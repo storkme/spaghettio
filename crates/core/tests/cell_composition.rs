@@ -31,22 +31,44 @@ use spaghettio_core::solver;
 fn cell_composed_ec15_zero_errors() {
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
     let (esr, l) = compose_pairs_calibrated(3);
-    println!("calibrated EC@15: {}x{} = {} tiles, {} entities", l.width, l.height, l.width * l.height, l.entities.len());
+    println!(
+        "calibrated EC@15: {}x{} = {} tiles, {} entities",
+        l.width,
+        l.height,
+        l.width * l.height,
+        l.entities.len()
+    );
     // Phase-A parity pins: the lift must reproduce the Phase-1 geometry
     // bit-for-bit (RFC-051 verification plan).
-    assert_eq!((l.width, l.height), (110, 22), "parity: sim-verified artifact dims");
-    assert_eq!(l.entities.len(), 461, "parity: sim-verified artifact entity count");
+    assert_eq!(
+        (l.width, l.height),
+        (110, 22),
+        "parity: sim-verified artifact dims"
+    );
+    assert_eq!(
+        l.entities.len(),
+        461,
+        "parity: sim-verified artifact entity count"
+    );
     let issues = validate::validate(&l, Some(&esr), LayoutStyle::Bus)
         .unwrap_or_else(|e| panic!("composed EC@15 must validate: {e}"));
-    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    let errors: Vec<_> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
     assert!(errors.is_empty(), "composed EC@15 errors: {errors:?}");
     assert!(
-        issues.iter().all(|i| i.category == "inserter-item-throughput"),
+        issues
+            .iter()
+            .all(|i| i.category == "inserter-item-throughput"),
         "only the sim-disproven attribution warnings are tolerated: {issues:?}"
     );
     // The 6 specific warnings were sim-adjudicated; more of the same
     // category would be NEW unadjudicated claims — trip on growth.
-    assert!(issues.len() <= 6, "warning count grew past the adjudicated 6: {issues:?}");
+    assert!(
+        issues.len() <= 6,
+        "warning count grew past the adjudicated 6: {issues:?}"
+    );
 }
 
 /// PERMANENT GATE (RFC-048 Phase 1; Phase-A parity pin): the
@@ -59,8 +81,13 @@ fn cell_composed_plastic_zero_issues() {
     let (sr, comp) = compose_plastic_calibrated();
     let issues = validate::validate(&comp, Some(&sr), LayoutStyle::Bus)
         .unwrap_or_else(|e| panic!("composed plastic must validate: {e}"));
-    println!("composed plastic (calibrated): {}x{}, {} entities, {} issues",
-        comp.width, comp.height, comp.entities.len(), issues.len());
+    println!(
+        "composed plastic (calibrated): {}x{}, {} entities, {} issues",
+        comp.width,
+        comp.height,
+        comp.entities.len(),
+        issues.len()
+    );
     assert!(issues.is_empty(), "composed plastic issues: {issues:?}");
 }
 
@@ -71,18 +98,25 @@ fn cell_composed_plastic_zero_issues() {
 fn probe_cell_source_geometry() {
     for (label, item, rate, inputs) in [
         ("cable", "copper-cable", 15.0, &["copper-plate"][..]),
-        ("ec", "electronic-circuit", 5.0, &["iron-plate", "copper-cable"][..]),
+        (
+            "ec",
+            "electronic-circuit",
+            5.0,
+            &["iron-plate", "copper-cable"][..],
+        ),
     ] {
         let (sr, l) = generate_cell_layout(item, rate, inputs);
-        println!("== {label}: {}x{}, {} entities ==", l.width, l.height, l.entities.len());
+        println!(
+            "== {label}: {}x{}, {} entities ==",
+            l.width,
+            l.height,
+            l.entities.len()
+        );
         for m in &sr.machines {
             println!("   spec {} x{:.2}", m.recipe, m.count);
         }
         for e in &l.entities {
-            let edge = e.x <= 1
-                || e.x >= l.width - 2
-                || e.y <= 1
-                || e.y >= l.height - 2;
+            let edge = e.x <= 1 || e.x >= l.width - 2 || e.y <= 1 || e.y >= l.height - 2;
             if edge && spaghettio_core::common::is_belt_entity(&e.name) {
                 println!(
                     "   edge belt ({},{}) {} dir={:?} carries={:?} seg={:?}",
@@ -99,13 +133,29 @@ fn probe_cell_source_geometry() {
 fn probe_extracted_cells() {
     for (label, item, rate, inputs) in [
         ("cable", "copper-cable", 15.0, &["copper-plate"][..]),
-        ("ec", "electronic-circuit", 5.0, &["iron-plate", "copper-cable"][..]),
+        (
+            "ec",
+            "electronic-circuit",
+            5.0,
+            &["iron-plate", "copper-cable"][..],
+        ),
     ] {
         let (_sr, l) = generate_cell_layout(item, rate, inputs);
         let c = extract_cell(&l);
-        println!("== {label} cell: {}x{}, {} entities ==", c.width, c.height, c.entities.len());
+        println!(
+            "== {label} cell: {}x{}, {} entities ==",
+            c.width,
+            c.height,
+            c.entities.len()
+        );
         for p in &c.ports {
-            println!("   port {} y={} {} {}", p.edge, p.y, p.item, if p.inbound { "IN" } else { "OUT" });
+            println!(
+                "   port {} y={} {} {}",
+                p.edge,
+                p.y,
+                p.item,
+                if p.inbound { "IN" } else { "OUT" }
+            );
         }
         for e in &c.entities {
             if spaghettio_core::common::is_belt_entity(&e.name) {
@@ -123,7 +173,8 @@ fn probe_extracted_cells() {
 #[ignore = "artifact producer for the sim step"]
 fn export_composed_ec15_for_sim() {
     let (esr, l) = compose_pairs_calibrated(3);
-    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &esr, "rfc048-ec15-composed");
+    let (bp, manifest) =
+        spaghettio_core::blueprint::export_with_manifest(&l, &esr, "rfc048-ec15-composed");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/rfc048-ec15.bp", &bp).unwrap();
     std::fs::write(
@@ -145,18 +196,40 @@ fn export_composed_ec15_for_sim() {
 #[ignore = "measurement probe"]
 fn probe_axis_growth_machine_tier() {
     for machine in ["assembling-machine-2", "assembling-machine-3"] {
-        let inputs: FxHashSet<String> =
-            ["iron-plate", "copper-cable"].iter().map(|s| s.to_string()).collect();
+        let inputs: FxHashSet<String> = ["iron-plate", "copper-cable"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            "electronic-circuit", 5.0, &inputs, &MachinePalette::default(),
-            machine, &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            "electronic-circuit",
+            5.0,
+            &inputs,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default()).unwrap();
         let c = extract_cell(&l);
-        println!("== {machine}: cell {}x{}, {} entities ==", c.width, c.height, c.entities.len());
-        for m in &sr.machines { println!("   spec {} x{:.2}", m.recipe, m.count); }
+        println!(
+            "== {machine}: cell {}x{}, {} entities ==",
+            c.width,
+            c.height,
+            c.entities.len()
+        );
+        for m in &sr.machines {
+            println!("   spec {} x{:.2}", m.recipe, m.count);
+        }
         for p in &c.ports {
-            println!("   port {} ({},{}) {} {}", p.edge, p.x, p.y, p.item, if p.inbound { "IN" } else { "OUT" });
+            println!(
+                "   port {} ({},{}) {} {}",
+                p.edge,
+                p.x,
+                p.y,
+                p.item,
+                if p.inbound { "IN" } else { "OUT" }
+            );
         }
     }
 }
@@ -167,14 +240,34 @@ fn probe_axis_growth_machine_tier() {
 fn probe_fluid_cell_geometry() {
     let (sr, l) = generate_cell_layout("plastic-bar", 2.0, &["petroleum-gas", "coal"]);
     let c = extract_cell(&l);
-    println!("== plastic cell {}x{}, {} entities ==", c.width, c.height, c.entities.len());
-    for m in &sr.machines { println!("   spec {} x{:.2}", m.recipe, m.count); }
-    for port in &c.ports { println!("   port {} ({},{}) {} {}", port.edge, port.x, port.y, port.item, if port.inbound { "IN" } else { "OUT" }); }
+    println!(
+        "== plastic cell {}x{}, {} entities ==",
+        c.width,
+        c.height,
+        c.entities.len()
+    );
+    for m in &sr.machines {
+        println!("   spec {} x{:.2}", m.recipe, m.count);
+    }
+    for port in &c.ports {
+        println!(
+            "   port {} ({},{}) {} {}",
+            port.edge,
+            port.x,
+            port.y,
+            port.item,
+            if port.inbound { "IN" } else { "OUT" }
+        );
+    }
     let mut segs: std::collections::BTreeSet<String> = Default::default();
     for e in &c.entities {
-        if let Some(seg) = e.segment_id.as_deref() { segs.insert(format!("{seg} [{}]", e.name)); }
+        if let Some(seg) = e.segment_id.as_deref() {
+            segs.insert(format!("{seg} [{}]", e.name));
+        }
     }
-    for s in &segs { println!("   seg {s}"); }
+    for s in &segs {
+        println!("   seg {s}");
+    }
 }
 
 /// Artifact producer for the sim: composed plastic blueprint + manifest.
@@ -182,11 +275,15 @@ fn probe_fluid_cell_geometry() {
 #[ignore = "artifact producer — run explicitly when exporting for the sim"]
 fn export_composed_plastic_for_sim() {
     let (sr, comp) = compose_plastic_calibrated();
-    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&comp, &sr, "rfc048-plastic-composed");
+    let (bp, manifest) =
+        spaghettio_core::blueprint::export_with_manifest(&comp, &sr, "rfc048-plastic-composed");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/rfc048-plastic.bp", &bp).unwrap();
-    std::fs::write("target/tmp/rfc048-plastic.manifest.json",
-        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    std::fs::write(
+        "target/tmp/rfc048-plastic.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
     println!("wrote target/tmp/rfc048-plastic.bp + manifest");
 }
 
@@ -208,7 +305,10 @@ fn probe_plastic_pipes() {
     let c = extract_cell(&l);
     for e in &c.entities {
         if e.name.contains("pipe") {
-            println!("{} ({},{}) dir={:?} io={:?} seg={:?}", e.name, e.x, e.y, e.direction, e.io_type, e.segment_id);
+            println!(
+                "{} ({},{}) dir={:?} io={:?} seg={:?}",
+                e.name, e.x, e.y, e.direction, e.io_type, e.segment_id
+            );
         }
     }
 }
@@ -219,12 +319,19 @@ fn probe_plastic_pipes() {
 #[ignore = "artifact producer"]
 fn export_engine_plastic_for_sim() {
     let (sr, l) = generate_cell_layout("plastic-bar", 2.0, &["petroleum-gas", "coal"]);
-    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "rfc048-engine-plastic");
+    let (bp, manifest) =
+        spaghettio_core::blueprint::export_with_manifest(&l, &sr, "rfc048-engine-plastic");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/rfc048-engine-plastic.bp", &bp).unwrap();
-    std::fs::write("target/tmp/rfc048-engine-plastic.manifest.json",
-        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-    println!("wrote engine plastic artifacts ({} boundary in)", l.boundary_inputs.len());
+    std::fs::write(
+        "target/tmp/rfc048-engine-plastic.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    println!(
+        "wrote engine plastic artifacts ({} boundary in)",
+        l.boundary_inputs.len()
+    );
 }
 
 /// Phase-B dev probe: the chain auto-placer on the two dev fixtures.
@@ -234,29 +341,61 @@ fn probe_chain_autoplace() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
     for (label, item, rate, inputs) in [
-        ("ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
-        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        (
+            "ec15",
+            "electronic-circuit",
+            15.0,
+            &["iron-plate", "copper-plate"][..],
+        ),
+        (
+            "ac1",
+            "advanced-circuit",
+            1.0,
+            &["iron-plate", "copper-plate", "plastic-bar"][..],
+        ),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            item, rate, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            item,
+            rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         println!("== {label}: {} specs ==", sr.machines.len());
-        for m in &sr.machines { println!("   {} x{:.2} out {:.2}/s", m.recipe, m.count, m.outputs[0].rate); }
+        for m in &sr.machines {
+            println!(
+                "   {} x{:.2} out {:.2}/s",
+                m.recipe, m.count, m.outputs[0].rate
+            );
+        }
         match compose_chain(&sr) {
             Ok(l) => {
-                println!("   composed {}x{} = {} tiles, {} entities", l.width, l.height, l.width * l.height, l.entities.len());
+                println!(
+                    "   composed {}x{} = {} tiles, {} entities",
+                    l.width,
+                    l.height,
+                    l.width * l.height,
+                    l.entities.len()
+                );
                 match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
                     Ok(issues) => {
-                        let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
+                        let e = issues
+                            .iter()
+                            .filter(|i| i.severity == Severity::Error)
+                            .count();
                         println!("   validation: {} errors / {} issues", e, issues.len());
                         for i in issues.iter().take(15) {
                             println!("     [{:?}] {} {}", i.severity, i.category, i.message);
                         }
                     }
                     Err(er) => {
-                        for line in format!("{er}").lines().take(12) { println!("     {line}"); }
+                        for line in format!("{er}").lines().take(12) {
+                            println!("     {line}");
+                        }
                     }
                 }
             }
@@ -298,48 +437,135 @@ struct SimFixture {
 }
 
 const SIM_FIXTURES: &[SimFixture] = &[
-    SimFixture { label: "chain-ac1", target: "advanced-circuit", rate: 1.0,
+    SimFixture {
+        label: "chain-ac1",
+        target: "advanced-circuit",
+        rate: 1.0,
         inputs: &["iron-plate", "copper-plate", "plastic-bar"],
-        compose: Compose::Chain, geo_cap: 0, levels: &[0] },
-    SimFixture { label: "chain-ec15", target: "electronic-circuit", rate: 15.0,
+        compose: Compose::Chain,
+        geo_cap: 0,
+        levels: &[0],
+    },
+    SimFixture {
+        label: "chain-ec15",
+        target: "electronic-circuit",
+        rate: 15.0,
         inputs: &["iron-plate", "copper-plate"],
-        compose: Compose::Chain, geo_cap: 0, levels: &[1, 2, 3, 5, 7] },
-    SimFixture { label: "chain-ec30", target: "electronic-circuit", rate: 30.0,
+        compose: Compose::Chain,
+        geo_cap: 0,
+        levels: &[1, 2, 3, 5, 7],
+    },
+    SimFixture {
+        label: "chain-ec30",
+        target: "electronic-circuit",
+        rate: 30.0,
         inputs: &["iron-plate", "copper-plate"],
-        compose: Compose::Chain, geo_cap: 0, levels: &[1, 2, 3, 5, 7] },
-    SimFixture { label: "chain-mil5ore", target: "military-science-pack", rate: 5.0,
+        compose: Compose::Chain,
+        geo_cap: 0,
+        levels: &[1, 2, 3, 5, 7],
+    },
+    SimFixture {
+        label: "chain-mil5ore",
+        target: "military-science-pack",
+        rate: 5.0,
         inputs: &["iron-ore", "copper-ore", "stone", "coal"],
-        compose: Compose::Chain, geo_cap: 0, levels: &[0, 2, 3, 7] },
-    SimFixture { label: "chain-mil5plates", target: "military-science-pack", rate: 5.0,
-        inputs: &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"],
-        compose: Compose::Chain, geo_cap: 0, levels: &[0, 2] },
+        compose: Compose::Chain,
+        geo_cap: 0,
+        levels: &[0, 2, 3, 7],
+    },
+    SimFixture {
+        label: "chain-mil5plates",
+        target: "military-science-pack",
+        rate: 5.0,
+        inputs: &[
+            "iron-plate",
+            "copper-plate",
+            "steel-plate",
+            "stone-brick",
+            "coal",
+        ],
+        compose: Compose::Chain,
+        geo_cap: 0,
+        levels: &[0, 2],
+    },
     // Mega chains. Same `compose_chain` path as the rows above, so they
     // carried the identical ambient-default defect; they export once
     // under a bare label rather than at declared levels.
-    SimFixture { label: "mega-chain-ac2raw", target: "advanced-circuit", rate: 2.0,
+    SimFixture {
+        label: "mega-chain-ac2raw",
+        target: "advanced-circuit",
+        rate: 2.0,
         inputs: &["iron-ore", "copper-ore", "crude-oil", "water", "coal"],
-        compose: Compose::Chain, geo_cap: 0, levels: &[] },
-    SimFixture { label: "mega-chain-chem5raw", target: "chemical-science-pack", rate: 5.0,
-        inputs: &["iron-ore", "copper-ore", "crude-oil", "water", "coal",
-                  "iron-plate", "copper-plate", "steel-plate"],
-        compose: Compose::Chain, geo_cap: 2, levels: &[] },
+        compose: Compose::Chain,
+        geo_cap: 0,
+        levels: &[],
+    },
+    SimFixture {
+        label: "mega-chain-chem5raw",
+        target: "chemical-science-pack",
+        rate: 5.0,
+        inputs: &[
+            "iron-ore",
+            "copper-ore",
+            "crude-oil",
+            "water",
+            "coal",
+            "iron-plate",
+            "copper-plate",
+            "steel-plate",
+        ],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[],
+    },
     // Not registry-blessed: their measurements live in #453 (USP@2,
     // -57.0%) and #437 (PU@4, -27.3%), both recorded before #431. Pinned
     // to L0 so those recorded numbers keep describing this geometry.
-    SimFixture { label: "mega-chain-usp2raw", target: "utility-science-pack", rate: 2.0,
-        inputs: &["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"],
-        compose: Compose::Chain, geo_cap: 0, levels: &[] },
-    SimFixture { label: "mega-chain-pu4raw", target: "processing-unit", rate: 4.0,
+    SimFixture {
+        label: "mega-chain-usp2raw",
+        target: "utility-science-pack",
+        rate: 2.0,
+        inputs: &[
+            "iron-ore",
+            "copper-ore",
+            "crude-oil",
+            "water",
+            "coal",
+            "stone",
+        ],
+        compose: Compose::Chain,
+        geo_cap: 0,
+        levels: &[],
+    },
+    SimFixture {
+        label: "mega-chain-pu4raw",
+        target: "processing-unit",
+        rate: 4.0,
         inputs: &["iron-ore", "copper-ore", "crude-oil", "water", "coal"],
-        compose: Compose::Chain, geo_cap: 0, levels: &[] },
+        compose: Compose::Chain,
+        geo_cap: 0,
+        levels: &[],
+    },
     // Mega CELLS: a different composer, unaffected by the capacity
     // default, but covered here so the gate has no blind spot.
-    SimFixture { label: "mega-plastic2", target: "plastic-bar", rate: 2.0,
+    SimFixture {
+        label: "mega-plastic2",
+        target: "plastic-bar",
+        rate: 2.0,
         inputs: &["crude-oil", "water", "coal"],
-        compose: Compose::MegaCell, geo_cap: 0, levels: &[] },
-    SimFixture { label: "mega-sulfur2", target: "sulfur", rate: 2.0,
+        compose: Compose::MegaCell,
+        geo_cap: 0,
+        levels: &[],
+    },
+    SimFixture {
+        label: "mega-sulfur2",
+        target: "sulfur",
+        rate: 2.0,
         inputs: &["crude-oil", "water"],
-        compose: Compose::MegaCell, geo_cap: 0, levels: &[] },
+        compose: Compose::MegaCell,
+        geo_cap: 0,
+        levels: &[],
+    },
 ];
 
 impl SimFixture {
@@ -349,14 +575,24 @@ impl SimFixture {
         match self.compose {
             Compose::MegaCell => {
                 spaghettio_core::bus::cells::mega::compose_mega_calibrated(
-                    self.target, self.rate, self.inputs,
-                ).unwrap_or_else(|e| panic!("{}: mega cell must compose: {e}", self.label)).1
+                    self.target,
+                    self.rate,
+                    self.inputs,
+                )
+                .unwrap_or_else(|e| panic!("{}: mega cell must compose: {e}", self.label))
+                .1
             }
             Compose::Chain => {
                 let sr = solver::solve_with_palette_exclusions_and_quality(
-                    self.target, self.rate, &inputs, &MachinePalette::default(),
-                    "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-                ).unwrap_or_else(|e| panic!("{}: must solve: {e:?}", self.label));
+                    self.target,
+                    self.rate,
+                    &inputs,
+                    &MachinePalette::default(),
+                    "assembling-machine-3",
+                    &FxHashSet::default(),
+                    QualityTier::Normal,
+                )
+                .unwrap_or_else(|e| panic!("{}: must solve: {e:?}", self.label));
                 spaghettio_core::bus::cells::chain::compose_chain_with_capacity(&sr, self.geo_cap)
                     .unwrap_or_else(|e| panic!("{}: chain must compose: {e}", self.label))
             }
@@ -364,7 +600,9 @@ impl SimFixture {
     }
 
     fn find(label: &str) -> &'static SimFixture {
-        SIM_FIXTURES.iter().find(|f| f.label == label)
+        SIM_FIXTURES
+            .iter()
+            .find(|f| f.label == label)
             .unwrap_or_else(|| panic!("no SIM_FIXTURES row for {label}"))
     }
 }
@@ -396,19 +634,32 @@ fn chain_fixture_geometry_matches_registry() {
         let candidates: Vec<(&str, String)> = SIM_FIXTURES
             .iter()
             .filter(|f| f.target == e.target && (f.rate - e.rate).abs() < 1e-9)
-            .map(|f| (f.label, format!("{:016x}", geometry_hash(&f.compose_layout()))))
+            .map(|f| {
+                (
+                    f.label,
+                    format!("{:016x}", geometry_hash(&f.compose_layout())),
+                )
+            })
             .collect();
-        assert!(!candidates.is_empty(),
+        assert!(
+            !candidates.is_empty(),
             "{}@{}: registry entry has no SIM_FIXTURES row, so no gate covers the exporter \
              that writes it — add the row. A silent skip here is exactly how the mega-chain \
              exporters kept the ambient-default defect.",
-            e.target, e.rate);
-        assert!(candidates.iter().any(|(_, h)| *h == e.geometry_hash),
+            e.target,
+            e.rate
+        );
+        assert!(
+            candidates.iter().any(|(_, h)| *h == e.geometry_hash),
             "{}@{}: registered geometry {} is no longer produced by any sim fixture at its \
              blessed capacity (fresh: {:?}). The exporter would write a DIFFERENT factory \
              under the same label, and every sim/meter number taken against this baseline \
              would silently compare two layouts — re-bless deliberately, never ignore.",
-            e.target, e.rate, e.geometry_hash, candidates);
+            e.target,
+            e.rate,
+            e.geometry_hash,
+            candidates
+        );
     }
 }
 
@@ -436,9 +687,15 @@ fn export_chain_fixtures_for_sim() {
         let (label, sr) = (f.label, {
             let inputs_set: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
             solver::solve_with_palette_exclusions_and_quality(
-                f.target, f.rate, &inputs_set, &MachinePalette::default(),
-                "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-            ).unwrap()
+                f.target,
+                f.rate,
+                &inputs_set,
+                &MachinePalette::default(),
+                "assembling-machine-3",
+                &FxHashSet::default(),
+                QualityTier::Normal,
+            )
+            .unwrap()
         });
         for &lvl in f.levels {
             let mut l = f.compose_layout();
@@ -447,10 +704,16 @@ fn export_chain_fixtures_for_sim() {
             let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, &tag);
             std::fs::create_dir_all("target/tmp").unwrap();
             std::fs::write(format!("target/tmp/{tag}.bp"), &bp).unwrap();
-            std::fs::write(format!("target/tmp/{tag}.manifest.json"),
-                serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-            println!("wrote target/tmp/{tag}.bp ({} boundary in / {} out)",
-                l.boundary_inputs.len(), l.boundary_outputs.len());
+            std::fs::write(
+                format!("target/tmp/{tag}.manifest.json"),
+                serde_json::to_string_pretty(&manifest).unwrap(),
+            )
+            .unwrap();
+            println!(
+                "wrote target/tmp/{tag}.bp ({} boundary in / {} out)",
+                l.boundary_inputs.len(),
+                l.boundary_outputs.len()
+            );
         }
     }
 }
@@ -465,24 +728,81 @@ fn probe_differential_scoreboard() {
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
     let fixtures: &[(&str, &str, f64, &[&str])] = &[
         ("gear15", "iron-gear-wheel", 15.0, &["iron-plate"]),
-        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"]),
-        ("ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
-        ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"]),
-        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"]),
-        ("ac2", "advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        (
+            "ec5",
+            "electronic-circuit",
+            5.0,
+            &["iron-plate", "copper-plate"],
+        ),
+        (
+            "ec15",
+            "electronic-circuit",
+            15.0,
+            &["iron-plate", "copper-plate"],
+        ),
+        (
+            "ec30",
+            "electronic-circuit",
+            30.0,
+            &["iron-plate", "copper-plate"],
+        ),
+        (
+            "ac1",
+            "advanced-circuit",
+            1.0,
+            &["iron-plate", "copper-plate", "plastic-bar"],
+        ),
+        (
+            "ac2",
+            "advanced-circuit",
+            2.0,
+            &["iron-plate", "copper-plate", "plastic-bar"],
+        ),
         // Package-2 targets: the scaling-wall class + from-ore chains
         // (furnace cells; fan-out >2 on shared plates).
-        ("ec15-ore", "electronic-circuit", 15.0, &["iron-ore", "copper-ore"]),
-        ("mil5-plates", "military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]),
-        ("mil5-ore", "military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"]),
-        ("ec60", "electronic-circuit", 60.0, &["iron-plate", "copper-plate"]),
+        (
+            "ec15-ore",
+            "electronic-circuit",
+            15.0,
+            &["iron-ore", "copper-ore"],
+        ),
+        (
+            "mil5-plates",
+            "military-science-pack",
+            5.0,
+            &[
+                "iron-plate",
+                "copper-plate",
+                "steel-plate",
+                "stone-brick",
+                "coal",
+            ],
+        ),
+        (
+            "mil5-ore",
+            "military-science-pack",
+            5.0,
+            &["iron-ore", "copper-ore", "stone", "coal"],
+        ),
+        (
+            "ec60",
+            "electronic-circuit",
+            60.0,
+            &["iron-plate", "copper-plate"],
+        ),
     ];
     for (label, item, rate, inputs) in fixtures {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            item, *rate, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         // Explicit Off — the DEFAULT is Candidate post-flip, and the bus
         // column must measure the bus.
         let bus_opts = layout::LayoutOptions {
@@ -493,10 +813,23 @@ fn probe_differential_scoreboard() {
         let bus_desc = match &bus {
             Ok(Ok(l)) => match validate::validate(l, Some(&sr), LayoutStyle::Bus) {
                 Ok(issues) => {
-                    let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
-                    format!("{}x{}={} tiles, {} errors / {} warnings", l.width, l.height, l.width * l.height, e, issues.len() - e)
+                    let e = issues
+                        .iter()
+                        .filter(|i| i.severity == Severity::Error)
+                        .count();
+                    format!(
+                        "{}x{}={} tiles, {} errors / {} warnings",
+                        l.width,
+                        l.height,
+                        l.width * l.height,
+                        e,
+                        issues.len() - e
+                    )
                 }
-                Err(er) => format!("validate() Err: {}", format!("{er}").lines().next().unwrap_or("")),
+                Err(er) => format!(
+                    "validate() Err: {}",
+                    format!("{er}").lines().next().unwrap_or("")
+                ),
             },
             Ok(Err(e)) => format!("REFUSED: {}", e.lines().next().unwrap_or("")),
             Err(_) => "PANICKED".into(),
@@ -506,10 +839,23 @@ fn probe_differential_scoreboard() {
             Ok(()) => match compose_chain(&sr) {
                 Ok(l) => match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
                     Ok(issues) => {
-                        let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
-                        format!("{}x{}={} tiles, {} errors / {} warnings", l.width, l.height, l.width * l.height, e, issues.len() - e)
+                        let e = issues
+                            .iter()
+                            .filter(|i| i.severity == Severity::Error)
+                            .count();
+                        format!(
+                            "{}x{}={} tiles, {} errors / {} warnings",
+                            l.width,
+                            l.height,
+                            l.width * l.height,
+                            e,
+                            issues.len() - e
+                        )
                     }
-                    Err(er) => format!("validate() Err: {}", format!("{er}").lines().next().unwrap_or("")),
+                    Err(er) => format!(
+                        "validate() Err: {}",
+                        format!("{er}").lines().next().unwrap_or("")
+                    ),
                 },
                 Err(e) => format!("REFUSED: {e}"),
             },
@@ -546,12 +892,20 @@ fn probe_differential_scoreboard() {
 fn cell_candidate_resolves_ec15_refusal() {
     use spaghettio_core::bus::cells::CellComposition;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
-    let inputs: FxHashSet<String> =
-        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "electronic-circuit",
+        15.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
 
     // Flag OFF (explicit — the DEFAULT is Candidate since the flip
     // decision): the bus refusal stands.
@@ -566,7 +920,10 @@ fn cell_candidate_resolves_ec15_refusal() {
     let opts = layout::LayoutOptions::default();
     let l = layout::build_bus_layout(&sr, opts).expect("candidate must resolve the refusal");
     let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
-    let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
+    let errors = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .count();
     assert_eq!(errors, 0, "composed candidate errors: {issues:?}");
     // **2026-07-25 (#448):** `row-input-belt-margin` joins the tolerated
     // set, and this fixture is the check's own motivating measurement —
@@ -592,7 +949,10 @@ fn cell_candidate_resolves_ec15_refusal() {
         "only the adjudicated categories tolerated: {issues:?}"
     );
     assert_eq!(
-        issues.iter().filter(|i| i.category == "row-input-belt-margin").count(),
+        issues
+            .iter()
+            .filter(|i| i.category == "row-input-belt-margin")
+            .count(),
         1,
         "expected exactly the one measured copper-cable input finding: {issues:?}"
     );
@@ -600,7 +960,10 @@ fn cell_candidate_resolves_ec15_refusal() {
     // budget (2.0 × 7.5 = 15.0/s) — any lane-budget warning here would
     // be a new, unadjudicated claim.
     assert_eq!(
-        issues.iter().filter(|i| i.category == "row-output-lane-budget").count(),
+        issues
+            .iter()
+            .filter(|i| i.category == "row-output-lane-budget")
+            .count(),
         0,
         "row-output-lane-budget should not fire at the recalibrated budget: {issues:?}"
     );
@@ -613,35 +976,90 @@ fn probe_registry_hashes() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::bus::cells::registry::geometry_hash;
     for (label, item, rate, inputs) in [
-        ("chain-ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
-        ("chain-ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
-        ("chain-ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..]),
-        ("chain-mil5ore", "military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"][..]),
-        ("chain-mil5plates", "military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"][..]),
+        (
+            "chain-ec15",
+            "electronic-circuit",
+            15.0,
+            &["iron-plate", "copper-plate"][..],
+        ),
+        (
+            "chain-ac1",
+            "advanced-circuit",
+            1.0,
+            &["iron-plate", "copper-plate", "plastic-bar"][..],
+        ),
+        (
+            "chain-ec30",
+            "electronic-circuit",
+            30.0,
+            &["iron-plate", "copper-plate"][..],
+        ),
+        (
+            "chain-mil5ore",
+            "military-science-pack",
+            5.0,
+            &["iron-ore", "copper-ore", "stone", "coal"][..],
+        ),
+        (
+            "chain-mil5plates",
+            "military-science-pack",
+            5.0,
+            &[
+                "iron-plate",
+                "copper-plate",
+                "steel-plate",
+                "stone-brick",
+                "coal",
+            ][..],
+        ),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            item, rate, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            item,
+            rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         let l = compose_chain(&sr).unwrap();
         println!("{label}: {:016x}", geometry_hash(&l));
     }
     for (label, item, rate, inputs) in [
-        ("mega-plastic2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        (
+            "mega-plastic2",
+            "plastic-bar",
+            2.0,
+            &["crude-oil", "water", "coal"][..],
+        ),
         ("mega-sulfur2", "sulfur", 2.0, &["crude-oil", "water"][..]),
     ] {
-        let (_sr, l) = spaghettio_core::bus::cells::mega::compose_mega_calibrated(item, rate, inputs).unwrap();
+        let (_sr, l) =
+            spaghettio_core::bus::cells::mega::compose_mega_calibrated(item, rate, inputs).unwrap();
         println!("{label}: {:016x}", geometry_hash(&l));
     }
     {
         let inputs_set: FxHashSet<String> =
-            ["iron-ore", "copper-ore", "crude-oil", "water", "coal"].iter().map(|s| s.to_string()).collect();
+            ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            "advanced-circuit", 2.0, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
-        println!("mega-chain-ac2raw: {:016x}", geometry_hash(&compose_chain(&sr).unwrap()));
+            "advanced-circuit",
+            2.0,
+            &inputs_set,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
+        println!(
+            "mega-chain-ac2raw: {:016x}",
+            geometry_hash(&compose_chain(&sr).unwrap())
+        );
     }
 }
 
@@ -665,22 +1083,35 @@ fn probe_registry_hashes() {
 fn chain_capacity_reaches_the_placer() {
     use spaghettio_core::bus::cells::chain::{compose_chain, compose_chain_with_capacity};
     use spaghettio_core::bus::cells::registry::geometry_hash;
-    let inputs: FxHashSet<String> =
-        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "electronic-circuit",
+        15.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let plain = compose_chain(&sr).unwrap();
     let default_explicit =
-        compose_chain_with_capacity(&sr, spaghettio_core::common::DEFAULT_INSERTER_CAPACITY).unwrap();
+        compose_chain_with_capacity(&sr, spaghettio_core::common::DEFAULT_INSERTER_CAPACITY)
+            .unwrap();
     assert_eq!(
-        geometry_hash(&plain), geometry_hash(&default_explicit),
+        geometry_hash(&plain),
+        geometry_hash(&default_explicit),
         "plain compose_chain must equal the DEFAULT_INSERTER_CAPACITY build"
     );
     let l0 = compose_chain_with_capacity(&sr, 0).unwrap();
     let l7 = compose_chain_with_capacity(&sr, 7).unwrap();
-    assert_eq!(l7.inserter_capacity, 7, "composed layout must declare its capacity");
+    assert_eq!(
+        l7.inserter_capacity, 7,
+        "composed layout must declare its capacity"
+    );
     assert_ne!(
         geometry_hash(&l0), geometry_hash(&l7),
         "declared L7 must change composed geometry (ladder-resized hands) —          identical hashes mean the option died on the way to the placer again (#383)"
@@ -698,12 +1129,20 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
     use spaghettio_core::bus::cells::registry::geometry_hash;
     use spaghettio_core::common::DEFAULT_INSERTER_CAPACITY;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
-    let inputs: FxHashSet<String> =
-        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "electronic-circuit",
+        15.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     // Geometry-regression lock on the L2 DEFAULT path — the geometry
     // production actually builds, which the registry gate (rebuilt at
     // explicit L0) does not cover (PR #431 review finding). Not sim-blessed
@@ -750,12 +1189,20 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
 #[test]
 fn mega_chain_composes_at_declared_capacity() {
     use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "crude-oil", "water", "coal"].iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "advanced-circuit", 2.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "advanced-circuit",
+        2.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     // L7 composes (no refusal, no clamp) and DECLARES its requested level —
     // the non-mega cells thread it; the mega interior stays L0 internally.
     let l7 = compose_chain_with_capacity(&sr, 7).expect("mega chain composes at L7");
@@ -787,18 +1234,79 @@ fn cell_registry_hashes_current() {
     // real L2 geometry and must reproduce at L2. Re-deriving everything
     // at one capacity would falsely fail one group or the other.
     let configs: &[(&str, f64, &[&str], &str, u8)] = &[
-        ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"], "chain", 0),
-        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "chain", 0),
-        ("electronic-circuit", 30.0, &["iron-plate", "copper-plate"], "chain", 0),
-        ("military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"], "chain", 0),
-        ("military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"], "chain", 0),
-        ("plastic-bar", 2.0, &["crude-oil", "water", "coal"], "mega", 0),
+        (
+            "advanced-circuit",
+            1.0,
+            &["iron-plate", "copper-plate", "plastic-bar"],
+            "chain",
+            0,
+        ),
+        (
+            "electronic-circuit",
+            15.0,
+            &["iron-plate", "copper-plate"],
+            "chain",
+            0,
+        ),
+        (
+            "electronic-circuit",
+            30.0,
+            &["iron-plate", "copper-plate"],
+            "chain",
+            0,
+        ),
+        (
+            "military-science-pack",
+            5.0,
+            &["iron-ore", "copper-ore", "stone", "coal"],
+            "chain",
+            0,
+        ),
+        (
+            "military-science-pack",
+            5.0,
+            &[
+                "iron-plate",
+                "copper-plate",
+                "steel-plate",
+                "stone-brick",
+                "coal",
+            ],
+            "chain",
+            0,
+        ),
+        (
+            "plastic-bar",
+            2.0,
+            &["crude-oil", "water", "coal"],
+            "mega",
+            0,
+        ),
         ("sulfur", 2.0, &["crude-oil", "water"], "mega", 0),
-        ("advanced-circuit", 2.0, &["iron-ore", "copper-ore", "crude-oil", "water", "coal"], "chain", 0),
+        (
+            "advanced-circuit",
+            2.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"],
+            "chain",
+            0,
+        ),
         // First post-#431 registration: blessed at the L2 default.
-        ("chemical-science-pack", 5.0,
-         &["iron-ore", "copper-ore", "crude-oil", "water", "coal",
-           "iron-plate", "copper-plate", "steel-plate"], "chain", 2),
+        (
+            "chemical-science-pack",
+            5.0,
+            &[
+                "iron-ore",
+                "copper-ore",
+                "crude-oil",
+                "water",
+                "coal",
+                "iron-plate",
+                "copper-plate",
+                "steel-plate",
+            ],
+            "chain",
+            2,
+        ),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {
@@ -809,14 +1317,22 @@ fn cell_registry_hashes_current() {
                 let l = match *kind {
                     "mega" => {
                         spaghettio_core::bus::cells::mega::compose_mega_calibrated(t, *r, inputs)
-                            .unwrap().1
+                            .unwrap()
+                            .1
                     }
                     _ => {
-                        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+                        let inputs_set: FxHashSet<String> =
+                            inputs.iter().map(|s| s.to_string()).collect();
                         let sr = solver::solve_with_palette_exclusions_and_quality(
-                            t, *r, &inputs_set, &MachinePalette::default(),
-                            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-                        ).unwrap();
+                            t,
+                            *r,
+                            &inputs_set,
+                            &MachinePalette::default(),
+                            "assembling-machine-3",
+                            &FxHashSet::default(),
+                            QualityTier::Normal,
+                        )
+                        .unwrap();
                         // Re-derive at the capacity this config was BLESSED at
                         // (never the ambient engine default, which moves) — see
                         // the per-config `u8` above for why the two groups differ.
@@ -826,9 +1342,12 @@ fn cell_registry_hashes_current() {
                 format!("{:016x}", geometry_hash(&l))
             })
             .collect();
-        assert!(!candidates.is_empty(),
+        assert!(
+            !candidates.is_empty(),
             "{}@{}: registry entry has no re-derivable fixture config in this gate — add it",
-            e.target, e.rate);
+            e.target,
+            e.rate
+        );
         assert!(candidates.contains(&e.geometry_hash),
             "{}@{} (declared capacity {}): composed geometry no longer matches the registered hash {} (fresh: {:?}) — re-verify in the sim and update cell-sim-registry.json",
             e.target, e.rate, e.declared_inserter_capacity, e.geometry_hash, candidates);
@@ -849,30 +1368,80 @@ fn cell_registry_hashes_current() {
 fn cell_quantization_copy_counts() {
     use spaghettio_core::bus::cells::chain::{chain_eligible, required_copies};
     for (label, item, rate, inputs, want_k) in [
-        ("ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..], 1),
-        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..], 1),
-        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"][..], 1),
+        (
+            "ec15",
+            "electronic-circuit",
+            15.0,
+            &["iron-plate", "copper-plate"][..],
+            1,
+        ),
+        (
+            "ac1",
+            "advanced-circuit",
+            1.0,
+            &["iron-plate", "copper-plate", "plastic-bar"][..],
+            1,
+        ),
+        (
+            "ec5",
+            "electronic-circuit",
+            5.0,
+            &["iron-plate", "copper-plate"][..],
+            1,
+        ),
         // pre-quantization these two REFUSED on the 45/s corridor cap
-        ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..], 2),
-        ("ec60", "electronic-circuit", 60.0, &["iron-plate", "copper-plate"][..], 4),
+        (
+            "ec30",
+            "electronic-circuit",
+            30.0,
+            &["iron-plate", "copper-plate"][..],
+            2,
+        ),
+        (
+            "ec60",
+            "electronic-circuit",
+            60.0,
+            &["iron-plate", "copper-plate"][..],
+            4,
+        ),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            item, rate, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            item,
+            rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         assert_eq!(required_copies(&sr), want_k, "{label}: copy count");
-        assert!(chain_eligible(&sr).is_ok(), "{label}: must be chain-eligible");
+        assert!(
+            chain_eligible(&sr).is_ok(),
+            "{label}: must be chain-eligible"
+        );
     }
     // Past K_MAX=12 the chain refuses loudly (ec600 → cable 1800/s → K=40).
-    let inputs_set: FxHashSet<String> =
-        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let inputs_set: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "electronic-circuit", 600.0, &inputs_set, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "electronic-circuit",
+        600.0,
+        &inputs_set,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let err = chain_eligible(&sr).unwrap_err();
-    assert!(err.contains("quantized copies"), "K_MAX refusal, got: {err}");
+    assert!(
+        err.contains("quantized copies"),
+        "K_MAX refusal, got: {err}"
+    );
 }
 
 /// PERMANENT GATE (belt-tier constraint): composed corridors are
@@ -887,30 +1456,52 @@ fn cell_quantization_copy_counts() {
 fn cell_candidate_respects_belt_tier_cap() {
     use spaghettio_core::bus::cells::registry::geometry_hash;
     use spaghettio_core::bus::cells::CellComposition;
-    let inputs: FxHashSet<String> =
-        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "electronic-circuit",
+        15.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     // EC@15 is chain-eligible, so only the tier guard keeps the
     // candidate out under a red cap.
     let build = |cc: CellComposition| {
-        layout::build_bus_layout(&sr, layout::LayoutOptions {
-            max_belt_tier: Some("fast-transport-belt".into()),
-            cell_composition: cc,
-            ..Default::default()
-        })
+        layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                max_belt_tier: Some("fast-transport-belt".into()),
+                cell_composition: cc,
+                ..Default::default()
+            },
+        )
     };
-    match (build(CellComposition::Candidate), build(CellComposition::Off)) {
+    match (
+        build(CellComposition::Candidate),
+        build(CellComposition::Off),
+    ) {
         (Ok(on), Ok(off)) => {
-            assert_eq!(geometry_hash(&on), geometry_hash(&off),
-                "sub-express cap: Candidate must be inert (bit-identical to Off)");
-            assert!(!on.entities.iter().any(|e| e.name.starts_with("express")),
-                "sub-express cap: no express entity may appear");
+            assert_eq!(
+                geometry_hash(&on),
+                geometry_hash(&off),
+                "sub-express cap: Candidate must be inert (bit-identical to Off)"
+            );
+            assert!(
+                !on.entities.iter().any(|e| e.name.starts_with("express")),
+                "sub-express cap: no express entity may appear"
+            );
         }
-        (on, off) => assert_eq!(on.is_err(), off.is_err(),
-            "sub-express cap: Candidate must not flip a refusal"),
+        (on, off) => assert_eq!(
+            on.is_err(),
+            off.is_err(),
+            "sub-express cap: Candidate must not flip a refusal"
+        ),
     }
     // Express cap (explicit) still composes the #336 refusal.
     let opts = layout::LayoutOptions {
@@ -932,15 +1523,36 @@ fn cell_candidate_respects_belt_tier_cap() {
 fn cell_candidate_never_displaces_a_succeeding_bus() {
     for (label, item, rate, inputs) in [
         ("gear15", "iron-gear-wheel", 15.0, &["iron-plate"][..]),
-        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"][..]),
-        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
-        ("ac2", "advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        (
+            "ec5",
+            "electronic-circuit",
+            5.0,
+            &["iron-plate", "copper-plate"][..],
+        ),
+        (
+            "ac1",
+            "advanced-circuit",
+            1.0,
+            &["iron-plate", "copper-plate", "plastic-bar"][..],
+        ),
+        (
+            "ac2",
+            "advanced-circuit",
+            2.0,
+            &["iron-plate", "copper-plate", "plastic-bar"][..],
+        ),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            item, rate, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            item,
+            rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
             .unwrap_or_else(|e| panic!("{label}: bus-succeeding fixture must lay out: {e}"));
         assert!(
@@ -963,24 +1575,43 @@ fn cell_candidate_never_displaces_a_succeeding_bus() {
 #[test]
 fn cell_candidate_composes_mil5_ore() {
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "stone", "coal"].iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "stone", "coal"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "military-science-pack",
+        5.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     // Bus-only arm still refuses — composition is doing the winning.
-    let off = layout::build_bus_layout(&sr, layout::LayoutOptions {
-        cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
-        ..Default::default()
-    });
-    assert!(off.is_err(), "bus-only mil5-ore must still refuse (else move this fixture to the bus ladder)");
+    let off = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            ..Default::default()
+        },
+    );
+    assert!(
+        off.is_err(),
+        "bus-only mil5-ore must still refuse (else move this fixture to the bus ladder)"
+    );
     let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
         .expect("mil5-ore must compose");
-    assert!(l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
-        "the composed candidate must be the winner");
+    assert!(
+        l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
+        "the composed candidate must be the winner"
+    );
     let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
-    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    let errors: Vec<_> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
     assert!(errors.is_empty(), "composed mil5-ore errors: {errors:?}");
 }
 
@@ -993,19 +1624,37 @@ fn cell_candidate_composes_mil5_ore() {
 #[test]
 fn cell_candidate_wins_mil5_plates_over_broken_native() {
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
-    let inputs: FxHashSet<String> =
-        ["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = [
+        "iron-plate",
+        "copper-plate",
+        "steel-plate",
+        "stone-brick",
+        "coal",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "military-science-pack",
+        5.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
         .expect("mil5-plates must lay out");
-    assert!(l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
-        "the clean composed candidate must win over the validation-broken native");
+    assert!(
+        l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
+        "the clean composed candidate must win over the validation-broken native"
+    );
     let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
-    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    let errors: Vec<_> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
     assert!(errors.is_empty(), "winner must validate clean: {errors:?}");
 }
 
@@ -1018,18 +1667,39 @@ fn cell_candidate_wins_mil5_plates_over_broken_native() {
 /// own self-check replay.
 #[test]
 fn selection_tier_validation_never_leaks_trace_events() {
-    let inputs: FxHashSet<String> =
-        ["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = [
+        "iron-plate",
+        "copper-plate",
+        "steel-plate",
+        "stone-brick",
+        "coal",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "military-science-pack",
+        5.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let l = layout::build_bus_layout_traced(&sr, layout::LayoutOptions::default())
         .expect("mil5-plates must lay out");
-    let n_validation_events = l.trace.as_ref().expect("traced build carries trace")
+    let n_validation_events = l
+        .trace
+        .as_ref()
+        .expect("traced build carries trace")
         .iter()
-        .filter(|e| matches!(e, spaghettio_core::trace::TraceEvent::ValidationCompleted { .. }))
+        .filter(|e| {
+            matches!(
+                e,
+                spaghettio_core::trace::TraceEvent::ValidationCompleted { .. }
+            )
+        })
         .count();
     assert_eq!(n_validation_events, 1,
         "only the winner's own validation may appear in the trace (leaked tier validations corrupt the web timing log)");
@@ -1050,8 +1720,18 @@ fn mega_cell_plastic_from_crude_zero_issues() {
     // All three Phase-A fixtures gate here (#401 review note: probe-only
     // coverage of plastic@5/sulfur@2 wouldn't catch a regression).
     for (label, item, rate, inputs) in [
-        ("plastic@2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
-        ("plastic@5", "plastic-bar", 5.0, &["crude-oil", "water", "coal"][..]),
+        (
+            "plastic@2",
+            "plastic-bar",
+            2.0,
+            &["crude-oil", "water", "coal"][..],
+        ),
+        (
+            "plastic@5",
+            "plastic-bar",
+            5.0,
+            &["crude-oil", "water", "coal"][..],
+        ),
         ("sulfur@2", "sulfur", 2.0, &["crude-oil", "water"][..]),
     ] {
         let (sr, l) = compose_mega_calibrated(item, rate, inputs)
@@ -1059,8 +1739,14 @@ fn mega_cell_plastic_from_crude_zero_issues() {
         // Kit-pitch invariant: boundary heads >= 4 apart, all at y=0,
         // sorted west→east (#363).
         let xs: Vec<i32> = l.boundary_inputs.iter().map(|b| b.x).collect();
-        assert!(xs.windows(2).all(|w| w[1] - w[0] >= 4), "{label}: feed heads must sit at >=4 pitch: {xs:?}");
-        assert!(l.boundary_inputs.iter().all(|b| b.y == 0), "{label}: feed heads at the north edge");
+        assert!(
+            xs.windows(2).all(|w| w[1] - w[0] >= 4),
+            "{label}: feed heads must sit at >=4 pitch: {xs:?}"
+        );
+        assert!(
+            l.boundary_inputs.iter().all(|b| b.y == 0),
+            "{label}: feed heads at the north edge"
+        );
         let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus)
             .unwrap_or_else(|e| panic!("{label}: mega must validate: {e}"));
         assert!(issues.is_empty(), "{label}: mega issues: {issues:?}");
@@ -1073,17 +1759,28 @@ fn mega_cell_plastic_from_crude_zero_issues() {
 fn export_mega_fixtures_for_sim() {
     use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
     for (label, item, rate, inputs) in [
-        ("mega-plastic2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        (
+            "mega-plastic2",
+            "plastic-bar",
+            2.0,
+            &["crude-oil", "water", "coal"][..],
+        ),
         ("mega-sulfur2", "sulfur", 2.0, &["crude-oil", "water"][..]),
     ] {
         let (sr, l) = compose_mega_calibrated(item, rate, inputs).unwrap();
         let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, label);
         std::fs::create_dir_all("target/tmp").unwrap();
         std::fs::write(format!("target/tmp/{label}.bp"), &bp).unwrap();
-        std::fs::write(format!("target/tmp/{label}.manifest.json"),
-            serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-        println!("wrote target/tmp/{label}.bp ({} in / {} out)",
-            l.boundary_inputs.len(), l.boundary_outputs.len());
+        std::fs::write(
+            format!("target/tmp/{label}.manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        println!(
+            "wrote target/tmp/{label}.bp ({} in / {} out)",
+            l.boundary_inputs.len(),
+            l.boundary_outputs.len()
+        );
     }
 }
 
@@ -1100,17 +1797,28 @@ fn mega_chain_ac_from_raw_zero_issues() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
     for rate in [1.0, 2.0, 4.0] {
-        let inputs: FxHashSet<String> =
-            ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
-                .iter().map(|s| s.to_string()).collect();
+        let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            "advanced-circuit", rate, &inputs, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
-        let l = compose_chain(&sr).unwrap_or_else(|e| panic!("AC@{rate} from raw must compose: {e}"));
+            "advanced-circuit",
+            rate,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
+        let l =
+            compose_chain(&sr).unwrap_or_else(|e| panic!("AC@{rate} from raw must compose: {e}"));
         let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus)
             .unwrap_or_else(|e| panic!("AC@{rate} from raw must validate: {e}"));
-        let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .collect();
         assert!(errors.is_empty(), "AC@{rate} from raw errors: {errors:?}");
         // AC@4's cable cell outputs 40/s. Under the old bridged express
         // budget (1.733 × 22.5 = 39.0/s) that was a 1/s shortfall and
@@ -1135,20 +1843,40 @@ fn mega_chain_ac_from_raw_zero_issues() {
 fn mega_chain_chem5_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "crude-oil", "water", "coal",
-         "iron-plate", "copper-plate", "steel-plate"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = [
+        "iron-ore",
+        "copper-ore",
+        "crude-oil",
+        "water",
+        "coal",
+        "iron-plate",
+        "copper-plate",
+        "steel-plate",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "chemical-science-pack", 5.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "chemical-science-pack",
+        5.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let l = compose_chain(&sr).expect("chem5 from raw must compose");
     let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).expect("must validate");
-    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    let errors: Vec<_> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
     assert!(errors.is_empty(), "chem5 errors: {errors:?}");
     assert!(
-        issues.iter().all(|i| matches!(i.category.as_str(), "inserter-item-throughput" | "power")),
+        issues
+            .iter()
+            .all(|i| matches!(i.category.as_str(), "inserter-item-throughput" | "power")),
         "only adjudicated categories tolerated: {issues:?}"
     );
 }
@@ -1164,13 +1892,20 @@ fn mega_chain_chem5_resolves_bus_failure() {
 fn mega_chain_pu4_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "processing-unit", 4.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "processing-unit",
+        4.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let plan = spaghettio_core::bus::cells::mega::mega_subgraph(&sr)
         .expect("subgraph")
         .expect("PU chain has a fluid subgraph");
@@ -1184,7 +1919,10 @@ fn mega_chain_pu4_resolves_bus_failure() {
         Ok(v) => v,
         Err(e) => e.issues,
     };
-    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    let errors: Vec<_> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
     assert!(errors.is_empty(), "PU@4 errors: {errors:?}");
     assert!(
         issues.iter().all(|i| matches!(
@@ -1219,13 +1957,27 @@ fn mega_chain_pu4_resolves_bus_failure() {
 fn mega_chain_usp2_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = [
+        "iron-ore",
+        "copper-ore",
+        "crude-oil",
+        "water",
+        "coal",
+        "stone",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "utility-science-pack", 2.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "utility-science-pack",
+        2.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let plan = spaghettio_core::bus::cells::mega::mega_subgraph(&sr)
         .expect("subgraph")
         .expect("USP chain has a fluid subgraph");
@@ -1258,7 +2010,10 @@ fn mega_chain_usp2_resolves_bus_failure() {
         Ok(v) => v,
         Err(e) => e.issues,
     };
-    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    let errors: Vec<_> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
     assert!(errors.is_empty(), "USP@2 errors: {errors:?}");
 }
 
@@ -1266,20 +2021,42 @@ fn mega_chain_usp2_resolves_bus_failure() {
 #[test]
 #[ignore = "artifact producer"]
 fn export_mega_usp_for_sim() {
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = [
+        "iron-ore",
+        "copper-ore",
+        "crude-oil",
+        "water",
+        "coal",
+        "stone",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "utility-science-pack", 2.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "utility-science-pack",
+        2.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let l = SimFixture::find("mega-chain-usp2raw").compose_layout();
-    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-usp2raw");
+    let (bp, manifest) =
+        spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-usp2raw");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/mega-chain-usp2raw.bp", &bp).unwrap();
-    std::fs::write("target/tmp/mega-chain-usp2raw.manifest.json",
-        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-    println!("wrote mega-chain-usp2raw.bp ({} in / {} out)", l.boundary_inputs.len(), l.boundary_outputs.len());
+    std::fs::write(
+        "target/tmp/mega-chain-usp2raw.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    println!(
+        "wrote mega-chain-usp2raw.bp ({} in / {} out)",
+        l.boundary_inputs.len(),
+        l.boundary_outputs.len()
+    );
 }
 
 /// RFC-055 real-geometry experiment. Kept opt-in while compact ordering is
@@ -1291,25 +2068,47 @@ fn rfc055_compact_usp_real_geometry() {
     use spaghettio_core::bus::cells::chain::{compose_chain_compact, compose_chain_with_capacity};
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = [
+        "iron-ore",
+        "copper-ore",
+        "crude-oil",
+        "water",
+        "coal",
+        "stone",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "utility-science-pack", 2.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "utility-science-pack",
+        2.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let control = compose_chain_with_capacity(&sr, 0).expect("control composes");
     let compact = compose_chain_compact(&sr, 0).expect("compact composes");
     let issues = match validate::validate(&compact, Some(&sr), LayoutStyle::Bus) {
         Ok(v) => v,
         Err(e) => e.issues,
     };
-    let errors: Vec<_> = issues.iter()
-        .filter(|i| i.severity == Severity::Error).collect();
+    let errors: Vec<_> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
     assert!(errors.is_empty(), "compact USP errors: {errors:?}");
-    println!("control={}x{} entities={} compact={}x{} entities={}",
-        control.width, control.height, control.entities.len(),
-        compact.width, compact.height, compact.entities.len());
+    println!(
+        "control={}x{} entities={} compact={}x{} entities={}",
+        control.width,
+        control.height,
+        control.entities.len(),
+        compact.width,
+        compact.height,
+        compact.entities.len()
+    );
 }
 
 #[test]
@@ -1319,36 +2118,78 @@ fn rfc055_compact_acceptance_corpus() {
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
     for (label, target, rate, raw) in [
-        ("usp2raw", "utility-science-pack", 2.0,
-            &["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"][..]),
-        ("chem5raw", "chemical-science-pack", 5.0,
-            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..]),
-        ("pu4raw", "processing-unit", 4.0,
-            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..]),
-        ("mil5ore", "military-science-pack", 5.0,
-            &["iron-ore", "copper-ore", "stone", "coal"][..]),
+        (
+            "usp2raw",
+            "utility-science-pack",
+            2.0,
+            &[
+                "iron-ore",
+                "copper-ore",
+                "crude-oil",
+                "water",
+                "coal",
+                "stone",
+            ][..],
+        ),
+        (
+            "chem5raw",
+            "chemical-science-pack",
+            5.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..],
+        ),
+        (
+            "pu4raw",
+            "processing-unit",
+            4.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..],
+        ),
+        (
+            "mil5ore",
+            "military-science-pack",
+            5.0,
+            &["iron-ore", "copper-ore", "stone", "coal"][..],
+        ),
     ] {
         let inputs: FxHashSet<String> = raw.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            target, rate, &inputs, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
-        let control = compose_chain_with_capacity(&sr, 0)
-            .unwrap_or_else(|e| panic!("{label} control: {e}"));
-        let compact = compose_chain_compact(&sr, 0)
-            .unwrap_or_else(|e| panic!("{label} compact: {e}"));
+            target,
+            rate,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
+        let control =
+            compose_chain_with_capacity(&sr, 0).unwrap_or_else(|e| panic!("{label} control: {e}"));
+        let compact =
+            compose_chain_compact(&sr, 0).unwrap_or_else(|e| panic!("{label} compact: {e}"));
         let issues = match validate::validate(&compact, Some(&sr), LayoutStyle::Bus) {
             Ok(v) => v,
             Err(e) => e.issues,
         };
-        let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
+        let errors = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .count();
         assert_eq!(errors, 0, "{label} compact has errors: {issues:?}");
-        let belts = |l: &spaghettio_core::models::LayoutResult| l.entities.iter()
-            .filter(|e| e.name.contains("transport-belt") || e.name.contains("splitter"))
-            .count();
-        let corridors = |l: &spaghettio_core::models::LayoutResult| l.entities.iter()
-            .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("corr:")))
-            .count();
+        let belts = |l: &spaghettio_core::models::LayoutResult| {
+            l.entities
+                .iter()
+                .filter(|e| e.name.contains("transport-belt") || e.name.contains("splitter"))
+                .count()
+        };
+        let corridors = |l: &spaghettio_core::models::LayoutResult| {
+            l.entities
+                .iter()
+                .filter(|e| {
+                    e.segment_id
+                        .as_deref()
+                        .is_some_and(|s| s.starts_with("corr:"))
+                })
+                .count()
+        };
         println!("{label}: control={}x{} entities={} belts={} corr={} compact={}x{} entities={} belts={} corr={}",
             control.width, control.height, control.entities.len(), belts(&control), corridors(&control),
             compact.width, compact.height, compact.entities.len(), belts(&compact), corridors(&compact));
@@ -1363,18 +2204,43 @@ fn export_rfc055_factorio_candidates() {
 
     std::fs::create_dir_all("target/tmp/rfc055").unwrap();
     for (label, target, rate, raw) in [
-        ("usp2raw", "utility-science-pack", 2.0,
-            &["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"][..]),
-        ("chem5raw", "chemical-science-pack", 5.0,
-            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..]),
-        ("pu4raw", "processing-unit", 4.0,
-            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..]),
+        (
+            "usp2raw",
+            "utility-science-pack",
+            2.0,
+            &[
+                "iron-ore",
+                "copper-ore",
+                "crude-oil",
+                "water",
+                "coal",
+                "stone",
+            ][..],
+        ),
+        (
+            "chem5raw",
+            "chemical-science-pack",
+            5.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..],
+        ),
+        (
+            "pu4raw",
+            "processing-unit",
+            4.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..],
+        ),
     ] {
         let inputs: FxHashSet<String> = raw.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            target, rate, &inputs, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            target,
+            rate,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         for (variant, layout) in [
             ("control", compose_chain_with_capacity(&sr, 0).unwrap()),
             ("compact", compose_chain_compact(&sr, 0).unwrap()),
@@ -1385,9 +2251,14 @@ fn export_rfc055_factorio_candidates() {
             std::fs::write(
                 format!("target/tmp/rfc055/{artifact}.manifest.json"),
                 serde_json::to_string_pretty(&manifest).unwrap(),
-            ).unwrap();
-            println!("wrote {artifact}: {}x{}, {} entities",
-                layout.width, layout.height, layout.entities.len());
+            )
+            .unwrap();
+            println!(
+                "wrote {artifact}: {}x{}, {} entities",
+                layout.width,
+                layout.height,
+                layout.entities.len()
+            );
         }
     }
 }
@@ -1396,26 +2267,36 @@ fn export_rfc055_factorio_candidates() {
 #[ignore = "RFC-057 coarse machine compaction potential"]
 fn rfc057_machine_constraint_baseline() {
     use spaghettio_core::bus::compaction::{
-        blocks_overlap, build_local_manifold_graph, build_manifold_nets, compact_axis, compact_island_axis,
-        compact_transport_geometry, estimated_manifold_wirelength, extract_rigid_islands,
-        extract_route_nets, machine_blocks, occupied_bbox,
+        blocks_overlap, build_local_manifold_graph, build_manifold_nets, compact_axis,
+        compact_island_axis, compact_transport_geometry, estimated_manifold_wirelength,
+        extract_rigid_islands, extract_route_nets, legalize_manifold_routes, machine_blocks,
+        materialize_legalized_manifold_routes, occupied_bbox,
         place_distributed_local_manifold_nodes, place_recipe_clusters, plan_local_manifolds,
-        legalize_manifold_routes, materialize_legalized_manifold_routes,
-        route_local_manifold_edges, CompactAxis, CompactIr,
-        PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
+        route_local_manifold_edges, CompactAxis, CompactIr, PlacedMachineSignature,
+        ProductionSignature, RouteTerminalKind,
     };
     use spaghettio_core::common::is_belt_entity;
     use spaghettio_core::density::{entity_footprint, score_density};
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
-    for label in ["mega-chain-usp2raw", "mega-chain-chem5raw", "mega-chain-pu4raw", "chain-mil5ore"] {
+    for label in [
+        "mega-chain-usp2raw",
+        "mega-chain-chem5raw",
+        "mega-chain-pu4raw",
+        "chain-mil5ore",
+    ] {
         let fixture = SimFixture::find(label);
-        let inputs: FxHashSet<String> =
-            fixture.inputs.iter().map(|s| s.to_string()).collect();
+        let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            fixture.target,
+            fixture.rate,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         let layout = fixture.compose_layout();
         let production = ProductionSignature::from_solver(&sr).unwrap();
         let placed = PlacedMachineSignature::from_layout(&layout);
@@ -1424,19 +2305,23 @@ fn rfc057_machine_constraint_baseline() {
         assert!(!production.machines.is_empty());
         assert!(!placed.0.is_empty());
         for edge in production.edges.iter().filter(|edge| !edge.is_fluid) {
-            assert!(nets.iter().any(|net| {
-                net.item == edge.item
-                    && net.terminals.iter().any(|terminal| {
-                        terminal.kind == RouteTerminalKind::ProducerDrop
-                            && terminal.recipe.as_ref().is_some_and(|recipe| {
-                                edge.producer_recipes.contains(recipe)
-                            })
-                    })
-                    && net.terminals.iter().any(|terminal| {
-                        terminal.kind == RouteTerminalKind::ConsumerPickup
-                            && terminal.recipe.as_deref() == Some(edge.consumer_recipe.as_str())
-                    })
-            }), "{label}: no route intent covers {edge:?}");
+            assert!(
+                nets.iter().any(|net| {
+                    net.item == edge.item
+                        && net.terminals.iter().any(|terminal| {
+                            terminal.kind == RouteTerminalKind::ProducerDrop
+                                && terminal
+                                    .recipe
+                                    .as_ref()
+                                    .is_some_and(|recipe| edge.producer_recipes.contains(recipe))
+                        })
+                        && net.terminals.iter().any(|terminal| {
+                            terminal.kind == RouteTerminalKind::ConsumerPickup
+                                && terminal.recipe.as_deref() == Some(edge.consumer_recipe.as_str())
+                        })
+                }),
+                "{label}: no route intent covers {edge:?}"
+            );
         }
 
         let original = machine_blocks(&layout);
@@ -1448,7 +2333,12 @@ fn rfc057_machine_constraint_baseline() {
         }
         for (i, a) in compacted.iter().enumerate() {
             for b in &compacted[i + 1..] {
-                assert!(!blocks_overlap(a, b), "{label}: blocks {} and {} overlap", a.id, b.id);
+                assert!(
+                    !blocks_overlap(a, b),
+                    "{label}: blocks {} and {} overlap",
+                    a.id,
+                    b.id
+                );
             }
         }
         let compact_bbox = occupied_bbox(&compacted);
@@ -1456,13 +2346,19 @@ fn rfc057_machine_constraint_baseline() {
         let after = i64::from(compact_bbox.0) * i64::from(compact_bbox.1);
         println!(
             "{label}: machines={} machine-bbox={}x{} -> {}x{} ({:+.1}%)",
-            original.len(), original_bbox.0, original_bbox.1,
-            compact_bbox.0, compact_bbox.1,
+            original.len(),
+            original_bbox.0,
+            original_bbox.1,
+            compact_bbox.0,
+            compact_bbox.1,
             (after as f64 / before as f64 - 1.0) * 100.0,
         );
 
         let island_source = occupied_bbox(
-            &islands.iter().map(|island| island.block.clone()).collect::<Vec<_>>()
+            &islands
+                .iter()
+                .map(|island| island.block.clone())
+                .collect::<Vec<_>>(),
         );
         let mut island_compacted = islands.clone();
         for _ in 0..8 {
@@ -1470,7 +2366,10 @@ fn rfc057_machine_constraint_baseline() {
             island_compacted = compact_island_axis(&island_compacted, CompactAxis::Y, 1);
         }
         let island_after = occupied_bbox(
-            &island_compacted.iter().map(|island| island.block.clone()).collect::<Vec<_>>()
+            &island_compacted
+                .iter()
+                .map(|island| island.block.clone())
+                .collect::<Vec<_>>(),
         );
         let ir = CompactIr::from_source(&layout, &sr);
         assert_eq!(ir.islands, islands);
@@ -1479,13 +2378,9 @@ fn rfc057_machine_constraint_baseline() {
         let (clustered_islands, clusters) = place_recipe_clusters(&ir, 1);
         let clustered_manifolds = build_manifold_nets(&ir, &clustered_islands).unwrap();
         let local_plans = plan_local_manifolds(&clustered_islands, &clustered_manifolds, 1);
-        let local_graphs: Vec<_> = local_plans
-            .iter()
-            .map(build_local_manifold_graph)
-            .collect();
+        let local_graphs: Vec<_> = local_plans.iter().map(build_local_manifold_graph).collect();
         let placed_hubs =
-            place_distributed_local_manifold_nodes(&clustered_islands, &local_graphs, 3)
-                .unwrap();
+            place_distributed_local_manifold_nodes(&clustered_islands, &local_graphs, 3).unwrap();
         if label == "chain-mil5ore" {
             let routed =
                 route_local_manifold_edges(&clustered_islands, &local_graphs, &placed_hubs)
@@ -1507,19 +2402,29 @@ fn rfc057_machine_constraint_baseline() {
             }
             let mut crossed_merge_edges = 0usize;
             let mut crossed_distribute_edges = 0usize;
-            for route in routed.routes.iter().filter(|route| !route.crossings.is_empty()) {
+            for route in routed
+                .routes
+                .iter()
+                .filter(|route| !route.crossings.is_empty())
+            {
                 let graph = local_graphs
                     .iter()
                     .find(|graph| graph.item == route.item)
                     .unwrap();
-                let touches_role = |endpoint: &spaghettio_core::bus::compaction::ManifoldEndpoint,
-                                    role| match endpoint {
-                    spaghettio_core::bus::compaction::ManifoldEndpoint::NodeInput { node, .. }
-                    | spaghettio_core::bus::compaction::ManifoldEndpoint::NodeOutput { node, .. } => {
-                        graph.nodes[*node].role == role
-                    }
-                    _ => false,
-                };
+                let touches_role =
+                    |endpoint: &spaghettio_core::bus::compaction::ManifoldEndpoint, role| {
+                        match endpoint {
+                            spaghettio_core::bus::compaction::ManifoldEndpoint::NodeInput {
+                                node,
+                                ..
+                            }
+                            | spaghettio_core::bus::compaction::ManifoldEndpoint::NodeOutput {
+                                node,
+                                ..
+                            } => graph.nodes[*node].role == role,
+                            _ => false,
+                        }
+                    };
                 if touches_role(
                     &route.edge.from,
                     spaghettio_core::bus::compaction::BalancerNodeRole::Merge,
@@ -1590,6 +2495,7 @@ fn rfc057_machine_constraint_baseline() {
                 }
             }
         }
+
         let clustered_bbox = occupied_bbox(
             &clustered_islands
                 .iter()
@@ -1618,12 +2524,18 @@ fn rfc057_machine_constraint_baseline() {
                 "{label}: {} manifold has no consumer/output",
                 manifold.item,
             );
-            assert!(manifold.planned_rate > 0, "{label}: {} has no planned rate", manifold.item);
-            let producer_max = manifold.producers()
+            assert!(
+                manifold.planned_rate > 0,
+                "{label}: {} has no planned rate",
+                manifold.item
+            );
+            let producer_max = manifold
+                .producers()
                 .filter(|terminal| terminal.island_id.is_some())
                 .map(|terminal| terminal.x)
                 .max();
-            let consumer_min = manifold.consumers()
+            let consumer_min = manifold
+                .consumers()
                 .filter(|terminal| terminal.island_id.is_some())
                 .map(|terminal| terminal.x)
                 .min();
@@ -1635,20 +2547,36 @@ fn rfc057_machine_constraint_baseline() {
         let after = i64::from(island_after.0) * i64::from(island_after.1);
         println!(
             "{label}: islands={} terminals={} manifolds={} island-bbox={}x{} -> {}x{} ({:+.1}%)",
-            islands.len(), islands.iter().map(|island| island.terminals.len()).sum::<usize>(),
+            islands.len(),
+            islands
+                .iter()
+                .map(|island| island.terminals.len())
+                .sum::<usize>(),
             manifolds.len(),
-            island_source.0, island_source.1, island_after.0, island_after.1,
+            island_source.0,
+            island_source.1,
+            island_after.0,
+            island_after.1,
             (after as f64 / before as f64 - 1.0) * 100.0,
         );
         println!("{label}: non-monotone manifolds={non_monotone:?}");
         println!(
             "{label}: express manifold lanes total={} max={}",
-            manifolds.iter().map(|manifold| manifold.required_belts(45.0)).sum::<u32>(),
-            manifolds.iter().map(|manifold| manifold.required_belts(45.0)).max().unwrap_or(0),
+            manifolds
+                .iter()
+                .map(|manifold| manifold.required_belts(45.0))
+                .sum::<u32>(),
+            manifolds
+                .iter()
+                .map(|manifold| manifold.required_belts(45.0))
+                .max()
+                .unwrap_or(0),
         );
         println!(
             "{label}: recipe clusters={} bbox={}x{}, weighted-wirelength={} -> {}",
-            clusters.len(), clustered_bbox.0, clustered_bbox.1,
+            clusters.len(),
+            clustered_bbox.0,
+            clustered_bbox.1,
             estimated_manifold_wirelength(&manifolds),
             estimated_manifold_wirelength(&clustered_manifolds),
         );
@@ -1656,13 +2584,22 @@ fn rfc057_machine_constraint_baseline() {
             "{label}: local hubs={} lanes={} merger-ready={} distributor-ready={}",
             local_plans.len(),
             local_plans.iter().map(|plan| plan.belt_count).sum::<u32>(),
-            local_plans.iter().filter(|plan| plan.all_mergers_stampable).count(),
-            local_plans.iter().filter(|plan| plan.all_distributors_stampable).count(),
+            local_plans
+                .iter()
+                .filter(|plan| plan.all_mergers_stampable)
+                .count(),
+            local_plans
+                .iter()
+                .filter(|plan| plan.all_distributors_stampable)
+                .count(),
         );
         println!(
             "{label}: stamped hub nodes={} entities={}",
             placed_hubs.iter().map(|hub| hub.nodes.len()).sum::<usize>(),
-            placed_hubs.iter().map(|hub| hub.entities.len()).sum::<usize>(),
+            placed_hubs
+                .iter()
+                .map(|hub| hub.entities.len())
+                .sum::<usize>(),
         );
         assert_eq!(local_plans.len(), clustered_manifolds.len());
         for ((plan, graph), manifold) in local_plans
@@ -1670,14 +2607,28 @@ fn rfc057_machine_constraint_baseline() {
             .zip(&local_graphs)
             .zip(&clustered_manifolds)
         {
-            assert!(plan.all_mergers_stampable, "{label}: {} merger hierarchy not stampable", plan.item);
-            assert!(plan.all_distributors_stampable, "{label}: {} distributor hierarchy not stampable", plan.item);
+            assert!(
+                plan.all_mergers_stampable,
+                "{label}: {} merger hierarchy not stampable",
+                plan.item
+            );
+            assert!(
+                plan.all_distributors_stampable,
+                "{label}: {} distributor hierarchy not stampable",
+                plan.item
+            );
             assert_eq!(
-                plan.lane_groups.iter().map(|group| group.producers.len()).sum::<usize>(),
+                plan.lane_groups
+                    .iter()
+                    .map(|group| group.producers.len())
+                    .sum::<usize>(),
                 manifold.producers().count(),
             );
             assert_eq!(
-                plan.lane_groups.iter().map(|group| group.consumers.len()).sum::<usize>(),
+                plan.lane_groups
+                    .iter()
+                    .map(|group| group.consumers.len())
+                    .sum::<usize>(),
                 manifold.consumers().count(),
             );
             for terminal in manifold.producers() {
@@ -1712,22 +2663,34 @@ fn rfc057_machine_constraint_baseline() {
             .iter()
             .filter(|issue| issue.severity == Severity::Error)
             .collect();
-        assert!(errors.is_empty(), "{label}: runnable post-pass errors: {errors:?}");
-        let underground_warnings = issues.iter()
+        assert!(
+            errors.is_empty(),
+            "{label}: runnable post-pass errors: {errors:?}"
+        );
+        let underground_warnings = issues
+            .iter()
             .filter(|issue| {
                 issue.severity != Severity::Error && issue.category == "underground-belt"
             })
             .count();
-        let source_belts = layout.entities.iter()
+        let source_belts = layout
+            .entities
+            .iter()
             .filter(|entity| is_belt_entity(&entity.name))
             .count();
-        let compact_belts = runnable.entities.iter()
+        let compact_belts = runnable
+            .entities
+            .iter()
             .filter(|entity| is_belt_entity(&entity.name))
             .count();
         println!(
             "{label}: runnable={}x{} -> {}x{}, belts={} -> {} ({:+.1}%)",
-            layout.width, layout.height, runnable.width, runnable.height,
-            source_belts, compact_belts,
+            layout.width,
+            layout.height,
+            runnable.width,
+            runnable.height,
+            source_belts,
+            compact_belts,
             (compact_belts as f64 / source_belts as f64 - 1.0) * 100.0,
         );
         println!("{label}: underground warnings={underground_warnings}");
@@ -1751,20 +2714,25 @@ fn rfc057_machine_constraint_baseline() {
 #[ignore = "RFC-057 runnable whitespace-compaction baseline"]
 fn rfc057_strip_empty_columns_mil5ore() {
     use spaghettio_core::bus::compaction::{
-        compact_island_axis, extract_rigid_islands, extract_route_nets, occupied_bbox,
-        compact_transport_geometry, compact_validated_geometry, strip_empty_columns,
-        CompactAxis, PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
+        compact_island_axis, compact_transport_geometry, compact_validated_geometry,
+        extract_rigid_islands, extract_route_nets, occupied_bbox, strip_empty_columns, CompactAxis,
+        PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
     };
     use spaghettio_core::common::is_belt_entity;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
     let fixture = SimFixture::find("chain-mil5ore");
-    let inputs: FxHashSet<String> =
-        fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        fixture.target,
+        fixture.rate,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let source = fixture.compose_layout();
     let compacted = strip_empty_columns(&source);
     let underground_compacted = compact_transport_geometry(&source);
@@ -1773,19 +2741,23 @@ fn rfc057_strip_empty_columns_mil5ore() {
     let nets = extract_route_nets(&source);
     let islands = extract_rigid_islands(&source);
     for edge in production.edges.iter().filter(|edge| !edge.is_fluid) {
-        assert!(nets.iter().any(|net| {
-            net.item == edge.item
-                && net.terminals.iter().any(|terminal| {
-                    terminal.kind == RouteTerminalKind::ProducerDrop
-                        && terminal.recipe.as_ref().is_some_and(|recipe| {
-                            edge.producer_recipes.contains(recipe)
-                        })
-                })
-                && net.terminals.iter().any(|terminal| {
-                    terminal.kind == RouteTerminalKind::ConsumerPickup
-                        && terminal.recipe.as_deref() == Some(edge.consumer_recipe.as_str())
-                })
-        }), "no extracted route net covers edge {edge:?}");
+        assert!(
+            nets.iter().any(|net| {
+                net.item == edge.item
+                    && net.terminals.iter().any(|terminal| {
+                        terminal.kind == RouteTerminalKind::ProducerDrop
+                            && terminal
+                                .recipe
+                                .as_ref()
+                                .is_some_and(|recipe| edge.producer_recipes.contains(recipe))
+                    })
+                    && net.terminals.iter().any(|terminal| {
+                        terminal.kind == RouteTerminalKind::ConsumerPickup
+                            && terminal.recipe.as_deref() == Some(edge.consumer_recipe.as_str())
+                    })
+            }),
+            "no extracted route net covers edge {edge:?}"
+        );
     }
     assert_eq!(
         PlacedMachineSignature::from_layout(&source),
@@ -1808,7 +2780,8 @@ fn rfc057_strip_empty_columns_mil5ore() {
             Ok(v) => v,
             Err(e) => e.issues,
         };
-        let errors: Vec<_> = issues.iter()
+        let errors: Vec<_> = issues
+            .iter()
             .filter(|issue| issue.severity == Severity::Error)
             .collect();
         assert!(errors.is_empty(), "{label} candidate errors: {errors:?}");
@@ -1820,45 +2793,69 @@ fn rfc057_strip_empty_columns_mil5ore() {
         ("rfc057-mil5ore-underground", &underground_compacted),
         ("rfc057-mil5ore-cut", &cut_compacted),
     ] {
-        let (bp, manifest) =
-            spaghettio_core::blueprint::export_with_manifest(layout, &sr, label);
+        let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(layout, &sr, label);
         std::fs::write(format!("target/tmp/{label}.bp"), bp).unwrap();
         std::fs::write(
             format!("target/tmp/{label}.manifest.json"),
             serde_json::to_string_pretty(&manifest).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
     }
     println!(
         "chain-mil5ore: {}x{} -> {}x{}; entities={}",
-        source.width, source.height, compacted.width, compacted.height,
+        source.width,
+        source.height,
+        compacted.width,
+        compacted.height,
         compacted.entities.len(),
     );
-    let source_belts = source.entities.iter()
+    let source_belts = source
+        .entities
+        .iter()
         .filter(|entity| is_belt_entity(&entity.name))
         .count();
-    let underground_belts = underground_compacted.entities.iter()
+    let underground_belts = underground_compacted
+        .entities
+        .iter()
         .filter(|entity| is_belt_entity(&entity.name))
         .count();
     println!(
         "underground candidate: {}x{} entities={} belts={} ({:+.1}% belts)",
-        underground_compacted.width, underground_compacted.height,
-        underground_compacted.entities.len(), underground_belts,
+        underground_compacted.width,
+        underground_compacted.height,
+        underground_compacted.entities.len(),
+        underground_belts,
         (underground_belts as f64 / source_belts as f64 - 1.0) * 100.0,
     );
     println!(
         "validated-cut candidate: {}x{} entities={}",
-        cut_compacted.width, cut_compacted.height, cut_compacted.entities.len(),
+        cut_compacted.width,
+        cut_compacted.height,
+        cut_compacted.entities.len(),
     );
     println!("extracted {} replaceable route nets", nets.len());
     println!(
         "extracted {} rigid production islands: entities={} terminals={} largest={}",
         islands.len(),
-        islands.iter().map(|island| island.entity_indices.len()).sum::<usize>(),
-        islands.iter().map(|island| island.terminals.len()).sum::<usize>(),
-        islands.iter().map(|island| island.entity_indices.len()).max().unwrap_or(0),
+        islands
+            .iter()
+            .map(|island| island.entity_indices.len())
+            .sum::<usize>(),
+        islands
+            .iter()
+            .map(|island| island.terminals.len())
+            .sum::<usize>(),
+        islands
+            .iter()
+            .map(|island| island.entity_indices.len())
+            .max()
+            .unwrap_or(0),
     );
     let source_island_bbox = occupied_bbox(
-        &islands.iter().map(|island| island.block.clone()).collect::<Vec<_>>()
+        &islands
+            .iter()
+            .map(|island| island.block.clone())
+            .collect::<Vec<_>>(),
     );
     let mut placed_islands = islands.clone();
     for _ in 0..8 {
@@ -1866,17 +2863,22 @@ fn rfc057_strip_empty_columns_mil5ore() {
         placed_islands = compact_island_axis(&placed_islands, CompactAxis::Y, 1);
     }
     let placed_island_bbox = occupied_bbox(
-        &placed_islands.iter().map(|island| island.block.clone()).collect::<Vec<_>>()
+        &placed_islands
+            .iter()
+            .map(|island| island.block.clone())
+            .collect::<Vec<_>>(),
     );
     println!(
         "rigid-island bbox: {}x{} -> {}x{}",
-        source_island_bbox.0, source_island_bbox.1,
-        placed_island_bbox.0, placed_island_bbox.1,
+        source_island_bbox.0, source_island_bbox.1, placed_island_bbox.0, placed_island_bbox.1,
     );
     for net in nets.iter().take(12) {
         println!(
             "  net {}: segments={} entities={} terminals={}",
-            net.item, net.segments.len(), net.entity_indices.len(), net.terminals.len(),
+            net.item,
+            net.segments.len(),
+            net.entity_indices.len(),
+            net.terminals.len(),
         );
     }
 }
@@ -1896,9 +2898,15 @@ fn export_rfc057_compacted_candidates() {
         let inputs: FxHashSet<String> =
             fixture.inputs.iter().map(|item| item.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            fixture.target,
+            fixture.rate,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         let control = fixture.compose_layout();
         let compacted = compact_validated_geometry(&control, &sr);
         for (variant, layout) in [("control", &control), ("compact", &compacted)] {
@@ -1909,12 +2917,17 @@ fn export_rfc057_compacted_candidates() {
             std::fs::write(
                 format!("target/tmp/{label}.manifest.json"),
                 serde_json::to_string_pretty(&manifest).unwrap(),
-            ).unwrap();
+            )
+            .unwrap();
         }
         println!(
             "{fixture_label}: {}x{} / {} entities -> {}x{} / {} entities",
-            control.width, control.height, control.entities.len(),
-            compacted.width, compacted.height, compacted.entities.len(),
+            control.width,
+            control.height,
+            control.entities.len(),
+            compacted.width,
+            compacted.height,
+            compacted.entities.len(),
         );
     }
 }
@@ -1923,62 +2936,114 @@ fn export_rfc057_compacted_candidates() {
 #[test]
 #[ignore = "artifact producer"]
 fn export_mega_pu_for_sim() {
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "processing-unit", 4.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "processing-unit",
+        4.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let l = SimFixture::find("mega-chain-pu4raw").compose_layout();
-    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-pu4raw");
+    let (bp, manifest) =
+        spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-pu4raw");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/mega-chain-pu4raw.bp", &bp).unwrap();
-    std::fs::write("target/tmp/mega-chain-pu4raw.manifest.json",
-        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-    println!("wrote mega-chain-pu4raw.bp ({} in / {} out)", l.boundary_inputs.len(), l.boundary_outputs.len());
+    std::fs::write(
+        "target/tmp/mega-chain-pu4raw.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    println!(
+        "wrote mega-chain-pu4raw.bp ({} in / {} out)",
+        l.boundary_inputs.len(),
+        l.boundary_outputs.len()
+    );
 }
 
 /// Artifact producer for the kill-2 sim run.
 #[test]
 #[ignore = "artifact producer"]
 fn export_mega_chem_for_sim() {
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "crude-oil", "water", "coal",
-         "iron-plate", "copper-plate", "steel-plate"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = [
+        "iron-ore",
+        "copper-ore",
+        "crude-oil",
+        "water",
+        "coal",
+        "iron-plate",
+        "copper-plate",
+        "steel-plate",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "chemical-science-pack", 5.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "chemical-science-pack",
+        5.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let l = SimFixture::find("mega-chain-chem5raw").compose_layout();
-    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-chem5raw");
+    let (bp, manifest) =
+        spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-chem5raw");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/mega-chain-chem5raw.bp", &bp).unwrap();
-    std::fs::write("target/tmp/mega-chain-chem5raw.manifest.json",
-        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-    println!("wrote mega-chain-chem5raw.bp ({} in / {} out)", l.boundary_inputs.len(), l.boundary_outputs.len());
+    std::fs::write(
+        "target/tmp/mega-chain-chem5raw.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    println!(
+        "wrote mega-chain-chem5raw.bp ({} in / {} out)",
+        l.boundary_inputs.len(),
+        l.boundary_outputs.len()
+    );
 }
 
 /// Artifact producer for the Phase-B flagship sim run.
 #[test]
 #[ignore = "artifact producer"]
 fn export_mega_chain_for_sim() {
-    let inputs: FxHashSet<String> =
-        ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
-            .iter().map(|s| s.to_string()).collect();
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "advanced-circuit", 2.0, &inputs, &MachinePalette::default(),
-        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-    ).unwrap();
+        "advanced-circuit",
+        2.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let l = SimFixture::find("mega-chain-ac2raw").compose_layout();
-    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-ac2raw");
+    let (bp, manifest) =
+        spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-ac2raw");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/mega-chain-ac2raw.bp", &bp).unwrap();
-    std::fs::write("target/tmp/mega-chain-ac2raw.manifest.json",
-        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-    println!("wrote target/tmp/mega-chain-ac2raw.bp ({} in / {} out)",
-        l.boundary_inputs.len(), l.boundary_outputs.len());
+    std::fs::write(
+        "target/tmp/mega-chain-ac2raw.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    println!(
+        "wrote target/tmp/mega-chain-ac2raw.bp ({} in / {} out)",
+        l.boundary_inputs.len(),
+        l.boundary_outputs.len()
+    );
 }
 
 #[test]
@@ -1987,8 +3052,18 @@ fn probe_mega_cells() {
     use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
     for (label, item, rate, inputs) in [
-        ("plastic2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
-        ("plastic5", "plastic-bar", 5.0, &["crude-oil", "water", "coal"][..]),
+        (
+            "plastic2",
+            "plastic-bar",
+            2.0,
+            &["crude-oil", "water", "coal"][..],
+        ),
+        (
+            "plastic5",
+            "plastic-bar",
+            5.0,
+            &["crude-oil", "water", "coal"][..],
+        ),
         ("sulfur2", "sulfur", 2.0, &["crude-oil", "water"][..]),
     ] {
         match compose_mega_calibrated(item, rate, inputs) {
@@ -1997,12 +3072,26 @@ fn probe_mega_cells() {
                 match d {
                     Ok(is) => {
                         let e = is.iter().filter(|i| i.severity == Severity::Error).count();
-                        println!("{label}: {}x{} {} entities, {} errors / {} warnings; feeds {:?}",
-                            l.width, l.height, l.entities.len(), e, is.len() - e,
-                            l.boundary_inputs.iter().map(|b| (b.item.clone(), b.x)).collect::<Vec<_>>());
-                        for i in is.iter().take(8) { println!("   [{:?}] {} {}", i.severity, i.category, i.message); }
+                        println!(
+                            "{label}: {}x{} {} entities, {} errors / {} warnings; feeds {:?}",
+                            l.width,
+                            l.height,
+                            l.entities.len(),
+                            e,
+                            is.len() - e,
+                            l.boundary_inputs
+                                .iter()
+                                .map(|b| (b.item.clone(), b.x))
+                                .collect::<Vec<_>>()
+                        );
+                        for i in is.iter().take(8) {
+                            println!("   [{:?}] {} {}", i.severity, i.category, i.message);
+                        }
                     }
-                    Err(er) => println!("{label}: validate ERR {}", format!("{er}").lines().next().unwrap_or("")),
+                    Err(er) => println!(
+                        "{label}: validate ERR {}",
+                        format!("{er}").lines().next().unwrap_or("")
+                    ),
                 }
             }
             Err(e) => println!("{label}: REFUSED {e}"),
@@ -2016,25 +3105,330 @@ fn probe_mil5_errors() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::validate::{self, LayoutStyle};
     for (label, item, rate, inputs) in [
-        ("mil5-ore", "military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"][..]),
-        ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..]),
+        (
+            "mil5-ore",
+            "military-science-pack",
+            5.0,
+            &["iron-ore", "copper-ore", "stone", "coal"][..],
+        ),
+        (
+            "ec30",
+            "electronic-circuit",
+            30.0,
+            &["iron-plate", "copper-plate"][..],
+        ),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
-            item, rate, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
+            item,
+            rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
         println!("== {label}: {} specs ==", sr.machines.len());
         match compose_chain(&sr) {
             Ok(l) => match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
                 Ok(_) => println!("   validates OK"),
                 Err(er) => {
-                    for line in format!("{er}").lines().filter(|l| l.contains("error")).take(8) {
+                    for line in format!("{er}")
+                        .lines()
+                        .filter(|l| l.contains("error"))
+                        .take(8)
+                    {
                         println!("   {line}");
                     }
                 }
             },
             Err(e) => println!("   REFUSED: {e}"),
         }
+    }
+}
+
+/// Fold search: try different numbers of folds and positions on the
+/// compacted mil5-ore layout, validate each, report the squarest valid.
+#[test]
+#[ignore = "exploration probe — fold search"]
+fn probe_fold_search_mil5() {
+    use spaghettio_core::bus::compaction::{compact_validated_geometry, fold_snake};
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "stone", "coal"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "military-science-pack",
+        5.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+
+    let bus = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+        .expect("mil5-ore must compose");
+    let compact = compact_validated_geometry(&bus, &sr);
+    println!(
+        "compact baseline: {}x{} = {} tiles, {} entities",
+        compact.width,
+        compact.height,
+        compact.width * compact.height,
+        compact.entities.len(),
+    );
+    // Diag: show South-facing belts near x=274
+    for e in compact.entities.iter() {
+        if e.x == 274 && e.direction == spaghettio_core::models::EntityDirection::South {
+            println!("  DIAG: South belt at (274,{}) name={}", e.y, e.name);
+        }
+    }
+    // Show max y
+    let max_y = compact.entities.iter().map(|e| e.y).max().unwrap_or(0);
+    println!("  DIAG: max_y={max_y} height={}", compact.height);
+    // Check what's at (274, 32) in the original — should be nothing
+    let at_274_32: Vec<_> = compact
+        .entities
+        .iter()
+        .filter(|e| e.x == 274 && e.y == 32)
+        .collect();
+    println!("  DIAG: entities at (274,32): {}", at_274_32.len());
+    // Validate the compact baseline
+    let base_issues = validate::validate(&compact, Some(&sr), LayoutStyle::Bus).unwrap();
+    let base_errors = base_issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .count();
+    println!("  DIAG: compact baseline errors={base_errors}");
+
+    // DIAG: check what's at (158,8) in original compact
+    for e in compact.entities.iter() {
+        if e.x == 158 && e.y == 8 {
+            println!(
+                "  DIAG: orig(158,8): name={} dir={:?} io={:?}",
+                e.name, e.direction, e.io_type
+            );
+        }
+    }
+
+    // DIAG: check UG belts at x=139 (fold boundary for f=140)
+    for e in compact.entities.iter() {
+        if e.x == 139 && e.y == 15 && spaghettio_core::common::is_ug_belt(&e.name) {
+            println!(
+                "  DIAG: UG at (139,15): name={} dir={:?} io={:?}",
+                e.name, e.direction, e.io_type
+            );
+        }
+    }
+    // Check what's at x=140..143, y=15 (search range for express)
+    for x in 140..=148 {
+        for e in compact.entities.iter() {
+            if e.x == x && e.y == 15 && spaghettio_core::common::is_ug_belt(&e.name) {
+                println!(
+                    "  DIAG: UG at ({x},15): name={} dir={:?} io={:?}",
+                    e.name, e.direction, e.io_type
+                );
+            }
+        }
+    }
+
+    let w = compact.width;
+    let mut best: Option<(i32, i32, usize, Vec<i32>)> = None;
+
+    // First: exhaustive 1-fold search to find all valid fold positions.
+    println!("\n--- Exhaustive 1-fold search ---");
+    for f in 1..w {
+        let folds = vec![f];
+        let Some(folded) = fold_snake(&compact, &folds) else {
+            continue;
+        };
+        let issues = match validate::validate(&folded, Some(&sr), LayoutStyle::Bus) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let errors = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .count();
+        if errors == 0 {
+            let area = folded.width * folded.height;
+            let aspect = if folded.height > folded.width {
+                folded.height as f64 / folded.width as f64
+            } else {
+                folded.width as f64 / folded.height as f64
+            };
+            println!(
+                "  f={f}: {}x{} = {} tiles, {} entities, aspect={:.2}",
+                folded.width,
+                folded.height,
+                area,
+                folded.entities.len(),
+                aspect,
+            );
+            let best_aspect = best
+                .as_ref()
+                .map(|b| {
+                    if b.1 > b.0 {
+                        b.1 as f64 / b.0 as f64
+                    } else {
+                        b.0 as f64 / b.1 as f64
+                    }
+                })
+                .unwrap_or(f64::MAX);
+            if aspect < best_aspect {
+                best = Some((
+                    folded.width,
+                    folded.height,
+                    folded.entities.len(),
+                    folds.clone(),
+                ));
+            }
+        }
+    }
+
+    for n_folds in 2..=4u32 {
+        let ideal: Vec<i32> = (1..=n_folds)
+            .map(|i| w * i as i32 / (n_folds + 1) as i32)
+            .collect();
+        println!("\n--- {n_folds} folds: ideal positions {ideal:?} ---");
+
+        let max_tries = 1000u32;
+        let mut tried = 0u32;
+
+        // Try fold positions near the ideal, plus all valid columns.
+        let mut candidates: Vec<Vec<i32>> = Vec::new();
+        // Single-delta search around ideal.
+        for delta in -30..=30 {
+            let folds: Vec<i32> = ideal.iter().map(|&p| p + delta).collect();
+            let valid =
+                folds.iter().all(|&f| f > 0 && f < w) && folds.windows(2).all(|w| w[1] > w[0]);
+            if valid {
+                candidates.push(folds);
+            }
+        }
+
+        // Filter to pairs with reasonable segment widths (≥50 tiles each).
+        let reasonable: Vec<Vec<i32>> = candidates
+            .into_iter()
+            .filter(|folds| {
+                let mut bounds = vec![0];
+                bounds.extend(folds);
+                bounds.push(w);
+                bounds.windows(2).all(|b| b[1] - b[0] >= 30)
+            })
+            .collect();
+        println!(
+            "  {n_folds}-fold: {} reasonable candidates",
+            reasonable.len()
+        );
+        for folds in &reasonable {
+            tried += 1;
+            if tried > max_tries {
+                break;
+            }
+            let Some(folded) = fold_snake(&compact, folds) else {
+                if tried <= 10 {
+                    println!("  folds={folds:?}: fold_snake None (multi-tile entity cut?)");
+                }
+                continue;
+            };
+            let issues = match validate::validate(&folded, Some(&sr), LayoutStyle::Bus) {
+                Ok(v) => v,
+                Err(e) => {
+                    if tried <= 10 {
+                        let msg = format!("{e}");
+                        let first = msg.lines().next().unwrap_or("");
+                        println!("  folds={folds:?}: validate Err: {first}");
+                        for line in msg.lines().skip(1).take(15) {
+                            println!("    {line}");
+                        }
+                    }
+                    if folds == &vec![158_i32, 341] {
+                        for e in folded.entities.iter().filter(|e| e.x == 158 && e.y == 8) {
+                            println!(
+                                "    DIAG(158,8): name={} dir={:?} io={:?}",
+                                e.name, e.direction, e.io_type
+                            );
+                        }
+                        for e in folded.entities.iter().filter(|e| e.x == 157 && e.y == 8) {
+                            println!("    DIAG(157,8): name={} dir={:?}", e.name, e.direction);
+                        }
+                    }
+                    continue;
+                }
+            };
+            let errors = issues
+                .iter()
+                .filter(|i| i.severity == Severity::Error)
+                .count();
+            let area = folded.width * folded.height;
+            let aspect = if folded.height > folded.width {
+                folded.height as f64 / folded.width as f64
+            } else {
+                folded.width as f64 / folded.height as f64
+            };
+
+            if errors == 0 {
+                let tag = if aspect < 1.5 { " SQUARE" } else { "" };
+                println!(
+                    "  folds={folds:?}: {}x{} = {} tiles, {} entities, aspect={:.2}{tag}",
+                    folded.width,
+                    folded.height,
+                    area,
+                    folded.entities.len(),
+                    aspect,
+                );
+                let best_aspect = best
+                    .as_ref()
+                    .map(|b| {
+                        if b.1 > b.0 {
+                            b.1 as f64 / b.0 as f64
+                        } else {
+                            b.0 as f64 / b.1 as f64
+                        }
+                    })
+                    .unwrap_or(f64::MAX);
+                let best_area = best
+                    .as_ref()
+                    .map(|b| (b.0 * b.1) as i64)
+                    .unwrap_or(i64::MAX);
+                let better = best.is_none()
+                    || aspect < best_aspect
+                    || (aspect < 1.5 && (area as i64) < best_area);
+                if better {
+                    best = Some((
+                        folded.width,
+                        folded.height,
+                        folded.entities.len(),
+                        folds.clone(),
+                    ));
+                }
+            } else if tried <= 3 || folds == &vec![158_i32, 341] {
+                for i in issues.iter().take(3) {
+                    println!("    [{:?}] {}", i.severity, i.message);
+                }
+                if folds == &vec![158_i32, 341] {
+                    for e in folded.entities.iter().filter(|e| e.x == 158 && e.y == 8) {
+                        println!("    DIAG(158,8): name={} dir={:?}", e.name, e.direction);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((w, h, n, folds)) = best {
+        println!(
+            "\n=== BEST: folds={folds:?} -> {}x{} = {} tiles, {} entities ===",
+            w,
+            h,
+            w * h,
+            n,
+        );
+    } else {
+        println!("\n=== No valid fold found ===");
     }
 }

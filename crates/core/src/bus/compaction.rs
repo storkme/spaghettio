@@ -3876,3 +3876,502 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// RFC-057 Phase 2: snake-fold transform
+// ---------------------------------------------------------------------------
+
+/// Mirror an `EntityDirection` across the X axis (East ↔ West, N/S unchanged).
+fn mirror_x_direction(dir: EntityDirection) -> EntityDirection {
+    match dir {
+        EntityDirection::East => EntityDirection::West,
+        EntityDirection::West => EntityDirection::East,
+        _ => dir,
+    }
+}
+
+/// Replace UG-belt pairs that straddle any fold boundary with surface belts.
+///
+/// A pair straddles fold `f` when one half is at `x < f` and the other at
+/// `x >= f`.  Only East/West-facing pairs can straddle (South-facing pairs
+/// are perpendicular to the fold axis).
+fn replace_straddling_ug_pairs(entities: &[PlacedEntity], folds: &[i32]) -> Vec<PlacedEntity> {
+    let ug_at: BTreeMap<(i32, i32), usize> = entities
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| is_ug_belt(&e.name))
+        .map(|(i, e)| ((e.x, e.y), i))
+        .collect();
+
+    let mut to_surface: FxHashSet<usize> = FxHashSet::default();
+    for (idx, entity) in entities.iter().enumerate() {
+        if !is_ug_belt(&entity.name) || entity.io_type.as_deref() != Some("input") {
+            continue;
+        }
+        let (dx, _dy) = dir_to_vec(entity.direction);
+        if dx == 0 {
+            continue;
+        }
+        let max_reach = ug_max_reach(ug_to_surface_tier(&entity.name)) as i32;
+        // ug_max_reach returns tiles BETWEEN entrance and exit (exclusive),
+        // so the max step from entrance to exit is max_reach + 1.
+        for step in 1..=(max_reach + 1) {
+            let look_x = entity.x + dx * step;
+            if let Some(&out_idx) = ug_at.get(&(look_x, entity.y)) {
+                let out = &entities[out_idx];
+                if out.name == entity.name
+                    && out.direction == entity.direction
+                    && out.io_type.as_deref() == Some("output")
+                {
+                    for &f in folds {
+                        if (entity.x < f && out.x >= f) || (out.x < f && entity.x >= f) {
+                            to_surface.insert(idx);
+                            to_surface.insert(out_idx);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut result: Vec<PlacedEntity> = entities
+        .iter()
+        .enumerate()
+        .map(|(idx, e)| {
+            if to_surface.contains(&idx) {
+                let mut s = e.clone();
+                s.name = ug_to_surface_tier(&e.name).to_string();
+                s.io_type = None;
+                s
+            } else {
+                e.clone()
+            }
+        })
+        .collect();
+
+    // Fill in surface belts between replaced UG entrance/exit pairs.
+    // The UG pair spanned from entrance to exit with items going
+    // underground.  After replacement, we need surface belts at every
+    // tile between them to carry items across.
+    let existing: FxHashSet<(i32, i32)> = result.iter().map(|e| (e.x, e.y)).collect();
+    for (idx, entity) in entities.iter().enumerate() {
+        if !to_surface.contains(&idx) || entity.io_type.as_deref() != Some("input") {
+            continue;
+        }
+        let (dx, _dy) = dir_to_vec(entity.direction);
+        if dx == 0 {
+            continue;
+        }
+        let max_reach = ug_max_reach(ug_to_surface_tier(&entity.name)) as i32;
+        // Find the matching output (already confirmed to exist above).
+        for step in 1..=(max_reach + 1) {
+            let look_x = entity.x + dx * step;
+            if let Some(&out_idx) = ug_at.get(&(look_x, entity.y)) {
+                let out = &entities[out_idx];
+                if to_surface.contains(&out_idx) && out.io_type.as_deref() == Some("output") {
+                    // Fill in surface belts between entrance and exit,
+                    // but only on the same side of the fold as the entrance.
+                    let surface = ug_to_surface_tier(&entity.name);
+                    for fill_x in 1..step {
+                        let fx = entity.x + dx * fill_x;
+                        // Don't fill past any fold boundary.
+                        let same_side = folds
+                            .iter()
+                            .all(|&f| (entity.x < f && fx < f) || (entity.x >= f && fx >= f));
+                        if same_side && !existing.contains(&(fx, entity.y)) {
+                            result.push(PlacedEntity {
+                                name: surface.to_string(),
+                                x: fx,
+                                y: entity.y,
+                                direction: entity.direction,
+                                carries: entity.carries.clone(),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Helper: find surface belts at a given folded X going a specific direction.
+fn belts_at_x_going(
+    entities: &[PlacedEntity],
+    x: i32,
+    dir: EntityDirection,
+) -> Vec<(i32, String, Option<String>)> {
+    entities
+        .iter()
+        .filter(|e| e.x == x && e.direction == dir && is_surface_belt(&e.name))
+        .map(|e| (e.y, e.name.clone(), e.carries.clone()))
+        .collect()
+}
+
+/// Place a vertical U-turn chain at column `jx` connecting a belt at
+/// `(edge_x, y_top)` going `from_dir` to a belt at `(edge_x, y_bot)` going
+/// `to_dir`.
+fn place_uturn(
+    entities: &mut Vec<PlacedEntity>,
+    jx: i32,
+    edge_x: i32,
+    y_top: i32,
+    y_bot: i32,
+    from_dir: EntityDirection,
+    to_dir: EntityDirection,
+    belt_name: &str,
+    carries: &Option<String>,
+) {
+    // belt_name is a surface belt name (e.g. "express-transport-belt").
+    let surface_name = belt_name;
+    let ug_name = match belt_name {
+        "express-transport-belt" => "express-underground-belt",
+        "fast-transport-belt" => "fast-underground-belt",
+        "transport-belt" => "underground-belt",
+        _ => "underground-belt",
+    };
+    let max_reach = ug_max_reach(surface_name) as i32;
+
+    // Horizontal connector belts from edge_x to jx at y_top.
+    // The belt at (edge_x, y_top) going from_dir deposits at edge_x ± 1.
+    // We need belts from there to jx to carry items to the U-turn.
+    let (step_x, end_x) = if jx > edge_x {
+        (1, jx) // fill from edge_x+1 to jx-1 going East
+    } else {
+        (-1, jx) // fill from edge_x-1 to jx+1 going West
+    };
+    for x in (edge_x + step_x)..end_x {
+        if !entities.iter().any(|e| e.x == x && e.y == y_top) {
+            entities.push(PlacedEntity {
+                name: surface_name.to_string(),
+                x,
+                y: y_top,
+                direction: from_dir,
+                carries: carries.clone(),
+                ..Default::default()
+            });
+        }
+    }
+
+    // Belt at (jx, y_top) going South — receives from the horizontal belt.
+    entities.push(PlacedEntity {
+        name: surface_name.to_string(),
+        x: jx,
+        y: y_top,
+        direction: EntityDirection::South,
+        carries: carries.clone(),
+        ..Default::default()
+    });
+
+    // Vertical chain from y_top+1 to y_bot-1.
+    let mut cy = y_top + 1;
+    while cy < y_bot {
+        let remaining = y_bot - cy;
+        if remaining >= 2 && remaining - 1 <= max_reach {
+            entities.push(PlacedEntity {
+                name: ug_name.to_string(),
+                x: jx,
+                y: cy,
+                direction: EntityDirection::South,
+                io_type: Some("input".into()),
+                carries: carries.clone(),
+                ..Default::default()
+            });
+            entities.push(PlacedEntity {
+                name: ug_name.to_string(),
+                x: jx,
+                y: cy + remaining - 1,
+                direction: EntityDirection::South,
+                io_type: Some("output".into()),
+                carries: carries.clone(),
+                ..Default::default()
+            });
+            cy += remaining;
+        } else if remaining > max_reach + 1 {
+            entities.push(PlacedEntity {
+                name: ug_name.to_string(),
+                x: jx,
+                y: cy,
+                direction: EntityDirection::South,
+                io_type: Some("input".into()),
+                carries: carries.clone(),
+                ..Default::default()
+            });
+            entities.push(PlacedEntity {
+                name: ug_name.to_string(),
+                x: jx,
+                y: cy + max_reach,
+                direction: EntityDirection::South,
+                io_type: Some("output".into()),
+                carries: carries.clone(),
+                ..Default::default()
+            });
+            cy += max_reach + 1;
+            entities.push(PlacedEntity {
+                name: surface_name.to_string(),
+                x: jx,
+                y: cy,
+                direction: EntityDirection::South,
+                carries: carries.clone(),
+                ..Default::default()
+            });
+            cy += 1;
+        } else {
+            entities.push(PlacedEntity {
+                name: surface_name.to_string(),
+                x: jx,
+                y: cy,
+                direction: EntityDirection::South,
+                carries: carries.clone(),
+                ..Default::default()
+            });
+            cy += 1;
+        }
+    }
+
+    // Belt at (jx, y_bot) going to_dir — receives from South chain.
+    entities.push(PlacedEntity {
+        name: surface_name.to_string(),
+        x: jx,
+        y: y_bot,
+        direction: to_dir,
+        carries: carries.clone(),
+        ..Default::default()
+    });
+
+    // Horizontal connector belts from jx to edge_x at y_bot.
+    // The U-turn belt at (jx, y_bot) going to_dir deposits at jx ± 1.
+    // We need belts from there to edge_x to carry items back to the segment.
+    if edge_x > jx {
+        // edge_x is to the right: fill from jx+1 to edge_x-1 going to_dir.
+        for x in (jx + 1)..edge_x {
+            if !entities.iter().any(|e| e.x == x && e.y == y_bot) {
+                entities.push(PlacedEntity {
+                    name: surface_name.to_string(),
+                    x,
+                    y: y_bot,
+                    direction: to_dir,
+                    carries: carries.clone(),
+                    ..Default::default()
+                });
+            }
+        }
+    } else {
+        // edge_x is to the left: fill from jx-1 down to edge_x+1 going to_dir.
+        for x in (edge_x + 1)..jx {
+            if !entities.iter().any(|e| e.x == x && e.y == y_bot) {
+                entities.push(PlacedEntity {
+                    name: surface_name.to_string(),
+                    x,
+                    y: y_bot,
+                    direction: to_dir,
+                    carries: carries.clone(),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+}
+
+/// Snake-fold a layout at the given fold columns.
+///
+/// The layout is divided into `folds.len() + 1` vertical segments.  Even
+/// segments keep their X orientation; odd segments are mirrored.  At each
+/// fold junction, belts that were cut are reconnected with vertical
+/// U-turns in the empty junction column.
+///
+/// Returns `None` if any fold column cuts through a multi-tile entity
+/// interior or the folds are out of order.
+pub fn fold_snake(layout: &LayoutResult, folds: &[i32]) -> Option<LayoutResult> {
+    if folds.is_empty() {
+        return Some(layout.clone());
+    }
+    for w in folds.windows(2) {
+        if w[0] >= w[1] {
+            return None;
+        }
+    }
+    for &f in folds {
+        if f <= 0 || f >= layout.width {
+            return None;
+        }
+    }
+    for &f in folds {
+        for entity in &layout.entities {
+            let (w, _) = entity_dims(&entity.name, entity.direction);
+            if entity.x < f && entity.x + w > f {
+                return None;
+            }
+        }
+    }
+
+    let h = layout.height;
+    let gap = 2;
+
+    let mut bounds = vec![0];
+    bounds.extend_from_slice(folds);
+    bounds.push(layout.width);
+    let n_segs = bounds.len() - 1;
+
+    // 1. Replace straddling UG pairs with surface belts.
+    let entities = replace_straddling_ug_pairs(&layout.entities, folds);
+
+    // 2. Left-align all segments to x=0.  This prevents X-overlap between
+    // segments at different Y levels (the main multi-fold failure mode).
+    // The junction columns go OUTSIDE the segment range.
+    let max_seg_w = (0..n_segs)
+        .map(|k| bounds[k + 1] - bounds[k])
+        .max()
+        .unwrap_or(0);
+
+    // 3. Transform every entity.
+    let mut folded: Vec<PlacedEntity> = Vec::with_capacity(entities.len());
+    for entity in &entities {
+        let seg = (0..n_segs).find(|&k| entity.x >= bounds[k] && entity.x < bounds[k + 1]);
+        let Some(seg) = seg else { continue };
+        let (new_x, new_dir) = if seg % 2 == 0 {
+            (entity.x - bounds[seg], entity.direction)
+        } else {
+            let (w, _) = entity_dims(&entity.name, entity.direction);
+            let nx = bounds[seg + 1] - w - entity.x;
+            (nx, mirror_x_direction(entity.direction))
+        };
+        let new_y = entity.y + (seg as i32) * (h + gap);
+
+        let mut e = entity.clone();
+        e.x = new_x;
+        e.y = new_y;
+        e.direction = new_dir;
+        folded.push(e);
+    }
+
+    // 4. Place U-turns at each fold junction.
+    //
+    // Junctions are placed OUTSIDE the segment range: East→West folds use
+    // x = max_seg_w + 2*i (right side), West→East folds use x = -1 - 2*i
+    // (left side), where i is the chain index (staggered to avoid overlap).
+    for k in 0..n_segs - 1 {
+        let seg_w_k = bounds[k + 1] - bounds[k];
+        let y_top_base = (k as i32) * (h + gap);
+        let y_bot_base = ((k + 1) as i32) * (h + gap);
+
+        if k % 2 == 0 {
+            let edge_x = seg_w_k - 1;
+            let cut_belts = belts_at_x_going(&folded, edge_x, EntityDirection::East);
+            for (i, (y, name, carries)) in cut_belts.iter().enumerate() {
+                if *y < y_top_base || *y >= y_top_base + h {
+                    continue;
+                }
+                let jx = max_seg_w + (i as i32) * 2;
+                let y_bot = y - y_top_base + y_bot_base;
+                place_uturn(
+                    &mut folded,
+                    jx,
+                    edge_x,
+                    *y,
+                    y_bot,
+                    EntityDirection::East,
+                    EntityDirection::West,
+                    name,
+                    carries,
+                );
+            }
+        } else {
+            let edge_x = 0;
+            let cut_belts = belts_at_x_going(&folded, edge_x, EntityDirection::West);
+            for (i, (y, name, carries)) in cut_belts.iter().enumerate() {
+                if *y < y_top_base || *y >= y_top_base + h {
+                    continue;
+                }
+                let jx = -1 - (i as i32) * 2;
+                let y_bot = y - y_top_base + y_bot_base;
+                place_uturn(
+                    &mut folded,
+                    jx,
+                    edge_x,
+                    *y,
+                    y_bot,
+                    EntityDirection::West,
+                    EntityDirection::East,
+                    name,
+                    carries,
+                );
+            }
+        }
+    }
+
+    // 5. Bridge gap for dead-end South belts at segment boundaries.
+    //
+    // Belts at the bottom edge of a segment (y = seg_end - 1) going South
+    // deposited outside the layout in the original. After folding, they
+    // deposit into the gap. Place a belt going East at the gap row to
+    // redirect items along the gap (avoids item-mismatch with whatever
+    // is at the same x in the next segment).
+    for k in 0..n_segs - 1 {
+        let seg_end_y = (k as i32) * (h + gap) + h; // first gap row
+                                                    // Find surface belts at y = seg_end_y - 1 going South.
+        let edge_belts: Vec<(i32, String, Option<String>)> = folded
+            .iter()
+            .filter(|e| {
+                e.y == seg_end_y - 1
+                    && e.direction == EntityDirection::South
+                    && is_surface_belt(&e.name)
+            })
+            .map(|e| (e.x, e.name.clone(), e.carries.clone()))
+            .collect();
+        for (x, name, carries) in &edge_belts {
+            // Place a belt going East at (x, seg_end_y) to redirect.
+            if !folded.iter().any(|e| e.x == *x && e.y == seg_end_y) {
+                folded.push(PlacedEntity {
+                    name: name.clone(),
+                    x: *x,
+                    y: seg_end_y,
+                    direction: EntityDirection::East,
+                    carries: carries.clone(),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    // 6. Compute new dimensions and normalise X origin.
+    let min_x = folded.iter().map(|e| e.x).min().unwrap_or(0);
+    let max_x = folded.iter().map(|e| e.x).max().unwrap_or(0);
+    let max_y = folded.iter().map(|e| e.y).max().unwrap_or(0);
+    let x_shift = if min_x < 0 { -min_x } else { 0 };
+    if x_shift > 0 {
+        for e in &mut folded {
+            e.x += x_shift;
+        }
+    }
+    let new_width = (max_x - min_x + 1).max(1);
+    let new_height = (max_y + 1).max(1);
+
+    // 6. Build the result.
+    let mut result = LayoutResult {
+        entities: folded,
+        width: new_width,
+        height: new_height,
+        ..layout.clone()
+    };
+    result.regions.clear();
+    result.trace = None;
+    result.power_wires = Some(crate::power_wires::compute_pole_wires(
+        &result.entities,
+        result.wire_mode,
+    ));
+    for b in &mut result.boundary_inputs {
+        b.x += x_shift;
+    }
+    for b in &mut result.boundary_outputs {
+        b.x += x_shift;
+    }
+    for (_, x, _) in &mut result.surplus_exits {
+        *x += x_shift;
+    }
+    Some(result)
+}
