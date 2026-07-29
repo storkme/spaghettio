@@ -83,14 +83,24 @@ per side, which is what capped every layout at one item each way:
   side inverts — it fills from the far side and climbs the other way, so the
   deepest row needs the largest column.
 
-`InputStranded` no longer fires on any multi-fold — **verified rather than
-inferred**, because "the check went quiet" is not evidence on its own, and item
-5 below predicted that adaptive gap sizing would invalidate the edge test this
-check relies on. Instrumenting every evaluation across the fold ladder: 504
-input checks, of which **82 are interior** (`on_edge=false`) and **all 82 are
-`supplied=true`** — the same 82. The interior branch still fires, and those
-cases pass because the feed pass genuinely supplies them, not because the test
-stopped discriminating. `SPAGHETTIO_FOLD_DEBUG=1` reproduces it.
+`InputStranded` no longer fires on **candidates that clear the gap-lane pass**.
+That scoping matters: `fold_snake` returns on a `GapLaneConflict` some 200 lines
+before the stranding check runs, so a candidate that dies on a lane clash is
+never measured. The stranding-prone candidates may be exactly the ones dying
+earlier — this does not establish anything about them.
+
+What it does establish, instrumenting every evaluation across the fold ladder:
+504 input checks, of which **82 are interior** (`on_edge=false`) and **all 82
+are `supplied=true`** — the same 82. So among candidates that get that far, the
+interior branch still fires and passes because the feed pass genuinely supplies
+them, not because the test stopped discriminating. That was worth checking,
+because "the check went quiet" is not evidence on its own, and the retained note
+in item 3 predicted adaptive gap sizing would invalidate this very edge test.
+`SPAGHETTIO_FOLD_DEBUG=1` reproduces it.
+
+Re-measure once the shared-column crossing is fixed and lane clashes stop
+refusing candidates — that is when the excluded population finally reaches the
+check.
 
 **The remaining blocker**, measured rather than assumed:
 
@@ -140,8 +150,12 @@ Measured across the corpus (`probe_fold_corpus`, before per-item lanes):
 Two things fall out and still hold. Legal columns are 40–50% everywhere, so
 column legality is **never** the binding constraint — the pipe-adjacency
 hypothesis for chem was wrong. And `pu4raw` records **zero** `InputStranded`,
-failing on `ExitLaneConflict` alone — the one fixture where a single class
-blocks everything, which is why the exit side was tackled first.
+failing with **zero** `InputStranded` — the only fixture where fixing the input
+side could not help at all, which is why the exit side was tackled first. (It
+still records 23 `JunctionBlocked`, so lane conflict is not its sole refusal —
+just its dominant one, and the only one input work could not touch.) By raw
+count `InputStranded` is the larger refusal on three of the four fixtures
+(121 vs 21, 132 vs 22, 107 vs 46); only `pu4raw` inverts that.
 
 By raw count `InputStranded` is the larger refusal on three of the four
 fixtures (121 vs 21, 132 vs 22, 107 vs 46); only `pu4raw` inverts that. "Fix
@@ -199,7 +213,7 @@ Adversarial review also raised two it could not exercise:
   looseness itself remains a latent risk: re-run that measurement if
   junction-column *placement* ever changes.
 
-### 5. Lower-confidence items
+### 4. Lower-confidence items
 
 - The continuity invariant (`RunSevered`) false-positived twice on splitter
   footprints — a 180° rotation swaps which physical tile the anchor names. It
