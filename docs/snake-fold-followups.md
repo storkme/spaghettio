@@ -72,17 +72,28 @@ Reward: 3-fold reaches 152×132 (1.15:1) on mil5.
 ### 2. Three of four corpus fixtures find no fold
 
 `mega-chain-chem5raw`, `mega-chain-pu4raw` and `mega-chain-usp2raw` all yield
-nothing. `search_snake_fold` now reports legal-column count, refusals by
-cause, and validation rejections for the not-found path — read those before
-theorising. Untested hypotheses:
+nothing. `search_snake_fold` reports legal-column count, refusals by cause,
+and validation rejections for the not-found path — read those before
+theorising.
 
-Measured for `chem5raw` (700×55): **275 of 699 columns are legal**, refusals
-`InputStranded` 132, `ExitLaneConflict` 22, `JunctionBlocked` 15, and *zero*
-rejected by validation. The pipe-adjacency hypothesis is therefore **wrong** —
-columns are not the constraint. Since a single fold cannot strand inputs, the
-`InputStranded` count is all from k≥2, and chem's one-fold candidates die on
-`ExitLaneConflict`: chemistry emits several *different* items on its bottom
-edge, and a gap has one lane per side.
+Measured across the corpus (`probe_fold_corpus`):
+
+| fixture | legal cols | ExitLane | InputStranded | JunctionBlocked | rejected-by-validation |
+|---|---:|---:|---:|---:|---:|
+| `chain-mil5ore` | 251/551 | 21 | 121 | 29 | 9 → folds |
+| `mega-chain-chem5raw` | 275/699 | 22 | 132 | 15 | 0 |
+| `mega-chain-pu4raw` | 1052/2380 | **173** | **0** | 23 | 0 |
+| `mega-chain-usp2raw` | 888/1938 | 46 | 107 | 43 | 0 |
+
+Two things fall out. Legal columns are 40–50% everywhere, so column legality
+is **never** the binding constraint and the pipe-adjacency hypothesis for
+chem was wrong. And `pu4raw` records **zero** `InputStranded` — it fails on
+`ExitLaneConflict` alone. Since a single fold cannot strand an input, every
+fixture's one-fold candidates die the same way: several *different* items
+leave on the bottom edge, and a gap carries one lane per side.
+
+**`ExitLaneConflict` is therefore the highest-value fix in this backlog.** It
+alone blocks `pu4raw` completely, and it is a prerequisite for the other two.
 
 **Fix shape, shared with (1):** one lane per distinct item, gap height sized
 to fit. Sizing the gap is easy and was tried; the hard part is that a second
