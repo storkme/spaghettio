@@ -19,6 +19,33 @@ changes.
   validation subagents → post. With `--comment` (which we pass —
   load-bearing) it posts inline comments on findings or a
   "No issues found" summary comment when clean.
+### Failure class 6: reviewed once, merged much later (2026-07-29)
+
+`claude-review` fires on every push, but two independent mechanisms conspire
+to make only the FIRST push get a review:
+
+- the plugin's own gate declines to re-review a PR Claude has already
+  commented on;
+- the guard below checks PR-**lifetime** coverage, so once any review exists
+  every later push passes trivially.
+
+Observed on #481: the bot reviewed the PR and found four real bugs, then six
+further commits — including the fixes for those four bugs and a substantial
+power-network change — landed and merged with no review of any of them. The
+check was green throughout, correctly by its own rules.
+
+The prompt now carries an explicit re-review rule: "already reviewed" is not a
+valid skip when new commits have landed, and on a `synchronize` event the run
+is told its `before..after` range and asked to name that range in its comment.
+Only the triviality gate justifies a skip, and it still requires the one-line
+notice.
+
+**Not yet done:** the guard is still PR-lifetime. Making it require coverage on
+the current head SHA would enforce this rather than merely asking for it, but
+that is only safe once the prompt change is observed working — otherwise it
+reds every follow-up push. Sequencing is deliberate: fix the behaviour, watch
+it, then tighten the gate.
+
 - [`clear-agent-reviewed.yml`](../.github/workflows/clear-agent-reviewed.yml)
   — drops the `agent-reviewed` label when new commits land, so a new head
   SHA gets re-reviewed.
