@@ -1660,24 +1660,33 @@ fn compose_chain_with_capacity_and_order(
         }
     }
     let width = entities.iter().map(|e| e.x).max().unwrap_or(0) + 1;
+    // Spanning pole line. The step is measured from the LAST POLE ACTUALLY
+    // PLACED, not from an absolute grid: pitch 8 against wire reach 9 leaves
+    // exactly one tile of slack, so a pole nudged forward past congestion put
+    // itself out of reach of its predecessor and silently broke the chain it
+    // was nudging to preserve (nudged gap 12, or 16 when no free tile was
+    // found at all — both > 9). Advancing from the last placement keeps every
+    // consecutive gap within reach regardless of how far a nudge travelled.
+    let mut last_x: Option<i32> = None;
     let mut px = 1;
     while px < width {
-        for nudge in 0..5 {
-            let x = px + nudge;
-            if !occupied.contains(&(x, band_bottom)) {
-                entities.push(PlacedEntity {
-                    name: "medium-electric-pole".into(), x, y: band_bottom,
-                    direction: EntityDirection::North,
-                    segment_id: Some("pole".into()), ..Default::default()
-                });
-                break;
-            }
+        let placed_at = (0..5).map(|n| px + n).find(|&x| {
+            x < width + 4 && !occupied.contains(&(x, band_bottom))
+        });
+        if let Some(x) = placed_at {
+            occupied.insert((x, band_bottom));
+            entities.push(PlacedEntity {
+                name: "medium-electric-pole".into(), x, y: band_bottom,
+                direction: EntityDirection::North,
+                segment_id: Some("pole".into()), ..Default::default()
+            });
+            last_x = Some(x);
         }
-        px += 8;
+        px = last_x.map_or(px + 8, |x| x + 8);
     }
 
     let height = (entities.iter().map(|e| e.y).max().unwrap_or(0) + 1).max(band_bottom + 2);
-    Ok(LayoutResult {
+    let mut composed = LayoutResult {
         entities,
         width,
         height,
@@ -1697,5 +1706,12 @@ fn compose_chain_with_capacity_and_order(
         // can cross-check them against the translated pipe entities (#476).
         surplus_exits,
         ..Default::default()
-    })
+    };
+    // Heuristic pole placement leaves islands, which is why
+    // `build_bus_layout` follows its own placement with this repair.
+    // Composition never did, and shipped layouts whose power network was in
+    // as many as 41 pieces — every machine covered, most of them unreachable
+    // from any single power source. Additive: bridge poles only.
+    crate::bus::layout::repair_pole_network(&mut composed);
+    Ok(composed)
 }

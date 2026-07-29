@@ -622,6 +622,29 @@ impl SimFixture {
 /// mega-chain exporters keep the identical defect after the first version
 /// of this gate landed, because a coverage gap was indistinguishable from
 /// a deliberate exclusion.
+/// Which registry pins have moved, all of them, without aborting on the first.
+///
+/// Deliberately a separate probe rather than a flag on the gate above: a real
+/// gate that turns into a no-op when an environment variable is set is one
+/// stray CI export away from protecting nothing.
+#[test]
+#[ignore = "survey — re-blessing aid, reports every moved pin"]
+fn probe_registry_pin_survey() {
+    use spaghettio_core::bus::cells::registry::{entries, geometry_hash};
+    for e in entries() {
+        let candidates: Vec<(&str, String)> = SIM_FIXTURES
+            .iter()
+            .filter(|f| f.target == e.target && (f.rate - e.rate).abs() < 1e-9)
+            .map(|f| (f.label, format!("{:016x}", geometry_hash(&f.compose_layout()))))
+            .collect();
+        let ok = candidates.iter().any(|(_, h)| *h == e.geometry_hash);
+        println!(
+            "{:<24}@{:<5} {}  blessed={} fresh={:?}",
+            e.target, e.rate, if ok { "OK   " } else { "MOVED" }, e.geometry_hash, candidates
+        );
+    }
+}
+
 #[test]
 fn chain_fixture_geometry_matches_registry() {
     use spaghettio_core::bus::cells::registry::{entries, geometry_hash};
@@ -3644,6 +3667,40 @@ fn export_fold_report_json() {
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/fold-report.json", out).unwrap();
     println!("wrote target/tmp/fold-report.json");
+}
+
+/// Export `mega-chain-chem5raw` at its registry-declared capacity, for
+/// re-blessing its pinned geometry after a change.
+///
+/// The registry pin carries a SIM-VERIFIED claim, so moving the hash without
+/// re-measuring would attach yesterday's evidence to today's factory — the
+/// exact failure its own assert message warns about.
+#[test]
+#[ignore = "sim export — re-bless the chem5 registry pin"]
+fn export_chem5_for_rebless() {
+    let fixture = SimFixture::find("mega-chain-chem5raw");
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    )
+    .unwrap();
+    let mut l = fixture.compose_layout();
+    // Registry entry declares inserter_capacity 2 / stacking 1.
+    l.inserter_capacity = 2;
+    let tag = "chem5-rebless";
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, tag);
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write(format!("target/tmp/{tag}.bp"), &bp).unwrap();
+    std::fs::write(
+        format!("target/tmp/{tag}.manifest.json"),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    ).unwrap();
+    println!(
+        "wrote target/tmp/{tag}.bp — {}x{}, {} entities, hash {:016x}",
+        l.width, l.height, l.entities.len(),
+        spaghettio_core::bus::cells::registry::geometry_hash(&l),
+    );
 }
 
 /// How often does the NORMAL pipeline emit a fragmented pole network?
