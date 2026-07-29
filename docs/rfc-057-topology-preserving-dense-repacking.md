@@ -864,6 +864,33 @@ make either experimental composer a production default.
   adds zero bridges here, because compaction has removed precisely the free
   tiles a bridge pole needs. That is the open problem.
 
+  **RESOLVED (2026-07-29, same day): the fold's power network is whole, and
+  Factorio agrees.** `replace_poles` had been stripping every pole and
+  re-placing from scratch, on the reasoning that pole positions depend on
+  final geometry. Wrong for this transform: a fold is a RIGID MOTION per
+  segment, so poles inside a segment keep their relative positions and a
+  connected source network stays connected within each segment — only the
+  seams break. Stripping discarded a good network and rebuilt a worse one with
+  `place_poles`, which is shaped for row layouts. Keeping the transformed
+  poles and bridging only the seams takes `chain-mil5ore` from 89 unreachable
+  poles to **zero**.
+
+  Two earlier fixes had to land before this was even visible: the cell
+  composer's pole repair (so the source network is connected at all — the
+  control went from 1 power warning to 0), and the de-aggregated connectivity
+  check (without which 2 and 89 both read as `{"power": 1}`).
+
+  | | geometry | aspect | produced | delivered | machines | pole networks | verdict |
+  |---|---|---|---:|---:|---:|---:|---|
+  | control | 553×32 | 17.28:1 | 5.00/s | 5.00/s | 146 | 1 | PASS |
+  | folded | 277×66 | 4.20:1 | 5.00/s* | 5.02/s | 146 | **1** | PASS |
+
+  \* the reported −1.6% is sampling phase: the window series alternates
+  4.92/5.08 with a mean of exactly 5.00, and every intermediate item measures
+  at plan. `power: 1 pole network` is the number that matters here — the
+  harness energises each network separately, so anything above 1 would have
+  been masked.
+
   The decisive finding is a **validator blind spot**. An earlier version of
   that same fold validated at exact control parity and produced *nothing* in
   Factorio: 0.00/s, 36 of 146 machines working, 110 with `full_output`, rates

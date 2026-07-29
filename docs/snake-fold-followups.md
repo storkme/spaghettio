@@ -1,9 +1,10 @@
 # Snake-fold followups
 
-**Status (2026-07-29):** single fold is verified for **throughput** on
-`chain-mil5ore` and **refused** on power — it fragments the pole network
-(2 disconnected poles to 89). See "The second trap" below before trusting any
-result in this document. Multi-fold and three of the four corpus fixtures do not
+**Status (2026-07-29):** single fold is verified on `chain-mil5ore` for
+throughput **and** power — 5.00/s, 146/146 machines, and one connected pole
+network, against a control that measures the same. The power fragmentation
+that previously blocked it is fixed. Read "The second trap" below anyway: it
+is why the fragmentation went unnoticed, and the reasoning generalises. Multi-fold and three of the four corpus fixtures do not
 fold; the causes below are diagnosed, not guessed. Owning design doc:
 [`rfc-057-topology-preserving-dense-repacking.md`](rfc-057-topology-preserving-dense-repacking.md),
 whose decision log carries the measurements.

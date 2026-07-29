@@ -131,12 +131,14 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 PR #481 — RFC ACTIVE, not closed)**: a single fold is Factorio-verified.
 `chain-mil5ore` goes 552x32 (17.25:1) to 276x66 (4.18:1) at **5.00/s produced
 with 146 of 146 machines working** — the unfolded control's exact census, both
-runs converged at `--warmup 216000`. **Throughput only**: the same fold takes
-disconnected power poles from 2 to 89, which neither the validator (it
-aggregated the count into one warning) nor the sim (the harness energises every
-pole network separately) could see. With the validator fixed the fold is
-correctly refused. Do not read a green sim as evidence about a blueprint's own
-wire graph. Bus layouts fold too: `gear15-ore` reaches
+runs converged at `--warmup 216000`, and the folded artifact measures **one
+pole network** — the whole factory on a single grid. Getting there needed three
+fixes that only made sense together: the cell composer's pole repair (the
+source network was itself in pieces), the de-aggregated connectivity check
+(2 and 89 unreachable poles both reported as one warning), and repairing the
+fold's seams rather than re-placing every pole. Standing lesson from the
+detour: the sim harness energises every pole network it finds, so a green sim
+is not evidence about a blueprint's own wire graph — check that separately. Bus layouts fold too: `gear15-ore` reaches
 55x65 (1.18:1) on **three** folds. Folding stays refused as a *density* lever
 (measured routing headroom ~20%); its value is shape, since a 2,381-tile-wide
 ribbon is not a factory anyone builds. Reachable only from tests — deliberately
