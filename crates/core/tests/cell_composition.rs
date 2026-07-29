@@ -3520,6 +3520,132 @@ fn export_fold_pair_for_sim() {
     }
 }
 
+/// Dump source-vs-folded geometry as JSON for the visual report.
+///
+/// One character per tile, classified by entity family, so the renderer can
+/// colour belts, machines, pipes and the rest differently without shipping
+/// per-entity records for tens of thousands of entities.
+#[test]
+#[ignore = "report export — feeds the fold visualisation"]
+fn export_fold_report_json() {
+    use spaghettio_core::bus::compaction::{compact_validated_geometry, search_snake_fold};
+    use spaghettio_core::models::LayoutResult;
+
+    fn class_of(name: &str) -> char {
+        use spaghettio_core::common::*;
+        if is_machine_entity(name) {
+            'm'
+        } else if is_splitter(name) {
+            's'
+        } else if is_ug_belt(name) {
+            'u'
+        } else if is_belt_entity(name) {
+            'b'
+        } else if is_inserter(name) {
+            'i'
+        } else if name.starts_with("pipe") {
+            'p'
+        } else if name.ends_with("electric-pole") || name == "substation" {
+            'e'
+        } else {
+            'o'
+        }
+    }
+
+    fn grid(l: &LayoutResult) -> String {
+        let (w, h) = (l.width.max(1) as usize, l.height.max(1) as usize);
+        let mut g = vec![b'.'; w * h];
+        for e in &l.entities {
+            let (ew, eh) = spaghettio_core::common::entity_size(&e.name);
+            let c = class_of(&e.name) as u8;
+            for dx in 0..(ew as i32).max(1) {
+                for dy in 0..(eh as i32).max(1) {
+                    let (x, y) = (e.x + dx, e.y + dy);
+                    if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h {
+                        let i = y as usize * w + x as usize;
+                        // machines win over belts so footprints read clearly
+                        if g[i] == b'.' || c == b'm' {
+                            g[i] = c;
+                        }
+                    }
+                }
+            }
+        }
+        String::from_utf8(g).unwrap()
+    }
+
+    fn counts(l: &LayoutResult) -> String {
+        let mut m = std::collections::BTreeMap::new();
+        for e in &l.entities {
+            *m.entry(class_of(&e.name)).or_insert(0usize) += 1;
+        }
+        m.iter()
+            .map(|(k, v)| format!("\"{k}\":{v}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    struct Case {
+        label: &'static str,
+        arch: &'static str,
+        item: &'static str,
+        rate: f64,
+        inputs: &'static [&'static str],
+        machine: &'static str,
+        cell: bool,
+    }
+    let cases = [
+        Case { label: "chain-mil5ore", arch: "cell", item: "military-science-pack", rate: 5.0,
+               inputs: &["iron-ore", "copper-ore", "stone", "coal"], machine: "assembling-machine-3", cell: true },
+        Case { label: "gear15-ore", arch: "bus", item: "iron-gear-wheel", rate: 15.0,
+               inputs: &["iron-ore"], machine: "assembling-machine-2", cell: false },
+        Case { label: "ec10-ore", arch: "bus", item: "electronic-circuit", rate: 10.0,
+               inputs: &["iron-ore", "copper-ore"], machine: "assembling-machine-1", cell: false },
+    ];
+
+    let mut out = String::from("[\n");
+    for (n, c) in cases.iter().enumerate() {
+        let inputs_set: FxHashSet<String> = c.inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            c.item, c.rate, &inputs_set, &MachinePalette::default(), c.machine,
+            &FxHashSet::default(), QualityTier::Normal,
+        )
+        .unwrap();
+        let base = if c.cell {
+            SimFixture::find(c.label).compose_layout()
+        } else {
+            layout::build_bus_layout(&sr, layout::LayoutOptions::default()).unwrap()
+        };
+        let compact = compact_validated_geometry(&base, &sr);
+        let search = search_snake_fold(&compact, &sr, 4);
+        let Some(found) = &search.best else {
+            println!("{}: no fold, skipped", c.label);
+            continue;
+        };
+        let f = &found.layout;
+        if n > 0 {
+            out.push_str(",\n");
+        }
+        out.push_str(&format!(
+            "{{\"label\":\"{}\",\"arch\":\"{}\",\"item\":\"{}\",\"rate\":{},\"folds\":{:?},\n\
+             \"src\":{{\"w\":{},\"h\":{},\"n\":{},\"counts\":{{{}}},\"grid\":\"{}\"}},\n\
+             \"fold\":{{\"w\":{},\"h\":{},\"n\":{},\"counts\":{{{}}},\"grid\":\"{}\"}}}}",
+            c.label, c.arch, c.item, c.rate, found.folds,
+            compact.width, compact.height, compact.entities.len(), counts(&compact), grid(&compact),
+            f.width, f.height, f.entities.len(), counts(f), grid(f),
+        ));
+        println!(
+            "{}: {}x{} -> {}x{} ({} -> {} entities)",
+            c.label, compact.width, compact.height, f.width, f.height,
+            compact.entities.len(), f.entities.len()
+        );
+    }
+    out.push_str("\n]\n");
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write("target/tmp/fold-report.json", out).unwrap();
+    println!("wrote target/tmp/fold-report.json");
+}
+
 /// Does the fold work on BUS layouts, not just cell chains?
 ///
 /// Every fold measurement so far has been on `compose_chain_*` output — the

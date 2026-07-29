@@ -293,6 +293,92 @@ pub(crate) fn resolve_row_spec<'a>(
 /// extends the same entity-cross-checked acceptance fluids already had —
 /// the step-7 solid-surplus merger records an exit tile in
 /// `LayoutResult::surplus_exits` the same way the fluid trunk router does.
+/// A boundary record is a ledger entry; the entity at its tile is the fact.
+///
+/// `boundary_inputs` / `boundary_outputs` say where the factory expects to
+/// receive and hand over goods. Everything downstream treats them as
+/// authoritative — blueprint export, and the sim harness, which places its
+/// source and collection chests at exactly these coordinates. Nothing
+/// previously checked they still described reality.
+///
+/// That gap is not hypothetical. A layout transform relocated an output belt
+/// to a new bounding-box edge and left the record on the old tile. The
+/// geometry was flawless and validation passed with an issue profile
+/// identical to the untransformed control; in Factorio the factory produced
+/// **0.00/s**, because output arrived where nothing collected it and every
+/// producer upstream backed up behind a full buffer.
+///
+/// `check_stranded_byproducts` already applies exactly this reasoning to
+/// `surplus_exits` and `voided_streams` — "a ledger without the physical
+/// entity is exactly the stalled-machine bug this check exists to catch". It
+/// was never extended to the primary product, which is the one boundary the
+/// factory exists to serve.
+///
+/// The assertion is deliberately narrow: the tile must hold a transport
+/// entity of the right family carrying the right item. Facing is not checked,
+/// because a boundary belt may legitimately run along an edge rather than
+/// through it, and a false error here would be worse than the gap.
+pub fn check_boundary_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
+    let mut issues = Vec::new();
+
+    let mut check = |record: &crate::models::BoundaryRecord, role: &str| {
+        let matched = layout.entities.iter().any(|e| {
+            e.x == record.x
+                && e.y == record.y
+                && if record.is_fluid {
+                    e.name == "pipe" || e.name == "pipe-to-ground"
+                } else {
+                    crate::common::is_belt_entity(&e.name)
+                }
+        });
+        if !matched {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                category: "boundary-record-integrity".to_string(),
+                message: format!(
+                    "{role} boundary for {} claims ({},{}), but no {} entity is there —                      goods would be handed over at a tile nothing reaches",
+                    record.item,
+                    record.x,
+                    record.y,
+                    if record.is_fluid { "pipe" } else { "belt" },
+                ),
+                x: Some(record.x),
+                y: Some(record.y),
+                detail: None,
+            });
+            return;
+        }
+        // Present, but carrying something else: the record and the geometry
+        // disagree about what crosses here.
+        let carries_ok = layout.entities.iter().any(|e| {
+            e.x == record.x
+                && e.y == record.y
+                && e.carries.as_deref() == Some(record.item.as_str())
+        });
+        if !carries_ok {
+            issues.push(ValidationIssue {
+                severity: Severity::Warning,
+                category: "boundary-record-integrity".to_string(),
+                message: format!(
+                    "{role} boundary for {} at ({},{}) sits on transport that does not                      carry {}",
+                    record.item, record.x, record.y, record.item,
+                ),
+                x: Some(record.x),
+                y: Some(record.y),
+                detail: None,
+            });
+        }
+    };
+
+    for record in &layout.boundary_inputs {
+        check(record, "Input");
+    }
+    for record in &layout.boundary_outputs {
+        check(record, "Output");
+    }
+    issues
+}
+
 pub fn check_stranded_byproducts(
     layout: &LayoutResult,
     solver: &SolverResult,
@@ -539,6 +625,7 @@ pub fn validate(
                 .unwrap_or_default()
         }),
         Box::new(|| check_unresolved_junctions(layout)),
+        Box::new(|| check_boundary_record_integrity(layout)),
         Box::new(|| {
             solver
                 .map(|s| check_stranded_byproducts(layout, s))
@@ -593,6 +680,60 @@ mod tests {
             height: 0,
             ..Default::default()
         }
+    }
+
+    /// Reconstructs the failure this check exists for: a transform moved the
+    /// output belt and left the boundary record behind. The geometry is
+    /// entirely legal — a belt, carrying the right item, correctly placed —
+    /// which is why every geometry check passed while the factory produced
+    /// nothing in Factorio.
+    #[test]
+    fn stale_boundary_output_record_is_an_error() {
+        use crate::models::BoundaryRecord;
+        let belt_at = |x: i32, y: i32| PlacedEntity {
+            name: "transport-belt".to_string(),
+            x,
+            y,
+            direction: EntityDirection::South,
+            carries: Some("iron-plate".to_string()),
+            ..Default::default()
+        };
+
+        // The belt actually lives at (5,9).
+        let mut layout = LayoutResult {
+            entities: vec![belt_at(5, 9)],
+            width: 10,
+            height: 10,
+            ..Default::default()
+        };
+        let record = |x: i32, y: i32| BoundaryRecord {
+            item: "iron-plate".to_string(),
+            x,
+            y,
+            direction: EntityDirection::South,
+            is_fluid: false,
+            entity: "transport-belt".to_string(),
+        };
+
+        // Record agrees with the belt: nothing to report.
+        layout.boundary_outputs = vec![record(5, 9)];
+        assert!(
+            check_boundary_record_integrity(&layout).is_empty(),
+            "a record that matches its belt must not be flagged"
+        );
+
+        // Record left behind at the pre-transform tile.
+        layout.boundary_outputs = vec![record(5, 3)];
+        let issues = check_boundary_record_integrity(&layout);
+        assert_eq!(issues.len(), 1, "stale record must be reported: {issues:?}");
+        assert_eq!(issues[0].severity, Severity::Error);
+        assert_eq!(issues[0].category, "boundary-record-integrity");
+
+        // Inputs get the same treatment; they were previously checked for
+        // fluids only, so a solid input record was unguarded entirely.
+        layout.boundary_outputs = vec![];
+        layout.boundary_inputs = vec![record(5, 3)];
+        assert_eq!(check_boundary_record_integrity(&layout).len(), 1);
     }
 
     fn layout_with_machine() -> LayoutResult {
