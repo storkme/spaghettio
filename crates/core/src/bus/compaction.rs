@@ -4576,121 +4576,22 @@ pub enum FoldRefusal {
     InputStranded { at: (i32, i32) },
 }
 
-/// Re-place power poles for a layout whose geometry has moved.
+/// Reconnect a folded layout's power network.
 ///
-/// Poles are the one thing a fold cannot carry along. `build_bus_layout`
-/// places them LAST, after routing, precisely because their positions depend
-/// on final geometry; translating the originals leaves a network that is
-/// correct nowhere — segments end up tens of tiles apart and the copper-wire
-/// graph fragments into islands. That shows up as `power` warnings on a fold
-/// whose belts are all perfect, which is what blocked most bus fixtures.
+/// This used to strip every pole and re-place from scratch, on the reasoning
+/// that poles depend on final geometry. That was wrong: a fold is a RIGID
+/// MOTION per segment, so poles inside a segment keep their relative
+/// positions, and a connected source network stays connected within each
+/// segment — only the seams between segments break. Re-placing discarded a
+/// good network and rebuilt a worse one with `place_poles`, which is shaped
+/// for row layouts rather than folded geometry. On `chain-mil5ore` that turned
+/// a fully connected source into 89 unreachable poles.
 ///
-/// Strips existing poles, rebuilds the coverage subjects and occupancy from
-/// what remains, and runs the same placement the pipeline uses.
+/// So: keep what the transform produced, and bridge only what the seams
+/// severed.
 fn replace_poles(layout: &LayoutResult) -> LayoutResult {
-    use crate::common::{is_inserter, is_machine_entity};
-
-    let mut kept: Vec<PlacedEntity> = layout
-        .entities
-        .iter()
-        .filter(|e| !e.name.ends_with("electric-pole") && e.name != "substation")
-        .cloned()
-        .collect();
-
-    let mut machines: Vec<(i32, i32, i32)> = Vec::new();
-    let mut inserters: Vec<(i32, i32)> = Vec::new();
-    let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
-    for ent in &kept {
-        if is_machine_entity(&ent.name) {
-            let (mw, mh) = crate::common::machine_dims(&ent.name);
-            let (mw, mh) = (mw as i32, mh as i32);
-            for dx in 0..mw {
-                for dy in 0..mh {
-                    occupied.insert((ent.x + dx, ent.y + dy));
-                }
-            }
-            machines.push((ent.x + mw / 2, ent.y, mh));
-        } else {
-            occupied.insert((ent.x, ent.y));
-            if is_inserter(&ent.name) {
-                inserters.push((ent.x, ent.y));
-            }
-            if crate::common::is_splitter(&ent.name) {
-                let (sx, sy) = crate::common::splitter_second_tile(ent);
-                occupied.insert((sx, sy));
-            }
-        }
-    }
-
-    // Quality is per-entity here; take it from a machine, since pole supply
-    // radius and wire reach both scale with it.
-    let quality = layout
-        .entities
-        .iter()
-        .find(|e| crate::common::is_machine_entity(&e.name))
-        .and_then(|e| e.quality)
-        .unwrap_or_default();
-    let (poles, _uncovered) = crate::bus::layout::place_poles(
-        &machines,
-        &inserters,
-        &occupied,
-        &[],
-        quality,
-    );
-    kept.extend(poles);
-
-    // Placement alone leaves islands. `build_bus_layout` follows it with
-    // `repair_pole_connectivity`, which drops bridge poles until the emitted
-    // wire graph is ONE component; skipping that step here produced a folded
-    // layout whose 89 poles formed two separate networks — a factory that
-    // pastes into a real game as two dead halves.
-    //
-    // It was invisible for two reasons worth remembering: the connectivity
-    // check aggregated its count into one warning, so the fold's admission
-    // gate saw the same issue count as the control; and the sim harness
-    // energises every pole network it finds, so the measured run powered both
-    // islands and passed.
-    // `repair_pole_connectivity` treats every element of the vec it is given
-    // as a wire node — it calls `pole_center` on each — so it takes a
-    // poles-ONLY vec, as the pipeline gives it. Handing it the whole layout
-    // makes it read belts and machines as poles, conclude the graph is one
-    // component, and return having done nothing.
-    let is_pole_ent =
-        |e: &PlacedEntity| e.name.ends_with("electric-pole") || e.name == "substation";
-    let mut pole_ents: Vec<PlacedEntity> =
-        kept.iter().filter(|e| is_pole_ent(e)).cloned().collect();
-    kept.retain(|e| !is_pole_ent(e));
-
-    let placed_tiles: FxHashSet<(i32, i32)> = pole_ents.iter().map(|e| (e.x, e.y)).collect();
-    let mut occupied_after = occupied.clone();
-    for tile in &placed_tiles {
-        occupied_after.insert(*tile);
-    }
-    let before = pole_ents.len();
-    crate::bus::layout::repair_pole_connectivity(
-        &mut pole_ents,
-        &placed_tiles,
-        &occupied_after,
-        quality,
-    );
-    if std::env::var("SPAGHETTIO_FOLD_DEBUG").is_ok() {
-        let w = crate::power_wires::compute_pole_wires(&pole_ents, layout.wire_mode);
-        eprintln!(
-            "replace_poles: {before} poles, bridges added {}, still disconnected {}",
-            pole_ents.len() - before,
-            crate::power_wires::count_disconnected_poles(&pole_ents, &w),
-        );
-    }
-    kept.extend(pole_ents);
-
-    let mut out = LayoutResult {
-        entities: kept,
-        ..layout.clone()
-    };
-    out.power_wires = Some(crate::power_wires::compute_pole_wires(
-        &out.entities,
-        out.wire_mode,
-    ));
+    let mut out = layout.clone();
+    crate::bus::layout::repair_pole_network(&mut out);
     out
 }
 
