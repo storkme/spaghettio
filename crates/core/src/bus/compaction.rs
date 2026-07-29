@@ -497,6 +497,39 @@ pub fn compact_transport_geometry(layout: &LayoutResult) -> LayoutResult {
 /// valid factory. This is the exact #456-style post-pass baseline: everything
 /// on the right of a cut moves together, equivalent seam belts coalesce, and
 /// the move is committed only when full validation remains error-free.
+/// Apply a transform only if it validates no worse than its input.
+///
+/// `compact_transport_geometry` was applied unguarded at the head of all three
+/// compaction entry points, and the failure mode is self-reinforcing: if it
+/// introduces an error, every subsequent coordinate-cut candidate inherits
+/// that error, so every candidate is rejected, no cut commits, and the
+/// function returns exactly the broken unvalidated layout it started from.
+/// The per-cut validation below can never catch it, because it only ever
+/// examines candidates derived FROM it.
+///
+/// Compaction is an optimisation. Declining to compact is always acceptable;
+/// returning a broken factory is not.
+fn accept_if_no_worse(
+    input: &LayoutResult,
+    candidate: LayoutResult,
+    solver: &SolverResult,
+) -> LayoutResult {
+    use crate::validate::{self, LayoutStyle, Severity};
+    let errors = |l: &LayoutResult| -> usize {
+        match validate::validate(l, Some(solver), LayoutStyle::Bus) {
+            Ok(issues) => issues,
+            Err(error) => error.issues,
+        }
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .count()
+    };
+    if errors(&candidate) > errors(input) {
+        return input.clone();
+    }
+    candidate
+}
+
 pub fn compact_validated_columns(
     layout: &LayoutResult,
     solver: &SolverResult,
@@ -504,7 +537,7 @@ pub fn compact_validated_columns(
 ) -> LayoutResult {
     use crate::validate::{self, LayoutStyle, Severity};
 
-    let mut current = compact_transport_geometry(layout);
+    let mut current = accept_if_no_worse(layout, compact_transport_geometry(layout), solver);
     let mut commits = 0;
     let mut cut = 1;
     while cut < current.width && commits < max_commits {
@@ -536,7 +569,7 @@ pub fn compact_validated_rows(
 ) -> LayoutResult {
     use crate::validate::{self, LayoutStyle, Severity};
 
-    let mut current = compact_transport_geometry(layout);
+    let mut current = accept_if_no_worse(layout, compact_transport_geometry(layout), solver);
     let mut commits = 0;
     let mut cut = 1;
     while cut < current.height && commits < max_commits {
@@ -561,7 +594,7 @@ pub fn compact_validated_rows(
 /// Full safe compaction entry point: transport resynthesis followed by
 /// alternating validated X/Y coordinate cuts to a small fixed point.
 pub fn compact_validated_geometry(layout: &LayoutResult, solver: &SolverResult) -> LayoutResult {
-    let mut current = compact_transport_geometry(layout);
+    let mut current = accept_if_no_worse(layout, compact_transport_geometry(layout), solver);
     for _ in 0..3 {
         let columns = compact_validated_columns(&current, solver, usize::MAX);
         let next = compact_validated_rows(&columns, solver, usize::MAX);
@@ -1564,19 +1597,46 @@ pub fn plan_local_manifolds(
 
 const LOCAL_BALANCER_FAN: u32 = 4;
 
-fn merger_stages(mut inputs: u32) -> Vec<BalancerStage> {
+/// Predict the merge tree `build_local_manifold_graph` will actually build.
+///
+/// It must mirror that builder's chunking exactly, because
+/// `all_mergers_stampable` and `producer_stages` are derived from this and
+/// never cross-checked against the graph. The previous formulation folded the
+/// remainder back into the next level's input count instead of emitting it as
+/// its own node, so the two diverged whenever `inputs % 4` was 2 or 3 — at 6
+/// producers it predicted 2 nodes against the builder's 3, and likewise at 7
+/// and 10. Ordinary counts, not edge cases, and the stampability guarantee was
+/// being checked against a tree that was never built.
+fn merger_stages(inputs: u32) -> Vec<BalancerStage> {
     let mut stages = Vec::new();
-    while inputs > 1 {
-        let fan = inputs.min(LOCAL_BALANCER_FAN);
-        let copies = inputs / fan;
-        if copies > 0 {
+    let mut frontier = inputs;
+    while frontier > 1 {
+        // The builder walks the frontier in chunks of `LOCAL_BALANCER_FAN`:
+        // each full chunk becomes an (n,1) node, a trailing chunk of 2 or more
+        // becomes its own smaller node, and a lone leftover passes through
+        // untouched to the next level.
+        let full = frontier / LOCAL_BALANCER_FAN;
+        let remainder = frontier % LOCAL_BALANCER_FAN;
+        let mut next = 0;
+        if full > 0 {
             stages.push(BalancerStage {
-                n: fan,
+                n: LOCAL_BALANCER_FAN,
                 m: 1,
-                copies,
+                copies: full,
             });
+            next += full;
         }
-        inputs = copies + inputs % fan;
+        if remainder >= 2 {
+            stages.push(BalancerStage {
+                n: remainder,
+                m: 1,
+                copies: 1,
+            });
+            next += 1;
+        } else {
+            next += remainder;
+        }
+        frontier = next;
     }
     stages
 }
@@ -3798,6 +3858,42 @@ mod tests {
         );
     }
 
+    /// `merger_stages` predicts the merge tree; `build_local_manifold_graph`
+    /// builds it. They must agree, because `all_mergers_stampable` and
+    /// `producer_stages` are derived from the prediction and never
+    /// cross-checked against the graph — so a divergence means the
+    /// stampability guarantee is being checked against a tree nobody builds.
+    /// They diverged at 6, 7 and 10 producers: ordinary counts, not edges.
+    #[test]
+    fn merger_stage_prediction_matches_the_built_graph() {
+        for inputs in 2u32..40 {
+            let predicted: u32 = merger_stages(inputs).iter().map(|s| s.copies).sum();
+
+            // Mirror of the builder's frontier chunking: walk in chunks of
+            // LOCAL_BALANCER_FAN,each chunk of 2+ becomes a node, a lone
+            // leftover passes through.
+            let mut frontier = inputs as usize;
+            let mut built = 0u32;
+            while frontier > 1 {
+                let mut next = 0usize;
+                let mut i = 0usize;
+                while i < frontier {
+                    let chunk = (frontier - i).min(LOCAL_BALANCER_FAN as usize);
+                    if chunk > 1 {
+                        built += 1;
+                    }
+                    next += 1;
+                    i += chunk;
+                }
+                frontier = next;
+            }
+            assert_eq!(
+                predicted, built,
+                "inputs={inputs}: predicted {predicted} merge nodes, builder makes {built}"
+            );
+        }
+    }
+
     #[test]
     fn rigid_islands_bind_direct_insertion_and_expose_belt_terminals() {
         let machine = |x, recipe: &str| crate::models::PlacedEntity {
@@ -4752,6 +4848,21 @@ pub fn fold_snake(
                 _ => continue,
             };
 
+            // The connector's legs are horizontal, and `place_uturn` stamps
+            // every tile of the bottom leg with the DOWNSTREAM belt's
+            // direction. If that belt runs vertically — a tap turning at the
+            // fold column, which nothing above excludes — the leg becomes a
+            // row of north/south belts that cannot carry items along it and
+            // dump into whatever sits beside them. Refuse: reconnecting into
+            // a turn needs a sideload this pass does not synthesize.
+            if !matches!(
+                down.direction,
+                EntityDirection::East | EntityDirection::West
+            ) {
+                return Err(FoldRefusal::JunctionBlocked {
+                    at: (down.x, down.y),
+                });
+            }
             let (Some((ux, uy, udir)), Some((dx_, dy_, ddir))) = (transform(up), transform(down))
             else {
                 continue;
@@ -5192,9 +5303,22 @@ pub fn fold_snake(
     }
 
     // 6. Compute new dimensions and normalise X origin.
+    // Footprint-inclusive, not anchor-only: a 3x3 assembler anchored at the
+    // bottom row occupies two rows below its anchor, so an anchor-derived
+    // height under-reports by up to `footprint - 1` and the declared
+    // dimensions describe a box the factory does not fit in. The rest of this
+    // function already uses `entity_dims`; this was the one place that did not.
     let min_x = folded.iter().map(|e| e.x).min().unwrap_or(0);
-    let max_x = folded.iter().map(|e| e.x).max().unwrap_or(0);
-    let max_y = folded.iter().map(|e| e.y).max().unwrap_or(0);
+    let max_x = folded
+        .iter()
+        .map(|e| e.x + entity_dims(&e.name, e.direction).0 - 1)
+        .max()
+        .unwrap_or(0);
+    let max_y = folded
+        .iter()
+        .map(|e| e.y + entity_dims(&e.name, e.direction).1 - 1)
+        .max()
+        .unwrap_or(0);
     let x_shift = if min_x < 0 { -min_x } else { 0 };
     if x_shift > 0 {
         for e in &mut folded {
