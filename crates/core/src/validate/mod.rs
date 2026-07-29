@@ -8,7 +8,6 @@ mod fluids;
 pub mod modules;
 pub mod power;
 pub mod sushi;
-pub mod underground;
 
 pub use fluids::{
     check_fluid_network_connectivity, check_fluid_port_connectivity, check_pipe_isolation,
