@@ -3550,6 +3550,39 @@ fn probe_fold_error_breakdown_mil5() {
         compact.entities.len()
     );
 
+    {
+        println!("  --- boundaries: source vs folded ---");
+        for b in &compact.boundary_inputs {
+            println!("      IN  src {} ({},{}) dir={:?}", b.item, b.x, b.y, b.direction);
+        }
+        for b in &compact.boundary_outputs {
+            println!("      OUT src {} ({},{}) dir={:?}", b.item, b.x, b.y, b.direction);
+        }
+        if let Ok(f) = spaghettio_core::bus::compaction::fold_snake(&compact, &[compact.width / 2]) {
+            for b in &f.boundary_inputs {
+                println!("      IN  fold {} ({},{}) dir={:?}", b.item, b.x, b.y, b.direction);
+            }
+            for b in &f.boundary_outputs {
+                println!("      OUT fold {} ({},{}) dir={:?}", b.item, b.x, b.y, b.direction);
+            }
+        } else {
+            println!("      (fold currently refused; boundaries unavailable)");
+        }
+        println!("  --- source around (489,8) ---");
+        let mut near: Vec<_> = compact
+            .entities
+            .iter()
+            .filter(|e| (e.x - 489).abs() <= 5 && (e.y - 8).abs() <= 2)
+            .collect();
+        near.sort_by_key(|e| (e.y, e.x));
+        for e in near {
+            println!(
+                "      ({},{}) {} dir={:?} io={:?} carries={:?}",
+                e.x, e.y, e.name, e.direction, e.io_type, e.carries
+            );
+        }
+    }
+
     // Control: whatever the compacted source already warns about is not
     // something folding introduced.
     let base = validate::validate(&compact, Some(&sr), LayoutStyle::Bus).unwrap();

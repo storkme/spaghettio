@@ -4454,6 +4454,9 @@ pub enum FoldRefusal {
     CornerNotATurn,
     /// Reconnection produced implausibly many entities — a runaway backstop.
     EntityExplosion,
+    /// A belt run that continued in the source now dead-ends. Carries the
+    /// source tile whose hand-off was lost.
+    RunSevered { at: (i32, i32) },
 }
 
 /// Snake-fold a layout at the given fold columns.
@@ -4698,6 +4701,13 @@ pub fn fold_snake(
     let edge_min_x = folded.iter().map(|e| e.x).min().unwrap_or(0);
     let edge_max_x = folded.iter().map(|e| e.x).max().unwrap_or(0);
 
+    // An exit that gets rerouted along a gap lane finishes somewhere new.
+    // Its boundary record has to follow it: the record is where a consumer
+    // (or the sim harness) expects to collect the output, and leaving it at
+    // the old tile means the factory produces into a spot nothing drains —
+    // every producer upstream then backs up and the whole line stalls.
+    let mut exit_moved: BTreeMap<(i32, i32), ((i32, i32), EntityDirection)> = BTreeMap::new();
+
     // 5. Give the layout's original exits somewhere to go.
     //
     // A belt on the source layout's bottom edge facing South deposited
@@ -4731,7 +4741,10 @@ pub fn fold_snake(
 
             // item claimed per tile on this row, so a conflict is detectable.
             let mut claimed: BTreeMap<i32, Option<String>> = BTreeMap::new();
+            let _ = &exit_moved;
             let mut pending: Vec<PlacedEntity> = Vec::new();
+            // Where each exit now finishes, so its boundary record can follow.
+            let mut termini: Vec<((i32, i32), (i32, i32), EntityDirection)> = Vec::new();
             for (x, name, carries) in &exits {
                 // Only true segment content can be an exit. A U-turn's
                 // vertical run passes through these same rows at a junction
@@ -4787,6 +4800,11 @@ pub fn fold_snake(
                         });
                     }
                 }
+                let term_x = if to_left { lo } else { hi };
+                termini.push(((*x, src_y), (term_x, row), dir));
+            }
+            for (from, to, dir) in termini {
+                exit_moved.insert(from, (to, dir));
             }
             folded.extend(pending);
         }
@@ -4802,6 +4820,144 @@ pub fn fold_snake(
     // bug in here refuses a fold instead of taking out the machine.
     if folded.len() > entities.len() * 2 + 1024 {
         return Err(FoldRefusal::EntityExplosion);
+    }
+
+    // 5c. Belt continuity: folding may not create a dead end.
+    //
+    // Every belt that handed off to another belt in the source must still
+    // hand off in the fold, or else leave the bounding box the way an output
+    // does. A severed run that nothing reconnected is not a geometry error —
+    // the tiles are all perfectly legal — so it surfaces far away as a
+    // starved machine ("items can't reach input", "delivers 0.0/s"), which is
+    // exactly the kind of silent functional break this transform must not
+    // produce. Checking it here turns that into an explicit refusal.
+    {
+        // Footprints, not anchors: a belt handing off to a splitter feeds
+        // whichever of its two tiles it abuts, which is often not the tile
+        // the splitter is anchored at.
+        let belt_tiles = |src: &[PlacedEntity]| -> FxHashSet<(i32, i32)> {
+            let mut tiles = FxHashSet::default();
+            for e in src.iter().filter(|e| is_belt_entity(&e.name)) {
+                let (w, hh) = entity_dims(&e.name, e.direction);
+                for dx in 0..w.max(1) {
+                    for dy in 0..hh.max(1) {
+                        tiles.insert((e.x + dx, e.y + dy));
+                    }
+                }
+            }
+            tiles
+        };
+        let src_belt = belt_tiles(&entities);
+        let out_belt = belt_tiles(&folded);
+        let (lo_x, hi_x) = (
+            folded.iter().map(|e| e.x).min().unwrap_or(0),
+            folded.iter().map(|e| e.x).max().unwrap_or(0),
+        );
+        let (lo_y, hi_y) = (
+            folded.iter().map(|e| e.y).min().unwrap_or(0),
+            folded.iter().map(|e| e.y).max().unwrap_or(0),
+        );
+
+        let debug = std::env::var("SPAGHETTIO_FOLD_DEBUG").is_ok();
+        let mut severed: Vec<((i32, i32), &'static str)> = Vec::new();
+
+        for e in entities.iter().filter(|e| is_belt_entity(&e.name)) {
+            // An underground entrance hands off to its exit, not to the tile
+            // in front of it.
+            if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("input") {
+                continue;
+            }
+            let (dx, dy) = dir_to_vec(e.direction);
+            let (w, hh) = entity_dims(&e.name, e.direction);
+            let hands_off = |tiles: &FxHashSet<(i32, i32)>, x: i32, y: i32, w: i32, hh: i32, d: (i32, i32)| {
+                (0..w.max(1)).any(|ox| {
+                    (0..hh.max(1)).any(|oy| tiles.contains(&(x + ox + d.0, y + oy + d.1)))
+                })
+            };
+            if !hands_off(&src_belt, e.x, e.y, w, hh, (dx, dy)) {
+                continue; // already a terminus in the source
+            }
+            let Some((nx, ny, ndir)) = transform(e) else {
+                continue;
+            };
+            let (ndx, ndy) = dir_to_vec(ndir);
+            let (nw, nh) = entity_dims(&e.name, ndir);
+            let leaves_box = (0..nw.max(1)).any(|ox| {
+                (0..nh.max(1)).any(|oy| {
+                    let (fx, fy) = (nx + ox + ndx, ny + oy + ndy);
+                    fx < lo_x || fx > hi_x || fy < lo_y || fy > hi_y
+                })
+            });
+            if !hands_off(&out_belt, nx, ny, nw, nh, (ndx, ndy)) && !leaves_box {
+                severed.push(((e.x, e.y), "downstream"));
+            }
+        }
+
+        // And the mirror: a belt that HAD an upstream feeder must still have
+        // one. A severed run is usually not a dead end — it is perfectly well
+        // connected downstream and simply has nothing arriving, which is why
+        // it reads as "items can't reach input" on a machine rather than as a
+        // belt error on the run itself.
+        // Every footprint tile hands off, not just the anchor. A splitter is
+        // two tiles across the flow and outputs from both; keying off the
+        // anchor alone made a belt fed by a splitter's far tile look unfed —
+        // and the 180° rotation swaps which physical tile the anchor names,
+        // so it only ever showed up after folding.
+        let fed_tiles = |src: &[PlacedEntity]| -> FxHashSet<(i32, i32)> {
+            let mut fed = FxHashSet::default();
+            for e in src.iter().filter(|e| is_belt_entity(&e.name)) {
+                if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("input") {
+                    continue;
+                }
+                let (dx, dy) = dir_to_vec(e.direction);
+                let (w, hh) = entity_dims(&e.name, e.direction);
+                for ox in 0..w.max(1) {
+                    for oy in 0..hh.max(1) {
+                        fed.insert((e.x + ox + dx, e.y + oy + dy));
+                    }
+                }
+            }
+            fed
+        };
+        let src_fed = fed_tiles(&entities);
+        let out_fed = fed_tiles(&folded);
+
+        for e in entities.iter().filter(|e| is_belt_entity(&e.name)) {
+            let (w, hh) = entity_dims(&e.name, e.direction);
+            let had_feed = (0..w.max(1)).any(|dx| {
+                (0..hh.max(1)).any(|dy| src_fed.contains(&(e.x + dx, e.y + dy)))
+            });
+            if !had_feed {
+                continue;
+            }
+            let Some((nx, ny, ndir)) = transform(e) else {
+                continue;
+            };
+            let (nw, nh) = entity_dims(&e.name, ndir);
+            let still_fed = (0..nw.max(1))
+                .any(|dx| (0..nh.max(1)).any(|dy| out_fed.contains(&(nx + dx, ny + dy))));
+            if !still_fed {
+                severed.push(((e.x, e.y), "upstream"));
+            }
+        }
+
+        if debug && !severed.is_empty() {
+            eprintln!("fold {folds:?}: {} severed belt(s)", severed.len());
+            for ((x, y), side) in severed.iter().take(24) {
+                let e = entities
+                    .iter()
+                    .find(|e| e.x == *x && e.y == *y && is_belt_entity(&e.name));
+                eprintln!(
+                    "  ({x},{y}) {side} name={:?} dir={:?} carries={:?}",
+                    e.map(|e| e.name.as_str()),
+                    e.map(|e| e.direction),
+                    e.and_then(|e| e.carries.clone()),
+                );
+            }
+        }
+        if let Some((at, _)) = severed.first() {
+            return Err(FoldRefusal::RunSevered { at: *at });
+        }
     }
 
     // 5b. Lane integrity at every U-turn corner.
@@ -4911,8 +5067,21 @@ pub fn fold_snake(
         (b.x, b.y) = fold_point(b.x, b.y);
     }
     for b in &mut result.boundary_outputs {
-        b.direction = fold_dir(b.x, b.direction);
-        (b.x, b.y) = fold_point(b.x, b.y);
+        let folded_dir = fold_dir(b.x, b.direction);
+        let (fx, fy) = fold_point(b.x, b.y);
+        // `fold_point` already applied the x-shift; the relocation map is in
+        // pre-shift coordinates.
+        match exit_moved.get(&(fx - x_shift, fy)) {
+            Some(((tx, ty), tdir)) => {
+                b.x = tx + x_shift;
+                b.y = *ty;
+                b.direction = *tdir;
+            }
+            None => {
+                b.direction = folded_dir;
+                (b.x, b.y) = (fx, fy);
+            }
+        }
     }
     for (_, x, y) in &mut result.surplus_exits {
         (*x, *y) = fold_point(*x, *y);
