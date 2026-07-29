@@ -2,7 +2,23 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    # `edited` closes one specific hole: the bot files real findings against
+    # the PR *description* (missing template sections, body claims the diff
+    # contradicts), and fixing those means editing the body — which pushes
+    # nothing, so no `synchronize` fires and the finding is never confirmed
+    # closed. Observed 2026-07-29 on #493/#494: a template finding was fixed
+    # in the body, and the next round's summary still reported it "already on
+    # record and unchanged". The job's `if` below keeps this from turning
+    # every typo fix into an 11-minute review.
+    types: [opened, synchronize, ready_for_review, reopened, edited]
+
+# A review takes 8-11 minutes and fires per push, so a burst of pushes leaves
+# several runs racing over superseded heads. Cancelling is safe *because* the
+# guard enforces coverage on the CURRENT head: the surviving run reviews the
+# only SHA that can be merged. Keyed by PR so PRs never cancel each other.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   claude-review:
@@ -10,6 +26,15 @@ jobs:
     # was off the `claude-review` check reported "skipping" on every PR, which
     # is indistinguishable at a glance from the silent-failure classes this
     # workflow was hardened against — see docs/review-bot.md.
+    #
+    # `edited` fires on title, body, and base-branch changes alike. A title
+    # edit changes nothing reviewable; a body edit gets the cheap
+    # description-only re-check the prompt describes; a base change silently
+    # rewrites the whole diff and gets a full review.
+    if: >-
+      github.event.action != 'edited' ||
+      github.event.changes.body != null ||
+      github.event.changes.base != null
     runs-on: ubuntu-latest
     # `pull-requests`/`issues` must be WRITE: the review agent posts its
     # findings as a PR review + inline/summary comments. The stock template
@@ -82,6 +107,32 @@ jobs:
             addressed rather than assuming. Only the triviality gate
             (genuinely no substantive change in the range) justifies a
             skip, and it still needs the one-line comment.
+            — Description-edit runs: when ${{ github.event.action }} is
+            `edited`, the code has NOT changed — the PR description has.
+            Do NOT re-review the diff. Read the current description, then
+            re-check ONLY the findings that were scoped to it (missing
+            template sections, body claims the diff contradicts, stale
+            numbers). Post one short `gh pr comment` saying which
+            body-scoped findings are now resolved and which still stand.
+            This exists because a body edit pushes no commit, so without
+            it a description finding can never be confirmed fixed — and
+            the next round reports it as still open when it isn't.
+            — Repeat findings escalate. A finding raised in an earlier
+            round and still unaddressed must NOT be restated at the same
+            volume as a new one: it is stronger evidence than a first
+            sighting, because it has now survived a round of attention.
+            Lead your comment with a `**Unaddressed from N prior
+            round(s):** ...` line naming each one before any new
+            findings. Three consecutive identical restatements buried at
+            the bottom of a summary is the observed failure (#493,
+            2026-07-29) — the author fixed every inline finding and
+            stepped over the repeated one twice.
+            — Scope claims about mutable state to when you looked. Issue
+            and PR state changes under you: a finding that says "#490 is
+            open, so this isn't fixed" can invert within the hour if #490
+            merges, taking your recommended remedy with it. Write such
+            claims as "as of this review, #490 is open" and say what
+            would change the conclusion.
           # Model pinned rather than left to the action's default: review
           # quality and cost both depend on it, and an unpinned default can
           # move under us without any change to this file.
@@ -116,6 +167,15 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -uo pipefail
+          # Description-edit runs carry no new commit, so head-SHA coverage is
+          # owned by whichever push event produced that head — every SHA gets
+          # an `opened` or `synchronize` run. Enforcing here would red a PR for
+          # a body edit whose cheap re-check legitimately had nothing to post.
+          # Carving this out cannot lose coverage on any SHA.
+          if [ "${EVENT_ACTION:-}" = "edited" ]; then
+            echo "Description-edit run — no new head SHA; coverage is enforced by the push events."
+            exit 0
+          fi
           # Fail-open on API errors: the guard is a safety net, and its own
           # flakiness must never block a merge. It fails ONLY on confirmed
           # zero-coverage abandonment.
