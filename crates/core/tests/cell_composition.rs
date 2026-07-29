@@ -3646,6 +3646,88 @@ fn export_fold_report_json() {
     println!("wrote target/tmp/fold-report.json");
 }
 
+/// How often does the NORMAL pipeline emit a fragmented pole network?
+///
+/// Decides whether `check_pole_network_connectivity` can be promoted from
+/// Warning to Error: a factory whose poles form two islands does not run, but
+/// promoting a check that already fires on ordinary output would just break
+/// every build. Measures rather than assumes.
+#[test]
+#[ignore = "measurement probe — pole connectivity across the pipeline"]
+fn probe_pole_connectivity_census() {
+    use spaghettio_core::bus::compaction::compact_validated_geometry;
+    use spaghettio_core::power_wires::{disconnected_poles, wires_for};
+
+    let cases: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("gear15-ore", "iron-gear-wheel", 15.0, &["iron-ore"], "assembling-machine-2"),
+        ("gear15-plate", "iron-gear-wheel", 15.0, &["iron-plate"], "assembling-machine-2"),
+        ("ec10-ore", "electronic-circuit", 10.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("ec15-plate", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "assembling-machine-2"),
+        ("belt5-ore", "transport-belt", 5.0, &["iron-ore"], "assembling-machine-2"),
+        ("insert3-ore", "inserter", 3.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("plastic10", "plastic-bar", 10.0, &["coal", "petroleum-gas"], "chemical-plant"),
+    ];
+
+    let mut dirty_raw = 0;
+    let mut dirty_compact = 0;
+    let mut total = 0;
+    for (label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve_with_palette_exclusions_and_quality(
+            item, *rate, &inputs_set, &MachinePalette::default(), machine,
+            &FxHashSet::default(), QualityTier::Normal,
+        ) else { println!("{label}: solver refused"); continue };
+        let Ok(bus) = layout::build_bus_layout(&sr, layout::LayoutOptions::default()) else {
+            println!("{label}: layout refused"); continue
+        };
+        let poles = |l: &spaghettio_core::models::LayoutResult| {
+            let n = l.entities.iter()
+                .filter(|e| e.name.ends_with("electric-pole") || e.name == "substation")
+                .count();
+            (n, disconnected_poles(&l.entities, &wires_for(l)).len())
+        };
+        let (bn, bd) = poles(&bus);
+        let compact = compact_validated_geometry(&bus, &sr);
+        let (cn, cd) = poles(&compact);
+        total += 1;
+        if bd > 0 { dirty_raw += 1; }
+        if cd > 0 { dirty_compact += 1; }
+        println!(
+            "{label:<14} bus {bd:>3}/{bn:<4} disconnected   compacted {cd:>3}/{cn:<4}{}",
+            if cd > bd { "   <-- COMPACTION MADE IT WORSE" } else { "" }
+        );
+    }
+    println!("\n{dirty_raw}/{total} raw bus layouts have a fragmented pole network");
+    println!("{dirty_compact}/{total} compacted layouts do");
+
+    // Cell composition is the other producer of layouts, and the one whose
+    // compacted mil5 control carries 2 disconnected poles.
+    println!("\n--- cell-composed fixtures ---");
+    for label in ["chain-mil5ore", "mega-chain-chem5raw", "mega-chain-pu4raw", "mega-chain-usp2raw"] {
+        let fixture = SimFixture::find(label);
+        let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve_with_palette_exclusions_and_quality(
+            fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ) else { continue };
+        let base = fixture.compose_layout();
+        let compact = compact_validated_geometry(&base, &sr);
+        let count = |l: &spaghettio_core::models::LayoutResult| {
+            let n = l.entities.iter()
+                .filter(|e| e.name.ends_with("electric-pole") || e.name == "substation")
+                .count();
+            (n, disconnected_poles(&l.entities, &wires_for(l)).len())
+        };
+        let (bn, bd) = count(&base);
+        let (cn, cd) = count(&compact);
+        println!(
+            "{label:<22} composed {bd:>3}/{bn:<4} disconnected   compacted {cd:>3}/{cn:<4}{}",
+            if cd > bd { "   <-- COMPACTION MADE IT WORSE" } else { "" }
+        );
+    }
+}
+
 /// Does the fold work on BUS layouts, not just cell chains?
 ///
 /// Every fold measurement so far has been on `compose_chain_*` output — the
