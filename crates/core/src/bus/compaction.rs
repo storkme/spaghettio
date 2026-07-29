@@ -4562,7 +4562,12 @@ pub enum FoldRefusal {
     /// other refusal and the fix is guesswork.
     JunctionBlocked { at: (i32, i32) },
     /// Two gap lanes would have to share a tile. Carries the tile.
-    ExitLaneConflict { at: (i32, i32) },
+    ///
+    /// Covers exits and input feeds alike — both are lanes in the same gap.
+    /// It was `GapLaneConflict`, which the input feed pass reused, so an
+    /// input-side collision reported a name that sent the reader to the exit
+    /// pass.
+    GapLaneConflict { at: (i32, i32) },
     /// A U-turn corner gained a second feeder, demoting a both-lane turn to a
     /// single-lane sideload (`docs/factorio-mechanics.md` B8 vs B11).
     CornerNotATurn,
@@ -4980,7 +4985,7 @@ pub fn fold_snake(
             by_item.into_iter().collect();
         lanes.sort_by_key(|(_, members)| members.iter().map(|m| m.0).min().unwrap_or(0));
         if lanes.len() as i32 > gap {
-            return Err(FoldRefusal::ExitLaneConflict { at: (-1, gap_top) });
+            return Err(FoldRefusal::GapLaneConflict { at: (-1, gap_top) });
         }
 
         for (lane_idx, (carries, members)) in lanes.into_iter().enumerate() {
@@ -5001,7 +5006,7 @@ pub fn fold_snake(
                 };
                 for y in from..=to {
                     if !occupied.insert((x, y)) {
-                        return Err(FoldRefusal::ExitLaneConflict { at: (x, y) });
+                        return Err(FoldRefusal::GapLaneConflict { at: (x, y) });
                     }
                     folded.push(PlacedEntity {
                         name: name.clone(),
@@ -5118,7 +5123,7 @@ pub fn fold_snake(
             lanes.sort_by_key(|(_, m)| m[0].0);
         }
         if lanes.len() as i32 > gap {
-            return Err(FoldRefusal::ExitLaneConflict { at: (-1, gap_top) });
+            return Err(FoldRefusal::GapLaneConflict { at: (-1, gap_top) });
         }
 
         for (lane_idx, (carries, members)) in lanes.into_iter().enumerate() {
@@ -5141,7 +5146,7 @@ pub fn fold_snake(
                              occupied by {owner:?}"
                         );
                     }
-                    return Err(FoldRefusal::ExitLaneConflict { at: (cx, row) });
+                    return Err(FoldRefusal::GapLaneConflict { at: (cx, row) });
                 }
                 folded.push(PlacedEntity {
                     name: name.clone(),
@@ -5161,7 +5166,7 @@ pub fn fold_snake(
             };
             for y in from..=to {
                 if !occupied.insert((x, y)) {
-                    return Err(FoldRefusal::ExitLaneConflict { at: (x, y) });
+                    return Err(FoldRefusal::GapLaneConflict { at: (x, y) });
                 }
                 folded.push(PlacedEntity {
                     name: name.clone(),

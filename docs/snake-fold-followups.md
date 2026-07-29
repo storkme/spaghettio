@@ -63,7 +63,7 @@ believing a fold.
 
 ## Open work
 
-### 1. Multi-fold: one crossing left (`ExitLaneConflict` at a shared column)
+### 1. Multi-fold: one crossing left (an INPUT lane at a shared column)
 
 Branch: `feat/multifold-gap-lanes`. `InputStranded` is **resolved**; what is
 left is a single, well-specified crossing.
@@ -107,8 +107,8 @@ reverted.
 
 ### 2. Three of four corpus fixtures find no fold
 
-Superseded in part by (1): `ExitLaneConflict` was the dominant refusal and the
-per-item lanes address it. Re-run `probe_fold_corpus` on the branch before
+Superseded in part by (1), which addresses both refusal classes with per-item
+lanes. Re-run `probe_fold_corpus` on the branch before
 trusting the table below, which predates that work.
 
 `search_snake_fold` reports legal-column count, refusals by cause, and
@@ -126,8 +126,10 @@ Measured across the corpus (`probe_fold_corpus`, before per-item lanes):
 Two things fall out and still hold. Legal columns are 40–50% everywhere, so
 column legality is **never** the binding constraint — the pipe-adjacency
 hypothesis for chem was wrong. And `pu4raw` records **zero** `InputStranded`,
-failing on `ExitLaneConflict` alone, which is why that was the highest-value
-fix and why (1) went after it first.
+failing on `GapLaneConflict` alone — the one fixture where a single class
+blocks everything, which is why the exit side was tackled first. By raw count
+`InputStranded` is larger on three of four fixtures (121 vs 21, 132 vs 22,
+107 vs 46); only `pu4raw` inverts that.
 
 ### 3. ~~Power network fragments across the fold~~ — DONE (2026-07-29)
 
@@ -193,7 +195,7 @@ Adversarial review also raised two it could not exercise:
 
 Every failure mode is a typed `FoldRefusal`, so a refusal names its cause
 rather than being a bare `None`: `CutsEntity`, `JunctionBlocked`,
-`ExitLaneConflict`, `CornerNotATurn`, `RunSevered`, `InputStranded`,
+`GapLaneConflict`, `CornerNotATurn`, `RunSevered`, `InputStranded`,
 `EntityExplosion`. `SPAGHETTIO_FOLD_DEBUG=1` lists every severed belt instead
 of just the first.
 
