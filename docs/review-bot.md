@@ -144,12 +144,41 @@ Validation history: planted-bug canary #330 (2026-07-21) — first-ever bot
 comment correctly flagged the bug inline with a committable fix; canary
 #368 re-validated after the installer overwrite was restored in #369.
 
-## Merge-time gating (the review is advisory)
+## Merge-time gating (the review is REQUIRED)
 
-**`main` has no branch protection.** `claude-review` is therefore a check
-nobody has to wait for: a PR sitting at `mergeStateStatus=UNSTABLE` with the
-review still running merges cleanly. The guard makes a *finished* run's silence
-loud; it can do nothing about a run that never finished.
+**`claude-review` is a required status check on `main`** — enabled 2026-07-29
+with `enforce_admins: true`, so it binds rather than being bypassable by any
+session holding the owner's token. Verified binding on #473, which went from
+mergeable to `BLOCKED` on a failed review. Direct pushes to `main` are blocked
+for everyone; `scripts/review-gate.sh unrequire` reverses the whole thing.
+
+Before that it was advisory, and the guard could only make a *finished* run's
+silence loud — never a run that never finished. The history below is kept
+because the reasoning is what justifies the cost.
+
+### The never-skip invariant (#497)
+
+Once the check is required, **the `claude-review` job must never be skipped**,
+and must not acquire a job-level `if:`. A job skipped that way still publishes
+a check run named `claude-review` with conclusion `skipped`, against a head SHA
+that may already carry a passing one — and required-check evaluation reads the
+latest. Whether GitHub counts `skipped` as a pass is undocumented enough that it
+is not worth betting a merge on.
+
+So the job always runs and always reports; every condition lives on a *step*:
+
+- the `edited` gate (title edits have nothing to review, body edits get the
+  cheap description-only re-check, base changes get a full review), and
+- the fork gate — `pull_request` withholds secrets from forks by design, so the
+  action would fail on an empty token. Advisory, that was noise. Required, it
+  is an unclearable merge block on an outside contributor.
+
+The guard carves out both cases too: a fork PR's review provably never started,
+so guard silence there cannot be hiding an abandonment. Fork PRs and
+workflow-file PRs both fall back to session-side review (CLAUDE.md "Workflow").
+
+Cost of the invariant is a runner spin-up (seconds) on events with nothing to
+review. That is the price of a check that cannot report `skipped`.
 
 That came within one wrong comparison of mattering on 2026-07-29. A session
 polled merge readiness with a hand-rolled loop testing
@@ -166,15 +195,16 @@ Two independent mitigations, only one of them applied:
   a poll; the trap is that the obvious-looking sentinel values (`PENDING`,
   `""`) are not states this API ever reports for a running check, so testing
   for their absence always succeeds.
-- **Not applied, needs a human call** — `scripts/review-gate.sh require` makes
+- **Applied 2026-07-29** — `scripts/review-gate.sh require` made
   `claude-review` a required status check on `main`. This is the change that
-  actually makes a merge wait. It is deliberately manual: the repo has *no*
-  protection today, so this introduces it, and to bind at all it needs
-  `enforce_admins: true` (with it false, every session using the owner's token
-  bypasses it and the gate is theatre). That form also blocks direct pushes to
-  `main` for everyone, and if the review cannot run at all — rotated secret,
-  action outage — nothing merges until protection is loosened. Real cost, real
-  benefit; `unrequire` reverses it in one command.
+  actually makes a merge wait. It stays a manual command rather than something
+  a session runs: it introduces protection where there was none, and to bind at
+  all it needs `enforce_admins: true` (with it false, every session using the
+  owner's token bypasses it and the gate is theatre). That form also blocks
+  direct pushes to `main` for everyone, and if the review cannot run at all —
+  rotated secret, action outage — nothing merges until protection is loosened.
+  `unrequire` reverses it in one command. See the never-skip invariant above:
+  requiring the check constrains how this workflow may be conditioned.
 
 ## Forensics playbook
 

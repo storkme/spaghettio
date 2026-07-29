@@ -27,14 +27,19 @@ jobs:
     # is indistinguishable at a glance from the silent-failure classes this
     # workflow was hardened against — see docs/review-bot.md.
     #
-    # `edited` fires on title, body, and base-branch changes alike. A title
-    # edit changes nothing reviewable; a body edit gets the cheap
-    # description-only re-check the prompt describes; a base change silently
-    # rewrites the whole diff and gets a full review.
-    if: >-
-      github.event.action != 'edited' ||
-      github.event.changes.body != null ||
-      github.event.changes.base != null
+    # THIS JOB HAS NO `if:` ON PURPOSE — do not add one (#497).
+    #
+    # `claude-review` is a REQUIRED status check on main (enforce_admins:
+    # true, see scripts/review-gate.sh). A job skipped by a job-level `if`
+    # still publishes a check run named `claude-review`, with conclusion
+    # `skipped`, against a head SHA that may already carry a passing one —
+    # and required-check evaluation reads the latest. Whether GitHub counts
+    # `skipped` as a pass is not something to bet a merge queue on.
+    #
+    # So the job always runs and always reports a real conclusion, and the
+    # conditions live on the steps instead. Cost is a runner spin-up
+    # (seconds) for events with nothing to review; the guard below exits
+    # early on those.
     runs-on: ubuntu-latest
     # `pull-requests`/`issues` must be WRITE: the review agent posts its
     # findings as a PR review + inline/summary comments. The stock template
@@ -62,6 +67,22 @@ jobs:
       # made runs abandon mid-review without posting.
       - name: Run Claude Code Review
         id: claude-review
+        # Two gates, both moved here from the job level so a no-op event still
+        # reports a real check conclusion (#497):
+        #
+        # 1. `edited` fires on title, body and base-branch changes alike. A
+        #    title edit changes nothing reviewable; a body edit gets the cheap
+        #    description-only re-check the prompt describes; a base change
+        #    silently rewrites the whole diff and gets a full review.
+        # 2. Fork PRs get no secrets from `pull_request` (by design — not a
+        #    leak), so the action would fail on an empty token. Advisory that
+        #    was noise; required it is an unclearable merge block for an
+        #    outside contributor.
+        if: >-
+          (github.event.action != 'edited' ||
+           github.event.changes.body != null ||
+           github.event.changes.base != null) &&
+          github.event.pull_request.head.repo.full_name == github.repository
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -165,8 +186,19 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_ACTION: ${{ github.event.action }}
           PUSH_BEFORE: ${{ github.event.before }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -uo pipefail
+          # Fork PR: the review step above is gated off (no secrets reach a
+          # fork's `pull_request` run), so there is nothing for this guard to
+          # find and failing here would be an unclearable block on an outside
+          # contributor. Skipping the guard cannot hide an abandonment — the
+          # review provably never started. Such PRs need session-side review,
+          # same rule as workflow-file PRs (CLAUDE.md "Workflow").
+          if [ -n "${HEAD_REPO:-}" ] && [ "${HEAD_REPO}" != "${REPO}" ]; then
+            echo "Fork PR ($HEAD_REPO != $REPO) — review step gated off, no secrets available. Needs session-side review."
+            exit 0
+          fi
           # Description-edit runs carry no new commit, so head-SHA coverage is
           # owned by whichever push event produced that head — every SHA gets
           # an `opened` or `synchronize` run. Enforcing here would red a PR for
