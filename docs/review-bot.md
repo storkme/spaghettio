@@ -40,11 +40,22 @@ is told its `before..after` range and asked to name that range in its comment.
 Only the triviality gate justifies a skip, and it still requires the one-line
 notice.
 
-**Not yet done:** the guard is still PR-lifetime. Making it require coverage on
-the current head SHA would enforce this rather than merely asking for it, but
-that is only safe once the prompt change is observed working — otherwise it
-reds every follow-up push. Sequencing is deliberate: fix the behaviour, watch
-it, then tighten the gate.
+The guard now requires coverage on the **current head SHA**, so a skipped
+follow-up push reds the check instead of reporting a review that did not
+happen. Two carve-outs keep that from being noisy: a push changing fewer than
+20 lines is triviality-gate territory (the whole-PR rule, applied to the
+delta), and every existing skip — drafts, workflow-file PRs, the conscious
+gate-skip signature, fail-open on API errors — is unchanged.
+
+**Attribution has one trap worth knowing.** A review's `commit_id` is pinned to
+the SHA it reviewed, but an inline comment's `commit_id` *advances* as the PR
+moves so the comment keeps tracking its line. Keying on it would attribute a
+six-pushes-old comment to the current head and make this guard silently
+useless — verified against #481, where 5 inline comments reported `commit_id`
+== head while every one was written six pushes earlier. Use
+`original_commit_id`. Bot summary comments carry no SHA and are attributed by
+time, deliberately the generous direction: that heuristic can admit coverage,
+never deny it.
 
 - [`clear-agent-reviewed.yml`](../.github/workflows/clear-agent-reviewed.yml)
   — drops the `agent-reviewed` label when new commits land, so a new head
