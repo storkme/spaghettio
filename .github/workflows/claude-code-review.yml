@@ -111,6 +111,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -uo pipefail
           # Fail-open on API errors: the guard is a safety net, and its own
@@ -141,26 +144,75 @@ jobs:
             echo "Diff is $changed changed lines (<20) — triviality-gate territory; guard not applicable."
             exit 0
           fi
-          # Coverage = any PR review (bot or session-side), any inline review
-          # comment, or a bot summary comment. Session-side reviews count:
-          # the guard guarantees the PR was reviewed, not who reviewed it.
-          # Coverage is PR-lifetime, not per-SHA — deliberate: the plugin's
-          # own gate declines to re-review a PR Claude already commented on,
-          # so per-SHA enforcement would permanently red every follow-up
-          # push. Per-SHA freshness is the agent-reviewed label's job
-          # (clear-agent-reviewed.yml). See docs/review-bot.md.
-          if ! reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --jq 'length' | awk '{s+=$1} END {print s+0}'); then
+          # A follow-up push that adds only a few lines does not need its own
+          # review — mirrors the whole-PR triviality gate above, applied to
+          # the delta. Only reachable on `synchronize`, where a range exists.
+          if [ "${EVENT_ACTION:-}" = "synchronize" ] && [ -n "${PUSH_BEFORE:-}" ] \
+             && [ "${PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ]; then
+            if delta=$(gh api "repos/$REPO/compare/${PUSH_BEFORE}...${HEAD_SHA}" \
+                        --jq '[.files[]?.changes] | add // 0'); then
+              case "$delta" in ''|*[!0-9]*) delta="";; esac
+              if [ -n "$delta" ] && [ "$delta" -lt 20 ]; then
+                echo "Push changed $delta lines (<20) — triviality-gate territory; guard not applicable."
+                exit 0
+              fi
+            else
+              echo "::warning::guard: compare query failed — treating push as substantive."
+            fi
+          fi
+          # Coverage must be on the CURRENT HEAD, not merely somewhere in the
+          # PR's lifetime.
+          #
+          # This was PR-lifetime until 2026-07-29, on the reasoning that the
+          # plugin declines to re-review a PR it has already commented on, so
+          # per-SHA enforcement would red every follow-up push. The cost of
+          # that choice showed up on #481: the bot reviewed one commit, found
+          # four real bugs including one in shipped code, and six further
+          # commits — containing the fixes for those very bugs — merged
+          # unreviewed behind a green check. Follow-up commits are the
+          # HIGHER-risk half: written fast, in response to a review, by
+          # someone who now believes they understand the problem.
+          #
+          # #484 fixed the behaviour (the prompt now refuses "already
+          # reviewed" as a skip and is handed its before..after range); this
+          # enforces it. If a run skips a substantive push anyway, the check
+          # goes red rather than reporting a review that did not happen.
+          #
+          # Attribution, and the field choice matters more than it looks.
+          #
+          # A review's `commit_id` is PINNED to the SHA it reviewed. An inline
+          # comment's `commit_id` ADVANCES as the PR moves, so the comment
+          # keeps pointing at its line — using it here would attribute a
+          # six-pushes-old comment to the current head and make this guard
+          # silently useless. Verified against #481: 5 of its inline comments
+          # report `commit_id` == head while every one was written against a
+          # commit six pushes earlier. `original_commit_id` is the pinned one.
+          #
+          # A bot summary comment carries no SHA at all, so it is attributed by
+          # time — created after the head commit's own timestamp. That is a
+          # heuristic, and deliberately the generous one: it can only admit
+          # coverage, never deny it.
+          if ! reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+                --jq "[.[] | select(.commit_id == \"$HEAD_SHA\")] | length" \
+                | awk '{s+=$1} END {print s+0}'); then
             echo "::warning::guard: reviews query failed — failing open."; exit 0
           fi
-          if ! inline=$(gh api "repos/$REPO/pulls/$PR/comments" --paginate --jq 'length' | awk '{s+=$1} END {print s+0}'); then
+          if ! inline=$(gh api "repos/$REPO/pulls/$PR/comments" --paginate \
+                --jq "[.[] | select(.original_commit_id == \"$HEAD_SHA\")] | length" \
+                | awk '{s+=$1} END {print s+0}'); then
             echo "::warning::guard: inline-comments query failed — failing open."; exit 0
           fi
-          if ! bot_summaries=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '[.[] | select(.user.login == "claude[bot]" or .user.login == "claude")] | length' | awk '{s+=$1} END {print s+0}'); then
+          if ! head_time=$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq '.commit.committer.date'); then
+            echo "::warning::guard: head-commit query failed — failing open."; exit 0
+          fi
+          if ! bot_summaries=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                --jq "[.[] | select((.user.login == \"claude[bot]\" or .user.login == \"claude\") and .created_at > \"$head_time\")] | length" \
+                | awk '{s+=$1} END {print s+0}'); then
             echo "::warning::guard: issue-comments query failed — failing open."; exit 0
           fi
-          echo "coverage: reviews=$reviews inline=$inline bot_summaries=$bot_summaries"
+          echo "coverage on $HEAD_SHA: reviews=$reviews inline=$inline bot_summaries=$bot_summaries"
           if [ "$reviews" -gt 0 ] || [ "$inline" -gt 0 ] || [ "$bot_summaries" -gt 0 ]; then
-            echo "Review coverage exists — OK."
+            echo "Review coverage exists for the current head — OK."
             exit 0
           fi
           # Zero coverage. Distinguish a conscious plugin gate-skip (cheap,
@@ -172,5 +224,5 @@ jobs:
             echo "No coverage, but the transcript shows a cheap conscious run (num_turns=$turns <= 8) — plugin gate-skip signature, not abandonment. Passing."
             exit 0
           fi
-          echo "::error title=Silent review no-op::claude-review exited green but PR #$PR ($changed changed lines) has zero reviews, zero inline comments, and no bot summary (transcript turns: ${turns:-unknown}). This is the silent no-op failure class — see docs/review-bot.md. Escape hatch if the skip was legitimate: re-run this job (runs are stochastic), or post a review and re-run the check."
+          echo "::error title=No review for this head commit::claude-review exited green but PR #$PR has no review, inline comment, or bot summary attributable to head $HEAD_SHA (transcript turns: ${turns:-unknown}). Either the run never reviewed (the silent no-op class), or it skipped a substantive follow-up push — the failure #481 merged behind. See docs/review-bot.md. Escape hatch if the skip was legitimate: re-run this job (runs are stochastic), or post a review on the current head and re-run the check."
           exit 1
