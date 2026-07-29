@@ -3,7 +3,7 @@
 A check that runs, works, and finds the problem can still be useless — if the
 way it reports makes the problem invisible to whoever is reading. That failure
 mode hit this codebase **nine times**, was found in one day (2026-07-29), and
-three of the nine were written *while fixing the other six*. It is easy to
+three of the nine were written *while fixing five of the others*. It is easy to
 reintroduce, so it is written down.
 
 ## The shape
@@ -61,4 +61,7 @@ Kept as evidence that this is a pattern rather than a run of bad luck.
 | 8 | `claude-review` guard | asked "was this PR reviewed", not "was this code reviewed" |
 | 9 | a PR-watch monitor | reported `passing: 0` for CI that had not started |
 
-Numbers 6, 8 and 9 were written during the session that fixed 1–5.
+Numbers 6, 8 and 9 were written during the session that fixed 1–5. Number 7 was
+found in the same audit and is **not yet fixed on `main`** — the fix is in
+flight ([#491](https://github.com/storkme/spaghettio/pull/491)), tracked by
+[#490](https://github.com/storkme/spaghettio/issues/490).
