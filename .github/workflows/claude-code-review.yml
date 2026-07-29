@@ -6,10 +6,10 @@ on:
 
 jobs:
   claude-review:
-    # Temporarily disabled by user request (2026-07-26). Keep the workflow
-    # and job name in place so branch-protection/check wiring remains stable;
-    # remove this condition to re-enable automated reviews.
-    if: ${{ false }}
+    # Re-enabled 2026-07-29 (disabled 2026-07-26 by user request). While it
+    # was off the `claude-review` check reported "skipping" on every PR, which
+    # is indistinguishable at a glance from the silent-failure classes this
+    # workflow was hardened against — see docs/review-bot.md.
     runs-on: ubuntu-latest
     # `pull-requests`/`issues` must be WRITE: the review agent posts its
     # findings as a PR review + inline/summary comments. The stock template
@@ -66,7 +66,11 @@ jobs:
             already reviewed), do not end silently — post a one-line
             `gh pr comment` stating the skip and the reason. A silent
             end is indistinguishable from a crash and fails the check.
+          # Model pinned rather than left to the action's default: review
+          # quality and cost both depend on it, and an unpinned default can
+          # move under us without any change to this file.
           claude_args: |
+            --model claude-sonnet-5
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
 
       # Full session transcript (includes every permission denial) — the
