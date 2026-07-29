@@ -119,7 +119,34 @@ row, and come back. An attempt that allocated lanes without solving the
 crossing regressed the verified single fold and was reverted; do not repeat it
 without the jog.
 
-### 3. Power network fragments across the fold (blocks the verified case)
+### 3. ~~Power network fragments across the fold~~ — DONE (2026-07-29)
+
+Fixed and Factorio-verified; kept here for the diagnosis, which generalises.
+
+Three separate causes, none sufficient alone:
+
+1. **The chain composer's spanning pole line** stepped by 8 on an absolute grid
+   against wire reach 9, and nudged forward past congestion without
+   compensating — orphaning the pole behind it. Now steps from the last pole
+   actually placed.
+2. **The fold re-placed poles from scratch.** A fold is a rigid motion per
+   segment, so poles keep their relative positions inside a segment and only
+   the seams break. Keeping the transformed poles and bridging the seams took
+   `chain-mil5ore` from 89 unreachable poles to 0.
+3. **`repair_pole_connectivity` seeded its bridge scan at the MIDPOINT** of the
+   two nearest components. That only works while the gap is at most
+   `2 * reach`; beyond it the midpoint is further from either endpoint than a
+   pole there could wire to, and the scan fails at any radius. Measured on
+   `usp2raw`: closest pair 40.3 tiles, reach 9, midpoint 20 from each end, gave
+   up with 11 components. Now falls back to stepping one reach-length from an
+   endpoint — as a FALLBACK, tried only when the midpoint scan finds nothing,
+   so every layout the old seeding handled keeps byte-identical geometry.
+   Seeding from the endpoint unconditionally also works but moves three
+   sim-verified registry pins to fix one fixture.
+
+Composed pole networks, all four fixtures: **1**.
+
+<!-- superseded detail retained below for the record -->
 
 `replace_poles` places poles well but the two folded segments end up as
 separate networks: 89 of 174 poles unreachable from the first. The pipeline's
@@ -138,7 +165,7 @@ Adversarial review also raised two it could not exercise:
   by coincidence of the current junction-column scheme. Adaptive gap sizing
   (item 1) would invalidate that coincidence.
 
-### 4. Lower-confidence items
+### 5. Lower-confidence items
 
 - The continuity invariant (`RunSevered`) false-positived twice on splitter
   footprints — a 180° rotation swaps which physical tile the anchor names. It
