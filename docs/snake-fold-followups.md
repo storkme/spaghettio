@@ -150,12 +150,10 @@ Measured across the corpus (`probe_fold_corpus`, before per-item lanes):
 Two things fall out and still hold. Legal columns are 40–50% everywhere, so
 column legality is **never** the binding constraint — the pipe-adjacency
 hypothesis for chem was wrong. And `pu4raw` records **zero** `InputStranded`,
-failing with **zero** `InputStranded` — the only fixture where fixing the input
-side could not help at all, which is why the exit side was tackled first. (It
-still records 23 `JunctionBlocked`, so lane conflict is not its sole refusal —
-just its dominant one, and the only one input work could not touch.) By raw
-count `InputStranded` is the larger refusal on three of the four fixtures
-(121 vs 21, 132 vs 22, 107 vs 46); only `pu4raw` inverts that.
+failing on `ExitLaneConflict` (173) instead — the only fixture where fixing the
+input side could not help at all, which is why the exit side was tackled first.
+(It still records 23 `JunctionBlocked`, so lane conflict is not its sole
+refusal — just its dominant one, and the only one input work could not touch.)
 
 By raw count `InputStranded` is the larger refusal on three of the four
 fixtures (121 vs 21, 132 vs 22, 107 vs 46); only `pu4raw` inverts that. "Fix
