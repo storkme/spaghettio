@@ -940,7 +940,7 @@ make either experimental composer a production default.
 - **2026-07-30 — Multi-fold works, and is Factorio-verified at three folds.**
   `chain-mil5ore` folds three times: 553×32 (17.3:1) → **153×141 (1.09:1)**,
   measured in headless 2.0.77 at `--warmup 216000` — **PASS**, target
-  military-science-pack 5.02/s delivered against 5.00/s planned (+0.3%),
+  military-science-pack 5.016/s delivered against 5.00/s planned (+0.3%),
   **146/146 machines working**, **one pole network**, 3567/3567 entities
   revived, zero kit errors, no fluid errors.
 
@@ -1029,7 +1029,7 @@ make either experimental composer a production default.
 
   Confirmed: with the dedupe, `mil5-fold1` re-measures **PASS**, zero kit
   errors, one pole network. On post-#502 geometry that is **277×66**, 3110/3110
-  revived, 5.02/s delivered against 5.00/s planned (+0.3%), 146/146 machines.
+  revived, 5.016/s delivered against 5.00/s planned (+0.3%), 146/146 machines.
   (The pre-#502 run measured 262×64 at 5.00/s produced / 4.90/s delivered with
   4075 entities.) So the single fold is independently verified as well, and BOTH
   fold depths pass in Factorio on the geometry current code produces.

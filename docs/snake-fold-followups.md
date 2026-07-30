@@ -2,7 +2,7 @@
 
 **Status (2026-07-30):** **multi-fold works and is Factorio-verified.**
 `chain-mil5ore` folds three times — 553×32 (17.3:1) → **153×141 (1.09:1)**,
-PASS at 5.02/s against 5.00/s planned, 146/146 machines, one pole network,
+PASS at 5.016/s against 5.00/s planned (+0.3%), 146/146 machines, one pole network,
 3567/3567 entities revived. Single fold remains verified for throughput and
 power. Read "The second trap" below anyway: it is why the earlier power
 fragmentation went unnoticed, and the reasoning generalises.
