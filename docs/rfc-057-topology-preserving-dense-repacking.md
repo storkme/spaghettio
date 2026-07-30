@@ -937,6 +937,92 @@ make either experimental composer a production default.
   the 2026-07-29 refusal of folding as a *density* lever — the ~20% routing
   ceiling stands, and the single fold costs 277 entities (2820 → 3097).
 
+- **2026-07-30 — Multi-fold works, and is Factorio-verified at three folds.**
+  `chain-mil5ore` folds three times: 521×31 (16.8:1) → **147×138 (1.07:1)**,
+  measured in headless 2.0.77 at `--warmup 216000` — **PASS**, target
+  military-science-pack 4.92/s delivered against 5.00/s planned (−1.6%),
+  **146/146 machines working**, **one pole network**, 4620/4620 entities
+  revived, zero kit errors, no fluid errors. The previous entry's "multi-fold
+  remains unproven" is now discharged.
+
+  **None of it was the fix the tracking issue specified.** #492 recorded the
+  blocker as two items sharing an input column, needing a B12 underground
+  dive. No dive was written. Instrumenting the refusal instead of reading the
+  issue found three different causes:
+
+  | Cause | Why it was invisible | Effect |
+  |---|---|---|
+  | Row assignment ignored source side | A gap takes inputs from BOTH neighbours; a climb crosses every row between itself and its source, so which rows get crossed depends on the side. The two sides impose OPPOSITE ordering requirements, so one global order was itself the bug — not a bad choice of order. | `GapLaneConflict` 32 → 0 on mil5; **0 on pu4raw**, whose 173 was called the backlog's highest-value fix |
+  | Lane terminus faced the run direction | Items traversed the whole lane, passed the input's column and dead-ended. Exits are immune because their flow runs the other way — the descent feeds the lane — and inputs are reversed. | `belt-flow-reachability` 45 → 0, `orphan-belt-segment` 4 → 0 |
+  | Lanes keyed by item, not (item, side) | Every source input sits on the top edge, so consecutive segments' copies of one item land on opposite sides of the same gap. The commonest arrangement refused. | corpus `InputStranded` was this only for chem5raw, and only half of it |
+
+  Rows are now partitioned by side — above-sourced from `gap_top` downward,
+  below-sourced from `gap_top + gap - 1` upward — which keeps each climb inside
+  its own block and makes the groups provably non-crossing while
+  `n_above + n_below <= gap`. Within a group the span-nesting argument survives
+  but the order FLIPS to ascending, because index 0 is now adjacent to its
+  source and crosses nothing.
+
+  Gap sizing is per parity: exits key by item (merged distinct count), inputs
+  by (item, side) (the sum). Deliberately not summing everywhere — that keeps a
+  single fold, which has only the even/exit gap, byte-identical, and with it
+  the registry pin measured at 5.00/s.
+
+  `cover_unpowered` (layout.rs) tops up pole COVERAGE, which nothing did —
+  `repair_pole_network` only ever fixed connectivity. Rotation is rigid so
+  coverage survives inside a segment, but an entity beside a fold column loses
+  the pole that covered it from across the seam (5 holes on the mil5 2-fold,
+  all within 3 tiles of a seam). It reuses the power validator's own
+  continuous-centre predicate so the two cannot drift, and returns 0 untouched
+  when coverage is already complete, so every single-fold and composed-cell
+  fixture stays byte-identical.
+
+  **Scope of the claim, stated because it is easy to over-read.** One fixture
+  of four. `chem5raw`, `pu4raw` and `usp2raw` still find no fold. This is a
+  SHAPE result, not a density one: it costs +807 entities (+21%), and the
+  2026-07-29 refusal of folding as a density lever stands untouched.
+
+  **A prediction that failed, kept on the record.** Keying by (item, side) was
+  expected to unblock the corpus, since `InputStranded` dominated everywhere
+  after the gap-lane fixes. Measured: pu4raw 155 → 155 and usp2raw 72 → 72,
+  i.e. no change at all, and chem5raw's freed candidates moved to
+  `GapLaneConflict` (+48, matching the 48 that stopped stranding) rather than
+  folding. Refusals moving later is not progress. Their `InputStranded` must be
+  the same-side-two-columns case, which genuinely needs a splitter.
+
+- **2026-07-30 — `FoldSearch::validation_regressions`, because a bare count hid
+  a fix's own side effect.** `rejected_by_validation` said how many candidates
+  were turned away and nothing about why, so the side-partition fix read as
+  `GapLaneConflict` 32 → 0 (progress) while silently pushing rejections 22 → 54
+  (the same candidates dying later). The counter could not name the check they
+  now failed. This is the reporting shape in
+  [`validator-reporting.md`](validator-reporting.md), inside the fold search
+  itself.
+
+- **2026-07-30 — Duplicate boundary records were ours, not the harness's
+  (#499).** A gap carries one lane per item, so N same-item exits merge into it
+  and `exit_moved` maps all N to one terminus. Correct geometry, but the record
+  list held N copies, and the sim harness built one drain rig per record: two
+  identical output records on `(0,31)` gave two rigs 2 tiles apart whose
+  9-position chest banks overlapped by 7, and it invalidated the run rather
+  than report a rate measured through cross-feeding chests. Records are now
+  deduped on the whole record (not position — two records at one tile carrying
+  different items is a real defect and must stay visible to
+  `check_boundary_record_integrity`) and order-preserving, since the harness
+  indexes rigs by record order. Reported as a harness bug because the
+  overlapping tiles are harness-side geometry at negative coordinates; the
+  harness was faithfully building what the manifest declared.
+
+  Consequence for the earlier reading: `mil5-fold3` was clean not because
+  non-south kits work, but because its two exits land in different gaps. The
+  `has_uncalibrated_direction` caveat still stands on its own — no live run has
+  exercised a non-south boundary kit — but it was not what bit us.
+
+  Confirmed: with the dedupe, `mil5-fold1` re-measures **PASS**, zero kit
+  errors, military-science-pack produced 5.00/s (+0.0%) / delivered 4.90/s
+  (−2.0%), 4075/4075 revived, one pole network, `converged=true`. So the single
+  fold is independently verified at a legal snapped column as well, and BOTH
+  fold depths now pass in Factorio.
 - **2026-07-30 — The manifold router's residual was a PLACEMENT bug; with it
   fixed, candidates materialise for the first time — and they are bigger than
   what they replace.**

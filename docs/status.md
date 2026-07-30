@@ -127,6 +127,43 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
+**`rfc-057-topology-preserving-dense-repacking.md` multi-fold (2026-07-30,
+PR #500 — RFC ACTIVE, not closed)**: **multi-fold is Factorio-verified.**
+`chain-mil5ore` folds **three times**: 521x31 (16.8:1) to **147x138 (1.07:1)**
+at 4.92/s delivered against 5.00/s planned, **146 of 146 machines**, **one pole
+network**, 4620/4620 entities revived, zero kit errors. The single fold
+re-measures PASS at a legal snapped column too (262x64, 5.00/s produced), so
+both depths now pass. This discharges the previous entry's "multi-fold remains
+unproven".
+
+Scope, because it is easy to over-read: **one fixture of four.**
+`mega-chain-chem5raw`, `mega-chain-pu4raw` and `mega-chain-usp2raw` still find
+no fold — their dominant refusal is now `InputStranded` from one item wanted at
+two columns on the same side, which needs a splitter. And this remains a SHAPE
+result: +21% entities, so the density refusal below stands untouched.
+
+Three causes, none of them the one the tracking issue named (#492 specified a
+shared-column underground dive; none was written): rows ignored which SIDE of
+the gap an input arrives from, so climbs from opposite sides swept each other's
+rows; the lane's terminal tile faced the run direction and so never turned
+toward the input it feeds (45 starved furnaces behind 4 orphan lanes); and lanes
+were keyed by item rather than (item, side), refusing the commonest possible
+arrangement. Pole COVERAGE also needed its own repair — `repair_pole_network`
+only ever fixed connectivity, and a rotation moves the pole that covered an
+entity across a seam.
+
+Two findings from the same work worth carrying: `rejected_by_validation` was a
+bare count that hid the side-partition fix's own side effect (`GapLaneConflict`
+32 to 0 while rejections went 22 to 54 — the same candidates dying later), now
+categorised; and duplicate `boundary_outputs` records for one physical terminus
+made the sim harness build two drain rigs on one tile (#499), which it caught
+and loudly invalidated rather than mismeasuring.
+
+**Still outstanding for this entry:** nobody has looked at the folded layout in
+a client, and the layout-engine change has not had local adversarial review —
+both required by CLAUDE.md's verification protocol and neither substitutable by
+the review bot, which cannot run STRESSGOLD or decode snapshots.
+
 **`rfc-057-topology-preserving-dense-repacking.md` snake fold (2026-07-29,
 PR #481 — RFC ACTIVE, not closed)**: a single fold is Factorio-verified.
 `chain-mil5ore` goes 552x32 (17.25:1) to 276x66 (4.18:1) at **5.00/s produced
