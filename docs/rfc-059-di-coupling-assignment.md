@@ -282,14 +282,18 @@ able to distinguish "policy had no effect" from "policy was not applied."
    the recorded rate is contradictory and the scratch flag that produced it was
    never committed.
 
-   Three outputs, not one, and the second and third are what make the later
-   criteria evaluable:
+   Three outputs, not one, and the second is what makes kill criterion 1
+   evaluable while the third does the same for kill criterion 2:
 
-   - the P0-vs-P1 layout diff per target (kill criterion 1);
+   - the P0-vs-P1 layout diff per target — a **consistency check** for kill
+     criterion 1, not its trigger. Contention-empty entails diff-empty, so an
+     empty contention set beside a non-empty diff means the census is missing a
+     coupling decision, and phase 1 must fail loudly rather than report both;
    - **the contention set per target** — which specs were eligible in more than
-     one coupling at all. A target with no contention cannot be evidence about
-     claim policy, and the binary diff does not distinguish "no contention" from
-     "contention that both orders happened to resolve the same way";
+     one coupling at all. This is **kill criterion 1's sole trigger**. A target
+     with no contention cannot be evidence about claim policy, and the binary
+     diff does not distinguish "no contention" from "contention that both orders
+     happened to resolve the same way";
    - **the per-coupling outcome for each contended spec**, which is the ground
      truth kill criterion 2 tests an estimator against. Without it that criterion
      is unevaluable exactly where P2/P3 would matter.
