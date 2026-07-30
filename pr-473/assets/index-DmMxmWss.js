@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-Dr3_opyQ.js","assets/webworkerAll-DcqxKjb6.js","assets/Filter-CbieHFtv.js","assets/WebGPURenderer-De1hS9k3.js","assets/BufferResource-D63YhmsK.js","assets/RenderTargetSystem-BC3k1XFh.js","assets/WebGLRenderer-Cf2G-aE_.js","assets/CanvasRenderer-B7FkUN-R.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-B0DPbjXg.js","assets/webworkerAll-iltqGbJd.js","assets/Filter-e5iqB0KK.js","assets/WebGPURenderer-C-L3x9w1.js","assets/BufferResource-B61EbSLK.js","assets/RenderTargetSystem-D1yyktl7.js","assets/WebGLRenderer-DfaiTH30.js","assets/CanvasRenderer-CH8wAuyK.js"])))=>i.map(i=>d[i]);
 let Nh, ya, rr, zt, $m, hn, Af, vi, ns, Ms, ue, se, Jt, ni, Ah, Et, ct, pt, jt, br, S, ye, Dy, Bg, wr, Tg, vn, vr, dr, Bt, id, Bo, Dt, Jn, hi, Rt, Ip, Im, Os, Rd, rd, wi, Kf, jf, gd, Nm, lg, hg, yg, mg, xg, Ml, tr, fa, ed, $e, ga, ag, cg, gg, pg, yp, bg, ke, Eh, Le, gr, ul, Ge, bx, Xp, fl, Gr, ml, qp, kh, Cr, Dn, Ar, p1, or, ma, $t, At, qo, ts, fn, Xo, Wi, Xt, ze, Od, Nd, li, Fe, u1, lx, ne, qy, re, Zt, Pt;
 let __tla = (async () => {
   (function() {
@@ -148,7 +148,7 @@ let __tla = (async () => {
     },
     test: () => true,
     load: async () => {
-      await Ln(() => import("./browserAll-Dr3_opyQ.js"), __vite__mapDeps([0,1,2]));
+      await Ln(() => import("./browserAll-B0DPbjXg.js"), __vite__mapDeps([0,1,2]));
     }
   };
   op = {
@@ -159,7 +159,7 @@ let __tla = (async () => {
     },
     test: () => typeof self < "u" && self.WorkerGlobalScope !== void 0,
     load: async () => {
-      await Ln(() => import("./webworkerAll-DcqxKjb6.js"), __vite__mapDeps([1,2]));
+      await Ln(() => import("./webworkerAll-iltqGbJd.js"), __vite__mapDeps([1,2]));
     }
   };
   class ge {
@@ -5189,7 +5189,7 @@ ${n}`;
       const o = t[r];
       if (o === "webgpu" && await Xf()) {
         const { WebGPURenderer: a } = await Ln(async () => {
-          const { WebGPURenderer: l } = await import("./WebGPURenderer-De1hS9k3.js");
+          const { WebGPURenderer: l } = await import("./WebGPURenderer-C-L3x9w1.js");
           return {
             WebGPURenderer: l
           };
@@ -5201,7 +5201,7 @@ ${n}`;
         break;
       } else if (o === "webgl" && Vf(n.failIfMajorPerformanceCaveat ?? id.defaultOptions.failIfMajorPerformanceCaveat)) {
         const { WebGLRenderer: a } = await Ln(async () => {
-          const { WebGLRenderer: l } = await import("./WebGLRenderer-Cf2G-aE_.js");
+          const { WebGLRenderer: l } = await import("./WebGLRenderer-DfaiTH30.js");
           return {
             WebGLRenderer: l
           };
@@ -5213,7 +5213,7 @@ ${n}`;
         break;
       } else if (o === "canvas") {
         const { CanvasRenderer: a } = await Ln(async () => {
-          const { CanvasRenderer: l } = await import("./CanvasRenderer-B7FkUN-R.js");
+          const { CanvasRenderer: l } = await import("./CanvasRenderer-CH8wAuyK.js");
           return {
             CanvasRenderer: l
           };
@@ -5523,7 +5523,7 @@ ${n}`;
       }
       const [l, { BitmapFont: c }] = await Promise.all([
         e.load(o),
-        Ln(() => import("./BitmapFont-sPMGzzld.js"), [])
+        Ln(() => import("./BitmapFont-DoAG3GN-.js"), [])
       ]), h = o.map((u) => l[u.src]);
       return new c({
         data: s,
@@ -17837,7 +17837,7 @@ fn mainFragment(
       tt.value = Z, tt.textContent = H, C.appendChild(tt);
     }), r.appendChild(l("Inserter research", C));
     const T = document.createElement("input");
-    T.type = "checkbox", T.className = "sb-checkbox", T.title = "Direct insertion (RFC-053): couple a producer straight into its consumer with inserters, so the shared item never touches a belt. Denser, and it lifts the belt-interface throughput ceiling. Pairs that cannot be served this way fall back to the bus automatically.", r.appendChild(l("Direct insertion", T));
+    T.type = "checkbox", T.className = "sb-checkbox", T.title = "FORCE direct insertion (RFC-053). DI couples a producer straight into its consumer with inserters, so the shared item never touches a belt \u2014 denser, and it lifts the belt-interface throughput ceiling. Leave this UNCHECKED for normal use: the engine already tries DI on every layout and keeps it wherever it is strictly better. Checking this skips that safety comparison and can produce a worse layout; it exists for A/B debugging.", r.appendChild(l("Direct insertion", T));
     const R = document.createElement("select");
     R.className = "sb-select", [
       [
@@ -18246,7 +18246,7 @@ fn mainFragment(
   }
   async function Nu() {
     if (We) return;
-    if (We = new Worker(new URL("/spaghettio/pr-473/assets/engine.worker-DhpunEdv.js", import.meta.url), {
+    if (We = new Worker(new URL("/spaghettio/pr-473/assets/engine.worker-C6Gz_ReS.js", import.meta.url), {
       type: "module",
       name: "spaghettio-engine"
     }), We.onmessage = (e) => {
@@ -18334,7 +18334,7 @@ fn mainFragment(
       wireMode: o ?? null,
       stacking: a ?? null,
       inserterCapacity: l ?? null,
-      directInsertion: c ?? false
+      directInsertion: c ? "on" : void 0
     });
   }
   function b_(n, t, e, s, i, r, o, a, l, c) {
@@ -18349,7 +18349,7 @@ fn mainFragment(
       wireMode: o ?? null,
       stacking: a ?? null,
       inserterCapacity: l ?? null,
-      directInsertion: c ?? false
+      directInsertion: c ? "on" : void 0
     });
   }
   async function Va() {
@@ -18385,7 +18385,7 @@ fn mainFragment(
         wireMode: o ?? null,
         stacking: a ?? null,
         inserterCapacity: l ?? null,
-        directInsertion: c ?? false,
+        directInsertion: c ? "on" : void 0,
         traceLogs: f
       });
     });
@@ -19464,7 +19464,7 @@ fn mainFragment(
     const w = new zt();
     v.addChild(w), v.fit(true, b * 1.15, x * 1.2), v.moveCenter(b / 2, x / 2);
     const { renderLayoutAnimated: C } = await Ln(async () => {
-      const { renderLayoutAnimated: T } = await import("./animated-C7t6eWAK.js");
+      const { renderLayoutAnimated: T } = await import("./animated-uI8edvBK.js");
       return {
         renderLayoutAnimated: T
       };
@@ -23626,7 +23626,7 @@ ${I}` : rt, Z();
     const t = document.getElementById("app"), e = window.location.hash, s = new URLSearchParams(window.location.search);
     if (e.startsWith("#/balancers")) {
       const { renderBalancerShowcase: r } = await Ln(async () => {
-        const { renderBalancerShowcase: o } = await import("./balancers-BouHw3Du.js");
+        const { renderBalancerShowcase: o } = await import("./balancers-Ct4QuS0o.js");
         return {
           renderBalancerShowcase: o
         };
