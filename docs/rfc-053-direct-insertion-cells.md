@@ -2251,12 +2251,27 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   flipping it is thin: `electronic-circuit@10`, `steel-plate@5` and
   `iron-gear-wheel@10` are byte-identical under both orders, the full
   suite is green under both, and the win on the one target that changes
-  is **3 entities at one rate** (`rail@1`; at `rail@5` the straddle does
-  not balance and reverse order builds the same stacked cell as forward).
+  is **3 entities at one rate** (see the correction below on WHICH rate).
   A green suite is weak evidence here — nearly every test runs with
   `direct_insertion: false`. Flipping a corpus-wide tie-break on one
   marginal case at one rate is the exploration-overruns-its-evidence
   shape the kill criteria exist to stop.*
+
+  ***Correction (2026-07-30, review of #508):*** *this entry originally named
+  `rail@1` as the winning rate and said the straddle does not balance at
+  `rail@5`. That contradicts this document's own coupling table above, which
+  reports `plan_row_straddle` balancing at exactly **5/s and 10/s** of 12 sampled
+  rates, with 1/s explicitly unbalanced (`P1:C1, 3.0 vs 1.5`). Both statements
+  cannot hold, and the measurement came from a scratch env flag that was never
+  committed — so the winning rate is **not recoverable from this record** and
+  neither figure should be quoted. The table's claim is the more specific and
+  self-consistent of the two (it lists the sample and the failing arithmetic), so
+  5/s or 10/s is the likelier location, but that is inference, not measurement.
+  Establishing it is now phase 1 of
+  [`rfc-059-di-coupling-assignment.md`](rfc-059-di-coupling-assignment.md), whose
+  kill criterion 1 cannot be evaluated until the sweep exists. Recorded rather
+  than silently corrected because the wrong half is not identifiable from the
+  document alone.*
 
   ***Status: the capability is built, tested and inert.*** *No corpus
   target reaches it today. The open question is not geometric any more —
