@@ -4893,7 +4893,7 @@ fn probe_band_packing_headroom() {
     // Kill criterion 1's baseline is the aggregate over ONLY the three
     // fixtures that criterion names — not the four-fixture figure.
     let gate = ["sci1-ore", "sci2-ore", "pu1-plate"];
-    let (mut gate_ctrl, mut gate_packed) = (0i64, 0i64);
+    let (mut gate_ctrl, mut gate_packed, mut gate_n) = (0i64, 0i64, 0usize);
 
     for (label, item, rate, inputs, machine) in cases {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
@@ -4915,10 +4915,22 @@ fn probe_band_packing_headroom() {
         };
         let bands = extract_bands(&l);
         let dims: Vec<(i32, i32)> = bands.iter().map(|b| (b.w, b.h)).collect();
+        // Two gates, deliberately distinct.
+        //
+        // The CORPUS aggregate includes every fixture with >1 band, counting
+        // unpackable ones at their control area — excluding them would bias
+        // the headline toward winners, the exact defect review caught in the
+        // RFC itself. That is what reproduces the RFC's −39.6%.
+        //
+        // KC2 REACH counts only fixtures with >=3 bands as candidates: two
+        // bands admit at most two shelves, which is a stacking choice rather
+        // than a packing problem, and counting them would inflate the figure
+        // the criterion turns on.
         if bands.len() < 2 {
             println!("{label:<13} bands={} — nothing to pack {dims:?}", bands.len());
             continue;
         }
+        let kc2_candidate = bands.len() >= 3;
         multi_band += 1;
         let (cw, ch) = bbox(&bands);
         let ctrl_area = (cw as i64) * (ch as i64);
@@ -4945,7 +4957,9 @@ fn probe_band_packing_headroom() {
         corpus_ctrl += ctrl_area;
         match best {
             Some((barea, btx, bw, bh)) => {
-                packable += 1;
+                if kc2_candidate {
+                    packable += 1;
+                }
                 corpus_packed += barea;
                 win_ctrl += ctrl_area;
                 win_packed += barea;
@@ -4954,6 +4968,7 @@ fn probe_band_packing_headroom() {
                 if gate.contains(label) {
                     gate_ctrl += ctrl_area;
                     gate_packed += barea;
+                    gate_n += 1;
                 }
                 println!(
                     "{label:<13} bands={:<2} ctrl {cw}x{ch}={ctrl_area:<6} -> {bw}x{bh}={barea:<6} \
@@ -4991,11 +5006,12 @@ fn probe_band_packing_headroom() {
         pct(win_tx_packed, win_tx_ctrl),
     );
     println!(
-        "  KC1 baseline ({} gate fixtures): {gate_ctrl} -> {gate_packed} ({:+.1}%), \
-         so the KC1 bar is half that: {:+.1}%",
+        "  KC1 baseline ({gate_n}/{} gate fixtures contributing): {gate_ctrl} -> {gate_packed} \
+         ({:+.1}%), so the KC1 bar is half that: {:+.1}%{}",
         gate.len(),
         pct(gate_packed as f64, gate_ctrl as f64),
         pct(gate_packed as f64, gate_ctrl as f64) / 2.0,
+        if gate_n == gate.len() { "" } else { "  <-- INCOMPLETE: a gate fixture no longer packs, so this baseline is not comparable to the RFC's" },
     );
     println!(
         "  KC2 reach: {packable}/{} fixtures packable ({:.0}%) — bar is 30%, but the \n\
