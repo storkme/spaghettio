@@ -1205,10 +1205,16 @@ pub fn select_best_decomposition(
             let nat_counts = count_issues(nat_layout, solver_result);
             crate::trace::truncate_events(start);
             let strictly_better_issues = hs_counts.strictly_better_than(&nat_counts);
-            let equal_issues_and_denser =
-                hs_counts == nat_counts && hs_score.score > nat_score.score + 1e-9;
-            (hs_score.accepted && (strictly_better_issues || equal_issues_and_denser))
-                .then_some(H_IDX)
+            // v1 deliberately has NO equal-issues-and-denser arm (unlike
+            // `di_choice`): measured on the first full-suite run, that
+            // arm's wins are ≤5% entity shaves on already-CLEAN layouts,
+            // and their cost was flipping ten pinned structural
+            // artifacts across two suites (stacking per-tile audits,
+            // cell registry hashes, EC fixtures). Horizontal displaces
+            // native only where native has issues to fix; clean layouts
+            // stay bit-identical. Revisit alongside RFC-058 packing
+            // (RFC-059 decision log, 2026-07-30).
+            (hs_score.accepted && strictly_better_issues).then_some(H_IDX)
         });
 
     // When BOTH scoped candidates beat native, resolve them pairwise
@@ -1218,9 +1224,9 @@ pub fn select_best_decomposition(
     // the soft score against native (RFC-059 design note).
     let scoped_choice: Option<usize> = match (di_choice, horizontal_choice) {
         (Some(_), Some(_)) => {
-            let (di_layout, di_score) =
+            let (di_layout, _) =
                 di_run.outcome.as_ref().expect("di_choice implies an outcome");
-            let (hs_layout, hs_score) = horizontal_run
+            let (hs_layout, _) = horizontal_run
                 .outcome
                 .as_ref()
                 .expect("horizontal_choice implies an outcome");
@@ -1228,8 +1234,9 @@ pub fn select_best_decomposition(
             let di_counts = count_issues(di_layout, solver_result);
             let hs_counts = count_issues(hs_layout, solver_result);
             crate::trace::truncate_events(start);
-            let hs_wins = hs_counts.strictly_better_than(&di_counts)
-                || (hs_counts == di_counts && hs_score.score > di_score.score + 1e-9);
+            // Consistent with horizontal_choice's strictly-better-only
+            // rule: no density tiebreak, ties → DI.
+            let hs_wins = hs_counts.strictly_better_than(&di_counts);
             Some(if hs_wins { H_IDX } else { DI_IDX })
         }
         (d, h) => d.or(h),
@@ -1265,24 +1272,42 @@ pub fn select_best_decomposition(
         horizontal_run.outcome.as_ref(),
     ];
     let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
-    let clean_flags: [Option<bool>; 7] = if merge_tap_choice.is_none()
+    let clean_flags: [Option<(bool, usize)>; 7] = if merge_tap_choice.is_none()
         && scoped_choice.is_none()
         && n_layouts > 1
     {
         let start = crate::trace::peek_events_len();
         let flags = tier_outcomes.map(|o| {
             o.map(|(l, score)| {
-                score.accepted
-                    && match crate::validate::validate(
-                        l,
-                        Some(solver_result),
-                        crate::validate::LayoutStyle::Bus,
-                    ) {
-                        Ok(issues) => issues
+                // (error-free, warning key). The key orders the
+                // error-free tier below: RFC-059 made the refusal path
+                // multi-candidate (cells, DI, horizontal), and a
+                // score-only order re-admits the density-over-warnings
+                // class THERE that `ranking_len` blocks on the success
+                // path — horizontal's denser 0-error/6-warning ec@15
+                // must not outrank DI's 0/0 resolution (pinned by
+                // `cell_candidate_resolves_ec15_refusal`).
+                match crate::validate::validate(
+                    l,
+                    Some(solver_result),
+                    crate::validate::LayoutStyle::Bus,
+                ) {
+                    Ok(issues) => {
+                        let errors = issues
                             .iter()
-                            .all(|i| i.severity != crate::validate::Severity::Error),
-                        Err(_) => false,
+                            .filter(|i| i.severity == crate::validate::Severity::Error)
+                            .count();
+                        let warnings = issues
+                            .iter()
+                            .filter(|i| i.severity == crate::validate::Severity::Warning)
+                            .count();
+                        (
+                            score.accepted && errors == 0,
+                            warnings + l.warnings.len(),
+                        )
                     }
+                    Err(_) => (false, usize::MAX),
+                }
             })
         });
         crate::trace::truncate_events(start);
@@ -1404,17 +1429,21 @@ pub fn select_best_decomposition(
         .iter()
         .enumerate()
         .filter_map(|(i, (outcome, _, _))| {
-            if clean_flags[i] != Some(true) {
+            let (clean, warn_key) = clean_flags[i]?;
+            if !clean {
                 return None;
             }
-            outcome.as_ref().map(|(_, score)| (i, score.score))
+            outcome.as_ref().map(|(_, score)| (i, warn_key, score.score))
         })
-        .max_by(|(ia, a), (ib, b)| {
-            a.partial_cmp(b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(ib.cmp(ia))
+        // Warnings first (asc), then score (desc), then earliest index —
+        // within the error-free tier a quieter layout beats a denser
+        // one (see the clean_flags comment; RFC-059 decision log).
+        .min_by(|(ia, wa, sa), (ib, wb, sb)| {
+            wa.cmp(wb)
+                .then(sb.partial_cmp(sa).unwrap_or(std::cmp::Ordering::Equal))
+                .then(ia.cmp(ib))
         })
-        .map(|(i, _)| i);
+        .map(|(i, _, _)| i);
 
     // The scoped Pooled merge-tap decision (error-count metric, ties → Native)
     // overrides the generic accepted-by-score pick when it ran; then the

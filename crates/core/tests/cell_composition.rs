@@ -938,6 +938,9 @@ fn cell_candidate_resolves_ec15_refusal() {
     let off_opts = layout::LayoutOptions {
         cell_composition: CellComposition::Off,
         direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+        // RFC-059 made horizontal-stack a THIRD refusal-resolving
+        // candidate; off for the same isolation reason as DI above.
+        horizontal_candidate: false,
         ..Default::default()
     };
     let off = layout::build_bus_layout(&sr, off_opts);
@@ -950,6 +953,8 @@ fn cell_candidate_resolves_ec15_refusal() {
     // this test exists to pin.
     let opts = layout::LayoutOptions {
         direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+        // Isolating the cell-composition arm (see off_opts note).
+        horizontal_candidate: false,
         ..Default::default()
     };
     let l = layout::build_bus_layout(&sr, opts).expect("candidate must resolve the refusal");

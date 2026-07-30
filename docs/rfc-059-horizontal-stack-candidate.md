@@ -47,12 +47,15 @@ bit-identically (all 6 simple cases). Full table: #513.
   and `RowKind::DualInput` is the only kind whose construction consults
   `row_layout`, so "no dual-input row" ⇒ bit-identical by construction
   and the extra pass is skipped. `catch_unwind` like cells/DI/merge-tap.
-- Scoped pairwise choice `horizontal_choice`, same rule as `di_choice`:
-  `accepted && (strictly_better_issues || (equal_issues && strictly
-  denser))` → win; `None` otherwise. Never returns `Some(NATIVE_IDX)`
-  (the #474 shadowing lesson). When native produced nothing, returns
-  `None` so horizontal competes in the generic ranking against
-  `cell-composed`/DI — that is the `ec@15` rescue path.
+- Scoped pairwise choice `horizontal_choice`: `accepted &&
+  strictly_better_issues` → win; `None` otherwise. **Narrower than
+  `di_choice`** — no equal-issues-and-denser arm in v1 (see decision
+  log: the density arm's measured value was ≤5% entity shaves on clean
+  layouts, its measured cost ten flipped structural artifacts). Never
+  returns `Some(NATIVE_IDX)` (the #474 shadowing lesson). When native
+  produced nothing, returns `None` so horizontal competes in the
+  generic ranking against `cell-composed`/DI — that is the `ec@15`
+  rescue path.
 - Candidate sits LAST (index 6). `ranking_len` = `DI_IDX` when native
   produced (excludes both DI and horizontal from the generic ranking —
   the single enforcement point the DI default rests on, extended), else
@@ -119,6 +122,25 @@ bit-identically (all 6 simple cases). Full table: #513.
   competes) accepted knowing it forgoes E10→E1-class improvements;
   the sweep shows horizontal's wins land at E0, so the forgone region is
   empty on current evidence. Revisit only with a measured case.*
+- *2026-07-30 — Error-free refusal tier now orders by WARNINGS first,
+  then score (was: score only). Adding a third refusal-resolving
+  candidate exposed that the #392 error-free tier re-admitted the
+  density-over-warnings class on the refusal path: horizontal's ec@15
+  resolution (0 errors, 6 warnings, denser) would have outranked DI's
+  genuinely clean 0/0. `cell_candidate_resolves_ec15_refusal` pins the
+  corrected order. Within error-free candidates, quiet beats dense.*
+- *2026-07-30 — Density arm DROPPED from v1 after the second full-suite
+  run measured its blast radius: with `equal_issues_and_denser` active,
+  ten pinned structural artifacts across two suites failed (4 cell
+  registry/chain fixtures, 6 e2e including the stacking per-tile audits
+  and `tier2_electronic_circuit_20s_from_ore`) — every one a CLEAN
+  layout flipped for a ≤5% entity shave (sweep: ec@20 1392→1386, pu@2
+  6499→6210). All headline value (`ac@5` E4/W11→0/0, `ac@7` E10/W64→0/0,
+  `pu@3` E11/W149→0/W35, `ec@15` refusal rescue) comes from the
+  strictly-better arm, which flips nothing that was clean. Rule:
+  horizontal displaces native only where native has issues to fix.
+  The density arm is a candidate to re-enable alongside RFC-058 packing
+  work, where structural churn is already priced in.*
 - *2026-07-30 — First full-suite run caught a forced-mode interaction:
   under `DirectInsertion::Forced` (explicit A/B topology request) the
   horizontal candidate competed, won, and returned a DI-free layout —
