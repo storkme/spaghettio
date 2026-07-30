@@ -2579,6 +2579,25 @@ pub fn place_rows(
                 // that is itself a DI consumer could be claimed by two
                 // different cells and placed twice.
                 if claimed.contains(&p_idx) || claimed.contains(&c_idx) {
+                    // CONTENTION (RFC-059 phase 1). This coupling was eligible
+                    // and lost, because one of its specs is already fused. The
+                    // dispatcher resolves that by iteration order alone — see
+                    // the RFC; a binary P0-vs-P1 layout diff cannot tell this
+                    // case from "nothing was contended", which is why kill
+                    // criterion 1 gates on the contention set rather than the
+                    // diff.
+                    let blocked = if claimed.contains(&p_idx) {
+                        (ordered[p_idx].recipe.clone(), "producer")
+                    } else {
+                        (c_spec.recipe.clone(), "consumer")
+                    };
+                    crate::trace::emit(crate::trace::TraceEvent::DiCouplingContended {
+                        contended_spec: blocked.0,
+                        loser_producer: producer_recipe.to_string(),
+                        loser_consumer: c_spec.recipe.clone(),
+                        loser_item: item.to_string(),
+                        blocked_side: blocked.1.to_string(),
+                    });
                     continue;
                 }
                 // Buildability, not merely eligibility — and the FULL
@@ -2617,6 +2636,15 @@ pub fn place_rows(
                 }
                 claimed.insert(p_idx);
                 claimed.insert(c_idx);
+                // The per-coupling outcome (RFC-059 phase 1, output 3): which
+                // coupling actually won a contended spec, which is the ground
+                // truth kill criterion 2 tests an estimator's ranking against.
+                crate::trace::emit(crate::trace::TraceEvent::DiCouplingClaimed {
+                    producer: producer_recipe.to_string(),
+                    consumer: c_spec.recipe.clone(),
+                    item: item.to_string(),
+                    variant: if stacked_ok { "stacked" } else { "row" }.to_string(),
+                });
                 cell_pairs.insert(c_idx, (p_idx, item, !stacked_ok));
                 break;
             }

@@ -8894,3 +8894,87 @@ fn merge_tap_does_not_shadow_di_on_pooled_yellow() {
         "DI regressed an issue channel on the merge-tap branch: {oc:?} -> {nc:?}"
     );
 }
+
+/// RFC-059 phase 1, outputs 2 and 3: does DI spec contention actually occur?
+///
+/// Kill criterion 1 closes the RFC as "not a real contention in practice" only
+/// if the corpus shows no layout difference between claim orders AND **every
+/// target's contention set is empty**. The second conjunct exists because a
+/// binary layout diff cannot distinguish "nothing was contended" from
+/// "contended, and two arbitrary orders happened to agree" — and KC2 identifies
+/// the latter as exactly where P2/P3 would earn their cost.
+///
+/// This reports the contention set (`DiCouplingContended`) and the per-coupling
+/// outcome (`DiCouplingClaimed`) per target. It is the instrument KC1 and KC2
+/// are written against; without it neither can be evaluated.
+#[test]
+#[ignore = "RFC-059 phase 1 — DI coupling contention census"]
+fn probe_di_coupling_contention() {
+    use spaghettio_core::trace::TraceEvent;
+    let cases: &[(&str, f64, &[&str])] = &[
+        ("rail", 1.0, &["iron-ore"]),
+        ("rail", 5.0, &["iron-ore"]),
+        ("rail", 10.0, &["iron-ore"]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        ("steel-plate", 5.0, &["iron-ore"]),
+        ("space-platform-foundation", 1.0, &["iron-plate", "copper-plate"]),
+        ("iron-stick", 5.0, &["iron-ore"]),
+        ("engine-unit", 2.0, &["iron-plate", "steel-plate"]),
+    ];
+
+    let mut any_contention = 0usize;
+    for (item, rate, ins) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, *rate, &inputs, "assembling-machine-3") else {
+            println!("  {item}@{rate}: solve failed — skipped");
+            continue;
+        };
+        let events = {
+            let _guard = spaghettio_core::trace::start_trace();
+            let _ = layout::build_bus_layout(&sr, layout::LayoutOptions::default());
+            spaghettio_core::trace::drain_events()
+        };
+
+        let mut contended: Vec<String> = Vec::new();
+        let mut claimed: Vec<String> = Vec::new();
+        for e in &events {
+            match e {
+                TraceEvent::DiCouplingContended {
+                    contended_spec, loser_producer, loser_consumer, loser_item, blocked_side,
+                } => contended.push(format!(
+                    "{contended_spec} ({blocked_side}) blocked {loser_producer}->{loser_consumer} on {loser_item}"
+                )),
+                TraceEvent::DiCouplingClaimed { producer, consumer, item, variant } =>
+                    claimed.push(format!("{producer}->{consumer} on {item} [{variant}]")),
+                _ => {}
+            }
+        }
+        if !contended.is_empty() {
+            any_contention += 1;
+        }
+        println!(
+            "  {item}@{rate}: {} claimed, {} CONTENDED",
+            claimed.len(),
+            contended.len()
+        );
+        for c in &claimed { println!("      claimed:   {c}"); }
+        for c in &contended { println!("      contended: {c}"); }
+    }
+    println!("\nRFC-059 KC1 gate: {any_contention} of {} targets show contention", cases.len());
+    println!("(KC1 may only trip if this is 0 AND no layout differs between claim orders)");
+}
+
+#[test]
+#[ignore = "RFC-059 phase 1 — does rail have DI couplings at all?"]
+fn probe_rail_di_couplings() {
+    for rate in [1.0, 5.0, 10.0] {
+        let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve("rail", rate, &inputs, "assembling-machine-3") else {
+            println!("rail@{rate}: solve failed"); continue;
+        };
+        println!("rail@{rate}: {} specs, di_couplings = {:?}",
+            sr.machines.len(), sr.di_couplings);
+    }
+}
