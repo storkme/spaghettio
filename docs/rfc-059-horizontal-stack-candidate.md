@@ -122,6 +122,16 @@ bit-identically (all 6 simple cases). Full table: #513.
   competes) accepted knowing it forgoes E10→E1-class improvements;
   the sweep shows horizontal's wins land at E0, so the forgone region is
   empty on current evidence. Revisit only with a measured case.*
+- *2026-07-30 — Cell-geometry derivation pins `horizontal_candidate:
+  false` (extract + both mega sub-solve sites), joining the existing
+  cells/DI recursion-guard pins. Found by `probe_registry_pin_survey`
+  bisection: chain-ec15/ec30 registry hashes drifted deterministically
+  at HEAD while every other fixture held — the EC sub-builds carry
+  exactly the belt-margin warnings the candidate strictly improves, so
+  the extraction path silently swapped to horizontal rows. Rule joins
+  the forced-modes rule: geometry-DERIVATION paths must be
+  candidate-independent by construction; a registry baseline that moves
+  because a sibling candidate got smarter is a false re-bless.*
 - *2026-07-30 — Error-free refusal tier now orders by WARNINGS first,
   then score (was: score only). Adding a third refusal-resolving
   candidate exposed that the #392 error-free tier re-admitted the
