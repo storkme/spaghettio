@@ -1007,18 +1007,21 @@ fn cell_candidate_resolves_ec15_refusal() {
         "row-output-lane-budget should not fire at the recalibrated budget: {issues:?}"
     );
 
-    // RFC-053: under the TRUE default both candidates are live, and DI
-    // takes this config — legitimately. The refusal is that copper-cable
-    // overloads a lane; DI removes cable from the belts entirely, so the
-    // `row-input-belt-margin` finding adjudicated above (a REAL ~5.3%
-    // throughput defect, measured) simply ceases to exist rather than
-    // being tolerated. Measured: DI 65x11 / 272 entities / 0 errors 0
-    // warnings on both channels, against composition's 70x21 / 292 / 1
-    // warning + an unverified-geometry note.
+    // Under the TRUE default all refusal-resolving candidates are live.
+    // Succession on this config, each step strictly at-or-above the
+    // last on both issue channels: composition (292 entities, 1
+    // adjudicated warning) → DI (RFC-053, 2026-07-26: 272 entities,
+    // 0/0, cable off the belts entirely) → horizontal-stack (RFC-059,
+    // 2026-07-30: 252 entities, 0/0 — equal cleanliness, so the
+    // error-free tier's density order decides; cable returns to belts
+    // but on stacked input trunks that clear the margin). K59-3 keeps
+    // this config on the sim-verification list precisely because the
+    // winner changed.
     //
-    // Pinned because it is the clearest evidence for the whole flip: DI
-    // is not merely additive here, it is strictly better than the
-    // alternative that used to win.
+    // Pinned because it is the clearest evidence for the candidate
+    // lifecycle: each successor must beat the incumbent on the
+    // never-worse terms, and the floors below enforce exactly that
+    // rather than any one winner's internal structure.
     let both = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
         .expect("the default must still resolve the refusal");
     let both_issues = validate::validate(&both, Some(&sr), LayoutStyle::Bus).unwrap();
@@ -1033,17 +1036,18 @@ fn cell_candidate_resolves_ec15_refusal() {
     );
     assert!(
         both.entities.len() < l.entities.len(),
-        "DI must win on entity count ({} vs composed {})",
+        "the default winner must beat composition on entity count ({} vs composed {})",
         both.entities.len(),
         l.entities.len()
     );
+    // Floor at DI's 272-entity resolution: a future winner may only
+    // succeed by matching or beating the incumbent (the succession
+    // note above). If this fires, a candidate won while being LARGER
+    // than a clean predecessor — the error-free tier ordering broke.
     assert!(
-        !both
-            .entities
-            .iter()
-            .any(|e| e.name.ends_with("transport-belt")
-                && e.carries.as_deref() == Some("copper-cable")),
-        "the coupled item must be off the belts entirely"
+        both.entities.len() <= 272,
+        "default winner ({} entities) regressed past DI's 272-entity resolution",
+        both.entities.len()
     );
 }
 
