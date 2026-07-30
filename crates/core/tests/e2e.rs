@@ -8689,3 +8689,125 @@ fn kc2_face_contention() {
         n_near + n_far,
         if n_near + n_far <= 3 { "KC2 PASSES" } else { "KC2 FIRES" });
 }
+
+/// Re-run #474's change surface on CURRENT main.
+///
+/// #474 measured "20 targets swept: 15 bit-identical, 5 flipped, 0 regressed"
+/// against a base that is now 32 commits gone — since then #500 (multi-fold),
+/// #502 (undergroundification, -26% source entities) and #503 (island packing)
+/// all moved the layout pipeline. The PR's own thesis is that fusing a pair
+/// changes row structure and trunk lanes / junction routing / per-lane capacity
+/// are computed against it, so its sweep is exactly the evidence that goes stale.
+///
+/// Classification per target:
+///   IDENTICAL  — same entity count and same issue triple. DI declined; the
+///                never-worse contract holds by construction.
+///   DI-BETTER  — DI won, and no issue channel got worse.
+///   REGRESSED  — DI won something while a channel got worse, or DI turned a
+///                success into a refusal. This is the merge blocker.
+///
+/// Reporting probe, not an assertion: the permanent gate
+/// `di_candidate_never_degrades_a_succeeding_bus_layout` is the structural pin.
+/// This exists to say WHICH targets moved and by how much, because a bare
+/// "tests pass" cannot — most tests run DI-off.
+#[test]
+#[ignore = "reporting probe — #474 change surface on current main"]
+fn di_change_surface_sweep() {
+    use spaghettio_core::bus::di_cell::DirectInsertion;
+    let counts = |l: &spaghettio_core::models::LayoutResult, sr: &_| -> (usize, usize, usize) {
+        let issues = spaghettio_core::validate::validate(
+            l,
+            Some(sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+        )
+    };
+
+    // The 5 #474 recorded as flipped, plus a spread of the bit-identical set.
+    let cases: &[(&str, f64, &[&str])] = &[
+        ("space-platform-foundation", 1.0, &["steel-plate", "copper-cable"]),
+        ("space-platform-foundation", 1.0, &["iron-plate", "copper-plate"]),
+        ("steel-plate", 5.0, &["iron-ore"]),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 5.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 5.0, &["iron-ore", "copper-ore"]),
+        ("iron-gear-wheel", 10.0, &["iron-plate"]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 2.0, &["iron-plate", "copper-plate"]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        ("steel-plate", 1.0, &["iron-ore"]),
+        ("steel-plate", 20.0, &["iron-ore"]),
+        ("iron-stick", 5.0, &["iron-ore"]),
+        ("pipe", 5.0, &["iron-ore"]),
+        ("copper-cable", 5.0, &["copper-ore"]),
+        ("stone-brick", 5.0, &["stone"]),
+    ];
+
+    let mut identical = 0;
+    let mut better = 0;
+    let mut regressed: Vec<String> = Vec::new();
+    let mut skipped = 0;
+
+    for (item, rate, ins) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, *rate, &inputs, "assembling-machine-3") else {
+            skipped += 1;
+            continue;
+        };
+        let off = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                direct_insertion: DirectInsertion::Off,
+                ..Default::default()
+            },
+        );
+        let on = layout::build_bus_layout(&sr, layout::LayoutOptions::default());
+
+        match (off, on) {
+            (Ok(off_l), Ok(on_l)) => {
+                let (oc, nc) = (counts(&off_l, &sr), counts(&on_l, &sr));
+                let (oe, ne) = (off_l.entities.len(), on_l.entities.len());
+                let worse = nc.0 > oc.0 || nc.1 > oc.1 || nc.2 > oc.2;
+                if worse {
+                    regressed.push(format!("{item}@{rate}: {oc:?}/{oe}ents -> {nc:?}/{ne}ents"));
+                    println!("  REGRESSED {item}@{rate}: {oc:?} {oe} ents -> {nc:?} {ne} ents");
+                } else if oe == ne && oc == nc {
+                    identical += 1;
+                    println!("  identical {item}@{rate}: {oc:?} {oe} ents");
+                } else {
+                    better += 1;
+                    println!("  DI-BETTER {item}@{rate}: {oc:?} {oe} ents -> {nc:?} {ne} ents");
+                }
+            }
+            (Err(e), Ok(on_l)) => {
+                better += 1;
+                println!(
+                    "  DI-RESOLVES {item}@{rate}: off REFUSED ({e}) -> on {:?} {} ents",
+                    counts(&on_l, &sr),
+                    on_l.entities.len()
+                );
+            }
+            (Ok(_), Err(e)) => {
+                regressed.push(format!("{item}@{rate}: DI turned a SUCCESS into a refusal: {e}"));
+                println!("  REGRESSED {item}@{rate}: DI turned a success into a refusal: {e}");
+            }
+            (Err(_), Err(_)) => {
+                skipped += 1;
+            }
+        }
+    }
+
+    println!(
+        "\n#474 change surface on current main: {identical} identical, {better} DI-better, \
+         {} REGRESSED, {skipped} not-applicable",
+        regressed.len()
+    );
+    for r in &regressed {
+        println!("  ! {r}");
+    }
+}
