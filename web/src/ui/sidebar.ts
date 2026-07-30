@@ -1051,6 +1051,7 @@ export function renderSidebar(
   inserterTierSelect.addEventListener("change", scheduleAutoSolve);
   qualitySelect.addEventListener("change", scheduleAutoSolve);
   directInsertionCb.addEventListener("change", scheduleAutoSolve);
+  compactCb.addEventListener("change", scheduleAutoSolve);
   modulesSelect.addEventListener("change", scheduleAutoSolve);
   moduleQualitySelect.addEventListener("change", scheduleAutoSolve);
   wireModeSelect.addEventListener("change", scheduleAutoSolve);
