@@ -159,8 +159,16 @@ static.
    document's kill criteria; see the decision log.
 2. **P2 cannot be estimated statically.** Concretely: after **at most three
    distinct estimator formulations**, if none of them RANKS the contended
-   couplings in the same order as the measured outcome on **every** target where
-   phase 1 found a difference, drop P2 and P3. Rank agreement, not a correlation
+   couplings in the same order as the measured per-coupling outcome on **every**
+   target where phase 1 found a contention, drop P2 and P3.
+
+   This criterion depends on phase 1 being extended to produce the ground truth
+   it checks against — see Phasing. As originally written it could not be
+   evaluated at all: phase 1's instrument reports a binary P0-vs-P1 layout diff
+   per target, and a binary winner is not a ranking. Worse, it was unevaluable
+   in precisely the case it guards — a target whose optimal assignment differs
+   from BOTH static orders is exactly where P2/P3 would earn their cost, and
+   exactly where a P0-vs-P1 diff says nothing. Rank agreement, not a correlation
    coefficient — the estimator's only job is to pick which coupling claims first,
    so ordering is the whole of it and magnitude is irrelevant.
 
@@ -232,11 +240,24 @@ able to distinguish "policy had no effect" from "policy was not applied."
 
 ## Phasing
 
-1. **Measure P0 vs P1 across the corpus, sweeping rates on `rail`.** Cheap, and
-   it may trip kill criterion 1 immediately — in which case the RFC closes having
-   cost a day and answered the question. This phase also has to *establish* the
-   motivating measurement, since the recorded rate is contradictory and the
-   scratch flag that produced it was never committed.
+1. **Measure P0 vs P1 across the corpus, sweeping rates on `rail`, and record
+   each target's CONTENTION SET.** Cheap, and it may trip kill criterion 1
+   immediately — in which case the RFC closes having cost a day and answered the
+   question. This phase also has to *establish* the motivating measurement, since
+   the recorded rate is contradictory and the scratch flag that produced it was
+   never committed.
+
+   Three outputs, not one, and the second and third are what make the later
+   criteria evaluable:
+
+   - the P0-vs-P1 layout diff per target (kill criterion 1);
+   - **the contention set per target** — which specs were eligible in more than
+     one coupling at all. A target with no contention cannot be evidence about
+     claim policy, and the binary diff does not distinguish "no contention" from
+     "contention that both orders happened to resolve the same way";
+   - **the per-coupling outcome for each contended spec**, which is the ground
+     truth kill criterion 2 tests an estimator against. Without it that criterion
+     is unevaluable exactly where P2/P3 would matter.
 2. **P2 gain estimate**, only if (1) shows contention beyond `rail`.
 3. **P3 matching**, only if (2) shows greedy is measurably sub-optimal.
 
@@ -320,9 +341,23 @@ tie-break with evidence, not necessarily a new algorithm.
   to mark #473 as pending rather than assert it as fact, since a cross-PR claim
   that cannot be checked from either side is fragile regardless of who is right.
 
-  That makes **five** kill criteria in this document revised for the same defect
-  across four review rounds. The generalisable lesson is in the shape, not the
+  That makes **five revisions across four** kill criteria in this document, all
+  for the same defect, across four review rounds — criterion 1 twice (the empty
+  result, then the "pin P0" remedy), criteria 2, 3 and 5 once each; criterion 4
+  never needed changing. Counted wrong in an earlier draft, in the very sentence
+  naming a pattern of boundary and counting errors. The generalisable lesson is in the shape, not the
   count: every one was written to catch the central case and silently excluded a
   boundary — a percentage that could not fire on its own scenario, a budget that
   did not compose, a condition that missed the empty result, an unfalsifiable
   "cannot be made to", and a remedy that forced the worse of two free options.
+
+- *2026-07-30 — two more, and the second is the funniest defect in this file.*
+  Kill criterion 2 checked an estimator against a ranking phase 1 never produced:
+  the sweep reports a binary P0-vs-P1 diff per target, and a binary winner is not
+  a ranking — so the criterion was unevaluable in exactly the case it guards, a
+  target whose optimal assignment differs from both static orders. Phase 1 now
+  has three outputs instead of one (diff, contention set, per-coupling outcome),
+  and criterion 2 names its dependency on them. And the decision log said "five
+  kill criteria revised" when it is five revisions across FOUR criteria —
+  criterion 1 twice, criterion 4 never — i.e. a miscount inside the sentence
+  naming a pattern of boundary and counting errors.
