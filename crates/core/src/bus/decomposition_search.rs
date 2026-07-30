@@ -370,6 +370,9 @@ impl DecompositionCandidate for ModuleSizeSplit {
             cell_composition: opts.cell_composition,
             splitter_tap_spacers: opts.splitter_tap_spacers,
             direct_insertion: opts.direct_insertion,
+            // Inherited, not defaulted: a claim-order measurement that silently
+            // reverted to P0 inside the partitioned path would report P0-vs-P0.
+            di_claim_order: opts.di_claim_order,
             compact_layout: false,
             // Same discipline as compact_layout: the flag-gated RFC-058
             // plan is emitted by the native pass, not re-emitted by every

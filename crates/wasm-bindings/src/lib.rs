@@ -121,6 +121,9 @@ fn layout_options(
             Some("off") => spaghettio_core::bus::cells::CellComposition::Off,
             _ => spaghettio_core::bus::cells::CellComposition::Candidate,
         },
+        // RFC-059 phase 1 is a measurement, not a shipped policy, so the web
+        // app always gets the status quo until a claim policy is decided.
+        di_claim_order: spaghettio_core::bus::di_cell::DiClaimOrder::Upstream,
         // RFC-057 post-layout compaction, now reachable from the web surface.
         // Transactional: `compact_validated_geometry` commits a transform only
         // when validation is no worse than its input, so the worst case is

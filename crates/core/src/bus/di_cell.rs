@@ -59,6 +59,27 @@ pub enum DirectInsertion {
     Forced,
 }
 
+/// Which order the dispatcher walks consumers when deciding who claims a
+/// contended DI spec (RFC-059).
+///
+/// A spec may be fused into at most one cell. When a spec is eligible in two
+/// couplings the winner is decided by ITERATION ORDER, which was never a
+/// decision anyone made — the walk is topological, so the upstream coupling
+/// claims and the downstream one is never evaluated.
+///
+/// This is an option rather than an env var on purpose. The measurement that
+/// motivated RFC-059 was taken with an uncommitted scratch flag and is
+/// consequently unrecoverable from the repository; a real option is what makes
+/// phase 1 reproducible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiClaimOrder {
+    /// Status quo (P0): consumers in topological order, so upstream claims.
+    #[default]
+    Upstream,
+    /// P1: consumers in reverse topological order, so downstream claims.
+    Downstream,
+}
+
 impl DirectInsertion {
     /// Does the PLACER act on `di_couplings` for this call? Only
     /// `Forced` does: under `Candidate` the native pass must stay

@@ -8998,3 +8998,88 @@ fn probe_rail_di_couplings() {
             sr.machines.len(), sr.di_couplings);
     }
 }
+
+
+/// RFC-059 phase 1, output 1 + the consistency check KC1 specifies.
+///
+/// KC1 trips on the contention set alone, because contention-empty ENTAILS
+/// diff-empty: if no spec was ever eligible in two couplings, claim order cannot
+/// change which couplings claim. The P0-vs-P1 diff is therefore not an
+/// independent condition — it is a check on the instrument. Observing zero
+/// contention together with a non-empty diff means a coupling decision is being
+/// made somewhere the census cannot see, and phase 1 must fail loudly rather
+/// than quietly report both numbers.
+#[test]
+#[ignore = "RFC-059 phase 1 — P0 vs P1, and the entailment KC1 rests on"]
+fn probe_di_claim_order_p0_vs_p1() {
+    use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
+    use spaghettio_core::trace::TraceEvent;
+
+    let cases: &[(&str, f64, &[&str])] = &[
+        ("rail", 1.0, &["iron-ore"]),
+        ("rail", 5.0, &["iron-ore"]),
+        ("rail", 10.0, &["iron-ore"]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 5.0, &["iron-ore", "copper-ore"]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        ("steel-plate", 5.0, &["iron-ore"]),
+        ("steel-plate", 20.0, &["iron-ore"]),
+        ("space-platform-foundation", 1.0, &["iron-plate", "copper-plate"]),
+        ("iron-stick", 5.0, &["iron-ore"]),
+        ("engine-unit", 2.0, &["iron-plate", "steel-plate"]),
+        ("pipe", 5.0, &["iron-ore"]),
+        ("iron-gear-wheel", 10.0, &["iron-plate"]),
+        ("stone-brick", 5.0, &["stone"]),
+    ];
+
+    let build = |sr: &_, order: DiClaimOrder| {
+        let opts = layout::LayoutOptions {
+            direct_insertion: DirectInsertion::Forced,
+            di_claim_order: order,
+            ..Default::default()
+        };
+        let _guard = spaghettio_core::trace::start_trace();
+        let l = layout::build_bus_layout(sr, opts);
+        let contended = spaghettio_core::trace::drain_events()
+            .iter()
+            .filter(|e| matches!(e, TraceEvent::DiCouplingContended { .. }))
+            .count();
+        (l.map(|l| (l.width, l.height, l.entities.len())).ok(), contended)
+    };
+
+    let (mut differ, mut contended_targets, mut violations) = (0usize, 0usize, Vec::new());
+    for (item, rate, ins) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, *rate, &inputs, "assembling-machine-3") else { continue };
+        let (p0, c0) = build(&sr, DiClaimOrder::Upstream);
+        let (p1, _c1) = build(&sr, DiClaimOrder::Downstream);
+        let same = p0 == p1;
+        if !same { differ += 1; }
+        if c0 > 0 { contended_targets += 1; }
+        // The entailment KC1 rests on. A violation means the census is blind to
+        // a decision the claim order is making.
+        if c0 == 0 && !same {
+            violations.push(format!("{item}@{rate}: 0 contention but P0 {p0:?} != P1 {p1:?}"));
+        }
+        println!(
+            "  {item}@{rate}: contention={c0} P0={p0:?} P1={p1:?} {}",
+            if same { "same" } else { "DIFFER" }
+        );
+    }
+
+    println!(
+        "\nRFC-059 phase 1: {contended_targets} of {} targets contended, {differ} differ between P0/P1",
+        cases.len()
+    );
+    assert!(
+        violations.is_empty(),
+        "ENTAILMENT VIOLATED — contention-empty must imply diff-empty, so the census \
+         is missing a coupling decision:\n{}",
+        violations.join("\n")
+    );
+    if contended_targets == 0 {
+        println!("KC1 TRIPS on this sample: no spec was ever contended, so claim order is");
+        println!("provably irrelevant here. Widen to the full corpus before acting on it.");
+    }
+}
