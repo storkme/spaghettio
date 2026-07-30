@@ -4232,3 +4232,122 @@ fn probe_fold_error_breakdown_mil5() {
         }
     }
 }
+
+/// Island placement must keep TERMINAL tiles disjoint, not just machine blocks.
+///
+/// A terminal is the belt tile an inserter reaches to, so it sits OUTSIDE the
+/// island's block. Packing on blocks alone let one island's input terminal
+/// land exactly on another island's output terminal — one tile asked to be the
+/// delivery point for two different commodities, which is physically
+/// impossible and which no router can repair, because the conflict is created
+/// before routing starts.
+///
+/// This asserts the invariant by COUNT and reports every offending tile, not a
+/// sample: the failure it guards was previously visible only as an aggregate
+/// "N routes still contain surface conflicts", which said nothing about cause.
+/// Cross-item shared terminals exactly equalled that unresolved-route count on
+/// all six bus fixtures measured (2, 2, 44, 4, 8, 7).
+#[test]
+fn rfc057_island_placement_keeps_terminals_disjoint() {
+    use spaghettio_core::bus::compaction::{
+        build_manifold_nets, materialize_legalized_manifold_routes, place_recipe_clusters,
+        CompactIr,
+    };
+    use std::collections::BTreeMap;
+
+    let cases: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("gear5-plate", "iron-gear-wheel", 5.0, &["iron-plate"], "assembling-machine-1"),
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("ec15-plate", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "assembling-machine-2"),
+        ("belt5-ore", "transport-belt", 5.0, &["iron-ore"], "assembling-machine-2"),
+    ];
+
+    let mut materialized = 0usize;
+    for (label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap_or_else(|e| panic!("{label}: solver refused: {e}"));
+        let bus = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| panic!("{label}: layout refused: {e}"));
+        let src = spaghettio_core::bus::compaction::compact_validated_geometry(&bus, &sr);
+
+        let ir = CompactIr::from_source(&src, &sr);
+        let (clustered, _) = place_recipe_clusters(&ir, 1);
+        let manifolds = build_manifold_nets(&ir, &clustered)
+            .unwrap_or_else(|e| panic!("{label}: manifold nets refused: {e}"));
+
+        // One entry per tile, so a failure names every collision.
+        let mut by_tile: BTreeMap<(i32, i32), Vec<&str>> = BTreeMap::new();
+        for net in &manifolds {
+            for terminal in &net.terminals {
+                by_tile
+                    .entry((terminal.x, terminal.y))
+                    .or_default()
+                    .push(net.item.as_str());
+            }
+        }
+        let cross_item: Vec<_> = by_tile
+            .iter()
+            .filter(|(_, items)| items.iter().any(|i| *i != items[0]))
+            .collect();
+        assert!(
+            cross_item.is_empty(),
+            "{label}: {} tile(s) host terminals for more than one commodity: {cross_item:?}",
+            cross_item.len(),
+        );
+
+        let inside: Vec<_> = manifolds
+            .iter()
+            .flat_map(|net| net.terminals.iter().map(move |t| (net.item.as_str(), t)))
+            .filter(|(_, t)| {
+                clustered.iter().enumerate().any(|(idx, island)| {
+                    Some(idx) != t.island_id
+                        && t.x >= island.block.x
+                        && t.x < island.block.x + island.block.width
+                        && t.y >= island.block.y
+                        && t.y < island.block.y + island.block.height
+                })
+            })
+            .map(|(item, t)| (item, t.x, t.y))
+            .collect();
+        assert!(
+            inside.is_empty(),
+            "{label}: {} terminal(s) land inside another island's footprint: {inside:?}",
+            inside.len(),
+        );
+
+        // The point of the invariant: routing can now actually complete.
+        let plans = spaghettio_core::bus::compaction::plan_local_manifolds(&clustered, &manifolds, 1);
+        let graphs: Vec<_> = plans
+            .iter()
+            .map(spaghettio_core::bus::compaction::build_local_manifold_graph)
+            .collect();
+        let hubs = spaghettio_core::bus::compaction::place_distributed_local_manifold_nodes(
+            &clustered, &graphs, 3,
+        )
+        .unwrap_or_else(|e| panic!("{label}: hub placement refused: {e}"));
+        let routed =
+            spaghettio_core::bus::compaction::route_local_manifold_edges(&clustered, &graphs, &hubs)
+                .unwrap_or_else(|e| panic!("{label}: routing refused: {e}"));
+        let legalized =
+            spaghettio_core::bus::compaction::legalize_manifold_routes(&routed.routes);
+        assert_eq!(
+            legalized.unresolved_routes, 0,
+            "{label}: {} routes still conflict after terminal-disjoint placement \
+             ({} tiles) — the placement invariant holds, so this is a genuine \
+             routing failure and wants its own diagnosis",
+            legalized.unresolved_routes, legalized.unresolved_tiles,
+        );
+        assert!(materialize_legalized_manifold_routes(&legalized.routes).is_ok());
+        materialized += 1;
+    }
+    assert_eq!(materialized, cases.len());
+}

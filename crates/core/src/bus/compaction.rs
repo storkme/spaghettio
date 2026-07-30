@@ -1142,24 +1142,64 @@ pub fn build_manifold_nets(
         }
     }
 
-    // Boundary terminals have no island-relative representation.
+    // Boundary terminals have no island-relative representation, so island
+    // placement cannot carry them. Keeping their SOURCE coordinates is only
+    // safe while placement preserves those coordinates; once islands are
+    // repacked in 2D the stale tile is arbitrary, and it can land exactly on
+    // a relocated machine terminal. After terminal-aware packing removed the
+    // island-vs-island collisions, this was the entire remaining residual on
+    // three of six bus fixtures.
+    //
+    // Relocate them onto the perimeter of the placed extent instead: inputs
+    // on the row above, outputs on the row below, which also agrees with the
+    // south-flowing orientation the balancer library is stamped for. Order is
+    // deterministic and the stride is 2, so no two boundary belts ever touch.
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_y = i32::MIN;
+    for island in placed_islands {
+        let (offset_dx, offset_dy, _, height) = terminal_inclusive_extent(island);
+        min_x = min_x.min(island.block.x + offset_dx);
+        min_y = min_y.min(island.block.y + offset_dy);
+        max_y = max_y.max(island.block.y + offset_dy + height - 1);
+    }
+    if min_x == i32::MAX {
+        min_x = 0;
+        min_y = 0;
+        max_y = 0;
+    }
+
+    let mut boundaries: Vec<(RouteTerminalKind, &str, i32, i32)> = Vec::new();
     for net in &ir.route_nets {
-        let terminals = by_item.get_mut(&net.item).unwrap();
         for terminal in &net.terminals {
-            if !matches!(
+            if matches!(
                 terminal.kind,
                 RouteTerminalKind::BoundaryInput | RouteTerminalKind::BoundaryOutput
             ) {
-                continue;
+                boundaries.push((terminal.kind, net.item.as_str(), terminal.x, terminal.y));
             }
-            terminals.push(ManifoldTerminal {
-                kind: terminal.kind,
-                x: terminal.x,
-                y: terminal.y,
-                island_id: None,
-                inserter_entity_index: None,
-            });
         }
+    }
+    boundaries.sort();
+    boundaries.dedup();
+    let (mut next_input, mut next_output) = (0i32, 0i32);
+    for (kind, item, _, _) in boundaries {
+        let (x, y) = if matches!(kind, RouteTerminalKind::BoundaryInput) {
+            let x = min_x + next_input * 2;
+            next_input += 1;
+            (x, min_y - 1)
+        } else {
+            let x = min_x + next_output * 2;
+            next_output += 1;
+            (x, max_y + 1)
+        };
+        by_item.get_mut(item).unwrap().push(ManifoldTerminal {
+            kind,
+            x,
+            y,
+            island_id: None,
+            inserter_entity_index: None,
+        });
     }
 
     let mut result = Vec::with_capacity(by_item.len());
@@ -1188,6 +1228,37 @@ pub struct RecipeClusterPlacement {
     pub block: CompactBlock,
 }
 
+/// Island footprint grown to contain every terminal tile, as
+/// `(offset_dx, offset_dy, width, height)` where `offset_*` (always `<= 0`)
+/// says where `block` sits inside the padded extent.
+///
+/// A terminal is the belt tile an inserter reaches to, so it lies OUTSIDE
+/// `block`. Packing on `block` alone guarantees only that machines do not
+/// overlap — it freely lets one island's input terminal land exactly on
+/// another island's output terminal. That is a physically impossible belt
+/// tile (one tile cannot be the delivery point for two commodities), and no
+/// router can repair it, because the conflict is created at placement time,
+/// before routing starts.
+///
+/// Measured across six bus fixtures, cross-item shared terminal tiles exactly
+/// equalled the manifold router's unresolved-route count — 2, 2, 44, 4, 8, 7
+/// — i.e. this was the entire residual keeping candidates non-exportable.
+/// Negotiated-congestion rerouting could not touch it: contested tile counts
+/// fell over 24 rounds but the contested ROUTE count never moved.
+fn terminal_inclusive_extent(island: &RigidIsland) -> (i32, i32, i32, i32) {
+    let mut min_dx = 0;
+    let mut min_dy = 0;
+    let mut max_dx = island.block.width - 1;
+    let mut max_dy = island.block.height - 1;
+    for terminal in &island.terminals {
+        min_dx = min_dx.min(terminal.dx);
+        min_dy = min_dy.min(terminal.dy);
+        max_dx = max_dx.max(terminal.dx);
+        max_dy = max_dy.max(terminal.dy);
+    }
+    (min_dx, min_dy, max_dx - min_dx + 1, max_dy - min_dy + 1)
+}
+
 /// Repack rigid islands into recipe banks, then place those banks in 2D by
 /// solver-rate-weighted production adjacency. This is the first RFC-057
 /// placement that does not preserve incumbent row/corridor coordinates.
@@ -1211,11 +1282,15 @@ pub fn place_recipe_clusters(
             let block = &ir.islands[id].block;
             std::cmp::Reverse((block.height, block.width, id))
         });
+        // Pack on the terminal-inclusive extent, not the bare machine block —
+        // see `terminal_inclusive_extent`. The shelf coordinates below address
+        // that extent; `block` is then offset back inside it, so the emitted
+        // machine geometry keeps its shape and only its origin moves.
         let area: i64 = island_ids
             .iter()
             .map(|&id| {
-                let block = &ir.islands[id].block;
-                i64::from(block.width + clearance) * i64::from(block.height + clearance)
+                let (_, _, width, height) = terminal_inclusive_extent(&ir.islands[id]);
+                i64::from(width + clearance) * i64::from(height + clearance)
             })
             .sum();
         let target_width = (area as f64).sqrt().ceil() as i32;
@@ -1223,25 +1298,21 @@ pub fn place_recipe_clusters(
         let mut y = 0;
         let mut row_height = 0;
         let mut max_x = 0;
+        let mut max_y = 0;
         for &id in &island_ids {
-            let width = islands[id].block.width;
-            let height = islands[id].block.height;
+            let (offset_dx, offset_dy, width, height) = terminal_inclusive_extent(&islands[id]);
             if x > 0 && x + width > target_width {
                 x = 0;
                 y += row_height + clearance;
                 row_height = 0;
             }
-            islands[id].block.x = x;
-            islands[id].block.y = y;
+            islands[id].block.x = x - offset_dx;
+            islands[id].block.y = y - offset_dy;
             x += width + clearance;
             row_height = row_height.max(height);
             max_x = max_x.max(x - clearance);
+            max_y = max_y.max(y + height);
         }
-        let max_y = island_ids
-            .iter()
-            .map(|&id| islands[id].block.y + islands[id].block.height)
-            .max()
-            .unwrap_or(0);
         let id = clusters.len();
         clusters.push(RecipeClusterPlacement {
             recipes,
