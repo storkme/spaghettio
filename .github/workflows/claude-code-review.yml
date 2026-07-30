@@ -307,14 +307,28 @@ jobs:
             echo "Review coverage exists for the current head — OK."
             exit 0
           fi
-          # Zero coverage. Distinguish a conscious plugin gate-skip (cheap,
-          # few turns: ~2-6 observed) from mid-review abandonment (the
-          # class-5 signature: 16-20 turns, then nothing). Threshold 8 sits
-          # between the observed clusters; see docs/review-bot.md.
+          # Zero coverage on a substantive PR. This now FAILS unconditionally,
+          # and the removal of the turn-count carve-out is the point.
+          #
+          # The old rule passed any run with num_turns <= 8, on the theory that
+          # a cheap run is a conscious plugin gate-skip while abandonment is
+          # expensive (the class-5 signature: 16-20 turns, then nothing).
+          # #500 falsified it: 3 turns, ONE permission denial, nothing posted,
+          # green check — on a 1000-line layout-engine PR. Turn count cannot
+          # distinguish "declined on purpose" from "hit a denial and gave up",
+          # because it only measures cost, not intent.
+          #
+          # And the carve-out was self-defeating even in theory. The prompt
+          # REQUIRES a one-line `gh pr comment` on any conscious skip, and such
+          # a comment is itself coverage — so a compliant skip never reaches
+          # this branch. Everything that gets here is by definition a run that
+          # violated the posting contract. There is nothing left to carve out.
+          #
+          # This is a strictness increase on a check that is REQUIRED on main
+          # (scripts/review-gate.sh), so it can block a merge. That is the
+          # intended trade: an unreviewed merge is worse than a blocked one,
+          # and the escape hatch below is one click.
           turns=$(grep -o '"num_turns"[[:space:]]*:[[:space:]]*[0-9]*' "${RUNNER_TEMP}/claude-execution-output.json" 2>/dev/null | tail -1 | grep -o '[0-9]*$' || true)
-          if [ -n "$turns" ] && [ "$turns" -le 8 ]; then
-            echo "No coverage, but the transcript shows a cheap conscious run (num_turns=$turns <= 8) — plugin gate-skip signature, not abandonment. Passing."
-            exit 0
-          fi
-          echo "::error title=No review for this head commit::claude-review exited green but PR #$PR has no review, inline comment, or bot summary attributable to head $HEAD_SHA (transcript turns: ${turns:-unknown}). Either the run never reviewed (the silent no-op class), or it skipped a substantive follow-up push — the failure #481 merged behind. See docs/review-bot.md. Escape hatch if the skip was legitimate: re-run this job (runs are stochastic), or post a review on the current head and re-run the check."
+          denials=$(grep -o '"permission_denials_count"[[:space:]]*:[[:space:]]*[0-9]*' "${RUNNER_TEMP}/claude-execution-output.json" 2>/dev/null | tail -1 | grep -o '[0-9]*$' || true)
+          echo "::error title=No review for this head commit::claude-review exited green but PR #$PR has no review, inline comment, or bot summary attributable to head $HEAD_SHA (transcript turns: ${turns:-unknown}, permission denials: ${denials:-unknown}). The run did not review, or reviewed and failed to post. A non-zero denial count with a low turn count is the denial-abandonment signature (failure class 5) — check the claude-execution-output artifact for the refused command shape and widen --allowedTools if it was legitimate. See docs/review-bot.md. Escape hatch: re-run this job (runs are stochastic), or post a review on the current head and re-run the check."
           exit 1

@@ -206,6 +206,37 @@ Two independent mitigations, only one of them applied:
   `unrequire` reverses it in one command. See the never-skip invariant above:
   requiring the check constrains how this workflow may be conditioned.
 
+### Failure class 9: cheap denial-abandonment passed as a gate-skip (2026-07-30)
+
+The guard used to pass any zero-coverage run with `num_turns <= 8`, reasoning
+that a conscious plugin gate-skip is cheap while abandonment is expensive (the
+class-5 signature: 16-20 turns, then nothing).
+
+#500 falsified it. A 1000-line layout-engine PR got a **3-turn** run with **one
+permission denial**, posted nothing, and green-checked:
+
+```
+coverage on 48e7ee6b...: reviews=0 inline=0 bot_summaries=0
+num_turns=3   permission_denials_count=1
+```
+
+Turn count measures cost, not intent, so it cannot separate "declined on
+purpose" from "hit a denial and gave up". Worse, the carve-out was
+self-defeating in theory too: the prompt REQUIRES a one-line `gh pr comment` on
+any conscious skip, and that comment is itself coverage — so a compliant skip
+never reaches the carve-out. Everything that got there had already violated the
+posting contract.
+
+Zero coverage on a substantive PR now fails unconditionally. The error reports
+both turn count and denial count, since a low turn count with a non-zero denial
+count is the denial-abandonment fingerprint and points at a refused command
+shape in the transcript artifact.
+
+Note what made this one visible: the check was green and every other signal
+agreed, so the only clue was the review taking **1m8s** where real reviews on
+this repo take 3-11 minutes. A green check plus an implausibly fast run is worth
+opening even when nothing else complains.
+
 ## Forensics playbook
 
 **Run signatures** (from the action's result JSON in the job log — grep the
