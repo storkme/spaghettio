@@ -151,8 +151,9 @@ static.
 
 1. **The question is empirically empty.** If sweeping the corpus under P0 and P1
    with `DI=Candidate` shows the final chosen layout differing on **at most the
-   known `rail` case — including the case where NOTHING differs at all** — then
-   no policy machinery is justified: **pin whichever static order wins on the
+   known `rail` case — including the case where NOTHING differs at all** — AND
+   **every target's contention set is empty** (phase 1 output 2), then no policy
+   machinery is justified: **pin whichever static order wins on the
    differing case** — P0 if nothing differs at all, P1 if the `rail` case
    reproduces and P1 is better there — with a test, add the reasoning to
    RFC-053's decision log, and close this RFC as *rejected — not a real
@@ -163,6 +164,17 @@ static.
    and strictly better (0 issues, 261 vs 264) on the one case known to differ.
    A kill criterion should end the *machinery*, not force the worse of two free
    options.
+
+   **The contention conjunct is load-bearing, and KC1 contradicted KC2 without
+   it.** A layout diff alone cannot distinguish "no spec was ever contended" from
+   "specs were contended and both static orders happened to resolve them the same
+   way" — and KC2 says of that same instrument that it is unevaluable exactly
+   where a target's optimal assignment differs from BOTH P0 and P1, which is
+   where P2/P3 would earn their cost. So a diff-only KC1 could close this RFC as
+   *"not a real contention in practice"* precisely in the scenario the RFC exists
+   to investigate. Requiring an empty contention set closes that: if specs were
+   contended at all, coincidental agreement between two arbitrary orders is not
+   evidence that the question is empty.
 
    The zero-difference outcome is called out explicitly because it is a live
    possibility, not a formality: this RFC's own Motivation records that the
@@ -363,11 +375,10 @@ tie-break with evidence, not necessarily a new algorithm.
   resolve a claim about another branch's state. The sentence was reworded anyway
   to mark #473 as pending rather than assert it as fact, since a cross-PR claim
   that cannot be checked from either side is fragile regardless of who is right.
- The generalisable lesson is in the shape, not the
-  count: each was written to catch the central case and silently excluded a
-  boundary. The enumeration and its total live together in the final entry
-  below, deliberately — this entry predates several of the revisions, and a list
-  here could only ever trail them.
+  The generalisable lesson is in the shape, not the count — though it is not
+  uniform, and the final entry below says which items depart from it. The
+  enumeration and its total live there together, deliberately: this entry
+  predates several of the revisions, and a list here could only ever trail them.
 
 - *2026-07-30 — two more, and the second is the funniest defect in this file.*
   Kill criterion 2 checked an estimator against a ranking phase 1 never produced:
@@ -389,6 +400,30 @@ tie-break with evidence, not necessarily a new algorithm.
   individually defensible, the relationship between them unchecked. Three
   attempts at one sentence is the evidence that a bare count is the wrong form
   for this claim.
+
+- *2026-07-30 — P3's matching formulation was wrong, and it was a correctness
+  bug rather than wording.* P3 read "max-weight matching over the coupling/spec
+  bipartite graph". That does not enforce the pairwise spec-disjointness the
+  Design section requires, because a coupling claims TWO specs (`placer.rs`
+  inserts two indices into its `claimed` set), so a bipartite matching only
+  guarantees each coupling gets at most one. On this RFC's own motivating case —
+  `C1 = {iron-plate, iron-stick}`, `C2 = {iron-stick, rail}` — it selects BOTH
+  (cardinality 2 beats either singleton), leaving `iron-stick` claimed twice.
+  Corrected to specs-as-vertices with couplings as EDGES, where a matching is
+  vertex-disjoint and therefore spec-disjoint by construction; that graph admits
+  odd cycles (a recipe fan such as iron-plate / iron-gear-wheel / transport-belt
+  is a triangle), so it needs general matching — Blossom, not Hungarian.
+  Consequential because P3 is the baseline KC4 measures P2 against, and an
+  implementer following the old wording literally would have built a solver able
+  to emit infeasible double-claimed assignments. Verified by evaluating the
+  counterexample, not by reading the definition.
+
+- *2026-07-30 — KC1 could have killed the RFC in the case KC2 calls valuable.*
+  KC1 tripped on a binary P0-vs-P1 layout diff alone, which cannot distinguish
+  "nothing was contended" from "specs were contended and two arbitrary orders
+  coincidentally agreed" — while KC2 says of that same instrument that it is
+  unevaluable exactly where the optimum differs from both static orders. KC1 now
+  additionally requires every target's contention set to be empty.
 
 - *2026-07-30 — the revision tally, as a table, placed last on purpose.* It
   counts every entry above it, so it belongs after them: an earlier draft spliced
@@ -418,22 +453,24 @@ tie-break with evidence, not necessarily a new algorithm.
   6. a criterion with no ground truth to check against (KC2)
   7. an ambiguity between per-target and aggregate readings (KC5)
   8. a both-bounds rationale with the conjunction backwards (KC5)
+  9. a trip condition that contradicted another criterion (KC1)
 
   Revision tally, per criterion, so the total is derivable rather than asserted:
 
   | criterion | revisions | what |
   |---|---:|---|
-  | KC1 | 2 | missed the empty-sweep result; then "pin P0" forced the worse of two free options |
+  | KC1 | 3 | missed the empty-sweep result; then "pin P0" forced the worse of two free options; then a diff-only trip condition that contradicted KC2 |
   | KC2 | 2 | unfalsifiable "cannot be made to"; then no ground truth to check against |
   | KC3 | 1 | local cost multiplier that did not compose with #474's spend |
   | KC4 | 0 | — |
   | KC5 | 3 | percentage that could not fire on its own case; then per-target vs aggregate ambiguity; then the conjunction rationale backwards |
 
-  **8 revisions across 4 criteria.** Stated as a table because the prose form was
+  **9 revisions across 4 criteria.** Stated as a table because the prose form was
   miscounted three times: first as "five kill criteria" (it was never five
   criteria); then as "five revisions across four criteria", which undercounted
   KC2 in the same paragraph that was revising KC2; then as seven, which
   undercounted the KC5 revision made in the very commit that introduced this
-  table. Each miss has the same cause — a total re-derived from memory of a list
+  table; then as eight, which undercounted the KC1 revision made in the commit
+  that added this line. Each miss has the same cause — a total re-derived from memory of a list
   not in front of me. A count is checkable only against an enumeration beside
   it; alone it is a number that looks careful.
