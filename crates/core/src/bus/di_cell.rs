@@ -1,5 +1,8 @@
 //! Direct-insertion cell geometry (RFC-053 Phase 1).
 //!
+//! [`DirectInsertion`] is the mode flag; see its docs for why DI is a
+//! scored candidate rather than an unconditional default.
+//!
 //! Plans the **straddle**: where to put a consumer row's machines relative
 //! to a producer row's so that every consumer can be fed entirely by
 //! machine→machine inserters, with no belt between the rows.
@@ -19,6 +22,63 @@
 //! [`stamp_di_cell`] turns a plan into placed machines and inserters.
 //! Wiring the cell into `place_rows` — belt suppression for the coupled
 //! item and the lane-planner skip — is the remaining Phase 1 step.
+
+/// Direct-insertion mode (RFC-053).
+///
+/// DI is **not** a plain on/off flag, and the reason is measured rather
+/// than assumed. Defaulting it to a bare `true` (2026-07-26) broke 8
+/// tests against a 100% green baseline: 5 hard validation errors on
+/// `tier4_advanced_circuit_from_ore_am2`, an `input-rate-delivery`
+/// warning on `tier2_electronic_circuit` — the *flagship* DI pair — and
+/// `mil5-ore` failing to lay out at all.
+///
+/// Nothing about the cells was wrong. **Fusing a pair changes the row
+/// structure**, and trunk lane assignment, junction routing and per-lane
+/// capacity are all computed against it. `mil5-ore` is the clearest:
+/// DI removes a row, stone-brick demand that spanned two trunks lands on
+/// one, and 25/s does not fit a 22.5/s lane. The five corpus pairs were
+/// verified at SPECIFIC RATES; defaulting on applies DI at every rate to
+/// every eligible pair.
+///
+/// So DI competes as a scored candidate instead, and may only displace
+/// the native layout when it is *strictly better* — see
+/// `decomposition_search::di_choice`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DirectInsertion {
+    /// No DI anywhere. The escape hatch, and what `NativeCandidate`
+    /// effectively runs under `Candidate`.
+    Off,
+    /// Default. The native layout is built DI-free; a separate
+    /// `DirectInsertionCandidate` builds the DI variant and wins only on
+    /// a strict quality improvement.
+    #[default]
+    Candidate,
+    /// DI applied directly in the native path — the old `true`. Kept for
+    /// A/B comparison and for the `di=1` URL, and used internally by
+    /// `DirectInsertionCandidate` to produce its variant.
+    Forced,
+}
+
+impl DirectInsertion {
+    /// Does the PLACER act on `di_couplings` for this call? Only
+    /// `Forced` does: under `Candidate` the native pass must stay
+    /// DI-free, because that is what makes a tie bit-identical.
+    pub fn placer_acts(self) -> bool {
+        matches!(self, DirectInsertion::Forced)
+    }
+
+    /// A/B helper for the old `bool` surface: `true` means "DI in this
+    /// layout" (`Forced`), `false` means "no DI at all" (`Off`).
+    /// Deliberately never yields `Candidate` — a caller asking for a
+    /// definite answer must not get a scored competition instead.
+    pub fn forced(on: bool) -> Self {
+        if on {
+            DirectInsertion::Forced
+        } else {
+            DirectInsertion::Off
+        }
+    }
+}
 
 /// One producer→consumer coupling in a planned cell.
 #[derive(Debug, Clone, PartialEq)]

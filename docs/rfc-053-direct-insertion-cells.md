@@ -1,6 +1,11 @@
 # RFC-053: Direct-insertion cells — machine→machine coupling
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Draft (circulated for review)**.
+Registry: [`rfcs.md`](rfcs.md). Status: **ACTIVE — Phases 0/1/2/4
+delivered and ON BY DEFAULT since 2026-07-26 as `DirectInsertion::Candidate`
+(DI competes and wins only on a strict improvement; see the decision log
+entry for why the blunt `true` default was refused). Phase 3 (multi-band)
+open; coverage is structurally bounded by producer:consumer ratio, not by
+eligibility.**
 
 ## Summary
 
@@ -2180,3 +2185,187 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   instance count by 3×, demoted a "finding" to a hypothesis, and turned a
   hand-waved prerequisite into a file:line change with a test to write
   first. Every one of those was cheaper found before building than after.*
+
+- *2026-07-26 — **`direct_insertion: true` as a blunt default is
+  REFUSED by measurement. Attempted on request, reverted the same
+  session.** The flip is one line; the case for it was wrong.*
+
+  *The argument was "inert where it does not apply, verified where it
+  does". The first half holds — every DI gate is a refusal, so a pair the
+  engine cannot serve is untouched. **The second half was the error.**
+  The five pairs were verified at SPECIFIC RATES. Defaulting DI on
+  applies it at every rate, to every pair that passes eligibility,
+  including combinations nobody has ever looked at.*
+
+  ***Measured, against a 100% green baseline on the same commit
+  (`487bc883`): 18/18 `cell_composition` and 64/64 `e2e` pass with DI
+  off; the flip breaks 8 of them.***
+
+  | test | with DI defaulted on |
+  |---|---|
+  | `tier4_advanced_circuit_from_ore_am2` | **5 validation ERRORS** — `unresolved-junction` at (15,134), (18,131), (18,134) |
+  | `tier2_electronic_circuit` | **1 `input-rate-delivery` warning** — and this is the FLAGSHIP DI pair |
+  | `tier2_electronic_circuit_splitter_stamp_regression` | fails |
+  | `stacking_fanin_wall_lift_ec6_yellow_legendary` | fails |
+  | `cell_candidate_composes_mil5_ore` | **no longer lays out at all** — `stone-brick 25.00/s exceeds per-lane capacity 22.50/s` |
+  | `cell_candidate_wins_mil5_plates_over_broken_native` | composed candidate no longer wins |
+  | `selection_tier_validation_never_leaks_trace_events` | leaked tier validations |
+  | `cell_candidate_resolves_ec15_refusal` | *premise inverted — DI RESOLVES a refusal the bus had. Arguably a win, but it moves the test's ground.* |
+
+  *The mechanism is not that DI is broken. It is that fusing a pair
+  changes the ROW STRUCTURE, and everything downstream — trunk lane
+  assignment, junction routing, per-lane capacity — is computed against
+  that structure. `mil5-ore` is the clearest: DI removes a row, the
+  stone-brick demand that was spread over two trunks lands on one, and
+  25/s does not fit a 22.5/s lane. **Nothing about the cell itself is
+  wrong; the layout around it is different and nobody checked those.***
+
+  ***The correct shape is already in this file, three lines above the
+  flag.*** *`cell_composition` faced exactly this and was flipped as
+  `Candidate`, not `On`: "the unbiased scorer picks composition only
+  where the bus path refuses or fails acceptance; every bus-successful
+  config is bit-identical (goldens gate this)." DI should follow that
+  precedent — **build the cell, validate it, and keep it only when it
+  does not make the layout worse** — rather than trusting eligibility to
+  imply a better outcome. That is a real piece of work, not a flag
+  change, and it is the honest price of turning DI on.*
+
+  *Recorded so the next person does not re-derive it: the one-line flip
+  is not a shortcut that was missed, it is a thing that was tried and
+  measured.*
+
+- *2026-07-26 — **DI IS ON BY DEFAULT, as `Candidate`.** The entry above
+  stands as written: the blunt flip really was refused by measurement.
+  This is what replaced it, and it ships in the same PR.*
+
+  ***The design.*** *`direct_insertion` becomes `Off | Candidate |
+  Forced`, defaulting to `Candidate`. The native pass runs DI-FREE; a
+  `DirectInsertionCandidate` builds the DI variant and may displace
+  native only on a strict improvement. Everything DI does not improve is
+  bit-identical, by construction rather than by luck.*
+
+  ***Why the scoped decision, and not the generic ranking every other
+  candidate uses.*** *`cell-composed` can safely ride `score_layout`
+  because composed density is empirically 1.5–3x WORSE, so it loses by
+  construction — the project knows this rests on a margin, which is why
+  `cell_candidate_never_displaces_a_succeeding_bus` exists (#384: "additivity
+  rested on an empirical score margin, with the tie-break pointing the
+  wrong way"). **DI has no such margin.** It removes ~a third of the
+  entities and is typically DENSER, so it would win the density-dominated
+  raw score on layouts where it regresses warnings. So `di_choice`
+  mirrors `merge_tap_choice` instead: pairwise against native, on BOTH
+  issue channels, ties to native.*
+
+  ***Two holes found by measurement, not by reasoning.*** *Both were
+  live in a version that looked finished:*
+
+  1. *`best_accepted_idx` iterated the whole candidates array. When DI
+     was the only other candidate, `n_layouts` stayed 1, `clean_flags`
+     was skipped entirely, and DI won on raw score regardless.
+     `tier2_electronic_circuit` kept regressing until the generic
+     rankings were restricted to `candidates[..ranking_len]`.*
+  2. *DI must NOT auto-win when native produces nothing.
+     `cell-composed` also resolves refusals, and short-circuiting would
+     preempt it without ever comparing the two. DI now enters the
+     generic ranking in exactly that case and competes.*
+
+  ***The recursion guard was not optional.*** *Cells are generated by
+  running the bus pipeline on a sub-solve, and all three sub-solve option
+  constructions use `..Default::default()`. The identical omission for
+  cell-composition "was found as a stack overflow the moment the default
+  flipped" (`extract.rs`'s own comment). Guarded at `cells/extract.rs`
+  and `cells/mega.rs` ×2 before the default moved.*
+
+  ***Three tests asserted refusals that DI legitimately resolves.*** *All
+  three are BELT-capacity refusals on copper-cable, and DI takes
+  copper-cable off the belts entirely — the premise evaporates. Each now
+  pins the refusal on the DI-Off arm (so it still tests what it claims,
+  per `cell_candidate_composes_mil5_ore`'s discipline) and asserts the
+  resolved layout. Verified rather than assumed:*
+
+  | config | DI Off | DI Candidate |
+  |---|---|---|
+  | `EC@10 AM1 fast` | REFUSES (cable 30/s > 15/s lane) | 0 err 0 warn, **0 cable belts** |
+  | `EC@6 legendary S=1` | REFUSES (fan-in 25/s > 15/s) | 0 err 1 warn, 0 cable belts |
+  | `EC@15 from plates` | composed wins: 70×21, 292 ents, 1 warn + unverified-geometry note | **DI wins: 65×11, 272 ents, 0/0** |
+
+  *That last row is the clearest evidence for the whole flip: DI is not
+  merely additive there, it is **strictly better than the candidate that
+  used to win**, and it deletes the real ~5.3% `row-input-belt-margin`
+  throughput defect that entry had adjudicated and tolerated.*
+
+  ***Measured change surface — 20 corpus targets swept: 15 bit-identical,
+  5 flipped, 0 regressed.*** *Every flip improves both size and issues:*
+
+  | target | DI off | DI on | sim |
+  |---|---|---|---|
+  | `steel-plate@5` | 815 ents | **527** | PASS (5.28/5.00; **not converged** — oscillates 5.08–5.85, above plan) |
+  | `space-platform-foundation@1` | 2684 ents, 33 warn + 1 layout warn | **1904, 0/0** | PASS converged, 1.00/1.00, 98.7% delivered, 172/172 |
+  | `electronic-circuit@15` | 292 ents, (0,1,1) | **272, 0/0** | PASS converged, 15.00/15.00, 101.3% |
+  | `electronic-circuit@5` plates | 114 ents, (0,2,0) | **102, 0/0** | PASS converged, 5.00/5.00, 101.3% |
+  | `electronic-circuit@5` ore | 369 ents | **333** | PASS converged, 5.00/5.00, 101.3% |
+
+  ***Gates.*** *A `PERMANENT GATE`
+  (`di_candidate_never_degrades_a_succeeding_bus_layout`) pins the
+  never-worse contract, and was **demonstrated to have teeth**: forcing
+  DI to always win fails it on `electronic-circuit@2` with
+  `(0,0,0) -> (0,1,0)`. Runtime: e2e 30.84s → 38.08s = **1.23×**, inside
+  K-DS1-3's 1.5× budget — DI is a full extra layout pass, gated on the
+  solve actually having couplings.*
+
+  ***What this does NOT change.*** *Coverage is still structurally
+  narrow, and the reason is not eligibility: a machine has two
+  neighbours, so a row cell needs producer and consumer counts within
+  ~2×, which most foundry→assembler pairs are nowhere near
+  (`casting-iron-gear-wheel → engine-unit` is 1:32). Widening eligibility
+  further — which the last several PRs did — is not the lever. The
+  `rail` / claim-ordering finding (#473) is also untouched.*
+
+- *2026-07-30 — `IssueCounts` compared lexicographically, not component-wise
+  (review finding on #474).* The derived `Ord` compared fields in declaration
+  order, so a 12-entry `layout.warnings` regression could be masked by a
+  1-warning improvement on an earlier field — undermining the never-worse
+  guarantee the `Candidate` default rests on. `IssueCounts` no longer derives
+  `Ord`/`PartialOrd` at all, so the lexicographic comparison is not expressible
+  rather than merely unused; `strictly_better_than` is explicit (no worse on
+  every channel, better on at least one). `di_score.accepted` is now also
+  required before DI may win — a separate axis the issue channels cannot see,
+  carrying the `missing-balancer-template` gate that the ranking treats as
+  disqualifying rather than merely worse. **The bug was latent, not active:** the
+  corpus sweep is byte-identical after the fix, because all five flips already
+  improved every channel or held it equal. So this tightened a guarantee that
+  did not actually hold rather than correcting a shipped result. Pinned by
+  `issue_counts_compare_component_wise_not_lexicographically`.
+
+- *2026-07-30 — `merge_tap_choice` shadowed `di_choice` (review finding on
+  #474).* `merge_tap_choice` is built with `.map()`, so it is `Some` whenever
+  merge-tap produced anything — including the `Some(NATIVE_IDX)` arm meaning
+  "native beat merge-tap" — and the `.or()` chain short-circuited on it,
+  discarding DI's already-computed, already-validated result unread even when DI
+  was strictly better than native. The preconditions overlap by construction:
+  `try_merge_tap` needs Pooled + native-produced-but-unaccepted, `di_choice`
+  needs only native-produced. Fixed by distinguishing the arms — merge-tap wins
+  when it genuinely beat native; when native won, `di_choice` gets its say and
+  falls back to native. DI is deliberately NOT ranked against merge-tap, since
+  `di_choice` only ever compared DI to native and ranking those two is a
+  different question. **Latent as well:** on the fixture the review named
+  (`electronic-circuit@35/s` from ore, Pooled, yellow) DI-Off and DI-Candidate
+  are identical, `(4, 123, 1)` / 6317 entities, so DI would not have won there
+  anyway, and the 16-target sweep is unchanged. A removed trap, not a win —
+  recorded as such so nobody later cites it as evidence DI improved. Pinned by
+  `merge_tap_does_not_shadow_di_on_pooled_yellow`.
+
+- *2026-07-30 — three comments misdescribed the DI-exclusion invariant (review
+  finding on #474).* All three claimed `clean_flags[DI_IDX]` was pinned `None`
+  by a `None` entry in `tier_outcomes`. No such entry exists — DI is populated
+  like any other candidate, and what excludes it is the
+  `candidates[..ranking_len]` slice bound. A third comment was inverted outright,
+  claiming the final fallback excludes DI when `di_choice` returns `None`
+  precisely so DI competes there. The code was correct throughout; the comments
+  described an invariant that does not exist, on the one safety property
+  defaulting DI on depends upon — so an edit that trusted them and dropped
+  `ranking_len` as redundant would have silently re-admitted the
+  density-wins-over-warnings regression `tier2_electronic_circuit` hit. Rewritten
+  to name `ranking_len` as the single enforcement point. Same shape as the
+  exit-lane `continue` in #500: a confident comment is what stops the next reader
+  looking.

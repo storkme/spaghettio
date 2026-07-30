@@ -931,16 +931,27 @@ fn cell_candidate_resolves_ec15_refusal() {
     .unwrap();
 
     // Flag OFF (explicit — the DEFAULT is Candidate since the flip
-    // decision): the bus refusal stands.
+    // decision): the bus refusal stands. DI is turned off too, because
+    // since RFC-053 it is a SECOND refusal-resolving candidate — leaving
+    // it on would let this arm pass for the wrong reason and stop
+    // isolating cell-composition.
     let off_opts = layout::LayoutOptions {
         cell_composition: CellComposition::Off,
+        direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
         ..Default::default()
     };
     let off = layout::build_bus_layout(&sr, off_opts);
     assert!(off.is_err(), "flag-Off must preserve the bus refusal");
 
-    // Flag ON (the default): the composed candidate wins, validates clean.
-    let opts = layout::LayoutOptions::default();
+    // Cell-composition ON, DI OFF — the arm this fixture is ABOUT.
+    // Isolating it keeps every adjudicated finding below meaningful;
+    // under the true default DI wins this config outright (asserted at
+    // the end), which would otherwise silently delete the measurements
+    // this test exists to pin.
+    let opts = layout::LayoutOptions {
+        direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+        ..Default::default()
+    };
     let l = layout::build_bus_layout(&sr, opts).expect("candidate must resolve the refusal");
     let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
     let errors = issues
@@ -989,6 +1000,45 @@ fn cell_candidate_resolves_ec15_refusal() {
             .count(),
         0,
         "row-output-lane-budget should not fire at the recalibrated budget: {issues:?}"
+    );
+
+    // RFC-053: under the TRUE default both candidates are live, and DI
+    // takes this config — legitimately. The refusal is that copper-cable
+    // overloads a lane; DI removes cable from the belts entirely, so the
+    // `row-input-belt-margin` finding adjudicated above (a REAL ~5.3%
+    // throughput defect, measured) simply ceases to exist rather than
+    // being tolerated. Measured: DI 65x11 / 272 entities / 0 errors 0
+    // warnings on both channels, against composition's 70x21 / 292 / 1
+    // warning + an unverified-geometry note.
+    //
+    // Pinned because it is the clearest evidence for the whole flip: DI
+    // is not merely additive here, it is strictly better than the
+    // alternative that used to win.
+    let both = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+        .expect("the default must still resolve the refusal");
+    let both_issues = validate::validate(&both, Some(&sr), LayoutStyle::Bus).unwrap();
+    assert!(
+        both_issues.iter().all(|i| i.severity != Severity::Error),
+        "DI winner must be error-free: {both_issues:?}"
+    );
+    assert_eq!(
+        both_issues.iter().filter(|i| i.category == "row-input-belt-margin").count(),
+        0,
+        "DI removes the cable input belt, so its margin finding must not fire: {both_issues:?}"
+    );
+    assert!(
+        both.entities.len() < l.entities.len(),
+        "DI must win on entity count ({} vs composed {})",
+        both.entities.len(),
+        l.entities.len()
+    );
+    assert!(
+        !both
+            .entities
+            .iter()
+            .any(|e| e.name.ends_with("transport-belt")
+                && e.carries.as_deref() == Some("copper-cable")),
+        "the coupled item must be off the belts entirely"
     );
 }
 

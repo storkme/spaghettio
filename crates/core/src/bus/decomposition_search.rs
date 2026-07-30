@@ -122,6 +122,67 @@ impl DecompositionCandidate for MergeTapCandidate {
     }
 }
 
+/// RFC-053: the direct-insertion candidate. Builds the layout with DI
+/// `Forced` so it can be compared against the DI-free native one.
+///
+/// Unlike every other candidate here, this one does **not** compete in
+/// the generic score ranking — see `di_choice` in
+/// [`select_best_decomposition`]. The reason is specific and measured:
+/// `score_layout` is density-dominated and hard-gates only on
+/// `missing-balancer-template`, while DI removes roughly a third of the
+/// entities and is typically *denser*. It would therefore win the raw
+/// score on layouts where it regresses warnings — which is exactly the
+/// failure that defaulting DI to a bare `true` produced (an
+/// `input-rate-delivery` warning on `tier2_electronic_circuit`, the
+/// flagship DI pair).
+///
+/// `cell-composed` can safely ride the generic ranking because composed
+/// density is empirically 1.5–3x WORSE, so it loses by construction.
+/// DI has no such margin, so its safety has to be structural.
+pub struct DirectInsertionCandidate;
+
+impl DecompositionCandidate for DirectInsertionCandidate {
+    fn name(&self) -> &str {
+        "direct-insertion"
+    }
+
+    fn produce(
+        &self,
+        solver_result: &SolverResult,
+        opts: &LayoutOptions,
+    ) -> Result<LayoutResult, String> {
+        if opts.direct_insertion != crate::bus::di_cell::DirectInsertion::Candidate {
+            return Err("direct insertion is not in Candidate mode".to_string());
+        }
+        let mut di_opts = opts.clone();
+        di_opts.direct_insertion = crate::bus::di_cell::DirectInsertion::Forced;
+        let l = run_layout_with_retry(solver_result, &di_opts)?;
+        // Self-validate before competing, for the same reason
+        // `CellComposedCandidate` does: `score_layout.accepted` never
+        // runs the full validator, so an error-laden DI layout would
+        // reach real callers as a silently broken `Ok`. Errors refuse;
+        // warnings pass here and are weighed by `di_choice` instead.
+        let issues =
+            crate::validate::validate(&l, Some(solver_result), crate::validate::LayoutStyle::Bus)
+                .map_err(|e| {
+                    format!(
+                        "direct insertion failed validation: {}",
+                        e.to_string().lines().next().unwrap_or("")
+                    )
+                })?;
+        let n_err = issues
+            .iter()
+            .filter(|i| i.severity == crate::validate::Severity::Error)
+            .count();
+        if n_err > 0 {
+            return Err(format!(
+                "direct insertion carries {n_err} validation errors (refusing a broken layout)"
+            ));
+        }
+        Ok(l)
+    }
+}
+
 /// RFC-051 Phase B: the cell-composition candidate. Runs only under
 /// `LayoutOptions.cell_composition == Candidate` (default Off) on
 /// chain-eligible solves (solid tree-with-fan-out; `cells::chain::
@@ -606,6 +667,69 @@ fn classify_errors(layout: &LayoutResult, solver_result: &SolverResult) -> Error
     kinds
 }
 
+/// Issue counts for the DI-vs-native comparison: validator errors,
+/// validator warnings, and the SECOND issue channel
+/// (`LayoutResult.warnings`, stamped by the layout pipeline itself and
+/// never seen by `validate()`).
+///
+/// Both channels are counted deliberately. RFC-053 has already produced
+/// one false "0 errors 0 warnings" claim by reading only the validator
+/// (#462), and the layout channel is where ghost-router and
+/// missing-balancer problems surface.
+/// **Deliberately NOT `Ord`/`PartialOrd`.** A derived ordering is
+/// LEXICOGRAPHIC — it compares the first differing field and stops — so
+/// `(0 err, 0 warn, 12 layout_warn) < (0, 1, 0)` would be `true`, letting
+/// a 12-layout-warning regression win because the validator warning count
+/// improved. That silently turns the second and third channels into
+/// tiebreakers when they are meant to be protected floors, which is the
+/// opposite of this type's purpose (review finding on #474).
+///
+/// Use [`IssueCounts::strictly_better_than`] instead; it is component-wise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct IssueCounts {
+    errors: usize,
+    warnings: usize,
+    layout_warnings: usize,
+}
+
+impl IssueCounts {
+    /// No worse on ANY channel — the floor each channel is meant to be.
+    fn no_worse_than(&self, other: &Self) -> bool {
+        self.errors <= other.errors
+            && self.warnings <= other.warnings
+            && self.layout_warnings <= other.layout_warnings
+    }
+
+    /// No worse anywhere AND better somewhere. Since `no_worse_than`
+    /// already pins every channel at `<=`, being unequal is exactly "at
+    /// least one channel is strictly better".
+    fn strictly_better_than(&self, other: &Self) -> bool {
+        self.no_worse_than(other) && self != other
+    }
+}
+
+fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCounts {
+    let issues = match crate::validate::validate(
+        layout,
+        Some(solver_result),
+        crate::validate::LayoutStyle::Bus,
+    ) {
+        Ok(issues) => issues,
+        Err(e) => e.issues,
+    };
+    IssueCounts {
+        errors: issues
+            .iter()
+            .filter(|i| i.severity == crate::validate::Severity::Error)
+            .count(),
+        warnings: issues
+            .iter()
+            .filter(|i| i.severity == crate::validate::Severity::Warning)
+            .count(),
+        layout_warnings: layout.warnings.len(),
+    }
+}
+
 /// Score a candidate's layout. Returns the soft score plus the input
 /// metrics so the trace event can report them. Hard constraint: layout
 /// must have zero `missing-balancer-template` warnings (the (n, m)
@@ -794,7 +918,11 @@ pub fn select_best_decomposition(
     // eligibility-gated, and catch_unwind — the composer's internal
     // asserts must degrade to the bus candidates, never abort the solve.
     let try_cells = opts.cell_composition == crate::bus::cells::CellComposition::Candidate
-        && !opts.direct_insertion // DI needs both rows in one place_rows call
+        // DI needs both rows in one place_rows call. Only `Forced`
+        // actually puts DI in the native pass, so `Candidate` leaves
+        // cell-composition free to compete as its own candidate — the
+        // two are alternatives, not exclusions.
+        && opts.direct_insertion != crate::bus::di_cell::DirectInsertion::Forced
         && opts
             .max_belt_tier
             .as_deref()
@@ -806,6 +934,22 @@ pub fn select_best_decomposition(
         })
     } else {
         CandidateRun::skipped("cell-composed")
+    };
+
+    // Direct-insertion candidate (RFC-053). Gated on the mode AND on the
+    // solve actually having couplings — the second half is the cost
+    // control: this candidate is a full extra layout pass, and the
+    // search is otherwise deliberately short-circuiting because "the
+    // stress test corpus busts the 600s timeout when partitioned cases
+    // run two full layouts". catch_unwind for the same reason as cells.
+    let try_di = opts.direct_insertion == crate::bus::di_cell::DirectInsertion::Candidate
+        && !solver_result.di_couplings.is_empty();
+    let di_run = if try_di {
+        run_candidate_catch_unwind("direct-insertion", solver_result, || {
+            DirectInsertionCandidate.produce(solver_result, &opts)
+        })
+    } else {
+        CandidateRun::skipped("direct-insertion")
     };
 
     // K=1 shape-fix follow-up. When Native's layout has missing-balancer
@@ -905,6 +1049,56 @@ pub fn select_best_decomposition(
         }
     });
 
+    // RFC-053: the DI-vs-native decision. Scoped and PAIRWISE, like
+    // `merge_tap_choice` above and deliberately NOT part of the generic
+    // score ranking below — see `DirectInsertionCandidate` for why the
+    // soft score cannot be trusted here.
+    //
+    // Two rules make this correct:
+    //
+    //   1. It returns `Some(DI_IDX)` only when DI WINS, and `None`
+    //      otherwise — never `Some(NATIVE_IDX)`. Returning native would
+    //      short-circuit the generic selection and could rob
+    //      `k1-shape-fix` or `cell-composed` of a legitimate win.
+    //      (`merge_tap_choice` may return `NATIVE_IDX` because its gate
+    //      already guarantees native is unaccepted; DI has no such gate
+    //      — it runs against perfectly healthy natives.)
+    //   2. Ties go to native, so any layout DI does not strictly improve
+    //      stays BIT-IDENTICAL. That is the whole safety argument.
+    //
+    // `count_issues` runs `validate()`, which emits a
+    // `ValidationCompleted` event; peek/truncate drops those so they
+    // never reach the winner's replayed stream (#396).
+    const DI_IDX: usize = 5;
+    let di_choice: Option<usize> = di_run.outcome.as_ref().and_then(|(di_layout, di_score)| {
+        let Some((nat_layout, nat_score)) = native_run.outcome.as_ref() else {
+            // Native produced nothing (a hard bus refusal). DI does NOT
+            // short-circuit here: `cell-composed` also exists to resolve
+            // refusals, and auto-winning would preempt it without ever
+            // comparing the two. Fall through to the generic ranking,
+            // which admits DI in exactly this case (see `ranking_len`).
+            return None;
+        };
+        let start = crate::trace::peek_events_len();
+        let di_counts = count_issues(di_layout, solver_result);
+        let nat_counts = count_issues(nat_layout, solver_result);
+        crate::trace::truncate_events(start);
+        // Component-wise, NOT lexicographic — see `IssueCounts`.
+        let strictly_better_issues = di_counts.strictly_better_than(&nat_counts);
+        // Equal on every issue channel: DI must then be strictly denser
+        // /smaller to displace native. `score` already folds density,
+        // overproduction and entity count.
+        let equal_issues_and_denser =
+            di_counts == nat_counts && di_score.score > nat_score.score + 1e-9;
+        // `accepted` is a hard constraint the issue channels do not see:
+        // it carries the `missing-balancer-template` gate, whose warnings
+        // live in `layout.warnings` but which the ranking treats as
+        // disqualifying rather than merely worse. An unaccepted DI layout
+        // must never displace an accepted native.
+        (di_score.accepted && (strictly_better_issues || equal_issues_and_denser))
+            .then_some(DI_IDX)
+    });
+
     // Validation-tiered selection (#392), part 1: the per-candidate
     // clean flags. `validate()` emits a `ValidationCompleted` trace
     // event per call, so this MUST run before the sink reattach below,
@@ -915,15 +1109,29 @@ pub fn select_best_decomposition(
     // review, blocking finding; same pattern as merge_tap_choice's
     // classify_errors above). Lazy: the single-layout common case and
     // merge-tap-decided solves skip validation entirely.
+    // DI IS in this array at index 5, and `clean_flags[5]` IS populated
+    // whenever DI produced. It is kept out of the generic ranking by the
+    // `candidates[..ranking_len]` slice bound, NOT by any `None` pin — an
+    // earlier version of this comment claimed the latter and was wrong.
+    // Naming the real mechanism matters: `ranking_len` is the SINGLE
+    // enforcement point for "DI may not enter the generic ranking when
+    // native succeeded", which is the invariant defaulting DI on rests on.
+    // Removing it as redundant would silently re-admit the
+    // density-wins-over-warnings regression that ranking cannot see — the
+    // failure `tier2_electronic_circuit` hit before `ranking_len` existed.
     let tier_outcomes = [
         native_run.outcome.as_ref(),
         k1_run.outcome.as_ref(),
         split_run.outcome.as_ref(),
         merge_tap_run.outcome.as_ref(),
         cells_run.outcome.as_ref(),
+        di_run.outcome.as_ref(),
     ];
     let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
-    let clean_flags: [Option<bool>; 5] = if merge_tap_choice.is_none() && n_layouts > 1 {
+    let clean_flags: [Option<bool>; 6] = if merge_tap_choice.is_none()
+        && di_choice.is_none()
+        && n_layouts > 1
+    {
         let start = crate::trace::peek_events_len();
         let flags = tier_outcomes.map(|o| {
             o.map(|(l, score)| {
@@ -943,7 +1151,7 @@ pub fn select_best_decomposition(
         crate::trace::truncate_events(start);
         flags
     } else {
-        [None; 5]
+        [None; 6]
     };
 
     // Re-attach the sink before replaying the winner's events. Score
@@ -963,6 +1171,7 @@ pub fn select_best_decomposition(
         &split_run.events,
         &merge_tap_run.events,
         &cells_run.events,
+        &di_run.events,
     ] {
         for ev in events {
             if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
@@ -976,19 +1185,40 @@ pub fn select_best_decomposition(
     // layout — same behaviour as today's pipeline when shape-fix can't
     // resolve a (n, m) trap).
     // Index order MUST match NATIVE_IDX (0) / MERGE_TAP_IDX (3) above.
-    let (native_err, k1_err, split_err, merge_tap_err, cells_err) = (
+    let (native_err, k1_err, split_err, merge_tap_err, cells_err, di_err) = (
         native_run.error.clone(),
         k1_run.error.clone(),
         split_run.error.clone(),
         merge_tap_run.error.clone(),
         cells_run.error.clone(),
+        di_run.error.clone(),
     );
-    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 5] = [
+    // Whether DI may enter the generic ranking at all. It may ONLY when
+    // native produced nothing: then there is no bit-identity to protect
+    // and DI competes fairly with `cell-composed` on the error-free tier.
+    // When native DID produce, DI is confined to `di_choice`, whose
+    // ties-to-native rule is the never-worse guarantee — letting it into
+    // a density-dominated ranking there would re-admit exactly the
+    // warning regressions that guarantee exists to block.
+    let ranking_len = if native_run.outcome.is_some() { DI_IDX } else { DI_IDX + 1 };
+
+    // DI is LAST so that, when it does reach the generic ranking, the
+    // earliest-index tie-break still favours native.
+    //
+    // It reaches the ranking in exactly one case — native produced nothing,
+    // where `ranking_len` is `DI_IDX + 1` and DI competes with
+    // `cell-composed` on the merits. When native SUCCEEDED, `ranking_len`
+    // is `DI_IDX`, so every ranking query is sliced to exclude index 5 and
+    // `clean_flags[DI_IDX]` is simply never read. That slice is the whole
+    // mechanism; there is no `None` pin (`tier_outcomes` populates DI like
+    // any other candidate).
+    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 6] = [
         (native_run.outcome, native_run.events, "native"),
         (k1_run.outcome, k1_run.events, "k1-shape-fix"),
         (split_run.outcome, split_run.events, "size-split-2"),
         (merge_tap_run.outcome, merge_tap_run.events, "merge-tap"),
         (cells_run.outcome, cells_run.events, "cell-composed"),
+        (di_run.outcome, di_run.events, "direct-insertion"),
     ];
 
     // Find best accepted candidate (highest score). The candidates
@@ -998,7 +1228,7 @@ pub fn select_best_decomposition(
     // cell-composed and silently break the additive contract (#384
     // review finding 4: additivity rested on an empirical score
     // margin, with the tie-break pointing the wrong way).
-    let best_accepted_idx = candidates
+    let best_accepted_idx = candidates[..ranking_len]
         .iter()
         .enumerate()
         .filter_map(|(i, (outcome, _, _))| {
@@ -1026,7 +1256,7 @@ pub fn select_best_decomposition(
     // computed pre-reattach above); if none is clean, fall through to
     // today's pick (still returns the error-laden best rather than
     // refusing — callers see the errors, behavior unchanged).
-    let best_error_free_idx = candidates
+    let best_error_free_idx = candidates[..ranking_len]
         .iter()
         .enumerate()
         .filter_map(|(i, (outcome, _, _))| {
@@ -1048,16 +1278,50 @@ pub fn select_best_decomposition(
     // produced a layout (Native preferred — earliest in the array). Same
     // degraded behaviour as today's pipeline when shape-fix can't resolve
     // a (n, m) trap.
-    let winner_idx = merge_tap_choice
-        .or(best_error_free_idx)
-        .or(best_accepted_idx)
-        .or_else(|| candidates.iter().position(|(o, _, _)| o.is_some()));
+    // `merge_tap_choice` must not SHADOW `di_choice`, which a plain
+    // `.or()` chain did (review finding on #474).
+    //
+    // `merge_tap_choice` is built with `.map()`, so it is `Some` whenever
+    // merge-tap produced anything at all — including its `Some(NATIVE_IDX)`
+    // arm, which means "native beat merge-tap". Under `.or()` that `Some`
+    // short-circuits, so DI's already-computed, already-validated result was
+    // discarded unread even when DI was strictly better than native. The
+    // preconditions overlap by construction: `try_merge_tap` needs Pooled +
+    // native-produced-but-unaccepted, and `di_choice` needs only
+    // native-produced — the same state satisfies both. Measured live on
+    // `electronic-circuit@35/s` from ore (Pooled, yellow), which carries DI's
+    // flagship copper-cable coupling AND is documented by
+    // `layout_retry_is_trace_independent` as a fixture where native beats
+    // merge-tap: DI ran a full extra layout pass there and was guaranteed to
+    // be thrown away, which also contradicts the cost rationale for gating
+    // `try_di` at all.
+    //
+    // So the arms are distinguished rather than collapsed:
+    //   MERGE_TAP_IDX — merge-tap genuinely beat native on `quality_key`; it
+    //     wins. DI is NOT compared against it here, because `di_choice` only
+    //     ever compared DI against NATIVE; ranking DI against merge-tap is a
+    //     different question and is deliberately not answered by this change.
+    //   NATIVE_IDX — native beat merge-tap, so native is the incumbent, and
+    //     `di_choice` is exactly a DI-vs-native comparison. DI gets its say,
+    //     falling back to native when it does not win.
+    let winner_idx = match merge_tap_choice {
+        Some(MERGE_TAP_IDX) => Some(MERGE_TAP_IDX),
+        Some(_) => di_choice.or(Some(NATIVE_IDX)),
+        None => di_choice,
+    }
+    .or(best_error_free_idx)
+    .or(best_accepted_idx)
+    // DI IS admitted here, deliberately: `di_choice` returns `None` when
+    // native produced nothing (see its guard), precisely so `cell-composed`
+    // and DI compete in this ranking rather than DI auto-winning a refusal.
+    // `ranking_len` is what excludes DI in the native-SUCCEEDED case.
+    .or_else(|| candidates[..ranking_len].iter().position(|(o, _, _)| o.is_some()));
 
     let Some(idx) = winner_idx else {
         let details: Vec<String> = candidates
             .iter()
             .map(|(_, _, name)| name.to_string())
-            .zip([&native_err, &k1_err, &split_err, &merge_tap_err, &cells_err])
+            .zip([&native_err, &k1_err, &split_err, &merge_tap_err, &cells_err, &di_err])
             .map(|(name, err)| {
                 format!("{name}: {}", err.as_deref().unwrap_or("did not run"))
             })
@@ -1196,6 +1460,40 @@ mod tests {
         });
         // No external_outputs entries → no overproduction reported.
         assert!((compute_overproduction(&solver)).abs() < 1e-9);
+    }
+
+    /// The DI never-worse comparison must be COMPONENT-WISE. A derived
+    /// `Ord` on `IssueCounts` is lexicographic and would accept a large
+    /// regression on a later channel in exchange for a one-unit gain on
+    /// an earlier one — the review finding on #474, which was live in
+    /// both `di_choice` and the e2e gate.
+    #[test]
+    fn issue_counts_compare_component_wise_not_lexicographically() {
+        let c = |errors, warnings, layout_warnings| IssueCounts {
+            errors,
+            warnings,
+            layout_warnings,
+        };
+        // THE REGRESSION CASE: one fewer validator warning, twelve more
+        // layout warnings. Lexicographic order calls this an improvement.
+        let native = c(0, 1, 0);
+        let di = c(0, 0, 12);
+        assert!(
+            !di.strictly_better_than(&native),
+            "trading 1 validator warning for 12 layout warnings is not an improvement"
+        );
+        assert!(!di.no_worse_than(&native), "the layout channel is a floor, not a tiebreaker");
+        // Same shape one channel over: fewer errors must not buy warnings.
+        assert!(!c(0, 9, 0).strictly_better_than(&c(1, 0, 0)));
+
+        // Genuine improvements still register, on each channel alone...
+        assert!(c(0, 0, 0).strictly_better_than(&c(1, 0, 0)));
+        assert!(c(0, 0, 0).strictly_better_than(&c(0, 1, 0)));
+        assert!(c(0, 0, 0).strictly_better_than(&c(0, 0, 1)));
+        // ...and equality is NOT "strictly better", which is what makes
+        // ties fall through to native and stay bit-identical.
+        assert!(!c(0, 1, 2).strictly_better_than(&c(0, 1, 2)));
+        assert!(c(0, 1, 2).no_worse_than(&c(0, 1, 2)));
     }
 
     #[test]

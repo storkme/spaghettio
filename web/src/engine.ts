@@ -286,7 +286,11 @@ function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: stri
     wireMode: wireMode ?? null,
     stacking: stacking ?? null,
     inserterCapacity: inserterCapacity ?? null,
-    directInsertion: directInsertion ?? false,
+    // RFC-053: the engine default is `Candidate` (DI competes and wins
+    // only on a strict improvement), so pass nothing when the box is
+    // unchecked. Checked means FORCE DI into the native pass — the
+    // A/B-comparison mode, and what `di=1` has always meant.
+    directInsertion: directInsertion ? "on" : undefined,
   });
 }
 
@@ -302,7 +306,11 @@ function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?
     wireMode: wireMode ?? null,
     stacking: stacking ?? null,
     inserterCapacity: inserterCapacity ?? null,
-    directInsertion: directInsertion ?? false,
+    // RFC-053: the engine default is `Candidate` (DI competes and wins
+    // only on a strict improvement), so pass nothing when the box is
+    // unchecked. Checked means FORCE DI into the native pass — the
+    // A/B-comparison mode, and what `di=1` has always meant.
+    directInsertion: directInsertion ? "on" : undefined,
   });
 }
 
@@ -369,7 +377,11 @@ async function buildLayoutStreaming(
       wireMode: wireMode ?? null,
       stacking: stacking ?? null,
       inserterCapacity: inserterCapacity ?? null,
-    directInsertion: directInsertion ?? false,
+    // RFC-053: the engine default is `Candidate` (DI competes and wins
+    // only on a strict improvement), so pass nothing when the box is
+    // unchecked. Checked means FORCE DI into the native pass — the
+    // A/B-comparison mode, and what `di=1` has always meant.
+    directInsertion: directInsertion ? "on" : undefined,
       traceLogs,
     });
   });

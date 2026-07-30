@@ -1196,30 +1196,64 @@ fn tier2_electronic_circuit_20s_from_ore() {
 // path returns far sooner, but the solve still runs.
 #[ntest::timeout(30000)]
 fn tier2_electronic_circuit_splitter_stamp_regression() {
+    use spaghettio_core::bus::di_cell::DirectInsertion;
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let outcome = run_e2e(
-        "tier2_electronic_circuit_splitter_stamp_regression",
-        "electronic-circuit",
-        10.0,
-        "assembling-machine-1",
-        Some("fast-transport-belt"),
-        &inputs,
-    );
-    let err = match outcome {
+    let sr = solver::solve("electronic-circuit", 10.0, &inputs, "assembling-machine-1")
+        .unwrap_or_else(|e| panic!("solve: {e:?}"));
+    let opts = |di| layout::LayoutOptions {
+        max_belt_tier: Some("fast-transport-belt".to_string()),
+        direct_insertion: di,
+        ..Default::default()
+    };
+
+    // The refusal this test exists for is a BELT-capacity refusal, so it
+    // is asserted with DI Off — the arm where copper-cable is actually on
+    // a belt. Checked explicitly rather than relying on the default, the
+    // same discipline `cell_candidate_composes_mil5_ore` uses: if this
+    // arm ever stops refusing, the fixture has stopped testing what it
+    // claims and belongs on the bus ladder instead.
+    let err = match layout::build_bus_layout(&sr, opts(DirectInsertion::Off)) {
         Err(e) => e,
         Ok(_) => panic!(
-            "EC@10/s AM1 fast belts must refuse (RFC-047 Leg B late sideload \
-             check): copper-cable 30/s on a single sideload-fed red trunk \
-             overloads one lane to 22/s > 15/s red per-lane cap, but it built"
+            "EC@10/s AM1 fast belts must refuse with DI Off (RFC-047 Leg B \
+             late sideload check): copper-cable 30/s on a single \
+             sideload-fed red trunk overloads one lane to 22/s > 15/s red \
+             per-lane cap, but it built"
         ),
     };
     assert!(
         err.contains("lane-aware delivery") && err.contains("copper-cable"),
         "expected the RFC-047 named lane-aware refusal for copper-cable, got: {err}"
     );
+
+    // RFC-053: under the default (`Candidate`) DI RESOLVES this refusal,
+    // and legitimately so — the refusal is that copper-cable overloads a
+    // lane, and DI takes copper-cable off the belts entirely. Verified
+    // here rather than asserted: zero belts carrying the coupled item,
+    // and clean on BOTH issue channels.
+    let l = layout::build_bus_layout(&sr, opts(DirectInsertion::Candidate))
+        .unwrap_or_else(|e| panic!("DI must resolve the cable-lane refusal: {e}"));
+    let cable_belts = l
+        .entities
+        .iter()
+        .filter(|e| e.name.ends_with("transport-belt") && e.carries.as_deref() == Some("copper-cable"))
+        .count();
+    assert_eq!(cable_belts, 0, "DI resolves this by removing copper-cable from the belts");
+    let issues = spaghettio_core::validate::validate(
+        &l,
+        Some(&sr),
+        spaghettio_core::validate::LayoutStyle::Bus,
+    )
+    .unwrap_or_else(|e| panic!("DI layout must validate: {e}"));
+    assert!(
+        issues.iter().all(|i| i.severity != Severity::Error),
+        "DI layout must be error-free: {:?}",
+        issues.iter().filter(|i| i.severity == Severity::Error).collect::<Vec<_>>()
+    );
+    assert!(l.warnings.is_empty(), "second channel too: {:?}", l.warnings);
 }
 
 // ---------------------------------------------------------------------------
@@ -7703,6 +7737,81 @@ fn stacking_ec_60s_red_one_belt_headline() {
     );
 }
 
+/// **PERMANENT GATE (RFC-053).** The never-worse contract: turning DI on
+/// may never degrade a layout the bus already produces.
+///
+/// This is the whole safety argument for the `Candidate` default, and it
+/// needs a structural pin rather than an empirical one. `cell-composed`
+/// can ride the generic soft score because composed density is always
+/// 1.5–3x WORSE, so it loses by construction. **DI has no such margin** —
+/// it removes roughly a third of the entities and is typically denser, so
+/// it would win a density-dominated ranking even on layouts where it
+/// regresses warnings. That is precisely what defaulting DI to a bare
+/// `true` did (2026-07-26): 8 tests broke, including 5 hard validation
+/// errors on `tier4_advanced_circuit_from_ore_am2` and an
+/// `input-rate-delivery` warning on the flagship DI pair.
+///
+/// So the guarantee lives in `decomposition_search::di_choice`: DI must
+/// be STRICTLY better on issue counts (validator errors, validator
+/// warnings, and `LayoutResult.warnings` — both channels, because
+/// reading only the validator already produced one false "0/0" claim in
+/// #462), and ties go to native so the layout stays bit-identical.
+///
+/// If this test fails, DI is winning something it should not.
+#[test]
+fn di_candidate_never_degrades_a_succeeding_bus_layout() {
+    use spaghettio_core::bus::di_cell::DirectInsertion;
+    let counts = |l: &spaghettio_core::models::LayoutResult, sr: &_| -> (usize, usize, usize) {
+        let issues = spaghettio_core::validate::validate(
+            l,
+            Some(sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+        )
+    };
+    for (item, rate, ins) in [
+        ("iron-gear-wheel", 10.0, &["iron-plate"][..]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"][..]),
+        ("electronic-circuit", 2.0, &["iron-plate", "copper-plate"][..]),
+        ("steel-plate", 5.0, &["iron-ore"][..]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+    ] {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, rate, &inputs, "assembling-machine-3") else {
+            continue;
+        };
+        let off = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                direct_insertion: DirectInsertion::Off,
+                ..Default::default()
+            },
+        );
+        // Only bus-SUCCEEDING configs constrain this contract; where the
+        // bus refuses, DI resolving it is the additive win.
+        let Ok(off_l) = off else { continue };
+        let on_l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| panic!("{item}@{rate}: DI default must not turn a success into a refusal: {e}"));
+        let (off_c, on_c) = (counts(&off_l, &sr), counts(&on_l, &sr));
+        // COMPONENT-WISE, not `on_c <= off_c`. Tuple `Ord` is
+        // lexicographic: it compares the first differing field and stops,
+        // so `(0, 0, 12) <= (0, 1, 0)` holds and a 12-layout-warning
+        // regression would pass unnoticed because the validator warning
+        // count improved. Each channel is a floor, not a tiebreaker
+        // (review finding on #474 — the bug was here AND in `di_choice`).
+        assert!(
+            on_c.0 <= off_c.0 && on_c.1 <= off_c.1 && on_c.2 <= off_c.2,
+            "{item}@{rate}: DI degraded the layout on at least one channel — \
+             (errors, warnings, layout_warnings) went {off_c:?} -> {on_c:?}"
+        );
+    }
+}
+
 /// RFC-047 Leg B/C lift differential (#312's exact repro config; see
 /// `quality_differential_ec_normal_vs_legendary`): EC@6/s legendary on
 /// yellow belts. copper-cable is 25/s (2 legendary AM3 machines @12.5/s)
@@ -7760,10 +7869,23 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     };
 
     // S=1: the fan-in wall holds — 25/s cable > 15/s full yellow.
-    let s1 = layout::build_bus_layout(&sr, opts_with(1));
+    //
+    // Asserted with DI Off. The wall is a BELT-capacity wall, so it only
+    // means anything on the arm where copper-cable is on a belt; under
+    // the default (`Candidate`) DI resolves it by taking cable off the
+    // belts entirely, which is a real capability gain rather than the
+    // wall failing (RFC-053 — verified separately: 0 errors, 0 belts
+    // carrying copper-cable).
+    let s1 = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..opts_with(1)
+        },
+    );
     assert!(
         s1.is_err(),
-        "S=1 must hit #312's fan-in refusal (25/s cable > 15/s full yellow)"
+        "S=1 must hit #312's fan-in refusal with DI Off (25/s cable > 15/s full yellow)"
     );
 
     // S=2: same config lays out physically valid end to end.
@@ -8117,7 +8239,7 @@ fn di_row_cell_fluid_fed_producer_validates_clean() {
     let layout = layout::build_bus_layout(
         &sr,
         layout::LayoutOptions {
-            direct_insertion: true,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
             max_belt_tier: Some("express-transport-belt".into()),
             ..Default::default()
         },
@@ -8168,7 +8290,7 @@ fn di_cell_output_belt_exemption_does_not_cover_the_consumer() {
     let mut layout = layout::build_bus_layout(
         &sr,
         layout::LayoutOptions {
-            direct_insertion: true,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
             max_belt_tier: Some("express-transport-belt".into()),
             ..Default::default()
         },
@@ -8242,7 +8364,7 @@ fn fluid_branch_meeting_its_own_pipe_is_not_a_blocked_tile() {
         let l = layout::build_bus_layout(
             &sr,
             layout::LayoutOptions {
-                direct_insertion: *di,
+                direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::forced(*di),
                 max_belt_tier: Some("express-transport-belt".into()),
                 ..Default::default()
             },
@@ -8319,7 +8441,7 @@ fn di_cell_kc3_export() {
     // artifact and a DI artifact look identical in a single run.
     let di = std::env::var("SPAGHETTIO_KC3_DI").as_deref() != Ok("0");
     let opts = layout::LayoutOptions {
-        direct_insertion: di,
+        direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::forced(di),
         max_belt_tier: Some(
             std::env::var("KC3_BELT").unwrap_or_else(|_| "transport-belt".into()),
         ),
@@ -8485,7 +8607,7 @@ fn di_cell_coverage_sweep() {
         };
         let ncoup = sr.di_couplings.len();
         let opts = layout::LayoutOptions {
-            direct_insertion: true,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
             max_belt_tier: Some(
                 std::env::var("SWEEP_BELT").unwrap_or_else(|_| "transport-belt".into()),
             ),
@@ -8566,4 +8688,209 @@ fn kc2_face_contention() {
     println!("  columns required: {n_near} near + {n_far} far = {} of 3 available -> {}",
         n_near + n_far,
         if n_near + n_far <= 3 { "KC2 PASSES" } else { "KC2 FIRES" });
+}
+
+/// Re-run #474's change surface on CURRENT main.
+///
+/// #474 measured "20 targets swept: 15 bit-identical, 5 flipped, 0 regressed"
+/// against a base that is now 32 commits gone — since then #500 (multi-fold),
+/// #502 (undergroundification, -26% source entities) and #503 (island packing)
+/// all moved the layout pipeline. The PR's own thesis is that fusing a pair
+/// changes row structure and trunk lanes / junction routing / per-lane capacity
+/// are computed against it, so its sweep is exactly the evidence that goes stale.
+///
+/// Classification per target:
+///   IDENTICAL  — same entity count and same issue triple. DI declined; the
+///                never-worse contract holds by construction.
+///   DI-BETTER  — DI won, and no issue channel got worse.
+///   REGRESSED  — DI won something while a channel got worse, or DI turned a
+///                success into a refusal. This is the merge blocker.
+///
+/// Reporting probe, not an assertion: the permanent gate
+/// `di_candidate_never_degrades_a_succeeding_bus_layout` is the structural pin.
+/// This exists to say WHICH targets moved and by how much, because a bare
+/// "tests pass" cannot — most tests run DI-off.
+#[test]
+#[ignore = "reporting probe — #474 change surface on current main"]
+fn di_change_surface_sweep() {
+    use spaghettio_core::bus::di_cell::DirectInsertion;
+    let counts = |l: &spaghettio_core::models::LayoutResult, sr: &_| -> (usize, usize, usize) {
+        let issues = spaghettio_core::validate::validate(
+            l,
+            Some(sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+        )
+    };
+
+    // The 5 #474 recorded as flipped, plus a spread of the bit-identical set.
+    let cases: &[(&str, f64, &[&str])] = &[
+        ("space-platform-foundation", 1.0, &["steel-plate", "copper-cable"]),
+        ("space-platform-foundation", 1.0, &["iron-plate", "copper-plate"]),
+        ("steel-plate", 5.0, &["iron-ore"]),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 5.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 5.0, &["iron-ore", "copper-ore"]),
+        ("iron-gear-wheel", 10.0, &["iron-plate"]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 2.0, &["iron-plate", "copper-plate"]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        ("steel-plate", 1.0, &["iron-ore"]),
+        ("steel-plate", 20.0, &["iron-ore"]),
+        ("iron-stick", 5.0, &["iron-ore"]),
+        ("pipe", 5.0, &["iron-ore"]),
+        ("copper-cable", 5.0, &["copper-ore"]),
+        ("stone-brick", 5.0, &["stone"]),
+    ];
+
+    let mut identical = 0;
+    let mut better = 0;
+    let mut regressed: Vec<String> = Vec::new();
+    let mut skipped = 0;
+
+    for (item, rate, ins) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, *rate, &inputs, "assembling-machine-3") else {
+            skipped += 1;
+            continue;
+        };
+        let off = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                direct_insertion: DirectInsertion::Off,
+                ..Default::default()
+            },
+        );
+        let on = layout::build_bus_layout(&sr, layout::LayoutOptions::default());
+
+        match (off, on) {
+            (Ok(off_l), Ok(on_l)) => {
+                let (oc, nc) = (counts(&off_l, &sr), counts(&on_l, &sr));
+                let (oe, ne) = (off_l.entities.len(), on_l.entities.len());
+                let worse = nc.0 > oc.0 || nc.1 > oc.1 || nc.2 > oc.2;
+                if worse {
+                    regressed.push(format!("{item}@{rate}: {oc:?}/{oe}ents -> {nc:?}/{ne}ents"));
+                    println!("  REGRESSED {item}@{rate}: {oc:?} {oe} ents -> {nc:?} {ne} ents");
+                } else if oe == ne && oc == nc {
+                    identical += 1;
+                    println!("  identical {item}@{rate}: {oc:?} {oe} ents");
+                } else {
+                    better += 1;
+                    println!("  DI-BETTER {item}@{rate}: {oc:?} {oe} ents -> {nc:?} {ne} ents");
+                }
+            }
+            (Err(e), Ok(on_l)) => {
+                better += 1;
+                println!(
+                    "  DI-RESOLVES {item}@{rate}: off REFUSED ({e}) -> on {:?} {} ents",
+                    counts(&on_l, &sr),
+                    on_l.entities.len()
+                );
+            }
+            (Ok(_), Err(e)) => {
+                regressed.push(format!("{item}@{rate}: DI turned a SUCCESS into a refusal: {e}"));
+                println!("  REGRESSED {item}@{rate}: DI turned a success into a refusal: {e}");
+            }
+            (Err(_), Err(_)) => {
+                skipped += 1;
+            }
+        }
+    }
+
+    println!(
+        "\n#474 change surface on current main: {identical} identical, {better} DI-better, \
+         {} REGRESSED, {skipped} not-applicable",
+        regressed.len()
+    );
+    for r in &regressed {
+        println!("  ! {r}");
+    }
+}
+
+/// The merge-tap/DI shadowing fix must actually DO something.
+///
+/// Review of #474 found that `merge_tap_choice` unconditionally preempted
+/// `di_choice`: it is built with `.map()`, so it is `Some` whenever merge-tap
+/// produced anything — including its `Some(NATIVE_IDX)` arm meaning "native beat
+/// merge-tap" — and a plain `.or()` chain short-circuits on that, discarding
+/// DI's already-computed, already-validated result unread.
+///
+/// The corpus sweep does not cover it: all 16 targets there come out identical
+/// before and after the fix. So without this test the fix is UNFALSIFIABLE, which
+/// is the defect `docs/validator-reporting.md` catalogues. This pins the exact
+/// fixture the review named — `electronic-circuit@35/s` from ore, Pooled, yellow
+/// belt, which carries DI's flagship copper-cable coupling and is documented by
+/// `layout_retry_is_trace_independent` as one where native beats merge-tap.
+///
+/// MEASURED OUTCOME, stated because it is weaker than the fix sounds: on this
+/// fixture DI-Off and DI-Candidate are IDENTICAL — `(4, 123, 1)` / 6317 entities
+/// both ways. The shadowing was real and structural, but DI does not beat native
+/// here, so removing it changes no result. The fix is therefore LATENT: correct
+/// by construction (a validated, strictly-better result must not be discarded
+/// unread) but with no fixture in the corpus that demonstrates a different
+/// outcome. Do not claim it as a win; it is a removed trap.
+///
+/// What this test does pin is the never-worse contract on the branch where DI was
+/// previously unreachable, so a future edit cannot make DI regress it there. It
+/// does NOT prove the fix has teeth — nothing currently does, and if someone
+/// finds a fixture where merge-tap runs, native beats merge-tap, and DI beats
+/// native, that case belongs here.
+#[test]
+fn merge_tap_does_not_shadow_di_on_pooled_yellow() {
+    use spaghettio_core::bus::di_cell::DirectInsertion;
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_exclusions(
+        "electronic-circuit",
+        35.0,
+        &inputs,
+        "assembling-machine-2",
+        &FxHashSet::default(),
+    )
+    .expect("solve electronic-circuit@35/s");
+
+    let counts = |l: &spaghettio_core::models::LayoutResult| -> (usize, usize, usize) {
+        let issues = spaghettio_core::validate::validate(
+            l,
+            Some(&sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+        )
+    };
+    let opts = |di: DirectInsertion| layout::LayoutOptions {
+        strategy: layout::LayoutStrategy::Pooled,
+        max_belt_tier: Some("transport-belt".to_string()),
+        direct_insertion: di,
+        ..Default::default()
+    };
+
+    let off = layout::build_bus_layout(&sr, opts(DirectInsertion::Off))
+        .expect("DI-off must still lay out");
+    let on = layout::build_bus_layout(&sr, opts(DirectInsertion::Candidate))
+        .expect("DI-candidate must not turn a success into a refusal");
+
+    let (oc, nc) = (counts(&off), counts(&on));
+    println!(
+        "EC@35 Pooled yellow: off {:?} {} ents -> candidate {:?} {} ents",
+        oc,
+        off.entities.len(),
+        nc,
+        on.entities.len()
+    );
+
+    // The never-worse contract, on the branch where DI used to be unreachable.
+    assert!(
+        nc.0 <= oc.0 && nc.1 <= oc.1 && nc.2 <= oc.2,
+        "DI regressed an issue channel on the merge-tap branch: {oc:?} -> {nc:?}"
+    );
 }

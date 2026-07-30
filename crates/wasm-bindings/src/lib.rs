@@ -38,11 +38,9 @@ fn layout_options(
     cell_composition: Option<String>,
     // RFC-053 direct insertion: fuse a coupled producer/consumer pair into
     // ONE row coupled by inserters, with no belt for the coupled item.
-    // Defaults to false — pairs the engine cannot serve as a cell fall back
-    // to the DI bridge and then to the bus, so enabling it never makes a
-    // layout worse, but it stays opt-in until coverage is wider (fluids and
-    // modules still refuse).
-    direct_insertion: Option<bool>,
+    // "off" | "on" | anything else (incl. absent) -> Candidate, the
+    // engine default. Same shape as `cell_composition` below.
+    direct_insertion: Option<String>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -85,7 +83,18 @@ fn layout_options(
         // decomposition search (`MergeTapCandidate`), never requested by the
         // web UI — always default-off at the public boundary.
         merge_tap: false,
-        direct_insertion: direct_insertion.unwrap_or(false),
+        // RFC-053 flip: absent/unknown -> Candidate (the engine
+        // default), where DI competes and may only win on a strict
+        // improvement. "off" is the escape hatch; "on" FORCES DI into
+        // the native pass, which is the A/B-comparison mode and what
+        // the `di=1` URL has always meant.
+        direct_insertion: match direct_insertion.as_deref() {
+            Some("off") => spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            Some("on") | Some("1") | Some("true") => {
+                spaghettio_core::bus::di_cell::DirectInsertion::Forced
+            }
+            _ => spaghettio_core::bus::di_cell::DirectInsertion::Candidate,
+        },
         // Phase C: set only by the mega-block sub-solve internally,
         // never at the public boundary.
         splitter_tap_spacers: false,
@@ -295,7 +304,7 @@ pub fn layout(
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
-    direct_insertion: Option<bool>,
+    direct_insertion: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
@@ -321,7 +330,7 @@ pub fn layout_traced(
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
-    direct_insertion: Option<bool>,
+    direct_insertion: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
@@ -391,7 +400,7 @@ pub fn layout_streaming(
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
-    direct_insertion: Option<bool>,
+    direct_insertion: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
