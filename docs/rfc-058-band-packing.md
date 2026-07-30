@@ -182,9 +182,16 @@ its gates — same discipline as `compact_layout`.
 
 1. **Transport eats the gain.** If, after real trunk routing, the **bounding-box
    area** saving on `sci1-ore`, `sci2-ore` and `pu1-plate` is below **half** the
-   probe's estimate (i.e. worse than −32% against an estimated −64.5%), then
+   probe's estimate for those same three fixtures — worse than **−33.0%**
+   against an estimated **−66.1%** (10,729 → 3,641 tiles) — then
    2D trunk cost is consuming the reclaimed area and band granularity fails the
    same way machine granularity did. Stop; do not re-tune the packer.
+
+   The baseline is the three-fixture aggregate, not the −64.5% four-fixture
+   figure quoted in Motivation. Those differ because the four-fixture number
+   includes `belt5-ore`, the weakest packer at −46.2%, which this criterion
+   does not name — so reusing −64.5% here would set the bar ~1pp more lenient
+   than the rule's own wording implies.
 
    The metric is bounding-box area, matching what the probe measured. It is
    deliberately **not** occupied tiles: bands are rigid, so machines and
@@ -244,10 +251,18 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
    y-projection. No behaviour change.
 2. **Packer** — shelf packing with aspect cap and swept target width, behind a
    default-off flag. Emits positions only; nothing consumes them yet.
-3. **Trunk spike — one fixture, throwaway code.** Route trunks for a single
-   packed fixture (`sci1-ore`) with whatever is quickest, and measure real
-   bounding-box area and real transport against the control. Evaluate kill
-   criterion 1 here.
+3. **Trunk spike — throwaway code, all three gate fixtures.** Route trunks for
+   the packed layouts with whatever is quickest and measure real bounding-box
+   area and real transport against each control. Start with `sci1-ore` (4
+   bands, cheapest) as a smoke test, then `sci2-ore` (8) and `pu1-plate` (11).
+
+   **All three are required before the gate is considered cleared.** Kill
+   criterion 1 names all three, and the two larger ones are precisely the
+   fixtures most likely to expose 2D-trunk cost — spiking only `sci1-ore` would
+   defer that exposure to phase 4, i.e. past the lane-planner work this gate
+   exists to protect against. An explicit area-vs-control comparison is part of
+   this phase, not deferred to phase 5's meter run, which prices throughput
+   (criterion 4) rather than area.
 
    This phase exists because phases 0–2 are cheap *and prove nothing*: a
    census, an extractor and a packer can all land green while saying nothing
@@ -256,7 +271,8 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
    the Manhattan transport proxy flattered packing — the one number in this
    RFC with a known directional risk.
 4. **2D lane planning** — `plan_bus_lanes` for packed bands, properly. Only
-   after the spike clears. Where kill criterion 5 is evaluated.
+   after the spike clears on all three fixtures. Where kill criterion 5 is
+   evaluated.
 5. **Validation, meter, and Factorio adjudication.**
 6. **Default-on decision**, as a scored decomposition candidate rather than a
    forced path.
@@ -323,6 +339,29 @@ than the lane-planner rewrite.
   representative of what users request. Phase 0 still runs the census properly
   before the packer is written; this entry records that the early signal is
   favourable, not that the criterion is settled.
+
+- **2026-07-30 — kill criterion 1's measured quantity changed from occupied
+  tiles to bounding-box area.** Recorded separately because it is a
+  consequential decision, not a wording fix, and CLAUDE.md requires those to
+  live in the owning RFC's decision log.
+
+  As first written the criterion set a −32% bar on *occupied-tile* saving
+  against a −64.5% baseline that is bounding-box *area*. Bands are rigid, so
+  machines and inserters cannot move relative to each other and only transport
+  tiles can shrink; against belts at ~39.6% of occupied tiles and a best-case
+  ~38% transport saving, achievable occupied-tile reduction is only ~15%. The
+  bar would therefore have fired on every run regardless of whether the
+  approach worked — a false-negative gate on the criterion this RFC exists to
+  test. Changed to bounding-box area, matching the probe.
+
+  Four other defects landed in the same pass, all internal inconsistencies
+  rather than decisions: the Summary defined a band as including belt rows
+  while the Design section excluded them; the width-floor argument claimed a
+  wide band floors *aspect* when it floors *width*; "every band is exactly 5
+  tiles tall" was generalised from the three fixtures whose dimensions had
+  been printed, all of which were the failing ones (`belt5-ore` and `sci2-ore`
+  each carry a 7-tall band); and 38.4%/39.6% appeared for unrelated quantities
+  without attribution.
 
 - **2026-07-30 — self-review after the bot pass; four presentation and
   method defects fixed.** None change the measured result; all change how it
