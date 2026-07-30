@@ -56,12 +56,20 @@ Review of this RFC asked which rate produces 261-vs-264, since `rail@5` is
 explicitly the no-difference case. The answer is that **RFC-053 contradicts
 itself**, so no rate can be quoted honestly:
 
-- [`rfc-053`](rfc-053-direct-insertion-cells.md) line ~2249 puts the win at
-  `rail@1`, and says that at `rail@5` "the straddle does not balance and reverse
-  order builds the same stacked cell as forward".
-- The same document's coupling table (line ~1943) says `plan_row_straddle`
+- **#473** (branch `feat/di-three-inputs`, *not yet merged*) adds a passage to
+  `rfc-053` putting the win at `rail@1`, and saying that at `rail@5` "the
+  straddle does not balance and reverse order builds the same stacked cell as
+  forward".
+- `rfc-053`'s coupling table **on `main` today** says `plan_row_straddle`
   "balances at only 2 of 12 sampled rates (**5/s, 10/s**)", and that at 1/s
   `snap()`'s rounding leaves supply and demand unequal — `P1:C1, 3.0 vs 1.5`.
+
+Cited by PR rather than by file-and-line deliberately: the first passage does not
+exist on `main`, so a line reference would not resolve for anyone reading this
+RFC after it lands, and did not resolve for the reviewer who checked. #473 now
+carries a correction note at that passage recording the conflict rather than
+silently repairing it, because **which half is wrong is not determinable from the
+document alone**.
 
 Those disagree about which rates balance, and therefore about where the win is.
 The measurement came from a scratch env flag that was never committed, so it
@@ -125,15 +133,32 @@ static.
 **Required.** Any of these ends the work.
 
 1. **The question is empirically empty.** If sweeping the corpus under P0 and P1
-   with `DI=Candidate` shows the final chosen layout differing on **only** the
-   known `rail` case, then no policy machinery is justified: pin P0 with a test
-   naming `rail` as the known sacrifice, add the reasoning to RFC-053's decision
-   log, and close this RFC as *rejected — not a real contention in practice*.
-2. **P2 cannot be estimated statically.** If a per-coupling gain estimate that
-   does not build a layout cannot be made to correlate with measured outcome on
-   the `rail` case plus at least two others, drop P2 and P3 — the matching
-   objective is unknowable at claim time, and the honest answer is a pinned
-   static order.
+   with `DI=Candidate` shows the final chosen layout differing on **at most the
+   known `rail` case — including the case where NOTHING differs at all** — then
+   no policy machinery is justified: pin P0 with a test, add the reasoning to
+   RFC-053's decision log, and close this RFC as *rejected — not a real
+   contention in practice*.
+
+   The zero-difference outcome is called out explicitly because it is a live
+   possibility, not a formality: this RFC's own Motivation records that the
+   `rail` measurement is currently unreproducible, so the sweep may find no
+   differing target whatsoever. Under the earlier wording ("differing on **only**
+   the known `rail` case") that outcome did not satisfy the condition — there
+   would be no `rail` difference for it to be "only" — and the remedy presupposed
+   a sacrifice that would not exist. Third instance of the same defect in this
+   document's kill criteria; see the decision log.
+2. **P2 cannot be estimated statically.** Concretely: after **at most three
+   distinct estimator formulations**, if none of them RANKS the contended
+   couplings in the same order as the measured outcome on **every** target where
+   phase 1 found a difference, drop P2 and P3. Rank agreement, not a correlation
+   coefficient — the estimator's only job is to pick which coupling claims first,
+   so ordering is the whole of it and magnitude is irrelevant.
+
+   Bounded at three attempts and stated as exact rank agreement because the
+   template rejects "if performance is bad" phrasing, and an unbounded "cannot be
+   made to" is that with extra steps: there is always one more estimator to try.
+   The other four criteria here are numeric or binary; this one was not until
+   review said so.
 3. **Cost.** If any policy takes end-to-end layout time on the existing corpus
    past **1.45× of the pre-#474 baseline**, it is refused regardless of quality
    gain — i.e. this RFC's own share is capped at roughly **1.18×** on top of what
@@ -241,3 +266,26 @@ tie-break with evidence, not necessarily a new algorithm.
   unresolved contradiction; it is now marked recorded-not-established. Both are
   the same shape as the criterion-5 finding: a statement that reads firmer than
   its evidence.
+
+- *2026-07-30 — three more review findings; one of them was mine and one was the
+  reviewer's, in the same finding.* The Motivation cited `rfc-053` line ~2249 for
+  the `rail@1` claim. That line resolves to unrelated text **on `main`**, and the
+  reviewer reported the string had never existed in any revision. Both halves are
+  instructive: the citation WAS invalid — the passage lives on #473's unmerged
+  branch, so it would not resolve for anyone reading this RFC after it lands —
+  and the reviewer's "never existed" is an artifact of the review workflow's
+  `fetch-depth: 1` checkout, which cannot see other branches or history. Fixed by
+  citing the PR rather than a file-and-line on a moving target.
+
+  Kill criterion 2 was unfalsifiable ("cannot be made to correlate") where the
+  other four are numeric; bounded to three estimator attempts judged on exact
+  rank agreement. Kill criterion 1 did not cover a sweep that finds NOTHING
+  differing — a live possibility given that the `rail` measurement is
+  unreproducible — where the literal condition could not be met and the remedy
+  presupposed a sacrifice that would not exist.
+
+  That is the **third** kill criterion in this document to fail on an edge of its
+  own scenario (after criterion 5's percentage and criterion 3's non-composing
+  budget). The pattern is now explicit enough to name: each was written to catch
+  the CENTRAL case and silently excluded a boundary — and all three read as
+  protection while providing none.
