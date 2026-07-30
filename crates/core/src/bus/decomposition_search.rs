@@ -1199,7 +1199,7 @@ pub fn select_best_decomposition(
     const H_IDX: usize = 6;
     let horizontal_choice: Option<usize> =
         horizontal_run.outcome.as_ref().and_then(|(hs_layout, hs_score)| {
-            let (nat_layout, nat_score) = native_run.outcome.as_ref()?;
+            let (nat_layout, _nat_score) = native_run.outcome.as_ref()?;
             let start = crate::trace::peek_events_len();
             let hs_counts = count_issues(hs_layout, solver_result);
             let nat_counts = count_issues(nat_layout, solver_result);

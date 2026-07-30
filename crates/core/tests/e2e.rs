@@ -1243,6 +1243,10 @@ fn tier2_electronic_circuit_splitter_stamp_regression() {
     let opts = |di| layout::LayoutOptions {
         max_belt_tier: Some("fast-transport-belt".to_string()),
         direct_insertion: di,
+        // RFC-059: horizontal-stack resolves this refusal on the
+        // candidate path (a legit rescue for users), but this fixture
+        // asserts the BELT-capacity wall itself — isolate it like DI.
+        horizontal_candidate: false,
         ..Default::default()
     };
 
@@ -2220,7 +2224,11 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // beltspan-lastinrow: the 4 residual inserter-item-throughput were dual_input_row
     // last-in-row far sides capped at one long-handed inserter; extending the far belt
     // one tile clears them (4 -> 0). The input-rate-delivery (1) is unrelated and unchanged.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1)]);
+    // RFC-059 re-bless (2026-07-30): the horizontal-stack candidate wins
+    // this config strictly-better and DELETES the long-standing
+    // input-rate-delivery residual (was the tier-4 ladder's known
+    // warning; docs/status.md row updated with the RFC close-out).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
