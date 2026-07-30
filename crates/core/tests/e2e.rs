@@ -9083,3 +9083,126 @@ fn probe_di_claim_order_p0_vs_p1() {
         println!("provably irrelevant here. Widen to the full corpus before acting on it.");
     }
 }
+
+/// RFC-059 phase 1, THE CORPUS SWEEP — kill criterion 1's verdict.
+///
+/// KC1 trips when every target's contention set is empty. Answered
+/// exhaustively: every producible item, at three rates, under both claim
+/// orders.
+///
+/// Runs `place_rows` DIRECTLY rather than `build_bus_layout`. The claim loop —
+/// the only thing that can produce contention — lives in `place_rows`, so
+/// routing, pole placement and validation are pure cost for this question. A
+/// full-layout version of this sweep ran 39 minutes without finishing and was
+/// abandoned as a bad instrument, not a slow one.
+///
+/// Skips are COUNTED, not silent: a sweep that quietly drops targets cannot
+/// support a claim about all of them.
+#[test]
+#[ignore = "RFC-059 phase 1 — corpus contention census, the KC1 verdict"]
+fn probe_di_contention_corpus_sweep() {
+    use spaghettio_core::bus::di_cell::DiClaimOrder;
+    use spaghettio_core::bus::placer::place_rows;
+    use spaghettio_core::bus::stacking_ctx::StackingCtx;
+    use spaghettio_core::bus::inserter_ladder::InserterTier;
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::trace::TraceEvent;
+
+    let items = spaghettio_core::recipe_db::all_producible_items();
+    let rates = [1.0f64, 5.0, 20.0];
+    let raw: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "water", "crude-oil"]
+        .iter().map(|s| s.to_string()).collect();
+
+    let (mut with_couplings, mut skipped_solve, mut no_couplings) = (0usize, 0usize, 0usize);
+    let (mut contended_targets, mut couplings_seen) = (0usize, 0usize);
+    let mut examples: Vec<String> = Vec::new();
+    let mut contended_pairs: Vec<(String, f64)> = Vec::new();
+
+    for name in &items {
+        for &rate in &rates {
+            let Ok(sr) = solver::solve(name, rate, &raw, "assembling-machine-3") else {
+                skipped_solve += 1;
+                continue;
+            };
+            if sr.di_couplings.is_empty() { no_couplings += 1; continue; }
+            with_couplings += 1;
+            couplings_seen += sr.di_couplings.len();
+
+            let census = |order: DiClaimOrder| -> (usize, Vec<String>) {
+                let _g = spaghettio_core::trace::start_trace();
+                let _ = place_rows(
+                    &sr.machines, &sr.dependency_order, 0, 0, None,
+                    InserterTier::default(), QualityTier::Normal, 0, None, None,
+                    spaghettio_core::bus::layout::RowLayout::default(),
+                    Some(order), &sr.di_couplings, &StackingCtx::unstacked(),
+                );
+                let ev = spaghettio_core::trace::drain_events();
+                let detail: Vec<String> = ev.iter().filter_map(|e| match e {
+                    TraceEvent::DiCouplingContended { contended_spec, loser_producer, loser_consumer, .. } =>
+                        Some(format!("{contended_spec}: {loser_producer}->{loser_consumer}")),
+                    _ => None,
+                }).collect();
+                (detail.len(), detail)
+            };
+
+            let (c0, d0) = census(DiClaimOrder::Upstream);
+            let (c1, _) = census(DiClaimOrder::Downstream);
+            if c0 > 0 || c1 > 0 {
+                contended_targets += 1;
+                contended_pairs.push((name.clone(), rate));
+                for d in d0.iter().take(2) { examples.push(format!("{name}@{rate}: {d}")); }
+            }
+        }
+    }
+
+    // Stage 2: on the targets that DO contend, does the claim order change the
+    // built layout? This is phase 1 output 1. Restricted to contended targets
+    // because a target with no contention cannot differ — that is the
+    // entailment KC1 rests on, and running full layouts corpus-wide to
+    // re-confirm it is what made the first version of this sweep unusable.
+    let mut differ: Vec<String> = Vec::new();
+    let mut same = 0usize;
+    for (name, rate) in &contended_pairs {
+        let inputs: FxHashSet<String> = raw.iter().cloned().collect();
+        let Ok(sr) = solver::solve(name, *rate, &inputs, "assembling-machine-3") else { continue };
+        let build = |order: DiClaimOrder| {
+            let opts = layout::LayoutOptions {
+                direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
+                di_claim_order: order,
+                ..Default::default()
+            };
+            layout::build_bus_layout(&sr, opts)
+                .map(|l| (l.width, l.height, l.entities.len()))
+                .ok()
+        };
+        let (a, b) = (build(DiClaimOrder::Upstream), build(DiClaimOrder::Downstream));
+        if a == b { same += 1; } else {
+            differ.push(format!("{name}@{rate}: P0={a:?} P1={b:?}"));
+        }
+    }
+
+    println!("\n=== RFC-059 phase 1 corpus contention census ===");
+    println!("  items swept:            {}", items.len());
+    println!("  target/rate pairs:      {}", items.len() * rates.len());
+    println!("  skipped (no solve):     {skipped_solve}");
+    println!("  solved, no couplings:   {no_couplings}");
+    println!("  solved WITH couplings:  {with_couplings}");
+    println!("  di_couplings seen:      {couplings_seen}");
+    println!("  targets CONTENDED:      {contended_targets}");
+    for e in examples.iter().take(20) { println!("      {e}"); }
+    println!("\n  contended targets rebuilt: {} same, {} DIFFER", same, differ.len());
+    for d in differ.iter().take(20) { println!("      {d}"); }
+
+    if contended_targets == 0 {
+        println!("\nKC1 TRIPS: no spec is contended anywhere in the corpus.");
+    } else if differ.is_empty() {
+        println!("\nKC1 does NOT trip on contention ({contended_targets} targets contend),");
+        println!("but claim order changes NO layout: every contended target builds identically");
+        println!("under P0 and P1. The contention is real and its resolution is inconsequential");
+        println!("on this corpus — which is a different finding from either KC1 branch.");
+    } else {
+        println!("\nKC1 does NOT trip: {contended_targets} targets contend and {} build",
+                 differ.len());
+        println!("differently under P0 vs P1. The question is real; proceed to phase 2.");
+    }
+}
