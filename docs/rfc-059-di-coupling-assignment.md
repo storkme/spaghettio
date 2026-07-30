@@ -302,175 +302,70 @@ tie-break with evidence, not necessarily a new algorithm.
 ## Decision log
 
 - *2026-07-30 — opened.* Split out of #473, which built the three-input row-cell
-  geometry and discovered that the face count was never `rail`'s blocker: the
-  dispatcher's claim order was. #473 deliberately did not flip the order, on the
-  grounds that a corpus-wide tie-break should not change on 3 entities of
-  evidence at one rate. That judgement is endorsed here and is the reason this
-  file exists. Note the question only became measurable once #474 defaulted DI
-  to `Candidate`, so the ordering of the two PRs matters: this RFC's phase 1
-  cannot be run meaningfully before #474 lands.
+  geometry and discovered the face count was never `rail`'s blocker: the
+  dispatcher's claim order was. #473 deliberately did not flip that order, on the
+  grounds that a corpus-wide tie-break should not change on 3 entities of evidence
+  at one rate. That judgement is endorsed here and is why this file exists. The
+  question only became measurable once #474 defaulted DI to `Candidate`, so phase
+  1 could not be run meaningfully before #474 landed.
 
-- *2026-07-30 — two review findings, both fixed, and the second changed the
-  RFC's shape.* Kill criterion 5 was stated as "under 1% of entities", which
-  cannot fire on the 3-of-264-entity win it is named for (1.14%); restated in
-  absolute entities. And the rate producing 261-vs-264 was asked for and turned
-  out to be **unrecoverable**: RFC-053 says `rail@1` in one place and, in its own
-  coupling table, that the straddle balances only at 5/s and 10/s — with 1/s
-  explicitly unbalanced. The measurement came from an uncommitted scratch flag.
-  So phase 1's first deliverable is now a reproducible rate sweep rather than a
-  policy, and kill criterion 1 cannot be evaluated until that exists. Worth
-  noting the failure mode: the original RFC quoted a measurement it could not
-  reproduce, and only a reviewer asking "at what rate?" surfaced that the source
-  disagreed with itself.
+- *2026-07-30 — the motivating measurement is not reproducible, and that raised
+  phase 1's value.* Asked which rate produces 261-vs-264, the record contradicts
+  itself: RFC-053 says `rail@1` in one place and, in its own coupling table, that
+  the straddle balances only at 5/s and 10/s with 1/s explicitly unbalanced. The
+  measurement came from an uncommitted scratch flag. So phase 1's first
+  deliverable is a reproducible rate sweep rather than a policy, and kill
+  criterion 1 cannot be evaluated until it exists. Corrected at source in #473.
 
 - *2026-07-30 — renumbered RFC-058 → RFC-059.* #506 landed
-  [`rfc-058-band-packing.md`](rfc-058-band-packing.md) on `main` while this was in
-  review. Parallel sessions claim numbers optimistically and first-to-main wins,
-  so this file cedes 058 and takes 059. Note it was verified unclaimed on
-  `origin/main` before writing — necessary but not sufficient, since the check and
-  the merge are not atomic.
+  [`rfc-058-band-packing.md`](rfc-058-band-packing.md) on `main` mid-review. 058
+  was verified unclaimed on `origin/main` before writing — necessary but not
+  sufficient, since the check and the merge are not atomic, and first-to-main
+  wins.
 
-- *2026-07-30 — two further review findings, both fixed.* Kill criterion 3's
-  "1.25×" was a LOCAL multiplier on top of #474's 1.23× of a 1.5× budget, so a
-  policy sitting exactly at the threshold would total ~1.54× and exceed the budget
-  the criterion exists to protect; restated against the shared pre-#474 baseline.
-  And Motivation's counter-evidence bullet asserted the `rail@5` no-difference
-  claim flatly while a later section identifies that very claim as half of an
-  unresolved contradiction; it is now marked recorded-not-established. Both are
-  the same shape as the criterion-5 finding: a statement that reads firmer than
-  its evidence.
-
-- *2026-07-30 — three more review findings; one of them was mine and one was the
-  reviewer's, in the same finding.* The Motivation cited `rfc-053` line ~2249 for
-  the `rail@1` claim. That line resolves to unrelated text **on `main`**, and the
-  reviewer reported the string had never existed in any revision. Both halves are
-  instructive: the citation WAS invalid — the passage lives on #473's unmerged
-  branch, so it would not resolve for anyone reading this RFC after it lands —
-  and the reviewer's "never existed" is an artifact of the review workflow's
-  `fetch-depth: 1` checkout, which cannot see other branches or history. Fixed by
-  citing the PR rather than a file-and-line on a moving target.
-
-  Kill criterion 2 was unfalsifiable ("cannot be made to correlate") where the
-  other four are numeric; bounded to three estimator attempts judged on exact
-  rank agreement. Kill criterion 1 did not cover a sweep that finds NOTHING
-  differing — a live possibility given that the `rail` measurement is
-  unreproducible — where the literal condition could not be met and the remedy
-  presupposed a sacrifice that would not exist.
-
-  That is the **third** kill criterion in this document to fail on an edge of its
-  own scenario (after criterion 5's percentage and criterion 3's non-composing
-  budget). The pattern is now explicit enough to name: each was written to catch
-  the CENTRAL case and silently excluded a boundary — and all three read as
-  protection while providing none.
-
-- *2026-07-30 — three further findings; two fixed, one disputed with evidence.*
-  Kill criterion 1's remedy said "pin P0" unconditionally, which would have
-  pinned the status quo even where this RFC's own figures show P1 zero-cost and
-  strictly better on the one differing case — now "pin whichever static order
-  wins". Kill criterion 5's bound was ambiguous between per-target and aggregate
-  and is now explicitly both. **Disputed:** the review reported that #473 carries
-  no correction note for the rate conflict; it does, at `rfc-053` line ~2260 in
-  commit `503ca889`. Almost certainly the same `fetch-depth: 1` blind spot as the
-  earlier citation finding — the reviewer can read this PR's diff but cannot
-  resolve a claim about another branch's state. The sentence was reworded anyway
-  to mark #473 as pending rather than assert it as fact, since a cross-PR claim
-  that cannot be checked from either side is fragile regardless of who is right.
-  The generalisable lesson is in the shape, not the count — though it is not
-  uniform, and the final entry below says which items depart from it. The
-  enumeration and its total live there together, deliberately: this entry
-  predates several of the revisions, and a list here could only ever trail them.
-
-- *2026-07-30 — two more, and the second is the funniest defect in this file.*
-  Kill criterion 2 checked an estimator against a ranking phase 1 never produced:
-  the sweep reports a binary P0-vs-P1 diff per target, and a binary winner is not
-  a ranking — so the criterion was unevaluable in exactly the case it guards, a
-  target whose optimal assignment differs from both static orders. Phase 1 now
-  has three outputs instead of one (diff, contention set, per-coupling outcome),
-  and criterion 2 names its dependency on them. And the decision log said "five
-  kill criteria revised" when it is five revisions across FOUR criteria —
-  criterion 1 twice, criterion 4 never — i.e. a miscount inside the sentence
-  naming a pattern of boundary and counting errors.
-
-- *2026-07-30 — the miscount fix was itself miscounted, twice over.* "Five
-  revisions across four criteria" undercounted KC2 and KC5, each revised twice —
-  and it undercounted KC2 in the very paragraph that was revising KC2. Tally
-  at the time was given as **7 across 4** — itself later corrected to 8; see the
-  final entry below, which carries the table and the enumeration together. Same
-  shape as the `5.02/s` vs `+0.3%` pairing on #505 the same day: each figure
-  individually defensible, the relationship between them unchecked. Three
-  attempts at one sentence is the evidence that a bare count is the wrong form
-  for this claim.
-
-- *2026-07-30 — P3's matching formulation was wrong, and it was a correctness
-  bug rather than wording.* P3 read "max-weight matching over the coupling/spec
-  bipartite graph". That does not enforce the pairwise spec-disjointness the
-  Design section requires, because a coupling claims TWO specs (`placer.rs`
-  inserts two indices into its `claimed` set), so a bipartite matching only
-  guarantees each coupling gets at most one. On this RFC's own motivating case —
-  `C1 = {iron-plate, iron-stick}`, `C2 = {iron-stick, rail}` — it selects BOTH
-  (cardinality 2 beats either singleton), leaving `iron-stick` claimed twice.
-  Corrected to specs-as-vertices with couplings as EDGES, where a matching is
-  vertex-disjoint and therefore spec-disjoint by construction; that graph admits
-  odd cycles (a recipe fan such as iron-plate / iron-gear-wheel / transport-belt
-  is a triangle), so it needs general matching — Blossom, not Hungarian.
-  Consequential because P3 is the baseline KC4 measures P2 against, and an
-  implementer following the old wording literally would have built a solver able
-  to emit infeasible double-claimed assignments. Verified by evaluating the
-  counterexample, not by reading the definition.
+- *2026-07-30 — P3's matching formulation was wrong; a correctness bug, not
+  wording.* P3 read "max-weight matching over the coupling/spec bipartite graph".
+  That does not enforce the pairwise spec-disjointness the Design section
+  requires, because a coupling claims TWO specs (`placer.rs` inserts two indices
+  into its `claimed` set), so a bipartite matching only guarantees each coupling
+  gets at most one. On this RFC's own motivating case — `C1 = {iron-plate,
+  iron-stick}`, `C2 = {iron-stick, rail}` — it selects BOTH (cardinality 2 beats
+  either singleton), leaving `iron-stick` claimed twice. Corrected to
+  specs-as-vertices with couplings as EDGES, where a matching is vertex-disjoint
+  and therefore spec-disjoint by construction; that graph admits odd cycles (a
+  recipe fan such as iron-plate / iron-gear-wheel / transport-belt is a triangle),
+  so it needs general matching — Blossom, not Hungarian. Consequential because P3
+  is the baseline KC4 measures P2 against, and an implementer following the old
+  wording would have built a solver able to emit infeasible double-claimed
+  assignments. Verified by evaluating the counterexample, not by reading the
+  definition.
 
 - *2026-07-30 — KC1 could have killed the RFC in the case KC2 calls valuable.*
   KC1 tripped on a binary P0-vs-P1 layout diff alone, which cannot distinguish
   "nothing was contended" from "specs were contended and two arbitrary orders
   coincidentally agreed" — while KC2 says of that same instrument that it is
-  unevaluable exactly where the optimum differs from both static orders. KC1 now
-  additionally requires every target's contention set to be empty.
+  unevaluable exactly where the optimum differs from both static orders, which is
+  where P2/P3 would earn their cost. KC1 now additionally requires every target's
+  contention set to be empty (phase 1 output 2).
 
-- *2026-07-30 — the revision tally, as a table, placed last on purpose.* It
-  counts every entry above it, so it belongs after them: an earlier draft spliced
-  it into an entry that predates two of the revisions it tallies, which made a
-  chronological record narrate a later finding early. Review caught that, along
-  with a "generalisable lesson" list that claimed all seven revisions and
-  enumerated five, and a kill-criterion-5 rationale whose conjunction ran
-  backwards — ANDed bounds can only narrow when a revert fires, so neither bound
-  "catches" what the other "tolerates"; each rescues a different SHAPE of genuine
-  win (diffuse: 40x4=160, saved by the aggregate conjunct; concentrated: 1x18,
-  saved by the per-target conjunct). Verified by evaluating the predicate on both
-  shapes rather than by reading it.
+- *2026-07-30 — review tightened every kill criterion except KC4.* Nine revisions
+  across four criteria, each one a threshold or condition that read as protection
+  while permitting what it forbade:
 
-  Most have the same shape — written to catch the central case, silently
-  excluding a boundary. Two do not, and the distinction is worth keeping: item 4
-  is a criterion that could never fire *at all* (a missing trip condition, not a
-  missed boundary), and item 8 is a defect in explanatory prose whose criterion's
-  trip condition was unchanged. An entry above counts only the boundary cases and
-  says "all three" — consistent with this, and the categorisation a blanket claim
-  here contradicted:
-
-  1. a percentage that could not fire on its own scenario (KC5)
-  2. a cost budget that did not compose with #474's spend (KC3)
-  3. a condition that missed the empty-sweep result (KC1)
-  4. an unfalsifiable "cannot be made to" (KC2)
-  5. a remedy that forced the worse of two free options (KC1)
-  6. a criterion with no ground truth to check against (KC2)
-  7. an ambiguity between per-target and aggregate readings (KC5)
-  8. a both-bounds rationale with the conjunction backwards (KC5)
-  9. a trip condition that contradicted another criterion (KC1)
-
-  Revision tally, per criterion, so the total is derivable rather than asserted:
-
-  | criterion | revisions | what |
+  | criterion | revisions | what was wrong |
   |---|---:|---|
-  | KC1 | 3 | missed the empty-sweep result; then "pin P0" forced the worse of two free options; then a diff-only trip condition that contradicted KC2 |
-  | KC2 | 2 | unfalsifiable "cannot be made to"; then no ground truth to check against |
-  | KC3 | 1 | local cost multiplier that did not compose with #474's spend |
+  | KC1 | 3 | missed the empty-sweep result; "pin P0" forced the worse of two free options; a diff-only trip condition that contradicted KC2 |
+  | KC2 | 2 | unfalsifiable "cannot be made to"; no ground truth to check against |
+  | KC3 | 1 | a local cost multiplier that did not compose with #474's spend |
   | KC4 | 0 | — |
-  | KC5 | 3 | percentage that could not fire on its own case; then per-target vs aggregate ambiguity; then the conjunction rationale backwards |
+  | KC5 | 3 | a percentage that could not fire on its own case; per-target vs aggregate ambiguity; a both-bounds rationale with the conjunction backwards |
 
-  **9 revisions across 4 criteria.** Stated as a table because the prose form was
-  miscounted three times: first as "five kill criteria" (it was never five
-  criteria); then as "five revisions across four criteria", which undercounted
-  KC2 in the same paragraph that was revising KC2; then as seven, which
-  undercounted the KC5 revision made in the very commit that introduced this
-  table; then as eight, which undercounted the KC1 revision made in the commit
-  that added this line. Each miss has the same cause — a total re-derived from memory of a list
-  not in front of me. A count is checkable only against an enumeration beside
-  it; alone it is a number that looks careful.
+  The generalisable half: most were written to catch the central case and
+  silently excluded a boundary; two were different — a criterion that could never
+  fire at all, and a rationale whose prose was wrong while its trip condition was
+  right. Kill criteria are worth stating as tables or predicates rather than
+  sentences, and worth testing against their own named scenario before shipping.
+
+  (Earlier drafts of this log narrated each editing slip in the tally itself,
+  which added surface faster than it removed error. Trimmed on 2026-07-30: a
+  decision log records calls made, not typos corrected.)
