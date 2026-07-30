@@ -937,6 +937,18 @@ pub fn undergroundify_straight_belts(layout: &LayoutResult) -> LayoutResult {
         .collect();
     result.regions.clear();
     result.trace = None;
+    // `power_wires` are index pairs into `entities`, and the rebuild above
+    // deletes the interior of every undergrounded run — so every stored pair
+    // now names a different entity. Left stale, `wires_for` hands the
+    // connectivity check a garbage graph and it reports a fragmented pole
+    // network that does not exist. Both coordinate-cut passes already
+    // recompute here; this one did not, and because the transport stage runs
+    // FIRST and is gated on total error count, the phantom errors rejected the
+    // whole stage on every bus layout measured.
+    result.power_wires = Some(crate::power_wires::compute_pole_wires(
+        &result.entities,
+        result.wire_mode,
+    ));
     result
 }
 
