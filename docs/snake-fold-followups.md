@@ -177,11 +177,13 @@ per-item side-partitioned lanes, post-#502/#503 geometry):
 `GapLaneConflict` is zero everywhere — per-item, side-partitioned lanes
 cleared it outright — and the population those clashes excluded now reaches
 the later checks, exactly as item 1 anticipated: `pu4raw` goes from 0
-`InputStranded` (every candidate died on 173 lane clashes first) to 118.
+`InputStranded` (173 died on lane clashes, the other 23 on `JunctionBlocked`,
+none reaching the input check) to 118.
 `InputStranded` is now the dominant refusal on all three non-folding fixtures;
 its shape is diagnosed in `status.md` as one item wanted at two columns on the
 same side, which needs a splitter the gap-lane pass cannot synthesize.
-`JunctionBlocked` is second everywhere, and that one number hides two causes:
+`JunctionBlocked` is second on those three and the sole refusal cause on
+`mil5ore`, and that one number hides two causes:
 it is emitted both for reconnecting into a turned belt (a sideload the
 junction pass does not synthesize) and for a U-turn exhausting its 32 column
 slots. The split is uninstrumented — instrument it before designing any
