@@ -48,6 +48,29 @@ Three entities is not a mandate to change a corpus-wide tie-break. The reason to
 do this work is that **nobody knows what the right rule is**, not that the
 current one is demonstrably costly.
 
+### The winning rate is not recoverable from the record
+
+Review of this RFC asked which rate produces 261-vs-264, since `rail@5` is
+explicitly the no-difference case. The answer is that **RFC-053 contradicts
+itself**, so no rate can be quoted honestly:
+
+- [`rfc-053`](rfc-053-direct-insertion-cells.md) line ~2249 puts the win at
+  `rail@1`, and says that at `rail@5` "the straddle does not balance and reverse
+  order builds the same stacked cell as forward".
+- The same document's coupling table (line ~1943) says `plan_row_straddle`
+  "balances at only 2 of 12 sampled rates (**5/s, 10/s**)", and that at 1/s
+  `snap()`'s rounding leaves supply and demand unequal — `P1:C1, 3.0 vs 1.5`.
+
+Those disagree about which rates balance, and therefore about where the win is.
+The measurement came from a scratch env flag that was never committed, so it
+cannot be re-run from the repository as it stands.
+
+**This raises the value of phase 1 rather than lowering it.** The first
+deliverable is not a policy — it is a reproducible measurement of *where the two
+orders differ at all*, sweeping rates rather than trusting either recorded
+figure. Until that exists, "the win is 3 entities at one rate" is a claim with no
+executable form, and kill criterion 1 cannot be evaluated.
+
 ### What changed since #473, and why the question is now answerable
 
 #473 noted that "a green suite is weak evidence here — nearly every test runs
@@ -116,10 +139,17 @@ static.
    assignment to greedy-by-gain on every corpus target, drop P3 and keep P2.
    Do not ship matching machinery for a tie.
 5. **The win stays at three entities.** If, after implementing the best policy
-   the above allows, the total measured improvement across the corpus is under
-   **1% of entities** on every target and resolves no validator issue anywhere,
-   revert it. A tie-break with no measurable consequence should stay an
-   arbitrary tie-break with a comment, not become a subsystem.
+   the above allows, the total measured improvement is **5 entities or fewer on
+   every target** and resolves no validator issue anywhere, revert it. A
+   tie-break with no measurable consequence should stay an arbitrary tie-break
+   with a comment, not become a subsystem.
+
+   Stated in absolute entities, not a percentage, because a percentage cannot
+   fire on the case this criterion is named for: 3 of 264 entities is 1.14%, so
+   an "under 1%" threshold would leave the three-entity win *passing* the test
+   meant to kill it. Caught in review of this RFC — a kill criterion that cannot
+   trip on its own titular scenario is worse than none, because it reads as
+   protection.
 
 ## Verification plan
 
@@ -137,8 +167,12 @@ able to distinguish "policy had no effect" from "policy was not applied."
   sweep reports the missed improvement. Without this, "0 regressed" is
   unfalsifiable — the same defect
   [`validator-reporting.md`](validator-reporting.md) catalogues.
-- **`rail@5` and the rate where the straddle balances**: assert the row cell is
-  built under the chosen policy, at tile level (belt positions and the
+- **A rate sweep over `iron-stick → rail`, not a named rate.** The verification
+  cannot plug in "the rate where the straddle balances" because the record
+  disagrees with itself about which rate that is (see Motivation). So phase 1
+  sweeps rates under both orders and reports every rate where the chosen layout
+  differs — that output IS the missing measurement. Once a differing rate exists,
+  assert the row cell at tile level there (belt positions and the
   `input_belt_ys` ↔ fused-spec positional contract), not "it returned `Some`".
 - **Sim** any newly-built cell that the corpus starts producing. #473 ran no sim
   because nothing reached the path; if a policy makes it reachable, that
@@ -147,9 +181,11 @@ able to distinguish "policy had no effect" from "policy was not applied."
 
 ## Phasing
 
-1. **Measure P0 vs P1 across the corpus.** Cheap, and it may trip kill
-   criterion 1 immediately — in which case the RFC closes having cost a day and
-   answered the question.
+1. **Measure P0 vs P1 across the corpus, sweeping rates on `rail`.** Cheap, and
+   it may trip kill criterion 1 immediately — in which case the RFC closes having
+   cost a day and answered the question. This phase also has to *establish* the
+   motivating measurement, since the recorded rate is contradictory and the
+   scratch flag that produced it was never committed.
 2. **P2 gain estimate**, only if (1) shows contention beyond `rail`.
 3. **P3 matching**, only if (2) shows greedy is measurably sub-optimal.
 
@@ -166,3 +202,16 @@ tie-break with evidence, not necessarily a new algorithm.
   file exists. Note the question only became measurable once #474 defaulted DI
   to `Candidate`, so the ordering of the two PRs matters: this RFC's phase 1
   cannot be run meaningfully before #474 lands.
+
+- *2026-07-30 — two review findings, both fixed, and the second changed the
+  RFC's shape.* Kill criterion 5 was stated as "under 1% of entities", which
+  cannot fire on the 3-of-264-entity win it is named for (1.14%); restated in
+  absolute entities. And the rate producing 261-vs-264 was asked for and turned
+  out to be **unrecoverable**: RFC-053 says `rail@1` in one place and, in its own
+  coupling table, that the straddle balances only at 5/s and 10/s — with 1/s
+  explicitly unbalanced. The measurement came from an uncommitted scratch flag.
+  So phase 1's first deliverable is now a reproducible rate sweep rather than a
+  policy, and kill criterion 1 cannot be evaluated until that exists. Worth
+  noting the failure mode: the original RFC quoted a measurement it could not
+  reproduce, and only a reviewer asking "at what rate?" surfaced that the source
+  disagreed with itself.
