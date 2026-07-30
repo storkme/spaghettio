@@ -117,6 +117,12 @@ Re-measure once the shared-column crossing is fixed and lane clashes stop
 refusing candidates — that is when the excluded population finally reaches the
 check.
 
+**Done 2026-07-30 on main** (`probe_fold_corpus`, post-#500): lane clashes no
+longer refuse anything — `GapLaneConflict` is 0 on all four fixtures — and the
+population they hid now reaches the input check: `pu4raw` goes from 0
+`InputStranded` to 118. The check discriminates on exactly the population that
+was excluded. Fresh corpus table in item 2.
+
 **The remaining blocker**, measured rather than assumed:
 
 ```
@@ -155,14 +161,36 @@ reverted.
 
 ### 2. Three of four corpus fixtures find no fold
 
-Superseded in part by (1), which addresses both refusal classes with per-item
-lanes. Re-run `probe_fold_corpus` on the branch before trusting the table
-below, which predates that work.
-
 `search_snake_fold` reports legal-column count, refusals by cause, and
 validation rejections for the not-found path — read those before theorising.
 
-Measured across the corpus (`probe_fold_corpus`, before per-item lanes):
+Re-measured 2026-07-30 on main (`probe_fold_corpus`, `max_folds` 4, post-#500
+per-item side-partitioned lanes, post-#502/#503 geometry):
+
+| fixture | legal cols | GapLane | InputStranded | JunctionBlocked | rejected-by-validation |
+|---|---:|---:|---:|---:|---:|
+| `chain-mil5ore` | 252/552 | 0 | 0 | 46 | 4 → folds 3× (153×141) |
+| `mega-chain-chem5raw` | 278/702 | 0 | 115 | 33 | 0 |
+| `mega-chain-pu4raw` | 1055/2383 | 0 | **118** | 36 | 0 |
+| `mega-chain-usp2raw` | 892/1942 | 0 | 85 | 65 | 0 |
+
+`GapLaneConflict` is zero everywhere — per-item, side-partitioned lanes
+cleared it outright — and the population those clashes excluded now reaches
+the later checks, exactly as item 1 anticipated: `pu4raw` goes from 0
+`InputStranded` (every candidate died on 173 lane clashes first) to 118.
+`InputStranded` is now the dominant refusal on all three non-folding fixtures;
+its shape is diagnosed in `status.md` as one item wanted at two columns on the
+same side, which needs a splitter the gap-lane pass cannot synthesize.
+`JunctionBlocked` is second everywhere, and that one number hides two causes:
+it is emitted both for reconnecting into a turned belt (a sideload the
+junction pass does not synthesize) and for a U-turn exhausting its 32 column
+slots. The split is uninstrumented — instrument it before designing any
+junction fix. `CornerNotATurn` is zero everywhere; see item 4 for how to read
+that. Legal columns remain 40–50% on every fixture, so column legality is
+still never the binding constraint.
+
+Superseded table (`probe_fold_corpus`, before per-item lanes), kept for the
+record:
 
 | fixture | legal cols | GapLane | InputStranded | JunctionBlocked | rejected-by-validation |
 |---|---:|---:|---:|---:|---:|
@@ -171,16 +199,17 @@ Measured across the corpus (`probe_fold_corpus`, before per-item lanes):
 | `mega-chain-pu4raw` | 1052/2380 | **173** | **0** | 23 | 0 |
 | `mega-chain-usp2raw` | 888/1938 | 46 | 107 | 43 | 0 |
 
-Two things fall out and still hold. Legal columns are 40–50% everywhere, so
-column legality is **never** the binding constraint — the pipe-adjacency
-hypothesis for chem was wrong. And `pu4raw` records **zero** `InputStranded`,
-failing on `GapLaneConflict` (173) instead — the only fixture where fixing the
-input side could not help at all, which is why the exit side was tackled first.
-(It still records 23 `JunctionBlocked`, so lane conflict is not its sole
-refusal — just its dominant one, and the only one input work could not touch.)
+Two things fell out of that run, one of which survived the lane work. Legal
+columns were 40–50% everywhere, so column legality was **never** the binding
+constraint — the pipe-adjacency hypothesis for chem was wrong — and that
+still holds. `pu4raw` recorded **zero** `InputStranded`, failing on
+`GapLaneConflict` (173) instead — the only fixture where fixing the input
+side could not help at all, which is why the exit side was tackled first.
+That zero was the exclusion artifact item 1 predicted, not a property of the
+fixture: with the clashes gone it records 118.
 
-By raw count `InputStranded` is the larger refusal on three of the four
-fixtures (121 vs 21, 132 vs 22, 107 vs 46); only `pu4raw` inverts that. "Fix
+By raw count `InputStranded` was the larger refusal on three of the four
+fixtures (121 vs 21, 132 vs 22, 107 vs 46); only `pu4raw` inverted that. "Fix
 the exits first" was a judgement about `pu4raw` being unblockable any other
 way, not a claim that exits dominated the corpus.
 
@@ -244,7 +273,16 @@ Adversarial review also raised two it could not exercise:
 - U-turn corners are checked to be single-feeder turns (both lanes, B11)
   rather than sideloads (one lane, B8). The check is pass/fail; if it starts
   refusing often on deeper fixtures, stagger junction columns per crossing
-  rather than weakening it.
+  rather than weakening it. **Measured 2026-07-30 (main, `probe_fold_corpus`,
+  `max_folds` 4): zero `CornerNotATurn` refusals on all four fixtures — the
+  contingency is dormant.** Read the zero honestly: only `chain-mil5ore`
+  actually exercises the check (its winning 3-fold plus its 4
+  rejected-by-validation candidates pass through it); on the other three,
+  every candidate dies earlier at `InputStranded` or `JunctionBlocked`, so
+  their zeros are vacuous. Junction columns are already staggered per
+  crossing *within* a fold (one slot per U-turn, span-nesting order, 32-slot
+  retry); before extending the stagger, instrument the `JunctionBlocked`
+  two-cause split (item 2) to check columns are even the cause.
 - `search_snake_fold` slides one comb of fold lines and snaps each to the
   nearest legal column. Independent per-column search would explore more, at
   combinatorial cost.
