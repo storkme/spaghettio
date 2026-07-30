@@ -8931,14 +8931,26 @@ fn probe_di_coupling_contention() {
             println!("  {item}@{rate}: solve failed — skipped");
             continue;
         };
+        // FORCED, not Candidate. Under `Candidate` the DI variant is built as a
+        // separate candidate whose trace stream is captured independently, and
+        // only the WINNER's stream is replayed — so a probe reading the global
+        // stream sees DI events only when DI wins, and reads "0 contention" on
+        // every target where it loses. That is the same defect this census
+        // exists to prevent, one level up. `Forced` runs DI in the native pass,
+        // so every coupling decision reaches the stream regardless of outcome.
         let events = {
             let _guard = spaghettio_core::trace::start_trace();
-            let _ = layout::build_bus_layout(&sr, layout::LayoutOptions::default());
+            let opts = layout::LayoutOptions {
+                direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
+                ..Default::default()
+            };
+            let _ = layout::build_bus_layout(&sr, opts);
             spaghettio_core::trace::drain_events()
         };
 
         let mut contended: Vec<String> = Vec::new();
         let mut claimed: Vec<String> = Vec::new();
+        let mut refused: Vec<String> = Vec::new();
         for e in &events {
             match e {
                 TraceEvent::DiCouplingContended {
@@ -8948,6 +8960,8 @@ fn probe_di_coupling_contention() {
                 )),
                 TraceEvent::DiCouplingClaimed { producer, consumer, item, variant } =>
                     claimed.push(format!("{producer}->{consumer} on {item} [{variant}]")),
+                TraceEvent::DiCouplingRefused { producer, consumer, item, reason } =>
+                    refused.push(format!("{producer}->{consumer} on {item}: {reason}")),
                 _ => {}
             }
         }
@@ -8955,12 +8969,18 @@ fn probe_di_coupling_contention() {
             any_contention += 1;
         }
         println!(
-            "  {item}@{rate}: {} claimed, {} CONTENDED",
+            "  {item}@{rate}: {} claimed, {} CONTENDED, {} refused-before-contention",
             claimed.len(),
-            contended.len()
+            contended.len(),
+            refused.len()
         );
         for c in &claimed { println!("      claimed:   {c}"); }
         for c in &contended { println!("      contended: {c}"); }
+        let mut by_reason: std::collections::BTreeMap<&str, usize> = Default::default();
+        for r in &refused {
+            *by_reason.entry(r.rsplit(": ").next().unwrap_or("?")).or_default() += 1;
+        }
+        for (why, n) in &by_reason { println!("      refused:   {n} x {why}"); }
     }
     println!("\nRFC-059 KC1 gate: {any_contention} of {} targets show contention", cases.len());
     println!("(KC1 may only trip if this is 0 AND no layout differs between claim orders)");
