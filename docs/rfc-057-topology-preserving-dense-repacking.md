@@ -988,7 +988,7 @@ make either experimental composer a production default.
 
   **Scope of the claim, stated because it is easy to over-read.** One fixture
   of four. `chem5raw`, `pu4raw` and `usp2raw` still find no fold. This is a
-  SHAPE result, not a density one: it costs +807 entities (+21%), and the
+  SHAPE result, not a density one: it costs +736 entities (+26%), and the
   2026-07-29 refusal of folding as a density lever stands untouched.
 
   **A prediction that failed, kept on the record.** Keying by (item, side) was
@@ -1028,10 +1028,11 @@ make either experimental composer a production default.
   exercised a non-south boundary kit — but it was not what bit us.
 
   Confirmed: with the dedupe, `mil5-fold1` re-measures **PASS**, zero kit
-  errors, military-science-pack produced 5.00/s (+0.0%) / delivered 4.90/s
-  (−2.0%), 4075/4075 revived, one pole network, `converged=true`. So the single
-  fold is independently verified at a legal snapped column as well, and BOTH
-  fold depths now pass in Factorio.
+  errors, one pole network. On post-#502 geometry that is **277×66**, 3110/3110
+  revived, 5.02/s delivered against 5.00/s planned (+0.3%), 146/146 machines.
+  (The pre-#502 run measured 262×64 at 5.00/s produced / 4.90/s delivered with
+  4075 entities.) So the single fold is independently verified as well, and BOTH
+  fold depths pass in Factorio on the geometry current code produces.
 - **2026-07-30 — The manifold router's residual was a PLACEMENT bug; with it
   fixed, candidates materialise for the first time — and they are bigger than
   what they replace.**

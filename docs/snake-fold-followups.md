@@ -1,16 +1,21 @@
 # Snake-fold followups
 
 **Status (2026-07-30):** **multi-fold works and is Factorio-verified.**
-`chain-mil5ore` folds three times — 521×31 (16.8:1) → **147×138 (1.07:1)**,
-PASS at 4.92/s against 5.00/s planned, 146/146 machines, one pole network,
-4620/4620 entities revived. Single fold remains verified for throughput and
+`chain-mil5ore` folds three times — 553×32 (17.3:1) → **153×141 (1.09:1)**,
+PASS at 5.02/s against 5.00/s planned, 146/146 machines, one pole network,
+3567/3567 entities revived. Single fold remains verified for throughput and
 power. Read "The second trap" below anyway: it is why the earlier power
 fragmentation went unnoticed, and the reasoning generalises.
 
+*(Re-measured on post-#502 geometry. The first run recorded 521×31 → 147×138
+at 4.92/s with 4620 entities; #502's undergroundification cut the compacted
+source from 3813 to 2831 entities, moving the fold columns to
+`[138, 276, 414]` and every figure with them.)*
+
 Scope, because it is easy to over-read: **one fixture of four.**
 `mega-chain-chem5raw`, `mega-chain-pu4raw` and `mega-chain-usp2raw` still find
-no fold. And this is a SHAPE result, not a density one — it costs +21%
-entities, and RFC-057's refusal of folding as a density lever stands.
+no fold. And this is a SHAPE result, not a density one — it costs +736
+entities (+26%), and RFC-057's refusal of folding as a density lever stands.
 
 **#492's stated blocker was not the blocker.** It recorded a shared-column B12
 underground dive as the remaining work. No dive was written. Three other causes
