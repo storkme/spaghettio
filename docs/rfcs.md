@@ -69,5 +69,6 @@ backfill the status next time the doc is touched.
 | RFC-055 | 2026-07-26 | [`rfc-055-compact-cell-chain.md`](rfc-055-compact-cell-chain.md) | Design — competes with RFC-056; #456 |
 | RFC-056 | 2026-07-26 | [`rfc-056-folded-cell-chain.md`](rfc-056-folded-cell-chain.md) | Design — competes with RFC-055; #456 |
 | RFC-057 | 2026-07-26 | [`rfc-057-topology-preserving-dense-repacking.md`](rfc-057-topology-preserving-dense-repacking.md) | Active |
+| RFC-058 | 2026-07-30 | [`rfc-058-di-coupling-assignment.md`](rfc-058-di-coupling-assignment.md) | Design (circulated for review) — split out of #473; phase 1 blocked on #474 landing |
 
-Next number: **RFC-058**.
+Next number: **RFC-059**.
