@@ -122,6 +122,13 @@ bit-identically (all 6 simple cases). Full table: #513.
   competes) accepted knowing it forgoes E10→E1-class improvements;
   the sweep shows horizontal's wins land at E0, so the forgone region is
   empty on current evidence. Revisit only with a measured case.*
+- *2026-07-30 — K59-1 measured at the final green suite: e2e wall-clock
+  129.7s (baseline, 64 tests) → 190.2s (candidate on, 67 tests) =
+  **1.47×**, inside the 1.5× budget with no headroom to spare — the
+  `any_dual_input_row` short-circuit is load-bearing, and any future
+  widening of eligibility must re-measure this. Zone-cache pin refreshed
+  per the ci.yml protocol (+185KB of new signatures from horizontal
+  variant routes).*
 - *2026-07-30 — Cell-geometry derivation pins `horizontal_candidate:
   false` (extract + both mega sub-solve sites), joining the existing
   cells/DI recursion-guard pins. Found by `probe_registry_pin_survey`
