@@ -119,6 +119,13 @@ bit-identically (all 6 simple cases). Full table: #513.
   competes) accepted knowing it forgoes E10→E1-class improvements;
   the sweep shows horizontal's wins land at E0, so the forgone region is
   empty on current evidence. Revisit only with a measured case.*
+- *2026-07-30 — First full-suite run caught a forced-mode interaction:
+  under `DirectInsertion::Forced` (explicit A/B topology request) the
+  horizontal candidate competed, won, and returned a DI-free layout —
+  `di_bridge_feeds_cable_only_at_high_research` failed with "DI must be
+  stamped (got 0)". Fix: `try_horizontal` stands down when DI is Forced,
+  the same exclusion `try_cells` already carries. Rule generalized for
+  future candidates: forced modes beat candidates, always.*
 - *2026-07-30 — Sim verification (K59-3) CANNOT run in this session's
   remote container: factorio.com is unreachable through the environment
   network policy (connection reset on both the site and the pinned

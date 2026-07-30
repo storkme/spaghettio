@@ -1025,6 +1025,13 @@ pub fn select_best_decomposition(
     // path is the least-exercised in the pipeline.
     let try_horizontal = opts.horizontal_candidate
         && matches!(opts.row_layout, super::layout::RowLayout::VerticalSplit)
+        // Forced DI is an explicit topology request (the A/B debug
+        // control) — a competing variant must not displace it. Same
+        // stand-down `try_cells` applies, and found the same way: the
+        // `di_bridge_feeds_cable_only_at_high_research` unit test
+        // asserts stamped DI under Forced, and the horizontal variant
+        // won and returned a DI-free layout.
+        && opts.direct_insertion != crate::bus::di_cell::DirectInsertion::Forced
         && super::placer::any_dual_input_row(&solver_result.machines);
     let horizontal_run = if try_horizontal {
         run_candidate_catch_unwind("horizontal-stack", solver_result, || {
