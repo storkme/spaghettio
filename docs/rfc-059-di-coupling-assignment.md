@@ -66,10 +66,12 @@ itself**, so no rate can be quoted honestly:
 
 Cited by PR rather than by file-and-line deliberately: the first passage does not
 exist on `main`, so a line reference would not resolve for anyone reading this
-RFC after it lands, and did not resolve for the reviewer who checked. #473 now
-carries a correction note at that passage recording the conflict rather than
-silently repairing it, because **which half is wrong is not determinable from the
-document alone**.
+RFC after it lands, and did not resolve for the reviewer who checked. #473 — still open at the time of writing — adds a
+correction note at that passage (`rfc-053` line ~2260, commit `503ca889`)
+recording the conflict rather than silently repairing it, because **which half is
+wrong is not determinable from the document alone**. Flagged as pending rather
+than stated as fact: if #473 lands in a different shape, this sentence is the one
+that goes stale.
 
 Those disagree about which rates balance, and therefore about where the win is.
 The measurement came from a scratch env flag that was never committed, so it
@@ -135,9 +137,17 @@ static.
 1. **The question is empirically empty.** If sweeping the corpus under P0 and P1
    with `DI=Candidate` shows the final chosen layout differing on **at most the
    known `rail` case — including the case where NOTHING differs at all** — then
-   no policy machinery is justified: pin P0 with a test, add the reasoning to
+   no policy machinery is justified: **pin whichever static order wins on the
+   differing case** — P0 if nothing differs at all, P1 if the `rail` case
+   reproduces and P1 is better there — with a test, add the reasoning to
    RFC-053's decision log, and close this RFC as *rejected — not a real
    contention in practice*.
+
+   "Pin P0" was unconditional in an earlier draft, which would have pinned the
+   status quo even in the branch where this RFC's own figures show P1 zero-cost
+   and strictly better (0 issues, 261 vs 264) on the one case known to differ.
+   A kill criterion should end the *machinery*, not force the worse of two free
+   options.
 
    The zero-difference outcome is called out explicitly because it is a live
    possibility, not a formality: this RFC's own Motivation records that the
@@ -173,8 +183,15 @@ static.
    assignment to greedy-by-gain on every corpus target, drop P3 and keep P2.
    Do not ship matching machinery for a tie.
 5. **The win stays at three entities.** If, after implementing the best policy
-   the above allows, the total measured improvement is **5 entities or fewer on
-   every target** and resolves no validator issue anywhere, revert it. A
+   the above allows, the improvement is **5 entities or fewer on every
+   individual target AND 20 entities or fewer summed across the corpus**, and it
+   resolves no validator issue anywhere, revert it.
+
+   Both bounds stated because one alone is ambiguous: "5 or fewer on every
+   target" read per-target would revert a policy delivering 4 entities on each of
+   forty targets — a real aggregate win — while an aggregate-only bound would
+   tolerate a single target regressing nothing but gaining nothing either. The
+   revert fires only when the win is small BOTH ways. A
    tie-break with no measurable consequence should stay an arbitrary tie-break
    with a comment, not become a subsystem.
 
@@ -289,3 +306,23 @@ tie-break with evidence, not necessarily a new algorithm.
   budget). The pattern is now explicit enough to name: each was written to catch
   the CENTRAL case and silently excluded a boundary — and all three read as
   protection while providing none.
+
+- *2026-07-30 — three further findings; two fixed, one disputed with evidence.*
+  Kill criterion 1's remedy said "pin P0" unconditionally, which would have
+  pinned the status quo even where this RFC's own figures show P1 zero-cost and
+  strictly better on the one differing case — now "pin whichever static order
+  wins". Kill criterion 5's bound was ambiguous between per-target and aggregate
+  and is now explicitly both. **Disputed:** the review reported that #473 carries
+  no correction note for the rate conflict; it does, at `rfc-053` line ~2260 in
+  commit `503ca889`. Almost certainly the same `fetch-depth: 1` blind spot as the
+  earlier citation finding — the reviewer can read this PR's diff but cannot
+  resolve a claim about another branch's state. The sentence was reworded anyway
+  to mark #473 as pending rather than assert it as fact, since a cross-PR claim
+  that cannot be checked from either side is fragile regardless of who is right.
+
+  That makes **five** kill criteria in this document revised for the same defect
+  across four review rounds. The generalisable lesson is in the shape, not the
+  count: every one was written to catch the central case and silently excluded a
+  boundary — a percentage that could not fire on its own scenario, a budget that
+  did not compose, a condition that missed the empty result, an unfalsifiable
+  "cannot be made to", and a remedy that forced the worse of two free options.
