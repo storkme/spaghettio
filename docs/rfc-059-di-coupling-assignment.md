@@ -350,13 +350,9 @@ tie-break with evidence, not necessarily a new algorithm.
   that cannot be checked from either side is fragile regardless of who is right.
  The generalisable lesson is in the shape, not the
   count: each was written to catch the central case and silently excluded a
-  boundary. The full seven, so the enumeration matches the tally instead of
-  trailing it — a percentage that could not fire on its own scenario; a budget
-  that did not compose; a condition that missed the empty result; an
-  unfalsifiable "cannot be made to"; a remedy that forced the worse of two free
-  options; a criterion with no ground truth to check against; an ambiguity between
-  per-target and aggregate readings; and a both-bounds rationale with the
-  direction of the conjunction backwards.
+  boundary. The enumeration and its total live together in the final entry
+  below, deliberately — this entry predates several of the revisions, and a list
+  here could only ever trail them.
 
 - *2026-07-30 — two more, and the second is the funniest defect in this file.*
   Kill criterion 2 checked an estimator against a ranking phase 1 never produced:
@@ -390,6 +386,18 @@ tie-break with evidence, not necessarily a new algorithm.
   win (diffuse: 40x4=160, saved by the aggregate conjunct; concentrated: 1x18,
   saved by the per-target conjunct). Verified by evaluating the predicate on both
   shapes rather than by reading it.
+
+  Every one has the same shape — written to catch the central case, silently
+  excluding a boundary:
+
+  1. a percentage that could not fire on its own scenario (KC5)
+  2. a cost budget that did not compose with #474's spend (KC3)
+  3. a condition that missed the empty-sweep result (KC1)
+  4. an unfalsifiable "cannot be made to" (KC2)
+  5. a remedy that forced the worse of two free options (KC1)
+  6. a criterion with no ground truth to check against (KC2)
+  7. an ambiguity between per-target and aggregate readings (KC5)
+  8. a both-bounds rationale with the conjunction backwards (KC5)
 
   Revision tally, per criterion, so the total is derivable rather than asserted:
 
