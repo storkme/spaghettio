@@ -1,15 +1,25 @@
 # Snake-fold followups
 
-**Status (2026-07-29):** single fold is verified on `chain-mil5ore` for
-throughput **and** power — 5.00/s, 146/146 machines, and one connected pole
-network, against a control that measures the same. The power fragmentation
-that previously blocked it is fixed. Read "The second trap" below anyway: it
-is why the fragmentation went unnoticed, and the reasoning generalises.
+**Status (2026-07-30):** **multi-fold works and is Factorio-verified.**
+`chain-mil5ore` folds three times — 521×31 (16.8:1) → **147×138 (1.07:1)**,
+PASS at 4.92/s against 5.00/s planned, 146/146 machines, one pole network,
+4620/4620 entities revived. Single fold remains verified for throughput and
+power. Read "The second trap" below anyway: it is why the earlier power
+fragmentation went unnoticed, and the reasoning generalises.
 
-Multi-fold is close but unfinished, on `feat/multifold-gap-lanes` (#492):
-`InputStranded` is resolved and the per-item lane machinery is built, leaving
-one crossing where two items share an input column. Every cause below is
-measured, not guessed. Owning design doc:
+Scope, because it is easy to over-read: **one fixture of four.**
+`mega-chain-chem5raw`, `mega-chain-pu4raw` and `mega-chain-usp2raw` still find
+no fold. And this is a SHAPE result, not a density one — it costs +21%
+entities, and RFC-057's refusal of folding as a density lever stands.
+
+**#492's stated blocker was not the blocker.** It recorded a shared-column B12
+underground dive as the remaining work. No dive was written. Three other causes
+were found by instrumenting the refusal: rows ignoring which side an input
+arrives from, a lane terminus that never turned toward the input it feeds, and
+lanes keyed by item rather than (item, side). The sections below are kept with
+their original measurements, annotated where a claim has since been falsified —
+the pattern of *what looked like the blocker and wasn't* is the reusable part.
+Owning design doc:
 [`rfc-057-topology-preserving-dense-repacking.md`](rfc-057-topology-preserving-dense-repacking.md),
 whose decision log carries the measurements.
 
@@ -115,11 +125,20 @@ the gap and one below. The ordering argument holds only for lanes at *distinct*
 columns; at a shared column one item's climb must cross the other's lane, and
 no assignment order avoids it.
 
-**Fix shape:** an underground dive where two lanes share a column — the
-standard belt-weaving technique (`factorio-mechanics.md` B12), which this pass
-does not yet synthesize.
+**Fix shape (SUPERSEDED 2026-07-30):** this called for an underground dive
+where two lanes share a column (`factorio-mechanics.md` B12). No dive was
+needed. The clash above was **cross-side** — the two items' sources are on
+opposite sides of the gap (note the excerpt's own `dir=North` occupant against
+a lane fed from above), and row assignment ignored the side entirely, so climbs
+from opposite sides swept through each other's rows. Measured on mil5: 28 of 32
+gap-lane refusals were cross-side, 4 same-side. Partitioning rows by source
+side took `GapLaneConflict` to 0 on mil5, pu4raw and usp2raw.
 
-Note the clash surfaces under the `ExitLaneConflict` refusal even though it is
+The lesson worth keeping: the excerpt contains the evidence that would have
+falsified the shared-column reading — `carries=coal` facing North against an
+iron-ore lane — and it was read as confirming it instead.
+
+Note the clash surfaces under the `GapLaneConflict` refusal even though it is
 an *input*-side collision: the input feed pass reuses that variant. A misnomer
 that sends the reader to the wrong pass — renamed to `GapLaneConflict` on the
 work branch. Reward: 3-fold reaches roughly 152×132 (1.15:1) on
@@ -140,7 +159,7 @@ validation rejections for the not-found path — read those before theorising.
 
 Measured across the corpus (`probe_fold_corpus`, before per-item lanes):
 
-| fixture | legal cols | ExitLane | InputStranded | JunctionBlocked | rejected-by-validation |
+| fixture | legal cols | GapLane | InputStranded | JunctionBlocked | rejected-by-validation |
 |---|---:|---:|---:|---:|---:|
 | `chain-mil5ore` | 251/551 | 21 | 121 | 29 | 9 → folds |
 | `mega-chain-chem5raw` | 275/699 | 22 | 132 | 15 | 0 |
@@ -150,7 +169,7 @@ Measured across the corpus (`probe_fold_corpus`, before per-item lanes):
 Two things fall out and still hold. Legal columns are 40–50% everywhere, so
 column legality is **never** the binding constraint — the pipe-adjacency
 hypothesis for chem was wrong. And `pu4raw` records **zero** `InputStranded`,
-failing on `ExitLaneConflict` (173) instead — the only fixture where fixing the
+failing on `GapLaneConflict` (173) instead — the only fixture where fixing the
 input side could not help at all, which is why the exit side was tackled first.
 (It still records 23 `JunctionBlocked`, so lane conflict is not its sole
 refusal — just its dominant one, and the only one input work could not touch.)
@@ -229,7 +248,7 @@ Adversarial review also raised two it could not exercise:
 
 Every failure mode is a typed `FoldRefusal`, so a refusal names its cause
 rather than being a bare `None`: `CutsEntity`, `JunctionBlocked`,
-`ExitLaneConflict`, `CornerNotATurn`, `RunSevered`, `InputStranded`,
+`GapLaneConflict`, `CornerNotATurn`, `RunSevered`, `InputStranded`,
 `EntityExplosion`. `SPAGHETTIO_FOLD_DEBUG=1` lists every severed belt instead
 of just the first.
 

@@ -3520,11 +3520,29 @@ fn export_fold_pair_for_sim() {
     )
     .unwrap();
     let compact = compact_validated_geometry(&fixture.compose_layout(), &sr);
-    let folded =
-        fold_snake(&compact, &[compact.width / 2]).expect("midpoint fold must succeed");
+    // Snap to a LEGAL column rather than the bare midpoint: `width / 2` is not
+    // guaranteed cuttable and refused with CutsEntity once compaction changed
+    // the width. The search snaps; this has to as well.
+    let legal = spaghettio_core::bus::compaction::legal_fold_columns(&compact);
+    let snap = |t: i32| {
+        legal
+            .iter()
+            .copied()
+            .min_by_key(|&f| (f - t).abs())
+            .expect("layout must have a legal fold column")
+    };
+    let mid = snap(compact.width / 2);
+    let folded = fold_snake(&compact, &[mid]).expect("midpoint fold must succeed");
+    // The 3-fold the search picks (#492). Exported alongside the verified pair
+    // so one sim run compares control / 1-fold / 3-fold on identical inputs.
+    let fold3 = fold_snake(&compact, &[130, 259, 390]).expect("3-fold must succeed");
 
     std::fs::create_dir_all("target/tmp").unwrap();
-    for (tag, l) in [("mil5-compact", &compact), ("mil5-fold1", &folded)] {
+    for (tag, l) in [
+        ("mil5-compact", &compact),
+        ("mil5-fold1", &folded),
+        ("mil5-fold3", &fold3),
+    ] {
         let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(l, &sr, tag);
         std::fs::write(format!("target/tmp/{tag}.bp"), &bp).unwrap();
         std::fs::write(
@@ -4231,6 +4249,290 @@ fn probe_fold_error_breakdown_mil5() {
             *n += 1;
         }
     }
+}
+
+/// Classify what actually kills a multi-fold candidate at the input pass.
+///
+/// #492 recorded the blocker as "two items share an input column, needs a B12
+/// dive". Measuring says that is the SMALLEST of three classes. A gap takes
+/// inputs from BOTH neighbouring segments, but lane rows are allocated purely
+/// by column, so climbs from opposite sides sweep through each other's rows
+/// with no shared column involved.
+///
+/// Read the classes off stderr with `SPAGHETTIO_FOLD_DEBUG=1`:
+///   CROSS-SIDE     — row assignment ignores source side. No underground needed.
+///   SAME-SIDE-TIE  — two same-side items on one column. Needs the dive.
+///   PRE-EXISTING   — a lane run hit real machine/belt geometry.
+///
+/// Scoped to mil5 and 2 folds deliberately: the whole corpus at 4 folds takes
+/// >10 minutes with debug on, and this is meant to be a fast feedback loop.
+/// Counts are of FIRST clashes — a candidate dies at its first one, so this
+/// does not measure latent conflicts hiding behind the one that fired.
+#[test]
+#[ignore = "exploration probe — input-clash classes (#492)"]
+fn probe_input_clash_classes() {
+    use spaghettio_core::bus::compaction::{compact_validated_geometry, search_snake_fold};
+    use std::collections::BTreeMap;
+
+    let fixture = SimFixture::find("chain-mil5ore");
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target,
+        fixture.rate,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    let compact = compact_validated_geometry(&fixture.compose_layout(), &sr);
+
+    let search = search_snake_fold(&compact, &sr, 2);
+    let mut why: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, r) in &search.refusals {
+        *why.entry(format!("{r:?}").split(' ').next().unwrap().into())
+            .or_default() += 1;
+    }
+    println!(
+        "mil5 @<=2 folds: legal_columns={} refusals={why:?} rejected_by_validation={} best={:?}",
+        search.legal_columns,
+        search.rejected_by_validation,
+        search.best.as_ref().map(|f| f.folds.clone()),
+    );
+    // The bare rejection count cannot say which check the newly-buildable
+    // layouts fail, which is the whole question once a geometry fix converts
+    // refusals into validation rejections.
+    println!("   validation regressions by category: {:?}", search.validation_regressions);
+}
+
+/// Take ONE 2-fold candidate that now builds and say exactly what it violates.
+///
+/// The side-partition fix (#492) took `GapLaneConflict` from 32 to 0 on mil5
+/// while `rejected_by_validation` went 22 -> 54: the same candidates, failing
+/// later. The aggregate categories are power / belt-flow-reachability /
+/// orphan-belt-segment; this prints positions so the cause is a location, not
+/// a category name.
+#[test]
+#[ignore = "exploration probe — one failing 2-fold candidate (#492)"]
+fn probe_one_multifold_candidate() {
+    use spaghettio_core::bus::compaction::{compact_validated_geometry, fold_snake};
+    use spaghettio_core::validate::{self, LayoutStyle};
+    use std::collections::BTreeMap;
+
+    let fixture = SimFixture::find("chain-mil5ore");
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target,
+        fixture.rate,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    let compact = compact_validated_geometry(&fixture.compose_layout(), &sr);
+
+    let profile = |l: &spaghettio_core::models::LayoutResult| {
+        let issues = match validate::validate(l, Some(&sr), LayoutStyle::Bus) {
+            Ok(i) => i,
+            Err(e) => e.issues,
+        };
+        let mut by: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for i in &issues {
+            by.entry(i.category.clone())
+                .or_default()
+                .push(i.message.clone());
+        }
+        by
+    };
+
+    let base = profile(&compact);
+    println!("source {}x{}", compact.width, compact.height);
+    for (cat, msgs) in &base {
+        println!("  base {cat}: {}", msgs.len());
+    }
+
+    // The comb the search would try for k=2 at delta=0.
+    let legal = spaghettio_core::bus::compaction::legal_fold_columns(&compact);
+    let snap = |t: i32| legal.iter().copied().min_by_key(|&f| (f - t).abs()).unwrap();
+    let folds = vec![snap(compact.width / 3), snap(compact.width * 2 / 3)];
+    println!("folds={folds:?}");
+
+    match fold_snake(&compact, &folds) {
+        Err(r) => println!("REFUSED: {r:?}"),
+        Ok(folded) => {
+            println!("folded {}x{}", folded.width, folded.height);
+            // Are the gap-1 lanes actually fed? Print the gap rows and the
+            // boundary-input records that should terminate them.
+            println!("  --- boundary_inputs ({}) ---", folded.boundary_inputs.len());
+            for b in &folded.boundary_inputs {
+                println!("      in {:?} at ({},{}) dir={:?}", b.item, b.x, b.y, b.direction);
+            }
+            for row in 66..=72 {
+                let mut row_ents: Vec<String> = folded
+                    .entities
+                    .iter()
+                    .filter(|e| e.y == row)
+                    .map(|e| format!("{}@{}({:?},{:?})", e.name.replace("transport-belt", "TB"), e.x, e.direction, e.carries))
+                    .collect();
+                row_ents.sort();
+                println!("  row {row}: {} ents: {}", row_ents.len(),
+                    row_ents.iter().take(8).cloned().collect::<Vec<_>>().join(" "));
+            }
+            let got = profile(&folded);
+            for (cat, msgs) in &got {
+                let b = base.get(cat).map(|v| v.len()).unwrap_or(0);
+                let marker = if msgs.len() > b { " <-- REGRESSED" } else { "" };
+                println!("  {cat}: {} (base {b}){marker}", msgs.len());
+                if msgs.len() > b {
+                    for m in msgs.iter().take(6) {
+                        println!("      {m}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// mil5 must keep folding, stay near-square, and keep BOTH belt lanes.
+///
+/// One test rather than three because the expensive part — solve, compose,
+/// compact, search — is shared; splitting it triples a 25-second cost.
+///
+/// The fold columns are DERIVED, not pinned. They were pinned initially, and
+/// #502/#503 (concurrent work fixing undergroundification, which changed the
+/// compacted source geometry) immediately falsified them: mil5 moved from
+/// folding at [172,346] to [189,373] with legal columns 220 -> 252. The fold
+/// itself was fine. A pin here tests "did upstream compaction change" — which
+/// is not this test's job and produces a failure that reads as a fold
+/// regression.
+///
+/// Three properties, and the third is the one a throughput sim cannot see:
+///
+/// 1. **A multi-fold still exists.** The transform's whole claim.
+/// 2. **No validation category is worse than the source.** Deliberately a
+///    comparison rather than a geometry assertion, because the validator
+///    demonstrably catches this transform's real failures — the lane terminus
+///    that never turned surfaced as 45 `belt-flow-reachability` + 4
+///    `orphan-belt-segment`, the pole seam holes as 5 `power`.
+/// 3. **Both belt lanes survive the gap corners.** A 90-degree corner preserves
+///    both lanes (factorio-mechanics B11); a sideload dumps everything onto the
+///    lane nearest the feeder (B8). `lane_transfer` models both exactly, so this
+///    is statically decidable — and INVISIBLE to a sim, since mil5 needs 5/s of
+///    science and a halved lane still delivers that.
+///
+/// The teeth assertion on (3) is load-bearing: "no lane-throughput errors" is
+/// vacuous if every lane sits far below capacity, so the busiest lane must
+/// exceed HALF the per-lane cap for a collapse to be detectable at all. mil5
+/// supplies stone at 50/s over two boundaries, which is what qualifies it.
+///
+/// What none of this covers: anything the validator is blind to. RFC-057 carries
+/// the case where this transform validated at exact control parity and produced
+/// 0.00/s in Factorio, which is why the sim measurement lives in the decision
+/// log rather than being replaced by a test.
+#[test]
+fn mil5_multifold_holds_and_preserves_lanes() {
+    use spaghettio_core::bus::compaction::{compact_validated_geometry, search_snake_fold};
+    use spaghettio_core::common::lane_capacity_stacked;
+    use spaghettio_core::validate::belt_flow::{check_lane_throughput, compute_lane_rates};
+    use spaghettio_core::validate::{self, LayoutStyle};
+    use std::collections::BTreeMap;
+
+    let fixture = SimFixture::find("chain-mil5ore");
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target,
+        fixture.rate,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    let compact = compact_validated_geometry(&fixture.compose_layout(), &sr);
+
+    let search = search_snake_fold(&compact, &sr, 4);
+    let found = search.best.as_ref().unwrap_or_else(|| {
+        let mut why: BTreeMap<String, usize> = BTreeMap::new();
+        for (_, r) in &search.refusals {
+            *why.entry(format!("{r:?}").split(' ').next().unwrap().into()).or_default() += 1;
+        }
+        panic!(
+            "mil5 no longer folds at all: legal_columns={} refusals={why:?} \
+             rejected_by_validation={} regressions={:?}",
+            search.legal_columns, search.rejected_by_validation, search.validation_regressions
+        )
+    });
+    let folded = &found.layout;
+
+    assert!(
+        found.folds.len() >= 2,
+        "mil5 should reach a MULTI-fold, got {} fold(s) at {:?} -> {}x{}",
+        found.folds.len(),
+        found.folds,
+        folded.width,
+        folded.height,
+    );
+
+    let aspect =
+        folded.width.max(folded.height) as f64 / folded.width.min(folded.height) as f64;
+    assert!(
+        aspect < 2.5,
+        "fold should be much squarer than the {:.1}:1 source, got {}x{} ({aspect:.2}:1) at {:?}",
+        compact.width as f64 / compact.height as f64,
+        folded.width,
+        folded.height,
+        found.folds,
+    );
+
+    let profile = |l: &spaghettio_core::models::LayoutResult| -> BTreeMap<String, usize> {
+        let issues = match validate::validate(l, Some(&sr), LayoutStyle::Bus) {
+            Ok(i) => i,
+            Err(e) => e.issues,
+        };
+        let mut by: BTreeMap<String, usize> = BTreeMap::new();
+        for i in &issues {
+            *by.entry(i.category.clone()).or_default() += 1;
+        }
+        by
+    };
+    let (base, got) = (profile(&compact), profile(folded));
+    let regressed: Vec<String> = got
+        .iter()
+        .filter(|(cat, n)| base.get(*cat).copied().unwrap_or(0) < **n)
+        .map(|(cat, n)| format!("{cat}: {} -> {n}", base.get(cat).copied().unwrap_or(0)))
+        .collect();
+    assert!(
+        regressed.is_empty(),
+        "fold regressed validation vs its source: {regressed:?}\nbase={base:?}\ngot={got:?}"
+    );
+
+    // Lane preservation, with the detectability check first.
+    let cap = lane_capacity_stacked("express-transport-belt", 1);
+    let peak = compute_lane_rates(folded, Some(&sr))
+        .values()
+        .map(|&[a, b]| a.max(b))
+        .fold(0.0f64, f64::max);
+    assert!(
+        peak * 2.0 > cap,
+        "lane check is vacuous here: busiest lane {peak:.2}/s doubles to {:.2}/s, under the \
+         {cap}/s per-lane cap, so a sideload could not be detected",
+        peak * 2.0
+    );
+    let lane_issues = check_lane_throughput(folded, Some(&sr));
+    assert!(
+        lane_issues.is_empty(),
+        "fold collapsed a belt onto one lane ({} errors): {:?}",
+        lane_issues.len(),
+        lane_issues.iter().take(4).map(|i| &i.message).collect::<Vec<_>>()
+    );
+    assert!(
+        check_lane_throughput(&compact, Some(&sr)).is_empty(),
+        "control already has lane-throughput errors; the fold result is not attributable"
+    );
 }
 
 /// Island placement must keep TERMINAL tiles disjoint, not just machine blocks.

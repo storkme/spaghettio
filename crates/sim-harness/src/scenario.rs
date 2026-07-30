@@ -807,12 +807,47 @@ script.on_init(function()
   -- entities silently; overlapping bank chests cross-feed items and
   -- poison the factory with wrong-item plugs. Any overlap invalidates
   -- the run — record it loudly.
+  -- Attribution matters as much as detection (#499): the position-only form
+  -- of this audit reported 14 bare tiles at negative coordinates, which read
+  -- as harness geometry and sent the investigation into the kit's vector
+  -- algebra. The actual cause was upstream — two IDENTICAL boundary_output
+  -- records, so the harness dutifully built two drain rigs on one tile. Naming
+  -- the owners would have pointed straight at it. storage.feeds/drains already
+  -- hold per-rig chest lists, so no rig has to change signature to do this.
   do
+    local owner = {}
+    local function claim(c, label)
+      if not (c and c.valid) then return end
+      local key = math.floor(c.position.x) .. "," .. math.floor(c.position.y)
+      if owner[key] then
+        table.insert(storage.kit_errors, "overlapping kit chests at (" .. key
+                     .. "): " .. owner[key] .. " vs " .. label)
+      else
+        owner[key] = label
+      end
+    end
+    for item, banks in pairs(storage.feeds) do
+      for bi, bank in ipairs(banks) do
+        for _, c in ipairs(bank.chests) do
+          claim(c, "feed[" .. item .. "] rig " .. bi)
+        end
+      end
+    end
+    for item, chests in pairs(storage.drains) do
+      for _, c in ipairs(chests) do
+        claim(c, "drain[" .. item .. "]")
+      end
+    end
+    -- Backstop for chests no rig registered. Without it, a rig that stops
+    -- recording its chests would silently disable the whole audit — the
+    -- check-goes-quiet failure this repo keeps re-learning
+    -- (docs/validator-reporting.md).
     local seen = {}
     for _, c in pairs(s.find_entities_filtered{name = "steel-chest"}) do
       local key = math.floor(c.position.x) .. "," .. math.floor(c.position.y)
-      if seen[key] then
-        table.insert(storage.kit_errors, "overlapping kit chests at (" .. key .. ")")
+      if seen[key] and not owner[key] then
+        table.insert(storage.kit_errors,
+                     "overlapping unattributed kit chests at (" .. key .. ")")
       end
       seen[key] = true
     end
