@@ -129,9 +129,11 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 **`rfc-057-topology-preserving-dense-repacking.md` multi-fold (2026-07-30,
 PR #500 — RFC ACTIVE, not closed)**: **multi-fold is Factorio-verified.**
-`chain-mil5ore` folds **three times**: 521x31 (16.8:1) to **147x138 (1.07:1)**
-at 4.92/s delivered against 5.00/s planned, **146 of 146 machines**, **one pole
-network**, 4620/4620 entities revived, zero kit errors. The single fold
+`chain-mil5ore` folds **three times**: 553x32 (17.3:1) to **153x141 (1.09:1)**
+at 5.02/s delivered against 5.00/s planned, **146 of 146 machines**, **one pole
+network**, 3567/3567 entities revived, zero kit errors. (Re-measured on
+post-#502 geometry; the first run measured 147x138 at 4.92/s from a
+521x31/3813-entity source, and #502's undergroundification moved both.) The single fold
 re-measures PASS at a legal snapped column too (262x64, 5.00/s produced), so
 both depths now pass. This discharges the previous entry's "multi-fold remains
 unproven".

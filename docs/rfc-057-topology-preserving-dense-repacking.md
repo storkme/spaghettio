@@ -938,11 +938,20 @@ make either experimental composer a production default.
   ceiling stands, and the single fold costs 277 entities (2820 → 3097).
 
 - **2026-07-30 — Multi-fold works, and is Factorio-verified at three folds.**
-  `chain-mil5ore` folds three times: 521×31 (16.8:1) → **147×138 (1.07:1)**,
+  `chain-mil5ore` folds three times: 553×32 (17.3:1) → **153×141 (1.09:1)**,
   measured in headless 2.0.77 at `--warmup 216000` — **PASS**, target
-  military-science-pack 4.92/s delivered against 5.00/s planned (−1.6%),
-  **146/146 machines working**, **one pole network**, 4620/4620 entities
-  revived, zero kit errors, no fluid errors. The previous entry's "multi-fold
+  military-science-pack 5.02/s delivered against 5.00/s planned (+0.3%),
+  **146/146 machines working**, **one pole network**, 3567/3567 entities
+  revived, zero kit errors, no fluid errors.
+
+  Re-measured 2026-07-30 on post-#502 geometry. The first measurement was
+  147×138 (1.07:1) at 4.92/s from a 521×31 / 3813-entity source; #502's
+  undergroundification cut the source to 553×32 / 2831 entities, which moved the
+  fold columns to [138, 276, 414] and the result to the figures above. Both
+  measurements PASS; the numbers here are the ones current code produces, and
+  the folded layout is now 3567 entities rather than 4620. Recording the shift
+  rather than overwriting it, because a claim measured against a base that no
+  longer exists is the trap #489's green checks fell into. The previous entry's "multi-fold
   remains unproven" is now discharged.
 
   **None of it was the fix the tracking issue specified.** #492 recorded the

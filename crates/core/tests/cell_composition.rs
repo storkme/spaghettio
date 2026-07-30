@@ -3585,7 +3585,7 @@ fn export_fold_pair_for_sim() {
     let folded = fold_snake(&compact, &[mid]).expect("midpoint fold must succeed");
     // The 3-fold the search picks (#492). Exported alongside the verified pair
     // so one sim run compares control / 1-fold / 3-fold on identical inputs.
-    let fold3 = fold_snake(&compact, &[130, 259, 390]).expect("3-fold must succeed");
+    let fold3 = fold_snake(&compact, &[138, 276, 414]).expect("3-fold must succeed");
 
     std::fs::create_dir_all("target/tmp").unwrap();
     for (tag, l) in [
