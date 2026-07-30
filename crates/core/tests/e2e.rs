@@ -8811,3 +8811,86 @@ fn di_change_surface_sweep() {
         println!("  ! {r}");
     }
 }
+
+/// The merge-tap/DI shadowing fix must actually DO something.
+///
+/// Review of #474 found that `merge_tap_choice` unconditionally preempted
+/// `di_choice`: it is built with `.map()`, so it is `Some` whenever merge-tap
+/// produced anything — including its `Some(NATIVE_IDX)` arm meaning "native beat
+/// merge-tap" — and a plain `.or()` chain short-circuits on that, discarding
+/// DI's already-computed, already-validated result unread.
+///
+/// The corpus sweep does not cover it: all 16 targets there come out identical
+/// before and after the fix. So without this test the fix is UNFALSIFIABLE, which
+/// is the defect `docs/validator-reporting.md` catalogues. This pins the exact
+/// fixture the review named — `electronic-circuit@35/s` from ore, Pooled, yellow
+/// belt, which carries DI's flagship copper-cable coupling and is documented by
+/// `layout_retry_is_trace_independent` as one where native beats merge-tap.
+///
+/// MEASURED OUTCOME, stated because it is weaker than the fix sounds: on this
+/// fixture DI-Off and DI-Candidate are IDENTICAL — `(4, 123, 1)` / 6317 entities
+/// both ways. The shadowing was real and structural, but DI does not beat native
+/// here, so removing it changes no result. The fix is therefore LATENT: correct
+/// by construction (a validated, strictly-better result must not be discarded
+/// unread) but with no fixture in the corpus that demonstrates a different
+/// outcome. Do not claim it as a win; it is a removed trap.
+///
+/// What this test does pin is the never-worse contract on the branch where DI was
+/// previously unreachable, so a future edit cannot make DI regress it there. It
+/// does NOT prove the fix has teeth — nothing currently does, and if someone
+/// finds a fixture where merge-tap runs, native beats merge-tap, and DI beats
+/// native, that case belongs here.
+#[test]
+fn merge_tap_does_not_shadow_di_on_pooled_yellow() {
+    use spaghettio_core::bus::di_cell::DirectInsertion;
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_exclusions(
+        "electronic-circuit",
+        35.0,
+        &inputs,
+        "assembling-machine-2",
+        &FxHashSet::default(),
+    )
+    .expect("solve electronic-circuit@35/s");
+
+    let counts = |l: &spaghettio_core::models::LayoutResult| -> (usize, usize, usize) {
+        let issues = spaghettio_core::validate::validate(
+            l,
+            Some(&sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+        )
+    };
+    let opts = |di: DirectInsertion| layout::LayoutOptions {
+        strategy: layout::LayoutStrategy::Pooled,
+        max_belt_tier: Some("transport-belt".to_string()),
+        direct_insertion: di,
+        ..Default::default()
+    };
+
+    let off = layout::build_bus_layout(&sr, opts(DirectInsertion::Off))
+        .expect("DI-off must still lay out");
+    let on = layout::build_bus_layout(&sr, opts(DirectInsertion::Candidate))
+        .expect("DI-candidate must not turn a success into a refusal");
+
+    let (oc, nc) = (counts(&off), counts(&on));
+    println!(
+        "EC@35 Pooled yellow: off {:?} {} ents -> candidate {:?} {} ents",
+        oc,
+        off.entities.len(),
+        nc,
+        on.entities.len()
+    );
+
+    // The never-worse contract, on the branch where DI used to be unreachable.
+    assert!(
+        nc.0 <= oc.0 && nc.1 <= oc.1 && nc.2 <= oc.2,
+        "DI regressed an issue channel on the merge-tap branch: {oc:?} -> {nc:?}"
+    );
+}

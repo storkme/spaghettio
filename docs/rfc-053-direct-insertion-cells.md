@@ -2320,3 +2320,52 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   (`casting-iron-gear-wheel → engine-unit` is 1:32). Widening eligibility
   further — which the last several PRs did — is not the lever. The
   `rail` / claim-ordering finding (#473) is also untouched.*
+
+- *2026-07-30 — `IssueCounts` compared lexicographically, not component-wise
+  (review finding on #474).* The derived `Ord` compared fields in declaration
+  order, so a 12-entry `layout.warnings` regression could be masked by a
+  1-warning improvement on an earlier field — undermining the never-worse
+  guarantee the `Candidate` default rests on. `IssueCounts` no longer derives
+  `Ord`/`PartialOrd` at all, so the lexicographic comparison is not expressible
+  rather than merely unused; `strictly_better_than` is explicit (no worse on
+  every channel, better on at least one). `di_score.accepted` is now also
+  required before DI may win — a separate axis the issue channels cannot see,
+  carrying the `missing-balancer-template` gate that the ranking treats as
+  disqualifying rather than merely worse. **The bug was latent, not active:** the
+  corpus sweep is byte-identical after the fix, because all five flips already
+  improved every channel or held it equal. So this tightened a guarantee that
+  did not actually hold rather than correcting a shipped result. Pinned by
+  `issue_counts_compare_component_wise_not_lexicographically`.
+
+- *2026-07-30 — `merge_tap_choice` shadowed `di_choice` (review finding on
+  #474).* `merge_tap_choice` is built with `.map()`, so it is `Some` whenever
+  merge-tap produced anything — including the `Some(NATIVE_IDX)` arm meaning
+  "native beat merge-tap" — and the `.or()` chain short-circuited on it,
+  discarding DI's already-computed, already-validated result unread even when DI
+  was strictly better than native. The preconditions overlap by construction:
+  `try_merge_tap` needs Pooled + native-produced-but-unaccepted, `di_choice`
+  needs only native-produced. Fixed by distinguishing the arms — merge-tap wins
+  when it genuinely beat native; when native won, `di_choice` gets its say and
+  falls back to native. DI is deliberately NOT ranked against merge-tap, since
+  `di_choice` only ever compared DI to native and ranking those two is a
+  different question. **Latent as well:** on the fixture the review named
+  (`electronic-circuit@35/s` from ore, Pooled, yellow) DI-Off and DI-Candidate
+  are identical, `(4, 123, 1)` / 6317 entities, so DI would not have won there
+  anyway, and the 16-target sweep is unchanged. A removed trap, not a win —
+  recorded as such so nobody later cites it as evidence DI improved. Pinned by
+  `merge_tap_does_not_shadow_di_on_pooled_yellow`.
+
+- *2026-07-30 — three comments misdescribed the DI-exclusion invariant (review
+  finding on #474).* All three claimed `clean_flags[DI_IDX]` was pinned `None`
+  by a `None` entry in `tier_outcomes`. No such entry exists — DI is populated
+  like any other candidate, and what excludes it is the
+  `candidates[..ranking_len]` slice bound. A third comment was inverted outright,
+  claiming the final fallback excludes DI when `di_choice` returns `None`
+  precisely so DI competes there. The code was correct throughout; the comments
+  described an invariant that does not exist, on the one safety property
+  defaulting DI on depends upon — so an edit that trusted them and dropped
+  `ranking_len` as redundant would have silently re-admitted the
+  density-wins-over-warnings regression `tier2_electronic_circuit` hit. Rewritten
+  to name `ranking_len` as the single enforcement point. Same shape as the
+  exit-lane `continue` in #500: a confident comment is what stops the next reader
+  looking.

@@ -1109,10 +1109,16 @@ pub fn select_best_decomposition(
     // review, blocking finding; same pattern as merge_tap_choice's
     // classify_errors above). Lazy: the single-layout common case and
     // merge-tap-decided solves skip validation entirely.
-    // DI's outcome is deliberately NOT in this array. It is decided
-    // solely by `di_choice`; letting it into the generic ranking would
-    // re-admit the density-wins-over-warnings failure that ranking
-    // cannot see. Index 5 is DI and stays `None` throughout.
+    // DI IS in this array at index 5, and `clean_flags[5]` IS populated
+    // whenever DI produced. It is kept out of the generic ranking by the
+    // `candidates[..ranking_len]` slice bound, NOT by any `None` pin — an
+    // earlier version of this comment claimed the latter and was wrong.
+    // Naming the real mechanism matters: `ranking_len` is the SINGLE
+    // enforcement point for "DI may not enter the generic ranking when
+    // native succeeded", which is the invariant defaulting DI on rests on.
+    // Removing it as redundant would silently re-admit the
+    // density-wins-over-warnings regression that ranking cannot see — the
+    // failure `tier2_electronic_circuit` hit before `ranking_len` existed.
     let tier_outcomes = [
         native_run.outcome.as_ref(),
         k1_run.outcome.as_ref(),
@@ -1196,11 +1202,16 @@ pub fn select_best_decomposition(
     // warning regressions that guarantee exists to block.
     let ranking_len = if native_run.outcome.is_some() { DI_IDX } else { DI_IDX + 1 };
 
-    // DI is LAST so that, should it ever reach the generic ranking, the
-    // earliest-index tie-break still favours native. It should not reach
-    // it: `clean_flags[DI_IDX]` is pinned `None` by the `None` entry in
-    // `tier_outcomes`, so `best_error_free_idx` skips it, and
-    // `best_accepted_idx` is only consulted after `di_choice`.
+    // DI is LAST so that, when it does reach the generic ranking, the
+    // earliest-index tie-break still favours native.
+    //
+    // It reaches the ranking in exactly one case — native produced nothing,
+    // where `ranking_len` is `DI_IDX + 1` and DI competes with
+    // `cell-composed` on the merits. When native SUCCEEDED, `ranking_len`
+    // is `DI_IDX`, so every ranking query is sliced to exclude index 5 and
+    // `clean_flags[DI_IDX]` is simply never read. That slice is the whole
+    // mechanism; there is no `None` pin (`tier_outcomes` populates DI like
+    // any other candidate).
     let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 6] = [
         (native_run.outcome, native_run.events, "native"),
         (k1_run.outcome, k1_run.events, "k1-shape-fix"),
@@ -1267,13 +1278,44 @@ pub fn select_best_decomposition(
     // produced a layout (Native preferred — earliest in the array). Same
     // degraded behaviour as today's pipeline when shape-fix can't resolve
     // a (n, m) trap.
-    let winner_idx = merge_tap_choice
-        .or(di_choice)
-        .or(best_error_free_idx)
-        .or(best_accepted_idx)
-        // Excludes DI: if native produced nothing and DI did, `di_choice`
-        // has already returned `Some(DI_IDX)` above.
-        .or_else(|| candidates[..ranking_len].iter().position(|(o, _, _)| o.is_some()));
+    // `merge_tap_choice` must not SHADOW `di_choice`, which a plain
+    // `.or()` chain did (review finding on #474).
+    //
+    // `merge_tap_choice` is built with `.map()`, so it is `Some` whenever
+    // merge-tap produced anything at all — including its `Some(NATIVE_IDX)`
+    // arm, which means "native beat merge-tap". Under `.or()` that `Some`
+    // short-circuits, so DI's already-computed, already-validated result was
+    // discarded unread even when DI was strictly better than native. The
+    // preconditions overlap by construction: `try_merge_tap` needs Pooled +
+    // native-produced-but-unaccepted, and `di_choice` needs only
+    // native-produced — the same state satisfies both. Measured live on
+    // `electronic-circuit@35/s` from ore (Pooled, yellow), which carries DI's
+    // flagship copper-cable coupling AND is documented by
+    // `layout_retry_is_trace_independent` as a fixture where native beats
+    // merge-tap: DI ran a full extra layout pass there and was guaranteed to
+    // be thrown away, which also contradicts the cost rationale for gating
+    // `try_di` at all.
+    //
+    // So the arms are distinguished rather than collapsed:
+    //   MERGE_TAP_IDX — merge-tap genuinely beat native on `quality_key`; it
+    //     wins. DI is NOT compared against it here, because `di_choice` only
+    //     ever compared DI against NATIVE; ranking DI against merge-tap is a
+    //     different question and is deliberately not answered by this change.
+    //   NATIVE_IDX — native beat merge-tap, so native is the incumbent, and
+    //     `di_choice` is exactly a DI-vs-native comparison. DI gets its say,
+    //     falling back to native when it does not win.
+    let winner_idx = match merge_tap_choice {
+        Some(MERGE_TAP_IDX) => Some(MERGE_TAP_IDX),
+        Some(_) => di_choice.or(Some(NATIVE_IDX)),
+        None => di_choice,
+    }
+    .or(best_error_free_idx)
+    .or(best_accepted_idx)
+    // DI IS admitted here, deliberately: `di_choice` returns `None` when
+    // native produced nothing (see its guard), precisely so `cell-composed`
+    // and DI compete in this ranking rather than DI auto-winning a refusal.
+    // `ranking_len` is what excludes DI in the native-SUCCEEDED case.
+    .or_else(|| candidates[..ranking_len].iter().position(|(o, _, _)| o.is_some()));
 
     let Some(idx) = winner_idx else {
         let details: Vec<String> = candidates
