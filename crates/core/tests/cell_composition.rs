@@ -4337,6 +4337,32 @@ fn rfc057_island_placement_keeps_terminals_disjoint() {
         let routed =
             spaghettio_core::bus::compaction::route_local_manifold_edges(&clustered, &graphs, &hubs)
                 .unwrap_or_else(|e| panic!("{label}: routing refused: {e}"));
+        // An edge that fails all three routing passes lands in `unroutable`
+        // and NEVER enters `routes` — so the legalization and materialization
+        // gates below cannot see it. Without these two assertions they hold
+        // trivially for every dropped edge, and vacuously in the limit where
+        // nothing routes at all. Exactly the "a check going quiet is not
+        // evidence" failure in CLAUDE.md's verification protocol.
+        let edge_count: usize = graphs.iter().map(|graph| graph.edges.len()).sum();
+        // …and `routes.len() == edge_count` is itself vacuous at zero, so the
+        // corpus has to actually pose the problem.
+        assert!(
+            edge_count > 0,
+            "{label}: no manifold edges to route — this fixture proves nothing",
+        );
+        assert!(
+            routed.unroutable.is_empty(),
+            "{label}: {} of {edge_count} manifold edge(s) could not be routed at all: {:?}",
+            routed.unroutable.len(),
+            routed.unroutable,
+        );
+        assert_eq!(
+            routed.routes.len(),
+            edge_count,
+            "{label}: {} routes emitted for {edge_count} graph edges — every edge \
+             must be accounted for before the gates below mean anything",
+            routed.routes.len(),
+        );
         let legalized =
             spaghettio_core::bus::compaction::legalize_manifold_routes(&routed.routes);
         assert_eq!(
