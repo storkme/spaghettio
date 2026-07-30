@@ -341,11 +341,21 @@ tie-break with evidence, not necessarily a new algorithm.
   to mark #473 as pending rather than assert it as fact, since a cross-PR claim
   that cannot be checked from either side is fragile regardless of who is right.
 
-  That makes **five revisions across four** kill criteria in this document, all
-  for the same defect, across four review rounds — criterion 1 twice (the empty
-  result, then the "pin P0" remedy), criteria 2, 3 and 5 once each; criterion 4
-  never needed changing. Counted wrong in an earlier draft, in the very sentence
-  naming a pattern of boundary and counting errors. The generalisable lesson is in the shape, not the
+  Revision tally, per criterion, so the total is derivable rather than asserted:
+
+  | criterion | revisions | what |
+  |---|---:|---|
+  | KC1 | 2 | missed the empty-sweep result; then "pin P0" forced the worse of two free options |
+  | KC2 | 2 | unfalsifiable "cannot be made to"; then no ground truth to check against |
+  | KC3 | 1 | local cost multiplier that did not compose with #474's spend |
+  | KC4 | 0 | — |
+  | KC5 | 2 | percentage that could not fire on its own case; then per-target vs aggregate ambiguity |
+
+  **7 revisions across 4 criteria.** Stated as a table because the prose form was
+  miscounted twice: first as "five kill criteria" (it was never five criteria),
+  then as "five revisions across four criteria" — which undercounted KC2 in the
+  same paragraph that was revising KC2. A total is checkable only against an
+  enumeration next to it; on its own it is just a number that looks careful. The generalisable lesson is in the shape, not the
   count: every one was written to catch the central case and silently excluded a
   boundary — a percentage that could not fire on its own scenario, a budget that
   did not compose, a condition that missed the empty result, an unfalsifiable
@@ -361,3 +371,13 @@ tie-break with evidence, not necessarily a new algorithm.
   kill criteria revised" when it is five revisions across FOUR criteria —
   criterion 1 twice, criterion 4 never — i.e. a miscount inside the sentence
   naming a pattern of boundary and counting errors.
+
+- *2026-07-30 — the miscount fix was itself miscounted, twice over.* "Five
+  revisions across four criteria" undercounted KC2 and KC5, each revised twice —
+  and it undercounted KC2 in the very paragraph that was revising KC2. Correct
+  tally is **7 across 4**, now given as a per-criterion table so the total is
+  derivable from the enumeration beside it rather than asserted on its own. Same
+  shape as the `5.02/s` vs `+0.3%` pairing on #505 the same day: each figure
+  individually defensible, the relationship between them unchecked. Three
+  attempts at one sentence is the evidence that a bare count is the wrong form
+  for this claim.
