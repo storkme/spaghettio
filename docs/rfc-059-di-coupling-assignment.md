@@ -195,11 +195,19 @@ static.
    individual target AND 20 entities or fewer summed across the corpus**, and it
    resolves no validator issue anywhere, revert it.
 
-   Both bounds stated because one alone is ambiguous: "5 or fewer on every
-   target" read per-target would revert a policy delivering 4 entities on each of
-   forty targets — a real aggregate win — while an aggregate-only bound would
-   tolerate a single target regressing nothing but gaining nothing either. The
-   revert fires only when the win is small BOTH ways. A
+   Both bounds, because the conjunction is what protects genuine wins of either
+   SHAPE — and an earlier draft had this backwards. Since the bounds are ANDed,
+   adding a conjunct can only make the revert fire *less* often, so neither one
+   "catches" what the other "tolerates"; each one rescues a different kind of
+   real win from being reverted:
+
+   - **per-target alone** would revert 4 entities on each of forty targets — a
+     160-entity aggregate win. The aggregate conjunct (160 > 20) saves it.
+   - **aggregate alone** would revert a single target gaining 18 — a real
+     concentrated win. The per-target conjunct (18 > 5) saves it.
+
+   The revert fires only when the win is small under *both* readings, which is
+   the 3-entity case this criterion is named for. A
    tie-break with no measurable consequence should stay an arbitrary tie-break
    with a comment, not become a subsystem.
 
@@ -340,26 +348,15 @@ tie-break with evidence, not necessarily a new algorithm.
   resolve a claim about another branch's state. The sentence was reworded anyway
   to mark #473 as pending rather than assert it as fact, since a cross-PR claim
   that cannot be checked from either side is fragile regardless of who is right.
-
-  Revision tally, per criterion, so the total is derivable rather than asserted:
-
-  | criterion | revisions | what |
-  |---|---:|---|
-  | KC1 | 2 | missed the empty-sweep result; then "pin P0" forced the worse of two free options |
-  | KC2 | 2 | unfalsifiable "cannot be made to"; then no ground truth to check against |
-  | KC3 | 1 | local cost multiplier that did not compose with #474's spend |
-  | KC4 | 0 | — |
-  | KC5 | 2 | percentage that could not fire on its own case; then per-target vs aggregate ambiguity |
-
-  **7 revisions across 4 criteria.** Stated as a table because the prose form was
-  miscounted twice: first as "five kill criteria" (it was never five criteria),
-  then as "five revisions across four criteria" — which undercounted KC2 in the
-  same paragraph that was revising KC2. A total is checkable only against an
-  enumeration next to it; on its own it is just a number that looks careful. The generalisable lesson is in the shape, not the
-  count: every one was written to catch the central case and silently excluded a
-  boundary — a percentage that could not fire on its own scenario, a budget that
-  did not compose, a condition that missed the empty result, an unfalsifiable
-  "cannot be made to", and a remedy that forced the worse of two free options.
+ The generalisable lesson is in the shape, not the
+  count: each was written to catch the central case and silently excluded a
+  boundary. The full seven, so the enumeration matches the tally instead of
+  trailing it — a percentage that could not fire on its own scenario; a budget
+  that did not compose; a condition that missed the empty result; an
+  unfalsifiable "cannot be made to"; a remedy that forced the worse of two free
+  options; a criterion with no ground truth to check against; an ambiguity between
+  per-target and aggregate readings; and a both-bounds rationale with the
+  direction of the conjunction backwards.
 
 - *2026-07-30 — two more, and the second is the funniest defect in this file.*
   Kill criterion 2 checked an estimator against a ranking phase 1 never produced:
@@ -381,3 +378,34 @@ tie-break with evidence, not necessarily a new algorithm.
   individually defensible, the relationship between them unchecked. Three
   attempts at one sentence is the evidence that a bare count is the wrong form
   for this claim.
+
+- *2026-07-30 — the revision tally, as a table, placed last on purpose.* It
+  counts every entry above it, so it belongs after them: an earlier draft spliced
+  it into an entry that predates two of the revisions it tallies, which made a
+  chronological record narrate a later finding early. Review caught that, along
+  with a "generalisable lesson" list that claimed all seven revisions and
+  enumerated five, and a kill-criterion-5 rationale whose conjunction ran
+  backwards — ANDed bounds can only narrow when a revert fires, so neither bound
+  "catches" what the other "tolerates"; each rescues a different SHAPE of genuine
+  win (diffuse: 40x4=160, saved by the aggregate conjunct; concentrated: 1x18,
+  saved by the per-target conjunct). Verified by evaluating the predicate on both
+  shapes rather than by reading it.
+
+  Revision tally, per criterion, so the total is derivable rather than asserted:
+
+  | criterion | revisions | what |
+  |---|---:|---|
+  | KC1 | 2 | missed the empty-sweep result; then "pin P0" forced the worse of two free options |
+  | KC2 | 2 | unfalsifiable "cannot be made to"; then no ground truth to check against |
+  | KC3 | 1 | local cost multiplier that did not compose with #474's spend |
+  | KC4 | 0 | — |
+  | KC5 | 3 | percentage that could not fire on its own case; then per-target vs aggregate ambiguity; then the conjunction rationale backwards |
+
+  **8 revisions across 4 criteria.** Stated as a table because the prose form was
+  miscounted three times: first as "five kill criteria" (it was never five
+  criteria); then as "five revisions across four criteria", which undercounted
+  KC2 in the same paragraph that was revising KC2; then as seven, which
+  undercounted the KC5 revision made in the very commit that introduced this
+  table. Each miss has the same cause — a total re-derived from memory of a list
+  not in front of me. A count is checkable only against an enumeration beside
+  it; alone it is a number that looks careful.
