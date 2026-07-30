@@ -8894,3 +8894,160 @@ fn merge_tap_does_not_shadow_di_on_pooled_yellow() {
         "DI regressed an issue channel on the merge-tap branch: {oc:?} -> {nc:?}"
     );
 }
+
+/// Full knob sweep: strategy x row-layout across a representative corpus.
+/// Diagnostic companion to the sidebar-simplification work (issue #512) —
+/// maps which combination wins per case so the engine can eventually pick
+/// per-layout instead of asking the user. NOT a gate: no assertions on
+/// winners, it only reports. Run with the CI zone-cache pin for
+/// machine-independent numbers:
+///
+///   SPAGHETTIO_ZONE_CACHE_PATH=$PWD/crates/core/data/sat-zones-ci.bin \
+///     cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     full_knob_sweep --ignored --exact --nocapture
+///
+/// Writes a markdown report to target/tmp/knob-sweep.md.
+#[test]
+#[ntest::timeout(1_800_000)]
+#[ignore = "diagnostic sweep, ~5-15 min; run explicitly with --ignored"]
+fn full_knob_sweep() {
+    use spaghettio_core::bus::layout::{LayoutStrategy, RowLayout};
+    use std::fmt::Write as _;
+
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt_tier: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+    let ores5: &[&str] = &["iron-ore", "copper-ore", "coal", "water", "crude-oil"];
+    let plates5: &[&str] = &["iron-plate", "copper-plate", "coal", "crude-oil", "water"];
+    let cases: &[Case] = &[
+        Case { name: "gear@10 am1 plate", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-1", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "gear@10 am2 ore", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore"] },
+        Case { name: "gear@20 am2 plate", item: "iron-gear-wheel", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "ec@10 am1 ore yellow", item: "electronic-circuit", rate: 10.0, machine: "assembling-machine-1", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "ec@20 am2 ore", item: "electronic-circuit", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "ec@15 am3 plates", item: "electronic-circuit", rate: 15.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["iron-plate", "copper-plate"] },
+        Case { name: "plastic@10 chem", item: "plastic-bar", rate: 10.0, machine: "chemical-plant", belt_tier: None, inputs: &["petroleum-gas", "coal"] },
+        Case { name: "sulfuric@5 chem", item: "sulfuric-acid", rate: 5.0, machine: "chemical-plant", belt_tier: None, inputs: &["iron-plate", "sulfur", "water"] },
+        Case { name: "steel@5 ore", item: "steel-plate", rate: 5.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["iron-ore"] },
+        Case { name: "ac@1 am2 plates", item: "advanced-circuit", rate: 1.0, machine: "assembling-machine-2", belt_tier: None, inputs: plates5 },
+        Case { name: "ac@5 am2 plates yellow", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "ac@7 am2 plates yellow", item: "advanced-circuit", rate: 7.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "pu@2 am3 ore red", item: "processing-unit", rate: 2.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
+        Case { name: "pu@3 am3 ore red", item: "processing-unit", rate: 3.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
+    ];
+    let combos: &[(&str, LayoutStrategy, RowLayout)] = &[
+        ("pool/vert", LayoutStrategy::Pooled, RowLayout::VerticalSplit),
+        ("pool/horiz", LayoutStrategy::Pooled, RowLayout::HorizontalStack),
+        ("part/vert", LayoutStrategy::PartitionedDecomposed, RowLayout::VerticalSplit),
+        ("part/horiz", LayoutStrategy::PartitionedDecomposed, RowLayout::HorizontalStack),
+    ];
+
+    struct RunRow {
+        combo: &'static str,
+        errs: usize,
+        warns: usize,
+        entities: usize,
+        dims: (i32, i32),
+        density: f64,
+        candidate: String,
+        ms: u128,
+        refused: Option<String>,
+    }
+
+    let mut md = String::new();
+    let _ = writeln!(md, "# Knob sweep: strategy x row-layout\n");
+    let _ = writeln!(md, "{} cases x {} combos. Lexicographic winner key: (errors, warnings, entities).\n", cases.len(), combos.len());
+    let _ = writeln!(md, "## Per-run data\n");
+    let _ = writeln!(md, "| case | combo | errs | warns | entities | WxH | dens% | candidate | ms |");
+    let _ = writeln!(md, "|---|---|---|---|---|---|---|---|---|");
+
+    let mut winners: Vec<String> = Vec::new();
+    for case in cases {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        let mut rows: Vec<RunRow> = Vec::new();
+        for (label, strategy, row_layout) in combos {
+            let test_name = format!("sweep {} {}", case.name, label.replace('/', "-"));
+            let started = std::time::Instant::now();
+            let result = run_e2e_with_strategy_and_row_layout(
+                &test_name, case.item, case.rate, case.machine, case.belt_tier, &inputs,
+                *strategy, *row_layout,
+            );
+            let ms = started.elapsed().as_millis();
+            let row = match result {
+                Ok(r) => {
+                    let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
+                    let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
+                    let candidate = r.trace_events.iter().find_map(|e| match e {
+                        TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
+                        _ => None,
+                    }).unwrap_or_else(|| "?".to_string());
+                    let density = density::score_density(&r.layout, (1, 1)).density;
+                    RunRow {
+                        combo: label, errs, warns,
+                        entities: r.layout.entities.len(),
+                        dims: (r.layout.width, r.layout.height),
+                        density, candidate, ms, refused: None,
+                    }
+                }
+                Err(e) => RunRow {
+                    combo: label, errs: usize::MAX, warns: usize::MAX, entities: usize::MAX,
+                    dims: (0, 0), density: 0.0, candidate: "-".to_string(), ms,
+                    refused: Some(e.chars().take(60).collect()),
+                },
+            };
+            eprintln!(
+                "  {:<24} {:<11} {:>6}  {}",
+                case.name, label, format!("{}ms", ms),
+                match &row.refused {
+                    Some(e) => format!("REFUSED: {e}"),
+                    None => format!("E{}/W{} {}ent {}x{} {:.1}% cand={}",
+                        row.errs, row.warns, row.entities, row.dims.0, row.dims.1,
+                        row.density * 100.0, row.candidate),
+                }
+            );
+            rows.push(row);
+        }
+        for r in &rows {
+            match &r.refused {
+                Some(e) => { let _ = writeln!(md, "| {} | {} | - | - | - | - | - | REFUSED: {} | {} |", case.name, r.combo, e, r.ms); }
+                None => { let _ = writeln!(md, "| {} | {} | {} | {} | {} | {}x{} | {:.1} | {} | {} |", case.name, r.combo, r.errs, r.warns, r.entities, r.dims.0, r.dims.1, r.density * 100.0, r.candidate, r.ms); }
+            }
+        }
+        let ok_rows: Vec<&RunRow> = rows.iter().filter(|r| r.refused.is_none()).collect();
+        let winner_line = if ok_rows.is_empty() {
+            format!("| {} | ALL REFUSED | - | - |", case.name)
+        } else {
+            let key = |r: &&RunRow| (r.errs, r.warns, r.entities);
+            let best = ok_rows.iter().min_by_key(|r| key(r)).unwrap();
+            let ties: Vec<&str> = ok_rows.iter().filter(|r| key(r) == key(best) && r.combo != best.combo).map(|r| r.combo).collect();
+            let baseline = rows.iter().find(|r| r.combo == "pool/vert").unwrap();
+            let vs_baseline = if baseline.refused.is_some() { "baseline refused".to_string() }
+                else if baseline.combo == best.combo || ties.contains(&"pool/vert") || key(&baseline) == key(best) { "= baseline".to_string() }
+                else {
+                    format!("E{}→{} W{}→{} ent{}→{}",
+                        baseline.errs, best.errs, baseline.warns, best.warns, baseline.entities, best.entities)
+                };
+            format!("| {} | {} | E{}/W{}/{}ent | {} |", case.name, best.combo,
+                best.errs, best.warns, best.entities,
+                if ties.is_empty() { vs_baseline } else { format!("{} (tie: {})", vs_baseline, ties.join(", ")) })
+        };
+        winners.push(winner_line);
+    }
+
+    let mut summary = String::new();
+    let _ = writeln!(summary, "\n## Winners (lexicographic: errors, then warnings, then entities)\n");
+    let _ = writeln!(summary, "| case | winner | key | vs pool/vert |");
+    let _ = writeln!(summary, "|---|---|---|---|");
+    for w in &winners { let _ = writeln!(summary, "{w}"); }
+    md.push_str(&summary);
+    eprintln!("{summary}");
+
+    std::fs::create_dir_all("target/tmp").ok();
+    std::fs::write("target/tmp/knob-sweep.md", &md).expect("write sweep report");
+    eprintln!("\nreport: crates/core/target/tmp/knob-sweep.md");
+}
