@@ -107,7 +107,7 @@ Four policies, in increasing cost:
 | **P0 — upstream-first** | status quo; topological order claims | zero |
 | **P1 — downstream-first** | reverse the walk | zero |
 | **P2 — greedy by gain** | score each candidate coupling in isolation, claim in descending order of predicted gain | one extra pass per coupling |
-| **P3 — optimal matching** | max-weight matching over the coupling/spec bipartite graph | small; contention sets are tiny |
+| **P3 — optimal matching** | max-weight matching on the SPEC graph, couplings as EDGES — general, not bipartite | small; contention sets are tiny |
 
 **Predicted shape of the diff.** The dispatcher's claim loop
 (`bus/di_cell.rs`, the walk that produces fused specs) gains a policy parameter
@@ -116,6 +116,21 @@ per-coupling gain estimate that does **not** require building the layout —
 otherwise the cost is a full layout per candidate. P3 needs the contention graph
 materialised, which is only worth it if P2's greedy proves to be measurably
 sub-optimal.
+
+**The matching is over the SPEC graph with couplings as EDGES**, not a
+coupling/spec bipartite graph — an earlier draft said the latter and it does not
+enforce the constraint this policy exists for. A coupling claims **two** specs
+(`iron-plate → iron-stick` claims both; `placer.rs` inserts two indices into
+`claimed`), so a bipartite matching only guarantees each coupling gets ≤1 spec.
+On this RFC's own motivating case it selects **both** `C1={iron-plate,
+iron-stick}` and `C2={iron-stick,rail}` — cardinality 2 beats either singleton —
+leaving `iron-stick` claimed by both. Modelling specs as vertices and couplings
+as edges makes a matching vertex-disjoint, which *is* spec-disjointness, by
+construction. That graph admits odd cycles (a recipe fan such as iron-plate /
+iron-gear-wheel / transport-belt forms a triangle), so it needs general
+matching — Blossom, not Hungarian. Caught in review; an implementer following the
+earlier wording literally would have built a solver able to emit infeasible
+double-claimed assignments.
 
 **Load-bearing constraint.** Whatever the policy, it must interact correctly
 with #474's `di_choice`: DI competes against a DI-free native layout and may
@@ -367,9 +382,9 @@ tie-break with evidence, not necessarily a new algorithm.
 
 - *2026-07-30 — the miscount fix was itself miscounted, twice over.* "Five
   revisions across four criteria" undercounted KC2 and KC5, each revised twice —
-  and it undercounted KC2 in the very paragraph that was revising KC2. Correct
-  tally is **7 across 4**, now given as a per-criterion table so the total is
-  derivable from the enumeration beside it rather than asserted on its own. Same
+  and it undercounted KC2 in the very paragraph that was revising KC2. Tally
+  at the time was given as **7 across 4** — itself later corrected to 8; see the
+  final entry below, which carries the table and the enumeration together. Same
   shape as the `5.02/s` vs `+0.3%` pairing on #505 the same day: each figure
   individually defensible, the relationship between them unchecked. Three
   attempts at one sentence is the evidence that a bare count is the wrong form
@@ -387,8 +402,13 @@ tie-break with evidence, not necessarily a new algorithm.
   saved by the per-target conjunct). Verified by evaluating the predicate on both
   shapes rather than by reading it.
 
-  Every one has the same shape — written to catch the central case, silently
-  excluding a boundary:
+  Most have the same shape — written to catch the central case, silently
+  excluding a boundary. Two do not, and the distinction is worth keeping: item 4
+  is a criterion that could never fire *at all* (a missing trip condition, not a
+  missed boundary), and item 8 is a defect in explanatory prose whose criterion's
+  trip condition was unchanged. An entry above counts only the boundary cases and
+  says "all three" — consistent with this, and the categorisation a blanket claim
+  here contradicted:
 
   1. a percentage that could not fire on its own scenario (KC5)
   2. a cost budget that did not compose with #474's spend (KC3)
