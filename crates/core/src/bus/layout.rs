@@ -139,6 +139,14 @@ pub struct LayoutOptions {
     /// RFC-057 topology-preserving post-layout compaction. Experimental and
     /// default off, so the normal pipeline remains byte-identical.
     pub compact_layout: bool,
+    /// RFC-059: run the horizontal-stack row layout as a scored
+    /// decomposition candidate when `row_layout` is `VerticalSplit` and
+    /// the solve has a `RowKind::DualInput` row. Default `true`; the
+    /// candidate may displace native only on a strict issue-channel
+    /// improvement (ties → native, bit-identical). `false` = pure
+    /// vertical (test baselines / debugging); force-horizontal remains
+    /// `row_layout: HorizontalStack`.
+    pub horizontal_candidate: bool,
 }
 
 impl Default for LayoutOptions {
@@ -174,6 +182,11 @@ impl Default for LayoutOptions {
             // strictly improve stays bit-identical.
             direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
             compact_layout: false,
+            // Default ON 2026-07-30 (RFC-059): same never-worse shape as
+            // `direct_insertion` above — the native pass stays vertical,
+            // the horizontal variant competes only where a DualInput row
+            // exists and wins only on strict improvement.
+            horizontal_candidate: true,
         }
     }
 }

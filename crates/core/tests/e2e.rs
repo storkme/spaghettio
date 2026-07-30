@@ -199,6 +199,7 @@ fn run_e2e_with_strategy(
         strategy,
         spaghettio_core::bus::layout::RowLayout::default(),
         spaghettio_core::bus::layout::SurplusPolicy::default(),
+        true,
     )
 }
 
@@ -225,6 +226,38 @@ fn run_e2e_with_strategy_and_row_layout(
         strategy,
         row_layout,
         spaghettio_core::bus::layout::SurplusPolicy::default(),
+        true,
+    )
+}
+
+/// RFC-059: like `run_e2e_with_strategy_and_row_layout` but with the
+/// horizontal-stack candidate DISABLED — a pure single-combo pass. Used
+/// by `full_knob_sweep`'s baseline columns, which measure each
+/// strategy × row-layout combination in isolation; the default engine
+/// behavior (candidate competing) is the sweep's separate `default`
+/// column.
+fn run_e2e_pure_combo(
+    test_name: &str,
+    item: &str,
+    rate: f64,
+    machine: &str,
+    belt_tier: Option<&str>,
+    available_inputs: &FxHashSet<String>,
+    strategy: spaghettio_core::bus::layout::LayoutStrategy,
+    row_layout: spaghettio_core::bus::layout::RowLayout,
+) -> Result<E2EResult, String> {
+    run_e2e_inner(
+        test_name,
+        item,
+        rate,
+        machine,
+        belt_tier,
+        available_inputs,
+        &FxHashSet::default(),
+        strategy,
+        row_layout,
+        spaghettio_core::bus::layout::SurplusPolicy::default(),
+        false,
     )
 }
 
@@ -248,6 +281,7 @@ fn run_e2e_with_exclusions(
         spaghettio_core::bus::layout::LayoutStrategy::Pooled,
         spaghettio_core::bus::layout::RowLayout::default(),
         spaghettio_core::bus::layout::SurplusPolicy::default(),
+        true,
     )
 }
 
@@ -276,6 +310,7 @@ fn run_e2e_with_exclusions_and_surplus_policy(
         spaghettio_core::bus::layout::LayoutStrategy::Pooled,
         spaghettio_core::bus::layout::RowLayout::default(),
         surplus_policy,
+        true,
     )
 }
 
@@ -291,6 +326,7 @@ fn run_e2e_inner(
     strategy: spaghettio_core::bus::layout::LayoutStrategy,
     row_layout: spaghettio_core::bus::layout::RowLayout,
     surplus_policy: spaghettio_core::bus::layout::SurplusPolicy,
+    horizontal_candidate: bool,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     spaghettio_core::zone_cache::set_thread_source(Some(test_name));
@@ -318,6 +354,7 @@ fn run_e2e_inner(
             inserter_capacity: 0,
             cell_composition: Default::default(),
             splitter_tap_spacers: false,
+            horizontal_candidate,
             ..Default::default()
         },
     )
@@ -7812,6 +7849,67 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
     }
 }
 
+/// RFC-059: the horizontal-candidate never-worse contract, on configs
+/// where the bus (vertical) path succeeds. Mirrors
+/// `di_candidate_never_degrades_a_succeeding_bus_layout` exactly: every
+/// issue channel is a component-wise floor, not a lexicographic
+/// tiebreaker. Where the bus refuses (e.g. ec@15-am3-plates),
+/// horizontal resolving it is the additive win and is not constrained
+/// here.
+#[test]
+fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
+    let counts = |l: &spaghettio_core::models::LayoutResult, sr: &_| -> (usize, usize, usize) {
+        let issues = spaghettio_core::validate::validate(
+            l,
+            Some(sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+        )
+    };
+    for (item, rate, ins) in [
+        ("iron-gear-wheel", 10.0, &["iron-plate"][..]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"][..]),
+        ("electronic-circuit", 20.0, &["iron-ore", "copper-ore"][..]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("sulfuric-acid", 5.0, &["iron-plate", "sulfur", "water"][..]),
+    ] {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, rate, &inputs, "assembling-machine-3") else {
+            continue;
+        };
+        let off = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions { horizontal_candidate: false, ..Default::default() },
+        );
+        let Ok(off_l) = off else { continue };
+        let on_l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| {
+                panic!("{item}@{rate}: horizontal default must not turn a success into a refusal: {e}")
+            });
+        let (off_c, on_c) = (counts(&off_l, &sr), counts(&on_l, &sr));
+        assert!(
+            on_c.0 <= off_c.0 && on_c.1 <= off_c.1 && on_c.2 <= off_c.2,
+            "{item}@{rate}: horizontal candidate degraded the layout on at least one channel — \
+             (errors, warnings, layout_warnings) went {off_c:?} -> {on_c:?}"
+        );
+        // No-dual-input chains must be BIT-identical, not merely
+        // never-worse — the `any_dual_input_row` gate skips the extra
+        // pass entirely, and blueprint equality proves it.
+        if !ins.contains(&"copper-plate") && !ins.contains(&"copper-ore") {
+            assert_eq!(
+                blueprint::export(&off_l, item),
+                blueprint::export(&on_l, item),
+                "{item}@{rate}: no DualInput row, so candidate-on must be bit-identical"
+            );
+        }
+    }
+}
+
 /// RFC-047 Leg B/C lift differential (#312's exact repro config; see
 /// `quality_differential_ec_normal_vs_legendary`): EC@6/s legendary on
 /// yellow belts. copper-cable is 25/s (2 legendary AM3 machines @12.5/s)
@@ -8940,11 +9038,16 @@ fn full_knob_sweep() {
         Case { name: "pu@2 am3 ore red", item: "processing-unit", rate: 2.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
         Case { name: "pu@3 am3 ore red", item: "processing-unit", rate: 3.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
     ];
-    let combos: &[(&str, LayoutStrategy, RowLayout)] = &[
-        ("pool/vert", LayoutStrategy::Pooled, RowLayout::VerticalSplit),
-        ("pool/horiz", LayoutStrategy::Pooled, RowLayout::HorizontalStack),
-        ("part/vert", LayoutStrategy::PartitionedDecomposed, RowLayout::VerticalSplit),
-        ("part/horiz", LayoutStrategy::PartitionedDecomposed, RowLayout::HorizontalStack),
+    // The four pure columns measure each combo in isolation
+    // (`horizontal_candidate` off); `default` is what the engine ships —
+    // Pooled + vertical native with the RFC-059 horizontal candidate
+    // competing under the never-worse contract.
+    let combos: &[(&str, LayoutStrategy, RowLayout, bool)] = &[
+        ("pool/vert", LayoutStrategy::Pooled, RowLayout::VerticalSplit, true),
+        ("pool/horiz", LayoutStrategy::Pooled, RowLayout::HorizontalStack, true),
+        ("part/vert", LayoutStrategy::PartitionedDecomposed, RowLayout::VerticalSplit, true),
+        ("part/horiz", LayoutStrategy::PartitionedDecomposed, RowLayout::HorizontalStack, true),
+        ("default", LayoutStrategy::Pooled, RowLayout::VerticalSplit, false),
     ];
 
     struct RunRow {
@@ -8970,13 +9073,20 @@ fn full_knob_sweep() {
     for case in cases {
         let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
         let mut rows: Vec<RunRow> = Vec::new();
-        for (label, strategy, row_layout) in combos {
+        for (label, strategy, row_layout, pure) in combos {
             let test_name = format!("sweep {} {}", case.name, label.replace('/', "-"));
             let started = std::time::Instant::now();
-            let result = run_e2e_with_strategy_and_row_layout(
-                &test_name, case.item, case.rate, case.machine, case.belt_tier, &inputs,
-                *strategy, *row_layout,
-            );
+            let result = if *pure {
+                run_e2e_pure_combo(
+                    &test_name, case.item, case.rate, case.machine, case.belt_tier, &inputs,
+                    *strategy, *row_layout,
+                )
+            } else {
+                run_e2e_with_strategy_and_row_layout(
+                    &test_name, case.item, case.rate, case.machine, case.belt_tier, &inputs,
+                    *strategy, *row_layout,
+                )
+            };
             let ms = started.elapsed().as_millis();
             let row = match result {
                 Ok(r) => {

@@ -1,0 +1,131 @@
+# RFC-059: HorizontalStack as a scored decomposition candidate
+
+Status: ACTIVE (2026-07-30) — implementation in progress on
+`claude/ui-simplification-w8y9p6`. Evidence base: issue #513 (the
+`full_knob_sweep` winner map, `051368b`). Companion: #512 (sidebar
+simplification), whose Engine drawer loses the Row layout knob when this
+RFC completes.
+
+## Summary
+
+Promote `RowLayout::HorizontalStack` (RFC-013) from an opt-in knob to a
+default-on **scored candidate** in the decomposition search, following
+the lifecycle `cell_composition` (RFC-051) and direct insertion
+(RFC-053, #474) already walked: the native pass runs vertical-split as
+today, a horizontal variant competes where it could differ, and it
+displaces native only on **strict improvement across both issue
+channels** (ties → native, so every layout horizontal does not strictly
+improve stays bit-identical). `RowLayout::HorizontalStack` remains as
+the force mode (debug), mirroring `DirectInsertion::Forced`.
+
+## Motivation
+
+First `full_knob_sweep` run (14-case corpus, debug + CI zone-cache pin,
+engine `40e2acc`): every one of the 8 contested cases is won by a
+`*/horiz` combo; `pool/vert` (the shipped default) wins none of them and
+hard-refuses `ec@15 am3 plates` outright — a config horizontal builds at
+0 errors / 252 entities / 51.2% density. Headline flips: `ac@7` E10/W64
+→ E0/W0 (−460 entities), `pu@3` E11/W149 → E0/W35 (−292), `ac@5` E4/W11
+→ E0/W0 (−456). Where ineligible, horizontal falls back and ties
+bit-identically (all 6 simple cases). Full table: #513.
+
+## Design
+
+- `LayoutOptions.horizontal_candidate: bool`, **default `true`**. `false`
+  = pure vertical (tests, sweep baselines, debug). No new user-facing
+  knob: the wasm surface pins it `true`; force-horizontal stays reachable
+  via the existing `row_layout` param (`rl=hs`).
+- `HorizontalStackCandidate` in `decomposition_search.rs`, structured
+  exactly like `DirectInsertionCandidate`: clone opts, set `row_layout =
+  HorizontalStack`, `run_layout_with_retry`, self-validate and refuse a
+  layout carrying validation errors (conscious conservatism inherited
+  from DI: a horizontal layout with 1 error never displaces a native
+  with 10 — the pairwise rule only ever upgrades to error-free).
+- Gate (cost control, mirrors `try_di`): candidate mode on AND
+  `row_layout == VerticalSplit` AND `placer::has_dual_input_row(
+  solver_result)` — `row_kind()` is a pure function of `MachineSpec`,
+  and `RowKind::DualInput` is the only kind whose construction consults
+  `row_layout`, so "no dual-input row" ⇒ bit-identical by construction
+  and the extra pass is skipped. `catch_unwind` like cells/DI/merge-tap.
+- Scoped pairwise choice `horizontal_choice`, same rule as `di_choice`:
+  `accepted && (strictly_better_issues || (equal_issues && strictly
+  denser))` → win; `None` otherwise. Never returns `Some(NATIVE_IDX)`
+  (the #474 shadowing lesson). When native produced nothing, returns
+  `None` so horizontal competes in the generic ranking against
+  `cell-composed`/DI — that is the `ec@15` rescue path.
+- Candidate sits LAST (index 6). `ranking_len` = `DI_IDX` when native
+  produced (excludes both DI and horizontal from the generic ranking —
+  the single enforcement point the DI default rests on, extended), else
+  `H_IDX + 1`.
+- DI-vs-horizontal when **both** beat native: the same pairwise metric
+  between the two winners, ties → DI (earlier candidate, preference-
+  order consistency with the array). Deliberately NOT a 3-way generic
+  score — same reasoning as keeping DI out of the soft score.
+- No composition of DI *within* the horizontal pass in this RFC: the
+  variant runs with the same opts otherwise, and `di_couplings`-driven
+  fusion inside `place_rows` applies as it does for native. Cross-
+  candidate stacking (horizontal + forced-DI hybrid pass) is out of
+  scope; recorded as a possible follow-up.
+
+## Kill criteria
+
+- **K59-1 (runtime)**: suite wall-clock multiplier from the extra pass
+  exceeds 1.5× on the e2e suite (same budget K-DS1-3 gave DI, which
+  landed at 1.23×) → tighten the gate or abandon default-on.
+- **K59-2 (never-worse has teeth)**: the pinning test
+  (`horizontal_candidate_never_degrades_a_succeeding_bus_layout`) red at
+  any point, or any corpus case where candidate-on regresses either
+  issue channel vs candidate-off → block; the contract is structural,
+  not aspirational.
+- **K59-3 (sim honesty)**: any flipped corpus case whose sim-measured
+  delivery drops below native's by >5% of plan → the static winner key
+  is lying for that class; revert default pending a fixed comparator.
+  **This criterion gates the merge**, not the implementation: the PR
+  stays draft until the flipped cases (`ac@5`, `ac@7`, `pu@2`, `pu@3`,
+  `ec@15`) sim at/above native.
+- **K59-4 (scope)**: net engine LOC (excluding tests/docs) exceeds ~400
+  → the integration point is wrong; stop and redesign rather than
+  ballooning.
+
+## Verification plan
+
+1. Pinning test mirroring `di_candidate_never_degrades_a_succeeding_bus_layout`.
+2. `full_knob_sweep` re-run: default column should now match the
+   previous per-case winner wherever horizontal won, and stay
+   bit-identical on the 6 all-tie cases.
+3. Full suite with the CI zone-cache pin green; goldens/scoreboards that
+   move are re-blessed only where the movement is an improvement on both
+   issue channels, each re-bless recorded in the decision log.
+4. Sim harness on the five flipped cases with a LONG `--warmup`
+   (`docs/status.md` deep-chain caveat) — merge gate per K59-3.
+5. Browser eyeball of at least `ac@5` and `ec@15` (verification protocol
+   step 2).
+
+## Decision log
+
+- *2026-07-30 — RFC opened. Candidate-shape (mirror DI) chosen over
+  (a) riding the generic soft score — refused for the same measured
+  reason DI was: horizontal is typically denser and would win score
+  while regressing warnings; and (b) a `RowLayoutMode` enum replacing
+  `RowLayout` — refused because `row_layout` is the pass-level template
+  selector consumed inside `place_rows`, and conflating policy with
+  selector would touch every construction site for no behavioural gain.*
+- *2026-07-30 — `horizontal_candidate` stays engine/test-surface only;
+  wasm pins it `true` and no web UI is added. A vertical-only web escape
+  hatch can ride a later wasm param if a real debugging need appears;
+  adding it now would mint a new knob in the same change that exists to
+  retire one.*
+- *2026-07-30 — Self-validation refusal (no error-laden horizontal ever
+  competes) accepted knowing it forgoes E10→E1-class improvements;
+  the sweep shows horizontal's wins land at E0, so the forgone region is
+  empty on current evidence. Revisit only with a measured case.*
+- *2026-07-30 — Sim verification (K59-3) CANNOT run in this session's
+  remote container: factorio.com is unreachable through the environment
+  network policy (connection reset on both the site and the pinned
+  2.0.77 headless download URL — measured, not assumed). Additionally
+  the manifest generator `crates/core/examples/sim_probe_export.rs` is
+  gitignored and absent on fresh clones (the RFC-050 "known gap").
+  Consequence: the implementation lands as a DRAFT PR; K59-3's five
+  flipped-case sims (`ac@5`, `ac@7`, `pu@2`, `pu@3`, `ec@15`, long
+  warmup) are the ready-for-review gate and must run from a
+  harness-capable machine.*

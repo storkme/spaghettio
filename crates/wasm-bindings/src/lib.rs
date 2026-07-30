@@ -120,6 +120,14 @@ fn layout_options(
         // an already-validated layout, so exposing it is a UI decision, not a
         // fallback-semantics one — hard-false until that decision is made.
         compact_layout: false,
+        // RFC-059: the horizontal-stack candidate is engine policy, not a
+        // web-surface axis — pinned `true` (the engine default). The
+        // never-worse contract makes an escape hatch unnecessary for
+        // users; force-horizontal stays reachable via `row_layout`
+        // ("horizontal-stack" / `rl=hs`). A vertical-only debug param can
+        // be added here later if a real need appears (RFC-059 decision
+        // log, 2026-07-30).
+        horizontal_candidate: true,
         // No `..Default::default()`: adding `direct_insertion` completed
         // the field list, and a no-op struct update is a clippy error
         // under the workspace's `-D warnings`. A field added to

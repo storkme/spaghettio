@@ -627,6 +627,15 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
     }
 }
 
+/// RFC-059: whether any machine spec would build a `RowKind::DualInput`
+/// row. `DualInput` is the only row kind whose construction consults
+/// `RowLayout`, so a solve with none of them produces a bit-identical
+/// layout under either row layout — the decomposition search uses this
+/// to skip the horizontal-stack candidate pass entirely.
+pub(crate) fn any_dual_input_row(machines: &[crate::models::MachineSpec]) -> bool {
+    machines.iter().any(|m| matches!(row_kind(m), RowKind::DualInput))
+}
+
 /// Whether lane splitting is applicable to a spec/count combination.
 ///
 /// SingleInput, DualInput, TripleInput, chemical-plant FluidInput, and
