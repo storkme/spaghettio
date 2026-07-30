@@ -149,41 +149,41 @@ static.
 
 **Required.** Any of these ends the work.
 
-1. **The question is empirically empty.** If sweeping the corpus under P0 and P1
-   with `DI=Candidate` shows the final chosen layout differing on **at most the
-   known `rail` case — including the case where NOTHING differs at all** — AND
-   **every target's contention set is empty** (phase 1 output 2), then no policy
-   machinery is justified: **pin whichever static order wins on the
-   differing case** — P0 if nothing differs at all, P1 if the `rail` case
-   reproduces and P1 is better there — with a test, add the reasoning to
-   RFC-053's decision log, and close this RFC as *rejected — not a real
-   contention in practice*.
+1. **The question is empirically empty.** If phase 1 finds **every target's
+   contention set empty** (output 2), close this RFC as *rejected — not a real
+   contention in practice*: pin P0 with a test, and record the reasoning in
+   RFC-053's decision log.
 
-   "Pin P0" was unconditional in an earlier draft, which would have pinned the
-   status quo even in the branch where this RFC's own figures show P1 zero-cost
-   and strictly better (0 issues, 261 vs 264) on the one case known to differ.
-   A kill criterion should end the *machinery*, not force the worse of two free
-   options.
+   **An empty contention set is sufficient on its own, and that is a stronger
+   statement than it looks.** If no spec was ever eligible in two couplings,
+   claim ORDER cannot change which couplings claim — every eligible coupling
+   claims regardless of the walk direction. So the layout diff is *entailed* to
+   be empty; it is not an independent condition. An earlier draft ANDed the two
+   and offered "pin P1 if the `rail` case reproduces and P1 is better there",
+   which is unreachable: inside a trip condition requiring zero contention, no
+   target can differ. Caught in review, and the dead branch is the evidence that
+   the conjunction was redundant rather than cautious.
 
-   **The contention conjunct is load-bearing, and KC1 contradicted KC2 without
-   it.** A layout diff alone cannot distinguish "no spec was ever contended" from
-   "specs were contended and both static orders happened to resolve them the same
-   way" — and KC2 says of that same instrument that it is unevaluable exactly
-   where a target's optimal assignment differs from BOTH P0 and P1, which is
-   where P2/P3 would earn their cost. So a diff-only KC1 could close this RFC as
-   *"not a real contention in practice"* precisely in the scenario the RFC exists
-   to investigate. Requiring an empty contention set closes that: if specs were
-   contended at all, coincidental agreement between two arbitrary orders is not
-   evidence that the question is empty.
+   **Use the diff as a CONSISTENCY CHECK, not a conjunct.** Contention-empty
+   entails diff-empty, so observing empty contention *together with* a
+   non-empty P0-vs-P1 diff means the instrument is wrong — a coupling decision
+   is being made somewhere the census does not see. Phase 1 should assert that
+   implication and fail loudly if it breaks, rather than quietly reporting both
+   numbers.
 
-   The zero-difference outcome is called out explicitly because it is a live
-   possibility, not a formality: this RFC's own Motivation records that the
-   `rail` measurement is currently unreproducible, so the sweep may find no
-   differing target whatsoever. Under the earlier wording ("differing on **only**
-   the known `rail` case") that outcome did not satisfy the condition — there
-   would be no `rail` difference for it to be "only" — and the remedy presupposed
-   a sacrifice that would not exist. Third instance of the same defect in this
-   document's kill criteria; see the decision log.
+   **Why the contention set and not the diff.** A diff alone cannot distinguish
+   "no spec was ever contended" from "specs were contended and both static
+   orders happened to resolve them the same way" — and KC2 says of that same
+   instrument that it is unevaluable exactly where a target's optimum differs
+   from BOTH P0 and P1, which is where P2/P3 would earn their cost. A diff-only
+   KC1 could therefore close this RFC precisely in the scenario it exists to
+   investigate.
+
+   The empty outcome is a live possibility, not a formality: Motivation records
+   the `rail` measurement as unreproducible, and the first phase-1 census (10
+   targets, `DirectInsertion::Forced`) found **0 contention anywhere**, with
+   `rail`'s three couplings failing at buildability rather than contention.
+
 2. **P2 cannot be estimated statically.** Concretely: after **at most three
    distinct estimator formulations**, if none of them RANKS the contended
    couplings in the same order as the measured per-coupling outcome on **every**
@@ -348,13 +348,13 @@ tie-break with evidence, not necessarily a new algorithm.
   where P2/P3 would earn their cost. KC1 now additionally requires every target's
   contention set to be empty (phase 1 output 2).
 
-- *2026-07-30 — review tightened every kill criterion except KC4.* Nine revisions
+- *2026-07-30 — review tightened every kill criterion except KC4.* Ten revisions
   across four criteria, each one a threshold or condition that read as protection
   while permitting what it forbade:
 
   | criterion | revisions | what was wrong |
   |---|---:|---|
-  | KC1 | 3 | missed the empty-sweep result; "pin P0" forced the worse of two free options; a diff-only trip condition that contradicted KC2 |
+  | KC1 | 4 | missed the empty-sweep result; "pin P0" forced the worse of two free options; a diff-only trip condition that contradicted KC2; then the conjunct fixing that made its own P1 branch unreachable |
   | KC2 | 2 | unfalsifiable "cannot be made to"; no ground truth to check against |
   | KC3 | 1 | a local cost multiplier that did not compose with #474's spend |
   | KC4 | 0 | — |
