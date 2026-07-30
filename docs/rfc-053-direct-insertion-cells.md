@@ -2267,9 +2267,10 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   neither figure should be quoted. The table's claim is the more specific and
   self-consistent of the two (it lists the sample and the failing arithmetic), so
   5/s or 10/s is the likelier location, but that is inference, not measurement.
-  Establishing it is now phase 1 of
-  [`rfc-059-di-coupling-assignment.md`](rfc-059-di-coupling-assignment.md), whose
-  kill criterion 1 cannot be evaluated until the sweep exists. Recorded rather
+  Establishing it is phase 1 of the DI coupling-assignment RFC, proposed in
+  **#509** (RFC-059) and not yet merged at the time of writing — cited by PR
+  rather than by filename precisely because the file does not exist on `main`
+  yet, and a link that 404s is worse than a pointer that names its own state. Recorded rather
   than silently corrected because the wrong half is not identifiable from the
   document alone.*
 
