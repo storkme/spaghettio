@@ -2635,14 +2635,25 @@ pub fn place_rows(
             // silently excluded `electronic-circuit`, i.e. the corpus's
             // most common DI consumer, from ever being considered.
             for &(item, producer_recipe) in couplings {
+                let refuse = |reason: &str| {
+                    crate::trace::emit(crate::trace::TraceEvent::DiCouplingRefused {
+                        producer: producer_recipe.to_string(),
+                        consumer: c_spec.recipe.clone(),
+                        item: item.to_string(),
+                        reason: reason.to_string(),
+                    });
+                };
                 let same_recipe = |r: &str| ordered.iter().filter(|s| s.recipe == r).count();
                 if same_recipe(producer_recipe) != 1 || same_recipe(&c_spec.recipe) != 1 {
+                    refuse("split-rows");
                     continue;
                 }
                 let Some(p_idx) = ordered.iter().position(|s| s.recipe == producer_recipe) else {
+                    refuse("producer-missing");
                     continue;
                 };
                 if p_idx >= c_idx {
+                    refuse("producer-not-upstream");
                     continue;
                 }
                 // A spec may only be fused once. Without this, a producer
@@ -2702,6 +2713,7 @@ pub fn place_rows(
                     && pair_is_arrangeable(ordered[p_idx], c_spec, item, true)
                     && trial(true);
                 if !(stacked_ok || row_ok) {
+                    refuse("not-buildable");
                     continue;
                 }
                 claimed.insert(p_idx);

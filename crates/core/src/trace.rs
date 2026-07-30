@@ -228,6 +228,20 @@ pub enum TraceEvent {
         /// Whether the blocked index was the producer or the consumer.
         blocked_side: String,
     },
+    /// A DI coupling was rejected BEFORE the contention check, so iteration
+    /// order never got to decide it (RFC-059 phase 1). Recorded because a
+    /// contention census is uninterpretable without it: a target reporting
+    /// zero contention because DI never engaged at all is a different fact
+    /// from one reporting zero because nothing was ever double-claimed, and
+    /// kill criterion 1 turns on exactly that distinction.
+    DiCouplingRefused {
+        producer: String,
+        consumer: String,
+        item: String,
+        /// `split-rows`, `producer-missing`, `producer-not-upstream`, or
+        /// `not-buildable`.
+        reason: String,
+    },
     /// A DI coupling successfully claimed both its specs — the per-coupling
     /// outcome kill criterion 2 tests an estimator's ranking against.
     DiCouplingClaimed {
