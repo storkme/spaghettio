@@ -217,7 +217,7 @@ its gates — same discipline as `compact_layout`.
 
 Criterion 1 is the one this RFC exists to test. The probe deliberately could
 not measure it: it prices band-to-band distance, not trunk corridors, so the
-−64.5% excludes the space trunks will consume.
+−66.1% excludes the space trunks will consume.
 
 ## Verification plan
 
@@ -383,9 +383,9 @@ than the lane-planner rewrite.
 
   Phasing was restructured: the original phases 0–2 were all cheap and all
   evidence-free, exactly the shape that let RFC-057 run until its premise died
-  in the expensive phase. A throwaway **trunk spike** on one fixture is now
-  phase 3 and carries kill criterion 1, so a negative result costs a day rather
-  than the lane-planner rewrite.
+  in the expensive phase. A throwaway **trunk spike** on all three gate
+  fixtures is now phase 3 and carries kill criterion 1, so a negative result
+  costs a day rather than the lane-planner rewrite.
 
   The 3:1 aspect cap is acknowledged as arbitrary and consequential — it alone
   refuses `insert3-ore` at 3.16:1 — with a sweep assigned to phase 2.
