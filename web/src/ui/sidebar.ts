@@ -858,6 +858,7 @@ export function renderSidebar(
   if (urlState.stacking) stackingSelect.value = urlState.stacking;
   if (urlState.inserterCapacity) inserterCapacitySelect.value = urlState.inserterCapacity;
   directInsertionCb.checked = urlState.directInsertion === true;
+  compactCb.checked = urlState.compactLayout === true;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
