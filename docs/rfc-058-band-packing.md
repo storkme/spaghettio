@@ -8,7 +8,8 @@ Place machine **row bands** in two dimensions instead of stacking them in a
 single left-aligned column, and re-route the trunk taps that serve them.
 
 A band is a maximal run of rows containing machines or inserters — one recipe's
-machine row plus its inserter and belt rows. Today the placer stacks bands
+machine row plus the inserter rows serving it. Belt rows are deliberately not
+part of it; they are the transport this RFC re-plans. Today the placer stacks bands
 vertically and left-aligns them, so the widest band fixes the layout width and
 every narrower band leaks its entire right margin. Measured across ten
 fixtures, that ragged right margin is **38.4% of all bounding-box area**.
@@ -59,15 +60,20 @@ rather than trading off.
 ### Where it does not apply
 
 The probe also characterised the failures, and they are structural rather than
-tuning problems. **Every band is exactly 5 tiles tall**; only widths vary
-(measured range 6–144). So:
+tuning problems. Bands are **almost always 5 tiles tall** — the machine row plus
+its two inserter rows — with occasional 7-tall exceptions (`belt5-ore` and
+`sci2-ore` have one each). Widths vary far more, measured range 3–144. So:
 
 - **Fewer than ~3 bands** — nothing to pack. `ec10-ore`, `ec15-plate`,
   `gear5-plate` have one band each.
-- **One band dominates the width** — the widest band is a hard floor on layout
-  width, so no packing can be squarer than that band's own aspect.
-  `gear15-ore` has a 144-wide band, `lds2-plate` a 121-wide one; the closest
-  packing for either is ~10:1 and correctly refused.
+- **A wide band combined with too few bands.** The widest band floors the
+  layout *width*; it does not by itself floor the aspect ratio, because
+  stacking further shelves at that width adds height and squares the result
+  up. What blocks squaring is having too few bands to build that height.
+  `gear15-ore` (2 bands, widest 144) can reach only 144×12 — two shelves —
+  giving 12:1, and `lds2-plate` (2 bands, widest 121) reaches 121×12 at
+  10.08:1. Both are correctly refused. A layout with a 144-wide band and
+  twenty bands to stack would pack fine.
 
 This RFC does **not** address the dominant-wide-band case. Splitting wide rows
 was measured separately on 2026-07-30 and falsified: capping machines per row
@@ -94,8 +100,14 @@ Shelf packing over band rectangles, with:
 
 - target shelf width swept from the widest band upward;
 - both source order and height-descending order;
-- a **fixed inter-band gap** for trunk/tap space;
+- a **fixed inter-band gap** of 2 tiles for trunk/tap space;
 - an **aspect cap**, so the optimum is not a degenerate one-shelf ribbon.
+
+The gap is genuinely fixed, and the packed heights in the results table
+reconcile against it once varying band heights are accounted for: a shelf is as
+tall as its tallest band, so `sci1-ore` (all bands 5 tall) packs to
+`5 + 2 + 5 = 12`, and `belt5-ore` (bands 5, 5 and 7 tall) to `5 + 2 + 7 = 14`.
+Assuming a uniform 5 makes those two look like they need different gaps.
 
 That last point is load-bearing and was learned the hard way: minimising
 bounding-box *area* alone drives every packing to a single shelf (all bands
@@ -138,11 +150,19 @@ its gates — same discipline as `compact_layout`.
 
 ## Kill criteria
 
-1. **Transport eats the gain.** If, after real trunk routing, the occupied-tile
-   saving on `sci1-ore`, `sci2-ore` and `pu1-plate` is below **half** the
+1. **Transport eats the gain.** If, after real trunk routing, the **bounding-box
+   area** saving on `sci1-ore`, `sci2-ore` and `pu1-plate` is below **half** the
    probe's estimate (i.e. worse than −32% against an estimated −64.5%), then
    2D trunk cost is consuming the reclaimed area and band granularity fails the
    same way machine granularity did. Stop; do not re-tune the packer.
+
+   The metric is bounding-box area, matching what the probe measured. It is
+   deliberately **not** occupied tiles: bands are rigid, so machines and
+   inserters cannot move relative to each other and only transport tiles can
+   shrink. Against belts at ~39.6% of occupied tiles and a best-case ~38%
+   transport saving, the achievable occupied-tile reduction is only ~15% — so
+   an occupied-tile bar set at −32% would fire on every run regardless of
+   whether the approach worked, killing the RFC spuriously.
 2. **Reach is too narrow.** If fewer than **30%** of the e2e corpus has ≥3
    bands and no width-dominant band, the technique cannot pay for its
    complexity regardless of how well it works where it applies. Measure this
@@ -211,8 +231,14 @@ Phases 0–2 are cheap and land independently. Phase 3 is the risk.
 - **RFC-055/056** established that macro reordering and contiguous folding are
   shape transforms, not density levers (~20% routing ceiling).
 - **RFC-053** (direct insertion) is complementary and attacks a different
-  category — belts are 39.6% of occupied tiles against machines' 38.4%, so
-  removing belt segments and packing bands are additive, not competing.
+  category. From the 2026-07-30 density audit over the same ten fixtures,
+  belts are 39.6% of *occupied tiles* and machines 38.4%, so removing belt
+  segments and packing bands are additive, not competing. (Two coincidences
+  worth naming so they are not read as copy errors: 38.4% is also the
+  ragged-right share of *bounding-box area* quoted in Motivation — a different
+  metric with a different denominator — and 39.6% happens to equal
+  `pu1-plate`'s transport delta in the results table. Both pairs are genuine
+  collisions of unrelated quantities.)
 - Folding composes on top: bands give a squarer layout, and multi-fold (#500)
   can shape whatever remains.
 
