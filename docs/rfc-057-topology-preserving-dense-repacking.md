@@ -936,3 +936,94 @@ make either experimental composer a production default.
   Factorio adjudication the single fold just received. This does not change
   the 2026-07-29 refusal of folding as a *density* lever — the ~20% routing
   ceiling stands, and the single fold costs 277 entities (2820 → 3097).
+
+- **2026-07-30 — The manifold router's residual was a PLACEMENT bug; with it
+  fixed, candidates materialise for the first time — and they are bigger than
+  what they replace.**
+
+  The 2026-07-26 routing entry left ~1,200 residual conflicting tiles and a
+  strict materializer that correctly refused. That residual was diagnosed as
+  needing "negotiated rip-up/reroute". It did not.
+
+  Measured on six **bus** layouts — the path `LayoutOptions::compact_layout`
+  actually wires, whereas every previous RFC-057 number is `compose_chain_*`
+  output — the unresolved-route count exactly equalled the number of tiles
+  hosting terminals for two different commodities:
+
+  | fixture | cross-item shared terminal tiles | unresolved routes |
+  |---|---:|---:|
+  | `gear5-plate` | 2 | 2 |
+  | `sci1-ore` | 2 | 2 |
+  | `gear15-ore` | 44 | 44 |
+  | `ec15-plate` | 4 | 4 |
+  | `belt5-ore` | 8 | 8 |
+  | `sci1b-ore` | 7 | 7 |
+
+  An exact match on all six. The cause: `place_recipe_clusters` shelf-packs on
+  `RigidIsland::block`, which covers machines and inserters. A **terminal is
+  the belt tile an inserter reaches to, and lies outside that block**, so
+  block-disjointness says nothing about terminals. Packed tightly, one
+  island's input terminal lands exactly on another's output terminal — one
+  tile asked to deliver two commodities. No router can repair that; the
+  conflict exists before routing starts. Packing on a terminal-inclusive
+  extent fixes it. A second, smaller instance: boundary terminals kept their
+  *source* coordinates while every island moved, so they too could land on a
+  relocated terminal; they are now placed on the packed perimeter.
+
+  With both fixed, **five of six fixtures materialise** — the first RFC-057
+  candidates ever to clear the strict materializer — with zero terminal
+  collisions and zero terminals inside a foreign island. `gear15-ore` retains
+  one genuinely conflicting route out of 157.
+
+  **Negotiated congestion was implemented and measured as a no-op.** A
+  PathFinder loop (history cost per contested tile, all edges rerouted each
+  round, cost plumbed through both the dense A* and the ghost fallback) drove
+  contested *tiles* down hard (35→9, 27→8, 19→4) but left the contested
+  *route* count invariant at 2, 2, 44, 4, 8, 7 across 24 rounds — the tell
+  that the obstruction was structural, not congestion. After the placement fix
+  it changed nothing at all (rounds=0 and rounds=24 byte-identical), so it was
+  reverted rather than landed as unexercised complexity. Reserving terminals
+  in the pass-2/pass-3 hard sets was also tried and made `gear15-ore` worse
+  (1 → 6 residual tiles); also reverted.
+
+  **The decisive result is the assembled candidate, and it fails the density
+  gate outright.** Islands + stamped hubs + routed belts, normalised, zero
+  entity overlaps except one on `belt5-ore`:
+
+  | fixture | source bbox | candidate bbox | Δ | island ents | hub ents | route ents |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `gear5-plate` | 128 | 448 | **+250%** | 15 | 28 | 60 |
+  | `sci1-ore` | 1,184 | 2,142 | **+81%** | 61 | 125 | 250 |
+  | `ec15-plate` | 731 | 2,091 | **+186%** | 57 | 173 | 284 |
+  | `belt5-ore` | 1,120 | 1,722 | **+54%** | 47 | 109 | 192 |
+  | `sci1b-ore` | 2,960 | 4,087 | **+38%** | 87 | 206 | 379 |
+
+  Logistics outweighs machinery 6–8×. On `sci1-ore` the manifold spends 375
+  logistics entities where the bus it replaces spends 201 — **86% more** — for
+  the same production. This is the RFC's own "density may never buy a slower
+  factory and call itself a win", inverted: the placement is genuinely tighter
+  (rigid bbox 35×23 against a 37×32 source) and the *transport* to serve it
+  costs more than the space it saves.
+
+  **Diagnosis: `(n,1)`/`(1,m)` balancer trees are the wrong primitive for the
+  commodities this corpus actually has.** `plan_local_manifolds` gives every
+  commodity a merger tree over all producer terminals and a distributor tree
+  over all consumer terminals, regardless of rate. But this RFC already
+  measured that almost every commodity needs ONE lane (USP: 28 lanes total
+  across all items, max 3 for any one; military science 14, max 2). For a
+  one-lane commodity a balanced tree is pure overhead — the bus answers the
+  same problem with a single trunk belt and inserter taps and no balancer at
+  all. §"Logistics synthesis" already ranks "shared item trunk with balanced
+  taps" above private manifolds; the implementation never built that tier and
+  goes straight to trees.
+
+  **Recommendation: do not pursue tree-based local manifolds further.** Build
+  the single-lane shared-trunk tier first and re-measure; reserve `(n,m)`
+  trees for the genuinely multi-lane commodities that measurement says are
+  rare. The 2D placement itself is vindicated and worth keeping — it is the
+  transport layer that is uneconomic.
+
+  Guard: `rfc057_island_placement_keeps_terminals_disjoint` asserts the
+  invariant by count and names every offending tile. Verified to fail without
+  the fix (`gear5-plate: 2 tile(s) host terminals for more than one
+  commodity`), not merely to pass with it.
