@@ -1,6 +1,7 @@
 # RFC-058: Band packing — 2D placement at row granularity
 
 Registry: [`rfcs.md`](rfcs.md). Status: **Design (circulated for review)**.
+Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
 
 ## Summary
 
@@ -51,11 +52,28 @@ packing swept over target widths under a 3:1 aspect cap):
 
 Aggregate over those four: band-bbox **−64.5%**, transport **−38.1%**.
 
+That aggregate is over the fixtures that *pack*, which is selection bias if
+read as a corpus result. Across all seven multi-band fixtures — counting the
+three that cannot pack at their unchanged control area — band-bbox is
+**−39.6%** (18,976 → 11,456 tiles). **−39.6% is the number to carry away**;
+−64.5% is what the technique achieves where it applies.
+
 Transport *falls*. That is the opposite of RFC-057's result and the reason this
 is worth building: the control stacks bands in dependency order, so a consumer
 band can sit far in y from its producer, and squaring the arrangement shortens
 exactly those links. The area saving and the transport saving come together
 rather than trading off.
+
+**The transport figure is the weakest number here and should be treated as
+provisional.** The probe prices band-centre to band-centre Manhattan distance.
+Real bus transport runs down a trunk column and then across to the row, which
+is close to Manhattan for the stacked control but not necessarily for a packed
+layout, where trunks must reach bands that are no longer in one column. The
+proxy may therefore distort the two cases *unequally* and flatter packing.
+Claiming the comparison is fair because the same proxy applies to both is only
+valid if the distortion is symmetric, and there is no evidence yet that it is.
+The area result does not depend on this; the "transport falls too" claim does.
+Phase 3's spike (below) is what settles it.
 
 ### Where it does not apply
 
@@ -75,11 +93,18 @@ its two inserter rows — with occasional 7-tall exceptions (`belt5-ore` and
   10.08:1. Both are correctly refused. A layout with a 144-wide band and
   twenty bands to stack would pack fine.
 
-This RFC does **not** address the dominant-wide-band case. Splitting wide rows
-was measured separately on 2026-07-30 and falsified: capping machines per row
-gave −0.9% bbox at zero errors (−5.3% only by introducing 10 errors), because
-each sub-row re-pays its own belt overhead. That is a different problem and
-wants its own RFC if it is ever worth solving.
+This RFC does **not** address the dominant-wide-band case, which is 2 of the 10
+fixtures measured. The obvious fix was tested on 2026-07-30 and failed: capping
+machines per row gave −0.9% bbox at zero errors (−5.3% only by introducing 10
+errors), because each sub-row re-pays its own belt overhead.
+
+That result is narrower than "wide bands are unsolvable", and should not be
+read as such. It falsifies *one* reshaping — `max_per_row` capping, which
+forces additional sub-rows each carrying their own belt row. Other reshapings
+were not tested; two machine rows sharing a single belt row, for instance,
+would not obviously carry the same cost. The honest status is "one obvious fix
+doesn't work", and a wide-band RFC remains open if those 2-in-10 fixtures
+justify it.
 
 ## Design
 
@@ -101,7 +126,12 @@ Shelf packing over band rectangles, with:
 - target shelf width swept from the widest band upward;
 - both source order and height-descending order;
 - a **fixed inter-band gap** of 2 tiles for trunk/tap space;
-- an **aspect cap**, so the optimum is not a degenerate one-shelf ribbon.
+- an **aspect cap**, so the optimum is not a degenerate one-shelf ribbon. The
+  probe used 3:1, chosen to be comfortably squarer than anything the engine
+  ships today and no more principled than that. It is not free: `insert3-ore`
+  packs at 3.16:1 and is refused, so the cap decides one fixture in ten. Phase
+  2 should sweep it and report the applicable-fixture count as a function of
+  the cap rather than inheriting 3:1 by default.
 
 The gap is genuinely fixed, and the packed heights in the results table
 reconcile against it once varying band heights are accounted for: a shelf is as
@@ -214,13 +244,26 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
    y-projection. No behaviour change.
 2. **Packer** — shelf packing with aspect cap and swept target width, behind a
    default-off flag. Emits positions only; nothing consumes them yet.
-3. **2D lane planning** — `plan_bus_lanes` for packed bands. The load-bearing
-   phase, and where kill criteria 1 and 5 are evaluated.
-4. **Validation, meter, and Factorio adjudication.**
-5. **Default-on decision**, as a scored decomposition candidate rather than a
+3. **Trunk spike — one fixture, throwaway code.** Route trunks for a single
+   packed fixture (`sci1-ore`) with whatever is quickest, and measure real
+   bounding-box area and real transport against the control. Evaluate kill
+   criterion 1 here.
+
+   This phase exists because phases 0–2 are cheap *and prove nothing*: a
+   census, an extractor and a packer can all land green while saying nothing
+   about whether trunks fit. RFC-057 front-loaded its cheap work the same way
+   and its premise died in the expensive phase. The spike also settles whether
+   the Manhattan transport proxy flattered packing — the one number in this
+   RFC with a known directional risk.
+4. **2D lane planning** — `plan_bus_lanes` for packed bands, properly. Only
+   after the spike clears. Where kill criterion 5 is evaluated.
+5. **Validation, meter, and Factorio adjudication.**
+6. **Default-on decision**, as a scored decomposition candidate rather than a
    forced path.
 
-Phases 0–2 are cheap and land independently. Phase 3 is the risk.
+Phases 0–2 are cheap, land independently, and are not evidence. Phase 3 is the
+gate: it is deliberately throwaway so that a negative result costs a day rather
+than the lane-planner rewrite.
 
 ## Relationship to earlier RFCs
 
@@ -280,3 +323,30 @@ Phases 0–2 are cheap and land independently. Phase 3 is the risk.
   representative of what users request. Phase 0 still runs the census properly
   before the packer is written; this entry records that the early signal is
   favourable, not that the criterion is settled.
+
+- **2026-07-30 — self-review after the bot pass; four presentation and
+  method defects fixed.** None change the measured result; all change how it
+  should be read.
+
+  The headline aggregate was over the four fixtures that pack — selection bias
+  if read as a corpus number. Corpus-wide across all seven multi-band fixtures
+  is **−39.6%**, now the figure the RFC leads with.
+
+  The transport saving rests on a band-centre Manhattan proxy. That is close to
+  real routing for the stacked control (down a trunk, across to a row) but not
+  necessarily for a packed layout, so it may distort the two cases unequally
+  and flatter packing. Recorded as the weakest number in the RFC; the area
+  result does not depend on it.
+
+  The wide-band scope-out was overstated. `max_per_row` capping was falsified,
+  but that is one reshaping, not the whole space — two machine rows sharing a
+  belt row was never tested. Softened to "one obvious fix doesn't work".
+
+  Phasing was restructured: the original phases 0–2 were all cheap and all
+  evidence-free, exactly the shape that let RFC-057 run until its premise died
+  in the expensive phase. A throwaway **trunk spike** on one fixture is now
+  phase 3 and carries kill criterion 1, so a negative result costs a day rather
+  than the lane-planner rewrite.
+
+  The 3:1 aspect cap is acknowledged as arbitrary and consequential — it alone
+  refuses `insert3-ore` at 3.16:1 — with a sweep assigned to phase 2.
