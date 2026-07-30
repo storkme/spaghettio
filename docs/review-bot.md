@@ -102,7 +102,7 @@ or don't land.
 | 3 | No harness `--allowedTools` — every posting/diff call denied | 11 denials on the #330 canary | #331 |
 | 4 | Re-running `/install-github-app` overwrote both workflow files with the stock template — wiped fixes 1–3 at once (plus `claude.yml`'s owner-only sender gate) | all of the above, after a period of working fine | #369 (canary #368) |
 | 5 | Shape-sensitive denial starvation — the allowlist admits plain `gh pr/issue` commands but denies improvised *shapes* (env prefixes `GH_PAGER= gh …`, command substitution `$(…)`, `cd … &&` chains, `gh api`); enough denials and the orchestrator abandons mid-review without posting. Stochastic per run, worse on large PRs (more context wanted → more improvised commands). Diagnosed 2026-07-24 on PR #389 (two consecutive silent no-ops; PR #405 succeeded through 31 denials the same day) | mid-cost, mid-duration run: more than a gate-skip, far less than a full review; see signature table below | prompt hardening + guard step (introduced with this doc) |
-| 6 | Async-wait abandonment — the plugin orchestrator fans out its reviewer subagents, then parks via `ScheduleWakeup` to "wait" for them; in a one-shot headless run the wakeup never fires and the session ends mid-wait. First caught live by the guard 2026-07-24 on PR #416 — transcript artifact showed 26 tool calls, near-zero denials, 4 parallel reviewers spawned, `ScheduleWakeup(180s)` then end at 10 turns/$1.08 with nothing posted. NOT a denial problem: the class-5 prompt note was propagating into every subagent and reads worked fine | mid-cost short run like class 5, but transcript shows `ScheduleWakeup` + spawned agents with unconsumed results | prompt note extended: one-shot/headless, never park, consume subagent results synchronously |
+| 6 | Async-wait abandonment — the plugin orchestrator fans out its reviewer subagents, then parks via `ScheduleWakeup` to "wait" for them; in a one-shot headless run the wakeup never fires and the session ends mid-wait. First caught live by the guard 2026-07-24 on PR #416 — transcript artifact showed 26 tool calls, near-zero denials, 4 parallel reviewers spawned, `ScheduleWakeup(180s)` then end at 10 turns/$1.08 with nothing posted. NOT a denial problem: the class-5 prompt note was propagating into every subagent and reads worked fine | mid-cost short run like class 5, but transcript shows `ScheduleWakeup` + spawned agents with unconsumed results | prompt note extended: one-shot/headless, never park, consume subagent results synchronously — **insufficient; recurred 2026-07-30 on #511, see below** |
 
 ### Failure class 7: findings against the PR body can never be closed (2026-07-29)
 
@@ -236,6 +236,47 @@ Note what made this one visible: the check was green and every other signal
 agreed, so the only clue was the review taking **1m8s** where real reviews on
 this repo take 3-11 minutes. A green check plus an implausibly fast run is worth
 opening even when nothing else complains.
+
+### Failure class 6 recurred with a new parking mechanism (2026-07-30)
+
+Class 6's mitigation was a prompt note telling the orchestrator never to park
+and to consume subagent results synchronously. On PR #511 it parked anyway,
+**without using `ScheduleWakeup`** — it simply ended its turn with a statement
+of intent:
+
+> Two background agents are now checking PR eligibility and gathering
+> CLAUDE.md file paths. I'll wait for their results before proceeding — no
+> further action needed from me until they complete.
+
+`num_turns: 6`, `subtype: success`, `$0.23`, `reviews=0 inline=0
+bot_summaries=0`. The guard caught it; the check failed correctly.
+
+Two details make this worth its own entry rather than a tally mark on the row
+above.
+
+**The results it was waiting for had already arrived.** The transcript
+artifact contains both subagents' outputs — one answering `SHOULD_STOP: no`
+with a correct eligibility rationale, the other listing the two relevant
+`CLAUDE.md` paths. Nothing was pending. The orchestrator ended a turn holding
+the answers it claimed to be waiting for, so a fix that only makes waiting
+work would not have helped here.
+
+**The mitigation is keyed to the wrong thing.** "Never park" was written
+against `ScheduleWakeup`, a specific tool call the guard can look for. Ending
+a turn is not a tool call, so no amount of tightening the note about parking
+tools covers it. Any prompt-level fix has to be phrased as an obligation to
+*post before ending* rather than a prohibition on a parking mechanism —
+mechanisms are open-ended, the posting contract is not.
+
+Also in the same transcript, before the park: the orchestrator called `Agent`
+with `subagent_type: "claude-haiku-4-5-20251001"` — a model ID in the agent-type
+slot — then self-corrected to `subagent_type: "claude", model: "haiku"`. Costs
+turns, not fatal, but it is the same run.
+
+The first attempt on this PR burned **28 turns** and also posted nothing;
+a plain re-run produced the 6-turn park above. So this is not stochastic in
+the way class 5 is — re-running is not the remedy, and two consecutive silent
+no-ops on one head is the signal to stop re-running and pull the artifact.
 
 ## Forensics playbook
 
