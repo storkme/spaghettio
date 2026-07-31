@@ -113,9 +113,11 @@ sufficient per #520.
 
 **Status: KILLED 2026-07-31, on paper analysis, before a prototype was
 built — see the decision log.** Ceiling 5.00–7.14% (row-kind-derived)
-against the ≥15% bar; the design section's "wasted lane" premise below
-does not hold against the current templates (`can_lane_split` already
-fills it for free). Kept as written for the record of what was proposed.
+against the **governing ≥25% bar** (escalated from ≥15% same-day when
+Phase A killed at A0, firing kill criterion 1) — misses both; the design
+section's "wasted lane" premise below does not hold against the current
+templates (`can_lane_split` already fills it for free). Kept as written
+for the record of what was proposed.
 
 **Approach.** RFC-058's phase-0 census found width-dominance is the
 *entire* failure mode among ≥3-band candidates (5 of 19: `ec20-ore`,
@@ -335,11 +337,19 @@ through the bar-tightening rule in kill criterion 1.
   merge is needed. Status: Design, no phases started. Evidence base is
   `docs/compaction-retro-2026-07.md`, itself committed in this same PR.
 
+- **2026-07-31 — kill criterion 1 fired: Phase A killed at the A0 probe
+  stage (≥25% bar unreachable per measured community-best balancer
+  ceilings), escalating Phase B's bar from ≥15% to ≥25%.** Per the RFC's
+  own kill criterion 1, this happened *before* this spike's paper analysis
+  concluded; the numbers below are evaluated against **≥25% as the
+  governing bar**, with the original ≥15% carried alongside as context,
+  not as the bar the verdict is judged against.
+
 - **2026-07-31 — Phase B killed on paper analysis, before a prototype
   template was written.** The RFC's own escape hatch fired: "a paper
   analysis against `docs/factorio-mechanics.md` lane rules may kill this
   in an hour." It did, in about that time, via two independent findings —
-  either alone caps the reshaping under the bar.
+  either alone caps the reshaping under both bars.
 
   **Finding 1 — the "wasted lane" the design section assumes does not
   exist in the current templates.** Phase B's motivating claim is that "the
@@ -380,9 +390,9 @@ through the bar-tightening rule in kill criterion 1.
   capping alone measured near-zero, −0.9%, on 2026-07-30), so this ceiling
   applies directly to band-bbox area, not just to one row's height. Best
   case across every row kind in the corpus (`SingleInput`) is **7.14%**,
-  under **half** the ≥15% bar and under a third of the ≥25% bar Phase B
-  would inherit under kill criterion 1 if Phase A's own ≥25% bar goes
-  unmet (Phase A has not been run in this repo as of this spike).
+  under **half** the original ≥15% bar and **under a third of the
+  escalated ≥25% bar** that governs per kill criterion 1 (Phase A killed
+  at A0, above).
 
   **The first wall, answered directly per the spike's pre-registration:**
   output-side sharing (above) is lane-safe. Input-side sharing is not, and
@@ -420,6 +430,21 @@ through the bar-tightening rule in kill criterion 1.
   | `pu2-ore-hs` | 18 | 192×184 | 192 | yes (refuses 3:1/3.5:1/4:1) |
   | `pu2.5-plates-hs` | 14 | 73×159 | 73 | **no** — packs at 3:1, 77×40 (−73%) |
 
+  **Ceiling vs both bars**, per row kind (structural — applies uniformly,
+  not fixture-by-fixture, since the mechanism is "one belt-tile-row saved
+  per merged pair" regardless of which fixture the pair sits in):
+
+  | row kind | H (tile-rows) | ceiling `1/(2H)` | vs original ≥15% | vs escalated ≥25% |
+  |---|---:|---:|---|---|
+  | `SingleInput` (best case) | 7 | **7.14%** | misses by ~2.1× | misses by ~3.5× |
+  | `DualInput` | 8 | 6.25% | misses by ~2.4× | misses by ~4.0× |
+  | `TripleInput` | 9 | 5.56% | misses by ~2.7× | misses by ~4.5× |
+  | `QuadInput` | 10 | 5.00% | misses by ~3.0× | misses by ~5.0× |
+
+  Every row kind these fixtures use misses **both** bars; the escalation
+  (≥15%→≥25%) doesn't change which side of the line the result falls on —
+  it was already a clean miss at the original bar, just a closer one.
+
   Reported honestly, not silently dropped: `pu2.5-plates-hs` reproduced as
   width-dominant in RFC-058's original 2026-07-31 census but packs cleanly
   under ordinary band-packing on this host/run — the same host-sensitivity
@@ -430,15 +455,19 @@ through the bar-tightening rule in kill criterion 1.
   so it applies uniformly and none of the 4 remaining fixtures can clear
   15% by construction.
 
-  **Verdict: KILLED, on paper analysis.** No prototype template, no
-  measurement harness, and no sim anchor were built — the RFC's own
-  kill-criterion-3 sim-anchoring duty never triggers because nothing
-  reached "validates clean" to anchor. Disposition: **KILLED**, no
-  residue — Phase B's premise (an idle lane free for the taking) is false
-  against the current template implementation, and the one savings
-  mechanism that does exist once that's corrected (deleting one duplicate
-  belt-tile-row per merged pair) has a hard, row-kind-derived ceiling
-  (5.00–7.14%) that misses the ≥15% bar by roughly half in the best case
-  and misses the kill-criterion-1-escalated ≥25% bar by 3–5×. Phase C
-  (DI-aware packing probe) and Phase A (balancer/template shrinking) are
-  unaffected — this closes Phase B only.
+  **Verdict: KILLED against the governing ≥25% bar** (escalated by kill
+  criterion 1 when Phase A killed at A0, same date — see above). The
+  ceiling (5.00–7.14%, row-kind-derived) would also have been a clean KILL
+  against the original ≥15% bar on its own merits — this is not a case of
+  the escalation flipping a would-be pass into a fail; the reshaping never
+  cleared either line. No prototype template, no measurement harness, and
+  no sim anchor were built — the RFC's own kill-criterion-3 sim-anchoring
+  duty never triggers because nothing reached "validates clean" to anchor.
+  Disposition: **KILLED**, no residue — Phase B's premise (an idle lane
+  free for the taking) is false against the current template
+  implementation, and the one savings mechanism that does exist once
+  that's corrected (deleting one duplicate belt-tile-row per merged pair)
+  cannot reach a third of the governing bar in the best case. With Phase A
+  also killed (A0) and Phase B killed here, Phase C (DI-aware packing
+  probe, still gated on #526's DI-cell repair per its own prerequisite) is
+  RFC-063's only phase not yet resolved.
