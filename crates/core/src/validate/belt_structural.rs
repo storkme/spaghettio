@@ -498,6 +498,49 @@ pub fn check_belt_dead_ends(layout: &LayoutResult) -> Vec<ValidationIssue> {
         }
     }
 
+    // Underground-belt outputs emit items onto the surface at their output
+    // tile — that tile needs a receiver just like a surface belt's. A UG
+    // output is, by construction, always a flow source (it only exists
+    // because a paired UG input fed it), so unlike surface belts it has no
+    // "orphan segment" case — an unreceived UG output is always a real
+    // dead-end, not dead concrete.
+    for e in &layout.entities {
+        if !(is_ug_belt(&e.name) && e.io_type.as_deref() == Some("output")) {
+            continue;
+        }
+        let d = dir_to_vec(e.direction);
+        let out_x = e.x + d.0;
+        let out_y = e.y + d.1;
+        if out_x < 0 || out_x >= w || out_y < 0 || out_y >= h {
+            continue;
+        }
+        if receiver_tiles.contains(&(out_x, out_y)) {
+            continue;
+        }
+        // The UG output's own tile is a full belt-like surface segment — an
+        // inserter reaching it drains items right there, so they never need
+        // to reach out_tile at all (compact leapfrog UG-output/inserter
+        // rows rely on exactly this; see the kovarex self-loop template).
+        if pickup_tiles.contains(&(e.x, e.y)) {
+            continue;
+        }
+        issues.push(ValidationIssue::with_pos(
+            Severity::Error,
+            "belt-dead-end",
+            format!(
+                "UG output at ({},{}) facing {:?} has no receiver at output tile ({},{}) \
+                 — items accumulate with nowhere to go",
+                e.x,
+                e.y,
+                e.direction,
+                out_x,
+                out_y
+            ),
+            e.x,
+            e.y,
+        ));
+    }
+
     issues
 }
 
@@ -1478,6 +1521,10 @@ mod tests {
         make_entity("transport-belt", x, y, dir)
     }
 
+    fn ug_belt(x: i32, y: i32, dir: EntityDirection, io_type: &str) -> PlacedEntity {
+        PlacedEntity { io_type: Some(io_type.to_string()), ..make_entity("underground-belt", x, y, dir) }
+    }
+
     fn belt_carrying(x: i32, y: i32, dir: EntityDirection, item: &str) -> PlacedEntity {
         PlacedEntity { carries: Some(item.to_string()), ..belt(x, y, dir) }
     }
@@ -1627,6 +1674,78 @@ mod tests {
         };
         let lr = layout(vec![belt(0, 0, EntityDirection::East), ug_input]);
         assert!(check_belt_dead_ends(&lr).is_empty());
+    }
+
+    #[test]
+    fn ug_output_dead_end_detected() {
+        // UG output facing South into empty space should be flagged.
+        // Ported from the abandoned belt_flow.rs duplicate (issue #488): the
+        // live check previously only iterated is_surface_belt entities, so
+        // a UG output running into nothing was never examined.
+        let lr = LayoutResult {
+            entities: vec![
+                belt(0, 0, EntityDirection::South),
+                ug_belt(0, 1, EntityDirection::South, "input"),
+                ug_belt(0, 3, EntityDirection::South, "output"),
+                // nothing at (0,4) — dead end
+            ],
+            width: 10,
+            height: 10,
+            ..Default::default()
+        };
+        let issues = check_belt_dead_ends(&lr);
+        let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+        assert_eq!(errors.len(), 1, "expected 1 dead-end for UG output into nothing");
+        assert!(errors[0].message.contains("UG output"));
+    }
+
+    #[test]
+    fn ug_output_with_receiver_ok() {
+        // UG output into a surface belt at layout edge — no dead end.
+        // Ported from the abandoned belt_flow.rs duplicate (issue #488).
+        let lr = LayoutResult {
+            entities: vec![
+                ug_belt(0, 0, EntityDirection::South, "input"),
+                ug_belt(0, 2, EntityDirection::South, "output"),
+                belt(0, 3, EntityDirection::South), // receives UG output, flows off edge
+            ],
+            width: 10,
+            height: 4, // belt at y=3 flows to y=4 which is off-edge — OK
+            ..Default::default()
+        };
+        let issues = check_belt_dead_ends(&lr);
+        let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+        assert!(errors.is_empty(), "UG output into belt should not be flagged");
+    }
+
+    #[test]
+    fn ug_output_drained_by_own_tile_inserter_ok() {
+        // A compact leapfrog row (e.g. the kovarex self-loop template): an
+        // inserter reaches the UG output's own tile and drains it directly,
+        // so the item never needs to continue to out_tile at all — even
+        // though out_tile is empty. Regression for a false positive found
+        // when this check was ported (issue #488): the first version only
+        // checked out_tile against receiver_tiles and flagged every
+        // leapfrog-row UG output whose out_tile happened to be the row's end.
+        let lr = LayoutResult {
+            entities: vec![
+                ug_belt(0, 0, EntityDirection::East, "input"),
+                ug_belt(2, 0, EntityDirection::East, "output"),
+                // inserter at (2,1) facing South picks up from (2,0) — the
+                // UG output's own tile — and drops somewhere irrelevant;
+                // nothing sits at (3,0).
+                inserter(2, 1, EntityDirection::South),
+            ],
+            width: 10,
+            height: 10,
+            ..Default::default()
+        };
+        let issues = check_belt_dead_ends(&lr);
+        let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+        assert!(
+            errors.is_empty(),
+            "UG output drained by an inserter at its own tile should not be flagged: {errors:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
