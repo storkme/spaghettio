@@ -156,9 +156,16 @@ impl Manifest {
         serde_json::from_str(s).map_err(|e| format!("manifest parse error: {e}"))
     }
 
-    /// True if any boundary (input, output, or surplus exit) is fluid —
-    /// the RFC requires fluid-fed runs to be flagged UNCALIBRATED in the
-    /// report (no fixture has exercised the infinity-pipe feed/void paths).
+    /// True if any boundary (input, output, or surplus exit) is fluid.
+    /// Surfaced in the report as context (`Report::fluid_fed`), not as a
+    /// calibration warning: the infinity-pipe feed/void path was flagged
+    /// UNCALIBRATED through RFC-050 Phase 1, but #373 found and fixed the
+    /// actual defect (an exporter pipe-to-ground direction inversion), and
+    /// `plastic-bar` (crude-oil), `sulfur` (water + crude-oil, two fluid
+    /// boundaries on one edge), and `land-mine` (mixed fluid+item boundary)
+    /// have all since exercised it and PASSed — see #537. A run with a
+    /// non-south fluid boundary is still covered by
+    /// `has_uncalibrated_direction` below, which remains live.
     pub fn has_fluid_boundary(&self) -> bool {
         self.boundary_inputs.iter().any(|b| b.is_fluid)
             || self.boundary_outputs.iter().any(|b| b.is_fluid)
