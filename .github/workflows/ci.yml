@@ -58,6 +58,9 @@ jobs:
           # block scalar since).
           grep -q -- 'number }} --comment' "$f" || { echo "::error file=$f::prompt missing --comment — plugin contract is 'do not post' without it (#329)"; fail=1; }
           grep -q -- '--allowedTools' "$f" || { echo "::error file=$f::claude_args missing --allowedTools — every posting/diff call denied (#331)"; fail=1; }
+          grep -q -- '--disallowedTools' "$f" || { echo "::error file=$f::claude_args missing --disallowedTools — async-family ban gone, silent-park class 6 reopens (#538)"; fail=1; }
+          r=.github/workflows/claude-review-auto-retry.yml
+          [ -f "$r" ] || { echo "::error file=$r::auto-retry workflow missing — silent-park runs red without automatic recovery (#538)"; fail=1; }
           g=.github/workflows/claude.yml
           grep -q 'github.event.sender.login == github.repository_owner' "$g" || { echo "::error file=$g::missing owner-only sender gate — public repo, outsiders can burn tokens via @claude"; fail=1; }
           if [ "$fail" -eq 1 ]; then
