@@ -1351,11 +1351,27 @@ fn layout_pass(
         })
         .collect();
 
-    // RFC-058 phase 2: flag-gated band packing plan. Emits trace events
-    // only — positions are recorded, nothing consumes them, and the
-    // entity list is untouched by construction (the call takes `&`).
+    // RFC-058 phase 4: flag-gated packed build. The plan event still fires
+    // (diagnosability), then the packed builder either takes over — its
+    // LayoutResult replaces the native one — or refuses with a typed
+    // reason and the native result below ships untouched.
     if opts.band_packing {
         crate::bus::bands::plan_band_packing(&row_spans, &all_entities);
+        match crate::bus::bands::build_packed_layout(
+            &row_spans,
+            &all_entities,
+            solver_result,
+            opts.max_belt_tier.as_deref(),
+        ) {
+            Ok(packed) => return Ok((packed, row_spans, Vec::new(), Vec::new())),
+            Err(reason) => {
+                crate::trace::emit(crate::trace::TraceEvent::BandPackingRefused {
+                    bands: 0,
+                    widest_band: 0,
+                    reason,
+                });
+            }
+        }
     }
 
     Ok((
@@ -3161,23 +3177,51 @@ mod tests {
             &FxHashSet::default(),
         )
         .expect("solve sci1");
-        let control = build_bus_layout(&sr, LayoutOptions::default()).expect("control layout");
+        // Candidate isolation, same as the parity test: with cell
+        // composition / DI in Candidate mode the flag-on run's winner can
+        // be a DIFFERENT candidate (observed: the cell candidate re-solves
+        // at AM3 and wins when the packed layout scores badly), which
+        // makes control-vs-packed comparison meaningless.
+        let base = LayoutOptions {
+            cell_composition: crate::bus::cells::CellComposition::Off,
+            direct_insertion: crate::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        };
+        let control = build_bus_layout(&sr, base.clone()).expect("control layout");
         let _guard = trace::start_trace();
         let packed = build_bus_layout(
             &sr,
             LayoutOptions {
                 band_packing: true,
-                ..Default::default()
+                ..base
             },
         )
         .expect("flag-on layout");
         let events = trace::drain_events();
 
-        assert_eq!(
-            format!("{:?}", control.entities),
-            format!("{:?}", packed.entities),
-            "band_packing must not move a single entity",
-        );
+        // Phase-4 contract (supersedes the phase-2 inertness assertion this
+        // test carried while the packer was emit-only): flag-on either
+        // REFUSES — byte-identical entities — or produces a packed layout
+        // that must not exceed the control's area and must preserve the
+        // machine census exactly (bands are rigid; only transport moves).
+        let census = |l: &crate::models::LayoutResult| {
+            let mut m: Vec<(String, Option<String>)> = l
+                .entities
+                .iter()
+                .filter(|e| crate::common::is_machine_entity(&e.name))
+                .map(|e| (e.name.clone(), e.recipe.clone()))
+                .collect();
+            m.sort();
+            m
+        };
+        if format!("{:?}", control.entities) != format!("{:?}", packed.entities) {
+            assert_eq!(census(&control), census(&packed), "machine census must survive packing");
+            assert!(
+                (packed.width as i64) * (packed.height as i64)
+                    <= (control.width as i64) * (control.height as i64),
+                "a packed layout may not exceed the control's bounding box",
+            );
+        }
         let last_plan = events.iter().rev().find(|e| {
             matches!(
                 e,

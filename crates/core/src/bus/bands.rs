@@ -632,25 +632,29 @@ pub fn route_packed_nets(
     const V: u8 = 4;
     const TURN: u8 = 8;
 
+    // Occupancy from ENTITY footprints, not band rects: a band's interior
+    // belt rows (dual-input templates put one between machine runs) are
+    // corridor TARGETS, and rect-blocking made them unreachable — the
+    // no-corridor-at-any-gap failure the parity test caught on sci2-ore.
     let mut occ: FxHashMap<(i32, i32), u8> = FxHashMap::default();
     let (mut lo, mut hi) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
-    for (bi, c) in contents.iter().enumerate() {
-        let (_, _, rw, rh) = c.rect;
-        let (ox, oy) = origins[bi];
-        for x in ox..ox + rw {
-            for y in oy..oy + rh {
-                *occ.entry((x, y)).or_insert(0) |= BAND;
+    for e in existing {
+        if is_transport(&e.name) {
+            let axis = match e.direction {
+                D::East | D::West => H,
+                _ => V,
+            };
+            *occ.entry((e.x, e.y)).or_insert(0) |= axis;
+        } else {
+            let (w, h) = entity_size(&e.name);
+            for dx in 0..w as i32 {
+                for dy in 0..h as i32 {
+                    *occ.entry((e.x + dx, e.y + dy)).or_insert(0) |= BAND;
+                }
             }
         }
-        lo = (lo.0.min(ox), lo.1.min(oy));
-        hi = (hi.0.max(ox + rw - 1), hi.1.max(oy + rh - 1));
-    }
-    for e in existing {
-        let axis = match e.direction {
-            D::East | D::West => H,
-            _ => V,
-        };
-        *occ.entry((e.x, e.y)).or_insert(0) |= axis;
+        lo = (lo.0.min(e.x), lo.1.min(e.y));
+        hi = (hi.0.max(e.x), hi.1.max(e.y));
     }
     let (min, max) = ((lo.0 - 6, lo.1 - 6), (hi.0 + 6, hi.1 + 6));
     let passable = |occ: &FxHashMap<(i32, i32), u8>, t: (i32, i32), horiz: bool| -> bool {
@@ -669,12 +673,23 @@ pub fn route_packed_nets(
 
     let mut out: Vec<PlacedEntity> = Vec::new();
     for net in ordered {
+        // The whole output row plus 2-tile extensions is the start set —
+        // the spike's shape. A single west-end pickup tile proved fragile:
+        // an earlier net's corridor turning on that exact tile left zero
+        // seedable starts (caught by the parity test on sci2-ore).
         let starts: Vec<(i32, i32)> = match net.src_band {
-            Some(bi) => contents[bi]
-                .row_indices
-                .iter()
-                .map(|&si| (origins[bi].0 - 1, row_y(bi, rows[si].output_belt_y)))
-                .collect(),
+            Some(bi) => {
+                let (ox, _) = origins[bi];
+                let rw = contents[bi].rect.2;
+                contents[bi]
+                    .row_indices
+                    .iter()
+                    .flat_map(|&si| {
+                        let y = row_y(bi, rows[si].output_belt_y);
+                        (ox - 2..ox + rw + 2).map(move |x| (x, y))
+                    })
+                    .collect()
+            }
             None => (min.1..=max.1).map(|y| (min.0, y)).collect(),
         };
         for &dst in &net.dst_bands {
@@ -750,9 +765,20 @@ pub fn route_packed_nets(
                 }
             }
             let Some(path) = found else {
+                let seedable = starts
+                    .iter()
+                    .filter(|&&s| passable(&occ, s, true) || passable(&occ, s, false))
+                    .count();
+                let sample: Vec<_> = starts.iter().take(3).collect();
                 return Err(format!(
-                    "net {}: no corridor from {:?} to band {dst}",
-                    net.item, net.src_band
+                    "net {}: no corridor from {:?} to band {dst} \
+                     (starts {} seedable of {} {:?}, targets {})",
+                    net.item,
+                    net.src_band,
+                    seedable,
+                    starts.len(),
+                    sample,
+                    targets.len(),
                 ));
             };
             // Materialize: belts along the path; crossings of existing
@@ -839,18 +865,40 @@ pub fn build_packed_layout(
             recipes: bands[i].recipes.clone(),
         })
         .collect();
-    let plan = best_pack(&pseudo, GAP, MAX_ASPECT)
-        .ok_or_else(|| "packed-refusal: no packing within the aspect cap".to_string())?;
-    // Shift origins so belt rows above the top shelf stay in-bounds.
-    let origins: Vec<(i32, i32)> =
-        plan.positions.iter().map(|&(x, y)| (x + 2, y + 3)).collect();
-    let mut entities = translate_band_contents(&contents, &origins, row_entities);
+    // The spike's measured lesson (RFC-058 decision log): real fixtures
+    // need gap widening once per-band belt rows are reserved — sci2-ore
+    // routed only at gap 6. Same loop here: pack, translate, route; any
+    // routing failure re-packs the whole arrangement one gap wider.
     let belt = crate::common::belt_entity_for_rate(f64::INFINITY, max_belt_tier);
-    entities.extend(stamp_band_belt_rows(rows, &contents, &origins, belt));
     let nets = build_packed_nets(rows, &contents, solver_result);
-    let corridors =
-        route_packed_nets(&nets, rows, &contents, &origins, &entities, belt)?;
-    entities.extend(corridors);
+    let mut built: Option<Vec<PlacedEntity>> = None;
+    let mut last_err = String::new();
+    let mut used_origins: Vec<(i32, i32)> = Vec::new();
+    for gap in GAP..=8 {
+        let Some(plan) = best_pack(&pseudo, gap, MAX_ASPECT) else {
+            last_err = format!("no packing within the aspect cap at gap {gap}");
+            continue;
+        };
+        // Shift origins so belt rows above the top shelf stay in-bounds.
+        let origins: Vec<(i32, i32)> =
+            plan.positions.iter().map(|&(x, y)| (x + 2, y + 3)).collect();
+        let mut entities = translate_band_contents(&contents, &origins, row_entities);
+        entities.extend(stamp_band_belt_rows(rows, &contents, &origins, belt));
+        match route_packed_nets(&nets, rows, &contents, &origins, &entities, belt) {
+            Ok(corridors) => {
+                entities.extend(corridors);
+                built = Some(entities);
+                used_origins = origins;
+                break;
+            }
+            Err(e) => last_err = format!("gap {gap}: {e}"),
+        }
+    }
+    let Some(mut entities) = built else {
+        return Err(format!("packed-refusal: no gap in 2..=8 routes all nets — {last_err}"));
+    };
+    let origins = used_origins;
+    let _ = &mut entities;
 
     // Pole grid over the arrangement extent, on free tiles only.
     let occupied: FxHashSet<(i32, i32)> = entities

@@ -5878,14 +5878,23 @@ fn rfc058_placer_bands_match_y_projection() {
             direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
             ..Default::default()
         };
+        // Phase 4 makes flag-on RETURN the packed layout, so the oracle
+        // y-projection runs on a flag-OFF control built with identical
+        // options — the same native arrangement the plan event describes.
+        let control_opts = layout::LayoutOptions {
+            band_packing: false,
+            ..opts.clone()
+        };
+        let control = layout::build_bus_layout(&sr, control_opts)
+            .unwrap_or_else(|e| panic!("{label}: control refused: {e}"));
         let _guard = trace::start_trace();
-        let l = layout::build_bus_layout(&sr, opts)
+        let _packed = layout::build_bus_layout(&sr, opts)
             .unwrap_or_else(|e| panic!("{label}: layout refused: {e}"));
         let events = trace::drain_events();
         drop(_guard);
 
-        // Oracle: the probe's y-projection over the final layout.
-        let oracle = rfc058_extract_bands(&l);
+        // Oracle: the probe's y-projection over the control layout.
+        let oracle = rfc058_extract_bands(&control);
         let oracle_rects: Vec<(i32, i32, i32, i32)> =
             oracle.iter().map(|b| (b.x, b.y, b.w, b.h)).collect();
 
@@ -5926,7 +5935,18 @@ fn rfc058_placer_bands_match_y_projection() {
                     "{label}: planned positions diverge from the probe packer",
                 );
             }
-            TraceEvent::BandPackingRefused { bands, .. } => {
+            TraceEvent::BandPackingRefused { bands, reason, .. } => {
+                println!("{label}: refused: {reason}");
+                if reason.starts_with("packed-refusal:") {
+                    // A BUILDER refusal (scope or routing), not a packer
+                    // one: the plan may be packable while the build
+                    // legitimately abstains — e.g. pu1-plate under the
+                    // DI-Off isolation this test needs puts copper-cable
+                    // at 81/s on the bus, tripping the multi-lane scope
+                    // refusal that DI normally removes. The native layout
+                    // ships; nothing to compare.
+                    continue;
+                }
                 // The oracle must agree there is nothing to pack here:
                 // either too few bands, or no packing under the cap.
                 assert_eq!(*bands, oracle.len(), "{label}: refusal band count diverges");
