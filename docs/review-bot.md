@@ -278,6 +278,118 @@ a plain re-run produced the 6-turn park above. So this is not stochastic in
 the way class 5 is — re-running is not the remedy, and two consecutive silent
 no-ops on one head is the signal to stop re-running and pull the artifact.
 
+### Failure class 10: a description-edit run cancelled the code run (2026-07-31)
+
+The first genuinely *structural* green-with-no-review: nothing crashed, nothing
+was denied, no agent gave up. Two runs raced and the wrong one survived.
+
+On PR #521, at head `269dc3e3`:
+
+| run | event | outcome |
+|---|---|---|
+| `30624281369` | code review | **cancelled** 38s in |
+| `30624312907` | `edited` (body) | **success**, 1m4s, `reviews=0 inline=0 bot_summaries=0` |
+
+`claude-review` went green with zero review activity, and the guard agreed it
+should.
+
+**Both halves were behaving as designed.** The concurrency group
+(`claude-review-<pr>`, `cancel-in-progress: true`) exists so a burst of pushes
+does not leave several runs reviewing superseded heads — its comment justified
+cancelling on the grounds that "the surviving run reviews the only SHA that can
+be merged." The `edited` handler exists so body-scoped findings can be confirmed
+closed without an 11-minute re-review, and its guard branch skips head-SHA
+enforcement because "coverage is enforced by the push events."
+
+Composed, they contradict: an `edited` run deliberately does **not** review the
+diff, so when it wins the cancellation race the survivor reviews nothing — and
+then defers coverage to the push event it just killed. Each comment was true in
+isolation and the pair was false.
+
+**Sequence that triggers it**, and it is an ordinary one: push a branch, open a
+PR, then edit the PR body within the review's 8-11 minute window. Anyone who
+opens a PR and immediately corrects a number in the description hits it.
+
+**Two fixes, deliberately redundant:**
+
+1. The concurrency group is keyed by event class —
+   `claude-review-<pr>-<body|code>` — so body edits and code runs are in
+   separate groups and cannot cancel each other.
+2. The guard's `edited` branch no longer takes the deferral on trust. Deferring
+   is only honest if a push run left something behind, so a body edit on a PR
+   with **zero** review artifacts anywhere in its lifetime now fails. Lifetime,
+   not head-SHA: the point is to catch "never reviewed at all" without demanding
+   that a body edit re-review code.
+
+Fix 1 prevents this specific race; fix 2 catches any future route to the same
+end state, since the failure is "the guard passed a PR nothing ever reviewed"
+rather than "these two events raced".
+
+**The generalisable lesson is about the comments, not the code.** Both carve-outs
+carried a written justification, and each justification quantified over the other
+mechanism's behaviour without naming it — "the surviving run reviews" assumed
+every survivor reviews; "coverage is enforced by the push events" assumed the
+push events still exist. When a carve-out's rationale depends on another
+mechanism's behaviour, name that mechanism in the comment, because that is what
+makes the dependency visible when the other one changes.
+
+Also caught in the same log: the review prompt still told the agent that "the
+guard below only checks that the PR has SOME review in its lifetime", which
+stopped being true on 2026-07-29 when the guard moved to head-SHA coverage
+(class 6's fix). That understated the consequence of a skip to the one reader
+whose behaviour it was trying to change. Corrected in the same PR.
+
+### Failure class 6 recurred a THIRD time: an async subagent launch (2026-07-31)
+
+Same head as class 10, one run later. PR #521, run `30624630414`:
+`num_turns: 4`, `subtype: success`, `permission_denials_count: 0`, $0.19, 23.7s,
+`reviews=0 inline=0 bot_summaries=0`. The guard caught it; the check failed
+correctly.
+
+The transcript, in order:
+
+```
+[4]  Agent(...)   -> "Async agent launched successfully… working in the background"
+[9]  "I'll wait for the eligibility check to complete before proceeding further."
+[10] ToolSearch(select:SendMessage)
+[14] gh pr view 521 --json state,isDraft,title,body,comments
+[19] ScheduleWakeup({stop: true})
+[26] "I've kicked off the eligibility check… I'll continue once it reports back."  -> ends
+```
+
+**The root cause is that `Agent` returned asynchronously.** The prompt told the
+orchestrator to "launch subagents and consume their results synchronously within
+this run", but the tool handed back a launch acknowledgement rather than a
+result, and there is no wake-up path in a one-shot headless job — the completion
+notification arrives after the runner is gone. Having no way to wait and no
+instruction covering that case, it ended the turn.
+
+Note it *did* call `ScheduleWakeup`, which the prompt banned outright — with
+`stop: true`, so the ban was technically honoured while the behaviour it exists
+to prevent happened anyway.
+
+**This is the third distinct parking mechanism**, and the previous entry
+predicted it in as many words: *"Any prompt-level fix has to be phrased as an
+obligation to post before ending rather than a prohibition on a parking
+mechanism — mechanisms are open-ended, the posting contract is not."* That advice
+was recorded and then not acted on; the prompt kept the ban and left the posting
+obligation **conditional** on "if you consciously decide NOT to review". This run
+never decided not to review — it believed it was mid-review — so the obligation
+did not bind. A conditional obligation is not a contract.
+
+**Fixes:**
+
+1. The posting contract is now **unconditional**: post a `gh pr comment` before
+   the final turn ends, in every run and every outcome, including a partial
+   review or an "I could not finish, here is how far I got". "If unsure, post."
+2. The async-`Agent` trap is named explicitly, with the instruction to do the
+   work inline via plain `gh pr view` / `gh pr diff`, and that an unarrived
+   subagent result is a reason to finish and post rather than to wait.
+
+The tally is what matters here: a prohibition on parking has now been defeated
+three times, by a wakeup call, by prose, and by a tool's async return. Each fix
+addressed the mechanism in front of it. Only the obligation generalises.
+
 ## Forensics playbook
 
 **Run signatures** (from the action's result JSON in the job log — grep the
