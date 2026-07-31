@@ -199,6 +199,58 @@ fn port_abs(p: &Port, cell_x: i32, cell_y: i32) -> (i32, i32) {
     (cell_x + p.x, cell_y + p.y)
 }
 
+/// The consumer-side port an INTERNAL (producer-cell → consumer-cell)
+/// corridor wires to for `item`. extract.rs derives one inbound port
+/// per 4-adjacency-CONNECTED RUN of the item's `belt-in` segment —
+/// usually that's one run (one port) per row, but UG gaps punched into
+/// a SINGLE row's belt-in segment (e.g. `quad_input_row`'s belt3:
+/// per-machine UG-IN at `mx` / gap / UG-OUT at `mx+2`, still one
+/// logical segment) break 4-adjacency and split it into several
+/// same-row runs, each getting its own port. Pre-#433-fix, `.find`
+/// picked whichever port came first in extraction order — which for
+/// these same-row splits is the westmost run, i.e. the belt's true
+/// upstream entry — and wired correctly (measured: 7 chain-eligible
+/// targets at warnings=0, review round on this PR). A genuinely
+/// multi-ROW consumer cell (distinct y per row) exposes one port per
+/// row for the same item; v1 corridors route to exactly one port, so
+/// wiring "the" port would silently starve every row past the first —
+/// THAT's the real #433 defect.
+///
+/// So: group matches by `y`. All matches share one y → same-row
+/// UG-split runs (or the trivial single-port case) — return the min-x
+/// (westmost = upstream entry) port, exactly reproducing the pre-fix
+/// deterministic behavior. Matches spanning more than one distinct y →
+/// genuine multi-row fan-in, which v1 corridors can't wire — refuse
+/// loudly instead of silently starving rows past the first (the
+/// EXTERNAL world-feed path was already fixed port-aware — commit
+/// 620d103c, "every port gets its own feed column"). Wiring every
+/// row's port is future work, gated on feed-bound sizing actually
+/// reaching multi-row chain cells.
+fn single_inbound_port<'a>(
+    ports: &'a [Port],
+    item: &str,
+    consumer_recipe: &str,
+) -> Result<&'a Port, String> {
+    let matches: Vec<&Port> = ports.iter().filter(|q| q.inbound && q.item == item).collect();
+    if matches.is_empty() {
+        return Err(format!("cells: {consumer_recipe} lacks in-port for {item}"));
+    }
+    let mut rows: Vec<i32> = matches.iter().map(|p| p.y).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    if rows.len() == 1 {
+        return Ok(matches
+            .into_iter()
+            .min_by_key(|p| p.x)
+            .expect("matches non-empty, checked above"));
+    }
+    Err(format!(
+        "cells: {consumer_recipe} has {} in-ports for {item} across {} rows (multi-row corridor fan not implemented, #433)",
+        matches.len(),
+        rows.len()
+    ))
+}
+
 /// Crossing-aware corridor stamper. Horizontal runs hop under
 /// registered vertical columns; vertical legs hop under registered
 /// horizontal rows; whichever is stamped LATER does the hopping, so
@@ -1269,12 +1321,7 @@ fn compose_chain_with_capacity_and_order(
                     branch_origins.push((pt_x, fan_y));
                     for (bi, ci) in ordered.iter().enumerate() {
                         let c = &placed[*ci];
-                        let port = c
-                            .cell
-                            .ports
-                            .iter()
-                            .find(|q| q.inbound && q.item == d_item)
-                            .expect("consumer port checked in eligibility");
+                        let port = single_inbound_port(&c.cell.ports, &d_item, &c.recipe)?;
                         let (tx, ty) = port_abs(port, c.x, c.y_off);
                         let (bx, by) = branch_origins[bi];
                         let seg = format!("corr:{}:{}", p.seg, c.seg);
@@ -1363,12 +1410,7 @@ fn compose_chain_with_capacity_and_order(
                     });
                     continue;
                 };
-                let port = c
-                    .cell
-                    .ports
-                    .iter()
-                    .find(|q| q.inbound && q.item == d_item)
-                    .expect("consumer port checked in eligibility");
+                let port = single_inbound_port(&c.cell.ports, &d_item, &c.recipe)?;
                 let (tx, ty) = port_abs(port, c.x, c.y_off);
                 let seg = format!("corr:{}:{}", p.seg, c.seg);
                 let up_demand = lane_demand[ci % n];
@@ -1526,9 +1568,7 @@ fn compose_chain_with_capacity_and_order(
         ordered.sort_by_key(|ci| placed[*ci].x);
         for (bi, ci) in ordered.iter().enumerate() {
             let c = &placed[*ci];
-            let port = c.cell.ports.iter()
-                .find(|q| q.inbound && q.item == out_item)
-                .expect("consumer port checked in eligibility");
+            let port = single_inbound_port(&c.cell.ports, &out_item, &c.recipe)?;
             let (tx, ty) = port_abs(port, c.x, c.y_off);
             let (bx, by) = branch_origins[bi];
             let seg = format!("corr:{}:{}", p.seg, c.seg);

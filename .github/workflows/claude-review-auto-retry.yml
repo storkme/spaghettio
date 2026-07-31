@@ -1,0 +1,39 @@
+# Mechanism-agnostic recovery for the review bot's silent-park class
+# (#538, failure class 6 in docs/review-bot.md): the orchestrator defers
+# (async agents, wakeups, bare intent), ends with zero review activity,
+# and the #522 guard fails the check. Four occurrences; a manual re-run
+# recovered every one. This automates exactly that re-run, capped so a
+# genuinely broken run still reds to a human after three attempts.
+#
+# Safety properties (verified in the #538 investigation):
+# - Triggers only on conclusion == 'failure'; every benign skip (draft,
+#   workflow-file PR, small diff, already-reviewed) exits 0 and never
+#   fires this.
+# - `gh run rerun --failed` re-runs the SAME run (new attempt) — the
+#   required check re-enters in_progress, no gap in gate semantics.
+# - workflow_run workflows always execute the default-branch version of
+#   this file, so a PR editing it cannot hijack the retry behavior.
+name: Claude Review Auto-Retry
+
+on:
+  workflow_run:
+    workflows: ["Claude Code Review"]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  retry:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.run_attempt < 3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-run failed review jobs (attempt ${{ github.event.workflow_run.run_attempt }} of max 3)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Re-running failed jobs of run ${{ github.event.workflow_run.id }} (attempt ${{ github.event.workflow_run.run_attempt }} just failed)"
+          gh run rerun ${{ github.event.workflow_run.id }} --failed -R ${{ github.repository }}

@@ -186,6 +186,15 @@ jobs:
           claude_args: |
             --model claude-sonnet-5
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
+            --disallowedTools "ScheduleWakeup,Task,TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,CronCreate,CronDelete,CronList,RemoteTrigger,Workflow,PushNotification"
+          # --disallowedTools is #538's structural guard: the silent-park
+          # class (failure class 6, four occurrences) kept finding new
+          # defer-and-end mechanisms after each prompt-level ban, and the
+          # #535 run artifact proved these tools stay reachable via
+          # ToolSearch even when absent from --allowedTools. None of the
+          # banned family has a legitimate use in a one-shot review run.
+          # Agent is deliberately NOT banned: the plugin's own eligibility
+          # gate dispatches through it (see #538 for the canary plan).
 
       # Full session transcript (includes every permission denial) — the
       # difference between forensics and guesswork when a run misbehaves.

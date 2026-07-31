@@ -9763,6 +9763,73 @@ fn probe_di_contention_corpus_sweep() {
     }
 }
 
+/// RFC-059's DECIDED default: `Downstream`, pinned on in-game evidence.
+///
+/// This is the teeth test for the flip, and it needs teeth because the choice
+/// is nearly invisible: 173 of the 179 contended corpus targets ship identical
+/// layouts under either order, and the whole suite is green under both. "Tests
+/// pass" says nothing about which order is live.
+///
+/// `big-electric-pole@1` on am2 is the fixture because it is where the choice
+/// reaches a user hardest. Headless runs, same harness and warmup, only the
+/// claim order differing:
+///
+/// - `Upstream` ships 1146 entities and measures **0.51/s against a planned
+///   1.00/s** — converged, with 43 machines working;
+/// - `Downstream` ships 1127 and measures **1.10/s**, with 96 working.
+///
+/// So the assertion is not "the denser layout wins", it is "the layout that
+/// runs at full rate wins". A revert to `Upstream` re-ships a half-rate factory
+/// that no validator channel objects to, which is exactly the failure #520
+/// documents and exactly what nothing else in this suite would catch.
+#[test]
+fn di_claim_order_default_is_downstream_and_ships_the_working_big_pole() {
+    use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
+
+    assert_eq!(
+        DiClaimOrder::default(),
+        DiClaimOrder::Downstream,
+        "RFC-059 decided `Downstream` on in-game measurement, not on validator \
+         parity. Reverting the default re-ships the 1146-entity \
+         big-electric-pole@1 layout that sims at 0.51/s against a planned 1.00/s"
+    );
+
+    let raw: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "water", "crude-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve("big-electric-pole", 1.0, &raw, "assembling-machine-2")
+        .expect("big-electric-pole@1 solves on am2");
+    let ship = |order: DiClaimOrder| {
+        let opts = layout::LayoutOptions {
+            direct_insertion: DirectInsertion::Candidate,
+            di_claim_order: order,
+            ..Default::default()
+        };
+        layout::build_bus_layout(&sr, opts)
+            .expect("big-electric-pole@1 lays out")
+            .entities
+            .len()
+    };
+
+    let dflt = ship(DiClaimOrder::default());
+    let upstream = ship(DiClaimOrder::Upstream);
+    assert_eq!(
+        dflt, 1127,
+        "the default must ship the sim-verified 1127-entity layout (1.10/s); \
+         got {dflt}"
+    );
+    // Asserted so the test cannot pass by the two arms collapsing together — if
+    // `di_claim_order` ever stops being honoured, both sides return the same
+    // number and this fires rather than the test quietly agreeing with itself.
+    assert_eq!(
+        upstream, 1146,
+        "explicit `Upstream` must still reproduce the 1146-entity layout that \
+         sims at 0.51/s; got {upstream}. Equal to the default would mean the \
+         claim order is no longer honoured at all"
+    );
+}
+
 /// #520 / RFC-059: the engine can now SEE the jammed DI cell, so its own
 /// never-worse gate rejects it.
 ///

@@ -149,8 +149,16 @@ inert scaffolding, and the flag-gated builder as the reproducible
 falsification record. Full trail in the RFC's decision log (fifteen
 dated entries, two falsified hypotheses recorded en route).
 
-**`rfc-059-di-coupling-assignment.md` (2026-07-31) — CLOSED, decided: the
-tie-break stays P0, and the better policy is blocked on a validator blind spot.**
+**`rfc-059-di-coupling-assignment.md` (2026-07-31) — SUPERSEDED, see the RFC-059
+entry above.** Kept as the record of what was concluded before #520's fix, when
+the validator could not see a starved pickup. Its verdict — "the tie-break stays
+P0, and the better policy is blocked on a validator blind spot" — was reversed
+once the two targets that made `Downstream` look worse turned out to be ones
+where `Upstream` shipped a half-rate factory.
+
+The original text follows.
+
+**Then-current verdict: the tie-break stays P0.**
 
 The DI dispatcher's claim order decides which of two couplings fuses a contended
 spec. Over every producible item at 1/5/20 per second across three machine tiers,
@@ -197,6 +205,33 @@ Calibration notes worth carrying forward:
   `DirectInsertionCandidate` refuses an error-laden layout before it ships.
 - The RFC's motivating case, `rail`, **never contends** — its couplings die at
   buildability, not at the contention check.
+
+**RFC-059 CLOSED — the DI claim order is `Downstream` (2026-07-31).** Flipped on
+in-game evidence after two validator-only measurements pointed the other way.
+Six headless runs, three targets under both arms, same harness and warmup:
+
+| target, am2 | `Upstream` (was default) | `Downstream` (now) |
+|---|---|---|
+| `small-electric-pole@5` | 139 ents, PASS 5.00/s | 136 ents, PASS 5.00/s |
+| `big-electric-pole@1` | 1146 ents, **FAIL 0.51/s**, 43 working | 1127 ents, **PASS 1.10/s**, 96 working |
+| `medium-electric-pole@5` | 2351 ents, PASS 5.00/s | 2340 ents, PASS 4.98/s |
+
+`big-electric-pole@1` inverts the framing the RFC carried throughout: the flip
+was argued as a 70-entity density improvement and is actually a **correctness
+fix** — the status quo shipped a factory at half its planned rate, with 43
+machines working against 96 under `Downstream`. Every claim-order comparison before those runs measured density
+and issue counts, which is exactly the pair of signals #520 showed cannot see
+this failure.
+
+Not verified, and the first explanation was wrong: three `land-mine` targets
+(am1/am2/am3, −9/−16/−12 entities) read a flat 0/s under BOTH arms. That was
+attributed to the harness's "fluid boundaries — infinity-pipe feed/void paths are
+UNCALIBRATED" note, **which is stale** — the fluid path was fixed in #373 (an
+exporter pipe-to-ground direction bug), and `plastic-bar@1` from crude-oil sims
+PASS at 1.70/s with that same note printed. So `land-mine@1`'s 0/s is
+unexplained rather than benign; it is neutral for this flip (identical under both
+orders) but a real open question, tracked as
+[#537](https://github.com/storkme/spaghettio/issues/537).
 
 **#520 — the validator shipped a half-rate factory (2026-07-31).**
 `check_belt_flow_reachability` asked its question **per machine over the union of
