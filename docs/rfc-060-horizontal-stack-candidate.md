@@ -239,3 +239,36 @@ bit-identically (all 6 simple cases). Full table: #513.
   ~−24% (EC −23.9%, AC −23.7%): the #519 single-lane-tap mechanism is
   warmup-invariant. Recorded as the case's honest floor; #519's fix
   should move it.*
+- *2026-07-31 — **K60-4 (scope) measured: no trip.** Net engine LOC on
+  the final merged tree, `git diff origin/main...HEAD --numstat` over
+  `crates/core/src` + `crates/wasm-bindings/src` (tests/docs excluded):
+  **+244 −25 = 219 net**, under the ~400 bar. The sim-harness fluid-feed
+  fix (+~60 in `crates/sim-harness`) is measurement tooling, not engine,
+  and is excluded on the same basis as tests. (Recorded on a PR-review
+  finding that K60-4 had no disposition; K60-2's disposition is the
+  green pinning test + zero corpus regressions, implicit in the suite
+  gate but stated here for completeness.)*
+- *2026-07-31 — **Review finding accepted: the #392 warnings-first
+  reorder was reachable on the native-SUCCESS path too** (the error-free
+  tier decides native-vs-cell-composed whenever neither scoped candidate
+  overrides, not only on refusals), which was wider than the stated
+  refusal-tier intent. SCOPED rather than acknowledged: warnings-first
+  now applies only when native produced nothing (`native_refused`), the
+  exact case it was built for (horizontal's 0/6 ec@15 resolution must
+  not outrank a genuinely clean 0/0); the success path keeps #392's
+  original score-first order, making every success-path selection
+  bit-identical to pre-RFC-060 behavior by construction instead of by
+  corpus coincidence. Full suite green on the scoped comparator;
+  `cell_candidate_resolves_ec15_refusal` pins the refusal side.*
+- *2026-07-31 — **Review finding accepted: the fluid-feed stagger could
+  collide with item-rig jog rows** (the separate fluid counter staggered
+  fluids only against each other; dist values 2/4/6/8 land exactly on
+  item jog depths 4/10 for feeds sharing the boundary side, and the Lua
+  overlap audit only sees chest-on-chest stacking). Fix: ONE ladder per
+  direction with fluids at the FRONT — fluid tiles (out 1..=2+dist,
+  dist=2+2*slot) sit strictly below the shallowest item band [2+6f,
+  6+6f], items shift up by the fluid count, the Rust disjoint-footprint
+  guard now models fluid columns too, and >5 same-side fluids fail
+  loudly (ug span limit) instead of fabricating. The K60-3 pu3 runs used
+  the interim kit; their geometry had fluids 28+ tiles from the nearest
+  item rig (verified in the sim dump), so the measurements stand.*

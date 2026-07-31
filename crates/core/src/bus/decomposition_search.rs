@@ -1505,6 +1505,16 @@ pub fn select_best_decomposition(
     // computed pre-reattach above); if none is clean, fall through to
     // today's pick (still returns the error-laden best rather than
     // refusing — callers see the errors, behavior unchanged).
+    // RFC-060 warnings-first ordering is SCOPED to the refusal path
+    // (native produced nothing) — the case it was built for: horizontal's
+    // 0-error/6-warning ec@15 resolution must not outrank DI's genuinely
+    // clean 0/0. When native produced a layout this tier keeps #392's
+    // original score-first order, so every success-path selection is
+    // bit-identical to pre-RFC-060 behavior. (PR #515 review finding:
+    // this comparator is also reached on the native-success path via the
+    // `.or()` chain below, so an unscoped reorder would have widened the
+    // change beyond the stated refusal-tier intent.)
+    let native_refused = candidates[NATIVE_IDX].0.is_none();
     let best_error_free_idx = candidates[..ranking_len]
         .iter()
         .enumerate()
@@ -1515,13 +1525,18 @@ pub fn select_best_decomposition(
             }
             outcome.as_ref().map(|(_, score)| (i, warn_key, score.score))
         })
-        // Warnings first (asc), then score (desc), then earliest index —
-        // within the error-free tier a quieter layout beats a denser
-        // one (see the clean_flags comment; RFC-060 decision log).
+        // Refusal path: warnings (asc), then score (desc), then earliest
+        // index — within the error-free tier a quieter layout beats a
+        // denser one (see the clean_flags comment; RFC-060 decision log).
+        // Success path: score (desc), then earliest index — the original
+        // #392 order, unchanged.
         .min_by(|(ia, wa, sa), (ib, wb, sb)| {
-            wa.cmp(wb)
-                .then(sb.partial_cmp(sa).unwrap_or(std::cmp::Ordering::Equal))
-                .then(ia.cmp(ib))
+            let score_ord = sb.partial_cmp(sa).unwrap_or(std::cmp::Ordering::Equal);
+            if native_refused {
+                wa.cmp(wb).then(score_ord).then(ia.cmp(ib))
+            } else {
+                score_ord.then(ia.cmp(ib))
+            }
         })
         .map(|(i, _, _)| i);
 
