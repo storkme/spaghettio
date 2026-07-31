@@ -1,10 +1,11 @@
 # RFC-058: Band packing — 2D placement at row granularity
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active — phases 0–3 complete
-(KC2 cleared at 36.8% vs 30%; KC1 cleared at −35.9% vs −33.0%, narrowly;
-placer-native extraction + flag-gated packer landed inert — all
-2026-07-31). Next: phase 4 (2D lane planning), where kill criterion 1 is
-re-evaluated on the real planner.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Concluded 2026-07-31 — kill
+criterion 1 FIRED in phase 4: the real planner under physically-legal
+routing holds −31.1% against the −33.0% bar, with the trajectory adverse
+as correctness increased. Phases 0–3's evidence and the inert
+scaffolding stand; the packed builder remains flag-gated and default-off
+as the falsification record. See the final decision-log entry.**
 Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
 
 ## Summary
@@ -708,6 +709,32 @@ clears. Rationale in the decision log.
   full entity context — then sci2's last isolation error, the warning
   classes (reachability 63, power 49), the pu1 scope decision,
   KC4/eyeball/sim, and phase 6's candidate wiring.
+
+- **2026-07-31 — KILL CRITERION 1 FIRES on the real planner; RFC-058
+  concludes.** The final materialization-correctness fix (the UG
+  entrance conversion must target the actual predecessor belt, not
+  `out.last_mut()` — the corruption the instrumented route dumps
+  exposed) forces legal-but-longer routes: sci2 re-packs at 72×39 and
+  the buildable-fixture aggregate lands at **−31.1%, below the −33.0%
+  bar**. The trajectory across the hardening loop is monotonically
+  adverse — −44.0% (naive, corrupt routing) → −34.6% (tree router,
+  still-corrupt materialization) → −31.1% (legal materialization) — with
+  KC3 parity still distant (sci2: 5 dead-ends, 1 isolation, 63
+  reachability warnings), so every remaining correctness repair can only
+  push density further below the bar. The tree router was pre-committed
+  as the LAST routing option ("the option is spent after this
+  iteration"), and the criterion's own text says stop; do not re-tune.
+
+  What stands: phases 0–3's measured evidence (KC2 36.8%; the spike's
+  −35.9% on a model now known to be generous about materialization
+  legality); the inert extraction/packer scaffolding on main; and this
+  branch's packed pipeline as the falsification instrument. What is
+  falsified: that 2D band packing can hold ≥33% real-bbox saving under
+  physically-legal single-lane trunk routing on the gate fixtures. The
+  phase-6 default-on question resolves NO by this evidence; phases 5–6
+  are closed by the kill, per the phasing section's own gate structure.
+  The flag and packed builder remain in-tree, default-off and inert, as
+  the reproducible record.
 
 - **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
   fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused

@@ -965,17 +965,30 @@ pub fn route_packed_nets(
             // run longer than the tier's reach fails the net (gap widens).
             if let Some(&(j, side, d)) = path.first().and_then(|t| branch_from.get(t)) {
                 // Carve the junction: the trunk belt at j becomes a
-                // splitter covering (j, side), anchored top-left.
+                // splitter whose 2-tile footprint is EXACTLY {j, side} —
+                // anchor derived from the oriented dims, and every book
+                // (occ, belt_dirs, belt_tiles-equivalent via belt_dirs)
+                // updated for BOTH tiles. The earlier anchor-min carve
+                // left footprints misaligned and the books stale, which
+                // is what orphaned the four sci2 branch stubs: later
+                // nets sideloaded into tiles that were physically empty.
+                let anchor = match d {
+                    D::East | D::West => (j.0, j.1.min(side.1)),
+                    _ => (j.0.min(side.0), j.1),
+                };
                 if let Some(tb) = out
                     .iter_mut()
                     .find(|e| (e.x, e.y) == j && e.name == belt_name)
                 {
                     tb.name = splitter_name.to_string();
-                    tb.x = j.0.min(side.0);
-                    tb.y = j.1.min(side.1);
+                    tb.x = anchor.0;
+                    tb.y = anchor.1;
                     tb.direction = d;
                 }
-                *occ.entry(side).or_insert(0) |= BAND;
+                for t in [j, side] {
+                    *occ.entry(t).or_insert(0) |= BAND;
+                    belt_dirs.insert(t, (d, Some(net.item.clone())));
+                }
             }
             let mut belt_tiles: FxHashSet<(i32, i32)> = existing
                 .iter()
@@ -990,6 +1003,20 @@ pub fn route_packed_nets(
                 _ => "underground-belt",
             };
             let reach = crate::common::ug_max_reach(belt_name) as usize;
+            if std::env::var("SPAGHETTIO_BANDS_DEBUG").is_ok() {
+                eprintln!(
+                    "route {} -> {:?}: path {:?} occupied {:?}",
+                    net.item,
+                    dst_opt,
+                    path,
+                    occupied
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, &o)| o)
+                        .map(|(i, _)| i)
+                        .collect::<Vec<_>>()
+                );
+            }
             let mut skip_until = 0usize;
             for (i, &t) in path.iter().enumerate() {
                 if i < skip_until {
@@ -1012,10 +1039,25 @@ pub fn route_packed_nets(
                                 j - run_start
                             ));
                         }
-                        if let Some(prev) = out.last_mut() {
-                            prev.name = ug_name.to_string();
-                            prev.io_type = Some("input".into());
-                        }
+                        // The entrance must be THE belt at path[run_start-1]
+                        // — out.last_mut() converted whatever was pushed
+                        // most recently, which corrupts an unrelated belt
+                        // whenever the predecessor tile was itself skipped
+                        // (sideload-through). If the predecessor was never
+                        // stamped, this path shape cannot be materialized.
+                        let prev_t = path[run_start - 1];
+                        let Some(prev) = out
+                            .iter_mut()
+                            .rev()
+                            .find(|e| (e.x, e.y) == prev_t && e.name == belt_name)
+                        else {
+                            return Err(format!(
+                                "net {}: crossing at {:?} follows an unstamped tile",
+                                net.item, path[run_start]
+                            ));
+                        };
+                        prev.name = ug_name.to_string();
+                        prev.io_type = Some("input".into());
                         let t2 = path[j];
                         let p = path[j - 1];
                         let dir = match (t2.0 - p.0, t2.1 - p.1) {
