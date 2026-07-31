@@ -215,9 +215,12 @@ impl DecompositionCandidate for DirectInsertionCandidate {
             Ok::<_, String>((l, n_warn))
         };
 
-        // A caller may pin an arm — that is how the corpus sweep measures the
-        // search against the pre-RFC status quo instead of asserting it is
-        // better. Only the default `Search` builds both.
+        // Two arms only under `Search`, which is NOT the default — `Upstream`
+        // is (RFC-059: the search is measured better on every validator channel
+        // and ships a 0/s factory on one target, so it waits on #520). Every
+        // other value pins a single arm, and that is also how the corpus sweep
+        // measures the search against the pre-RFC status quo rather than
+        // asserting that picking the better arm cannot be worse.
         if opts.di_claim_order != crate::bus::di_cell::DiClaimOrder::Search {
             return arm(opts.di_claim_order.clone()).map(|(l, _)| l);
         }

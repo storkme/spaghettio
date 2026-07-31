@@ -121,9 +121,14 @@ fn layout_options(
             Some("off") => spaghettio_core::bus::cells::CellComposition::Off,
             _ => spaghettio_core::bus::cells::CellComposition::Candidate,
         },
-        // RFC-059 decided this (P1, downstream-first) on a corpus measurement,
-        // so the web app follows the engine default rather than pinning an arm.
-        // Deliberately NOT a URL knob: it is a settled policy, not a user
+        // The engine default, which RFC-059 measured and deliberately left at
+        // `Upstream` (P0): the two-arm `Search` is better on every validator
+        // channel and ships a factory that produces 0/s on one target, so it
+        // stays off until #520 is fixed. Following the default rather than
+        // naming an arm is what keeps this boundary honest — when #520 clears
+        // and the default flips, the web app inherits it with no edit here.
+        //
+        // Deliberately NOT a URL knob: it is a settled tie-break, not a user
         // trade-off, and the RFC's whole complaint was that it had been an
         // implicit one. Naming it here rather than `..Default::default()`
         // keeps the field list exhaustive — see the note below.

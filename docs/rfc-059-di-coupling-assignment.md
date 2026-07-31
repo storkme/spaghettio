@@ -438,9 +438,15 @@ able to distinguish "policy had no effect" from "policy was not applied."
 materialised is not that: on every differing target the claim order changes
 **which candidate wins the decomposition search** — commonly native under one arm
 and DI under the other — so what needs pinning is the shipped layout's identity,
-not a cell's internal geometry. `di_claim_order_is_searched_not_fixed` asserts
-that on two targets that disagree about which arm wins. A tile-level assertion on
-the DI cell would pin geometry both arms agree on, which is the wrong invariant.
+not a cell's internal geometry.
+`di_claim_order_status_quo_ships_and_search_stays_reachable` asserts that: on
+`display-panel@1` the default must ship the sim-verified 221-entity layout, and
+the rejected variant must still look better on every signal the engine has, so a
+future scoring change cannot silently re-select it. It then checks `Search` on two
+targets that disagree about which arm wins (`small-electric-pole@5` am1 wants
+upstream, `land-mine@1` am3 wants downstream), which is what stops the blocked
+policy rotting into unreachable code. A tile-level assertion on the DI cell would
+pin geometry both arms agree on, which is the wrong invariant.
 
 ## Phasing
 
@@ -649,10 +655,12 @@ widespread and the optimum is static everywhere.
   trusting this paragraph. It is also the mechanism P3 would apply through if the
   corpus ever moves.
 
-  The same argument keeps `Upstream` and `Downstream` as public arms once the
-  default became `Search`: without them the corpus sweep could not measure the
-  search against the pre-RFC status quo, and "the search picks the better arm, so
-  it cannot be worse" would be an argument rather than a measurement.
+  The same argument keeps `Upstream` and `Downstream` as public arms alongside
+  `Search`: without them the corpus sweep could not measure the search against
+  the pre-RFC status quo, and "the search picks the better arm, so it cannot be
+  worse" would be an argument rather than a measurement. (Written when `Search`
+  was briefly the default; it is not — see below — and the arms matter more now,
+  since `Upstream` is what ships.)
 
 - *2026-07-31 — the sim falsified the RFC's safety premise, and the policy was
   held back rather than shipped.* The verification plan requires simming any
