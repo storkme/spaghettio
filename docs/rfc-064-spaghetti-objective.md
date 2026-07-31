@@ -1,0 +1,843 @@
+# RFC-064: The spaghetti objective — aspect ratio + belt-transit under sim-anchored never-worse gates
+
+Registry: [`rfcs.md`](rfcs.md). Status: **Design (circulated for review)**.
+Successor-in-reframing to
+[`rfc-063-compaction-primitives.md`](rfc-063-compaction-primitives.md), whose
+Phase A/B kills answered a different question honestly and stand. Evidence
+base: [`compaction-retro-2026-07.md`](compaction-retro-2026-07.md),
+[`rfc-055-compact-cell-chain.md`](rfc-055-compact-cell-chain.md),
+[`rfc-057-topology-preserving-dense-repacking.md`](rfc-057-topology-preserving-dense-repacking.md),
+[`snake-fold-followups.md`](snake-fold-followups.md), PR
+[#500](https://github.com/storkme/spaghettio/pull/500).
+
+## Summary
+
+This RFC reframes what "a good layout" means. Every compaction RFC to date
+(055, 056, 057, 058, 063) scored candidates primarily on **bounding-box
+area** — and, measured honestly, that objective lost three times at three
+granularities (machine, band, macro) and was closed by RFC-063's own kills.
+That verdict stands; it answered "does 2D repacking shrink area under legal
+routing" and the answer was no.
+
+It does not answer a different question the project owner raised on
+2026-07-31: is area the objective anyone actually wants? Three results
+already sitting in the repo — folding, RFC-055's transit reordering, and the
+undergroundify post-pass — were treated as failures or shelved specifically
+because they scored badly on area, while all three either shipped a real,
+Factorio-verified win on a different axis, or were never scored on the axis
+this RFC proposes at all. **The spaghetti objective** replaces bbox-area
+minimization with two primary, pre-registered metrics — an **aspect-ratio
+score** and a **rate-weighted belt-transit metric** — combined by an explicit
+lexicographic rule, gated throughout by the project's existing sim-anchored
+never-worse discipline (#520), with **entity count demoted to a reported,
+non-gating cost**. The unifying mental model, stated by the owner directly
+during review of this draft, is Tetris: **a machine row is a rigid,
+immutable piece — its internal template and port geometry don't change —
+but the connection fabric around it (trunks, taps, feeds, orientation) is
+fully flexible and may spend entities freely to pack rows tighter or shorten
+their runs.** Five bounded phases promote or spike the levers the evidence
+base and that framing name: folding (Phase 1), the undergroundify post-pass
+(Phase 2), row-granularity rigid packing — RFC-058's own architecture,
+rescored under this objective rather than area (Phase 3), row-flipping
+(Phase 4, spike), and bidirectional trunk feeds (Phase 5, spike). A cheap
+Phase 0 checks the scoring rule itself against the owner's judgment before
+any of the five is built out further, because a precisely-defined metric
+nobody agrees with is exploration rework with extra steps.
+
+## Motivation
+
+### Provenance — the objective was contested, not assumed
+
+On 2026-07-31 the project owner contested the compaction arc's objective
+function directly, in these terms (recorded here verbatim-in-spirit, per
+this RFC's own instruction to do so): *"increasing entity count isn't
+terrible, if the density / aspect ratio looks better"*; that follow-up passes
+can *"shorten belt transits by a lot"*; and named two concrete levers not yet
+tried under any objective — *"flipping rows if it makes sense"* and *"input
+belts coming in from either direction."*
+
+RFC-063's Phase A and Phase B kills (2026-07-31, same day) answered the bbox
+question honestly: Phase A's ≥25% area bar was unreachable against
+verified community-best balancer references (≈8.1%/5.9% measured ceiling);
+Phase B's row-sharing ceiling (5.00–7.14%, structural) missed even its
+un-escalated bar. **Those kills do not transfer here.** They were run against
+an area objective this RFC explicitly does not use. Re-litigating them under
+this RFC's metrics is out of scope (see Non-goals); citing them as evidence
+against *this* objective would be a category error the owner's contest
+specifically called out.
+
+### Three wins already on the board, shelved for the wrong reason
+
+1. **Folding** (RFC-057, PR #500). `chain-mil5ore`: 553×32 (17.3:1) → 153×141
+   (1.09:1), Factorio-verified **PASS** at 5.016/s against 5.00/s planned,
+   146/146 machines, one pole network, 3567/3567 entities revived, **+26%
+   entities** (2831 → 3567). RFC-057's own decision log (2026-07-29,
+   reaffirmed 2026-07-30) states the disposition plainly: *"folding is
+   refused as a density lever and retained as a shape transform"* — refused
+   because its ~20% obstacle-free routing-cost ceiling (measured by
+   `probe_fold_routing_headroom`, surviving every mirror variant, fold count
+   and greedy fold-position search tried) cannot reach RFC-057's 35%-belt /
+   40%-tile area gates. **Under an aspect-ratio objective, 17.3:1 → 1.09:1 is
+   not a footnote — it is the single best number the entire compaction arc
+   has produced**, already carrying a real in-game throughput result. It
+   ships nothing today; `search_snake_fold` is test-only, never wired into
+   `LayoutOptions`.
+2. **RFC-055 transit reordering.** Weighted rate-weighted port distance
+   −16.3% to −39.6% across four fixtures (`usp2raw`, `chem5raw`, `pu4raw`,
+   `mil5ore`), selected over RFC-056 on 2026-07-26. Physical belt entities
+   moved less and more mixed (−10.1% to −17.3% on three fixtures, **+8.5% on
+   USP**) — which is exactly why it lost under an area/entity-count framing.
+   Its own decision log records a long-warmup Factorio control run for
+   `chem5raw` at 4.03/s against 5.0/s planned, **explicitly not adjudicated**
+   at the user's request; that debt is real and transfers to any revival
+   under this RFC (see Phase 4, which reuses its mechanism and inherits its
+   unadjudicated Factorio gap). RFC-057's decision log calls RFC-055
+   superseded and folds its "reorder for shape" ground into folding's
+   conclusion — but RFC-057 never scored transit as a first-class metric
+   either; it only ever asked whether area shrank.
+3. **Undergroundify post-pass.** The conservative half of `compact_layout`
+   (surface-belt-to-underground substitution plus empty-row/column
+   stripping, no manifold trees) measured belts −36.8% to −63.8%, occupied
+   tiles −20.5% to −54.0% across the four mega-chain/`chain-mil5ore`
+   fixtures, **and improved the mil5 fast-meter throughput 1.73/s →
+   2.16/s produced** (2026-07-26 decision log entries) — the only post-pass
+   in the whole arc that moved both density and throughput the same
+   direction. It shipped as `LayoutOptions::compact_layout`, exposed through
+   WASM and the URL param chain (`crates/wasm-bindings/src/lib.rs`), but
+   **default `false`**. The doc comment at `crates/core/src/bus/layout.rs:144`
+   gives the reason: *"Experimental and default off, so the normal pipeline
+   remains byte-identical"* — a generic caution, not a named defect. Digging
+   into the decision log finds the real gap: every quantitative validation of
+   this pass ran against the same narrow four-fixture mega-chain/chain corpus
+   folding used, predominantly via the fast meter, and **three of those four
+   fixtures (`chem5raw`, `pu4raw`, `usp2raw`) were never adjudicated in
+   headless Factorio at all** — only `chain-mil5ore` later received real
+   sim runs, and only because the folding work needed them. It has never been
+   swept across the ordinary stress/tier e2e corpus under sim-anchored
+   never-worse (#520). That is a concrete, checkable gap, not received wisdom
+   — Phase 2 below closes it before proposing default-on.
+
+### Why area was the wrong lens for all three
+
+The retrospective's own honest paragraph
+([`compaction-retro-2026-07.md`](compaction-retro-2026-07.md)) says the logistics
+floor is real: *"the row is near-optimal shared delivery, and the slack is
+either load-bearing margin ... or template footprint."* That finding is about
+**area** specifically — it says you cannot shrink the bounding box without
+paying more in logistics than you save in space, at every granularity tried.
+It says nothing about whether a 17:1 ribbon and a 1.1:1 square, at equal
+entity cost order of magnitude and equal throughput, are equally good
+outcomes for a human looking at the factory or trying to fit it in a base.
+They are not, and the owner's contest names exactly that gap.
+
+## Design
+
+### Non-goals (stated up front, because they bound everything below)
+
+- **Bounding-box-area minimization as an objective.** RFC-063's Phase A/B
+  kills stand for that objective; this RFC does not reopen them and does not
+  re-litigate their numbers.
+- **Whole-factory MACHINE-granularity placement rewrites.** RFC-057's
+  island-level 2D repacking (+38% to +250% bbox vs the bus it replaced) is
+  not revived. Its specific failure mode — tree-based `(n,m)` local
+  manifolds are the wrong primitive for a corpus where almost every
+  commodity needs exactly one lane (USP: 28 lanes total, max 3 for any one
+  item) — is objective-independent: a balanced merge/distribute tree over a
+  one-lane commodity is pure overhead regardless of whether the score
+  rewards area, aspect ratio, or transit. Not reopened under this objective
+  either.
+- **Fast-meter-only adjudication as a phase's oracle.** RFC-054's KC1
+  tripped (military family wrong by 57.8pp, fluids −100% on 7/12 configs) —
+  an instrument-trust failure, not a scoring-axis failure. Stands under any
+  objective; restated as kill criterion 4 below.
+- **Folding and row-granularity band packing (RFC-058) are the two items on
+  RFC-063's don't-refund list this RFC's math changes, and both are named
+  explicitly rather than silently reopened — see Phase 1 and Phase 3.**
+  RFC-057 refused folding *as a density lever* against an area gate it
+  structurally cannot clear (~20% ceiling vs a 35%/40% bar); this RFC asks
+  it to clear an aspect-ratio gate instead, the exact axis its own measured
+  number (17.3:1 → 1.09:1) already dominates. RFC-058 (band packing) was
+  killed against a **≥33% bounding-box-area** bar — a different,
+  already-adjudicated, pre-registered objective. Phase 3 below re-scores the
+  *same* mechanism and scaffolding against `AR_score`/`Transit_score`
+  instead; per this project's own precedent for what a kill criterion
+  actually covers (RFC-063 Phase C re-tests RFC-058's own technique under a
+  different *input* distribution without violating its kill; this RFC
+  re-tests it under a different *objective* without violating it either),
+  this is not "re-tuning the packer" to dodge a missed bar — it is a
+  materially different, separately pre-registered question. Everything else
+  on RFC-063's don't-refund list (tree manifolds, meter expansion,
+  whole-factory repacking generally) stays refused under this objective too,
+  for the objective-independent reasons above.
+
+### The tetris model — rigid rows, flexible connections
+
+Stated by the owner during review of this draft, and adopted here as the
+mental model that unifies every phase below: *"each row of machines is
+pretty immutable. the inputs/outputs it needs are pretty fixed, though. we
+can rotate any sort of connections we like. whatever helps us pack the rows
+tighter."*
+
+Concretely: a row's **interior** — its template, its machine count, its
+port positions — is a rigid piece, exactly the way a Tetris piece's shape
+doesn't change once it's spawned. What's free to move is everything *around*
+it: which direction it faces, where it sits relative to other rows, and how
+the belt/underground/pipe fabric that feeds and drains it gets there. That
+fabric may spend entities without limit under the soft-cost rule in (c)
+below, in exchange for packing rows tighter (aspect ratio) or routing them
+shorter (transit).
+
+This also explains, precisely, why RFC-057's island/manifold work failed and
+why the phases below don't repeat it. RFC-057 didn't just move rows — it
+dissolved them, redistributing individual machines into 2D islands and
+rebuilding delivery from scratch with balanced `(n,m)` trees, which is why it
+paid a 6–8× logistics tax for commodities that only ever needed one lane.
+Every phase in this RFC keeps the row as the placement unit: Phase 1 (fold)
+and Phase 3 (pack) both move and reorient *whole rows*, never decompose them;
+Phase 2 changes only the belt fabric already serving them; Phases 4 and 5
+change only a row's facing and a trunk's feed side. None of the five touches
+what's inside a row.
+
+### Metrics
+
+All four are computed on a validated, fully routed `LayoutResult` — never on
+an unrouted IR estimate, per the project's own realism-step discipline
+(*"proxy metrics halve per realism step,"* Wall 2 of the retrospective). Every
+metric is reported relative to the **native incumbent** — the layout the
+existing decomposition search would otherwise produce for the same solve, at
+`compact_layout: false` and no folding/row-flip/bidirectional candidate
+selected — so a report is always "how much did this candidate move the
+needle from what ships today," not an absolute number that means nothing
+without a corpus to compare against.
+
+#### (a) Aspect-ratio score
+
+```text
+AR(L)       = max(width, height) / min(width, height)
+```
+
+computed on the **non-pole entity bounding box** — the same footprint
+convention RFC-058's own kill used after two rounds of adversarial review
+(*"criterion-scope non-pole extents, honest footprints"*, RFC-058 registry
+entry), adopted here directly so pole-coverage sprawl never masquerades as
+shape.
+
+```text
+AR_score(L) = 1 - (AR(L) - 1) / (AR(native) - 1)
+```
+
+`AR_score(native) = 0` by construction (no change scores neutral, not
+positive); `AR_score = 1` means perfectly square (`AR = 1`); a candidate that
+becomes *more* elongated than native scores negative — deliberately
+unclamped, so a regression on this axis is visible in the composite rather
+than floored to "no worse than doing nothing." (Degenerate case:
+`AR(native) = 1` defines `AR_score(L) = 1` if `AR(L) = 1` else `0`, avoiding
+division by zero on an already-square native, which does not occur on any
+fixture in the current corpus but is defined for completeness.)
+
+**Calibration anchor:** `chain-mil5ore`'s Factorio-verified 3-fold,
+`AR(native) = 17.3`, `AR(folded) = 1.09` →
+`AR_score = 1 - (1.09-1)/(17.3-1) = 1 - 0.09/16.3 ≈ 0.9945`. This is the
+number "good" means under this metric — it is the only entry in the corpus
+with a real in-game result, so every phase gate below that references an
+AR bar is stated as a fraction of this anchor, not an invented absolute
+target.
+
+#### (b) Belt-transit metric
+
+Starting point, per this RFC's own instruction, is RFC-055's weighted
+port-distance term — its primary scoring term was:
+
+```text
+score = Σ solid_edge_rate × estimated_port_distance
+      + fluid_weight × Σ fluid_edge_rate × estimated_port_distance
+      + critical_weight × longest_external_to_target_path
+      + congestion_weight × estimated_cut_congestion
+      + area_weight × estimated_bounding_area
+      + backward_weight × rate_of_westward_edges
+```
+
+RFC-055 computed `estimated_port_distance` on the pre-route placement graph
+— cheap, but an estimate, and this RFC's own Wall-2 discipline (proxy metrics
+halve per realism step) says an estimate cannot be the *gating* number twice
+in one arc. This RFC keeps the shape of RFC-055's primary term but promotes
+it from an IR-stage estimate to a post-route physical measurement, and drops
+the secondary terms (congestion, raw bounding area, backward-edge rate) from
+the *gated* metric — bounding area is now scored separately as (a) above, and
+congestion/backward-rate remain useful *screening* signals for cheap
+pre-route search, not gated quantities:
+
+```text
+Transit(L) = Σ_{e ∈ edges(L)} rate(e) × path_length(e)
+```
+
+where `edges(L)` is the production-edge set from `SolverResult` /
+`ProductionSignature` (producer_recipe, item, consumer_recipe, planned_rate
+— RFC-057's own edge definition, reused rather than re-derived), `rate(e)` is
+the solved planned rate for that edge in items/s (fluid edges weighted by
+`fluid_weight < 1`, exactly as RFC-055 did, because Factorio 2.0 fluids do
+not carry belt-style in-flight inventory but pipe length still consumes space
+and routing capacity), and `path_length(e)` is the **realized physical tile
+length** of the routed belt/underground/pipe path connecting that edge's
+producer output port to its consumer input port in the final validated
+`LayoutResult` — not the pre-route estimate.
+
+```text
+Transit_score(L) = 1 - Transit(L) / Transit(native)
+```
+
+Same unclamped, relative-to-native convention as `AR_score`: 0 = no change,
+positive = shorter transit, negative = longer. RFC-055's own reported range
+(−16.3% to −39.6% weighted distance, pre-route estimate) is retained as the
+*expected order of magnitude* for what a transit-focused mechanism should
+produce, not as a bar this RFC treats as already cleared — it was never
+adjudicated end-to-end in Factorio (see Motivation §2), and this metric is
+computed differently (post-route, not pre-route) so RFC-055's own numbers are
+context, not a pre-cleared gate.
+
+The external-input→target critical-path length (RFC-055's
+`longest_external_to_target_path`) is retained as a **secondary reported**
+metric on every candidate report, not part of the gated composite — RFC-055's
+own results showed it can move independently and dramatically from the
+primary term (`pu4raw`: −85.9% critical path vs −39.6% weighted distance),
+and hiding that inside one number would repeat the "a count inside a message
+can't tell 2 from 218" failure mode this project has hit nine times
+([`validator-reporting.md`](validator-reporting.md)).
+
+#### (c) Entity-count soft-reporting rule
+
+Entity count is **never a gate, at any phase, in either direction.** Every
+candidate report always includes:
+
+```text
+ΔEntities%(L) = (entities(L) - entities(native)) / entities(native)
+```
+
+This is reported unconditionally, alongside a **non-gating WARN annotation**
+(report-only, does not remove the candidate from ranking or fail admission)
+when `ΔEntities%` exceeds roughly 2× the folding calibration anchor
+(`chain-mil5ore`'s Factorio-verified +26%, so the flag threshold is ≈+52%) —
+purely so a human skimming a candidate list sees "this one grew a lot," the
+same way the owner would looking at a screenshot, without the flag ever
+touching admission or ranking. This operationalizes the provenance quote
+directly: *"increasing entity count isn't terrible, if the density / aspect
+ratio looks better"* — the metric exists to inform a human, never to gate a
+machine decision.
+
+#### (d) Composite / lexicographic decision rule
+
+```text
+Composite(L) = w_AR × AR_score(L) + w_T × Transit_score(L)
+```
+
+Default `w_AR = w_T = 0.5`, both **provisional pending Phase 0** (below) —
+the two component scores are already normalized to the same "fraction of the
+way from native to ideal" scale, so an even split is the natural prior, but
+whether the owner's actual judgment weights shape over transit or the reverse
+is exactly the open question Phase 0 exists to surface, and the weights are
+expected to move once real calibration data exists.
+
+Candidates are ranked lexicographically:
+
+1. **Admissibility (hard gate, pass/fail, never scored):** sim-anchored
+   never-worse per #520 — measured target throughput at a warmup long enough
+   to rule out buffer-fill transients (the deep-chain rule in
+   `docs/status.md`) must not regress below the native incumbent's own
+   measured throughput, within noise. A validator-clean, zero-warning
+   candidate that has not cleared this is not admissible, full stop — #520's
+   own canonical case (a validator-clean, 37-entities-denser DI layout that
+   measured 2.52/s against 5.00/s planned) is exactly the failure mode this
+   gate exists to catch, and it applies here with zero exceptions.
+2. Among admissible candidates, rank by `Composite(L)` descending.
+3. **Tie-break** (composite scores within ε = 0.02 of each other): prefer
+   lower `ΔEntities%` — the *only* place entity count enters a ranking
+   decision, and only as a tie-break among candidates the composite already
+   judged equivalent, never as a primary criterion.
+4. Remaining ties: lower absolute entity count, then deterministic
+   candidate-id order (reproducibility).
+
+### Phases
+
+Bounded, spike-first per the RFC-058 discipline this project now defaults
+to: cheap paper analysis or narrow probes before committing session cost to
+a prototype, exactly as RFC-063's Phase B killed itself on paper in about an
+hour before writing a template.
+
+#### Phase 0 — calibrate the scoring rule against the owner's judgment
+
+**This runs before, or in parallel with, Phase 1** — it gates whether the
+composite rule in (d) is worth building candidate selection around at all.
+
+**Method.** Generate N = 8–12 layouts spanning the corpus and the mechanism
+space this RFC covers: native (uncompacted) bus layouts, `compact_layout`
+(undergroundify) candidates, folded `chain-mil5ore` at 1/2/3 folds, and at
+least one deliberately bad control (e.g. a wide ribbon with no compaction
+applied at all, to anchor the low end). Present each as a screenshot/URL
+(the web app's existing `?item=&rate=&...` URL scheme, per CLAUDE.md's
+Visualizations section) to the project owner for a blind ranking — no scores
+shown. Compute `Composite(L)` for the same set. Compare rank orders.
+
+**Gate.** Pre-registered bar: Kendall's τ ≥ 0.6 between the owner's ranking
+and the composite's ranking, **and** exact agreement on which layout the
+owner ranks #1. Below that, the weights (or the metric definitions
+themselves) do not yet correlate with the judgment they are meant to
+formalize.
+
+**Kill criterion (RFC-level, not phase-level — this is the one directive
+explicitly asks for at this scope).** If the composite score cannot be made
+to correlate with the owner's judgment on this calibration set after one
+reweighting attempt (adjusting `w_AR`/`w_T` within [0.2, 0.8] and re-checking
+τ), **stop before building any optimizer, candidate-selection logic, or
+default-flip decision on top of this metric.** Phases 1 and 2 may still ship
+their underlying mechanisms (folding, undergroundify) as a plain user-knob
+with reported-not-decided metrics if their own sim-anchored never-worse gates
+clear independently — what a failed Phase 0 forecloses is *auto-selection
+logic that trusts the composite to rank candidates a human wouldn't agree
+with*.
+
+#### Phase 1 — promote folding to a first-class scored candidate
+
+**Starting point.** The mechanism already works and is Factorio-verified
+(`chain-mil5ore`, PR #500, RFC-057's 2026-07-30 decision log): 553×32 →
+153×141, PASS at 5.016/s vs 5.00/s planned, +26% entities. `search_snake_fold`
+exists, is test-only, and is not wired into `LayoutOptions` or the
+decomposition search. The work this phase funds is candidate wiring and the
+scoring rule from (d) above — not new fold physics.
+
+**What's still unresolved, named rather than hand-waved.** Folding today only
+finds a fold on 1 of the 4 corpus fixtures it's been tried against
+(`chain-mil5ore`); `mega-chain-chem5raw`, `mega-chain-pu4raw` and
+`mega-chain-usp2raw` still refuse (`InputStranded` dominant, per
+[`snake-fold-followups.md`](snake-fold-followups.md) item 2), and folding
+operates on the mega-chain/cell-composition path, not the ordinary row-bus
+path most of the e2e corpus exercises. "First-class scored option" needs an
+answer to how often it fires before it's worth auto-selecting.
+
+**Gate — corpus-applicability spike first, then wiring.**
+
+1. *Spike* (bounded, reuse `probe_fold_corpus`): measure fold admissibility
+   (a fold is found, validates, and clears the never-worse gate) across an
+   expanded corpus beyond the four mega-chain fixtures — include ordinary
+   row-bus stress/tier fixtures if `search_snake_fold` can even attempt them,
+   and report honestly if it structurally cannot (that itself is a finding).
+2. *Decision rule from the spike*, pre-registered: if admissibility ≥ 25% of
+   the probe corpus, wire folding in as an **auto-selected scored
+   candidate** — same pattern as DI (RFC-053) and `HorizontalStack`
+   (RFC-060), competing inside the decomposition search under Composite(L).
+   If admissibility is below 25%, ship it as an **explicit user knob**
+   instead (URL param / sidebar toggle, mirroring `compact_layout`'s existing
+   opt-in shape) — a candidate that almost never fires adds search cost
+   without benefit, and a knob reaches the one user who wants a square
+   `chain-mil5ore` just as well.
+3. *Metric sanity check* (not a novel research bar — a check that the metric
+   agrees with the one real result already in hand): `Composite(L)` computed
+   on `chain-mil5ore`'s native-vs-3-fold pair must rank the fold above native,
+   with `AR_score ≥ 0.9` on that specific fixture (below the measured 0.9945
+   anchor only to allow for routing-detail drift since PR #500, not a lowered
+   bar).
+4. *Never-worse regression*: full corpus stays byte-identical when folding is
+   not admitted; any fixture where folding auto-selects must independently
+   clear sim-anchored never-worse (#520) at long warmup before shipping, not
+   validator parity alone.
+
+**Kill criterion.** If the corpus-applicability spike finds admissibility
+below 25% **and** wiring a user-knob adds material session cost beyond
+exposing the existing `search_snake_fold` behind a flag (i.e. if it turns out
+non-trivial engineering, not configuration, is needed to make it toggle-safe
+outside `chain-mil5ore`), stop at documenting the one verified fixture and
+defer general wiring — the mechanism's value on the fixture where it works
+does not disappear, but "first-class scored option" would be overclaiming.
+
+#### Phase 2 — undergroundify default-on path
+
+**Why it's off today, established above (Motivation §"undergroundify"):**
+validated on a four-fixture mega-chain corpus, predominantly via the fast
+meter, with three of those four fixtures never adjudicated in headless
+Factorio. That is the concrete gap this phase closes before proposing
+default-on — not a vague "needs more testing."
+
+**Gate.**
+
+1. Run `compact_layout` (undergroundify path only — no folding, no manifold
+   trees; RFC-057's decision log is explicit that this is what ships today)
+   across the **full stress/tier e2e corpus** used elsewhere in this project
+   (`crates/core/tests/e2e.rs`), not just the four mega-chain fixtures.
+2. Sim-anchor every fixture where `compact_layout` changes the geometry —
+   headless Factorio, long `--warmup` per the deep-chain rule
+   (`docs/status.md`) — and require zero regressions vs. the native
+   (uncompacted) incumbent's own measured throughput, per kill criterion 2
+   below. Validator parity is not sufficient (#520).
+3. Report `AR_score`, `Transit_score`, and `ΔEntities%` per fixture using the
+   metrics in (a)–(c) above, even though the pass predates this RFC and
+   wasn't built to optimize either — establishing where it already sits on
+   these axes is itself new information.
+4. **Default-on decision**: only if step 2 clears with zero regressions
+   corpus-wide. A pass that wins on some fixtures and silently regresses on
+   others does not get to flip its own default because the aggregate looks
+   good — every fixture's floor must hold individually, matching this
+   project's own "don't sum across categories" discipline
+   ([`validator-reporting.md`](validator-reporting.md)).
+
+**Kill criterion.** If the corpus-wide sim sweep finds throughput regression
+on any fixture that validates clean today, undergroundify stays opt-in and
+the specific regressing fixture(s) are filed as a tracked defect — do not
+weaken the never-worse gate to make the default flip, per the discipline
+RFC-058's own kill used verbatim (*"the criterion's own text says stop; do
+not re-tune"*).
+
+#### Phase 3 — row-granularity rigid packing (RFC-058, rescored)
+
+**This is RFC-058's own architecture, run against this RFC's objective
+instead of area — the tetris model's central phase.** RFC-058 already built
+exactly the "rows are rigid, pack them tighter" mechanism this RFC's framing
+calls for: 2D placement of whole machine rows (never individual machines —
+the same row-as-placement-unit discipline this RFC's tetris framing states),
+with the belt fabric re-routed around the packed result. It was killed
+2026-07-31 because its real-planner result under physically-legal routing
+(−27.0%) missed its own pre-registered **≥33% bounding-box-area** bar by six
+points, with the trajectory adverse as correctness increased
+(−44.0% → −34.6% → −27.0%). That kill is not reopened here — see Non-goals.
+What changes is the objective the same mechanism is scored against.
+
+**Two facts from RFC-058's own record motivate re-scoring it rather than
+starting over.** First, its Phase-0 census measured that **38.4% of bbox
+area is ragged-right dead margin** — empty space trailing the shorter rows
+in a bus layout, the literal geometric shape of "a kilometre-wide ribbon."
+Packing removes exactly that margin; it is not a coincidental side effect
+that packing helps area, it is the same margin whose removal is what makes a
+17:1 ribbon look like a 1.1:1 square. RFC-058 measured this as an
+area-reduction lever and it fell short of its area bar; under an
+aspect-ratio lens the same removed margin is closer to the metric's own
+definition of "good." Second, RFC-058's Phase-4 decay trajectory
+(−44.0% idealized → −34.6% tree-routed → −27.0% legal-and-faithful) was
+driven substantially by the cost of routing **parsimony** — every more-real
+routing pass added back entities and tiles the idealized packer's estimate
+hadn't paid for, specifically to keep the connection fabric's own footprint
+small. The entity-count soft-cost rule in (c) above directly relaxes that
+half of the tax: a packer under this objective no longer needs to minimize
+what its connection fabric costs, only for that fabric to be legal and
+sim-anchored never-worse. This does not guarantee the decay reverses — see
+the kill criterion below for what it means if it doesn't — but it is a
+concrete, named reason the same mechanism might behave differently under
+this rescoring, not a hope.
+
+**Implementation base.** RFC-058's inert scaffolding and flag-gated builder
+remain in-tree as the record of that arc (tracking **#507**) — this phase
+reuses them rather than reimplementing row-granularity 2D placement from
+scratch. The change is the scoring function the builder optimizes against
+and the gate it's evaluated on, not the placement search itself.
+
+**Incoming empirical evidence, not yet in hand.** RFC-063 Phase C (a
+DI-aware packing spike revisiting RFC-058's own bar on DI-composed input,
+gated on #526's DI-cell repair, imminent per its own tracking) has been
+arranged to **dual-record `AR_score`/`Transit_score`/`ΔEntities%` alongside
+its own −40.0% bbox bar**, using this RFC's metric definitions, on the same
+class of packed candidate this phase's mechanism produces. If Phase C lands
+before this phase starts, its numbers are the first real routed-geometry
+data point for the bar below — treat them as informative, not authoritative,
+since Phase C's input distribution (DI-composed rows) differs from this
+phase's general row corpus, but they are free evidence this phase doesn't
+have to spend its own session budget generating from scratch.
+
+**Gate.** Pre-registered bar, derived from RFC-058's own real numbers rather
+than invented: **`AR_score ≥ 0.5`** (closes at least half the distance from
+native's aspect ratio to square) on RFC-058's own gate and holdout fixtures,
+measured on the same faithful real-planner instrument RFC-058's own Phase 4
+(its internal phase numbering, not this RFC's) finally converged on after
+two rounds of adversarial review (non-pole
+extents, honest footprints, candidate scoring not bypassed) — reusing that
+instrument directly rather than re-deriving it. **AND** `Transit_score` does
+not go negative net across those fixtures — packing may spend entities
+freely, but it may not make the *average* delivery run longer while doing
+it. **AND** sim-anchored never-worse (#520) on every fixture the rescored
+candidate ships on.
+
+**Kill criterion.** If the real-planner result under this objective — with
+entity growth fully unconstrained — still comes in below `AR_score ≥ 0.5`,
+that is a different and stronger finding than RFC-058's own kill: it would
+mean the Phase-4 decay was **not** primarily the parsimony tax this
+objective relaxes, but a more fundamental routing-legality cost that no
+amount of spent entities buys back. Record that explicitly as a new,
+separate falsification — do not read a second miss against a different bar
+as confirmation of the first; RFC-058's own kill was scoped to its own
+metric, and this one must be scoped to its own.
+
+#### Phase 4 — row-flipping spike
+
+**Same family as Phase 3 — a connection-fabric transform around an
+immutable row, at a much smaller scope: orientation only, not position.**
+
+**Mechanism, and why it is not RFC-063 Phase B under a different name.**
+Phase B's kill was about *sharing* a belt row's already-claimed lane between
+two rows — Finding 1 showed `can_lane_split` already claims a row's free
+lane unconditionally at zero cost, so there was no idle lane to share, and
+Finding 2's ceiling (5.00–7.14%) came from deleting one duplicate belt-tile
+*row*, a mechanism this RFC does not use. Row-flipping is a **placement
+orientation** decision, not a lane-sharing one: today rows are stamped with a
+uniform facing toward the trunk, so a row's tap-off run length is fixed by
+its position along the trunk regardless of which physical side of the row
+would be closer. Mirroring alternate rows' orientation (which side faces the
+trunk) can shorten that specific row's tap/transit run without touching how
+many lanes any belt carries or removing any belt-tile-row — an orthogonal
+mechanism to the one Phase B killed.
+
+**Partial machinery already in the codebase.** Per-machine fluid-port
+mirroring (`mirror: true` combined with `direction`, giving 8 orientations —
+CLAUDE.md's own Factorio-rules section) is validated per-entity today, but
+that is fluid *port geometry*, not a row-*placement* orientation decision.
+RFC-055's "Validated cell orientations" section already specifies the exact
+validation checklist any transform of this shape needs — entity-overlap,
+belt/underground connectivity, inserter reachability, pipe-segment/pipe-to-
+ground pairing, recipe fluid-port identity, power coverage, boundary-
+record/entity agreement, item isolation, blueprint round-trip — and this
+phase reuses that checklist rather than re-deriving it.
+
+**Gate — paper analysis first, per the RFC-058/063 discipline that killed
+Phase B in about an hour before any prototype.** Before writing a row-flip
+template, compute the structural ceiling the way Phase B's Finding 2 did:
+for each `RowKind` and its known tap-off geometry (`placer.rs` row-height
+constants, per the same table Phase B used), estimate the maximum tap-run
+length a flip could ever save per row, and derive `Transit_score` at that
+ceiling across the same width-dominant fixtures RFC-058's census named.
+**Pre-registered bar: `Transit_score ≥ 0.08`** — half of RFC-055's smallest
+achieved fixture gain (`chem5raw`, −16.3% weighted distance), applying this
+project's own Wall-2 halving discipline to a mechanism with zero measured
+data of its own, chosen specifically so a first spike cannot be read as
+rounding noise against RFC-055's already-real numbers.
+
+**Kill criterion.** If the paper ceiling — computed structurally, the same
+way Phase B's row-kind-height table was, no prototype required — falls below
+0.08 on every fixture, kill without writing a template, on the same
+discipline Phase B used to kill itself before a prototype existed. If the
+ceiling clears 0.08 on paper, proceed to a bounded prototype spike gated on
+the same bar recomputed from real routed geometry (not the paper estimate),
+plus sim-anchored never-worse per #520 on every fixture the prototype
+touches.
+
+#### Phase 5 — bidirectional input feeds spike
+
+**Same family as Phase 4 — a connection-fabric transform around immutable
+rows: which edge a trunk feed enters from, not what any row contains.**
+
+**Mechanism.** Trunks currently accept external inputs from one edge. Letting
+inputs enter from whichever edge is physically closer to their consuming row
+would shorten `Transit(L)` for consumers on the far side of today's
+single-direction convention.
+
+**Named constraint, not hand-waved.** The sim harness's feed-rig geometry is
+calibrated **south-only** — #363 (open, `ready`, `area:sim`) recorded that
+the first live exercise of a non-south (east-facing) feed rig delivered items
+to 1 of 9 lanes, with 50 feeder inserters stuck
+`waiting_for_space_in_destination` from misaligned drop tiles, on an
+otherwise fully-valid build. `scenario.rs`'s own module doc already flags the
+non-south path UNCALIBRATED. "Bidirectional" inherently needs at least one
+additional calibrated direction beyond south — there is no way to measure a
+bidirectional candidate in headless Factorio today, at all, without first
+doing some part of #363's fix.
+
+**Gate.** Because #363 is a hard prerequisite, not parallel work, this phase
+is sequenced explicitly:
+
+1. Calibrate **one additional direction** (propose north, the natural
+   opposite of the already-calibrated south, to minimize new vector-algebra
+   surface) against a live server, following #363's own stated fix direction
+   ("calibrate the east/west/north feed vector algebra against a live server
+   the way the south case was — the golden-fragment tests only pin the south
+   reduction"). Budget-capped at a spike, matching RFC-063 Phase C's 1-day
+   throwaway-spike precedent for comparable harness work.
+2. Only after step 1 lands: build a bidirectional-trunk candidate (bounded
+   prototype) on fixtures with consumers spanning both the north and south
+   trunk edges, and measure `Transit_score` at real routed geometry, gated by
+   sim-anchored never-worse (#520) using the now-calibrated harness.
+3. Pre-registered bar: `Transit_score ≥ 0.08`, same half-of-RFC-055's-
+   smallest-gain reasoning as Phase 4 — no existing measurement anchors this
+   mechanism at all, so the bar is deliberately conservative.
+
+**Kill criterion.** If calibrating the second direction (step 1) reveals the
+harness's feed-rig builder needs a structural rework rather than a
+vector-algebra correction — i.e. the fix is materially larger than #363's own
+issue body implies — **stop this phase and escalate #363 to a standalone
+tracked fix**, outside this RFC's spike budget. Building a layout-side
+mechanism on top of an unfixed measurement instrument would repeat exactly
+the "instrument trust" failure this project's own Wall 4 already named
+(default-warmup buffer-fill certifying phantom deficits); a harness rework is
+not a one-day spike and does not belong folded into this RFC's Phase 5 cost.
+
+## Kill criteria
+
+Pre-registered at the RFC level, inherited discipline stated explicitly per
+this RFC's own instruction, plus Phase 0's calibration kill (restated here
+for visibility — full text under Phase 0 above):
+
+1. **Phase 0's calibration kill.** If `Composite(L)` cannot be made to
+   correlate (Kendall τ ≥ 0.6, exact #1 agreement) with the owner's blind
+   ranking of a calibration set after one reweighting attempt, stop before
+   building any optimizer or auto-selection logic on top of the metric —
+   ship mechanisms as plain user-knobs instead, reported-not-decided.
+2. **Sim-anchored never-worse means sim-anchored never-worse, per #520.** A
+   layout that validates with zero errors and zero warnings is not evidence
+   it works — #520's own canonical case was exactly that, and measured
+   2.52/s against a 5.00/s plan. Every "never regresses" claim anywhere in
+   this RFC is backed by a headless Factorio run at a warmup long enough to
+   rule out buffer-fill transients, not by validator issue counts alone.
+   Folding's own +0.3% mil5 result (5.016 vs 5.00/s) is the standard every
+   phase's throughput claim is held to.
+3. **Proxy metrics halve per realism step (retrospective Wall 2).** Every
+   phase gate above that is stated without a full-corpus, real-routed
+   measurement behind it (Phase 4 and Phase 5's paper-ceiling bars) uses a
+   bar derived by halving the nearest real, adjudicated evidence this
+   project has (RFC-055's smallest achieved fixture gain) rather than an
+   invented number — and any bar computed on an estimate is provisional
+   until re-measured on real routed geometry, exactly as RFC-058's own
+   −66.1% → −35.9% → −27.0% trajectory demonstrated is the typical shape of
+   that gap. Phase 3's bar is the one exception stated on real, already-
+   adjudicated routed geometry rather than a halved estimate — it reuses
+   RFC-058's own faithful real-planner instrument directly — but its result
+   is still provisional against *this* objective until measured, per kill
+   criterion 2.
+4. **No phase is adjudicated by the fast meter alone.** RFC-054's own KC1
+   tripped (military family wrong by 57.8pp, fluids −100% on 7/12 reachable
+   configs) — the meter remains a screening tool for ranking candidates
+   cheaply within a phase's search, never the instrument a claimed win in
+   this RFC is adjudicated against. Headless Factorio is the bar throughout,
+   per kill criterion 2.
+
+## Verification plan
+
+Per the layout-engine protocol in
+[`CLAUDE.md`](../CLAUDE.md#verification-protocol-for-layout-engine-changes),
+applied to whichever phase is under active work:
+
+- **Full e2e suite green** — `cargo test --manifest-path crates/core/Cargo.toml`,
+  all non-ignored tests, after each phase that touches engine code.
+- **Browser eyeball** on the fixtures each phase's gate names, before
+  claiming a phase clears — a high `AR_score`/`Transit_score` candidate with
+  visibly disconnected belts is a metric-computation bug, not a win.
+- **Snapshot decode** (`SPAGHETTIO_DUMP_SNAPSHOTS=1`) for the specific
+  transform each phase makes, not just the aggregate score delta — per the
+  nine (now ten, per #520) recorded instances of a quiet check concealing a
+  live defect in [`validator-reporting.md`](validator-reporting.md). Folding
+  specifically has two known false-pass traps recorded in
+  [`snake-fold-followups.md`](snake-fold-followups.md) (stale boundary
+  records after relocation; power-network fragmentation invisible to a
+  per-network-energized sim harness) — any phase reusing fold machinery
+  re-checks both explicitly, not by assuming PR #500's fixes generalize.
+- **Trace events** — Phases 1, 3, 4 and 5 each emit a typed trace event
+  carrying before/after `AR_score`/`Transit_score`/`ΔEntities%`, matching
+  `BalancerStamped`/`BandPackingPlanned` precedent (Phase 3 reuses
+  `BandPackingPlanned` directly, since it reuses RFC-058's builder), so a
+  disappointing result is diagnosable without a debugger.
+- **Sim harness at long `--warmup`** on every fixture named in a phase's
+  gate, for kill criterion 2 and each phase's own never-worse contract. Phase
+  5 additionally depends on #363's calibration landing before any sim run on
+  a non-south-fed candidate can be trusted at all.
+- **Clippy + WASM build** stay green through every phase; a change that
+  clippy-fails or breaks the WASM build is not done.
+
+## Phasing
+
+0. **Phase 0 — scoring-rule calibration.** Runs first (or in parallel with
+   Phase 1's mechanical work). Gates whether Composite(L) is trusted for
+   auto-selection anywhere in Phases 1–5. Its calibration set can start with
+   Phase 1/2 candidates (already available) and is extended once Phase 3
+   produces packed candidates, without blocking on Phase 3.
+1. **Phase 1 — folding as a scored candidate.** Corpus-applicability spike
+   first; wiring (auto-candidate or user-knob, decided by the spike's own
+   pre-registered 25% threshold) follows.
+2. **Phase 2 — undergroundify default-on.** Corpus-wide sim sweep first (the
+   why-off investigation this RFC required before proposing promotion);
+   default flips only if the sweep clears with zero regressions.
+3. **Phase 3 — row-granularity rigid packing (RFC-058, rescored).** Reuses
+   RFC-058's own inert scaffolding and flag-gated builder (#507). May absorb
+   RFC-063 Phase C's dual-recorded numbers as incoming evidence if that spike
+   lands first, but is not blocked on it.
+4. **Phase 4 — row-flipping spike.** Paper-ceiling analysis first (bar
+   0.08 Transit_score); prototype only if the paper analysis clears.
+5. **Phase 5 — bidirectional feeds spike.** #363 calibration (one additional
+   direction) is a hard prerequisite, sequenced before any candidate
+   prototyping; both are spike-budgeted.
+
+Phases are independent except where stated (Phase 5 depends on its own #363
+sub-step; Phase 0's calibration set optionally extends with Phase 3's output;
+nothing else cross-depends). A phase's kill does not cancel the others.
+
+## Relationship to earlier RFCs
+
+- **RFC-055** supplies this RFC's transit-metric starting point (the
+  weighted rate × distance term) and its unadjudicated-Factorio-gap debt,
+  which transfers to Phase 4 directly since Phase 4 reuses RFC-055's
+  reordering mechanism in spirit (orientation instead of order, same
+  transit-shortening goal).
+- **RFC-057** supplies the folding mechanism (Phase 1), the undergroundify
+  post-pass (Phase 2), and the ~20% folding routing-ceiling measurement that
+  is *why* folding needed a different objective to look like a win rather
+  than a rejected density lever.
+- **RFC-058** is Phase 3's direct predecessor and the RFC whose architecture
+  this one revives rather than reopens: same row-granularity 2D placement,
+  same inert scaffolding and flag-gated builder (tracking **#507**), same
+  faithful real-planner instrument (non-pole extents, honest footprints) —
+  scored against `AR_score`/`Transit_score` instead of the ≥33% bbox-area bar
+  its own kill was pre-registered against. Also supplies the non-pole-extent
+  bbox convention this RFC's `AR(L)` reuses directly, and Phase 4's
+  paper-analysis-first method, copied from how RFC-058's own Phase B killed
+  itself in an hour.
+- **RFC-063** supplies the immediate precedent for this RFC's kill-criteria
+  discipline (escalating bars, "stop; do not re-tune") and is the RFC whose
+  Phase A/B kills this RFC explicitly does not reopen — see Non-goals.
+  Phase B's sharing-mechanism kill is the one this RFC's Phase 4 design
+  explicitly distinguishes itself from, mechanism by mechanism. RFC-063
+  Phase C (still gated on #526) is Phase 3's arranged source of incoming
+  dual-recorded evidence, per Phase 3's design above.
+- **#520 / #526** establish that validator parity is not evidence of a
+  working layout; every phase gate above inherits that discipline via kill
+  criterion 2. #526 additionally feeds Phase 3's evidence indirectly, through
+  RFC-063 Phase C, the same way RFC-063 itself named.
+- **#363** is Phase 5's hard prerequisite, named and sequenced rather than
+  hand-waved, per this RFC's own instruction.
+- **#507** tracks RFC-058's retained scaffolding; Phase 3 is its first
+  proposed consumer since RFC-058's own kill.
+
+## Decision log
+
+- **2026-07-31 — provenance: the objective was contested by the project
+  owner, and this RFC is the response.** Recorded verbatim-in-spirit: *"increasing
+  entity count isn't terrible, if the density / aspect ratio looks better"*;
+  follow-up passes can *"shorten belt transits by a lot"*; named levers
+  *"flipping rows if it makes sense"* and *"input belts coming in from either
+  direction."* Explicit framing from the owner and carried into this RFC
+  unchanged: RFC-063's Phase A/B kills answered the bbox-area question
+  honestly and are not reopened here; this RFC is the reframed goal, not a
+  re-litigation of that kill.
+
+- **2026-07-31 — second owner message, mid-draft: the Tetris framing, and a
+  new phase.** Arrived while this RFC was being written, recorded
+  verbatim-in-spirit: *"all this talk about flipping and rotating makes me
+  think of tetris. each row of machines is pretty immutable. the
+  inputs/outputs it needs are pretty fixed, though. we can rotate any sort of
+  connections we like. whatever helps us pack the rows tighter."* Two
+  concrete effects on the draft, both incorporated in this same commit rather
+  than a later revision: (1) added the "tetris model" as the Design section's
+  unifying frame (rows rigid, connection fabric flexible and free to spend
+  entities) and used it to reorganize how Phases 1–2 and 4–5 are described;
+  (2) added **Phase 3 — row-granularity rigid packing**, which re-scores
+  RFC-058's own killed architecture against this RFC's `AR_score`/
+  `Transit_score` instead of RFC-058's ≥33% bbox-area bar, reusing RFC-058's
+  retained scaffolding (#507) rather than reimplementing it. The Non-goals
+  section was corrected in the same pass: an earlier draft of this RFC
+  claimed RFC-058's "band packing as a post-pass" stayed refused under any
+  objective, which stopped being true the moment Phase 3 was added — it is
+  now named, alongside folding, as the second item on RFC-063's don't-refund
+  list this RFC's math changes. The coordinator also arranged for RFC-063
+  Phase C (imminent, gated on #526) to dual-record `AR_score`/`Transit_score`
+  on its own packed candidates using this RFC's metric definitions, giving
+  Phase 3 free incoming evidence before its own spike needs to run.
+
+- **2026-07-31 — RFC opened as RFC-064.** Numbering checked against
+  `docs/rfcs.md` (registry stated "Next number: RFC-064" on `origin/main` at
+  commit `0c4cf89e`), `gh pr list --state open` (only #553,
+  `fix/526-di-lift-feed-order`, unrelated), and
+  `git ls-remote origin 'refs/heads/rfc*'` (no branch claims 064; the one
+  `rfc/compaction-next-arc` branch found is PR #547, already merged as
+  RFC-063). No competing claim found. Branch `rfc/spaghetti-objective` cut
+  from `origin/main` at the same commit. Registry row added in this commit.
+  Status: Design, no phases started.

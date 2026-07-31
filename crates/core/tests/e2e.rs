@@ -9830,29 +9830,102 @@ fn di_claim_order_default_is_downstream_and_ships_the_working_big_pole() {
     );
 }
 
-/// #520 / RFC-059: the engine can now SEE the jammed DI cell, so its own
-/// never-worse gate rejects it.
+/// #520 / #524 / #526: the engine can SEE a jammed DI cell (#524), and #526
+/// repairs the GEOMETRY CLASS itself — a belt-to-belt bridge no longer picks
+/// off a DI cell's output belt at a column that permanently misses some of
+/// its total supply.
 ///
-/// The defect this pins was invisible on every signal the engine had.
-/// `di-row:copper-cable:electronic-circuit` on am1 drops its output partway
-/// along an east-flowing merger belt and the consumer picks up UPSTREAM of that
-/// drop, so the pickup sits on permanently empty belt — the consumer starves
-/// while everything behind the drop backs up. It validated with zero errors and
-/// zero warnings and produced 0/s in a headless Factorio run, against native's
-/// measured 1.00/s.
+/// The root cause (#520): a bridge's pick/drop column was derived purely
+/// from the DOWNSTREAM consumer's own alignment, with no way to know where
+/// an upstream DI-cell producer's belt actually carries its full output.
+/// **#526's first attempt at a fix was itself wrong, and the sim harness is
+/// what caught it.** It clamped a bridge's column to the LEFTMOST of the
+/// cell's several producer drops, which fixes belt-flow-REACHABILITY (no
+/// tile the validator inspects is ever literally, permanently empty) but
+/// not THROUGHPUT: belts are one-directional, so a picker positioned before
+/// a LATER drop can never draw that drop's contribution — not occasionally,
+/// permanently. That "fixed" layout validated with zero errors and zero
+/// warnings and still measured **2.94/s against a 5.00/s plan** in a
+/// headless run — the exact "validates clean, physically wrong" trap #520
+/// is itself about, reproduced by the fix meant to close it. Corrected by
+/// clamping to the RIGHTMOST (last) drop instead — `RowSpan::
+/// output_feed_x_min`, despite the name, now holds that last-drop column —
+/// which only downstream of it has the belt seen every producer's
+/// contribution. `stamp_di_bridge` shifts a bridge's columns to clear it
+/// (preserving relative spacing so sibling columns for one machine never
+/// collapse onto the same tile), or REFUSES the whole bridge when no shift
+/// fits within the consumer machine's own column budget.
 ///
-/// `check_belt_flow_reachability` missed it for two compounding reasons, both
-/// now fixed: it asked its question PER MACHINE over the union of a machine's
-/// input belts (so `display-panel`'s healthy iron-plate belt satisfied the test
-/// and its starved electronic-circuit belt was never examined), and it did not
-/// model belt-to-belt lift inserters at all (so the lift's drop was not a source
-/// and its own pickup was never checked).
+/// **The corrected fix changes NO shipped layout anywhere in the corpus.**
+/// A trace-instrumented sweep of every producible item across three machine
+/// tiers, three rates, and both reachable claim orders (`Upstream`/
+/// `Downstream` — `Search` tries both and `Candidate`'s default pins one, so
+/// together these cover every arm `DirectInsertionCandidate` can ever build)
+/// found the new refuse logic reachable on exactly 11 distinct targets —
+/// and on every one of them, EVERY producer drop the coupling needs sits
+/// wider than a single downstream consumer machine's own 1-3 tile column
+/// budget, so the bridge correctly refuses outright rather than shipping a
+/// partial-throughput layout. A full `build_bus_layout` diff (origin/main
+/// vs this fix) on all 11 targets under `Candidate` with
+/// `default()`/`Search`/`Upstream` (33 comparisons) is byte-identical, i.e.
+/// this fix changes NOTHING that ships — but "byte-identical" is not the
+/// same claim as "native ships everywhere". On 32 of the 33 comparisons
+/// native does ship, because #524's belt-flow-reachability check already
+/// caught the old bridge's starvation and the never-worse gate already
+/// declined it. On the 33rd — `small-electric-pole@5` am2 under
+/// `Downstream`/`Search` — what ships (identically before and after this
+/// fix) is a 136-entity DI layout carrying one `input-rate-delivery`
+/// warning, beating native's clean 139-entity layout: the #519
+/// selection-firewall (flux warnings don't block selection) behaving
+/// exactly as designed, on a `di-row` cell this fix's own logic never
+/// touches (that arm's `copper-cable→small-electric-pole` coupling fuses
+/// directly, with no separate bridge to refuse). What changes for the 11
+/// touched targets is that the placer itself now refuses a bridge it
+/// cannot fill, rather than emitting a shape whose brokenness only the
+/// validator (or, as this fix's own first draft shows, only the sim
+/// harness) can catch. `small-electric-pole@5` **am1** (this test's
+/// target) is the canonical instance: 3 producer drops spread across the
+/// belt for 3 downstream machines, each with only a 3-tile column budget —
+/// too narrow to clear the last drop, so it refuses like every other
+/// touched target.
 ///
-/// Three assertions, because "the layout is no longer selected" is weaker than
-/// "the engine knows why":
-///   1. the validator FLAGS the jammed variant, at the pickup tile;
-///   2. consequently the shipped layout under `Search` is the sim-verified one;
-///   3. `Search` still functions where nothing is broken.
+/// **F2 firewall (adversarial-review follow-up).** The shift-application
+/// path (moving a bridge's columns rather than refusing outright) is
+/// unexercised anywhere in this sweep — `DiBridgeShifted` fires on zero
+/// targets — and local review showed a shifted drop could in principle
+/// land east of a downstream machine's own near-feed pickup, silently
+/// under-feeding it (a different validator-clean-but-wrong shape). The
+/// shift machinery stays in `stamp_di_bridge` (dead code) behind
+/// `ALLOW_DI_BRIDGE_SHIFT = false`, refusing on any nonzero shift rather
+/// than only an overflowing one, until a real target needs it and can be
+/// sim-verified.
+///
+/// Assertions:
+///   1. `small-electric-pole@5` am1 ships NATIVE under every reachable
+///      claim order — unchanged from before #526, but now via a placer
+///      that refuses the broken bridge itself rather than depending on the
+///      validator downstream.
+///   2. `display-panel@1` am1 — the OTHER confirmed instance of the class —
+///      ships the sim-verified 221-entity native layout, validator-clean,
+///      under both `default()` and `Search`.
+///   3. The FORCED diagnostic variant behind that decline no longer carries
+///      the ORIGINAL starvation signature (no `belt-flow-reachability`
+///      issue at the old pickup tile) — the geometry class is genuinely
+///      repaired, not merely re-hidden. It is not validator-clean overall
+///      (the refused bridge's bus-fallback hits a separate, pre-existing
+///      ghost-router gap when a lane must route through a DI cell's own
+///      dead-end output belt — tracked as
+///      [#556](https://github.com/storkme/spaghettio/issues/556), and
+///      irrelevant to what ships since assertion 2 already confirms the
+///      gate declines the whole candidate).
+///   4. `Search` still selects a DI cell where the cell is sound (an
+///      unrelated target, confirming the fix didn't disturb DI generally).
+///
+/// The policy question #520 raised — whether `di_choice` should require
+/// more than validator parity before displacing native, now with a THIRD
+/// validator-clean-but-wrong exhibit (this fix's own first draft) — remains
+/// open, tracked as
+/// [#557](https://github.com/storkme/spaghettio/issues/557).
 #[test]
 fn di_jammed_cell_is_visible_and_therefore_refused() {
     use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
@@ -9880,35 +9953,37 @@ fn di_jammed_cell_is_visible_and_therefore_refused() {
         (l.entities.len(), issues)
     };
 
-    // 1. The jammed variant is now visible, and the issue is positioned at the
-    //    starved pickup rather than at the machine that starves because of it.
-    let (jammed_ents, jammed_issues) = build(
-        "display-panel",
-        1.0,
-        "assembling-machine-1",
-        DirectInsertion::Forced,
-        DiClaimOrder::Downstream,
-    );
-    assert_eq!(jammed_ents, 202, "the jammed variant is the 202-entity one");
-    let reach: Vec<_> = jammed_issues
-        .iter()
-        .filter(|i| i.category == "belt-flow-reachability")
-        .collect();
-    assert!(
-        !reach.is_empty(),
-        "the jammed DI cell must be visible to the validator — it sims at 0/s. \
-         Issues seen: {:?}",
-        jammed_issues.iter().map(|i| &i.category).collect::<Vec<_>>()
-    );
-    assert!(
-        reach.iter().any(|i| i.message.contains("(8,26)")),
-        "the issue must point at the starved pickup tile (8,26), not at the \
-         machine three rows downstream: {:?}",
-        reach.iter().map(|i| &i.message).collect::<Vec<_>>()
-    );
+    // 1. `small-electric-pole@5` am1 still ships native (163) under every
+    //    reachable order — the geometry class is repaired (the bridge now
+    //    refuses honestly instead of silently under-feeding), but there is
+    //    no shift that clears the cell's LAST drop within a single
+    //    downstream machine's own column budget, so DI cannot win here.
+    //    This used to ship a 126-entity DI layout measured at 2.52/s
+    //    against a 5.00/s plan (#520); #524 made the starvation visible so
+    //    the never-worse gate already declined it before this fix landed.
+    for order in [DiClaimOrder::default(), DiClaimOrder::Search, DiClaimOrder::Upstream] {
+        let (ents, issues) = build(
+            "small-electric-pole", 5.0, "assembling-machine-1",
+            DirectInsertion::Candidate, order.clone(),
+        );
+        assert_eq!(
+            ents, 163,
+            "small-electric-pole@5 am1 must ship native (163) under {order:?}: \
+             no shift clears the cell's last drop within a single downstream \
+             machine's column budget"
+        );
+        assert!(
+            issues.is_empty(),
+            "the shipped layout must stay clean under {order:?}: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
 
-    // 2. So DI's own never-worse gate now declines it and the sim-verified
-    //    native layout ships — under BOTH the default and the search policy.
+    // 2. THE HONEST-DECLINE CASE. `display-panel@1` am1's row cell has no
+    //    shift that fits the downstream consumer's column budget (a 5-tile
+    //    gap against a 3-wide machine), so the bridge refuses and native
+    //    ships — under BOTH the default and the search policy, unchanged
+    //    from #524's fix.
     for order in [DiClaimOrder::default(), DiClaimOrder::Search] {
         let (ents, issues) = build(
             "display-panel",
@@ -9919,8 +9994,8 @@ fn di_jammed_cell_is_visible_and_therefore_refused() {
         );
         assert_eq!(
             ents, 221,
-            "display-panel@1 am1 must ship the sim-verified 221-entity layout \
-             under {order:?}; 202 is the variant that sims at 0/s"
+            "display-panel@1 am1 must ship the sim-verified 221-entity native \
+             layout under {order:?}: no shift closes its 5-tile gap"
         );
         assert!(
             issues.is_empty(),
@@ -9929,24 +10004,28 @@ fn di_jammed_cell_is_visible_and_therefore_refused() {
         );
     }
 
-    // 3. THE OTHER CONFIRMED HALF-RATE LAYOUT, and the reason this assertion
-    //    reads backwards from its first draft. `small-electric-pole@5` on am1
-    //    used to ship a 126-entity DI layout: denser than native's 163, clean
-    //    on every validator channel, and measured in a headless run at
-    //    **2.52/s against a planned 5.00/s** — converged, so a steady state
-    //    rather than a warmup artifact. Native measures 5.08/s. Same starved-lift
-    //    defect as display-panel, in a different coupling
-    //    (`copper-plate -> copper-cable`), which is why sweeping for the cell
-    //    rather than for the defect class missed it.
-    //
-    //    So 163 is the correct answer here and 126 must never ship again.
-    assert_eq!(
-        build("small-electric-pole", 5.0, "assembling-machine-1",
-              DirectInsertion::Candidate, DiClaimOrder::Search).0,
-        163,
-        "small-electric-pole@5 am1 must ship native (163); 126 is the DI layout \
-         that sims at 2.52/s against a planned 5.00/s"
+    // 3. The FORCED diagnostic variant behind that decline no longer carries
+    //    the ORIGINAL starvation — the geometry class is repaired, not
+    //    re-hidden. (It is not validator-clean for an unrelated reason: see
+    //    the doc comment above.)
+    let (_, jammed_issues) = build(
+        "display-panel",
+        1.0,
+        "assembling-machine-1",
+        DirectInsertion::Forced,
+        DiClaimOrder::Downstream,
     );
+    let reach: Vec<_> = jammed_issues
+        .iter()
+        .filter(|i| i.category == "belt-flow-reachability")
+        .collect();
+    assert!(
+        reach.is_empty(),
+        "#526 must repair the lift-vs-feed ordering, so no belt-flow-reachability \
+         issue should remain on the forced variant: {:?}",
+        reach.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
+
     // 4. `Search` still selects a DI cell where the cell is sound.
     assert_eq!(
         build("land-mine", 1.0, "assembling-machine-3",

@@ -812,6 +812,22 @@ pub struct DiCellLayout {
     pub output_belt_y: i32,
     pub x_min: i32,
     pub x_max: i32,
+    /// Leftmost x at which the output belt carries the FULL cumulative
+    /// output of every consumer's out-inserter — the RIGHTMOST (last)
+    /// drop's own column, not the leftmost. Belts are one-directional: a
+    /// pickup west of a given drop can never see that drop's item (it can
+    /// only move further east), so a picker positioned before the LAST drop
+    /// systematically misses that drop's entire share, not merely reads an
+    /// occasional empty tile. #526 first got this wrong by clamping to the
+    /// leftmost drop instead: it fixed reachability (no tile is ever
+    /// literally empty) but not throughput (the last drop's flow is
+    /// permanently unreachable by every picker upstream of it) — caught by
+    /// the sim harness measuring 2.94/s against a 5.00/s plan despite a
+    /// validator-clean layout, the same "validates clean, physically wrong"
+    /// trap #520 itself is about. A downstream `stamp_di_bridge` that picks
+    /// up west of THIS tile can still read nonzero belt (so the old bug is
+    /// gone) but cannot draw the LAST drop's contribution.
+    pub output_feed_x_min: i32,
 }
 
 impl DiCellLayout {
@@ -911,6 +927,17 @@ pub fn stamp_di_cell_io(
         });
     }
 
+    // The belt spans the whole cell (`x_min..=x_max` above), but only the
+    // consumer machines drop onto it. A picker needs the RIGHTMOST
+    // (last) consumer's own column, not the leftmost: belts are
+    // one-directional, so only downstream of every drop has the belt seen
+    // the FULL cumulative output (#526 — see the field doc). `consumer_xs`
+    // is non-empty here: `plan_straddle` refuses a plan with zero
+    // consumers.
+    let output_feed_x_min = x0
+        + plan.consumer_xs.iter().copied().max().unwrap_or(0)
+        + mid;
+
     Some(DiCellLayout {
         entities: ents,
         input_belt_y,
@@ -920,6 +947,7 @@ pub fn stamp_di_cell_io(
         output_belt_y,
         x_min,
         x_max,
+        output_feed_x_min,
     })
 }
 
@@ -1425,6 +1453,14 @@ pub struct RowCellLayout {
     pub output_belt_y: i32,
     pub x_min: i32,
     pub x_max: i32,
+    /// Leftmost x at which the output belt carries the FULL cumulative
+    /// output of every consumer-role machine's out-inserter — the
+    /// RIGHTMOST (last) consumer's own column, not the leftmost. See
+    /// `DiCellLayout::output_feed_x_min`'s doc for why: belts are
+    /// one-directional, so a picker upstream of the last drop permanently
+    /// misses that drop's whole share rather than merely reading an
+    /// occasional empty tile (#526).
+    pub output_feed_x_min: i32,
 }
 
 /// Everything the row stamper needs beyond the plan.
@@ -1602,6 +1638,10 @@ pub fn stamp_row_cell(
     let seg = format!("di-row:{}:{}", spec.item, spec.consumer_recipe);
     let mut ents = Vec::new();
     let mut fluid_ports: Vec<(String, i32, i32)> = Vec::new();
+    // Leftmost x at which the output belt carries the FULL cumulative
+    // output — the RIGHTMOST consumer out-inserter column, tracked as
+    // they're stamped below (#526; see `RowCellLayout::output_feed_x_min`).
+    let mut output_feed_x_min: Option<i32> = None;
 
     let belt_run = |ents: &mut Vec<PlacedEntity>, y: i32, name: &str, carries: &str| {
         for x in x_min..=x_max {
@@ -1738,6 +1778,17 @@ pub fn stamp_row_cell(
                     ..Default::default()
                 });
             }
+            if no > 0 {
+                // The RIGHTMOST out-inserter column for this consumer, not
+                // the first: `no` output columns are stamped at
+                // `mx + nf .. mx + nf + no - 1` below, and with `no >= 2`
+                // (the ordinary case when the output side needs a second
+                // reach-2 column — see the face-plan comment above) the
+                // first column is NOT this consumer's last drop.
+                let this_x = mx + nf as i32 + no as i32 - 1;
+                output_feed_x_min =
+                    Some(output_feed_x_min.map_or(this_x, |cur| cur.max(this_x)));
+            }
             for j in 0..no as i32 {
                 ents.push(PlacedEntity {
                     name: spec.out_inserter.to_string(),
@@ -1827,6 +1878,15 @@ pub fn stamp_row_cell(
         output_belt_y,
         x_min,
         x_max,
+        // Always `Some` by construction: `no = spec.out_count.max(1)` and
+        // `plan.sequence` contains at least one consumer (`plan_row_straddle`
+        // refuses `consumer_count == 0`), so the loop above visits at least
+        // one consumer with `no > 0`. `x_max` is a defensive fallback only,
+        // and deliberately the CONSERVATIVE bound (rather than `x_min`): a
+        // caller reading this field treats it as a floor for safe pickup, so
+        // an unreachable fallback should overstate the floor, not understate
+        // it.
+        output_feed_x_min: output_feed_x_min.unwrap_or(x_max),
     })
 }
 
@@ -2048,6 +2108,36 @@ mod row_stamp_tests {
             .filter(|e| e.carries.as_deref() == Some("electronic-circuit") && e.name.contains("inserter"))
             .count();
         assert_eq!(out_ins, n_consumers);
+    }
+
+    /// #526 F1: `output_feed_x_min` must be the RIGHTMOST out-inserter
+    /// column of the LAST consumer, not its first. The canonical fixture's
+    /// `out_count == 2` (two output columns per consumer — EC's 2.5/s needs
+    /// two long-handed columns at L2), so this is exactly the shape an
+    /// `mx + nf` computation gets wrong: it would report the first of the
+    /// last consumer's two columns, one tile short of where the belt
+    /// actually finishes receiving that consumer's output.
+    #[test]
+    fn output_feed_x_min_is_the_last_consumers_rightmost_column() {
+        let (plan, l) = stamped();
+        // Last (rightmost) consumer in the sequence.
+        let last_consumer_idx = plan
+            .sequence
+            .iter()
+            .enumerate()
+            .filter(|&(_, &is_p)| !is_p)
+            .next_back()
+            .map(|(i, _)| i)
+            .expect("canonical plan has consumers");
+        let mx = plan.xs[last_consumer_idx];
+        let nf = 1; // spec().consumer_feed_count
+        let no = 2; // spec().out_count
+        assert_eq!(
+            l.output_feed_x_min,
+            mx + nf + no - 1,
+            "must be the last consumer's RIGHTMOST out-inserter column \
+             (mx + nf + no - 1), not its first (mx + nf)"
+        );
     }
 
     /// Feed inserters must actually reach their belts: the consumer's is
