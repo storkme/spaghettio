@@ -781,10 +781,80 @@ pub fn route_packed_nets(
                     targets.len(),
                 ));
             };
-            // Materialize: belts along the path; crossings of existing
-            // perpendicular belts become UG pairs in the wiring increment
-            // (the tiles are legally crossable by construction here).
+            // Materialize with real crossings. A path tile already carrying
+            // a belt is never double-stamped: at the FIRST tile that is the
+            // pickup adjacency, at the LAST it is the sideload into the
+            // feed row, and interior runs are bridged by an underground
+            // pair whose entrance/exit replace the plain belts on either
+            // side. Turn-legality guarantees crossings are straight, and a
+            // run longer than the tier's reach fails the net (gap widens).
+            let mut belt_tiles: FxHashSet<(i32, i32)> = existing
+                .iter()
+                .chain(out.iter())
+                .filter(|e| is_transport(&e.name))
+                .map(|e| (e.x, e.y))
+                .collect();
+            let occupied: Vec<bool> = path.iter().map(|t| belt_tiles.contains(t)).collect();
+            let ug_name = match belt_name {
+                "express-transport-belt" => "express-underground-belt",
+                "fast-transport-belt" => "fast-underground-belt",
+                _ => "underground-belt",
+            };
+            let reach = crate::common::ug_max_reach(belt_name) as usize;
+            let mut skip_until = 0usize;
             for (i, &t) in path.iter().enumerate() {
+                if i < skip_until {
+                    continue;
+                }
+                if occupied[i] {
+                    let run_start = i;
+                    let mut j = i;
+                    while j < path.len() && occupied[j] {
+                        j += 1;
+                    }
+                    if run_start > 0 && j < path.len() {
+                        // Interior run: bridge with a UG pair — entrance
+                        // replaces the plain belt just pushed, exit lands
+                        // on the first free tile past the run.
+                        if j - run_start + 1 > reach {
+                            return Err(format!(
+                                "net {}: crossing run of {} exceeds {belt_name} reach",
+                                net.item,
+                                j - run_start
+                            ));
+                        }
+                        if let Some(prev) = out.last_mut() {
+                            prev.name = ug_name.to_string();
+                            prev.io_type = Some("input".into());
+                        }
+                        let t2 = path[j];
+                        let p = path[j - 1];
+                        let dir = match (t2.0 - p.0, t2.1 - p.1) {
+                            (1, 0) => D::East,
+                            (-1, 0) => D::West,
+                            (0, 1) => D::South,
+                            _ => D::North,
+                        };
+                        belt_tiles.insert(t2);
+                        out.push(PlacedEntity {
+                            name: ug_name.to_string(),
+                            x: t2.0,
+                            y: t2.1,
+                            direction: dir,
+                            io_type: Some("output".into()),
+                            carries: Some(net.item.clone()),
+                            ..Default::default()
+                        });
+                        skip_until = j + 1;
+                    } else {
+                        // Boundary run: the first tiles are the pickup
+                        // adjacency, the last the sideload — the existing
+                        // belt IS the connection; stamp nothing.
+                        skip_until = j;
+                    }
+                    continue;
+                }
+                belt_tiles.insert(t);
                 let dir = if i + 1 < path.len() {
                     let n = path[i + 1];
                     match (n.0 - t.0, n.1 - t.1) {
