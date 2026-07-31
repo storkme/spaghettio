@@ -2749,13 +2749,26 @@ fn compute_lane_rates_impl(
             }
         }
         // Second pass: seed each source tile, split evenly across the belt's
-        // two lanes. Each source gets its visible demand plus an even share
-        // of the UNATTRIBUTED residual (total − Σdemand): the demand pass is
-        // blind past some structures (self-loop recirculation, voider rows —
-        // seeding zero there fabricated starvation on the uranium fixtures),
-        // so the residual keeps blind trunks supplied. Fully-invisible
-        // demand degrades to the old even split; fully-visible demand is
-        // purely demand-weighted; Σseeds = max(total, scaled) either way.
+        // two lanes.
+        //
+        // Seeds are demand-weighted ONLY when the backward demand map is
+        // SELF-CONSISTENT for the item (Σ attributed ≈ solver total): a
+        // boundary trunk physically supplies what its consumers pull, and
+        // when attribution reconciles with the plan, weighting fixes the
+        // even split's misallocation (chem5: iron 35/s over six trunks =
+        // 5.83 each against one row's 6.25 draw — a fabricated tail
+        // deficit on a sim-verified layout; Σd = 35.000 exactly).
+        //
+        // When it does NOT reconcile, the map is untrustworthy in absolute
+        // terms — compute_demand propagates the full downstream demand up
+        // EVERY branch of a merge (correct as an upper bound for splitter
+        // RATIOS, its original job), so merge-heavy layouts over-attribute
+        // (ec45: three sources each claiming the same 33.75/s row, Σ=1.5×;
+        // mil5 snake-fold: enough compounded merges that per-source
+        // optimistic seeding modeled 57/s lanes on express and threw 406
+        // false lane-cap errors). Fall back to the conservation-obeying
+        // even split — the pre-#519 behavior — rather than guess.
+        // Attribution across merges is the open follow-up on #519.
         for (item, sources) in &sources_by_item {
             let total = external_rates[item];
             let demands: Vec<f64> = sources
@@ -2763,13 +2776,18 @@ fn compute_lane_rates_impl(
                 .map(|pos| demand.get(pos).copied().unwrap_or(0.0))
                 .collect();
             let demand_sum: f64 = demands.iter().sum();
-            let (scale, residual_even) = if demand_sum > total {
-                (total / demand_sum, 0.0)
-            } else {
-                (1.0, (total - demand_sum) / sources.len() as f64)
-            };
+            let attribution_consistent =
+                demand_sum > 0.0 && (demand_sum - total).abs() <= 0.05 * total.max(1e-9);
+            let even = total / sources.len() as f64;
+            if std::env::var("SPAGHETTIO_LANE_WALK_STATS").is_ok() {
+                eprintln!(
+                    "seed-stats item={item} total={total:.3} demand_sum={demand_sum:.3} \
+                     consistent={attribution_consistent} sources={:?}",
+                    sources.iter().zip(&demands).collect::<Vec<_>>()
+                );
+            }
             for (&pos, &d) in sources.iter().zip(&demands) {
-                let per_tile = d * scale + residual_even;
+                let per_tile = if attribution_consistent { d * (total / demand_sum) } else { even };
                 let entry = lane_rates.entry(pos).or_insert([0.0, 0.0]);
                 entry[0] += per_tile / 2.0;
                 entry[1] += per_tile / 2.0;
