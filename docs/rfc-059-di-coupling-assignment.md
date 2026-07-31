@@ -760,6 +760,46 @@ widespread and the optimum is static everywhere.
   repaired factory. The deferral was still right — it is what bought the sim runs
   that found this.
 
+- *2026-07-31 — the flip was blamed for a CI failure it probably did not cause.*
+  `main` went red on `chain_am2_default_options_ships_cell_composed_rescue`
+  immediately after the flip merged (`94cb5dd9`), and I attributed it to the flip
+  on sight. The reasoning was sound as far as it went: that test asserts an exact
+  `(width, height, entities)` triple for a layout built with
+  `cell_composition: Off, ..Default::default()`, and `..Default::default()` now
+  carries `Downstream` — `cell_composition: Off` disables cell composition, not
+  DI, so the golden genuinely does depend on the claim order.
+
+  **Plausible, and probably wrong.** The failing value (23, 50, 424) is not
+  reproducible from the tree under any local axis — warm cache, empty cache,
+  CI-pinned cache, debug, 2-core — by me or by a second investigator. `main` then
+  went green at the next commit (#539), which did not touch that golden.
+
+  The mechanism that fits is a **shared-cache race, not torn writes**. The zone
+  cache appends with `O_APPEND` and one `write_all` per 100–300-byte record, well
+  under `PIPE_BUF`, so concurrent processes get interleaved-but-intact records by
+  design. What is not handled: `resolve_cache_path()` honours
+  `SPAGHETTIO_ZONE_CACHE_PATH`, so **CI writes into its own pinned baseline
+  during the run**, and [`status.md`](status.md) separately records that
+  "slow/loaded machines record spurious timeouts that then *cache*". Under
+  nextest's process-per-test parallelism, whether a given test reads a
+  freshly-solved zone or another process's load-induced `Timeout` entry is
+  scheduling luck — which makes the fail/pass/pass sequence luck too, not a
+  bisection.
+
+  The brittle pins are retired as of `61bad814` (#543), which reached the same
+  conclusion independently and from the other end, attributing them to #533 as
+  "host-relative". Left open, and worth its own change: making the CI cache
+  read-only or per-process would surface the race loudly instead of letting it
+  masquerade as a layout regression. Both halves of the mechanism were already
+  documented in `status.md`; nobody had joined them.
+
+  **The lesson is about attribution, not about the cache.** "My change plausibly
+  explains this failure" and "my change caused this failure" are different
+  claims, and a golden that *could* move is not evidence that it *did*. I also
+  quoted "1053 pass" as verification for the flip when my local run was not
+  reproducing CI at all — the number was real and the confidence it carried was
+  not.
+
 - *2026-07-31 — `DiClaimOrder::Pinned` kept although P2/P3 were dropped.* It is
   measurement machinery for a policy that will not ship, which normally argues
   for deleting it. Kept because it is the instrument that produced the negative,
