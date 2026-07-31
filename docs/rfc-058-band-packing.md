@@ -1,6 +1,7 @@
 # RFC-058: Band packing — 2D placement at row granularity
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active (Phase 0)**.
+Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phase 0 complete (KC2
+cleared 2026-07-31 at 37.5% against the 30% bar); Phase 3 trunk spike next.**
 Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
 
 ## Summary
@@ -203,7 +204,8 @@ its gates — same discipline as `compact_layout`.
 2. **Reach is too narrow.** If fewer than **30%** of the e2e corpus has ≥3
    bands and no width-dominant band, the technique cannot pay for its
    complexity regardless of how well it works where it applies. Measure this
-   in Phase 0, before writing the packer.
+   in Phase 0, before writing the packer. *(Evaluated 2026-07-31: cleared at
+   37.5%, cap-insensitive across 3:1–4:1 — see decision log.)*
 3. **Correctness regression that isn't mechanical.** If packed candidates
    validate worse than their controls (new categories, or higher counts in any
    category) and the cause is not a mechanical record-relocation fix, stop.
@@ -431,3 +433,37 @@ clears. Rationale in the decision log.
   measurement, not a packer tuning knob. Nothing about the gates changes —
   KC2 is still evaluated at phase 0, KC1 still at the spike, and all three
   gate fixtures are still required before phase 4 starts.
+
+- **2026-07-31 — Phase 0 complete: KC2 clears at 37.5%, and the aspect cap
+  turns out not to matter on the real corpus.** The census
+  (`probe_band_census_e2e_corpus` in `crates/core/tests/cell_composition.rs`)
+  transcribes every distinct production request exercised by a non-ignored
+  test in `e2e.rs` — 40 rows; the inclusion rule lives in the test's doc
+  comment. One consequence worth naming: `pu1-plate`, a KC1 gate fixture, is
+  **not** in KC2's denominator, because its owning e2e test
+  (`pipe_belt_processing_unit_1s_routes`) is `#[ignore]`d.
+
+  All 40 rows built. 22/40 (55%) have ≥3 bands; **15/40 (37.5%) also pack,
+  against the 30% bar**. The sweep (3.0 / 3.5 / 4.0) changes nothing — 15/40
+  at every cap. The probe-corpus concern (`insert3-ore` refused at 3.16:1)
+  does not generalise: on the e2e corpus every ≥3-band fixture either packs
+  inside 3:1 or is width-dominant beyond 4:1. The 3:1 default stands and the
+  sweep obligation from the reorder entry is discharged.
+
+  Two honesty notes on the margin. First, one packable row (`ec10-plate`, 3
+  bands, 30×15 control) packs at exactly ±0%; KC2's wording counts it, but
+  excluding zero-gain rows gives 14/40 (35%) — the verdict does not hinge on
+  it. Second, this is one machine's geometry (see the sensitivity entry
+  above); the margin is 3 fixtures, and the packable set is dominated by
+  deep multi-band fixtures (8–85 bands) whose candidacy small band-count
+  jitter cannot flip, so the second-machine re-run is not being demanded.
+
+  Findings that shape later phases: width-dominance is the *entire* failure
+  mode among candidates (7/22 — `ec20-ore`, `ac4/5/7-nauvis`, `ac45-plates`,
+  `pu2-ore-hs`, `pu2.5-plates-hs`; widest bands 97–692 tiles, all smelter or
+  assembler mega-rows), which sharpens the case for a separate wide-band RFC.
+  The winners are deep and save −63% to −81% (`pu20-plates`: 85 bands,
+  145×735 → 166×124), consistent with the probe corpus. And band extraction
+  has a benign artifact — `ec10-plate` yields a 1-tall inserter-only band
+  [(30,5), (20,1), (21,5)] — to keep in mind when phase 1 makes `RowSpan`
+  the source of truth.
