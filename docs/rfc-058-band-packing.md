@@ -622,6 +622,19 @@ clears. Rationale in the decision log.
   candidate wiring should inherit, not a silent re-basing of the gate.
   Probe: `probe_packed_kc1_real_planner`.
 
+- **2026-07-31 — phase 5 opened: KC3 baseline measured, not yet parity.**
+  Controls validate at 0 issues; packed `sci1-ore` carries 48 (21
+  entity-overlap Errors, belt-dead-end, flow-reachability, throughput
+  warnings) and `sci2-ore` 156 (item-isolation, belt-loops, UG pairing,
+  power coverage among them) — `probe_packed_validation_parity` prints
+  the per-category tables. These are mechanical geometry defects of the
+  young builder (the class KC3 explicitly tolerates fixing, not the
+  criterion firing), and each category now gets the verification
+  protocol's treatment: snapshot-decode, tile-level inspection, fix,
+  re-measure — never trusting a count drop alone. KC4 (fast meter),
+  browser eyeball, and sim adjudication queue behind validation parity;
+  phase 6's candidate wiring stays blocked until KC3 closes.
+
 - **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
   fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused
   verbatim) and 1D-specific geometry (left untouched; paralleled by a

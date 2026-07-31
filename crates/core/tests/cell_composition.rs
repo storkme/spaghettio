@@ -6030,3 +6030,41 @@ fn probe_packed_kc1_real_planner() {
         println!("  NOTE: not all three gate fixtures built — the three-fixture aggregate is NOT evaluated; record the scope gap in the decision log.");
     }
 }
+
+/// RFC-058 phase 5, KC3: per-category validation parity, packed vs
+/// control, on the buildable gate fixtures.
+#[test]
+#[ignore = "RFC-058 phase 5 validation parity — run with --ignored --nocapture"]
+fn probe_packed_validation_parity() {
+    use spaghettio_core::validate::{self, LayoutStyle};
+    for (label, item, rate, inputs, machine) in [
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"][..], "assembling-machine-1"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"][..], "assembling-machine-2"),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(), machine,
+            &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let base = layout::LayoutOptions {
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        };
+        for (kind, opts) in [
+            ("control", base.clone()),
+            ("packed", layout::LayoutOptions { band_packing: true, ..base.clone() }),
+        ] {
+            let l = layout::build_bus_layout(&sr, opts).unwrap();
+            let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                Ok(i) => i,
+                Err(e) => e.issues,
+            };
+            let mut by_cat: std::collections::BTreeMap<(String, String), usize> = Default::default();
+            for i in &issues {
+                *by_cat.entry((format!("{:?}", i.severity), i.category.clone())).or_default() += 1;
+            }
+            println!("{label} {kind}: {} issues {:?}", issues.len(), by_cat);
+        }
+    }
+}
