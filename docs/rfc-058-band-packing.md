@@ -220,6 +220,23 @@ the RFC never made. This is the same strictly-additive entry pattern
 cell composition and DI used: compete where you can build, abstain
 loudly where you cannot.
 
+**Two implementation specifics, fixed before code (2026-07-31).** First,
+phase 4 packs the **content rect**, not the structural rect: a band must
+carry its fluid pipe rows (and any other non-belt span content) rigidly,
+so the packing input is the span's y-range minus belt-only rows, with the
+x-extent of all non-belt entities. The phase 0–3 instruments measured
+structural rects (machines+inserters only) and their published numbers
+stand; the content rect adds a small area cost on fluid-carrying bands
+(`pu1-plate`'s chem rows), which the KC1 re-measure absorbs or reports.
+Second, the integration seam is INSIDE `layout_pass`, immediately after
+`place_rows` — the RFC's rejected-alternatives entry still holds: a
+post-pass over the finished layout would re-run lane planning with less
+information. When the flag is on and nothing refuses, the packed builder
+takes over (translate bands, plan nets, route, place poles, emit
+boundary records — the fold's 0.00/s lesson makes the records
+first-class, not an afterthought); on any refusal it emits the typed
+event and falls through to the untouched native pipeline.
+
 KC5 verdict: **extension, not rewrite — the criterion does not fire.**
 `plan_bus_lanes` is not modified; the packed planner sits beside it
 behind the same flag, and the linear path stays byte-identical.
