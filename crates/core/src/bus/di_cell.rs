@@ -812,6 +812,12 @@ pub struct DiCellLayout {
     pub output_belt_y: i32,
     pub x_min: i32,
     pub x_max: i32,
+    /// Leftmost x at which the output belt ACTUALLY carries `output_item` —
+    /// the leftmost consumer's own output-inserter column, not `x_min` (the
+    /// producer row may start well to the left with no output drop over its
+    /// own columns at all). #526: a downstream `stamp_di_bridge` that picks
+    /// up west of this tile finds permanently empty belt.
+    pub output_feed_x_min: i32,
 }
 
 impl DiCellLayout {
@@ -911,6 +917,14 @@ pub fn stamp_di_cell_io(
         });
     }
 
+    // The belt spans the whole cell (`x_min..=x_max` above), but only the
+    // consumer machines drop onto it — the leftmost one's own column is
+    // where real content first appears. `consumer_xs` is non-empty here:
+    // `plan_straddle` refuses a plan with zero consumers.
+    let output_feed_x_min = x0
+        + plan.consumer_xs.iter().copied().min().unwrap_or(0)
+        + mid;
+
     Some(DiCellLayout {
         entities: ents,
         input_belt_y,
@@ -920,6 +934,7 @@ pub fn stamp_di_cell_io(
         output_belt_y,
         x_min,
         x_max,
+        output_feed_x_min,
     })
 }
 
@@ -1425,6 +1440,14 @@ pub struct RowCellLayout {
     pub output_belt_y: i32,
     pub x_min: i32,
     pub x_max: i32,
+    /// Leftmost x at which the output belt ACTUALLY carries the output
+    /// item — the leftmost CONSUMER-role machine's own output-inserter
+    /// column. In a row cell only consumer machines emit onto this belt
+    /// (producers hand off through the DI coupler), and the sequence often
+    /// leads with a producer (`plan_row_straddle`'s tie-break prefers
+    /// `PCPC…`), so the belt can be empty for one or more machine-widths
+    /// west of this tile. See `DiCellLayout::output_feed_x_min` (#526).
+    pub output_feed_x_min: i32,
 }
 
 /// Everything the row stamper needs beyond the plan.
@@ -1602,6 +1625,9 @@ pub fn stamp_row_cell(
     let seg = format!("di-row:{}:{}", spec.item, spec.consumer_recipe);
     let mut ents = Vec::new();
     let mut fluid_ports: Vec<(String, i32, i32)> = Vec::new();
+    // Leftmost x actually fed onto the output belt — tracked over every
+    // consumer's out-inserter column as they're stamped below (#526).
+    let mut output_feed_x_min: Option<i32> = None;
 
     let belt_run = |ents: &mut Vec<PlacedEntity>, y: i32, name: &str, carries: &str| {
         for x in x_min..=x_max {
@@ -1738,6 +1764,11 @@ pub fn stamp_row_cell(
                     ..Default::default()
                 });
             }
+            if no > 0 {
+                let first_x = mx + nf as i32;
+                output_feed_x_min =
+                    Some(output_feed_x_min.map_or(first_x, |cur| cur.min(first_x)));
+            }
             for j in 0..no as i32 {
                 ents.push(PlacedEntity {
                     name: spec.out_inserter.to_string(),
@@ -1827,6 +1858,11 @@ pub fn stamp_row_cell(
         output_belt_y,
         x_min,
         x_max,
+        // Always `Some` by construction: `no = spec.out_count.max(1)` and
+        // `plan.sequence` contains at least one consumer (`plan_row_straddle`
+        // refuses `consumer_count == 0`), so the loop above visits at least
+        // one consumer with `no > 0`. `x_min` is a defensive fallback only.
+        output_feed_x_min: output_feed_x_min.unwrap_or(x_min),
     })
 }
 

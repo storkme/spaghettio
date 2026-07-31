@@ -94,6 +94,31 @@ pub struct RowSpan {
     /// Rightmost x coordinate of the output belt run. For eastward rows,
     /// items exit the row at `output_belt_x_max + 1`.
     pub output_belt_x_max: i32,
+    /// `Some(x)` when the row's own output belt is NOT fed uniformly across
+    /// `[output_belt_x_min, output_belt_x_max]` — only DI cells set this.
+    /// `None` means "assume the belt carries the item from
+    /// `output_belt_x_min` onward", true for every ordinary row template
+    /// (every machine drops onto the belt near its own column, so coverage
+    /// is continuous from the row's leftmost tile).
+    ///
+    /// A `di-row`/`di-cell` fuses producer and consumer machines into one
+    /// row, but ONLY the consumer-role machines emit the coupled item onto
+    /// the belt — the producer-role machines feed it via the DI coupler,
+    /// never a belt. So a cell's belt can be empty for several tiles west
+    /// of its first real drop (whichever comes first: the leftmost
+    /// consumer-role machine's own column), while `output_belt_x_min`
+    /// still reports the CELL's geometric left edge (needed for row-width
+    /// and merger bookkeeping elsewhere).
+    ///
+    /// #526: `stamp_di_bridge` used to derive a bridge's pickup x purely
+    /// from the DOWNSTREAM consumer's own alignment, with no way to learn
+    /// that the upstream cell's belt was still empty there — the pickup
+    /// landed upstream of the cell's only drop, so the belt segment under
+    /// it was permanently empty and the bridge starved (`di-row:copper-
+    /// cable:electronic-circuit` on `display-panel@1`, `di-cell:copper-
+    /// plate:copper-cable` on `small-electric-pole@5`). This field lets
+    /// the bridge clamp its pickup downstream of the real drop instead.
+    pub output_feed_x_min: Option<i32>,
     /// `Some(_)` when this row uses `RowLayout::HorizontalStack`. The
     /// lane planner reads this to allocate K trunk lanes for the
     /// row's high-demand input. See `docs/rfc-horizontal-trunks.md`.
@@ -1612,6 +1637,9 @@ pub(crate) fn build_one_row(
         output_east,
         output_belt_x_min,
         output_belt_x_max,
+        // Ordinary row: every machine along it drops onto the belt near its
+        // own column, so coverage is continuous from `output_belt_x_min`.
+        output_feed_x_min: None,
         horizontal_stack,
         secondary_output_belt,
         sorted_output_belts,
@@ -1756,13 +1784,57 @@ fn stamp_di_bridge(
         .take(plan.count.max(1))
         .collect();
 
+    // #526: `mxs`/`dxs` above are chosen from the CONSUMER's own alignment,
+    // which for an ordinary producer row is safe — its output belt has
+    // content from `output_belt_x_min` on, because every machine along it
+    // drops there. A DI CELL producer is different: only its consumer-role
+    // machines emit onto the belt, so coverage can start well east of the
+    // row's own left edge. `producer.output_feed_x_min` (`Some` only for
+    // cells) says where. A bridge whose pick/drop column sits upstream of
+    // that finds permanently empty belt — the exact defect #520/#526 found
+    // twice (`di-row:copper-cable:electronic-circuit` on `display-panel@1`,
+    // `di-cell:copper-plate:copper-cable` on `small-electric-pole@5`).
+    //
+    // Fix: shift this machine's WHOLE column set east by whatever is needed
+    // to clear `feed_x_min`, preserving the relative spacing between its
+    // `dxs` (so sibling columns for the same machine never collapse onto
+    // one tile). A south-facing bridge's pick and drop share one x, so the
+    // shift moves both together; that is safe for the DROP side too,
+    // because the consumer's own feed inserter is further downstream still
+    // and a later drop still reaches it. If the shift would push a column
+    // past this machine's own span (`[mx, mx + mw - 1]`) it would collide
+    // with the NEXT machine's dedicated columns instead of merely arriving
+    // later — refuse the whole bridge rather than emit that, the
+    // established pattern here being "refuse rather than under-feed".
+    let min_dx = dxs.iter().copied().min().unwrap_or(0);
+    let max_dx = dxs.iter().copied().max().unwrap_or(0);
+    if let Some(feed_x_min) = producer.output_feed_x_min {
+        for &mx in &mxs {
+            let shift = (feed_x_min - (mx + min_dx)).max(0);
+            if max_dx + shift > mw as i32 - 1 {
+                crate::trace::emit(crate::trace::TraceEvent::GhostSpecFailed {
+                    spec_key: format!("di-bridge:{item}:upstream-of-feed"),
+                    from_x: feed_x_min,
+                    from_y: producer_belt_y,
+                    to_x: mx,
+                    to_y: bridge_y,
+                });
+                return Vec::new();
+            }
+        }
+    }
+
     let mut entities = Vec::new();
     let seg = Some(format!("di-bridge:{item}:{}", consumer_spec.recipe));
     for &mx in &mxs {
+        let shift = match producer.output_feed_x_min {
+            Some(feed_x_min) => (feed_x_min - (mx + min_dx)).max(0),
+            None => 0,
+        };
         for &dx in &dxs {
             entities.push(PlacedEntity {
                 name: plan.entity.to_string(),
-                x: mx + dx,
+                x: mx + dx + shift,
                 y: bridge_y,
                 direction: EntityDirection::South,
                 carries: Some(item.to_string()),
@@ -2071,6 +2143,7 @@ fn try_build_cell(
         output_east: true,
         output_belt_x_min: cell.x_min,
         output_belt_x_max: cell.x_max,
+        output_feed_x_min: Some(cell.output_feed_x_min),
         horizontal_stack: None,
         secondary_output_belt: None,
         sorted_output_belts: Vec::new(),
@@ -2529,6 +2602,7 @@ fn try_build_row_cell(
         output_east: true,
         output_belt_x_min: cell.x_min,
         output_belt_x_max: cell.x_max,
+        output_feed_x_min: Some(cell.output_feed_x_min),
         horizontal_stack: None,
         secondary_output_belt: None,
         sorted_output_belts: Vec::new(),
