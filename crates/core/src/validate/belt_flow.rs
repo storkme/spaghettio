@@ -2557,6 +2557,75 @@ fn compute_lane_rates_impl(
         }
     }
 
+    // Input-inserter pickup demand per belt tile, serving TWO roles:
+    // (1) the backward demand pass (RFC rfc-lane-demand-flow.md Phase 1
+    //     Branch A) that steers splitter allocation toward demand, and
+    // (2) the forward CONSUMPTION DECREMENT (#519): each tile's outflow
+    //     to its downstream neighbor is its arriving rate minus this
+    //     tile's pickup demand, so a shared row belt depletes machine by
+    //     machine and the tail sees leftovers, not the head supply. The
+    //     walker previously propagated undecremented rates, which let
+    //     `input-rate-delivery` compare every inserter against the full
+    //     row supply — tail starvation (ac5-on simming at 75% of plan
+    //     while E0/W0) was structurally invisible.
+    let mut input_ins_count: FxHashMap<((i32, i32), String), usize> = FxHashMap::default();
+    let mut input_ins: Vec<((i32, i32), (i32, i32), String)> = Vec::new();
+    for ins in &layout.entities {
+        if !is_inserter(&ins.name) {
+            continue;
+        }
+        let (dx, dy) = dir_to_vec(ins.direction);
+        let reach = inserter_reach(&ins.name);
+        let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
+        let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
+        if !machine_tiles_set.contains(&drop_pos) || !belt_dir_map.contains_key(&pickup_pos) {
+            continue;
+        }
+        let mpos = match machine_by_tile.get(&drop_pos) {
+            Some(&p) => p,
+            None => continue,
+        };
+        let item = match belt_carries.get(&pickup_pos).and_then(|c| c.as_deref()) {
+            Some(i) => i.to_string(),
+            None => continue,
+        };
+        *input_ins_count.entry((mpos, item.clone())).or_insert(0) += 1;
+        input_ins.push((pickup_pos, mpos, item));
+    }
+    let mut base_demand: FxHashMap<(i32, i32), f64> = FxHashMap::default();
+    for (pickup, mpos, item) in &input_ins {
+        let me = match machine_entity.get(mpos) {
+            Some(e) => e,
+            None => continue,
+        };
+        let recipe = match me.recipe.as_deref() {
+            Some(r) => r,
+            None => continue,
+        };
+        let fallback_spec = match recipe_to_spec.get(recipe) {
+            Some(s) => *s,
+            None => continue,
+        };
+        // Same position-resolved attribution as the injection loop above —
+        // see `super::resolve_row_spec`'s doc comment.
+        let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
+        let utilization = utilization_for(spec);
+        let required = spec
+            .inputs
+            .iter()
+            .find(|i| &i.item == item)
+            .map(|i| i.rate * utilization)
+            .unwrap_or(0.0);
+        if required <= 0.0 {
+            continue;
+        }
+        let count = input_ins_count
+            .get(&(*mpos, item.clone()))
+            .copied()
+            .unwrap_or(1);
+        *base_demand.entry(*pickup).or_insert(0.0) += required / count as f64;
+    }
+
     let mut lane_rates: FxHashMap<(i32, i32), [f64; 2]> = belt_dir_map
         .keys()
         .map(|&p| (p, lane_injections.get(&p).copied().unwrap_or([0.0, 0.0])))
@@ -2662,6 +2731,11 @@ fn compute_lane_rates_impl(
                     let (idx, idy) = dir_to_vec(inp_d);
                     let behind = (paired_input.0 - idx, paired_input.1 - idy);
                     if let Some(&behind_rates) = lane_rates.get(&behind) {
+                        // Pickups at `behind` eat before the tunnel (#519).
+                        let behind_rates = outflow_after_pickup(
+                            behind_rates,
+                            base_demand.get(&behind).copied().unwrap_or(0.0),
+                        );
                         let rates = lane_rates.entry(pos).or_insert([0.0, 0.0]);
                         rates[0] += behind_rates[0];
                         rates[1] += behind_rates[1];
@@ -2684,7 +2758,7 @@ fn compute_lane_rates_impl(
                     // Gave up waiting for sibling — mark processed with current
                     // rates and skip averaging to avoid silently wrong numbers.
                     processed.insert(pos);
-                    do_propagate(pos, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates);
+                    do_propagate(pos, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates, &base_demand);
                     notify_ug_deps(pos, &mut in_degree, &mut queue);
                     continue;
                 } else {
@@ -2703,7 +2777,7 @@ fn compute_lane_rates_impl(
                     lane_rates.insert(sib, [sib_out.0, sib_out.1]);
                     for &tile in &[sib, pos] {
                         processed.insert(tile);
-                        do_propagate(tile, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates);
+                        do_propagate(tile, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates, &base_demand);
                         notify_ug_deps(tile, &mut in_degree, &mut queue);
                     }
                     continue;
@@ -2712,7 +2786,7 @@ fn compute_lane_rates_impl(
         }
 
         processed.insert(pos);
-        do_propagate(pos, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates);
+        do_propagate(pos, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates, &base_demand);
         notify_ug_deps(pos, &mut in_degree, &mut queue);
     }
 
@@ -2801,6 +2875,11 @@ fn compute_lane_rates_impl(
                         let (idx, idy) = dir_to_vec(inp_d);
                         let behind = (paired_input.0 - idx, paired_input.1 - idy);
                         if let Some(&behind_rates) = lane_rates.get(&behind) {
+                            // Pickups at `behind` eat before the tunnel (#519).
+                            let behind_rates = outflow_after_pickup(
+                                behind_rates,
+                                base_demand.get(&behind).copied().unwrap_or(0.0),
+                            );
                             let rates = lane_rates.entry(pos).or_insert([0.0, 0.0]);
                             rates[0] += behind_rates[0];
                             rates[1] += behind_rates[1];
@@ -2822,7 +2901,7 @@ fn compute_lane_rates_impl(
                             continue;
                         }
                         processed.insert(pos);
-                        do_propagate(pos, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates);
+                        do_propagate(pos, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates, &base_demand);
                         notify_ug_deps(pos, &mut in_degree, &mut queue);
                         continue;
                     } else {
@@ -2850,7 +2929,7 @@ fn compute_lane_rates_impl(
                         lane_rates.insert(sib, [sib_out.0, sib_out.1]);
                         for &tile in &[sib, pos] {
                             processed.insert(tile);
-                            do_propagate(tile, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates);
+                            do_propagate(tile, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates, &base_demand);
                             notify_ug_deps(tile, &mut in_degree, &mut queue);
                         }
                         continue;
@@ -2858,72 +2937,9 @@ fn compute_lane_rates_impl(
                 }
             }
             processed.insert(pos);
-            do_propagate(pos, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates);
+            do_propagate(pos, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates, &base_demand);
             notify_ug_deps(pos, &mut in_degree, &mut queue);
         }
-    }
-
-    // Backward demand pass (RFC rfc-lane-demand-flow.md Phase 1 Branch A).
-    // Seed each machine-input-inserter pickup tile with its share of the
-    // machine's utilization-scaled required rate, then propagate that demand
-    // upstream so the splitter allocation below can route toward it instead
-    // of splitting 50/50.
-    let mut input_ins_count: FxHashMap<((i32, i32), String), usize> = FxHashMap::default();
-    let mut input_ins: Vec<((i32, i32), (i32, i32), String)> = Vec::new();
-    for ins in &layout.entities {
-        if !is_inserter(&ins.name) {
-            continue;
-        }
-        let (dx, dy) = dir_to_vec(ins.direction);
-        let reach = inserter_reach(&ins.name);
-        let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
-        let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
-        if !machine_tiles_set.contains(&drop_pos) || !belt_dir_map.contains_key(&pickup_pos) {
-            continue;
-        }
-        let mpos = match machine_by_tile.get(&drop_pos) {
-            Some(&p) => p,
-            None => continue,
-        };
-        let item = match belt_carries.get(&pickup_pos).and_then(|c| c.as_deref()) {
-            Some(i) => i.to_string(),
-            None => continue,
-        };
-        *input_ins_count.entry((mpos, item.clone())).or_insert(0) += 1;
-        input_ins.push((pickup_pos, mpos, item));
-    }
-    let mut base_demand: FxHashMap<(i32, i32), f64> = FxHashMap::default();
-    for (pickup, mpos, item) in &input_ins {
-        let me = match machine_entity.get(mpos) {
-            Some(e) => e,
-            None => continue,
-        };
-        let recipe = match me.recipe.as_deref() {
-            Some(r) => r,
-            None => continue,
-        };
-        let fallback_spec = match recipe_to_spec.get(recipe) {
-            Some(s) => *s,
-            None => continue,
-        };
-        // Same position-resolved attribution as the injection loop above —
-        // see `super::resolve_row_spec`'s doc comment.
-        let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
-        let utilization = utilization_for(spec);
-        let required = spec
-            .inputs
-            .iter()
-            .find(|i| &i.item == item)
-            .map(|i| i.rate * utilization)
-            .unwrap_or(0.0);
-        if required <= 0.0 {
-            continue;
-        }
-        let count = input_ins_count
-            .get(&(*mpos, item.clone()))
-            .copied()
-            .unwrap_or(1);
-        *base_demand.entry(*pickup).or_insert(0.0) += required / count as f64;
     }
 
     // Convergence budget (RFC kill criterion 2): a HARD `3 × segment_count`,
@@ -3028,7 +3044,7 @@ fn compute_lane_rates_impl(
                     continue;
                 }
                 let seed = seed_rates.get(&pos).copied().unwrap_or([0.0, 0.0]);
-                let fc = feeder_contributions_for_tile(pos, &prev, &feeders, &belt_dir_map);
+                let fc = feeder_contributions_for_tile(pos, &prev, &feeders, &belt_dir_map, &base_demand);
                 next.insert(pos, [seed[0] + fc[0], seed[1] + fc[1]]);
             }
 
@@ -3045,8 +3061,8 @@ fn compute_lane_rates_impl(
             // the export branch gets the remainder, via
             // `splitter_output_rates_convergence` (per-lane, RFC-047).
             for &(a, b) in &pair_set {
-                let a_fc = feeder_contributions_for_tile(a, &prev, &feeders, &belt_dir_map);
-                let b_fc = feeder_contributions_for_tile(b, &prev, &feeders, &belt_dir_map);
+                let a_fc = feeder_contributions_for_tile(a, &prev, &feeders, &belt_dir_map, &base_demand);
+                let b_fc = feeder_contributions_for_tile(b, &prev, &feeders, &belt_dir_map, &base_demand);
                 let loop_priority_rate =
                     splitter_entity.get(&a).and_then(|e| e.loop_priority_rate);
                 // Demand at each output tile's downstream, and the per-output
@@ -3104,11 +3120,14 @@ fn compute_lane_rates_impl(
                 };
                 let (idx, idy) = dir_to_vec(inp_d);
                 let behind = (paired_input.0 - idx, paired_input.1 - idy);
-                let behind_rates = next
-                    .get(&behind)
-                    .copied()
-                    .or_else(|| prev.get(&behind).copied())
-                    .unwrap_or([0.0, 0.0]);
+                let behind_rates = outflow_after_pickup(
+                    next.get(&behind)
+                        .copied()
+                        .or_else(|| prev.get(&behind).copied())
+                        .unwrap_or([0.0, 0.0]),
+                    // Pickups at `behind` eat before the tunnel (#519).
+                    base_demand.get(&behind).copied().unwrap_or(0.0),
+                );
                 let seed = seed_rates.get(&ug_out).copied().unwrap_or([0.0, 0.0]);
                 next.insert(ug_out, [seed[0] + behind_rates[0], seed[1] + behind_rates[1]]);
             }
@@ -3173,6 +3192,11 @@ fn compute_lane_rates_impl(
         let (dx, dy) = dir_to_vec(dir);
         let upstream = (ix - dx, iy - dy);
         if let Some(&upstream_rates) = lane_rates.get(&upstream) {
+            // What reaches the UG-in surface is upstream's outflow (#519).
+            let upstream_rates = outflow_after_pickup(
+                upstream_rates,
+                base_demand.get(&upstream).copied().unwrap_or(0.0),
+            );
             lane_rates.insert((ix, iy), upstream_rates);
         }
     }
@@ -3231,6 +3255,23 @@ fn lane_transfer(
     }
 }
 
+/// A tile's outflow after its own input-inserter pickups take their share
+/// (#519): `consumed` — the tile's summed per-inserter demand from
+/// `base_demand` — is subtracted proportionally across the two lanes,
+/// clamped at zero. This is what flows PAST the tile to its downstream
+/// neighbor, so a shared row belt depletes machine by machine and the
+/// row's tail sees head supply minus every upstream draw. The stored
+/// `lane_rates` value for a tile remains its ARRIVING rate (what its own
+/// pickups can see); the subtraction applies only on the way out.
+fn outflow_after_pickup(rates: [f64; 2], consumed: f64) -> [f64; 2] {
+    let total = rates[0] + rates[1];
+    if consumed <= 0.0 || total <= 0.0 {
+        return rates;
+    }
+    let scale = ((total - consumed).max(0.0)) / total;
+    [rates[0] * scale, rates[1] * scale]
+}
+
 /// Whether `pos`'s feeder list contains a straight feeder (ft == 0). Used
 /// by [`lane_transfer`] callers to disambiguate sideload from turn.
 fn has_straight_feeder(
@@ -3253,6 +3294,7 @@ fn feeder_contribution(
     fr: [f64; 2],
     feeders: &FxHashMap<(i32, i32), Vec<((i32, i32), u8)>>,
     belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
+    consumption: &FxHashMap<(i32, i32), f64>,
 ) -> [f64; 2] {
     let fd = match belt_dir_map.get(&fp) {
         Some(&d) => d,
@@ -3262,6 +3304,8 @@ fn feeder_contribution(
         Some(&d) => d,
         None => return [0.0, 0.0],
     };
+    // The feeder's own pickups eat before anything leaves it (#519).
+    let fr = outflow_after_pickup(fr, consumption.get(&fp).copied().unwrap_or(0.0));
     lane_transfer(fp, fd, fr, pos, pd, has_straight_feeder(pos, feeders))
 }
 
@@ -3272,6 +3316,7 @@ fn feeder_contributions_for_tile(
     rates: &FxHashMap<(i32, i32), [f64; 2]>,
     feeders: &FxHashMap<(i32, i32), Vec<((i32, i32), u8)>>,
     belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
+    consumption: &FxHashMap<(i32, i32), f64>,
 ) -> [f64; 2] {
     let Some(my_feeders) = feeders.get(&pos) else {
         return [0.0, 0.0];
@@ -3279,7 +3324,7 @@ fn feeder_contributions_for_tile(
     let mut total = [0.0, 0.0];
     for &(fp, _ft) in my_feeders {
         let fr = rates.get(&fp).copied().unwrap_or([0.0, 0.0]);
-        let contrib = feeder_contribution(fp, pos, fr, feeders, belt_dir_map);
+        let contrib = feeder_contribution(fp, pos, fr, feeders, belt_dir_map, consumption);
         total[0] += contrib[0];
         total[1] += contrib[1];
     }
@@ -3294,6 +3339,7 @@ fn do_propagate(
     in_degree: &mut FxHashMap<(i32, i32), i32>,
     queue: &mut VecDeque<(i32, i32)>,
     lane_rates: &mut FxHashMap<(i32, i32), [f64; 2]>,
+    consumption: &FxHashMap<(i32, i32), f64>,
 ) {
     let d = match belt_dir_map.get(&tile) {
         Some(&d) => d,
@@ -3305,7 +3351,11 @@ fn do_propagate(
         return;
     }
 
-    let my_rates = *lane_rates.get(&tile).unwrap_or(&[0.0, 0.0]);
+    // This tile's pickups eat before anything moves on (#519).
+    let my_rates = outflow_after_pickup(
+        *lane_rates.get(&tile).unwrap_or(&[0.0, 0.0]),
+        consumption.get(&tile).copied().unwrap_or(0.0),
+    );
     let ds_d = belt_dir_map[&downstream];
     let contrib = lane_transfer(
         tile,
@@ -5309,5 +5359,142 @@ mod tests {
             "equal-demand rows split evenly, got a={row_a} b={row_b}"
         );
         assert!(check_input_rate_delivery(&layout, Some(&solver)).is_empty());
+    }
+
+    /// #519: consumption decrement along a shared row belt. One producer
+    /// seeds 6/s of iron-plate onto a belt serving THREE consumers that
+    /// need 2.5/s each (7.5 total). The walker must deplete the belt
+    /// machine by machine — the first two pickups see enough, the tail
+    /// sees 6.0 − 5.0 = 1.0/s and warns. Before the decrement the walker
+    /// propagated the undecremented 6.0 to every pickup and per-inserter
+    /// comparison passed all three (the ac5-on flux blind spot).
+    #[test]
+    fn input_rate_delivery_row_tail_starvation_warns() {
+        fn sr_with_supply(supply: f64) -> SolverResult {
+            SolverResult {
+                machines: vec![
+                    MachineSpec {
+                        entity: "electric-furnace".to_string(),
+                        recipe: "iron-plate".to_string(),
+                        self_loop: vec![], voider: false, game_modules: Vec::new(),
+                        count: 1.0,
+                        inputs: vec![],
+                        outputs: vec![ItemFlow {
+                            item: "iron-plate".to_string(),
+                            rate: supply,
+                            is_fluid: false,
+                            module_id: 0,
+                        }],
+                    },
+                    MachineSpec {
+                        entity: "assembling-machine-3".to_string(),
+                        recipe: "iron-gear-wheel".to_string(),
+                        self_loop: vec![], voider: false, game_modules: Vec::new(),
+                        count: 3.0,
+                        inputs: vec![ItemFlow {
+                            item: "iron-plate".to_string(),
+                            rate: 2.5,
+                            is_fluid: false,
+                            module_id: 0,
+                        }],
+                        outputs: vec![ItemFlow {
+                            item: "iron-gear-wheel".to_string(),
+                            rate: 1.25,
+                            is_fluid: false,
+                            module_id: 0,
+                        }],
+                    },
+                ],
+                external_inputs: vec![],
+                external_outputs: vec![ItemFlow {
+                    item: "iron-gear-wheel".to_string(),
+                    rate: 3.75,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                surplus_outputs: vec![],
+                dependency_order: vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()],
+                ..Default::default()
+            }
+        }
+        // Producer furnace at (0,-4); output inserter (1,-1)S drops onto the
+        // belt head (1,0)E. Belt runs east (1,0)..(7,0). Three consumers at
+        // x=0,3,6 (3x3, y=2..4), each with an input inserter at (x+1, 1)S
+        // picking from (x+1, 0).
+        let mut entities = vec![
+            PlacedEntity {
+                name: "electric-furnace".to_string(),
+                x: 0,
+                y: -4,
+                direction: EntityDirection::North,
+                recipe: Some("iron-plate".to_string()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "inserter".to_string(),
+                x: 1,
+                y: -1,
+                direction: EntityDirection::South,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            },
+        ];
+        for x in 1..=7 {
+            entities.push(PlacedEntity {
+                name: "transport-belt".to_string(),
+                x,
+                y: 0,
+                direction: EntityDirection::East,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            });
+        }
+        for mx in [0, 3, 6] {
+            entities.push(PlacedEntity {
+                name: "assembling-machine-3".to_string(),
+                x: mx,
+                y: 2,
+                direction: EntityDirection::North,
+                recipe: Some("iron-gear-wheel".to_string()),
+                ..Default::default()
+            });
+            entities.push(PlacedEntity {
+                name: "inserter".to_string(),
+                x: mx + 1,
+                y: 1,
+                direction: EntityDirection::South,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            });
+        }
+        let lr = LayoutResult {
+            entities,
+            width: 20,
+            height: 20,
+            ..Default::default()
+        };
+
+        // Under-supplied (6.0 vs 7.5): exactly ONE warning, at the TAIL
+        // pickup (7,0) — the head machines eat first.
+        let issues = check_input_rate_delivery(&lr, Some(&sr_with_supply(6.0)));
+        assert_eq!(
+            issues.len(),
+            1,
+            "expected exactly the tail machine to warn: {issues:?}"
+        );
+        assert_eq!((issues[0].x, issues[0].y), (Some(7), Some(0)), "{issues:?}");
+
+        // Rates themselves deplete along the row: 6.0 at the head pickup,
+        // 3.5 at the second, 1.0 arriving at the tail.
+        let rates = compute_lane_rates(&lr, Some(&sr_with_supply(6.0)));
+        let total = |p: (i32, i32)| rates.get(&p).map(|r| r[0] + r[1]).unwrap_or(0.0);
+        assert!((total((1, 0)) - 6.0).abs() < 1e-6, "head {:?}", total((1, 0)));
+        assert!((total((4, 0)) - 3.5).abs() < 1e-6, "mid {:?}", total((4, 0)));
+        assert!((total((7, 0)) - 1.0).abs() < 1e-6, "tail {:?}", total((7, 0)));
+
+        // Exact supply (7.5 == demand): the knife-edge is CLEAN — the tail
+        // receives exactly its share and nothing warns.
+        let issues = check_input_rate_delivery(&lr, Some(&sr_with_supply(7.5)));
+        assert!(issues.is_empty(), "exact supply must not warn: {issues:?}");
     }
 }
