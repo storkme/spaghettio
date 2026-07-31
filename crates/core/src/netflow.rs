@@ -340,10 +340,72 @@ pub fn solve_netflow(
 
 /// Like [`solve_netflow`] but accepts [`NetflowOptions`] (Fulgora
 /// scrap-economy spike — additive, both flags default `false`).
+///
+/// RFC-062 Phase 1: a thin one-element-slice caller of
+/// [`solve_netflow_multi_with_options`] — this and every function that
+/// forwards to it (the 8 scalar wrappers in `solver.rs`) share the single
+/// N-target implementation, so N=1 bit-identity is a construction
+/// guarantee, not a tested coincidence.
 #[allow(clippy::too_many_arguments)]
 pub fn solve_netflow_with_options(
     target_item: &str,
     target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+    scope: RecipeScope<'_>,
+    costs: &CostTable,
+    options: &NetflowOptions,
+) -> Result<SolverResult, SolverError> {
+    solve_netflow_multi_with_options(
+        &[(target_item.to_string(), target_rate)],
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+        scope,
+        costs,
+        options,
+    )
+}
+
+/// Multi-target entry point (RFC-062 Phase 1,
+/// `docs/rfc-062-multi-target-outputs.md` §Solver): solve for N ≥ 1
+/// simultaneous targets in one LP instead of gluing together N independent
+/// solves. `targets` is `(item, rate)` pairs; an item requested more than
+/// once has its rates summed into a single demand row (RFC-062 Phase 1
+/// decision log — summing rather than refusing duplicates).
+#[allow(clippy::too_many_arguments)]
+pub fn solve_netflow_multi(
+    targets: &[(String, f64)],
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+    scope: RecipeScope<'_>,
+    costs: &CostTable,
+) -> Result<SolverResult, SolverError> {
+    solve_netflow_multi_with_options(
+        targets,
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+        scope,
+        costs,
+        &NetflowOptions::default(),
+    )
+}
+
+/// Like [`solve_netflow_multi`] but accepts [`NetflowOptions`]. This is the
+/// single choke point every scalar entry point (`solve_netflow`,
+/// `solve_netflow_with_options`, and transitively the 8 wrappers in
+/// `solver.rs`) now forwards to via a one-element `targets` slice — see
+/// [`solve_netflow_with_options`].
+#[allow(clippy::too_many_arguments)]
+pub fn solve_netflow_multi_with_options(
+    targets: &[(String, f64)],
     available_inputs: &FxHashSet<String>,
     palette: &MachinePalette,
     default_machine: &str,
@@ -359,6 +421,10 @@ pub fn solve_netflow_with_options(
     // producers and re-solve. Genuinely forced cycles (kovarex with
     // uranium-processing excluded) still refuse with a typed error. Each
     // retry removes at least one recipe, so the cap is just a backstop.
+    //
+    // Target-count-agnostic by construction (RFC-062 Phase 1): every branch
+    // below inspects `r.machines` / `r.surplus_outputs` post-solve, never a
+    // single `target_idx`, so this loop needed no changes to generalize.
     let mut extra_excluded: FxHashSet<String> = FxHashSet::default();
     let mut attempt_options = *options;
     let mut last_refusal: Option<SolverError> = None;
@@ -366,8 +432,7 @@ pub fn solve_netflow_with_options(
     // exclusivity re-solve (#476).
     for _ in 0..9 {
         match solve_attempt(
-            target_item,
-            target_rate,
+            targets,
             available_inputs,
             palette,
             default_machine,
@@ -421,15 +486,22 @@ pub fn solve_netflow_with_options(
         }
     }
     Err(last_refusal.unwrap_or_else(|| SolverError::LpFailed {
-        target: target_item.to_string(),
+        target: target_label(targets),
         detail: "acyclic fallback did not converge".to_string(),
     }))
 }
 
+/// Human-readable label for an error's `target` field when more than one
+/// target is in play — joins every requested item name. Bit-identical to
+/// the single-item label (`target_item.to_string()`) when `targets.len() ==
+/// 1`, since `join` on a one-element slice is a no-op.
+fn target_label(targets: &[(String, f64)]) -> String {
+    targets.iter().map(|(item, _)| item.as_str()).collect::<Vec<_>>().join(", ")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn solve_attempt(
-    target_item: &str,
-    target_rate: f64,
+    targets: &[(String, f64)],
     available_inputs: &FxHashSet<String>,
     palette: &MachinePalette,
     default_machine: &str,
@@ -523,8 +595,30 @@ fn solve_attempt(
         candidates.push(Candidate { recipe, net: net_vec });
     }
 
-    // Ensure the target item has a row even if nothing in scope touches it.
-    let target_idx = items.intern(target_item, false);
+    // Ensure every target item has a row even if nothing in scope touches
+    // it, and build the demand vector (RFC-062 Phase 1 multi-seed
+    // generalization). `target_order` is deduplicated, first-seen order —
+    // requesting the same item twice sums its rates into one row rather
+    // than adding a second row or refusing the request (Phase 1 decision
+    // log: summing, not a typed duplicate-target error). `target_order`
+    // also drives the demand-closure seed and output-assembly DFS seed
+    // below, and `external_outputs`'s order, so a caller's first-requested
+    // target is visited/emitted first — matching the N=1 single-target
+    // traversal exactly when `targets.len() == 1`.
+    let mut target_order: Vec<usize> = Vec::new();
+    let mut target_rate_of: FxHashMap<usize, f64> = FxHashMap::default();
+    for (name, rate) in targets {
+        let idx = items.intern(name, false);
+        match target_rate_of.entry(idx) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                *e.get_mut() += rate;
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(*rate);
+                target_order.push(idx);
+            }
+        }
+    }
 
     // NOTE (RFC-044): the closure below runs on RAW nets, before module
     // resolution. Productivity only ever increases product coefficients,
@@ -534,8 +628,11 @@ fn solve_attempt(
     // that shape (Phase 3 review, NIT 5).
     // Demand closure over net-signed edges: a candidate joins when it
     // net-produces a demanded item; its net-consumed items become demanded.
+    // RFC-062 Phase 1: seeded from every target, not just one.
     let mut demanded = vec![false; items.len()];
-    demanded[target_idx] = true;
+    for &idx in &target_order {
+        demanded[idx] = true;
+    }
     let mut in_closure = vec![false; candidates.len()];
     loop {
         let mut grew = false;
@@ -779,24 +876,29 @@ fn solve_attempt(
             row.push((o, -1.0));
         }
         if row.is_empty() {
-            // An untouched non-target item simply has no flow. The TARGET
+            // An untouched non-target item simply has no flow. A TARGET
             // row going empty means nothing can produce or supply it —
             // skipping it would let the LP "solve" with an empty plan.
             // Surface the stored machine-incompatibility (the usual cause:
             // every producer column was dropped for the configured
-            // machine) or an explicit unproducible error.
-            if i == target_idx {
+            // machine) or an explicit unproducible error. RFC-062 Phase 1:
+            // any of the N targets can hit this, not just a single one —
+            // report the specific item whose row is empty (more precise
+            // than the old single-target error, and identical to it when
+            // `targets.len() == 1`, since `items.names[target_idx] ==
+            // target_item` there).
+            if target_rate_of.contains_key(&i) {
                 if let Some(err) = dropped_incompat.into_iter().next() {
                     return Err(AttemptError::Hard(err));
                 }
                 return Err(AttemptError::Hard(SolverError::LpFailed {
-                    target: target_item.to_string(),
+                    target: items.names[i].to_string(),
                     detail: "target has no producer, no external supply, and no surplus sink".to_string(),
                 }));
             }
             continue;
         }
-        let rhs = if i == target_idx { target_rate } else { 0.0 };
+        let rhs = target_rate_of.get(&i).copied().unwrap_or(0.0);
         problem.add_constraint(row.as_slice(), ComparisonOp::Eq, rhs);
     }
 
@@ -810,7 +912,7 @@ fn solve_attempt(
             return AttemptError::Hard(err);
         }
         AttemptError::Hard(SolverError::LpFailed {
-            target: target_item.to_string(),
+            target: target_label(targets),
             detail: format!("{e:?}"),
         })
     })?;
@@ -1041,7 +1143,10 @@ fn solve_attempt(
         Item(usize),
         Col(usize),
     }
-    let mut stack = vec![Work::Item(target_idx)];
+    // RFC-062 Phase 1: seeded from every target, reverse-pushed so the
+    // first-requested target pops (and is thus visited/emitted) first —
+    // bit-identical to the old single-item seed when `targets.len() == 1`.
+    let mut stack: Vec<Work> = target_order.iter().rev().map(|&idx| Work::Item(idx)).collect();
     while let Some(w) = stack.pop() {
         match w {
             Work::Item(i) => {
@@ -1115,7 +1220,7 @@ fn solve_attempt(
             .expect("mismatch implies at least one unreachable column");
         return Err(AttemptError::Cycle {
             refusal: SolverError::LpFailed {
-                target: target_item.to_string(),
+                target: target_label(targets),
                 detail: format!(
                     "surplus-processor exclusion did not converge (last: {first_unreachable})"
                 ),
@@ -1124,6 +1229,18 @@ fn solve_attempt(
         });
     }
 
+    // Byproduct produced beyond internal demand + target-row RHS. RFC-062
+    // Phase 1 semantics (decision log): this is NOT mutually exclusive with
+    // `external_outputs` — a target item can appear in BOTH when its net
+    // production (driven by another target's recipe tree) exceeds its own
+    // requested rate; `o_of(i)` is computed identically regardless of
+    // whether `i` is a target (no code branch here checks target
+    // membership). `external_outputs` conveys the guaranteed per-target
+    // export rate (the row's RHS); `surplus_outputs` conveys any additional
+    // production of that same item beyond what internal consumers + the
+    // target RHS need. Phase 2 (layout) must give a target item that also
+    // carries surplus two physical exports of the same item, exactly as it
+    // already must for a non-target byproduct today.
     let surplus_outputs: Vec<ItemFlow> = (0..items.len())
         .filter(|&i| o_of(i) > ACTIVE_TOL)
         .map(|i| ItemFlow {
@@ -1134,7 +1251,14 @@ fn solve_attempt(
         })
         .collect();
 
-    let target_is_fluid = items.is_fluid[target_idx];
+    // RFC-062 Phase 1 DI-coupling guard: an item that is itself one of the
+    // requested targets must never be stamped as a direct-insertion
+    // coupling, even if it otherwise qualifies (exactly one active
+    // producer, exactly one active consumer, no external supply/surplus,
+    // matching rates) — DI fuses producer straight into consumer with no
+    // exposed belt, and the item's export path (still demanded by its row's
+    // RHS) would have nowhere to attach. See `detect_di_couplings`.
+    let target_index_set: FxHashSet<usize> = target_order.iter().copied().collect();
 
     // Direct-insertion coupling detection (RFC decomposition-search Phase 3).
     // For each item with exactly one active producer and one active consumer,
@@ -1142,12 +1266,14 @@ fn solve_attempt(
     // coupling. Fluids are excluded (inserter DI only; pipe adjacency is a
     // separate concern). Voider columns are excluded as consumers (they
     // destroy items, they don't use them to make something). Self-loop items
-    // within a single recipe are not producer↔consumer pairs.
+    // within a single recipe are not producer↔consumer pairs. Target items
+    // are excluded (RFC-062 Phase 1, above).
     let di_couplings = detect_di_couplings(
         &columns,
         &active,
         &producers_of,
         &items,
+        &target_index_set,
         &|i| s_of(i),
         &|i| o_of(i),
         &|c| x_of(c),
@@ -1156,12 +1282,19 @@ fn solve_attempt(
     Ok(SolverResult {
         machines,
         external_inputs,
-        external_outputs: vec![ItemFlow {
-            item: target_item.to_string(),
-            rate: target_rate,
-            is_fluid: target_is_fluid,
-            module_id: 0,
-        }],
+        // RFC-062 Phase 1: one ItemFlow per unique requested target, in
+        // first-seen order, rate = the (possibly summed) demand this
+        // attempt's LP rows were built against. Bit-identical to the old
+        // single-element vec when `targets.len() == 1`.
+        external_outputs: target_order
+            .iter()
+            .map(|&idx| ItemFlow {
+                item: items.names[idx].to_string(),
+                rate: target_rate_of[&idx],
+                is_fluid: items.is_fluid[idx],
+                module_id: 0,
+            })
+            .collect(),
         surplus_outputs,
         dependency_order,
         di_couplings,
@@ -1191,15 +1324,30 @@ fn snap_value(v: f64) -> f64 {
 /// - no external supply (`s_of(i)` ≈ 0)
 /// - no surplus (`o_of(i)` ≈ 0)
 /// - the item is not a fluid (inserter DI only; pipe DI is separate)
+/// - the item is not itself one of the requested export targets (RFC-062
+///   Phase 1 — see `target_indices` below)
 /// - supply rate ≈ demand rate (producer's output matches consumer's input)
 ///
 /// Emits one `DICoupling` per qualifying (producer, consumer, item) triple.
 /// The placer MAY use these; presence does not force DI layout.
+///
+/// `target_indices` (RFC-062 Phase 1,
+/// `docs/rfc-062-multi-target-outputs.md` §Solver "Correctness gap"): under
+/// single-target solving a target item never qualified here by construction
+/// (its export is a property of the row's RHS, invisible to this function).
+/// Under multi-target, an item can legitimately have exactly one producer
+/// and one consumer AND be a target simultaneously — stamping that pair as
+/// DI would let the placer fuse producer directly into consumer with no
+/// exposed belt, leaving the item's still-demanded export path with nowhere
+/// to attach. Membership in `target_indices` is checked first and refuses
+/// the pair outright, before the supply/demand rate comparison runs (which
+/// is not itself a reliable guard here — see the Phase 1 decision log).
 fn detect_di_couplings(
     columns: &[Column],
     active: &[usize],
     producers_of: &FxHashMap<usize, Vec<usize>>,
     items: &Items,
+    target_indices: &FxHashSet<usize>,
     s_of: &dyn Fn(usize) -> f64,
     o_of: &dyn Fn(usize) -> f64,
     x_of: &dyn Fn(usize) -> f64,
@@ -1216,6 +1364,12 @@ fn detect_di_couplings(
 
     let mut couplings = Vec::new();
     for (&i, producers) in producers_of {
+        // RFC-062 Phase 1: an item that's itself a requested export target
+        // must never be DI-coupled, regardless of how the rest of the
+        // eligibility check would score it.
+        if target_indices.contains(&i) {
+            continue;
+        }
         // Must be exactly one producer and one consumer.
         let consumers = match consumers_of.get(&i) {
             Some(cs) if cs.len() == 1 => &cs[..],
@@ -1380,4 +1534,109 @@ fn find_active_cycle_indices(columns: &[Column], active: &[usize]) -> Option<Vec
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::module_policy::MachineModuleEffects;
+    use crate::recipe_db::db;
+
+    /// RFC-062 Phase 1 (`docs/rfc-062-multi-target-outputs.md` §Solver,
+    /// "Correctness gap"): `detect_di_couplings` must refuse to stamp a
+    /// producer→consumer pair when the intermediate item is itself a
+    /// requested export target, even when supply and demand happen to
+    /// match exactly (the shape that would otherwise qualify for DI).
+    ///
+    /// The live KC2 fixture (EC@10/s + AC@3/s, see
+    /// `crates/core/tests/solver_multi_target.rs`) never actually exercises
+    /// this branch: EC's target rate forces the producer's gross output to
+    /// exceed AC's ingredient draw by exactly the target rate, so
+    /// supply != demand there regardless of the guard (confirmed by
+    /// probing the live solve with the guard temporarily removed — see the
+    /// Phase 1 decision log). This test constructs the supply == demand
+    /// coincidence directly with synthetic columns, so the guard is proven
+    /// on its own terms rather than relying on a numeric accident in one
+    /// fixture.
+    #[test]
+    fn di_coupling_guard_suppresses_target_item_coupling() {
+        let ec_recipe = db().recipes.get("electronic-circuit").expect("electronic-circuit recipe");
+        let ac_recipe = db().recipes.get("advanced-circuit").expect("advanced-circuit recipe");
+
+        let mut items = Items::default();
+        let ec_idx = items.intern("electronic-circuit", false);
+        let ac_idx = items.intern("advanced-circuit", false);
+
+        // Column 0: EC producer, net +1 EC/craft. Column 1: AC consumer,
+        // net -2 EC/craft (AC's real per-craft EC coefficient) and +1
+        // AC/craft. x-rates (6.0, 3.0) are chosen so supply (6*1=6) exactly
+        // equals demand (3*2=6) — the coincidence the guard must catch
+        // regardless of whether EC's row also carries a nonzero target
+        // rate (irrelevant here, since this test calls
+        // `detect_di_couplings` directly rather than solving a full LP).
+        let columns = vec![
+            Column {
+                recipe: ec_recipe,
+                machine: "assembling-machine-2".to_string(),
+                crafting_speed: 0.75,
+                net: vec![(ec_idx, 1.0)],
+                effects: MachineModuleEffects::none(),
+            },
+            Column {
+                recipe: ac_recipe,
+                machine: "assembling-machine-2".to_string(),
+                crafting_speed: 0.75,
+                net: vec![(ec_idx, -2.0), (ac_idx, 1.0)],
+                effects: MachineModuleEffects::none(),
+            },
+        ];
+        let active = vec![0usize, 1usize];
+        let mut producers_of: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+        producers_of.insert(ec_idx, vec![0]);
+        producers_of.insert(ac_idx, vec![1]);
+
+        let x_of = |c: usize| if c == 0 { 6.0 } else { 3.0 };
+        let s_of = |_i: usize| 0.0;
+        let o_of = |_i: usize| 0.0;
+
+        // Control: EC is NOT a target — the pair qualifies for DI exactly
+        // like plain single-target AC-from-EC solving does today.
+        let no_targets: FxHashSet<usize> = FxHashSet::default();
+        let couplings = detect_di_couplings(
+            &columns,
+            &active,
+            &producers_of,
+            &items,
+            &no_targets,
+            &s_of,
+            &o_of,
+            &x_of,
+        );
+        assert_eq!(
+            couplings.len(),
+            1,
+            "expected EC->AC coupling when EC is not a target, got {couplings:?}"
+        );
+        assert_eq!(couplings[0].producer_recipe, "electronic-circuit");
+        assert_eq!(couplings[0].consumer_recipe, "advanced-circuit");
+        assert_eq!(couplings[0].item, "electronic-circuit");
+
+        // EC as a requested target — the guard must suppress the coupling.
+        let mut ec_is_target: FxHashSet<usize> = FxHashSet::default();
+        ec_is_target.insert(ec_idx);
+        let couplings2 = detect_di_couplings(
+            &columns,
+            &active,
+            &producers_of,
+            &items,
+            &ec_is_target,
+            &s_of,
+            &o_of,
+            &x_of,
+        );
+        assert!(
+            couplings2.is_empty(),
+            "EC as target must suppress the EC->AC coupling, got {couplings2:?}"
+        );
+    }
 }

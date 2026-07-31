@@ -546,3 +546,176 @@ needed to look at the result, not a UI feature.
   run clean, one pass, after the probe was added (production code
   untouched — the probe is additive-only and gitignored). No production
   files changed in this phase.
+- *2026-07-31 — Phase 1 solver generalization landed: kill criterion 2
+  confirmed (exact), kill criterion 5 holds by construction.*
+
+  **Scope.** `crates/core/src/netflow.rs` only, per the RFC's §Solver plan.
+  No layout, harness, or interface changes — Phase 2's shared-row fix
+  (Phase 0's three-site list) is untouched and still pending.
+
+  **New entry point.** `solve_netflow_multi(targets: &[(String, f64)], ...)`
+  and `solve_netflow_multi_with_options(...)` (same trailing args as the
+  existing scalar functions, plus `NetflowOptions`) are the new choke
+  point. `solve_netflow_with_options` — the inner of the two scalar
+  entry points named in the RFC's "3 layered entry points in netflow.rs" —
+  now has a two-line body: `solve_netflow_multi_with_options(&[(target_item
+  .to_string(), target_rate)], ...)`. `solve_netflow` is untouched (it
+  already only calls `solve_netflow_with_options`) and inherits the
+  guarantee transitively. Because none of the **8 scalar wrappers in
+  `solver.rs`** call anything below `solve_netflow`/
+  `solve_netflow_with_options`, **zero lines in `solver.rs` changed** —
+  every one of the 11 wrappers the RFC named now bottoms out in the same
+  `solve_attempt(targets: &[(String, f64)], ...)` implementation via a
+  one-element slice, by construction. This is what makes kill criterion 5
+  (N=1 bit-identical) a compile-time guarantee rather than a tested
+  coincidence: there is exactly one code path from any scalar wrapper to
+  the LP, and the N=1 case is that path's literal special case.
+
+  **The three internal sites**, all in `solve_attempt`:
+  1. Target interning now builds `target_order: Vec<usize>` (deduplicated,
+     first-seen order) and `target_rate_of: FxHashMap<usize, f64>` (summed
+     per unique item) in one pass, replacing the single `target_idx`.
+  2. Demand-closure seed: `demanded[idx] = true` for every `idx` in
+     `target_order` (was: `demanded[target_idx] = true`).
+  3. Output-assembly DFS seed: `target_order.iter().rev().map(|&idx|
+     Work::Item(idx)).collect()` (was: `vec![Work::Item(target_idx)]`) —
+     reverse-pushed so the first-requested target pops (and is thus
+     visited/emitted) first, matching the existing "reverse-push so the
+     first producer pops first" convention used elsewhere in the same
+     function.
+  4. Row RHS (`netflow.rs`, LP constraint assembly): `target_rate_of.get(&i)
+     .copied().unwrap_or(0.0)` (was: `if i == target_idx { target_rate }
+     else { 0.0 }`). The empty-row-is-an-error check now tests
+     `target_rate_of.contains_key(&i)` instead of `i == target_idx`, and
+     reports `items.names[i]` (the specific empty row) rather than the
+     caller's original string — strictly more precise under N targets,
+     and bit-identical to the old message when `targets.len() == 1`.
+
+  **Semantics decision: duplicate target items are summed, not refused.**
+  Requesting the same item twice (`&[("electronic-circuit", 4.0),
+  ("electronic-circuit", 6.0)]`) collapses to one demand row and one
+  `external_outputs` entry at the summed rate (10.0), verified
+  bit-identical to requesting `electronic-circuit@10.0` directly
+  (`duplicate_target_item_rates_are_summed` in
+  `crates/core/tests/solver_multi_target.rs`). Rejected alternative: a
+  typed `DuplicateTarget` refusal — summing is strictly less surprising to
+  a caller building a target list programmatically (e.g. a future UI that
+  lets a user add the same item twice with different rates meaning
+  "at least this much") and requires no new error variant threaded through
+  every caller.
+
+  **Semantics decision: `external_outputs` and `surplus_outputs` are not
+  mutually exclusive.** `external_outputs` now carries one `ItemFlow` per
+  unique requested target, in first-seen order, at the (possibly summed)
+  demand rate that row's RHS was solved against. `surplus_outputs`
+  continues to be computed identically regardless of target membership —
+  `o_of(i)` has no target-aware branch anywhere in `solve_attempt`. This
+  means a target item CAN legitimately appear in both lists at once: if
+  another target's recipe tree forces net production of item `i` above
+  `i`'s own requested rate (e.g. a byproduct that is itself a low-rate
+  target while a sibling target's demand drives its producer harder), the
+  LP satisfies the row via `o[i] > 0` rather than reducing production,
+  since reducing production would violate the other target's higher
+  draw. Verified this is reachable in principle by direct row-algebra
+  (`net_production − consumption + s − o = target_rate` has a legitimate
+  `o > 0` solution whenever some *other* column's demand for `i` forces
+  gross production above `i`'s own RHS) — not exercised by the KC2 fixture
+  itself (EC and AC's coupling runs the other direction: EC's export adds
+  to the row's demand rather than exceeding it). **For Phase 2**: a target
+  item carrying surplus needs two physical exports of the same item — the
+  guaranteed target export plus the surplus export — exactly as a
+  non-target byproduct already needs one today; this is a new *instance*
+  of dual-purpose-lane provisioning to plan for, not a new mechanism.
+
+  **DI-coupling guard** (`detect_di_couplings`, RFC's "Correctness gap").
+  Added a `target_indices: &FxHashSet<usize>` parameter; the very first
+  check inside the per-item loop is `if target_indices.contains(&i) {
+  continue; }`, before the one-producer/one-consumer/no-surplus/rate-match
+  checks run. Verified with a dedicated unit test,
+  `netflow::tests::di_coupling_guard_suppresses_target_item_coupling`
+  (white-box — needs the private `Column`/`Items` types, so it lives in
+  `netflow.rs` itself rather than the integration test file): synthetic
+  EC-producer/AC-consumer columns with `x` rates chosen so supply (6.0)
+  exactly equals demand (6.0), proving the guard suppresses the coupling
+  when EC is in `target_indices` and the same setup couples when it isn't.
+  **Finding, not just implementation**: the live KC2 fixture
+  (EC@10/s + AC@3/s) does **not** actually exercise this guard — verified
+  by temporarily removing the `target_indices` check and re-running the
+  probe (`crates/core/examples/rfc062_phase1_kc2_probe.rs`, gitignored).
+  Row algebra explains why: for a target item with exactly one producer
+  and one consumer and no external supply/surplus, the row constraint
+  forces `producer_output − consumer_input = target_rate`, so `supply !=
+  demand` in `detect_di_couplings`'s own tolerance check for any nonzero
+  target rate — the existing rate-match check already happens to reject
+  the pairing before the new guard would need to. The guard is still
+  correct and necessary defense-in-depth (a future recipe-graph shape, a
+  target requested at an effectively-zero rate, or a different DI
+  eligibility refinement could reach the coincidence this guard exists
+  to close), and the RFC's own text frames it as a correctness gap to
+  close regardless of whether one specific fixture reaches it — but Phase
+  2/3 readers should not expect the KC2 fixture's validator/sim behavior
+  to visibly change because of this guard; its payoff is defensive.
+
+  **Typed-refusal review.** The acyclic-fallback / oil-path-physical retry
+  loop (now `solve_netflow_multi_with_options`) needed no logic changes —
+  confirmed target-count-agnostic exactly as the RFC predicted, since every
+  branch inspects `r.machines`/`r.surplus_outputs` post-solve. Error
+  `target` fields that used to read `target_item.to_string()` now read
+  `target_label(targets)` (joins every requested item name;
+  bit-identical to the old string when `targets.len() == 1`). Verified the
+  machine-incompatibility typed-refusal path still surfaces correctly under
+  N=2 with one satisfiable and one unsatisfiable target
+  (`multi_target_incompatible_machine_error_not_masked_by_other_target`):
+  AM1-pinned `advanced-circuit` alongside a perfectly solvable
+  `iron-gear-wheel@5` still returns `SolverError::IncompatibleMachine`,
+  not a silent partial success. Did not construct a dedicated multi-target
+  cycle-refusal test beyond this — the retry loop's cycle-handling code is
+  unchanged (not just unchanged-in-effect but literally the same lines),
+  and constructing a deterministic multi-target cycle fixture is
+  materially more fragile than the machine-incompatibility case for the
+  same evidentiary value; flagging as an explicit scope stop rather than a
+  silent gap.
+
+  **Kill criterion 2 — measured, exact.** Canonical probe
+  (`electronic-circuit@10/s` + `advanced-circuit@3/s`, from ore, AM2,
+  `RecipeScope::Free`), `kc2_ec_ac_shared_copper_cable_exact` in
+  `crates/core/tests/solver_multi_target.rs`:
+
+  | Item | Multi-seed LP (this phase) | Naive-concatenation total (Motivation table) |
+  |---|---:|---:|
+  | copper-cable | **20.000000** | 20.0 |
+  | electronic-circuit | **10.666667** (16/1.5 exact) | — (10.667 in the RFC's rounded table) |
+  | iron-plate | **25.600000** | 25.6 |
+  | copper-plate | **48.000000** | 48.0 |
+
+  All four asserted to within `1e-9` of the closed-form expected value
+  (derived independently from crafting-speed/energy arithmetic, not copied
+  from the RFC table, then cross-checked against it) — none within 1e-9 of
+  the hand-sum shortcut's wrong numbers (16.0 copper-cable machines).
+  `advanced-circuit` itself solves to 24.0 machines and `dependency_order`
+  places `electronic-circuit` before `advanced-circuit`
+  (`kc2_dependency_order_ec_before_ac`), confirming the shared upstream is
+  genuinely deduplicated rather than solved twice and concatenated.
+
+  **Kill criterion 5 — pinned, not just argued.** Beyond the construction
+  guarantee above,
+  `n1_equivalence_multi_matches_scalar`/`n1_equivalence_holds_on_multi_hop_target`
+  assert full field-level bit-identity (`f64::to_bits()` on every rate/
+  count field, not approximate equality) between `solve_netflow_multi`
+  called with a one-element slice and the existing scalar `solve_netflow`,
+  on both a single-recipe target and a multi-hop coupled target
+  (`advanced-circuit` from ore). Combined with the full existing suite
+  passing at zero golden churn (below), this is the systemic proof the RFC
+  asked for.
+
+  **Verification.** `cargo test --manifest-path crates/core/Cargo.toml` —
+  one clean invocation, all non-ignored tests, 0 failures: lib 920 passed
+  (919 pre-existing + 1 new DI-guard unit test), `solver_netflow_parity`
+  11 passed (unchanged), `solver_multi_target` 7 passed (new), every other
+  suite unchanged. `cargo clippy -p spaghettio_core -- -D warnings` (the
+  exact pre-commit hook invocation) clean. `cargo build -p spaghettio_wasm`
+  clean (native-target sanity check only — the wasm bindings' public
+  surface was not touched, so a full `wasm-pack` rebuild was judged
+  unnecessary for a solver-internals-only change; Phase 5 is where the
+  wasm/URL surface actually changes and gets the real wasm-pack + browser
+  verification pass). No `.fls` snapshot or golden file changed.
