@@ -5268,7 +5268,9 @@ fn rfc058_band_packing_premise_holds() {
 /// `fulgora_scrap_sorter_mechanism_present` needs the recycling-aware
 /// `solve_fulgora` path, and `cable13u_bridged_row_lane_throughput_clean`
 /// solves at `QualityTier::Uncommon` — so "every distinct request" is
-/// exact only over default-quality, non-recycling solves.
+/// exact only over default-quality, non-recycling solves. (The Legendary
+/// leg of `quality_differential_ec_normal_vs_legendary` is excluded the
+/// same way; its Normal leg is the `ec4-plate-am3-red` row.)
 ///
 /// KC2 asks what fraction of this corpus has >=3 bands and no
 /// width-dominant band. The aspect cap is consequential (it alone refuses
@@ -5315,6 +5317,7 @@ fn probe_band_census_e2e_corpus() {
         Case { label: "gear20-plate", source: "tier1_iron_gear_wheel_20s", item: "iron-gear-wheel", rate: 20.0, machine: A2, belt: None, inputs: &["iron-plate"], excluded: &[] },
         Case { label: "ec10-plate", source: "tier2_electronic_circuit", item: "electronic-circuit", rate: 10.0, machine: A2, belt: None, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
         Case { label: "ec10-plate-am1-red", source: "tier2_electronic_circuit_splitter_stamp_regression", item: "electronic-circuit", rate: 10.0, machine: A1, belt: RED, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
+        Case { label: "ec4-plate-am3-red", source: "quality_differential_ec_normal_vs_legendary (Normal leg)", item: "electronic-circuit", rate: 4.0, machine: A3, belt: RED, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
         Case { label: "ec10-ore-yellow", source: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 10.0, machine: A1, belt: YELLOW, inputs: ORES, excluded: &[] },
         Case { label: "ec20-ore", source: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: A2, belt: None, inputs: ORES, excluded: &[] },
         Case { label: "plastic10-gas", source: "tier3_plastic_bar", item: "plastic-bar", rate: 10.0, machine: CHEM, belt: None, inputs: &["petroleum-gas", "coal"], excluded: &[] },
