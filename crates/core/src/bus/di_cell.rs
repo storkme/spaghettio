@@ -116,8 +116,10 @@ pub enum DiClaimOrder {
     Downstream,
     /// Build both static orders and keep the better one.
     ///
-    /// **Measured-correct but NOT the default**, and the gap between those is
-    /// the whole of RFC-059's outcome. By every validator channel this is
+    /// **Not the default, and no longer needed:** `Downstream` matches it on
+    /// every corpus target, so the second build buys nothing (KC4's "do not ship
+    /// machinery for a tie", one level up). Kept as the instrument that
+    /// re-derives the corpus verdict. By every validator channel this is
     /// strictly better than either fixed arm on the corpus and worse on none.
     /// In a real Factorio it ships a jammed factory on at least one target
     /// (`display-panel@1` am1), because the DI row cell it selects there is
@@ -126,10 +128,13 @@ pub enum DiClaimOrder {
     /// would mean re-deriving a measurement that took a corpus sweep across
     /// three machine tiers.
     ///
-    /// RFC-059 set out to choose between `Upstream` and `Downstream` and
-    /// measured that neither dominates: across three machine tiers,
-    /// `Downstream` ships a strictly better layout on 6 corpus targets and a
-    /// strictly worse one on 2. Any fixed choice forfeits the other's wins.
+    /// RFC-059 set out to choose between `Upstream` and `Downstream` and first
+    /// measured that neither dominates — `Downstream` better on 6 corpus targets
+    /// and worse on 2 — which is why this variant exists. **That reading was an
+    /// artefact of the validator's starved-pickup blind spot (#520):** the two
+    /// targets it "lost" were ones where `Upstream` shipped a factory running at
+    /// half its planned rate. With the blind spot fixed, `Downstream` is never
+    /// worse and this arm has nothing left to buy.
     ///
     /// Searching is exhaustive here, not heuristic. The same sweep pinned each
     /// contended coupling to claim first and rebuilt: on no target did any

@@ -149,8 +149,16 @@ inert scaffolding, and the flag-gated builder as the reproducible
 falsification record. Full trail in the RFC's decision log (fifteen
 dated entries, two falsified hypotheses recorded en route).
 
-**`rfc-059-di-coupling-assignment.md` (2026-07-31) — CLOSED, decided: the
-tie-break stays P0, and the better policy is blocked on a validator blind spot.**
+**`rfc-059-di-coupling-assignment.md` (2026-07-31) — SUPERSEDED, see the RFC-059
+entry above.** Kept as the record of what was concluded before #520's fix, when
+the validator could not see a starved pickup. Its verdict — "the tie-break stays
+P0, and the better policy is blocked on a validator blind spot" — was reversed
+once the two targets that made `Downstream` look worse turned out to be ones
+where `Upstream` shipped a half-rate factory.
+
+The original text follows.
+
+**Then-current verdict: the tie-break stays P0.**
 
 The DI dispatcher's claim order decides which of two couplings fuses a contended
 spec. Over every producible item at 1/5/20 per second across three machine tiers,

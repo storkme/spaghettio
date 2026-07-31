@@ -260,15 +260,16 @@ Four policies, in increasing cost:
 
 | Policy | Rule | Cost | Outcome |
 |---|---|---|---|
-| **P0 — upstream-first** | status quo; topological order claims | zero | **kept as default** |
-| **P1 — downstream-first** | reverse the walk | zero | measured; better on 6 targets, worse on 2 |
+| **P0 — upstream-first** | status quo; topological order claims | zero | measured, lost |
+| **P1 — downstream-first** | reverse the walk | zero | **shipped as the default** |
 | **P2 — greedy by gain** | score each candidate coupling in isolation, claim in descending order of predicted gain | one extra pass per coupling | dropped, unbuilt |
 | **P3 — optimal matching** | max-weight matching on the SPEC graph, couplings as EDGES — general, not bipartite | small; contention sets are tiny | dropped, unbuilt |
 
 A fifth policy emerged from the measurement and is not in this table because
 nobody proposed it: **search both static arms and keep the better**
 (`DiClaimOrder::Search`). It is implemented and measured strictly better than
-either fixed arm, and it is not the default — see Outcome for why.
+either fixed arm, and it is not the default: `Downstream` matches it everywhere
+once #520's blind spot is fixed, so the second build buys nothing. See Outcome.
 
 The rest of this section is the design as circulated, kept because P3's
 formulation was corrected in review and that correction is worth preserving for
@@ -680,7 +681,7 @@ widespread and the optimum is static everywhere.
   a fixed arm on none — asserted by measurement, not by the fact that the picker
   picks the better arm, because the picker orders on (validator warnings, layout
   warnings, entities) while `di_choice` gates component-wise against native, and
-  two orderings that look aligned can disagree. It is **not the default**; the
+  two orderings that look aligned can disagree. It did not become the default; the
   sim entry below is why.
 
   P2/P3 are dropped on a stronger finding than KC4 asks for: pinning each
@@ -774,7 +775,8 @@ widespread and the optimum is static everywhere.
   the pre-RFC status quo, and "the search picks the better arm, so it cannot be
   worse" would be an argument rather than a measurement. (Written when `Search`
   was briefly the default; it is not — see below — and the arms matter more now,
-  since `Upstream` is what ships.)
+  since `Downstream` is what ships and `Upstream` is the arm it is measured
+  against.)
 
 - *2026-07-31 — the sim falsified the RFC's safety premise, and the policy was
   held back rather than shipped.* The verification plan requires simming any
