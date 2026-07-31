@@ -59,7 +59,7 @@ pub fn compose_mega_calibrated(
         // off its sim-measured registry baseline. Drop the override when
         // #415 threads capacity into the mega interior.
         inserter_capacity: 0,
-        // RFC-059: candidate-independent geometry, same reason as
+        // RFC-060: candidate-independent geometry, same reason as
         // extract::generate_cell_layout.
         horizontal_candidate: false,
         ..Default::default()
@@ -1093,7 +1093,7 @@ pub fn compose_mega_block(
         // engine default (moved to L2 in 2026-07-24's #383 change).
         // Drop when #415 threads capacity into the mega interior.
         inserter_capacity: 0,
-        // RFC-059: candidate-independent geometry, same reason as
+        // RFC-060: candidate-independent geometry, same reason as
         // extract::generate_cell_layout.
         horizontal_candidate: false,
         ..Default::default()

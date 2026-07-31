@@ -627,7 +627,7 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
     }
 }
 
-/// RFC-059: whether any machine spec would build a `RowKind::DualInput`
+/// RFC-060: whether any machine spec would build a `RowKind::DualInput`
 /// row. `DualInput` is the only row kind whose construction consults
 /// `RowLayout`, so a solve with none of them produces a bit-identical
 /// layout under either row layout — the decomposition search uses this

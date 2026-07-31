@@ -183,7 +183,7 @@ impl DecompositionCandidate for DirectInsertionCandidate {
     }
 }
 
-/// RFC-059: the horizontal-stack row-layout candidate. Builds the layout
+/// RFC-060: the horizontal-stack row-layout candidate. Builds the layout
 /// with `RowLayout::HorizontalStack` so it can be compared against the
 /// vertical-split native one.
 ///
@@ -220,7 +220,7 @@ impl DecompositionCandidate for HorizontalStackCandidate {
         // error-laden horizontal layout would reach real callers as a
         // silently broken `Ok`. Errors refuse; warnings pass here and are
         // weighed by `horizontal_choice` instead. (Conscious conservatism,
-        // RFC-059 decision log: an E1 horizontal never displaces an E10
+        // RFC-060 decision log: an E1 horizontal never displaces an E10
         // native — on sweep evidence horizontal's wins all land at E0, so
         // the forgone region is empty.)
         let issues =
@@ -1016,7 +1016,7 @@ pub fn select_best_decomposition(
         CandidateRun::skipped("direct-insertion")
     };
 
-    // Horizontal-stack candidate (RFC-059). Gated on the mode AND on the
+    // Horizontal-stack candidate (RFC-060). Gated on the mode AND on the
     // solve actually having a `RowKind::DualInput` row — the only row
     // kind whose construction consults `RowLayout`, so "no dual-input
     // row" means the variant would be bit-identical and the extra full
@@ -1188,7 +1188,7 @@ pub fn select_best_decomposition(
             .then_some(DI_IDX)
     });
 
-    // RFC-059: the horizontal-vs-native decision. Identical shape and
+    // RFC-060: the horizontal-vs-native decision. Identical shape and
     // rules to `di_choice` above: returns `Some(H_IDX)` only when
     // horizontal WINS, never `Some(NATIVE_IDX)`; ties go to native so
     // any layout horizontal does not strictly improve stays
@@ -1213,7 +1213,7 @@ pub fn select_best_decomposition(
             // cell registry hashes, EC fixtures). Horizontal displaces
             // native only where native has issues to fix; clean layouts
             // stay bit-identical. Revisit alongside RFC-058 packing
-            // (RFC-059 decision log, 2026-07-30).
+            // (RFC-060 decision log, 2026-07-30).
             (hs_score.accepted && strictly_better_issues).then_some(H_IDX)
         });
 
@@ -1221,7 +1221,7 @@ pub fn select_best_decomposition(
     // with the same rule, ties → DI (the earlier candidate — consistent
     // with the array's earliest-index preference). Deliberately not a
     // 3-way generic score, for the same reason neither candidate rides
-    // the soft score against native (RFC-059 design note).
+    // the soft score against native (RFC-060 design note).
     let scoped_choice: Option<usize> = match (di_choice, horizontal_choice) {
         (Some(_), Some(_)) => {
             let (di_layout, _) =
@@ -1280,7 +1280,7 @@ pub fn select_best_decomposition(
         let flags = tier_outcomes.map(|o| {
             o.map(|(l, score)| {
                 // (error-free, warning key). The key orders the
-                // error-free tier below: RFC-059 made the refusal path
+                // error-free tier below: RFC-060 made the refusal path
                 // multi-candidate (cells, DI, horizontal), and a
                 // score-only order re-admits the density-over-warnings
                 // class THERE that `ranking_len` blocks on the success
@@ -1364,7 +1364,7 @@ pub fn select_best_decomposition(
     // ties-to-native rule is the never-worse guarantee — letting it into
     // a density-dominated ranking there would re-admit exactly the
     // warning regressions that guarantee exists to block.
-    // (RFC-059: the same slice bound now confines BOTH scoped candidates
+    // (RFC-060: the same slice bound now confines BOTH scoped candidates
     // — DI at 5 and horizontal-stack at 6 — to their pairwise choices
     // when native succeeded; both enter the generic ranking only on a
     // native refusal, where there is no bit-identity to protect.)
@@ -1437,7 +1437,7 @@ pub fn select_best_decomposition(
         })
         // Warnings first (asc), then score (desc), then earliest index —
         // within the error-free tier a quieter layout beats a denser
-        // one (see the clean_flags comment; RFC-059 decision log).
+        // one (see the clean_flags comment; RFC-060 decision log).
         .min_by(|(ia, wa, sa), (ib, wb, sb)| {
             wa.cmp(wb)
                 .then(sb.partial_cmp(sa).unwrap_or(std::cmp::Ordering::Equal))
@@ -1477,7 +1477,7 @@ pub fn select_best_decomposition(
     //   NATIVE_IDX — native beat merge-tap, so native is the incumbent, and
     //     `di_choice` is exactly a DI-vs-native comparison. DI gets its say,
     //     falling back to native when it does not win.
-    // (RFC-059: `di_choice` in the arms below became `scoped_choice` —
+    // (RFC-060: `di_choice` in the arms below became `scoped_choice` —
     // the DI/horizontal pairwise resolution — so neither scoped
     // candidate can shadow the other; the merge-tap non-shadowing
     // structure is unchanged.)

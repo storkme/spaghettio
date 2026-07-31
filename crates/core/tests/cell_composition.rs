@@ -938,7 +938,7 @@ fn cell_candidate_resolves_ec15_refusal() {
     let off_opts = layout::LayoutOptions {
         cell_composition: CellComposition::Off,
         direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
-        // RFC-059 made horizontal-stack a THIRD refusal-resolving
+        // RFC-060 made horizontal-stack a THIRD refusal-resolving
         // candidate; off for the same isolation reason as DI above.
         horizontal_candidate: false,
         ..Default::default()
@@ -1011,10 +1011,10 @@ fn cell_candidate_resolves_ec15_refusal() {
     // Succession on this config, each step strictly at-or-above the
     // last on both issue channels: composition (292 entities, 1
     // adjudicated warning) → DI (RFC-053, 2026-07-26: 272 entities,
-    // 0/0, cable off the belts entirely) → horizontal-stack (RFC-059,
+    // 0/0, cable off the belts entirely) → horizontal-stack (RFC-060,
     // 2026-07-30: 252 entities, 0/0 — equal cleanliness, so the
     // error-free tier's density order decides; cable returns to belts
-    // but on stacked input trunks that clear the margin). K59-3 keeps
+    // but on stacked input trunks that clear the margin). K60-3 keeps
     // this config on the sim-verification list precisely because the
     // winner changed.
     //

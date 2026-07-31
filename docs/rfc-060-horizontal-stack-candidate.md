@@ -1,4 +1,4 @@
-# RFC-059: HorizontalStack as a scored decomposition candidate
+# RFC-060: HorizontalStack as a scored decomposition candidate
 
 Status: ACTIVE (2026-07-30) — implementation in progress on
 `claude/ui-simplification-w8y9p6`. Evidence base: issue #513 (the
@@ -72,21 +72,21 @@ bit-identically (all 6 simple cases). Full table: #513.
 
 ## Kill criteria
 
-- **K59-1 (runtime)**: suite wall-clock multiplier from the extra pass
+- **K60-1 (runtime)**: suite wall-clock multiplier from the extra pass
   exceeds 1.5× on the e2e suite (same budget K-DS1-3 gave DI, which
   landed at 1.23×) → tighten the gate or abandon default-on.
-- **K59-2 (never-worse has teeth)**: the pinning test
+- **K60-2 (never-worse has teeth)**: the pinning test
   (`horizontal_candidate_never_degrades_a_succeeding_bus_layout`) red at
   any point, or any corpus case where candidate-on regresses either
   issue channel vs candidate-off → block; the contract is structural,
   not aspirational.
-- **K59-3 (sim honesty)**: any flipped corpus case whose sim-measured
+- **K60-3 (sim honesty)**: any flipped corpus case whose sim-measured
   delivery drops below native's by >5% of plan → the static winner key
   is lying for that class; revert default pending a fixed comparator.
   **This criterion gates the merge**, not the implementation: the PR
   stays draft until the flipped cases (`ac@5`, `ac@7`, `pu@2`, `pu@3`,
   `ec@15`) sim at/above native.
-- **K59-4 (scope)**: net engine LOC (excluding tests/docs) exceeds ~400
+- **K60-4 (scope)**: net engine LOC (excluding tests/docs) exceeds ~400
   → the integration point is wrong; stop and redesign rather than
   ballooning.
 
@@ -100,7 +100,7 @@ bit-identically (all 6 simple cases). Full table: #513.
    move are re-blessed only where the movement is an improvement on both
    issue channels, each re-bless recorded in the decision log.
 4. Sim harness on the five flipped cases with a LONG `--warmup`
-   (`docs/status.md` deep-chain caveat) — merge gate per K59-3.
+   (`docs/status.md` deep-chain caveat) — merge gate per K60-3.
 5. Browser eyeball of at least `ac@5` and `ec@15` (verification protocol
    step 2).
 
@@ -122,7 +122,7 @@ bit-identically (all 6 simple cases). Full table: #513.
   competes) accepted knowing it forgoes E10→E1-class improvements;
   the sweep shows horizontal's wins land at E0, so the forgone region is
   empty on current evidence. Revisit only with a measured case.*
-- *2026-07-30 — K59-1 measured at the final green suite: e2e wall-clock
+- *2026-07-30 — K60-1 measured at the final green suite: e2e wall-clock
   129.7s (baseline, 64 tests) → 190.2s (candidate on, 67 tests) =
   **1.47×**, inside the 1.5× budget with no headroom to spare — the
   `any_dual_input_row` short-circuit is load-bearing, and any future
@@ -165,13 +165,13 @@ bit-identically (all 6 simple cases). Full table: #513.
   stamped (got 0)". Fix: `try_horizontal` stands down when DI is Forced,
   the same exclusion `try_cells` already carries. Rule generalized for
   future candidates: forced modes beat candidates, always.*
-- *2026-07-30 — Sim verification (K59-3) CANNOT run in this session's
+- *2026-07-30 — Sim verification (K60-3) CANNOT run in this session's
   remote container: factorio.com is unreachable through the environment
   network policy (connection reset on both the site and the pinned
   2.0.77 headless download URL — measured, not assumed). Additionally
   the manifest generator `crates/core/examples/sim_probe_export.rs` is
   gitignored and absent on fresh clones (the RFC-050 "known gap").
-  Consequence: the implementation lands as a DRAFT PR; K59-3's five
+  Consequence: the implementation lands as a DRAFT PR; K60-3's five
   flipped-case sims (`ac@5`, `ac@7`, `pu@2`, `pu@3`, `ec@15`, long
   warmup) are the ready-for-review gate and must run from a
   harness-capable machine.*

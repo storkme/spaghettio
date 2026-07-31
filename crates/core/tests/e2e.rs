@@ -230,7 +230,7 @@ fn run_e2e_with_strategy_and_row_layout(
     )
 }
 
-/// RFC-059: like `run_e2e_with_strategy_and_row_layout` but with the
+/// RFC-060: like `run_e2e_with_strategy_and_row_layout` but with the
 /// horizontal-stack candidate DISABLED — a pure single-combo pass. Used
 /// by `full_knob_sweep`'s baseline columns, which measure each
 /// strategy × row-layout combination in isolation; the default engine
@@ -1243,7 +1243,7 @@ fn tier2_electronic_circuit_splitter_stamp_regression() {
     let opts = |di| layout::LayoutOptions {
         max_belt_tier: Some("fast-transport-belt".to_string()),
         direct_insertion: di,
-        // RFC-059: horizontal-stack resolves this refusal on the
+        // RFC-060: horizontal-stack resolves this refusal on the
         // candidate path (a legit rescue for users), but this fixture
         // asserts the BELT-capacity wall itself — isolate it like DI.
         horizontal_candidate: false,
@@ -2224,7 +2224,7 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // beltspan-lastinrow: the 4 residual inserter-item-throughput were dual_input_row
     // last-in-row far sides capped at one long-handed inserter; extending the far belt
     // one tile clears them (4 -> 0). The input-rate-delivery (1) is unrelated and unchanged.
-    // RFC-059 re-bless (2026-07-30): the horizontal-stack candidate wins
+    // RFC-060 re-bless (2026-07-30): the horizontal-stack candidate wins
     // this config strictly-better and DELETES the long-standing
     // input-rate-delivery residual (was the tier-4 ladder's known
     // warning; docs/status.md row updated with the RFC close-out).
@@ -7857,7 +7857,7 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
     }
 }
 
-/// RFC-059: the horizontal-candidate never-worse contract, on configs
+/// RFC-060: the horizontal-candidate never-worse contract, on configs
 /// where the bus (vertical) path succeeds. Mirrors
 /// `di_candidate_never_degrades_a_succeeding_bus_layout` exactly: every
 /// issue channel is a component-wise floor, not a lexicographic
@@ -9048,7 +9048,7 @@ fn full_knob_sweep() {
     ];
     // The four pure columns measure each combo in isolation
     // (`horizontal_candidate` off); `default` is what the engine ships —
-    // Pooled + vertical native with the RFC-059 horizontal candidate
+    // Pooled + vertical native with the RFC-060 horizontal candidate
     // competing under the never-worse contract.
     let combos: &[(&str, LayoutStrategy, RowLayout, bool)] = &[
         ("pool/vert", LayoutStrategy::Pooled, RowLayout::VerticalSplit, true),
