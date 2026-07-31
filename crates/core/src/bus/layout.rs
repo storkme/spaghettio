@@ -1365,9 +1365,10 @@ fn layout_pass(
         ) {
             Ok(packed) => return Ok((packed, row_spans, Vec::new(), Vec::new())),
             Err(reason) => {
+                let bands = crate::bus::bands::extract_bands(&row_spans, &all_entities);
                 crate::trace::emit(crate::trace::TraceEvent::BandPackingRefused {
-                    bands: 0,
-                    widest_band: 0,
+                    bands: bands.len(),
+                    widest_band: bands.iter().map(|b| b.w).max().unwrap_or(0),
                     reason,
                 });
             }
