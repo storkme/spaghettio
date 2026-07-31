@@ -6019,12 +6019,30 @@ fn probe_packed_kc1_real_planner() {
             built_all = false;
             continue;
         }
-        let parea = (packed.width as i64) * (packed.height as i64);
+        // Criterion-scope area: the spike's KC1 quantity was bands +
+        // transport, with NO poles (the spike placed none), and the
+        // control side is the band-bbox — so the packed side measures
+        // non-pole entity extents, footprint-inclusive (#523 review:
+        // pole placement was inflating the packed bbox asymmetrically).
+        let (mut pxmin, mut pymin, mut pxmax, mut pymax) =
+            (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for e in &packed.entities {
+            if e.name.contains("electric-pole") {
+                continue;
+            }
+            let (w, h) = spaghettio_core::common::entity_size(&e.name);
+            pxmin = pxmin.min(e.x);
+            pymin = pymin.min(e.y);
+            pxmax = pxmax.max(e.x + w as i32 - 1);
+            pymax = pymax.max(e.y + h as i32 - 1);
+        }
+        let parea = ((pxmax - pxmin + 1) as i64) * ((pymax - pymin + 1) as i64);
         agg_ctrl += ctrl_area;
         agg_pack += parea;
         println!(
             "{label:<10} ctrl band-bbox {cw}x{ch}={ctrl_area}  packed {}x{}={parea} ({:+.1}%)",
-            packed.width, packed.height,
+            pxmax - pxmin + 1,
+            pymax - pymin + 1,
             (parea - ctrl_area) as f64 / ctrl_area as f64 * 100.0,
         );
     }

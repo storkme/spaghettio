@@ -1379,10 +1379,17 @@ pub fn build_packed_layout(
     let max_x = entities.iter().map(|e| e.x).max().unwrap_or(0);
     let max_y = entities.iter().map(|e| e.y).max().unwrap_or(0);
     let mut poles = Vec::new();
-    for gy in (0..=max_y + 3).step_by(7) {
-        for gx in (0..=max_x + 3).step_by(7) {
+    // Poles stay INSIDE the pre-pole extent: the grid running to +3 with a
+    // 3-tile free-tile drift let poles land up to ~6 tiles past the last
+    // real entity, inflating the bbox KC1 is measured from, and two
+    // drifted neighbours could exceed wire reach (#523 review, both
+    // findings). Clamping bounds the drift and the bbox; reach can still
+    // be exceeded pathologically — the record's pole grid stays a sketch.
+    for gy in (0..=max_y).step_by(7) {
+        for gx in (0..=max_x).step_by(7) {
             if let Some(free) = (0..4)
                 .flat_map(|dy| (0..4).map(move |dx| (gx + dx, gy + dy)))
+                .filter(|&(x, y)| x <= max_x && y <= max_y)
                 .find(|t| !occupied.contains(t))
             {
                 poles.push(PlacedEntity {

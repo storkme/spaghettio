@@ -2,8 +2,9 @@
 
 Registry: [`rfcs.md`](rfcs.md). Status: **Concluded 2026-07-31 — kill
 criterion 1 FIRED in phase 4: the real planner under physically-legal
-routing and an honest footprint-inclusive bbox holds −23.3% against the
-−33.0% bar, with the trajectory adverse as correctness increased. Phases 0–3's evidence and the inert
+routing, measured faithfully (criterion-scope non-pole extents, honest
+footprints, scoring bypassed), holds −27.0% against the −33.0% bar, with
+the trajectory adverse as correctness increased. Phases 0–3's evidence and the inert
 scaffolding stand; the packed builder remains flag-gated and default-off
 as the falsification record. See the final decision-log entry.**
 Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
@@ -714,15 +715,20 @@ clears. Rationale in the decision log.
   concludes.** The final materialization-correctness fix (the UG
   entrance conversion must target the actual predecessor belt, not
   `out.last_mut()` — the corruption the instrumented route dumps
-  exposed) forces legal-but-longer routes, and #523's review then caught
-  the packed bbox being computed anchor-only with no minimum —
-  understating the area the criterion is measured in. With
-  footprint-inclusive, origin-normalised dimensions the
-  buildable-fixture aggregate lands at **−23.3% (sci1 −20.0%, sci2
-  −24.1%), ten points below the −33.0% bar**. The trajectory across the
-  hardening loop is monotonically adverse — −44.0% (naive, corrupt
-  routing) → −34.6% (tree router, still-corrupt materialization) →
-  −23.3% (legal materialization, honest bbox) — with
+  exposed) forces legal-but-longer routes, and two rounds of #523 review
+  then corrected the MEASUREMENT itself: the packed bbox was anchor-only
+  with no minimum (understating), the pole grid drifted up to ~6 tiles
+  past the last real entity (inflating, and outside the criterion's
+  scope — the spike placed no poles), and a scoring flip could ship a
+  native-shaped K1 variant mislabelled as packed, so the flag now
+  bypasses candidate scoring outright (an instrument, not a candidate).
+  On the faithful instrument — packed artifact, criterion-scope
+  non-pole extents, honest footprints — the buildable-fixture aggregate
+  lands at **−27.0% (sci1 −27.3%, sci2 −26.9%), six points below the
+  −33.0% bar**. The trajectory across the hardening loop remains
+  adverse — −44.0% (naive, corrupt routing) → −34.6% (tree router,
+  still-corrupt materialization) → −27.0% (legal materialization,
+  faithful measurement) — with
   KC3 parity still distant (sci2: 5 dead-ends, 1 isolation, 63
   reachability warnings), so every remaining correctness repair can only
   push density further below the bar. The tree router was pre-committed
@@ -738,7 +744,18 @@ clears. Rationale in the decision log.
   phase-6 default-on question resolves NO by this evidence; phases 5–6
   are closed by the kill, per the phasing section's own gate structure.
   The flag and packed builder remain in-tree, default-off and inert, as
-  the reproducible record.
+  the reproducible record. Known latent defects in that record — found
+  by #523's two review rounds and deliberately left, since each fix
+  makes routing stricter or restores dropped transport and so moves
+  density further below the bar: the splitter carve can silently no-op
+  (re-selected junction, or a junction whose belt a crossing bridger
+  already renamed to UG); the collector loop lacks crossing/UG handling
+  and the foreign-feed filter; secondary/sorted output-belt rows are not
+  re-stamped (no gate fixture carries them); `src_bands` self-exclusion
+  is evaluated against the first consumer only; and the sketch pole grid
+  can exceed wire reach after free-tile drift (clamped to the pre-pole
+  extent, but not reach-verified). Each is annotated at its site in
+  `bus::bands`.
 
 - **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
   fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused

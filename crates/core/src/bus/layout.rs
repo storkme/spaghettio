@@ -244,8 +244,17 @@ pub fn build_bus_layout(
         ));
     }
     let compact_layout = opts.compact_layout;
-    let result =
-        crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)?;
+    // RFC-058 (concluded): band_packing is a measurement instrument, not a
+    // candidate — flag-on runs the native pass directly so the packed
+    // takeover (or its typed refusal) is what ships, never outcompeted by
+    // K1/cell/DI variants. Without this, a scoring flip mislabels a
+    // native-shaped winner as "packed" in the KC1 probe (#523 review
+    // fallout, caught when pole clamping shifted the score).
+    let result = if opts.band_packing {
+        crate::bus::layout::run_layout_with_retry(solver_result, &opts)?
+    } else {
+        crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)?
+    };
     if compact_layout {
         Ok(crate::bus::compaction::compact_validated_geometry(
             &result,
