@@ -671,6 +671,23 @@ clears. Rationale in the decision log.
   below −33.0%, the criterion fires and the RFC stops — the option is
   spent after this iteration.
 
+- **2026-07-31 — the tree-router iteration lands: sci2 builds again,
+  KC1's buildable aggregate clears at −34.6%, and sci1 validates
+  ERROR-FREE.** Five routing advances, each from a tile-level diagnosis:
+  splitter-carved branch junctions; feed-row west continuations;
+  negotiated net ordering (failing net promoted, one promotion per net
+  per gap) which is what actually unlocked sci2; multi-producer
+  collectors (the producer map kept ONE band per item — every other
+  producer's output row stranded); and immediate-continuation pickups
+  (seeding at ox−2 left a one-tile hole rows dead-ended into). State:
+  sci1 builds at −28.9% with 16 warnings and ZERO errors; sci2 at −36.0%
+  with 153 issues (4 dead-ends, 1 isolation, rest warnings); buildable
+  aggregate 5,094 → 3,331 (−34.6% vs the −33.0% bar). pu1 still refuses
+  on multi-lane scope. The KC1 tree-router condition from the previous
+  entry is MET on the buildable set; KC3 remains open (sci2 errors,
+  warning classes on both) and the loop's next diagnoses are queued in
+  the probes.
+
 - **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
   fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused
   verbatim) and 1D-specific geometry (left untouched; paralleled by a
