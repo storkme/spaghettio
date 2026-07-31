@@ -86,11 +86,14 @@ pub enum DiClaimOrder {
     /// Chosen on measurement, and the measurement took two rounds because the
     /// first instrument was wrong. Across three machine tiers, `Downstream` is
     /// never worse than `Upstream` on any of the 179 contended corpus targets
-    /// and strictly better on 6. That claim was ALSO true before #520 fixed the
-    /// validator's starved-pickup blind spot — but it was true for the wrong
-    /// reason then, and two targets appeared to favour `Upstream` because the
-    /// layouts it shipped there were physically broken in a way nothing could
-    /// see.
+    /// and strictly better on 6.
+    ///
+    /// That was **not** true before #520 fixed the validator's starved-pickup
+    /// blind spot: two targets then appeared to favour `Upstream`, which is why
+    /// this RFC first concluded that neither order dominates. Those two are the
+    /// `small-electric-pole@5` layouts where `Upstream` shipped a factory
+    /// measured at 2.52/s against a planned 5.00/s — it was never ahead there,
+    /// the instrument just could not see the deficit.
     ///
     /// The deciding evidence is in-game, not the validator, because RFC-059's
     /// own lesson is that a clean validator is not evidence a layout works.
@@ -105,8 +108,9 @@ pub enum DiClaimOrder {
     /// | `medium-electric-pole@5` | 2351 ents, PASS 5.00/s | 2340 ents, PASS 4.98/s |
     ///
     /// `big-electric-pole@1` is the one that settles it: the status quo ships a
-    /// factory running at **half its planned rate** with 43 of its machines idle,
-    /// and the flip repairs it. The entity savings were the least of it.
+    /// factory running at **half its planned rate**, with 43 machines working
+    /// against 96 under `Downstream`, and the flip repairs it. The entity
+    /// savings were the least of it.
     #[default]
     Downstream,
     /// Build both static orders and keep the better one.

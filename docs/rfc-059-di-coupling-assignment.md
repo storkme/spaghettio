@@ -490,12 +490,12 @@ materialised is not that: on every differing target the claim order changes
 and DI under the other — so what needs pinning is the shipped layout's identity,
 not a cell's internal geometry.
 `di_jammed_cell_is_visible_and_therefore_refused` asserts that: on
-`display-panel@1` the default must ship the sim-verified 221-entity layout, and
-the rejected variant must still look better on every signal the engine has, so a
-future scoring change cannot silently re-select it. It then checks `Search` on two
-targets that disagree about which arm wins (`small-electric-pole@5` am1 wants
-upstream, `land-mine@1` am3 wants downstream), which is what stops the blocked
-policy rotting into unreachable code. A tile-level assertion on the DI cell would
+`display-panel@1` the validator now FLAGS the jammed variant, at the starved
+pickup tile, so DI's own never-worse gate refuses it and the sim-verified
+221-entity layout ships. (An earlier version of this paragraph described the
+opposite — "the rejected variant must still look better on every signal" — which
+was the pre-#520 state, when the defect was invisible. The name was re-pointed
+when the test was renamed and the prose was not; caught in review of #535.) A tile-level assertion on the DI cell would
 pin geometry both arms agree on, which is the wrong invariant.
 
 ## Phasing
@@ -722,17 +722,37 @@ widespread and the optimum is static everywhere.
   `big-electric-pole@1` is what settled it, and it inverts the framing this RFC
   had carried all along. The flip was argued as an entity-density improvement
   worth 70 entities; it is actually a **correctness fix**. The status quo ships a
-  factory at half its planned rate with 43 of 96 machines idle, and `Downstream`
-  repairs it. Every claim-order comparison in this document before that run
+  factory at half its planned rate — 43 machines working against 96 under
+  `Downstream` — and the flip repairs it. Every claim-order comparison in this document before that run
   measured density and issue counts, which is precisely the pair of signals #520
   showed cannot see this failure.
 
-  **What was NOT verified, stated plainly.** Three of the six improving targets
-  are `land-mine` at am1/am2/am3 (−9, −16, −12 entities). `land-mine` needs water
-  and crude-oil, and the harness's infinity-pipe feed/void paths are uncalibrated
-  (RFC-050 Phase 1) — both arms return a flat 0/s, which measures the harness.
-  Those three are accepted on the corpus never-worse result alone. If the fluid
-  boundary is calibrated, they are the first thing to re-check.
+  **What was NOT verified — and the first explanation for it was wrong.** Three
+  of the six improving targets are `land-mine` at am1/am2/am3 (−9, −16, −12
+  entities). Both arms return a flat 0/s, and I first attributed that to the
+  harness: it prints "this run has fluid boundaries — infinity-pipe feed/void
+  paths are UNCALIBRATED (RFC-050 Phase 1)" on any fluid run, and `land-mine`
+  needs water and crude-oil.
+
+  **That warning is stale.** It fires unconditionally on
+  `Manifest::has_fluid_boundary()`, but the fluid path was diagnosed in #364 and
+  FIXED in #373 — the root cause was an exporter bug (pipe-to-ground blueprint
+  direction inverted 180°), not the harness. Verified by control: `plastic-bar@1`
+  from crude-oil sims **PASS at 1.70/s, converged**, with the same UNCALIBRATED
+  note printed beside it.
+
+  So `land-mine@1` returning 0/s under both arms is **not** explained by the
+  instrument, and is unexplained rather than benign. It is not evidence for or
+  against this flip either way — the layout fails identically under both orders —
+  but it is a real open question, tracked as
+  [#537](https://github.com/storkme/spaghettio/issues/537). The three `land-mine`
+  entries in the improving-targets list are improving a factory that does not
+  currently run.
+
+  The generalisable half: a kit's own self-report is evidence about the kit at the
+  time the string was written, not at the time it printed. "Sim kit is first
+  suspect" is a good heuristic and it misfired here precisely because the kit
+  volunteered a reason.
 
   The proportionality argument that justified deferring is also gone: "70 entities
   is a thin prize" was the reason to wait, and the prize turned out to be a

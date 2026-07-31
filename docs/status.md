@@ -210,16 +210,20 @@ Six headless runs, three targets under both arms, same harness and warmup:
 
 `big-electric-pole@1` inverts the framing the RFC carried throughout: the flip
 was argued as a 70-entity density improvement and is actually a **correctness
-fix** — the status quo shipped a factory at half its planned rate with 43 of 96
-machines idle. Every claim-order comparison before those runs measured density
+fix** — the status quo shipped a factory at half its planned rate, with 43
+machines working against 96 under `Downstream`. Every claim-order comparison before those runs measured density
 and issue counts, which is exactly the pair of signals #520 showed cannot see
 this failure.
 
-Not verified: three `land-mine` targets (am1/am2/am3, −9/−16/−12 entities) need
-water and crude-oil, and the harness's infinity-pipe paths are uncalibrated
-(RFC-050 Phase 1) — both arms read a flat 0/s. Accepted on the corpus
-never-worse result alone; first thing to re-check if the fluid boundary is
-calibrated.
+Not verified, and the first explanation was wrong: three `land-mine` targets
+(am1/am2/am3, −9/−16/−12 entities) read a flat 0/s under BOTH arms. That was
+attributed to the harness's "fluid boundaries — infinity-pipe feed/void paths are
+UNCALIBRATED" note, **which is stale** — the fluid path was fixed in #373 (an
+exporter pipe-to-ground direction bug), and `plastic-bar@1` from crude-oil sims
+PASS at 1.70/s with that same note printed. So `land-mine@1`'s 0/s is
+unexplained rather than benign; it is neutral for this flip (identical under both
+orders) but a real open question, tracked as
+[#537](https://github.com/storkme/spaghettio/issues/537).
 
 **#520 — the validator shipped a half-rate factory (2026-07-31).**
 `check_belt_flow_reachability` asked its question **per machine over the union of
