@@ -1265,6 +1265,129 @@ fn chain_refuses_multirow_internal_corridor() {
     );
 }
 
+/// #433 review round 2 (false-positive class). `single_inbound_port`'s
+/// first cut refused on raw port COUNT > 1, y-blind — but extract.rs
+/// gives a fresh port to each 4-adjacency-CONNECTED RUN of a row's
+/// belt-in segment, and UG gaps punched into a SINGLE row's segment
+/// (`quad_input_row`'s belt3: per-machine UG-IN at `mx` / gap / UG-OUT
+/// at `mx+2`, still one logical segment) break 4-adjacency and split it
+/// into several same-y runs. That is NOT the multi-row case #433 is
+/// about — it is a same-row artifact of how the segment is drawn.
+///
+/// Review-measured false positive: assembling-machine-2@1 (raw
+/// steel-plate as an external input, so the solve doesn't route it
+/// through its own sub-chain; am3) has its OWN iron-gear-wheel consumer
+/// ports at (0,2) and (2,2) — same y=2, UG-split, not a second row. The
+/// y-blind check refused this chain outright.
+///
+/// Pins `compose_chain_with_capacity` directly (not the full
+/// decomposition-search path — see
+/// `chain_am2_default_options_ships_cell_composed_rescue` below for
+/// that) against this exact scenario: must return `Ok`, with geometry
+/// byte-identical (via `geometry_hash`) to what base commit cc9fb340
+/// (the true pre-#433-work tree, plain `.find`-based port selection)
+/// produces — i.e. the fix's min-x tie-break must reproduce the exact
+/// westmost-port pick `.find` made, not merely "some" valid pick.
+/// Confirmed FAILS (refuses) on this PR's round-1 head (commit
+/// a6f21b25) and passes after the y-discrimination fix.
+#[test]
+fn chain_am2_from_plate_steel_composes_ok_not_false_positive() {
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    use spaghettio_core::bus::cells::registry::geometry_hash;
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "steel-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "assembling-machine-2",
+        1.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    let l = compose_chain_with_capacity(&sr, spaghettio_core::common::DEFAULT_INSERTER_CAPACITY)
+        .unwrap_or_else(|e| {
+            panic!("same-row UG-split ports must NOT trigger the multi-row refusal: {e}")
+        });
+    assert_eq!(
+        (l.width, l.height, l.entities.len()),
+        (131, 27, 750),
+        "pinned to base cc9fb340's pre-#433-work geometry (measured during the review round)"
+    );
+    assert_eq!(
+        geometry_hash(&l),
+        16181045263949429483,
+        "port selection must be byte-identical to the pre-fix westmost-port pick (base cc9fb340), not just same dims"
+    );
+}
+
+/// #433 review round 2 companion to the test above: the END-TO-END
+/// symptom the reviewer actually measured. `assembling-machine-2@1`
+/// (raw steel-plate input, am3) is a case where NATIVE fails
+/// acceptance and `CellComposedCandidate` — live under
+/// `LayoutOptions::default()` (`cell_composition: Candidate` since
+/// RFC-051) — RESCUES it. The round-1 false positive silently starved
+/// that rescue: `CellComposedCandidate` errored, so
+/// `select_best_decomposition` fell through to native's own inferior
+/// result. This asserts the DEFAULT-options end-to-end path ships the
+/// rescued cell-composed layout again, byte-identical (dims +
+/// `geometry_hash`) to base commit cc9fb340 — and that it is NOT the
+/// same layout `CellComposition::Off` (native-only) produces, proving
+/// the rescue is actually live, not coincidentally matching native.
+#[test]
+fn chain_am2_default_options_ships_cell_composed_rescue() {
+    use spaghettio_core::bus::cells::registry::geometry_hash;
+    use spaghettio_core::bus::cells::CellComposition;
+    use spaghettio_core::bus::layout::{self, LayoutOptions};
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "steel-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "assembling-machine-2",
+        1.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    let native = layout::build_bus_layout(
+        &sr,
+        LayoutOptions {
+            cell_composition: CellComposition::Off,
+            ..Default::default()
+        },
+    )
+    .expect("native-only build must still succeed");
+    assert_eq!(
+        (native.width, native.height, native.entities.len()),
+        (23, 51, 430),
+        "native-only baseline (unaffected by chain.rs) — if this moved, the fixture drifted, not the fix"
+    );
+    let default = layout::build_bus_layout(&sr, LayoutOptions::default())
+        .expect("default options must compose (cell-composed rescue must not be silently lost)");
+    assert_eq!(
+        (default.width, default.height, default.entities.len()),
+        (131, 27, 750),
+        "default options must ship the cell-composed rescue, not fall back to native's inferior result"
+    );
+    assert_eq!(
+        geometry_hash(&default),
+        16181045263949429483,
+        "byte-identical to base cc9fb340's default-options result"
+    );
+    assert_ne!(
+        geometry_hash(&default),
+        geometry_hash(&native),
+        "the rescue must actually differ from native-only — this is the whole point of the candidate"
+    );
+}
+
 /// #383 (2026-07-24): the EC@15 chain — the canonical #383 fixture —
 /// carries input-inserter-throughput warnings at the raw L0 world but
 /// composes inserter-clean at the L2 engine default (the input bind

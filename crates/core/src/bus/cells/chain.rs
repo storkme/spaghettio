@@ -200,28 +200,55 @@ fn port_abs(p: &Port, cell_x: i32, cell_y: i32) -> (i32, i32) {
 }
 
 /// The consumer-side port an INTERNAL (producer-cell → consumer-cell)
-/// corridor wires to for `item`. A multi-row consumer cell exposes one
-/// inbound port per row for the same ingredient (extract.rs's
-/// one-port-per-connected-run grouping) — v1 corridors route to exactly
-/// one port, so wiring "the" port silently starves every row past the
-/// first. Refuse loudly instead (#433; the EXTERNAL world-feed path was
-/// already fixed port-aware — commit 620d103c, "every port gets its own
-/// feed column"). Wiring every row's port is future work, gated on
-/// feed-bound sizing actually reaching multi-row chain cells.
+/// corridor wires to for `item`. extract.rs derives one inbound port
+/// per 4-adjacency-CONNECTED RUN of the item's `belt-in` segment —
+/// usually that's one run (one port) per row, but UG gaps punched into
+/// a SINGLE row's belt-in segment (e.g. `quad_input_row`'s belt3:
+/// per-machine UG-IN at `mx` / gap / UG-OUT at `mx+2`, still one
+/// logical segment) break 4-adjacency and split it into several
+/// same-row runs, each getting its own port. Pre-#433-fix, `.find`
+/// picked whichever port came first in extraction order — which for
+/// these same-row splits is the westmost run, i.e. the belt's true
+/// upstream entry — and wired correctly (measured: 7 chain-eligible
+/// targets at warnings=0, review round on this PR). A genuinely
+/// multi-ROW consumer cell (distinct y per row) exposes one port per
+/// row for the same item; v1 corridors route to exactly one port, so
+/// wiring "the" port would silently starve every row past the first —
+/// THAT's the real #433 defect.
+///
+/// So: group matches by `y`. All matches share one y → same-row
+/// UG-split runs (or the trivial single-port case) — return the min-x
+/// (westmost = upstream entry) port, exactly reproducing the pre-fix
+/// deterministic behavior. Matches spanning more than one distinct y →
+/// genuine multi-row fan-in, which v1 corridors can't wire — refuse
+/// loudly instead of silently starving rows past the first (the
+/// EXTERNAL world-feed path was already fixed port-aware — commit
+/// 620d103c, "every port gets its own feed column"). Wiring every
+/// row's port is future work, gated on feed-bound sizing actually
+/// reaching multi-row chain cells.
 fn single_inbound_port<'a>(
     ports: &'a [Port],
     item: &str,
     consumer_recipe: &str,
 ) -> Result<&'a Port, String> {
     let matches: Vec<&Port> = ports.iter().filter(|q| q.inbound && q.item == item).collect();
-    match matches.as_slice() {
-        [p] => Ok(p),
-        [] => Err(format!("cells: {consumer_recipe} lacks in-port for {item}")),
-        _ => Err(format!(
-            "cells: {consumer_recipe} has {} in-ports for {item} (multi-row corridor fan not implemented, #433)",
-            matches.len()
-        )),
+    if matches.is_empty() {
+        return Err(format!("cells: {consumer_recipe} lacks in-port for {item}"));
     }
+    let mut rows: Vec<i32> = matches.iter().map(|p| p.y).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    if rows.len() == 1 {
+        return Ok(matches
+            .into_iter()
+            .min_by_key(|p| p.x)
+            .expect("matches non-empty, checked above"));
+    }
+    Err(format!(
+        "cells: {consumer_recipe} has {} in-ports for {item} across {} rows (multi-row corridor fan not implemented, #433)",
+        matches.len(),
+        rows.len()
+    ))
 }
 
 /// Crossing-aware corridor stamper. Horizontal runs hop under
