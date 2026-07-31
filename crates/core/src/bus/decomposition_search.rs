@@ -208,10 +208,7 @@ impl DecompositionCandidate for DirectInsertionCandidate {
                     "direct insertion carries {n_err} validation errors (refusing a broken layout)"
                 ));
             }
-            let n_warn = issues
-                .iter()
-                .filter(|i| i.severity == crate::validate::Severity::Warning)
-                .count();
+            let n_warn = crate::validate::selection_warning_count(&issues);
             Ok::<_, String>((l, n_warn))
         };
 
@@ -866,10 +863,21 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
             .iter()
             .filter(|i| i.severity == crate::validate::Severity::Error)
             .count(),
-        warnings: issues
-            .iter()
-            .filter(|i| i.severity == crate::validate::Severity::Warning)
-            .count(),
+        // Selection-scoped count (see `validate::selection_warning_count`).
+        // Honest scope statement (review finding on #525 corrected an
+        // earlier "bit-identical to pre-#519" overclaim here): the
+        // category PRE-EXISTED with nonzero counts, so excluding it DOES
+        // change selection on any config where candidates already
+        // differed in input-rate-delivery — the observed flips
+        // (stacking_fanin_wall_lift S=2, adjudicated in the fixture) are
+        // exactly that. The exemption is a calibration firewall, not a
+        // no-op: the #519 recalibration multiplied the category's counts
+        // ~10x, and letting an unanchored model steer selection shipped
+        // a physically over-stamped winner on stacking_ec_60s. Folding
+        // flux into selection (the #520 teeth) is the recorded follow-up,
+        // gated on sim-anchoring — decision log:
+        // docs/rfc-lane-demand-flow.md.
+        warnings: crate::validate::selection_warning_count(&issues),
         layout_warnings: layout.warnings.len(),
     }
 }
@@ -1377,10 +1385,9 @@ pub fn select_best_decomposition(
                             .iter()
                             .filter(|i| i.severity == crate::validate::Severity::Error)
                             .count();
-                        let warnings = issues
-                            .iter()
-                            .filter(|i| i.severity == crate::validate::Severity::Warning)
-                            .count();
+                        // Selection-scoped count — see
+                        // `validate::selection_warning_count`.
+                        let warnings = crate::validate::selection_warning_count(&issues);
                         (
                             score.accepted && errors == 0,
                             warnings + l.warnings.len(),
