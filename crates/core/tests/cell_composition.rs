@@ -5512,9 +5512,19 @@ fn probe_trunk_spike_gate_fixtures() {
         grid: &Grid,
         starts: &[(i32, i32)],
         targets: &FxHashSet<(i32, i32)>,
-        goal_hint: (i32, i32),
     ) -> Option<Vec<(i32, i32)>> {
-        let h = |t: (i32, i32)| (t.0 - goal_hint.0).abs() + (t.1 - goal_hint.1).abs();
+        // Admissible heuristic: Manhattan distance to the targets' bounding
+        // rectangle. Every target lies inside the rect, so this never
+        // exceeds the true remaining cost and is 0 on every target tile —
+        // a hint-point heuristic here was inadmissible (h > 0 on targets)
+        // and could return non-shortest corridors.
+        let tx0 = targets.iter().map(|t| t.0).min().unwrap_or(0);
+        let tx1 = targets.iter().map(|t| t.0).max().unwrap_or(0);
+        let ty0 = targets.iter().map(|t| t.1).min().unwrap_or(0);
+        let ty1 = targets.iter().map(|t| t.1).max().unwrap_or(0);
+        let h = move |t: (i32, i32)| {
+            (tx0 - t.0).max(t.0 - tx1).max(0) + (ty0 - t.1).max(t.1 - ty1).max(0)
+        };
         let mut open: BinaryHeap<Reverse<(i32, i32, (i32, i32), bool)>> = BinaryHeap::new();
         let mut best: FxHashMap<((i32, i32), bool), i32> = FxHashMap::default();
         let mut parent: FxHashMap<((i32, i32), bool), ((i32, i32), bool)> = FxHashMap::default();
@@ -5547,6 +5557,14 @@ fn probe_trunk_spike_gate_fixtures() {
                 let next = (tile.0 + dx, tile.1 + dy);
                 let next_h = dy == 0;
                 if !grid.passable(next, next_h) {
+                    continue;
+                }
+                // Changing axis makes `tile` a corner, which occupies BOTH
+                // axes there — so the current tile must be free on the new
+                // axis too. Without this, a corridor could turn on top of a
+                // reserved belt row or another corridor's straight run it
+                // was only ever allowed to CROSS.
+                if next_h != horizontal && !grid.passable(tile, next_h) {
                     continue;
                 }
                 let ncost = cost + 1;
@@ -5764,14 +5782,11 @@ fn probe_trunk_spike_gate_fixtures() {
                     Some(pi) => out_row(&packed[pi]),
                     None => west.clone(),
                 };
-                let (targets, hint): (FxHashSet<(i32, i32)>, (i32, i32)) = match f.dst {
-                    Some(ci) => (
-                        feed_tiles(ci, &packed[ci]).into_iter().collect(),
-                        centre(&packed[ci]),
-                    ),
-                    None => (east.clone(), (grid.max.0, (grid.min.1 + grid.max.1) / 2)),
+                let targets: FxHashSet<(i32, i32)> = match f.dst {
+                    Some(ci) => feed_tiles(ci, &packed[ci]).into_iter().collect(),
+                    None => east.clone(),
                 };
-                let Some(path) = route(&grid, &starts, &targets, hint) else {
+                let Some(path) = route(&grid, &starts, &targets) else {
                     println!(
                         "{label}: gap {gap}: flow {} {:?}->{:?} failed to route — widening",
                         f.item, f.src, f.dst,

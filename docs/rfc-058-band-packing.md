@@ -1,7 +1,7 @@
 # RFC-058: Band packing — 2D placement at row granularity
 
 Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phases 0 and 3 complete
-(KC2 cleared at 36.8% vs 30%; KC1 cleared at −35.2% vs −33.0%, narrowly —
+(KC2 cleared at 36.8% vs 30%; KC1 cleared at −35.9% vs −33.0%, narrowly —
 both 2026-07-31). Next: phases 1–2 scaffolding, then phase 4 (2D lane
 planning), with kill criterion 1 staying armed through phase 4.**
 Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
@@ -222,7 +222,7 @@ its gates — same discipline as `compact_layout`.
 Criterion 1 is the one this RFC exists to test. The probe deliberately could
 not measure it: it prices band-to-band distance, not trunk corridors, so the
 −66.1% excludes the space trunks will consume. *(Evaluated 2026-07-31 by the
-phase-3 spike: cleared at −35.2%, a 2.2-point margin — see decision log. The
+phase-3 spike: cleared at −35.9%, a 2.9-point margin — see decision log. The
 criterion stays armed through phase 4; the spike's model is throwaway and
 the real lane planner must re-clear it.)*
 
@@ -485,7 +485,7 @@ clears. Rationale in the decision log.
   inserter-only band [(30,5), (20,1), (21,5)] — to keep in mind when phase 1
   makes `RowSpan` the source of truth.
 
-- **2026-07-31 — Phase 3 trunk spike: KC1 clears at −35.2% against the
+- **2026-07-31 — Phase 3 trunk spike: KC1 clears at −35.9% against the
   −33.0% bar. Narrowly — and the margin's history is the real content of
   this entry.** The spike (`probe_trunk_spike_gate_fixtures`) packs the gate
   fixtures with the phase-0 packer, then routes every band-to-band item flow
@@ -507,9 +507,9 @@ clears. Rationale in the decision log.
   | fixture | control | packed+trunks | saving | gap | flows | belt-row tiles | corridor tiles |
   |---|---:|---:|---:|---:|---:|---:|---:|
   | `sci1-ore` | 990 | 672 | −32.1% | 2 | 6 | 102 | 55 |
-  | `sci2-ore` | 4,104 | 2,695 | −34.3% | 6 | 14 | 301 | 454 |
-  | `pu1-plate` | 5,635 | 3,584 | −36.4% | 4 | 20 | 603 | 379 |
-  | **aggregate** | **10,729** | **6,951** | **−35.2%** | | | | |
+  | `sci2-ore` | 4,104 | 2,618 | −36.2% | 6 | 14 | 301 | 428 |
+  | `pu1-plate` | 5,635 | 3,584 | −36.4% | 4 | 20 | 603 | 368 |
+  | **aggregate** | **10,729** | **6,874** | **−35.9%** | | | | |
 
   KC1 is defined on the aggregate; `sci1-ore` individually sits at −32.1%.
   Trunk cost consumed roughly half the obstacle-free −66.1% — the exact
@@ -524,6 +524,16 @@ clears. Rationale in the decision log.
   feed row is not checked (capacity is sized at two items per row but
   which-item-which-lane is unmodelled); fluids are priced as belt lanes;
   external inputs are assumed available anywhere on the west edge. Net
-  lean is conservative, but the 2.2-point margin is thin enough that phase
+  lean is conservative, but the 2.9-point margin is thin enough that phase
   4's real lane planner must treat −33.0% as a live bar, not a cleared
   formality — kill criterion 1 stays armed through phase 4.
+
+  Two router defects found by #517's review were fixed and re-measured
+  before this entry's numbers were frozen: a corridor could TURN on a tile
+  it was only entitled to cross (the corner check ignored pre-existing
+  perpendicular occupancy — generous), and the A\* heuristic aimed at a
+  hint point instead of the target set, making it inadmissible and the
+  corridors non-minimal (conservative). The fixes move the aggregate
+  −35.2% → −35.9% (`sci2-ore` 2,695 → 2,618; corridor tiles 454 → 428 and
+  379 → 368): the shorter true-minimal corridors outweigh the stricter
+  turn rule, so the verdict stands with a slightly wider margin.
