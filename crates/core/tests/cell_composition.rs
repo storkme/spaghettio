@@ -5960,3 +5960,73 @@ fn rfc058_placer_bands_match_y_projection() {
         }
     }
 }
+
+/// RFC-058 phase 4: KC1 re-measured on the REAL packed builder. The
+/// criterion's bar is −33.0% aggregate over its three gate fixtures;
+/// pu1-plate refuses in packed scope while the native pass is DI-free
+/// (copper-cable at 81/s needs balancer families), so this reports the
+/// buildable gate fixtures against their own controls and states the
+/// aggregate honestly rather than silently re-basing it.
+#[test]
+#[ignore = "RFC-058 phase 4 KC1 re-measure — run with --ignored --nocapture"]
+fn probe_packed_kc1_real_planner() {
+    let gate: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("pu1-plate", "processing-unit", 1.0, &["iron-plate", "copper-plate", "sulfuric-acid"], "assembling-machine-2"),
+    ];
+    let (mut agg_ctrl, mut agg_pack) = (0i64, 0i64);
+    let mut built_all = true;
+    for (label, item, rate, inputs, machine) in gate {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, *rate, &inputs_set, &MachinePalette::default(), machine,
+            &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap_or_else(|e| panic!("{label}: solve: {e}"));
+        let base = layout::LayoutOptions {
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        };
+        let control = layout::build_bus_layout(&sr, base.clone()).expect("control");
+        // KC1's control quantity is the band-bbox of the as-placed bands.
+        let ctrl_bands = rfc058_extract_bands(&control);
+        let (cw, ch) = {
+            let w = ctrl_bands.iter().map(|b| b.x + b.w).max().unwrap_or(0)
+                - ctrl_bands.iter().map(|b| b.x).min().unwrap_or(0);
+            let h = ctrl_bands.iter().map(|b| b.y + b.h).max().unwrap_or(0)
+                - ctrl_bands.iter().map(|b| b.y).min().unwrap_or(0);
+            (w, h)
+        };
+        let ctrl_area = (cw as i64) * (ch as i64);
+        let packed = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions { band_packing: true, ..base },
+        ).expect("packed build");
+        let identical =
+            format!("{:?}", control.entities) == format!("{:?}", packed.entities);
+        if identical {
+            println!("{label:<10} REFUSED (native shipped) — ctrl band-bbox {cw}x{ch}={ctrl_area}");
+            built_all = false;
+            continue;
+        }
+        let parea = (packed.width as i64) * (packed.height as i64);
+        agg_ctrl += ctrl_area;
+        agg_pack += parea;
+        println!(
+            "{label:<10} ctrl band-bbox {cw}x{ch}={ctrl_area}  packed {}x{}={parea} ({:+.1}%)",
+            packed.width, packed.height,
+            (parea - ctrl_area) as f64 / ctrl_area as f64 * 100.0,
+        );
+    }
+    println!("\n=== KC1 on the real planner ===");
+    if agg_ctrl > 0 {
+        println!(
+            "  buildable-fixture aggregate: {agg_ctrl} -> {agg_pack} ({:+.1}%)  bar −33.0%",
+            (agg_pack - agg_ctrl) as f64 / agg_ctrl as f64 * 100.0,
+        );
+    }
+    if !built_all {
+        println!("  NOTE: not all three gate fixtures built — the three-fixture aggregate is NOT evaluated; record the scope gap in the decision log.");
+    }
+}

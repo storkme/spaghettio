@@ -600,6 +600,28 @@ clears. Rationale in the decision log.
   379 → 368): the shorter true-minimal corridors outweigh the stricter
   turn rule, so the verdict stands with a slightly wider margin.
 
+- **2026-07-31 — phase 4 built end-to-end; KC1 on the real planner:
+  buildable-fixture aggregate −44.0% against the −33.0% bar.** The packed
+  pipeline (refusals → content-rect packing with the spike's 2..=8 gap
+  widening → rigid translation → inserter-aligned belt rows → corridor
+  routing with UG pairs at crossings → pole grid → boundary records) now
+  ships real layouts behind the flag: `sci1-ore` 990 → 512 (−48.3%),
+  `sci2-ore` 4,104 → 2,340 (−43.0%) — both beating the spike's estimates,
+  which reserved worst-case feed rows the real templates do not need.
+  Three router defects were caught by the tests and fixed: rect-blocking
+  made interior feed rows unreachable, a single-tile pickup was killed by
+  an earlier corridor's turn, and the fixed gap denied sci2.
+
+  **Scope gap, recorded not hidden: `pu1-plate` refuses on the real
+  planner** — the native pass is DI-free under the Candidate pattern, so
+  copper-cable rides the bus at 81/s and trips the multi-lane refusal
+  that DI normally removes. The three-fixture KC1 aggregate is therefore
+  NOT evaluated on the real planner; the buildable-fixture aggregate
+  (−44.0%) clears the bar with room, and closing the pu1 gap means
+  packing the DI candidate's rows — future work this RFC's phase-6
+  candidate wiring should inherit, not a silent re-basing of the gate.
+  Probe: `probe_packed_kc1_real_planner`.
+
 - **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
   fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused
   verbatim) and 1D-specific geometry (left untouched; paralleled by a
