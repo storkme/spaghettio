@@ -114,3 +114,27 @@ model's absolute attribution).
   rates (2.94 supply vs 4.29 demand) never divide evenly, so any fixed
   partition strands remainder flux; pooling lets backpressure do the
   fractional allocation the plan cannot.*
+- *2026-07-31 — **Phase 1 lands; K61-1 and K61-3 both clear.** Root cause
+  narrowed one level below the RFC's framing: the (m, m) family
+  passthrough (issue #268: "balancing is unnecessary for a fungible
+  item") freezes a producer→column pairing; under demand skew some
+  column's consumers outdraw its producer and the real library
+  templates — "kept as a safety net but never consulted" — were exactly
+  the unused fix. `LaneFamily::demand_skewed` (permutation-invariant:
+  max per-lane demand > min per-producer supply) routes skewed families
+  to the real template. K61-1: the ac@5 allocation probe collapses from
+  5 disjoint groups (2 UNDER) to one unified pool. K61-3, measured on
+  the real harness at long warmup, both HS cases: **ac@5 3.75/s → 4.84/s
+  (75.0% → 96.8% of plan)**, **ac@7 6.00/s → 6.68/s (85.7% → 95.4%)**,
+  both converged, machine censuses from mass-starvation to 78/81 and
+  108/113 working.*
+- *2026-07-31 — Phase 1 SCOPED to HS K-trunk families after the corpus
+  measured mixed movement on VerticalSplit families (tier5's walker
+  count +14 with no sim evidence either way): VS keeps the passthrough
+  until Phase 2 runs its own K61-3-style gate. One sim-adjudicated
+  tolerance rides along: ac@7's (6,6) stamp takes a feeder arrival on
+  its flank as a UG sideload — a real single-lane hazard the validator
+  correctly names, measured off the critical path (95.4% with the tile
+  flagged); fixing the feeder approach is Phase 1.5 and removes the
+  tolerance. Zone-cache pin refreshed deliberately for the new balancer
+  routes (ci.yml protocol).*
