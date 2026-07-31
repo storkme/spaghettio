@@ -224,6 +224,67 @@ fn bfs_belt_downstream(
     visited
 }
 
+/// One step of belt flow, mirroring `bfs_belt_downstream`'s three rules
+/// (direction, underground tunnel, splitter sibling). Used to seed a
+/// STRICTLY-DOWNSTREAM closure: `bfs_belt_downstream` includes its own starts,
+/// so seeding it with the sources would let a tile count as its own supply.
+fn belt_step_successors(
+    t: (i32, i32),
+    belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
+    ug_pairs: &FxHashMap<(i32, i32), (i32, i32)>,
+    splitter_siblings: &FxHashMap<(i32, i32), (i32, i32)>,
+) -> Vec<(i32, i32)> {
+    let mut out = Vec::new();
+    if let Some(&d) = belt_dir_map.get(&t) {
+        let (dx, dy) = dir_to_vec(d);
+        let nb = (t.0 + dx, t.1 + dy);
+        if belt_dir_map.contains_key(&nb) {
+            out.push(nb);
+        }
+    }
+    if let Some(&p) = ug_pairs.get(&t) {
+        if belt_dir_map.contains_key(&p) {
+            out.push(p);
+        }
+    }
+    if let Some(&sib) = splitter_siblings.get(&t) {
+        if belt_dir_map.contains_key(&sib) {
+            out.push(sib);
+        }
+    }
+    out
+}
+
+/// Mirror of [`belt_step_successors`] for the upstream direction.
+fn belt_step_predecessors(
+    t: (i32, i32),
+    belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
+    ug_pairs: &FxHashMap<(i32, i32), (i32, i32)>,
+    splitter_siblings: &FxHashMap<(i32, i32), (i32, i32)>,
+) -> Vec<(i32, i32)> {
+    let mut out = Vec::new();
+    for (ddx, ddy) in [(1, 0i32), (-1, 0), (0, 1), (0, -1)] {
+        let n = (t.0 + ddx, t.1 + ddy);
+        if let Some(&nd) = belt_dir_map.get(&n) {
+            let (ndx, ndy) = dir_to_vec(nd);
+            if (n.0 + ndx, n.1 + ndy) == t {
+                out.push(n);
+            }
+        }
+    }
+    if let Some(&p) = ug_pairs.get(&t) {
+        if belt_dir_map.contains_key(&p) {
+            out.push(p);
+        }
+    }
+    if let Some(&sib) = splitter_siblings.get(&t) {
+        if belt_dir_map.contains_key(&sib) {
+            out.push(sib);
+        }
+    }
+    out
+}
+
 fn bfs_belt_upstream(
     starts: &FxHashSet<(i32, i32)>,
     belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
@@ -1109,46 +1170,35 @@ pub fn check_belt_flow_reachability(
         Severity::Warning
     };
 
-    // Input check
-    let mut checked: FxHashSet<(i32, i32)> = FxHashSet::default();
-    for e in &layout.entities {
-        if !is_machine_entity(&e.name) {
+    // BELT-TO-BELT LIFT inserters: pick off one belt and drop onto another.
+    // Invisible to the classification above, which only recognises
+    // machine<->belt, and that blind spot is half of #520 — a lift's drop was
+    // not counted as a source of its belt, and its own pickup was never
+    // verified, so a lift feeding off permanently empty belt looked fine.
+    //
+    // Modelled as BOTH: its drop tile is a source (items do arrive there) and
+    // its pickup tile is a sink that must itself be fed. That is what makes the
+    // check transitive, and it localises the fault at the lift's pickup rather
+    // than at the machine three rows downstream that starves because of it.
+    let mut lift_drop_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
+    let mut lift_pickup_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
+    let mut lift_by_pickup: FxHashMap<(i32, i32), (String, i32, i32, Option<String>)> =
+        FxHashMap::default();
+    for ins in &layout.entities {
+        if !is_inserter(&ins.name) {
             continue;
         }
-        let mpos = (e.x, e.y);
-        if !checked.insert(mpos) {
-            continue;
-        }
-        if e.recipe.as_deref().is_some_and(|r| fluid_only.contains(r)) {
-            continue;
-        }
-        let belts = match machine_input_belts.get(&mpos) {
-            Some(b) => b,
-            None => continue,
-        };
-        let belt_set: FxHashSet<(i32, i32)> = belts.iter().copied().collect();
-        let upstream = bfs_belt_upstream(
-            &belt_set,
-            &belt_dir_map,
-            Some(&ug_pairs),
-            Some(&splitter_siblings),
-        );
-        let upstream_beyond: FxHashSet<(i32, i32)> =
-            upstream.difference(&belt_set).copied().collect();
-        let reaches_source = upstream_beyond.iter().any(|&t| on_boundary(t))
-            || upstream_beyond.intersection(&output_belt_tiles).next().is_some();
-        if !reaches_source {
-            issues.push(ValidationIssue::with_pos(
-                severity,
-                "belt-flow-reachability",
-                format!(
-                    "{} at ({},{}): items can't reach input \
-                     (no upstream path from boundary or another machine's output)",
-                    e.name, e.x, e.y
-                ),
-                e.x,
-                e.y,
-            ));
+        let (dx, dy) = dir_to_vec(ins.direction);
+        let reach = inserter_reach(&ins.name);
+        let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
+        let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
+        if belt_dir_map.contains_key(&drop_pos) && belt_dir_map.contains_key(&pickup_pos) {
+            lift_drop_tiles.insert(drop_pos);
+            lift_pickup_tiles.insert(pickup_pos);
+            lift_by_pickup.insert(
+                pickup_pos,
+                (ins.name.clone(), ins.x, ins.y, ins.carries.clone()),
+            );
         }
     }
 
@@ -1167,54 +1217,198 @@ pub fn check_belt_flow_reachability(
         })
         .collect();
 
-    // Output check
-    checked.clear();
+    // ONE forward sweep from every source, and one backward sweep from every
+    // sink, instead of a BFS per machine.
+    //
+    // This is the other half of #520, and it is a reporting defect rather than a
+    // missing rule. The check used to seed the BFS with ALL of a machine's input
+    // belts at once and ask whether the UNION reached a source, so on
+    // display-panel (iron-plate + electronic-circuit) the iron-plate belt's path
+    // back to the furnaces satisfied the test and the electronic-circuit belt —
+    // which no source fed — was never examined. A per-machine question cannot
+    // distinguish "every input is fed" from "some input is fed"; the same shape
+    // `validator-reporting.md` catalogues for counts that cannot tell 2 from
+    // 218. Per-TILE membership answers it exactly, and costs one sweep instead
+    // of one per machine.
+    let mut source_tiles: FxHashSet<(i32, i32)> = belt_dir_map
+        .keys()
+        .copied()
+        .filter(|&t| on_boundary(t))
+        .collect();
+    source_tiles.extend(output_belt_tiles.iter().copied());
+    source_tiles.extend(lift_drop_tiles.iter().copied());
+    // Seeded one step IN from each source, not with the sources themselves:
+    // the old per-machine form asked about `upstream \ own_belts`, so a tile was
+    // never its own supply. Seeding `bfs_belt_downstream` directly would have
+    // made a boundary output tile drain into itself — caught by this check's own
+    // `flow_reachability_output_dead_end_fails` unit test, which is the only
+    // reason the regression did not ship.
+    let mut fed_seed: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for &t in &source_tiles {
+        fed_seed.extend(belt_step_successors(
+            t,
+            &belt_dir_map,
+            &ug_pairs,
+            &splitter_siblings,
+        ));
+    }
+    let fed = bfs_belt_downstream(
+        &fed_seed,
+        &belt_dir_map,
+        Some(&ug_pairs),
+        Some(&splitter_siblings),
+    );
+
+    let mut sink_tiles: FxHashSet<(i32, i32)> = belt_dir_map
+        .keys()
+        .copied()
+        .filter(|&t| on_boundary(t))
+        .collect();
+    sink_tiles.extend(input_belt_tiles.iter().copied());
+    sink_tiles.extend(di_bridge_pickup_tiles.iter().copied());
+    sink_tiles.extend(lift_pickup_tiles.iter().copied());
+    let mut drain_seed: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for &t in &sink_tiles {
+        drain_seed.extend(belt_step_predecessors(
+            t,
+            &belt_dir_map,
+            &ug_pairs,
+            &splitter_siblings,
+        ));
+    }
+    let drains = bfs_belt_upstream(
+        &drain_seed,
+        &belt_dir_map,
+        Some(&ug_pairs),
+        Some(&splitter_siblings),
+    );
+
+    // Input check — one issue per unfed pickup TILE, positioned at the
+    // consumer, so two starved inputs on one machine report as two.
+    let mut machines_by_input: FxHashMap<(i32, i32), Vec<(String, i32, i32)>> =
+        FxHashMap::default();
     for e in &layout.entities {
         if !is_machine_entity(&e.name) {
-            continue;
-        }
-        let mpos = (e.x, e.y);
-        if !checked.insert(mpos) {
             continue;
         }
         if e.recipe.as_deref().is_some_and(|r| fluid_only.contains(r)) {
             continue;
         }
-        let belts = match machine_output_belts.get(&mpos) {
-            Some(b) => b,
-            None => continue,
-        };
-        let belt_set: FxHashSet<(i32, i32)> = belts.iter().copied().collect();
-        let downstream = bfs_belt_downstream(
-            &belt_set,
-            &belt_dir_map,
-            Some(&ug_pairs),
-            Some(&splitter_siblings),
-        );
-        let downstream_beyond: FxHashSet<(i32, i32)> =
-            downstream.difference(&belt_set).copied().collect();
-        let reaches_sink = downstream_beyond.iter().any(|&t| on_boundary(t))
-            || downstream_beyond
-                .intersection(&input_belt_tiles)
-                .next()
-                .is_some()
-            // DI: the output belt (or a tile downstream of it) is picked
-            // from by a direct-insertion bridge inserter — the items leave
-            // via the bridge, not by flowing onward.
-            || !downstream.is_disjoint(&di_bridge_pickup_tiles);
-        if !reaches_sink {
-            issues.push(ValidationIssue::with_pos(
-                severity,
-                "belt-flow-reachability",
-                format!(
-                    "{} at ({},{}): items can't leave output \
-                     (no downstream path to boundary or another machine's input)",
-                    e.name, e.x, e.y
-                ),
-                e.x,
-                e.y,
-            ));
+        if let Some(belts) = machine_input_belts.get(&(e.x, e.y)) {
+            for &b in belts {
+                machines_by_input
+                    .entry(b)
+                    .or_default()
+                    .push((e.name.clone(), e.x, e.y));
+            }
         }
+    }
+    let mut reported: FxHashSet<(i32, i32)> = FxHashSet::default();
+    // A tile that is BOTH a drop and a pickup is fed by the drop, even though
+    // the one-step-in seeding cannot see it: the seeding exists to stop a tile
+    // supplying itself, and a drop AT the tile is a different thing from the
+    // tile being its own upstream. Caught in review of this change — it is the
+    // common shape, since `stamp_di_bridge`'s pickup column and a producer's own
+    // output-drop column both land at `mx+1` under the default row geometry.
+    //
+    // Deliberately NOT `!source_tiles.contains(&t)`: `source_tiles` also holds
+    // every boundary tile, and letting a pickup satisfy itself by sitting on the
+    // boundary is the laxity the seeding was added to remove. Only an actual
+    // drop at the tile counts.
+    let mut unfed: Vec<(i32, i32)> = machines_by_input
+        .keys()
+        .chain(lift_pickup_tiles.iter())
+        .filter(|&&t| {
+            !fed.contains(&t)
+                && !output_belt_tiles.contains(&t)
+                && !lift_drop_tiles.contains(&t)
+        })
+        .copied()
+        .collect();
+    unfed.sort();
+    for t in unfed {
+        if !reported.insert(t) {
+            continue;
+        }
+        let who = if let Some(ms) = machines_by_input.get(&t) {
+            let (n, mx, my) = &ms[0];
+            format!("{n} at ({mx},{my})")
+        } else if let Some((n, ix, iy, carry)) = lift_by_pickup.get(&t) {
+            format!(
+                "belt-to-belt {n} at ({ix},{iy}){}",
+                carry
+                    .as_deref()
+                    .map(|c| format!(" carrying {c}"))
+                    .unwrap_or_default()
+            )
+        } else {
+            "consumer".to_string()
+        };
+        issues.push(ValidationIssue::with_pos(
+            severity,
+            "belt-flow-reachability",
+            format!(
+                "{who}: nothing feeds its pickup belt at ({},{}) — no upstream path \
+                 from the boundary, a machine's output, or another belt",
+                t.0, t.1
+            ),
+            t.0,
+            t.1,
+        ));
+    }
+
+    // Output check — one issue per output TILE whose items cannot leave. Also
+    // per-tile for the same reason: a machine with two output belts, one of
+    // which dead-ends, used to pass on the other.
+    let mut machines_by_output: FxHashMap<(i32, i32), Vec<(String, i32, i32)>> =
+        FxHashMap::default();
+    for e in &layout.entities {
+        if !is_machine_entity(&e.name) {
+            continue;
+        }
+        if e.recipe.as_deref().is_some_and(|r| fluid_only.contains(r)) {
+            continue;
+        }
+        if let Some(belts) = machine_output_belts.get(&(e.x, e.y)) {
+            for &b in belts {
+                machines_by_output
+                    .entry(b)
+                    .or_default()
+                    .push((e.name.clone(), e.x, e.y));
+            }
+        }
+    }
+    // Mirror of the input-side allowance: items leave a tile that something
+    // picks FROM, even when that tile is the machine's own drop tile. The old
+    // code encoded this only for DI bridges, by testing the INCLUSIVE
+    // `downstream` set against `di_bridge_pickup_tiles` while using the strict
+    // `downstream_beyond` for every other arm. That asymmetry was load-bearing
+    // and undocumented; it is stated here and extended to the other pickup
+    // kinds, which have the same physics.
+    let mut stuck: Vec<(i32, i32)> = machines_by_output
+        .keys()
+        .filter(|&&t| {
+            !drains.contains(&t)
+                && !input_belt_tiles.contains(&t)
+                && !di_bridge_pickup_tiles.contains(&t)
+                && !lift_pickup_tiles.contains(&t)
+        })
+        .copied()
+        .collect();
+    stuck.sort();
+    for t in stuck {
+        let (n, mx, my) = &machines_by_output[&t][0];
+        issues.push(ValidationIssue::with_pos(
+            severity,
+            "belt-flow-reachability",
+            format!(
+                "{n} at ({mx},{my}): items dropped on ({},{}) cannot leave \
+                 (no downstream path to the boundary, a machine's input, or another belt)",
+                t.0, t.1
+            ),
+            t.0,
+            t.1,
+        ));
     }
 
     issues
@@ -3989,7 +4183,7 @@ mod tests {
         let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
         let errors: Vec<_> = issues
             .iter()
-            .filter(|i| i.message.contains("can't reach input"))
+            .filter(|i| i.message.contains("nothing feeds its pickup belt"))
             .collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
@@ -4020,7 +4214,7 @@ mod tests {
         let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
         let errors: Vec<_> = issues
             .iter()
-            .filter(|i| i.message.contains("can't reach input"))
+            .filter(|i| i.message.contains("nothing feeds its pickup belt"))
             .collect();
         assert_eq!(errors.len(), 1);
     }
@@ -4054,9 +4248,112 @@ mod tests {
         let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
         let errors: Vec<_> = issues
             .iter()
-            .filter(|i| i.message.contains("can't leave output"))
+            .filter(|i| i.message.contains("cannot leave"))
             .collect();
         assert_eq!(errors.len(), 1);
+    }
+
+    /// Regression for the same-tile false positive on the OUTPUT side (#524
+    /// review): a DI bridge picks straight off the producer's own drop tile.
+    ///
+    /// The tile is in `sink_tiles` but never in the strictly-one-step-upstream
+    /// `drains` closure, so a membership test alone reported "items cannot
+    /// leave" on a working layout. This is the COMMON shape rather than a corner
+    /// case — `stamp_di_bridge`'s pickup column and the producer's own
+    /// output-drop column both land at `mx + 1` under the default row geometry —
+    /// and because `di_choice` gates on being better on every channel, the
+    /// spurious warning would have suppressed correct DI layouts.
+    #[test]
+    fn flow_reachability_di_bridge_on_own_drop_tile_is_not_stuck() {
+        let sr = simple_solver(5.0, 2.5);
+        let mut entities = vec![
+            PlacedEntity {
+                name: "assembling-machine-3".to_string(),
+                x: 3,
+                y: 0,
+                direction: EntityDirection::North,
+                recipe: Some("iron-gear-wheel".to_string()),
+                ..Default::default()
+            },
+            inserter(4, -1, EntityDirection::South), // input: picks (4,-2)
+        ];
+        for x in 0..5 {
+            entities.push(belt(x, -2, EntityDirection::East));
+        }
+        // Output inserter drops on (4,4); that belt flows nowhere...
+        entities.push(inserter(4, 3, EntityDirection::South));
+        entities.push(belt(4, 4, EntityDirection::North));
+        // ...because a DI bridge lifts straight off it. South-facing at (4,5)
+        // picks from (4,4) and carries to the consumer.
+        let mut bridge = inserter(4, 5, EntityDirection::South);
+        bridge.segment_id = Some("di-bridge:iron-gear-wheel".to_string());
+        entities.push(bridge);
+        let lr = LayoutResult {
+            entities,
+            width: 20,
+            height: 20,
+            ..Default::default()
+        };
+        let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
+        let stuck: Vec<_> = issues
+            .iter()
+            .filter(|i| i.message.contains("cannot leave"))
+            .collect();
+        assert!(
+            stuck.is_empty(),
+            "a DI bridge picking off the producer's own drop tile is a valid \
+             exit: {stuck:?}"
+        );
+    }
+
+    /// Mirror of the above on the INPUT side: a belt-to-belt lift drops onto the
+    /// exact tile another inserter picks from. That tile is a genuine, active
+    /// source, but the one-step-in seeding excluded it from `fed`.
+    ///
+    /// The geometry mirrors `flow_reachability_output_dead_end_fails`
+    /// deliberately. A first draft put the machine where its input inserter's
+    /// drop tile missed the machine footprint, so the pickup was never
+    /// classified as a machine input and never checked — the test passed with
+    /// the fix AND with it sabotaged, i.e. it asserted nothing.
+    #[test]
+    fn flow_reachability_lift_drop_on_pickup_tile_is_fed() {
+        let sr = simple_solver(5.0, 2.5);
+        let mut entities = vec![
+            PlacedEntity {
+                name: "assembling-machine-3".to_string(),
+                x: 3,
+                y: 0,
+                direction: EntityDirection::North,
+                recipe: Some("iron-gear-wheel".to_string()),
+                ..Default::default()
+            },
+            // Machine input: picks from (4,-2).
+            inserter(4, -1, EntityDirection::South),
+        ];
+        // (4,-2) is isolated: nothing FLOWS into it. Its only supply is the lift.
+        entities.push(belt(4, -2, EntityDirection::South));
+        // A fed run along y = -4, reaching the boundary at x = 0.
+        for x in 0..5 {
+            entities.push(belt(x, -4, EntityDirection::East));
+        }
+        // Lift at (4,-3) facing South: picks (4,-4) off the fed run, drops (4,-2)
+        // — the machine's pickup tile.
+        entities.push(inserter(4, -3, EntityDirection::South));
+        let lr = LayoutResult {
+            entities,
+            width: 20,
+            height: 20,
+            ..Default::default()
+        };
+        let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
+        let unfed: Vec<_> = issues
+            .iter()
+            .filter(|i| i.message.contains("nothing feeds its pickup belt at (4,-2)"))
+            .collect();
+        assert!(
+            unfed.is_empty(),
+            "a lift dropping onto the pickup tile feeds it: {unfed:?}"
+        );
     }
 
     // --- check_belt_dead_ends: UG output ---

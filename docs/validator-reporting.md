@@ -2,9 +2,13 @@
 
 A check that runs, works, and finds the problem can still be useless — if the
 way it reports makes the problem invisible to whoever is reading. That failure
-mode hit this codebase **nine times**, was found in one day (2026-07-29), and
-three of the nine were written *while fixing the other six*. It is easy to
+mode hit this codebase **ten times**. Nine were found in one day (2026-07-29),
+and three of those were written *while fixing the other six*. It is easy to
 reintroduce, so it is written down.
+
+Number ten (2026-07-31) is the one that cost the most: it let `main` ship a
+factory running at **half its planned rate**, with the validator reporting zero
+errors and zero warnings.
 
 ## The shape
 
@@ -45,7 +49,7 @@ collapses N problems into one issue is therefore invisible to all of them —
    finds, so it reported 146/146 machines working for a blueprint that pastes
    as two dead halves.
 
-## The nine
+## The ten
 
 Kept as evidence that this is a pattern rather than a run of bad luck.
 
@@ -60,8 +64,48 @@ Kept as evidence that this is a pattern rather than a run of bad luck.
 | 7 | `check_belt_network_topology` | count in prose *and* origin-relative |
 | 8 | `claude-review` guard | asked "was this PR reviewed", not "was this code reviewed" |
 | 9 | a PR-watch monitor | reported `passing: 0` for CI that had not started |
+| 10 | `check_belt_flow_reachability` | asked per MACHINE over the union of its input belts; one fed input masked a starved one |
 
 Numbers 6, 8 and 9 were written during the session that fixed 1–5. Number 7 was
 found in the same audit and fixed last, in
 [#491](https://github.com/storkme/spaghettio/pull/491) — so all six of the
 others are fixed on `main`.
+
+### Number ten in detail (2026-07-31, #520)
+
+Worth more than a table row, because it is the first one with a measured cost in
+a real Factorio, and because the shape is subtler than "a count in a message".
+
+`check_belt_flow_reachability` seeded one BFS with **all** of a machine's input
+belts and asked whether the union reached a source. On `display-panel`
+(iron-plate + electronic-circuit) the iron-plate belt's path back to the furnaces
+satisfied the test, so the electronic-circuit belt — which nothing fed, because
+the only drop onto it was *downstream* of the pickup — was never examined. A
+per-machine question cannot distinguish **"every input is fed"** from **"some
+input is fed"**, which is rule 1's problem wearing different clothes: the check
+did not collapse N issues into one, it collapsed N *questions* into one.
+
+Compounding it, belt-to-belt lift inserters were not modelled at all. The
+classifier recognised only machine→belt and belt→machine, so a lift's drop was
+not a source of its belt and its own pickup was never checked — which is why the
+fault localised nowhere even when something downstream was visibly starving.
+
+**Measured cost.** `small-electric-pole@5` on am1 shipped a 126-entity DI layout,
+denser than native's 163 and clean on every channel, that a headless run measured
+at **2.52/s against a planned 5.00/s** — converged, so a steady state. Native
+measures 5.08/s. `di_choice` preferred the broken one correctly, by every signal
+the engine had.
+
+**The rule this adds.** Rules 1 and 2 are about how many issues a check emits.
+This one is about how many questions it asks: **a check that aggregates over a
+set must ask its question per element of that set, not over the union.** The
+union form is strictly weaker and its weakness is invisible — it reports success
+whenever *any* element passes. Both directions of this check are now one forward
+sweep from every source and one backward sweep from every sink, tested per tile;
+that is also cheaper than the per-machine BFS it replaced.
+
+**And the fix's own near-miss**, kept because it is the same lesson one level
+down: the first version seeded those sweeps with the source tiles themselves,
+which let a boundary output tile count as its own sink. The check's existing
+`flow_reachability_output_dead_end_fails` unit test caught it. The sweeps are now
+seeded one step in.

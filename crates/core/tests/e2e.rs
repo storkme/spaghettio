@@ -9586,41 +9586,38 @@ fn probe_di_contention_corpus_sweep() {
     }
 }
 
-/// RFC-059's DECISION, pinned: the status quo (`Upstream`) stays live, and the
-/// measured-better `Search` policy stays reachable but off.
+/// #520 / RFC-059: the engine can now SEE the jammed DI cell, so its own
+/// never-worse gate rejects it.
 ///
-/// Both halves need pinning, and for different reasons.
+/// The defect this pins was invisible on every signal the engine had.
+/// `di-row:copper-cable:electronic-circuit` on am1 drops its output partway
+/// along an east-flowing merger belt and the consumer picks up UPSTREAM of that
+/// drop, so the pickup sits on permanently empty belt — the consumer starves
+/// while everything behind the drop backs up. It validated with zero errors and
+/// zero warnings and produced 0/s in a headless Factorio run, against native's
+/// measured 1.00/s.
 ///
-/// **The default must stay `Upstream`** because a headless-Factorio run
-/// falsified the premise that made `Search` safe. On `display-panel@1` / am1 the
-/// arm `Search` prefers ships a `di-row:copper-cable:electronic-circuit` cell
-/// that the validator passes with zero errors and zero warnings and that
-/// produces **0/s in game** (jammed: `full_output: 10`), against native's
-/// measured 1.00/s under `Upstream`. Nothing in the test suite can see that, so
-/// this test names the fixture and asserts the working layout ships.
+/// `check_belt_flow_reachability` missed it for two compounding reasons, both
+/// now fixed: it asked its question PER MACHINE over the union of a machine's
+/// input belts (so `display-panel`'s healthy iron-plate belt satisfied the test
+/// and its starved electronic-circuit belt was never examined), and it did not
+/// model belt-to-belt lift inserters at all (so the lift's drop was not a source
+/// and its own pickup was never checked).
 ///
-/// **`Search` must keep working** because it is the measured-correct policy
-/// modulo that one defect, and re-deriving the measurement means a corpus sweep
-/// across three machine tiers. Asserting it still picks the better arm is what
-/// stops it rotting into unreachable code while it waits for the cell fix.
+/// Three assertions, because "the layout is no longer selected" is weaker than
+/// "the engine knows why":
+///   1. the validator FLAGS the jammed variant, at the pickup tile;
+///   2. consequently the shipped layout under `Search` is the sim-verified one;
+///   3. `Search` still functions where nothing is broken.
 #[test]
-fn di_claim_order_status_quo_ships_and_search_stays_reachable() {
+fn di_jammed_cell_is_visible_and_therefore_refused() {
     use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
-
-    assert_eq!(
-        DiClaimOrder::default(),
-        DiClaimOrder::Upstream,
-        "RFC-059 measured `Search` as better on every validator channel and kept \
-         `Upstream` anyway, because the sim showed the validator is blind to the \
-         cell `Search` selects on display-panel@1/am1. Flipping this default \
-         needs that cell fixed and re-simmed, not a one-line edit"
-    );
 
     let raw: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "water", "crude-oil"]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let ship = |item: &str, rate: f64, tier: &str, di: DirectInsertion, order: DiClaimOrder| {
+    let build = |item: &str, rate: f64, tier: &str, di: DirectInsertion, order: DiClaimOrder| {
         let sr = solver::solve(item, rate, &raw, tier)
             .unwrap_or_else(|e| panic!("{item}@{rate} on {tier} solves: {e}"));
         let opts = layout::LayoutOptions {
@@ -9636,66 +9633,83 @@ fn di_claim_order_status_quo_ships_and_search_stays_reachable() {
             spaghettio_core::validate::LayoutStyle::Bus,
         )
         .unwrap_or_else(|e| e.issues);
-        (
-            issues.iter().filter(|i| i.severity == Severity::Error).count(),
-            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
-            l.warnings.len(),
-            l.entities.len(),
-        )
+        (l.entities.len(), issues)
     };
 
-    // THE SIM-VERIFIED LAYOUT. 221 entities is native: under `Upstream` the DI
-    // candidate's own arm carries 3 validation errors and is refused, so native
-    // ships — and native is what measured 1.00/s against plan.
-    let dflt = ship(
+    // 1. The jammed variant is now visible, and the issue is positioned at the
+    //    starved pickup rather than at the machine that starves because of it.
+    let (jammed_ents, jammed_issues) = build(
         "display-panel",
         1.0,
         "assembling-machine-1",
-        DirectInsertion::Candidate,
-        DiClaimOrder::default(),
+        DirectInsertion::Forced,
+        DiClaimOrder::Downstream,
     );
-    let searched = ship(
-        "display-panel",
-        1.0,
-        "assembling-machine-1",
-        DirectInsertion::Candidate,
-        DiClaimOrder::Search,
-    );
-    assert_eq!(
-        dflt.3, 221,
-        "display-panel@1 on am1 must ship the sim-verified native layout (221 \
-         entities); got {dflt:?}. 202 is the DI variant that sims at 0/s"
-    );
-    // The trap this guards, stated as an assertion rather than a comment: the
-    // rejected layout is DENSER and validator-clean. Any future scoring change
-    // that ranks on density or issue counts alone will pick it again.
+    assert_eq!(jammed_ents, 202, "the jammed variant is the 202-entity one");
+    let reach: Vec<_> = jammed_issues
+        .iter()
+        .filter(|i| i.category == "belt-flow-reachability")
+        .collect();
     assert!(
-        searched.3 < dflt.3 && (searched.0, searched.1, searched.2) == (0, 0, 0),
-        "the broken variant is supposed to look BETTER on every signal the engine \
-         has — if it no longer does, either the cell was fixed (re-sim and flip \
-         the default) or the corpus moved: default={dflt:?} search={searched:?}"
+        !reach.is_empty(),
+        "the jammed DI cell must be visible to the validator — it sims at 0/s. \
+         Issues seen: {:?}",
+        jammed_issues.iter().map(|i| &i.category).collect::<Vec<_>>()
+    );
+    assert!(
+        reach.iter().any(|i| i.message.contains("(8,26)")),
+        "the issue must point at the starved pickup tile (8,26), not at the \
+         machine three rows downstream: {:?}",
+        reach.iter().map(|i| &i.message).collect::<Vec<_>>()
     );
 
-    // `Search` still functions where it is not blocked: on am1
-    // `small-electric-pole@5` wants the upstream arm and on am3 `land-mine@1`
-    // wants the downstream one, so a search that had silently collapsed to one
-    // arm would fail one of these.
-    let sep = ship(
-        "small-electric-pole",
-        5.0,
-        "assembling-machine-1",
-        DirectInsertion::Candidate,
-        DiClaimOrder::Search,
+    // 2. So DI's own never-worse gate now declines it and the sim-verified
+    //    native layout ships — under BOTH the default and the search policy.
+    for order in [DiClaimOrder::default(), DiClaimOrder::Search] {
+        let (ents, issues) = build(
+            "display-panel",
+            1.0,
+            "assembling-machine-1",
+            DirectInsertion::Candidate,
+            order.clone(),
+        );
+        assert_eq!(
+            ents, 221,
+            "display-panel@1 am1 must ship the sim-verified 221-entity layout \
+             under {order:?}; 202 is the variant that sims at 0/s"
+        );
+        assert!(
+            issues.is_empty(),
+            "the shipped layout must stay clean under {order:?}: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    // 3. THE OTHER CONFIRMED HALF-RATE LAYOUT, and the reason this assertion
+    //    reads backwards from its first draft. `small-electric-pole@5` on am1
+    //    used to ship a 126-entity DI layout: denser than native's 163, clean
+    //    on every validator channel, and measured in a headless run at
+    //    **2.52/s against a planned 5.00/s** — converged, so a steady state
+    //    rather than a warmup artifact. Native measures 5.08/s. Same starved-lift
+    //    defect as display-panel, in a different coupling
+    //    (`copper-plate -> copper-cable`), which is why sweeping for the cell
+    //    rather than for the defect class missed it.
+    //
+    //    So 163 is the correct answer here and 126 must never ship again.
+    assert_eq!(
+        build("small-electric-pole", 5.0, "assembling-machine-1",
+              DirectInsertion::Candidate, DiClaimOrder::Search).0,
+        163,
+        "small-electric-pole@5 am1 must ship native (163); 126 is the DI layout \
+         that sims at 2.52/s against a planned 5.00/s"
     );
-    assert_eq!(sep.3, 126, "Search keeps the upstream arm here; got {sep:?}");
-    let lm = ship(
-        "land-mine",
-        1.0,
-        "assembling-machine-3",
-        DirectInsertion::Candidate,
-        DiClaimOrder::Search,
+    // 4. `Search` still selects a DI cell where the cell is sound.
+    assert_eq!(
+        build("land-mine", 1.0, "assembling-machine-3",
+              DirectInsertion::Candidate, DiClaimOrder::Search).0,
+        282,
+        "Search keeps the downstream arm on land-mine@1 am3"
     );
-    assert_eq!(lm.3, 282, "Search keeps the downstream arm here; got {lm:?}");
 }
 
 /// RFC-059's corpus verdict — the measurement that decided the policy.
@@ -9922,14 +9936,32 @@ fn probe_di_claim_order_shipped_corpus_verdict() {
         worse_than_up.join("\n"),
         worse_than_down.join("\n")
     );
+    // The probe must find SOMETHING, or it proves nothing about claim order.
     assert!(
-        !beats_up.is_empty() && !beats_down.is_empty(),
-        "the search must beat BOTH fixed arms somewhere. If it only beats one, \
-         that arm is dominated and RFC-059's answer is to pick the other one \
-         rather than to search: beats_up={} beats_down={}",
-        beats_up.len(),
-        beats_down.len()
+        !beats_up.is_empty() || !beats_down.is_empty(),
+        "the search beats neither fixed arm anywhere — either the corpus moved \
+         or this probe has stopped discriminating"
     );
+    // WHICH arm dominates is reported, not asserted, because the answer moved
+    // once the validator could see a starved pickup (#520). It used to be
+    // "neither": downstream looked strictly worse on the two
+    // `small-electric-pole@5` targets. Those were exactly the layouts where
+    // UPSTREAM shipped a validator-clean factory running at half its planned
+    // rate, so downstream was never worse there — it was better, and the
+    // measurement could not tell. With the defect visible, downstream is
+    // never worse and better on several targets, which makes the two-arm
+    // search equivalent to simply flipping the default.
+    if beats_down.is_empty() {
+        println!("\n  DOWNSTREAM DOMINATES: the search never beats it, so a fixed");
+        println!("  `Downstream` default would ship the same layouts for one build");
+        println!("  instead of two. RFC-059's KC4 logic applies — do not ship search");
+        println!("  machinery for a tie. Flipping needs sim verification of the");
+        println!("  targets it improves first; validator-clean is not enough (#520).");
+    } else if beats_up.is_empty() {
+        println!("\n  UPSTREAM DOMINATES: keep the status quo and drop the search.");
+    } else {
+        println!("\n  NEITHER ARM DOMINATES: the two-arm search earns its extra build.");
+    }
     assert!(
         pin_beats_search.is_empty(),
         "a per-target assignment now beats the search — RFC-059 dropped P2/P3 \
