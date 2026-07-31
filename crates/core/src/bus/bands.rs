@@ -897,8 +897,17 @@ pub fn route_packed_nets(
                 if best.get(&(tile, horiz)).copied().unwrap_or(i32::MAX) < cost {
                     continue;
                 }
-                // A sideload target: adjacent to a feed-row tile, pointing in.
-                if targets.contains(&tile) {
+                // A goal must be belt-free or carry THIS net's item: a
+                // foreign-occupied continuation tile can be LANDED on as a
+                // crossing, and accepting it as a goal orphaned the branch
+                // stub behind a trailing run materialization then skipped
+                // (the four sci2 dead-ends).
+                let goal_ok = |t: (i32, i32)| {
+                    belt_dirs
+                        .get(&t)
+                        .is_none_or(|(_, c)| c.as_deref() == Some(net.item.as_str()) || c.is_none())
+                };
+                if targets.contains(&tile) && goal_ok(tile) {
                     let mut path = vec![tile];
                     let mut cur = (tile, horiz);
                     while let Some(&p) = parent.get(&cur) {

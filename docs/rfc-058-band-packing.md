@@ -697,11 +697,17 @@ clears. Rationale in the decision log.
   branch's continuation exists at (10,11) — a one-tile gap exactly where
   the branch crossed the x=9 corridor, i.e. the crossing-to-UG
   conversion did not fire for the branch's first crossing. Same class at
-  (26,27) and two south-pointing west-margin stubs. Next: reproduce with
-  the dumps, fix the conversion at branch-entry crossings, re-measure
-  both probes — then sci2's last isolation error, the warning classes
-  (reachability 63, power 49), the pu1 scope decision, KC4/eyeball/sim,
-  and phase 6's candidate wiring.
+  (26,27) and two south-pointing west-margin stubs. TWO hypotheses now
+  measured and falsified: the trailing-run sideload assumption (west-
+  continuation follow-through fill landed, no delta) and foreign-goal
+  acceptance (free-or-own-item goal rule landed, no delta — kept as
+  guards, both physically required). The class survives blind iteration;
+  next session opens the SNAPSHOT DEBUGGER on the sci2 packed layout
+  (SPAGHETTIO_DUMP_SNAPSHOTS=1 + the decoder in
+  docs/layout-snapshot-debugger.md) and walks the four stub tiles with
+  full entity context — then sci2's last isolation error, the warning
+  classes (reachability 63, power 49), the pu1 scope decision,
+  KC4/eyeball/sim, and phase 6's candidate wiring.
 
 - **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
   fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused
