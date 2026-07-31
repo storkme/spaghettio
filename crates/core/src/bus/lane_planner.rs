@@ -1199,14 +1199,42 @@ fn split_overflowing_lanes(
                     .sum::<f64>()
                     * crate::common::utilization_for(&rs.spec)
             };
+            // Per-machine RAW input rate (no utilization) — the placer's
+            // block_size formula uses the raw rate ("must stay the raw
+            // per-machine rate"); utilization applies to the DEMAND value
+            // only. Review finding on #536: the first cut used the global
+            // split index/count (wrong for lanes feeding multiple HS rows
+            // — trunks reconstructed as zero-machine blocks) and an even
+            // div_ceil split (the placer floors block_size by belt
+            // capacity and leaves the remainder in the LAST block, so
+            // non-divisible counts under-estimated the max block). Both
+            // biased toward keeping the unsafe passthrough.
+            let per_machine_raw = |ri: usize| -> f64 {
+                row_spans[ri]
+                    .spec
+                    .inputs
+                    .iter()
+                    .filter(|inp| inp.item == lane.item && !inp.is_fluid)
+                    .map(|inp| inp.rate)
+                    .sum::<f64>()
+            };
             let mut lane_demands: Vec<f64> = Vec::with_capacity(effective_n_splits);
             for (si, consumers) in consumers_per_split.iter().enumerate() {
-                let d: f64 = if hs_idx_per_split[si].is_some() && consumers.len() == 1 {
+                let d: f64 = if let (Some(trunk_idx), true) =
+                    (hs_idx_per_split[si], consumers.len() == 1)
+                {
                     let ri = consumers[0];
                     let count = row_spans[ri].machine_count;
-                    let k = effective_n_splits.max(1);
-                    let bs = count.div_ceil(k);
-                    let filled: usize = si * bs;
+                    // The placer's own quantization: block_size =
+                    // floor(full belt capacity / raw per-machine rate),
+                    // fill order with the remainder in the last block.
+                    let raw = per_machine_raw(ri);
+                    let bs = if raw > 0.0 {
+                        ((full_belt_cap / raw).floor() as usize).max(1)
+                    } else {
+                        count.max(1)
+                    };
+                    let filled = trunk_idx * bs;
                     let block = count.saturating_sub(filled).min(bs);
                     per_machine_demand(ri) * block as f64
                 } else {
