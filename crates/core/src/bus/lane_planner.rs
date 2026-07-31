@@ -157,6 +157,17 @@ pub struct LaneFamily {
     /// item). The ghost router stamps a merge-tree and routes feeders to its
     /// inputs instead of a balancer block.
     pub merge_tap: bool,
+    /// RFC-061 (#519): per-lane demands are skewed relative to per-producer
+    /// supplies — `max(lane demand) > min(producer supply)` — so the
+    /// `(m, m)` passthrough shortcut (issue #268: "balancing is
+    /// unnecessary for a fungible item") is UNSAFE: under some
+    /// producer→column pairing a column's consumers outdraw its producer
+    /// and the deficit is frozen at plan time (ac@5's cable: 8.82/s
+    /// columns feeding 12.86/s blocks, sim-measured at 75% of plan).
+    /// When set, `stamp_family_balancer` uses the real library template.
+    /// The predicate is permutation-invariant, so it is correct under
+    /// whatever feeder→column assignment the ghost router produces.
+    pub demand_skewed: bool,
 }
 
 
@@ -1120,6 +1131,7 @@ fn split_overflowing_lanes(
                     balancer_y_end: band_y,
                     total_rate: producer_bin_rate[t],
                     merge_tap: true,
+                    demand_skewed: false,
                 });
                 // Consumers assigned to this trunk, in row order so the tap
                 // sequence down the trunk is deterministic (find_tap_off_ys
@@ -1170,6 +1182,99 @@ fn split_overflowing_lanes(
             let shape = (n_producers, n_lanes_with_consumers);
             family_id = Some(families.len());
 
+            // RFC-061 (#519): decide whether the (m, m) passthrough is
+            // safe. Per-producer supply from row specs; per-lane demand
+            // from each split's consumers — for HS trunk splits the
+            // consumers repeat one row index, so demand is the trunk
+            // BLOCK's share: block_i machines × per-machine rate, with
+            // block sizes reconstructed as div_ceil fill order (the
+            // placer's block_size/k_trunks quantization).
+            let per_machine_demand = |ri: usize| -> f64 {
+                let rs = &row_spans[ri];
+                rs.spec
+                    .inputs
+                    .iter()
+                    .filter(|inp| inp.item == lane.item && !inp.is_fluid)
+                    .map(|inp| inp.rate)
+                    .sum::<f64>()
+                    * crate::common::utilization_for(&rs.spec)
+            };
+            // Per-machine RAW input rate (no utilization) — the placer's
+            // block_size formula uses the raw rate ("must stay the raw
+            // per-machine rate"); utilization applies to the DEMAND value
+            // only. Review finding on #536: the first cut used the global
+            // split index/count (wrong for lanes feeding multiple HS rows
+            // — trunks reconstructed as zero-machine blocks) and an even
+            // div_ceil split (the placer floors block_size by belt
+            // capacity and leaves the remainder in the LAST block, so
+            // non-divisible counts under-estimated the max block). Both
+            // biased toward keeping the unsafe passthrough.
+            let per_machine_raw = |ri: usize| -> f64 {
+                row_spans[ri]
+                    .spec
+                    .inputs
+                    .iter()
+                    .filter(|inp| inp.item == lane.item && !inp.is_fluid)
+                    .map(|inp| inp.rate)
+                    .sum::<f64>()
+            };
+            let mut lane_demands: Vec<f64> = Vec::with_capacity(effective_n_splits);
+            for (si, consumers) in consumers_per_split.iter().enumerate() {
+                let d: f64 = if let (Some(trunk_idx), true) =
+                    (hs_idx_per_split[si], consumers.len() == 1)
+                {
+                    let ri = consumers[0];
+                    let count = row_spans[ri].machine_count;
+                    // The placer's own quantization: block_size =
+                    // floor(full belt capacity / raw per-machine rate),
+                    // fill order with the remainder in the last block.
+                    let raw = per_machine_raw(ri);
+                    let bs = if raw > 0.0 {
+                        ((full_belt_cap / raw).floor() as usize).max(1)
+                    } else {
+                        count.max(1)
+                    };
+                    let filled = trunk_idx * bs;
+                    let block = count.saturating_sub(filled).min(bs);
+                    per_machine_demand(ri) * block as f64
+                } else {
+                    consumers
+                        .iter()
+                        .map(|&ri| {
+                            per_machine_demand(ri) * row_spans[ri].machine_count as f64
+                        })
+                        .sum()
+                };
+                lane_demands.push(d);
+            }
+            let producer_supplies: Vec<f64> = all_producer_rows
+                .iter()
+                .map(|&pri| {
+                    let rs = &row_spans[pri];
+                    rs.spec
+                        .outputs
+                        .iter()
+                        .filter(|o| o.item == lane.item)
+                        .map(|o| o.rate)
+                        .sum::<f64>()
+                        * crate::common::utilization_for(&rs.spec)
+                        * rs.machine_count as f64
+                })
+                .collect();
+            let max_demand = lane_demands.iter().cloned().fold(0.0_f64, f64::max);
+            let min_supply = producer_supplies.iter().cloned().fold(f64::MAX, f64::min);
+            // Phase 1 scope (RFC-061): HS K-trunk families only — the
+            // class the ac@5 sim validated (3.75/s -> 4.84/s, 96.8% of
+            // plan, K61-3). VerticalSplit families showed mixed MODELED
+            // movement (tier5 +14 walker warnings) with no sim evidence
+            // either way; they keep the passthrough until Phase 2 runs
+            // its own K61-3-style gate.
+            let demand_skewed = any_hs
+                && n_producers == n_lanes_with_consumers
+                && n_producers >= 2
+                && min_supply < f64::MAX
+                && max_demand > min_supply + 1e-6;
+
             let balancer_y_start = if n_producers == 1 {
                 row_spans[all_producer_rows[0]].output_belt_y
             } else {
@@ -1194,6 +1299,7 @@ fn split_overflowing_lanes(
                 balancer_y_end: balancer_y_start,
                 total_rate: lane.rate,
                 merge_tap: false,
+                demand_skewed,
             });
             family_source_y = Some(balancer_y_start + 1);
         }

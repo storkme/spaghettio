@@ -5776,6 +5776,7 @@ mod feeder_specs_skipped_tests {
             balancer_y_end: 11,
             total_rate: 20.0,
             merge_tap: false,
+            demand_skewed: false,
         };
         let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
         let solver_result = empty_solver_result();
@@ -5831,6 +5832,7 @@ mod feeder_specs_skipped_tests {
             balancer_y_end: 11,
             total_rate: 20.0,
             merge_tap: false,
+            demand_skewed: false,
         };
         let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
         let solver_result = empty_solver_result();
@@ -5872,6 +5874,7 @@ mod feeder_specs_skipped_tests {
             balancer_y_end: 11,
             total_rate: 20.0,
             merge_tap: false,
+            demand_skewed: false,
         };
         let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
         let solver_result = empty_solver_result();
