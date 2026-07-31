@@ -595,7 +595,7 @@ pub fn plan_bus_lanes(
         // template's 6+; otherwise direct match, then decomposition fallback.
         let tpl_height = if fam.merge_tap {
             Some(crate::bus::balancer_generate::merge_tree(n).height)
-        } else if crate::bus::balancer::is_passthrough_shape(n, m) {
+        } else if crate::bus::balancer::family_uses_passthrough(fam) {
             Some(1u32)
         } else {
             templates.get(&(n, m)).map(|t| t.height)

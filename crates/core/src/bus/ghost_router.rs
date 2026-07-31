@@ -1781,10 +1781,19 @@ pub fn route_bus_ghost(
                         for r in rel {
                             input_xs.push(origin_x + r);
                         }
-                    } else if crate::bus::balancer::is_passthrough_shape(n, m) {
+                    } else if crate::bus::balancer::family_uses_passthrough(fam) {
                         // Passthrough: each producer feeds the matching
                         // output column directly (issue #268). No template
                         // origin offset — input_xs == lane_xs.
+                        //
+                        // RFC-061 Phase 1.5: this branch MIRRORS
+                        // `stamp_family_balancer`'s passthrough decision
+                        // and must carry the same `demand_skewed` gate —
+                        // Phase 1 gated only the stamper, so skewed
+                        // families got a REAL template but feeders still
+                        // targeted the passthrough columns, landing on
+                        // the template's flank (ac@7's UG sideload,
+                        // sim-adjudicated in tier4_7s at the time).
                         input_xs = fam.lane_xs.clone();
                     } else if let Some(template) = templates.get(&(n, m)) {
                         let origin_x = if fam.lane_xs.is_empty() {

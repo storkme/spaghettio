@@ -123,6 +123,19 @@ pub(crate) fn is_passthrough_shape(n: u32, m: u32) -> bool {
     n == m && n >= 2
 }
 
+/// THE single passthrough decision for a family (RFC-061 Phase 1.5).
+/// Three sites previously mirrored `is_passthrough_shape` independently
+/// — the stamper, the ghost router's feeder targeting, and the lane
+/// planner's height resolution — and Phase 1 gating only the stamper
+/// left the other two treating a skewed family as 1-tall
+/// passthrough columns: feeders aimed at `lane_xs` and trunks started
+/// 18 rows early, driving straight through the stamped template's body
+/// (ac@7's flank UG sideload). Every passthrough-vs-template decision
+/// must go through here.
+pub(crate) fn family_uses_passthrough(fam: &crate::bus::lane_planner::LaneFamily) -> bool {
+    is_passthrough_shape(fam.shape.0 as u32, fam.shape.1 as u32) && !fam.demand_skewed
+}
+
 /// Predicate: would `stamp_family_balancer((n, m), …)` find a template
 /// to use, either directly or via decomposition?
 ///
@@ -216,7 +229,7 @@ pub(crate) fn stamp_family_balancer(
     // some column (`LaneFamily::demand_skewed`; ac@5's cable columns
     // carried 8.82/s into 12.86/s blocks and sim-measured 75% of plan).
     // Skewed families fall into exactly the library net below.
-    if is_passthrough_shape(n, m) && !family.demand_skewed {
+    if family_uses_passthrough(family) {
         let seg_id = Some(format_segment_id(&family.item, family.module_id, n, m, None));
         let entities: Vec<PlacedEntity> = family
             .lane_xs
