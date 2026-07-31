@@ -324,15 +324,25 @@ local function add_feed(s, force, head_x, head_y, ox, oy, lx, ly, depth, item, b
   table.insert(storage.feeds[item], {chests = chests, fed = 0})
 end
 
--- Fluid FEED: infinity-pipe adjacent to the boundary tile, auto-maintained
--- by the game (no periodic script refill needed). UNCALIBRATED (RFC-050:
--- "mark clearly ... fluid paths are UNCALIBRATED, no fixture has exercised
--- them yet") — geometry and API verified live only for a standalone
--- infinity-pipe (kit-probe), never against a real fluid-consuming factory.
-local function add_fluid_feed(s, force, head_x, head_y, ox, oy, item)
-  local px, py = head_x + ox, head_y + oy
+-- Fluid FEED: infinity-pipe at the far end of an ISOLATED ug-pipe run.
+-- A bare infinity-pipe on the tile beyond the port merges with the
+-- neighboring feed's when two fluid ports are adjacent (pu3: crude@38
+-- + water@39 became ONE network; crude won and the acid chain never
+-- ran — K60-3 forensics 2026-07-31). ug-pipe bodies have no lateral
+-- connections, so runs in adjacent columns stay isolated; the per-feed
+-- `dist` stagger keeps the surface caps (the only merge-capable tiles)
+-- non-adjacent. Runtime pipe-to-ground direction = the surface-opening
+-- side (verified from a pasted port's sim dump: port dir=north, opening
+-- north). Rate remains UNCALIBRATED (RFC-050), but no longer cross-feeds.
+local function add_fluid_feed(s, force, head_x, head_y, ox, oy, dist, item)
   local ok, err = pcall(function()
-    local ip = s.create_entity{name = "infinity-pipe", position = {px, py}, force = force}
+    s.create_entity{name = "pipe-to-ground", position = {head_x + ox, head_y + oy},
+                    direction = dir_from_vec(-ox, -oy), force = force}
+    s.create_entity{name = "pipe-to-ground",
+                    position = {head_x + ox * (1 + dist), head_y + oy * (1 + dist)},
+                    direction = dir_from_vec(ox, oy), force = force}
+    local ip = s.create_entity{name = "infinity-pipe",
+                    position = {head_x + ox * (2 + dist), head_y + oy * (2 + dist)}, force = force}
     ip.set_infinity_pipe_filter{name = item, percentage = 1, mode = "exactly"}
   end)
   if not ok then storage.fluid_errors[item .. "@feed"] = tostring(err) end
@@ -455,11 +465,13 @@ end
 /// tile — see `add_fluid_feed`) so they're excluded and don't consume a
 /// slot.
 fn feed_slots(records: &[BoundaryRecord]) -> Vec<i32> {
-    let mut by_dir: BTreeMap<u8, Vec<usize>> = BTreeMap::new();
+    // Fluids get a SEPARATE per-direction counter: they don't jog, so
+    // they don't participate in the item rigs' depth ladder — their slot
+    // only staggers the isolated ug-run length in `add_fluid_feed` so
+    // that adjacent fluid ports' surface caps never touch.
+    let mut by_dir: BTreeMap<(u8, bool), Vec<usize>> = BTreeMap::new();
     for (i, rec) in records.iter().enumerate() {
-        if !rec.is_fluid {
-            by_dir.entry(rec.direction).or_default().push(i);
-        }
+        by_dir.entry((rec.direction, rec.is_fluid)).or_default().push(i);
     }
     let mut slots = vec![0i32; records.len()];
     for idxs in by_dir.into_values() {
@@ -500,9 +512,15 @@ fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
         y = rec.y,
     );
     if rec.is_fluid {
+        // Stagger the isolated ug-run length per same-direction fluid
+        // slot so adjacent ports' surface caps land ≥2 tiles apart.
+        // Cycle of 4 keeps the ug span (dist-1 ≤ 7) inside the game's
+        // 9-tile limit; same-length repeats are then ≥4 slots apart,
+        // with at least 3 ports physically between them.
+        let dist = 2 + 2 * (slot % 4);
         let _ = writeln!(
             out,
-            "    add_fluid_feed(s, force, head_x, head_y, {ox}, {oy}, \"{item}\")",
+            "    add_fluid_feed(s, force, head_x, head_y, {ox}, {oy}, {dist}, \"{item}\")",
             ox = outward.0,
             oy = outward.1,
             item = rec.item,
@@ -1465,7 +1483,35 @@ mod tests {
         });
         let params = RunParams::defaults_for(&m, "test-fluid".into(), 16, Some(18000));
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
-        assert!(lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, \"water\")"));
+        assert!(lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"water\")"));
+    }
+
+    /// Two ADJACENT fluid ports must get different ug-run lengths, or
+    /// their infinity caps sit side by side and merge into one network —
+    /// the pu3 crude/water cross-feed (K60-3 forensics 2026-07-31).
+    #[test]
+    fn adjacent_fluid_feeds_get_staggered_run_lengths() {
+        let mut m = fixture();
+        for (x, item) in [(38, "crude-oil"), (39, "water")] {
+            m.boundary_inputs.push(BoundaryRecord {
+                item: item.into(),
+                x,
+                y: 0,
+                direction: 8,
+                is_fluid: true,
+                entity: "pipe-to-ground".into(),
+            });
+        }
+        let params = RunParams::defaults_for(&m, "test-fluid2".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        let crude = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"crude-oil\")");
+        let water = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 4, \"water\")");
+        let crude_swap = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 4, \"crude-oil\")");
+        let water_swap = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"water\")");
+        assert!(
+            (crude && water) || (crude_swap && water_swap),
+            "adjacent fluid feeds must get dist 2 and 4 (either order)"
+        );
     }
 
     #[test]
