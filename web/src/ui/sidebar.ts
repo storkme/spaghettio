@@ -69,6 +69,90 @@ function makeSection(
   return { section, body, countEl };
 }
 
+/** Create a collapsible variant of `makeSection`: same icon+title header,
+ *  plus a click-to-toggle chevron. Body starts collapsed. Used for the
+ *  Advanced / Engine (debug) groupings (issue #512 Phase 1) — controls a
+ *  typical session never touches. When `trackChanges` is set, the header
+ *  also renders a "(n changed)" badge and a reset-to-defaults button;
+ *  callers drive both via the returned setters. */
+function makeCollapsibleSection(
+  iconSvg: string,
+  title: string,
+  trackChanges: boolean,
+): {
+  section: HTMLDivElement;
+  body: HTMLDivElement;
+  setChangedCount: (n: number) => void;
+  setOnReset: (fn: () => void) => void;
+} {
+  const section = document.createElement("div");
+  section.className = "sb-section";
+
+  const header = document.createElement("div");
+  header.className = "sb-section-header sb-section-header-collapsible";
+
+  const chevron = document.createElement("span");
+  chevron.className = "sb-section-chevron";
+  chevron.textContent = "▸";
+  header.appendChild(chevron);
+
+  const iconEl = document.createElement("span");
+  iconEl.className = "sb-section-icon";
+  iconEl.innerHTML = iconSvg;
+  header.appendChild(iconEl);
+
+  const titleEl = document.createElement("span");
+  titleEl.textContent = title;
+  header.appendChild(titleEl);
+
+  const countEl = document.createElement("span");
+  countEl.className = "sb-section-count sb-section-changed-count";
+  header.appendChild(countEl);
+
+  const resetBtn = document.createElement("button");
+  resetBtn.type = "button";
+  resetBtn.className = "sb-section-reset";
+  resetBtn.textContent = "Reset";
+  resetBtn.style.display = "none";
+  header.appendChild(resetBtn);
+
+  section.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "sb-section-collapsible-body";
+  body.style.display = "none"; // collapsed by default — the typical session never opens these
+  section.appendChild(body);
+
+  let collapsed = true;
+  header.addEventListener("click", (e) => {
+    if (e.target === resetBtn) return;
+    collapsed = !collapsed;
+    body.style.display = collapsed ? "none" : "";
+    chevron.textContent = collapsed ? "▸" : "▾";
+  });
+
+  let onReset: (() => void) | null = null;
+  if (trackChanges) {
+    resetBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onReset?.();
+    });
+  }
+
+  return {
+    section,
+    body,
+    setChangedCount(n: number) {
+      if (!trackChanges) return;
+      countEl.textContent = n > 0 ? `(${n} changed)` : "";
+      resetBtn.style.display = n > 0 ? "" : "none";
+    },
+    setOnReset(fn: () => void) {
+      onReset = fn;
+    },
+  };
+}
+
 function appendFlows(
   container: HTMLElement,
   flows: ItemFlow[],
@@ -327,6 +411,35 @@ export function renderSidebar(
     "Target",
   );
 
+  // ==================== ADVANCED ====================
+  // Facts about the player's world (issue #512 design principle 1): no
+  // "best" exists, the user knows their save. Assembler/Furnace/Belt stay
+  // in Target — the Problem section calls those out as the real per-recipe
+  // selects; everything else in this bucket (plus the six read-only
+  // machine rows below) is genuinely secondary to a typical session.
+  const {
+    section: advancedSection,
+    body: advancedBody,
+    setChangedCount: setAdvancedChangedCount,
+    setOnReset: setAdvancedOnReset,
+  } = makeCollapsibleSection(
+    `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.5v2M8 11.5v2M2.5 8h2M11.5 8h2M4.6 4.6l1.4 1.4M10 10l1.4 1.4M4.6 11.4l1.4-1.4M10 6l1.4-1.4"/><circle cx="8" cy="8" r="2"/></svg>`,
+    "Advanced",
+    true,
+  );
+
+  // ==================== ENGINE (DEBUG) ====================
+  // Engine strategy experiments (design principle 3): "best" is per-layout
+  // and the engine should decide it via the scored-candidate pattern —
+  // `cell_composition` and DI-as-of-#474 are the precedent, and the
+  // control disappears once each graduates. Until then, URL-addressable
+  // but off the main panel.
+  const { section: engineSection, body: engineBody } = makeCollapsibleSection(
+    `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="6" height="7" rx="2"/><path d="M8 5V3M4.5 7H2M14 7h-2.5M4.5 11H2M14 11h-2.5M6 3.2L5 2.2M10 3.2l1-1"/></svg>`,
+    "Engine (debug)",
+    false,
+  );
+
   const allItems = engine.allProducibleItems();
   const itemSet = new Set(allItems);
 
@@ -348,11 +461,35 @@ export function renderSidebar(
   picker.el.style.cssText = "margin-bottom:6px";
   targetBody.appendChild(picker.el);
 
+  // Rate (numeric with /s suffix) — moved up adjacent to the target
+  // picker (issue #512 Phase 1): the whole request is one sentence, so
+  // item and rate should sit next to each other.
+  const rateRow = document.createElement("div");
+  rateRow.className = "sb-field";
+  const rateLabel = document.createElement("span");
+  rateLabel.className = "sb-field-label";
+  rateLabel.textContent = "Rate";
+  rateRow.appendChild(rateLabel);
+  const rateInput = document.createElement("input");
+  rateInput.type = "number";
+  rateInput.className = "sb-input";
+  rateInput.step = "0.5";
+  rateInput.min = "0.1";
+  rateInput.style.cssText = "flex:1;min-width:0";
+  rateInput.placeholder = "10";
+  rateRow.appendChild(rateInput);
+  const rateSuffix = document.createElement("span");
+  rateSuffix.className = "sb-rate-suffix";
+  rateSuffix.textContent = "/s";
+  rateRow.appendChild(rateSuffix);
+  targetBody.appendChild(rateRow);
+
   // Per-category machine palette. Each editable category gets a `<select>`
   // tagged with `data-cat="<category>"` so the solve handler can build the
   // palette in one pass. Categories with only one Space Age option today
   // render as a read-only label so the user can see which machine each
-  // recipe class will use.
+  // recipe class will use — moved into Advanced (issue #512 Phase 1): they
+  // carry no decision, only Assembler/Furnace are real selects.
   type EditableMachine = {
     category: string;
     label: string;
@@ -408,7 +545,7 @@ export function renderSidebar(
     const span = document.createElement("span");
     span.className = "sb-machine-readonly";
     span.textContent = niceName(ro.machine);
-    targetBody.appendChild(makeField(ro.label, span));
+    advancedBody.appendChild(makeField(ro.label, span));
   }
 
   function buildPalette(): Record<string, string> {
@@ -444,7 +581,7 @@ export function renderSidebar(
   const inserterTierSelect = document.createElement("select");
   inserterTierSelect.className = "sb-select";
   [
-    ["Stack (default)", ""],
+    ["Stack", ""],
     ["Fast", "fast"],
     ["Regular", "regular"],
   ].forEach(([label, value]) => {
@@ -453,7 +590,7 @@ export function renderSidebar(
     opt.textContent = label;
     inserterTierSelect.appendChild(opt);
   });
-  targetBody.appendChild(makeField("Inserter tier", inserterTierSelect));
+  advancedBody.appendChild(makeField("Inserter tier", inserterTierSelect));
 
   // Build quality (`docs/rfc-build-quality.md`): quality of the entities
   // the engine places — machines craft faster, inserters swing faster,
@@ -462,7 +599,7 @@ export function renderSidebar(
   const qualitySelect = document.createElement("select");
   qualitySelect.className = "sb-select";
   [
-    ["Normal (default)", ""],
+    ["Normal", ""],
     ["Uncommon", "uncommon"],
     ["Rare", "rare"],
     ["Epic", "epic"],
@@ -473,7 +610,7 @@ export function renderSidebar(
     opt.textContent = label;
     qualitySelect.appendChild(opt);
   });
-  targetBody.appendChild(makeField("Build quality", qualitySelect));
+  advancedBody.appendChild(makeField("Build quality", qualitySelect));
 
   // Global module policy (RFC-044 Phase 3): fills every eligible
   // machine's slots with one module family+tier; productivity falls
@@ -483,7 +620,7 @@ export function renderSidebar(
   const modulesSelect = document.createElement("select");
   modulesSelect.className = "sb-select";
   [
-    ["None (default)", ""],
+    ["None", ""],
     ["Speed 1", "s1"],
     ["Speed 2", "s2"],
     ["Speed 3", "s3"],
@@ -496,12 +633,12 @@ export function renderSidebar(
     opt.textContent = label;
     modulesSelect.appendChild(opt);
   });
-  targetBody.appendChild(makeField("Modules", modulesSelect));
+  advancedBody.appendChild(makeField("Modules", modulesSelect));
 
   const moduleQualitySelect = document.createElement("select");
   moduleQualitySelect.className = "sb-select";
   [
-    ["Normal (default)", ""],
+    ["Normal", ""],
     ["Uncommon", "u"],
     ["Rare", "r"],
     ["Epic", "e"],
@@ -512,7 +649,7 @@ export function renderSidebar(
     opt.textContent = label;
     moduleQualitySelect.appendChild(opt);
   });
-  targetBody.appendChild(makeField("Module quality", moduleQualitySelect));
+  advancedBody.appendChild(makeField("Module quality", moduleQualitySelect));
 
   /** Compact `FormState.modules` value from the two selects ("p3l"),
    *  or null when no family is chosen (module quality alone is inert). */
@@ -525,7 +662,7 @@ export function renderSidebar(
   const wireModeSelect = document.createElement("select");
   wireModeSelect.className = "sb-select";
   [
-    ["Dense (default)", ""],
+    ["Dense", ""],
     ["Minimal tree", "tree"],
   ].forEach(([label, value]) => {
     const opt = document.createElement("option");
@@ -533,7 +670,7 @@ export function renderSidebar(
     opt.textContent = label;
     wireModeSelect.appendChild(opt);
   });
-  targetBody.appendChild(makeField("Pole wiring", wireModeSelect));
+  advancedBody.appendChild(makeField("Pole wiring", wireModeSelect));
 
   // Belt stacking (`docs/rfc-046-belt-stacking.md`): Space Age's stacked
   // belts. Every engine-loaded belt-drop inserter is forced to a stack
@@ -544,7 +681,7 @@ export function renderSidebar(
   stackingSelect.title =
     "Belt stack size (Space Age research): multiplies belt capacity";
   [
-    ["Off (default)", ""],
+    ["Off", ""],
     ["×2", "2"],
     ["×3", "3"],
     ["×4", "4"],
@@ -554,7 +691,7 @@ export function renderSidebar(
     opt.textContent = label;
     stackingSelect.appendChild(opt);
   });
-  targetBody.appendChild(makeField("Belt stacking", stackingSelect));
+  advancedBody.appendChild(makeField("Belt stacking", stackingSelect));
 
   // Inserter capacity research (`docs/rfc-049-inserter-capacity-research.md`):
   // the hand-size research chain. Composes with build quality (swings) and
@@ -581,7 +718,63 @@ export function renderSidebar(
     opt.textContent = label;
     inserterCapacitySelect.appendChild(opt);
   });
-  targetBody.appendChild(makeField("Inserter research", inserterCapacitySelect));
+  advancedBody.appendChild(makeField("Inserter research", inserterCapacitySelect));
+
+  // Advanced-section fields whose default value is the empty string —
+  // driving the "(n changed)" badge + reset action (issue #512 Phase 1).
+  const ADVANCED_CHANGE_FIELDS: HTMLSelectElement[] = [
+    inserterTierSelect,
+    qualitySelect,
+    modulesSelect,
+    moduleQualitySelect,
+    wireModeSelect,
+    stackingSelect,
+    inserterCapacitySelect,
+  ];
+  function updateAdvancedChangedCount(): void {
+    setAdvancedChangedCount(ADVANCED_CHANGE_FIELDS.filter((sel) => sel.value !== "").length);
+  }
+  setAdvancedOnReset(() => {
+    for (const sel of ADVANCED_CHANGE_FIELDS) sel.value = "";
+    updateAdvancedChangedCount();
+    scheduleAutoSolve();
+  });
+
+  // Layout strategy. Phase 0b of `rfc-modular-production` shipped the
+  // dropdown; the surviving `partitioned-decomposed` variant produces
+  // strictly ≤ Pooled errors on every case in the corpus. The deprecated
+  // `partitioned-per-consumer` (P1) option was dropped from the UI when
+  // the P1 enum variant was hard-deleted; bookmarked URLs still load
+  // via the back-compat alias in `state.ts`.
+  const strategySelect = document.createElement("select");
+  strategySelect.className = "sb-select";
+  ([
+    ["Pooled (default)", ""],
+    ["Partitioned + decomposed", "partitioned-decomposed"],
+  ] as const).forEach(([label, value]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    strategySelect.appendChild(opt);
+  });
+  engineBody.appendChild(makeField("Strategy", strategySelect));
+
+  // Row layout. See `docs/rfc-horizontal-trunks.md`. Default is the
+  // existing vertical-split behaviour; horizontal-stack is being
+  // developed under that RFC and currently only handles dual-input
+  // solid recipes (other row kinds fall back to vertical-split).
+  const rowLayoutSelect = document.createElement("select");
+  rowLayoutSelect.className = "sb-select";
+  ([
+    ["Vertical split (today)", ""],
+    ["Horizontal stack (RFC)", "horizontal-stack"],
+  ] as const).forEach(([label, value]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    rowLayoutSelect.appendChild(opt);
+  });
+  engineBody.appendChild(makeField("Row layout", rowLayoutSelect));
 
   // RFC-053 direct insertion. Since the 2026-07-26 flip the engine
   // default is `Candidate` — DI is ALREADY competing on every layout and
@@ -603,7 +796,7 @@ export function renderSidebar(
     "and keeps it wherever it is strictly better. Checking this skips that " +
     "safety comparison and can produce a worse layout; it exists for A/B " +
     "debugging.";
-  targetBody.appendChild(makeField("Direct insertion", directInsertionCb));
+  engineBody.appendChild(makeField("Force direct insertion (debug)", directInsertionCb));
 
   // RFC-057 post-layout compaction. Off by default because it rewrites
   // geometry — a bookmarked URL must keep rendering what it did — but it is
@@ -619,63 +812,6 @@ export function renderSidebar(
     "case is no change. On the largest corpus layout this is -26% bounding " +
     "box and -45% entities.";
   targetBody.appendChild(makeField("Compact layout", compactCb));
-
-  // Layout strategy. Phase 0b of `rfc-modular-production` shipped the
-  // dropdown; the surviving `partitioned-decomposed` variant produces
-  // strictly ≤ Pooled errors on every case in the corpus. The deprecated
-  // `partitioned-per-consumer` (P1) option was dropped from the UI when
-  // the P1 enum variant was hard-deleted; bookmarked URLs still load
-  // via the back-compat alias in `state.ts`.
-  const strategySelect = document.createElement("select");
-  strategySelect.className = "sb-select";
-  ([
-    ["Pooled (default)", ""],
-    ["Partitioned + decomposed", "partitioned-decomposed"],
-  ] as const).forEach(([label, value]) => {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = label;
-    strategySelect.appendChild(opt);
-  });
-  targetBody.appendChild(makeField("Strategy", strategySelect));
-
-  // Row layout. See `docs/rfc-horizontal-trunks.md`. Default is the
-  // existing vertical-split behaviour; horizontal-stack is being
-  // developed under that RFC and currently only handles dual-input
-  // solid recipes (other row kinds fall back to vertical-split).
-  const rowLayoutSelect = document.createElement("select");
-  rowLayoutSelect.className = "sb-select";
-  ([
-    ["Vertical split (today)", ""],
-    ["Horizontal stack (RFC)", "horizontal-stack"],
-  ] as const).forEach(([label, value]) => {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = label;
-    rowLayoutSelect.appendChild(opt);
-  });
-  targetBody.appendChild(makeField("Row layout", rowLayoutSelect));
-
-  // Rate (numeric with /s suffix)
-  const rateRow = document.createElement("div");
-  rateRow.className = "sb-field";
-  const rateLabel = document.createElement("span");
-  rateLabel.className = "sb-field-label";
-  rateLabel.textContent = "Rate";
-  rateRow.appendChild(rateLabel);
-  const rateInput = document.createElement("input");
-  rateInput.type = "number";
-  rateInput.className = "sb-input";
-  rateInput.step = "0.5";
-  rateInput.min = "0.1";
-  rateInput.style.cssText = "flex:1;min-width:0";
-  rateInput.placeholder = "10";
-  rateRow.appendChild(rateInput);
-  const rateSuffix = document.createElement("span");
-  rateSuffix.className = "sb-rate-suffix";
-  rateSuffix.textContent = "/s";
-  rateRow.appendChild(rateSuffix);
-  targetBody.appendChild(rateRow);
 
   inner.appendChild(targetSection);
 
@@ -782,6 +918,11 @@ export function renderSidebar(
 
   inner.appendChild(inputsSection);
 
+  // Advanced / Engine (debug) sit below Inputs and above Solver (issue
+  // #512 target resting state), collapsed by default.
+  inner.appendChild(advancedSection);
+  inner.appendChild(engineSection);
+
   // ==================== SOLVER ====================
   const { section: solverSection, body: solverBody, countEl: solverCount } = makeSection(
     `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8h10M9 4l4 4-4 4"/></svg>`,
@@ -859,6 +1000,7 @@ export function renderSidebar(
   if (urlState.inserterCapacity) inserterCapacitySelect.value = urlState.inserterCapacity;
   directInsertionCb.checked = urlState.directInsertion === true;
   compactCb.checked = urlState.compactLayout === true;
+  updateAdvancedChangedCount();
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
@@ -1048,15 +1190,15 @@ export function renderSidebar(
   beltSelect.addEventListener("change", scheduleAutoSolve);
   strategySelect.addEventListener("change", scheduleAutoSolve);
   rowLayoutSelect.addEventListener("change", scheduleAutoSolve);
-  inserterTierSelect.addEventListener("change", scheduleAutoSolve);
-  qualitySelect.addEventListener("change", scheduleAutoSolve);
+  inserterTierSelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
+  qualitySelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
   directInsertionCb.addEventListener("change", scheduleAutoSolve);
   compactCb.addEventListener("change", scheduleAutoSolve);
-  modulesSelect.addEventListener("change", scheduleAutoSolve);
-  moduleQualitySelect.addEventListener("change", scheduleAutoSolve);
-  wireModeSelect.addEventListener("change", scheduleAutoSolve);
-  stackingSelect.addEventListener("change", scheduleAutoSolve);
-  inserterCapacitySelect.addEventListener("change", scheduleAutoSolve);
+  modulesSelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
+  moduleQualitySelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
+  wireModeSelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
+  stackingSelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
+  inserterCapacitySelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
   checkboxes.forEach((cb) => cb.addEventListener("change", scheduleAutoSolve));
 
   runSolve().catch((err) => console.error("runSolve failed:", err));
