@@ -6107,8 +6107,12 @@ fn probe_packed_overlap_diagnosis() {
         if let (Some(x), Some(y)) = (i.x, i.y) {
             for e in &l.entities {
                 let (w, h) = spaghettio_core::common::entity_size(&e.name);
-                if x >= e.x && x < e.x + w as i32 && y >= e.y && y < e.y + h as i32 {
-                    println!("   at tile: {} anchor ({},{}) dir {:?} carries {:?}", e.name, e.x, e.y, e.direction, e.carries);
+                if e.x >= x - 2 && e.x <= x + 2 && e.y >= y - 2 && e.y <= y + 2 {
+                    let _ = (w, h);
+                    println!(
+                        "   near: {} ({},{}) {:?} io {:?} carries {:?}",
+                        e.name, e.x, e.y, e.direction, e.io_type, e.carries
+                    );
                 }
             }
         }
