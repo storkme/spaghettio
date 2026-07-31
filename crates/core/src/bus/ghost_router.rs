@@ -1829,6 +1829,11 @@ pub fn route_bus_ghost(
                                     }
                                 }
                             }
+                            FamilyStampPlan::Unresolvable => {
+                                // input_xs stays empty -> FeederSpecsSkipped
+                                // below, the long-standing contract for
+                                // shapes nothing can serve.
+                            }
                             FamilyStampPlan::Generated(t) => {
                                 let origin_x = if fam.lane_xs.is_empty() {
                                     x

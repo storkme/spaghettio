@@ -150,6 +150,10 @@ pub(crate) enum FamilyStampPlan {
     },
     /// Runtime-generated template (shapes the library lacks).
     Generated(crate::bus::balancer_generate::OwnedTemplate),
+    /// Nothing can serve this shape: no stamp, no feeders
+    /// (`FeederSpecsSkipped`), no height. Only NON-square shapes land
+    /// here — a square always has the passthrough tail.
+    Unresolvable,
 }
 
 pub(crate) fn family_stamp_plan(
@@ -180,10 +184,20 @@ pub(crate) fn family_stamp_plan(
             return FamilyStampPlan::Generated(generated);
         }
     }
-    // Nothing resolves: consistent 1-tall passthrough everywhere (the
-    // pre-Phase-1.5 sites disagreed here). Honest by construction — the
-    // walker reports what the passthrough under-delivers.
-    FamilyStampPlan::Passthrough
+    // Tail: a SQUARE nothing else can serve gets a consistent 1-tall
+    // passthrough at every site (the pre-Phase-1.5 sites disagreed
+    // here) — honest by construction, the walker reports what the
+    // passthrough under-delivers. A NON-square passthrough would be
+    // geometric nonsense (m columns fed by n != m producers), so those
+    // keep the long-standing unstampable contract: empty stamp,
+    // FeederSpecsSkipped, no reserved height (pinned by
+    // `shape_is_stampable_matches_stamping` and
+    // `fires_when_shape_has_no_template_at_all`).
+    if is_passthrough_shape(n, m) {
+        FamilyStampPlan::Passthrough
+    } else {
+        FamilyStampPlan::Unresolvable
+    }
 }
 
 /// Predicate: would `stamp_family_balancer((n, m), …)` find a template
@@ -472,7 +486,7 @@ mod tests {
     #[test]
     fn test_template_outputs_align_with_lane_xs() {
     
-        let templates = balancer_templates();
+        let templates = crate::bus::balancer_library::balancer_templates();
         for (&(n, m), template) in templates.iter() {
             let lane_xs: Vec<i32> = (100..100 + m as i32).collect();
             let origin_x = balancer_origin_x(&lane_xs, template.output_tiles);

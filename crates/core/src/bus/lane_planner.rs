@@ -600,12 +600,15 @@ pub fn plan_bus_lanes(
             // what the stamper actually places (it previously accepted
             // width-guard-rejected decompositions and reserved bogus
             // zones).
-            Some(match crate::bus::balancer::family_stamp_plan(fam) {
-                crate::bus::balancer::FamilyStampPlan::Passthrough => 1u32,
-                crate::bus::balancer::FamilyStampPlan::Direct(t) => t.height,
-                crate::bus::balancer::FamilyStampPlan::Decomposed { sub, .. } => sub.height,
-                crate::bus::balancer::FamilyStampPlan::Generated(t) => t.height,
-            })
+            match crate::bus::balancer::family_stamp_plan(fam) {
+                crate::bus::balancer::FamilyStampPlan::Passthrough => Some(1u32),
+                crate::bus::balancer::FamilyStampPlan::Direct(t) => Some(t.height),
+                crate::bus::balancer::FamilyStampPlan::Decomposed { sub, .. } => Some(sub.height),
+                crate::bus::balancer::FamilyStampPlan::Generated(t) => Some(t.height),
+                // Nothing stamps: no zone to reserve (the pre-plan code
+                // reached the same outcome via its or_else(None) chain).
+                crate::bus::balancer::FamilyStampPlan::Unresolvable => None,
+            }
         };
         if let Some(h) = tpl_height {
             fam.balancer_y_end = fam.balancer_y_start + h as i32 - 1;
