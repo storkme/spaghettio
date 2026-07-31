@@ -226,13 +226,32 @@ jobs:
           # instead of passing. Lifetime, not head-SHA: the point is to catch
           # "never reviewed at all", not to demand a body edit re-review code.
           if [ "${EVENT_ACTION:-}" = "edited" ]; then
-            if ! any=$( { gh api "repos/$REPO/pulls/$PR/reviews" --paginate --jq 'length'
-                          gh api "repos/$REPO/pulls/$PR/comments" --paginate --jq 'length'
-                          gh api "repos/$REPO/issues/$PR/comments" --paginate \
-                            --jq '[.[] | select(.user.login == "claude[bot]")] | length'
-                        } | awk '{s+=$1} END {print s+0}'); then
-              echo "::warning::guard: lifetime-coverage query failed — failing open."; exit 0
-            fi
+            # Three queries, each checked SEPARATELY and summed in the shell.
+            # Not one brace group piped to awk: a group's exit status is its
+            # LAST command's, so a transient failure in either of the first two
+            # would go undetected, contribute 0, and let this branch red a PR
+            # that does have reviews. A false red is the one direction this
+            # guard must never fail in — every other query here fails open.
+            any=0
+            for q in "pulls/$PR/reviews|length" \
+                     "pulls/$PR/comments|length" \
+                     "issues/$PR/comments|[.[] | select(.user.login == \"claude[bot]\")] | length"; do
+              path="${q%%|*}"; expr="${q#*|}"
+              # awk validates each line rather than summing blindly. A plain
+              # `{s+=$1}` coerces any non-numeric output to 0 and prints a
+              # perfectly numeric total, so garbage or an error body that still
+              # exits 0 would read as "no reviews" and red the PR. Exiting
+              # non-zero here trips `pipefail` and the fail-open below. `!seen`
+              # covers empty output for the same reason: absent data is not
+              # evidence of zero coverage.
+              if ! n=$(gh api "repos/$REPO/$path" --paginate --jq "$expr" | awk '
+                        /^[0-9]+$/ { s += $1; seen = 1; next }
+                        { bad = 1; exit 3 }
+                        END { if (bad || !seen) exit 3; print s + 0 }'); then
+                echo "::warning::guard: lifetime-coverage query ($path) failed or returned non-numeric output — failing open."; exit 0
+              fi
+              any=$((any + n))
+            done
             if [ "${any:-0}" -gt 0 ]; then
               echo "Description-edit run — no new head SHA, and the PR has $any review artifact(s); head coverage is enforced by the push events."
               exit 0
