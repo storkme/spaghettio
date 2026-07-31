@@ -41,21 +41,35 @@ manifest recording the feed/drain boundary positions, bbox, dims, and
 planned per-item rates. The harness deliberately does **not** depend on
 `spaghettio_core` — it consumes the manifest JSON schema only.
 
-**Known gap:** the only existing generator is
-`crates/core/examples/sim_probe_export.rs`, and `crates/core/examples/`
-is gitignored (local-only debug scripts) — on a fresh clone there is no
-tracked way to produce the pair. Usage of the local example, where
-present:
+`crates/core/examples/sim_export.rs` is the tracked generator. The
+`examples/` directory is otherwise gitignored (local-only debug scripts);
+`.gitignore` carries an explicit negation for this one file so a fresh
+clone can produce the pair.
 
 ```bash
-# writes $SIM_PROBE_OUT/bp.txt + manifest-real.json (default /tmp)
-cargo run --example sim_probe_export <item> <rate> <stacking> <inserter_cap> [quality] [belt]
+cargo run --release --example sim_export -- <item> <rate> [flags]
+
+  --tier <entity>       crafting machine (default assembling-machine-3)
+  --di off|candidate|forced       direct insertion (default candidate)
+  --claim up|down|search          DI claim order (default: engine default)
+  --belt <entity>       max belt tier      --quality <name>   normal..legendary
+  --stacking <1..4>     belt stacking      --inserter-cap <n> capacity level
+  --inputs a,b,c        raw inputs (default: the six-ore set)
+  --label <name>        output subdir + manifest label
+  --out <dir>           parent dir (default $SIM_PROBE_OUT, else /tmp)
 ```
 
-Pass **`manifest-real.json`** to `run` — it's the `export_with_manifest`
-output the harness parses. The example also writes a sibling
-`manifest.json` in a stale pre-Phase-0 ad hoc shape (no `label` field);
-the harness will reject it with a missing-field error.
+It writes `<out>/<label>/bp.txt` and `<out>/<label>/manifest-real.json`,
+and prints the ready-to-paste `run` command. Unknown flags are an error
+rather than ignored — a silently-dropped `--belt` would export a layout
+the caller did not ask for and then be simmed as though it had.
+
+There is also an older, **untracked** `sim_probe_export.rs` in the same
+directory. Prefer `sim_export`: it covers the same axes plus the DI ones,
+and it writes only `manifest-real.json`. `sim_probe_export` additionally
+writes a sibling `manifest.json` in a stale pre-Phase-0 ad hoc shape (no
+`label` field) that the harness rejects with a missing-field error — so
+with that one you have to know which of the two files to pass.
 
 In-process generation from a fixture name is deferred Phase 1 wiring
 (see the dependency note in `crates/sim-harness/Cargo.toml`); until then,
