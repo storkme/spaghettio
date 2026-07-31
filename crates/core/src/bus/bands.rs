@@ -721,6 +721,16 @@ pub fn route_packed_nets(
         b & (BAND | TURN) == 0 && b & (if horiz { H } else { V }) == 0
     };
 
+    // Every belt's direction and cargo, kept current as corridors stamp:
+    // a tile a FOREIGN-carrying belt points into is not routable — placing
+    // a belt there chains two items head-to-tail (the diagnosed
+    // item-isolation class: an ore corridor feeding a plate UG entrance).
+    let mut belt_dirs: FxHashMap<(i32, i32), (D, Option<String>)> = existing
+        .iter()
+        .filter(|e| is_transport(&e.name))
+        .map(|e| ((e.x, e.y), (e.direction, e.carries.clone())))
+        .collect();
+
     let mut ordered: Vec<&PackedNet> = nets.iter().collect();
     ordered.sort_by(|a, b| b.rate.total_cmp(&a.rate).then_with(|| a.item.cmp(&b.item)));
 
@@ -785,13 +795,28 @@ pub fn route_packed_nets(
             let hfn = |t: (i32, i32)| {
                 (tx0 - t.0).max(t.0 - tx1).max(0) + (ty0 - t.1).max(t.1 - ty1).max(0)
             };
+            let fed_by_foreign = |t: (i32, i32)| -> bool {
+                [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {
+                    let n = (t.0 + dx, t.1 + dy);
+                    belt_dirs.get(&n).is_some_and(|(dir, carry)| {
+                        let v = match dir {
+                            D::East => (1, 0),
+                            D::West => (-1, 0),
+                            D::South => (0, 1),
+                            D::North => (0, -1),
+                        };
+                        (n.0 + v.0, n.1 + v.1) == t
+                            && carry.as_deref().is_some_and(|c| c != net.item)
+                    })
+                })
+            };
             let mut open: BinaryHeap<Reverse<(i32, i32, (i32, i32), bool)>> = BinaryHeap::new();
             let mut best: FxHashMap<((i32, i32), bool), i32> = FxHashMap::default();
             let mut parent: FxHashMap<((i32, i32), bool), ((i32, i32), bool)> =
                 FxHashMap::default();
             for &s in &starts {
                 for horiz in [true, false] {
-                    if passable(&occ, s, horiz, net.src_band) {
+                    if passable(&occ, s, horiz, net.src_band) && !fed_by_foreign(s) {
                         best.insert((s, horiz), 0);
                         open.push(Reverse((hfn(s), 0, s, horiz)));
                     }
@@ -817,7 +842,7 @@ pub fn route_packed_nets(
                 for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                     let nxt = (tile.0 + dx, tile.1 + dy);
                     let nh = dy == 0;
-                    if !passable(&occ, nxt, nh, net.src_band) {
+                    if !passable(&occ, nxt, nh, net.src_band) || fed_by_foreign(nxt) {
                         continue;
                     }
                     if nh != horiz && !passable(&occ, tile, nh, net.src_band) {
@@ -907,6 +932,7 @@ pub fn route_packed_nets(
                             _ => D::North,
                         };
                         belt_tiles.insert(t2);
+                        belt_dirs.insert(t2, (dir, Some(net.item.clone())));
                         out.push(PlacedEntity {
                             name: ug_name.to_string(),
                             x: t2.0,
@@ -953,6 +979,7 @@ pub fn route_packed_nets(
                     (Some(a), _) | (_, Some(a)) => *bits |= if a { H } else { V },
                     _ => {}
                 }
+                belt_dirs.insert(t, (dir, Some(net.item.clone())));
                 out.push(PlacedEntity {
                     name: belt_name.to_string(),
                     x: t.0,

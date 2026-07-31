@@ -635,6 +635,25 @@ clears. Rationale in the decision log.
   browser eyeball, and sim adjudication queue behind validation parity;
   phase 6's candidate wiring stays blocked until KC3 closes.
 
+- **2026-07-31 — hardening loop, honest checkpoint: correctness rules are
+  eating the density, and one "0 issues" was the trap, caught.** The
+  foreign-feed legality rule (a tile a foreign-carrying belt points into
+  is unroutable) fixed the diagnosed item-isolation class — and made a
+  sci2 net unroutable at every gap, so the builder REFUSES sci2 and the
+  parity probe's "sci2 packed: 0 issues" was the native fallback
+  validating clean, not a fixed packed layout (the check-went-quiet
+  failure mode CLAUDE.md documents; caught by re-running the KC1 probe,
+  which detects refusal by entity identity). sci1 still builds at 30
+  issues but its saving fell to −28.9% — BELOW the −33.0% bar. Current
+  truth: no gate fixture both builds AND clears KC1 under the hardened
+  router. The tension is structural: each legality rule the validator
+  demands lengthens corridors or forces refusal, which is exactly the
+  trade KC1 exists to police. Next iterations owe either smarter routing
+  under the same rules (same-item merging instead of blanket overlap
+  bans, per-item feed-row assignment making sideloads legal, per-seam gap
+  growth) or the honest conclusion that KC1 fires on the real planner —
+  neither is decided yet, and no number in this entry is a pass.
+
 - **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
   fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused
   verbatim) and 1D-specific geometry (left untouched; paralleled by a
