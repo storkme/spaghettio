@@ -210,9 +210,13 @@ pub(crate) fn stamp_family_balancer(
     // see issue #268). Stamps `m` south-facing belts at the family's
     // top row; the producer feeders sideload-or-straight-load onto
     // these belts and the trunk picks up at `balancer_y_end + 1`.
-    // Library entries for `(2, 2)`..`(8, 8)` are kept as a safety net
-    // but never consulted — the passthrough check runs first.
-    if is_passthrough_shape(n, m) {
+    // Library entries for `(2, 2)`..`(8, 8)` are kept as a safety net.
+    // RFC-061 (#519): a demand-skewed `(m, m)` family must MIX — the
+    // passthrough freezes a producer→column pairing that under-provisions
+    // some column (`LaneFamily::demand_skewed`; ac@5's cable columns
+    // carried 8.82/s into 12.86/s blocks and sim-measured 75% of plan).
+    // Skewed families fall into exactly the library net below.
+    if is_passthrough_shape(n, m) && !family.demand_skewed {
         let seg_id = Some(format_segment_id(&family.item, family.module_id, n, m, None));
         let entities: Vec<PlacedEntity> = family
             .lane_xs
@@ -383,6 +387,7 @@ mod tests {
             balancer_y_end: 11,
             total_rate: 20.0,  // should use fast-transport-belt
             merge_tap: false,
+            demand_skewed: false,
         };
 
         let entities = stamp_family_balancer(&family, None, &StackingCtx::unstacked());
@@ -455,6 +460,7 @@ mod tests {
                     balancer_y_end: 100 + 50,
                     total_rate: 30.0,
                     merge_tap: false,
+                    demand_skewed: false,
                 };
                 let entities =
                     stamp_family_balancer(&family, None, &StackingCtx::unstacked()).unwrap_or_default();
