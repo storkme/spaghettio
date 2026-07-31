@@ -719,3 +719,262 @@ needed to look at the result, not a UI feature.
   unnecessary for a solver-internals-only change; Phase 5 is where the
   wasm/URL surface actually changes and gets the real wasm-pack + browser
   verification pass). No `.fls` snapshot or golden file changed.
+
+- *2026-07-31 — Phase 2 shared-row layout fix landed: kill criterion 1
+  re-cleared on the real Phase-1 solver output, the new outflow-
+  conservation validator invariant shipped two-sided, one confirmed
+  pre-existing gap found and documented (not fixed).*
+
+  **Scope.** `crates/core/src/bus/placer.rs`, `lane_planner.rs`,
+  `ghost_router.rs` (the three sites Phase 0's decision log named) plus
+  the new validator check in `crates/core/src/validate/mod.rs`. No
+  solver changes (Phase 1 untouched). No harness/interface changes
+  (Phases 3/5 still pending).
+
+  **The three-site fix, exactly as Phase 0 specified.**
+  1. `placer.rs::place_rows` — a new `internally_consumed_items` set
+     (every non-fluid item appearing in any non-voider `MachineSpec`'s
+     `inputs`, computed once per call) is subtracted from `is_final`'s
+     final-item test: `is_final = spec.outputs.iter().any(|o| !o.is_fluid
+     && final_items.contains(item) && !internally_consumed_items.contains
+     (item))`. Voiders are excluded from the set deliberately — their draw
+     is bus-invisible by design (mirrors `lane_planner`'s own voider
+     exclusion) and folding them in would wrongly flip `is_final` off for
+     a target whose only consumer is a voider, breaking the existing
+     Step-7c voider mechanism. A normal (non-self-loop) `MachineSpec`
+     never lists the same item in both `inputs` and `outputs`
+     (self-recirculation uses `self_loop` instead), so the set can safely
+     include every machine's inputs, including the producer's own row's,
+     without a row reading itself as its own internal consumer.
+  2. `lane_planner.rs::plan_bus_lanes` — a new `solid_target_items` set
+     (non-fluid `external_outputs` items) gates a second `perimeter_exit_y`
+     pass, separate from the existing fluid one: a lane qualifies when
+     `!lane.is_fluid && !lane.consumer_rows.is_empty() &&
+     solid_target_items.contains(item)`. Deliberately narrower than the
+     fluid gate (which also covers zero-consumer fluid targets, since
+     Step 7 never builds a row-level merge for fluids at all) — a
+     zero-consumer solid target keeps its existing `is_final`/
+     `output_east` path untouched, which is what makes kill criterion 5
+     (N=1 bit-identical) hold by construction rather than by testing. No
+     exit-y staggering (unlike the fluid case's F1 pipe-merge avoidance):
+     solid belts at the same y on different columns don't interact.
+  3. `ghost_router.rs` Step 7 — `output_items` additionally filters out
+     any item present in a new `dual_purpose_solid_items` set (derived
+     the same way as (2), from `lanes` directly), mirroring the existing
+     `!ext.is_fluid` fluid skip.
+
+  **A fourth site Phase 0's design text didn't name but the physical
+  mechanism requires**: `ghost_router.rs`'s SOLID trunk-stamping loop
+  (the one before fluid Step 3.6, unconditional on `is_fluid`) computed
+  `end_y` from `tap_off_ys`/`producer_ys`/`balancer_y` only — it had no
+  knowledge of `perimeter_exit_y` at all, because before this phase no
+  solid lane ever set it. Extended `end_y` to
+  `end_y.max(lane.perimeter_exit_y.unwrap_or(end_y))`, and added a
+  `surplus_exits` record (mirroring the fluid Step 3.6 code exactly) so
+  `check_stranded_byproducts` and the new outflow check can
+  entity-cross-check the claim. Without this site, `perimeter_exit_y`
+  being set on a solid lane would be inert — the trunk would stop at the
+  last tap and the flow would strand exactly at the boundary the field
+  claims to reach. Documented here because a reader diffing this PR
+  against Phase 0's "3-site fix" list should not conclude a site was
+  missed; it's the same fix, one level more concrete than Phase 0's
+  design-time text could get without running the pipeline.
+
+  **The new validator invariant — shipped two-sided, not one-sided.**
+  `check_shared_row_outflow_conservation` (`validate/mod.rs`), wired into
+  `validate()`'s dispatch, gated on `solver.is_some()` like
+  `check_stranded_byproducts`. Operates purely on `SolverResult` (target
+  rate, tap demand from every non-voider machine's `inputs`, surplus
+  rate, all summed per item using the CEILED per-`MachineSpec` machine
+  count — the same rounding `place_rows` applies, so `production` matches
+  what's actually built, not the LP's fractional demand) plus
+  entity-cross-checked `boundary_outputs`/`surplus_exits` for the
+  physical-realization check. A "shared row" requires **at least two** of
+  `{target > 0, taps > 0, surplus > 0}` to be live — deliberately
+  broader than just "target + taps" (the EC+AC shape) so it also covers
+  "target + surplus" (the adversarial U-235/U-238 shape below); a row
+  with only one live claim is never flagged, since the solver's own flow
+  conservation already guarantees it's correct and this check exists to
+  catch a LAYOUT-side failure to honor that conservation, not to
+  re-litigate the LP.
+  - **Over-claim** (`shared-row-outflow-overclaim`, error): `target +
+    taps + surplus > production`. The RFC's primary ask. One positioned
+    issue per violating item, positioned at a real producer-machine
+    entity (rule 4, `docs/validator-reporting.md` — never `(0,0)` unless
+    genuinely no matching entity exists), carrying `IssueDetail{
+    delivered: production, needed: claimed }`.
+  - **Under-claim** (`shared-row-outflow-underclaim`, error): the item
+    has a live target AND at least one other live claim, but no physical
+    export record backed by a real entity exists at all (checked against
+    both `boundary_outputs` and `surplus_exits`, matching
+    `check_stranded_byproducts`'s and `check_boundary_record_integrity`'s
+    own standard). **Decision, not assumed**: the RFC's task brief asked
+    whether the invariant should be two-sided, specifically to catch
+    Phase 0's own "dropped export under the cell-composed candidate"
+    observation. Traced why the existing checks miss it:
+    `check_belt_network_topology`'s output-network check seeds a BFS from
+    `output_inserter_belt_tiles` and returns immediately when
+    `belt_starts.is_empty()` — a fully-dropped export (zero output
+    inserters found for the item at all) produces an empty `belt_starts`
+    and the check silently returns without emitting anything, the same
+    "union hides an empty case" shape as failure #10 in
+    `docs/validator-reporting.md`'s table. `check_output_belt_coverage`
+    only asks "does this machine have SOME output belt", not "does this
+    item's production reach the layout boundary" — a fused cell where EC
+    feeds AC directly still has an output belt, so it passes too. Neither
+    existing check would have caught Phase 0's dropped-export finding.
+    Added the under-claim direction rather than leaving it as a
+    documented gap, at low marginal cost (the same entity-cross-check
+    machinery `check_stranded_byproducts` already uses, reused verbatim).
+  - Five unit tests pin the check's own logic in isolation
+    (`crates/core/src/validate/mod.rs`, `check_shared_row_outflow_*`):
+    quiet within capacity, over-claim fires with exact `IssueDetail`
+    numbers, under-claim fires on a missing record, under-claim fires
+    even when a `surplus_exits` ledger entry exists with no backing
+    entity (the "ledger without the entity" case rule 4 exists for), and
+    a non-shared row (fewer than 2 live claims) is never flagged
+    regardless of numbers.
+
+  **Regression fixtures** (`crates/core/tests/layout_multi_target.rs`,
+  new file — the RFC's plan said `e2e.rs`, but `e2e.rs`'s `RunParams`
+  harness is built around `solver::solve*`'s scalar `target_item`/
+  `target_rate` and cannot drive `solve_netflow_multi`; Phase 1 hit the
+  same shape and made the same call with `solver_multi_target.rs`, so
+  this mirrors established precedent rather than inventing a new one).
+
+  1. **`ec_ac_shared_row_native_mechanism_zero_errors`** — the mechanism
+     fixture, `cell_composition`/`direct_insertion` forced `Off` per the
+     task brief, to guarantee the native 3(+1)-site fix (not a
+     cell-composed candidate) is what's under test. Zero validation
+     errors. Zero `shared-row-outflow-{overclaim,underclaim}` issues.
+     Zero `input-rate-delivery` issues mentioning electronic-circuit
+     (Phase 0's exact original symptom — AC's machines starved). The EC
+     lane's `LanesPlanned` trace entry has non-empty `consumer_rows` and
+     `tap_off_ys` (AC's tap-off is real, not hypothetical);
+     `layout.surplus_exits` has an electronic-circuit entry backed by a
+     real belt entity at that exact tile (the perimeter exit is real, not
+     a ledger claim); AC's real machine-entity count in the layout
+     matches the solver's ceiled AC machine count exactly (AC is actually
+     built, not just claimed). A companion example script
+     (`crates/core/examples/rfc062_phase2_ec_ac_snapshot.rs`, gitignored,
+     writes a `.fls` snapshot to `$TMPDIR/spaghettio_rfc062_phase2/`) was
+     used to eyeball the exact tiles: electronic-circuit's row-out belt
+     at (23-32,76) now runs **West** (was East pre-fix), the trunk column
+     x=2 collects from three row-splits (y=72/80/83 — RowSplit ceiled 16/
+     1.5=10.67 target+tap demand to more machines than one row holds),
+     taps east into AC's `row:advanced-circuit:belt-in:electronic-circuit`
+     at y=87-89 (24 long-handed inserters, matching AC's 24-machine
+     count), and the SAME trunk continues south past the tap to the
+     perimeter exit at (2,96) — `boundary_outputs` for electronic-circuit
+     is empty (correctly: Step 7's row-level merge was skipped for this
+     item; `surplus_exits` owns the physical claim instead). Residual: 4
+     `input-rate-delivery` **warnings** (not errors) on copper-cable, a
+     DIFFERENT shared item (AC draws 2 cable/craft directly, on top of
+     EC's own cable draw — the RFC's own Motivation table names this
+     second coupling edge) — an ordinary multi-consumer lane
+     untouched by this phase (copper-cable is not itself an external
+     target, so `solid_target_items` never gates it); a pre-existing
+     lane-balancing gap this phase's fixture is the first to exercise,
+     out of scope here, logged in the test output for visibility.
+  2. **`ec_ac_default_options_candidate_choice`** — documents what the
+     shipped-default engine (`cell_composition`/`direct_insertion` both
+     `Candidate`) actually does with the real Phase-1 solver output.
+     **Result: the confound does not reproduce.** `DecompositionChosen`
+     names `"native"` as the winner, zero validation errors, and
+     electronic-circuit's export claim is present. Phase 0's own
+     confound was observed on a **hand-built** `SolverResult`
+     (`examples/rfc062_phase0_shared_ec_row.rs`) with `assembling-
+     machine-2` hardcoded and specific flow numbers chosen by hand; the
+     REAL Phase-1 solve for this exact recipe pair apparently doesn't
+     land in the same region of the decomposition search's scoring
+     function that made the cell-composed candidate win in Phase 0's
+     probe. This is verified for the ONE canonical fixture, not proven
+     in general — a different multi-target shape could still exercise
+     the cell-composed path first. The test pins `DecompositionChosen`'s
+     name so a future engine change that flips the winner for this exact
+     shape is a visible test diff, not silent drift.
+  3. **`u235_u238_target_and_surplus_overlap`** — the adversarial
+     reviewer's case, U-235@0.1 + U-238@0.05 kovarex excluded. Confirmed
+     the solver produces the expected large U-238 surplus (14.136/s,
+     matching the reviewer's 14.13/s hand-derivation). **Found a real,
+     pre-existing bug, distinct from the EC+AC dual-purpose-lane
+     mechanism**: neither uranium item has an internal consumer (kovarex
+     excluded), so `lane_planner`'s `solid_target_items` gate never
+     applies to either — this fixture exercises the OLDER D2a/D2b
+     solid-surplus-secondary-belt path (`docs/rfc-fulgora-scrap.md`),
+     asked for the first time to treat BOTH of a D2b row's distinct solid
+     outputs (uranium-235 primary, uranium-238 secondary via
+     `RowSpan::secondary_output_belt`) as external targets simultaneously
+     — a shape only reachable now that Phase 1's solver can request two
+     targets at once. `ghost_router.rs` Step 7's per-item merge
+     unconditionally sources `output_ys` from `row_spans[ri].
+     output_belt_y` (the row's PRIMARY belt) for every item in
+     `output_items`, with no branch for `secondary_output_belt` — so
+     uranium-238 as a Step-7 target merges from uranium-235's belt.
+     Measured result: 12 real validation errors (8 `entity-overlap`, 4
+     `belt-item-isolation` — "belt at (134,Y) carries uranium-235 but
+     feeds into (135,Y) which carries uranium-238", at all four of the
+     row's split sub-rows). uranium-235's own export (existing,
+     unaffected path) stays clean. **Decision**: not fixed in this
+     phase — Step 7's `output_ys` needs to become per-item aware of
+     `secondary_output_belt`/`sorted_output_belts` (the D2b/D3
+     multi-output-belt machinery), a change to a different, older
+     mechanism than this phase's 3(+1)-site fix, deserving its own
+     investigation rather than a bolted-on patch under review-pressure.
+     Made LOUD per the task brief: the test **asserts** (not just logs)
+     both the ledger-level "export claim present" state (still true —
+     `exported()`'s own check is too weak to catch this class of
+     corruption, itself a finding) AND the specific error categories/
+     non-empty counts, so a future fix to Step 7's D2b targeting is
+     forced to update this test rather than the gap silently
+     disappearing or reappearing unnoticed. Tracked as a followup:
+     **Step 7 must resolve a target item's per-row belt-y from
+     `RowSpan::output_belt_y_for(item)`** (the same helper
+     `lane_planner` already uses for exactly this purpose, per its own
+     doc comment) instead of the bare `output_belt_y` field, for every
+     row in `output_rows`, not just the D2b case specifically — this is
+     the general fix shape, not a uranium-specific patch.
+
+  **N=1 regression.** Full suite run clean before AND after adding the
+  new tests: `cargo test --manifest-path crates/core/Cargo.toml` — 925
+  lib tests passed (920 Phase-1 baseline + 5 new
+  `check_shared_row_outflow_*` unit tests), 0 failures, 3 ignored
+  (unchanged); every existing integration-test file's pass count
+  unchanged; no `.fls` snapshot or golden file touched or regenerated.
+  `is_final`'s new `internally_consumed_items` check only changes
+  behavior when a row's own output item is BOTH in `final_items` AND
+  appears in some non-voider machine's `inputs` — no existing
+  single-target fixture in the corpus has ever hit that intersection (a
+  single target being simultaneously consumed internally requires a
+  second demand edge on the target item that only exists once a SECOND
+  target's recipe tree creates one), so this is a construction argument
+  backed by the full suite staying byte-for-byte green, not just an
+  absence of observed diffs.
+
+  **Verification.** `cargo test --manifest-path crates/core/Cargo.toml`,
+  one clean invocation as above. `cargo clippy -p spaghettio_core --
+  -D warnings` (the exact pre-commit hook invocation) clean. `cargo build
+  -p spaghettio_wasm --manifest-path crates/wasm-bindings/Cargo.toml`
+  clean (native-target sanity check; the wasm public surface is
+  untouched by this phase — Phase 5 gets the real wasm-pack + browser
+  pass). **Browser eyeball: N/A, explicitly** — this phase changes only
+  multi-target layout paths; no single-target visual change is expected
+  or possible (kill criterion 5's construction guarantee), and the
+  minimal URL/wasm extension needed to even LOAD an N=2 fixture in the
+  browser is Phase 5's scope, not yet landed. Snapshot inspection
+  performed via a gitignored example script rather than the e2e harness'
+  built-in dumper (which `layout_multi_target.rs`, being outside
+  `e2e.rs`, doesn't have wired up) — entities inspected directly at the
+  EC row's actual coordinates (not Phase 0's, which came from a
+  different hand-built fixture and different row placement), confirming
+  the West-flowing row-out belt and the tap-then-continue trunk shape
+  described above.
+
+  **For Phase 3+**: (a) the Step-7/D2b `output_belt_y_for` followup
+  above, tracked but not scheduled; (b) the copper-cable lane-balancing
+  warning on the EC+AC fixture is a residual, not investigated further
+  here — worth a look before Phase 4's sim-harness pass, since a
+  warning-level under-delivery could still measure as a real rate gap;
+  (c) Phase 3 (harness per-item verification plumbing) is unblocked by
+  this phase — the EC+AC fixture now builds validator-clean under the
+  native mechanism, which is Phase 3/4's prerequisite.

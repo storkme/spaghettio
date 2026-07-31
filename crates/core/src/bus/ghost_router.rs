@@ -625,6 +625,15 @@ pub fn route_bus_ghost(
         } else {
             end_y
         };
+        // RFC-062 Phase 2: a solid dual-purpose lane (real consumer taps
+        // AND an external-target export) extends the trunk past its last
+        // tap down to the perimeter, mirroring the fluid trunk's
+        // `perimeter_exit_y` handling in Step 3.6 below.
+        let end_y = if let Some(exit_y) = lane.perimeter_exit_y {
+            end_y.max(exit_y)
+        } else {
+            end_y
+        };
 
         for (seg_start, seg_end) in trunk_segments(start_y, end_y, &skip_ys) {
             for y in seg_start..=seg_end {
@@ -661,6 +670,19 @@ pub fn route_bus_ghost(
                 lane_x: lane.x,
                 is_fluid: false,
                 entities: entities[lane_start..].to_vec(),
+            });
+        }
+        // Solid dual-purpose lane exit: record the boundary tile the same
+        // way the fluid trunk emitter does at Step 3.6, so
+        // `check_stranded_byproducts` (and any future check keyed off
+        // `surplus_exits`) can cross-check a real entity sits there
+        // instead of trusting the claim alone.
+        if let Some(exit_y) = lane.perimeter_exit_y {
+            surplus_exits.push((lane.item.clone(), x, exit_y));
+            crate::trace::emit(crate::trace::TraceEvent::SurplusRouted {
+                item: lane.item.clone(),
+                x,
+                y: exit_y,
             });
         }
     }
@@ -3432,6 +3454,21 @@ pub fn route_bus_ghost(
     // -------------------------------------------------------------------------
     // Step 7: Merge output rows for final products
     // -------------------------------------------------------------------------
+    // RFC-062 Phase 2: a solid target that got a dual-purpose lane
+    // (`perimeter_exit_y` set, real consumer taps) already owns its
+    // export via the lane's own trunk extension (stamped above, Step 3) —
+    // its producer row is `is_final=false`/west-flowing (`placer.rs`), so
+    // it must NOT also get a row-level east merge here. Mirrors the
+    // existing fluid skip below (`!ext.is_fluid`): fluids never get a
+    // Step 7 merge at all because the lane always owns the export;
+    // dual-purpose solids are the same shape, just conditional on having
+    // actually claimed the row via a lane instead of unconditional.
+    let dual_purpose_solid_items: FxHashSet<&str> = lanes
+        .iter()
+        .filter(|l| !l.is_fluid && l.perimeter_exit_y.is_some() && !l.consumer_rows.is_empty())
+        .map(|l| l.item.as_str())
+        .collect();
+
     // Deterministic Vec order (not a set): with multiple output items the
     // iteration order decides merge-column positions, and FxHashSet order
     // is arbitrary. Dedup by seen-set, first occurrence wins.
@@ -3439,7 +3476,11 @@ pub fn route_bus_ghost(
     let output_items: Vec<String> = solver_result
         .external_outputs
         .iter()
-        .filter(|ext| !ext.is_fluid && seen_output_items.insert(ext.item.as_str()))
+        .filter(|ext| {
+            !ext.is_fluid
+                && !dual_purpose_solid_items.contains(ext.item.as_str())
+                && seen_output_items.insert(ext.item.as_str())
+        })
         .map(|ext| ext.item.clone())
         .collect();
 

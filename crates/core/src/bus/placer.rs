@@ -2586,6 +2586,31 @@ pub fn place_rows(
     let empty_gaps: FxHashMap<usize, i32> = FxHashMap::default();
     let extra_gaps = extra_gap_after_row.unwrap_or(&empty_gaps);
 
+    // RFC-062 Phase 2: items consumed internally by ANY machine's `inputs`
+    // (solid only — fluids never go through `is_final`/`output_east` at
+    // all, see `plan_bus_lanes`'s pre-existing fluid dual-purpose lane).
+    // Voider rows are excluded: a voider's draw is bus-invisible by design
+    // (`plan_bus_lanes` skips `rs.spec.voider` rows when building
+    // `item_to_consumers` too) and gets its physical connection from
+    // `ghost_router`'s Step 7c, which assumes the producer row it taps is
+    // still EAST-flowing — folding voider consumption in here would
+    // wrongly flip `is_final` off for a target that only has a voider
+    // consumer, breaking that existing mechanism.
+    //
+    // A normal (non-self-loop) `MachineSpec` never lists the same item in
+    // both `inputs` and `outputs` (self-recirculation uses `self_loop`
+    // instead, per `models.rs`), so this set can safely include every
+    // machine's inputs — including the producer's own row spec — without
+    // a row falsely reading itself as "internally consuming" its own
+    // target output.
+    let internally_consumed_items: FxHashSet<&str> = machines
+        .iter()
+        .filter(|m| !m.voider)
+        .flat_map(|m| m.inputs.iter())
+        .filter(|f| !f.is_fluid)
+        .map(|f| f.item.as_str())
+        .collect();
+
     // DI coupling lookup: consumer_recipe → [(item, producer_recipe)].
     // A consumer can be coupled on more than one input, so the value is a
     // list — a plain map keyed by consumer_recipe would silently drop all
@@ -2945,10 +2970,23 @@ pub fn place_rows(
             max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack)
         };
 
-        let is_final = spec
-            .outputs
-            .iter()
-            .any(|o| !o.is_fluid && final_items.contains(o.item.as_str()));
+        // RFC-062 Phase 2: a final (target) item that is ALSO consumed by
+        // another row must NOT force `output_east=true` here — the row
+        // keeps its ordinary internal-tap (west) orientation and the
+        // export happens via the dual-purpose lane (`perimeter_exit_y`,
+        // generalized from fluid-only to solids in `plan_bus_lanes`).
+        // Forcing east for such an item collided physically with the
+        // lane's own tap-off claim on the same row (RFC-062 Phase 0
+        // spike: `unresolved-junction`/`belt-junction` errors at the
+        // shared row, every internal consumer starved). A row with
+        // several outputs (D2b multi-solid-output) still gets
+        // `output_east=true` if ANY of its outputs is a pure-export
+        // target with no internal consumer.
+        let is_final = spec.outputs.iter().any(|o| {
+            !o.is_fluid
+                && final_items.contains(o.item.as_str())
+                && !internally_consumed_items.contains(o.item.as_str())
+        });
 
         // Split into evenly-sized chunks driven by `max_per_row` —
         // the per-row machine cap that keeps each row's output rate
