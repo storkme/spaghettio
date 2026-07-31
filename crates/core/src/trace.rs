@@ -242,6 +242,21 @@ pub enum TraceEvent {
         /// `not-buildable`.
         reason: String,
     },
+    /// Which claim order the DI candidate kept, and what both arms scored
+    /// (RFC-059). Emitted once per DI candidate that built under both orders.
+    ///
+    /// Exists because the choice is otherwise invisible: on the corpus the two
+    /// arms agree on all but a handful of targets, so "DI won" says nothing
+    /// about which order produced it, and a regression that quietly stopped
+    /// running the second arm would look identical to one where both arms tied.
+    DiClaimOrderChosen {
+        /// `upstream` or `downstream`.
+        order: String,
+        upstream_entities: usize,
+        downstream_entities: usize,
+        upstream_warnings: usize,
+        downstream_warnings: usize,
+    },
     /// A DI coupling successfully claimed both its specs — the per-coupling
     /// outcome kill criterion 2 tests an estimator's ranking against.
     DiCouplingClaimed {

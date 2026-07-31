@@ -2621,7 +2621,7 @@ pub fn place_rows(
     // its second input at all).
     let mut cell_pairs: FxHashMap<usize, (usize, &str, bool)> = FxHashMap::default();
     let mut claimed: FxHashSet<usize> = FxHashSet::default();
-    if let Some(claim_order) = direct_insertion {
+    if let Some(claim_order) = &direct_insertion {
         // RFC-059: WHICH consumer gets to claim a contended spec first. The
         // walk is topological, so `Upstream` (the status quo) lets the upstream
         // coupling claim and the downstream one is never evaluated. This was
@@ -2632,14 +2632,66 @@ pub fn place_rows(
         // the `p_idx >= c_idx` guard still requires the producer to sit upstream
         // in `ordered`, so reversing cannot fuse a pair that was not already
         // fusible — it can only change who wins when two couplings want one spec.
+        //
+        // `Pinned` is a THIRD axis over the same loop: the named couplings'
+        // consumers are visited first, in the order given, and within such a
+        // consumer its named coupling is offered first. It changes only who is
+        // ASKED first — every gate below still applies, so a pinned coupling
+        // that cannot build still loses and the rest still claim what is left.
+        use crate::bus::di_cell::DiClaimOrder;
         let walk: Vec<usize> = match claim_order {
-            crate::bus::di_cell::DiClaimOrder::Upstream => (0..ordered.len()).collect(),
-            crate::bus::di_cell::DiClaimOrder::Downstream => (0..ordered.len()).rev().collect(),
+            // `Search` is a candidate-level policy (build both, keep the
+            // better); a single placer call walks exactly one order, so it
+            // reads as the status-quo direction. Spelled out rather than
+            // grouped with `Upstream` in one arm, because silently treating an
+            // unhandled policy as P0 is how the RFC's original problem started.
+            DiClaimOrder::Upstream | DiClaimOrder::Search => (0..ordered.len()).collect(),
+            DiClaimOrder::Downstream => (0..ordered.len()).rev().collect(),
+            DiClaimOrder::Pinned(keys) => {
+                let mut seen: FxHashSet<usize> = FxHashSet::default();
+                let mut v: Vec<usize> = Vec::with_capacity(ordered.len());
+                for k in keys.iter() {
+                    if let Some(i) = ordered.iter().position(|s| s.recipe == k.consumer) {
+                        if seen.insert(i) {
+                            v.push(i);
+                        }
+                    }
+                }
+                for i in 0..ordered.len() {
+                    if seen.insert(i) {
+                        v.push(i);
+                    }
+                }
+                v
+            }
         };
         for c_idx in walk {
             let c_spec = &ordered[c_idx];
             let Some(couplings) = di_lookup.get(c_spec.recipe.as_str()) else {
                 continue;
+            };
+            // Only `Pinned` reorders a consumer's own coupling list, and it
+            // sorts STABLY — so P0/P1 keep the untouched `di_couplings` order
+            // and stay byte-identical to before this variant existed.
+            let reordered: Vec<(&str, &str)> = match claim_order {
+                DiClaimOrder::Pinned(keys) => {
+                    let mut cs: Vec<(&str, &str)> = couplings.to_vec();
+                    cs.sort_by_key(|(item, producer)| {
+                        keys.iter()
+                            .position(|k| {
+                                k.item == *item
+                                    && k.producer == *producer
+                                    && k.consumer == c_spec.recipe
+                            })
+                            .unwrap_or(usize::MAX)
+                    });
+                    cs
+                }
+                _ => Vec::new(),
+            };
+            let couplings: &[(&str, &str)] = match claim_order {
+                DiClaimOrder::Pinned(_) => &reordered,
+                _ => couplings,
             };
             // Try every coupling this consumer has, not just a lone one.
             // A consumer coupled on two items cannot be a Phase-1 STACKED

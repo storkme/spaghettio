@@ -729,7 +729,7 @@ fn layout_pass(
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
-        opts.direct_insertion.placer_acts().then_some(opts.di_claim_order),
+        opts.direct_insertion.placer_acts().then_some(opts.di_claim_order.clone()),
         &solver_result.di_couplings,
         &stacking_ctx,
     );
@@ -791,7 +791,7 @@ fn layout_pass(
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
-                opts.direct_insertion.placer_acts().then_some(opts.di_claim_order),
+                opts.direct_insertion.placer_acts().then_some(opts.di_claim_order.clone()),
                 &solver_result.di_couplings,
                 &stacking_ctx,
             );

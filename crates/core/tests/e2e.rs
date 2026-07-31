@@ -8802,9 +8802,14 @@ fn di_change_surface_sweep() {
         }
     }
 
+    // The claim order is named in the header because RFC-059's verification
+    // plan required it: this sweep is the primary instrument for both RFCs, and
+    // its "identical" rows read the same whether a policy did nothing or was
+    // never applied. Printing the policy is what separates those.
     println!(
-        "\n#474 change surface on current main: {identical} identical, {better} DI-better, \
-         {} REGRESSED, {skipped} not-applicable",
+        "\n#474 change surface on current main (DI claim order: {:?}): {identical} identical, \
+         {better} DI-better, {} REGRESSED, {skipped} not-applicable",
+        layout::LayoutOptions::default().di_claim_order,
         regressed.len()
     );
     for r in &regressed {
@@ -9195,6 +9200,10 @@ fn probe_di_contention_corpus_sweep() {
 
     if contended_targets == 0 {
         println!("\nKC1 TRIPS: no spec is contended anywhere in the corpus.");
+        // Kept as an unreachable-on-today's-corpus branch on purpose: it is what
+        // the census would print if a future recipe-DB change removed every
+        // contention, and a silent fall-through to the `differ.is_empty()` arm
+        // would then read as "contention is real but inconsequential".
     } else if differ.is_empty() {
         println!("\nKC1 does NOT trip on contention ({contended_targets} targets contend),");
         println!("but claim order changes NO layout: every contended target builds identically");
@@ -9205,4 +9214,345 @@ fn probe_di_contention_corpus_sweep() {
                  differ.len());
         println!("differently under P0 vs P1. The question is real; proceed to phase 2.");
     }
+}
+
+/// RFC-059's DECISION, pinned: the DI candidate SEARCHES both claim orders and
+/// keeps the better one — so neither fixed order can pass this test.
+///
+/// This is the teeth test the RFC's verification plan required, and it needs
+/// teeth because a claim policy is nearly invisible: on all but a handful of
+/// corpus targets both orders ship byte-identical layouts, and the whole suite
+/// is green under either. "Tests pass" therefore says nothing about which
+/// policy is live.
+///
+/// The two fixtures are chosen to pull in OPPOSITE directions, which is the
+/// whole point of the finding: `land-mine@1` is better under downstream-first,
+/// `small-electric-pole@5` on am1 is better under upstream-first. A regression
+/// to any single fixed order fails exactly one half. That is a stronger pin
+/// than the earlier single-fixture version, which a revert to upstream-first
+/// would have failed but a revert to downstream-first would have passed.
+#[test]
+fn di_claim_order_is_searched_not_fixed() {
+    use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
+
+    let raw: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "water", "crude-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    // `Candidate`, not `Forced`: this asserts what a CALLER RECEIVES. Under
+    // `Forced` the orders differ far more loudly — on `land-mine@1` upstream
+    // carries 3 validation errors and downstream none — but an error-laden DI
+    // layout is refused before it can ship, so quoting that difference would
+    // describe a layout nobody gets.
+    let ship = |item: &str, rate: f64, tier: &str, di: DirectInsertion, order: DiClaimOrder| {
+        let sr = solver::solve(item, rate, &raw, tier)
+            .unwrap_or_else(|e| panic!("{item}@{rate} on {tier} solves: {e}"));
+        let opts = layout::LayoutOptions {
+            direct_insertion: di,
+            di_claim_order: order,
+            ..Default::default()
+        };
+        let l = layout::build_bus_layout(&sr, opts)
+            .unwrap_or_else(|e| panic!("{item}@{rate} on {tier} lays out: {e}"));
+        let issues = spaghettio_core::validate::validate(
+            &l,
+            Some(&sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+            l.entities.len(),
+        )
+    };
+
+    // Downstream-first wins here: 294 entities (native, because the upstream
+    // DI arm validates with errors and is refused) against 282.
+    let lm = ship(
+        "land-mine",
+        1.0,
+        "assembling-machine-3",
+        DirectInsertion::Candidate,
+        DiClaimOrder::default(),
+    );
+    let lm_up = ship(
+        "land-mine",
+        1.0,
+        "assembling-machine-3",
+        DirectInsertion::Forced,
+        DiClaimOrder::Upstream,
+    );
+    assert_eq!(
+        lm.3, 282,
+        "land-mine@1 must ship the downstream arm (282 entities); got {lm:?}. \
+         The upstream-forced arm scores {lm_up:?}, so if this is 294 the search \
+         is not running the second arm at all."
+    );
+
+    // Upstream-first wins here: 126 entities against downstream's 166, which
+    // loses to native's 163 and is therefore refused. A policy fixed to
+    // downstream-first ships 163 here.
+    let sep = ship(
+        "small-electric-pole",
+        5.0,
+        "assembling-machine-1",
+        DirectInsertion::Candidate,
+        DiClaimOrder::default(),
+    );
+    assert_eq!(
+        sep.3, 126,
+        "small-electric-pole@5 on am1 must ship the upstream arm (126 entities); \
+         got {sep:?}. 163 means the search kept the downstream arm's refusal and \
+         fell back to native"
+    );
+
+    // Neither fixture regressed an issue channel — the never-worse property the
+    // whole RFC rests on. Asserted rather than assumed: the search picks on
+    // (warnings, layout warnings, entities), so a bug in that ordering would
+    // show up as a denser layout carrying more warnings.
+    assert_eq!((lm.0, lm.1, lm.2), (0, 0, 0), "land-mine@1 ships clean");
+    assert_eq!((sep.0, sep.1, sep.2), (0, 0, 0), "small-electric-pole@5 am1 ships clean");
+}
+
+/// RFC-059's corpus verdict — the measurement that decided the policy.
+/// Ignored by default; it builds full layouts for every contended target under
+/// the search and both fixed arms, across three machine tiers.
+///
+/// Four numbers come out:
+///
+///   1. how often the SEARCH beats each fixed arm in what a caller RECEIVES;
+///   2. how often it is WORSE than the pre-RFC arm (`Upstream`) — this must be
+///      zero, and it is the whole safety claim, MEASURED rather than argued
+///      from the fact that the search picks the better arm. The arm picker
+///      orders on (validator warnings, layout warnings, entities) while
+///      `di_choice` gates component-wise against native, and two orderings that
+///      look aligned can disagree;
+///   3. whether either fixed arm dominates — the answer is no, which is why
+///      the RFC ships a search instead of a choice;
+///   4. whether any assignment reachable by pinning an individual coupling
+///      beats the search. That is the only evidence a per-target policy (P2's
+///      greedy-by-gain, P3's matching) could earn its cost.
+///
+/// Measured under `Candidate`, which is what production runs. Under `Forced`
+/// the arms differ far more loudly — downstream-first clears every validation
+/// error on five am3 targets — but `DirectInsertionCandidate` refuses an
+/// error-laden layout before it can ship, so the `Forced` numbers describe
+/// layouts nobody receives.
+///
+/// A target where NEITHER arm builds is counted separately from one where the
+/// search regresses. Collapsing them is a live defect this probe already had:
+/// two am2 targets fail under native as well, on an unrelated lane-capacity
+/// refusal, and a fall-through arm reported them as claim-order regressions.
+///
+/// NOT exhaustive over matchings: for k contended couplings it explores k+2
+/// assignments, not all 2^k subsets. So a "0" on line 4 bounds the achievable
+/// gain from BELOW, and is evidence rather than proof.
+#[test]
+#[ignore = "RFC-059 — the shipped corpus verdict: search vs both fixed arms"]
+fn probe_di_claim_order_shipped_corpus_verdict() {
+    use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
+    use spaghettio_core::bus::inserter_ladder::InserterTier;
+    use spaghettio_core::bus::placer::place_rows;
+    use spaghettio_core::bus::stacking_ctx::StackingCtx;
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::trace::TraceEvent;
+
+    let raw: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "water", "crude-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    let ship = |sr: &spaghettio_core::models::SolverResult, order: DiClaimOrder| {
+        let opts = layout::LayoutOptions {
+            direct_insertion: DirectInsertion::Candidate,
+            di_claim_order: order,
+            ..Default::default()
+        };
+        let l = layout::build_bus_layout(sr, opts).ok()?;
+        let issues = spaghettio_core::validate::validate(
+            &l,
+            Some(sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        Some((
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+            l.entities.len(),
+        ))
+    };
+
+    // The claim loop is the whole of the order-dependent decision, so the
+    // contention census runs `place_rows` alone — no routing, no poles.
+    let losers = |sr: &spaghettio_core::models::SolverResult, order: DiClaimOrder| {
+        let _g = spaghettio_core::trace::start_trace();
+        let _ = place_rows(
+            &sr.machines,
+            &sr.dependency_order,
+            0,
+            0,
+            None,
+            InserterTier::default(),
+            QualityTier::Normal,
+            0,
+            None,
+            None,
+            layout::RowLayout::default(),
+            Some(order),
+            &sr.di_couplings,
+            &StackingCtx::unstacked(),
+        );
+        spaghettio_core::trace::drain_events()
+            .iter()
+            .filter_map(|e| match e {
+                TraceEvent::DiCouplingContended {
+                    loser_producer,
+                    loser_consumer,
+                    loser_item,
+                    ..
+                } => Some((
+                    loser_item.clone(),
+                    loser_producer.clone(),
+                    loser_consumer.clone(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let items = spaghettio_core::recipe_db::all_producible_items();
+    let (mut contended, mut identical, mut skipped, mut unbuildable) =
+        (0usize, 0usize, 0usize, 0usize);
+    let (mut beats_up, mut beats_down, mut worse_than_up, mut worse_than_down) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut pin_beats_search: Vec<String> = Vec::new();
+
+    // Three machine tiers, not one. "Never worse" is the load-bearing claim and
+    // a single-tier sweep cannot support it: am1 has two ingredient slots and no
+    // fluid box, so the same recipe gets a different ROW STRUCTURE — which is
+    // exactly what the claim order acts on. An am3-only sweep reported one
+    // differing target and no regressions; widening it found eight and two.
+    // Most recipes refuse to solve on am1; those are COUNTED, because a
+    // shrinking denominator makes "never worse" easier to satisfy for the wrong
+    // reason.
+    let tiers = [
+        "assembling-machine-1",
+        "assembling-machine-2",
+        "assembling-machine-3",
+    ];
+    for tier in tiers {
+        for name in &items {
+            for &rate in &[1.0f64, 5.0, 20.0] {
+                let Ok(sr) = solver::solve(name, rate, &raw, tier) else {
+                    skipped += 1;
+                    continue;
+                };
+                if sr.di_couplings.is_empty() {
+                    continue;
+                }
+                let mut ls = losers(&sr, DiClaimOrder::Upstream);
+                ls.extend(losers(&sr, DiClaimOrder::Downstream));
+                ls.sort();
+                ls.dedup();
+                if ls.is_empty() {
+                    continue;
+                }
+                contended += 1;
+
+                let search = ship(&sr, DiClaimOrder::Search);
+                let up = ship(&sr, DiClaimOrder::Upstream);
+                let down = ship(&sr, DiClaimOrder::Downstream);
+                let (Some(s), Some(u), Some(d)) = (search, up, down) else {
+                    // No layout at all under one or more arms. On this corpus
+                    // that is always a refusal native shares (a lane-capacity
+                    // wall), never something the claim order caused — but it is
+                    // recorded on its own line so it can never be read as one.
+                    unbuildable += 1;
+                    continue;
+                };
+                if s == u && s == d {
+                    identical += 1;
+                }
+                if s < u {
+                    beats_up.push(format!("[{tier}] {name}@{rate}: up={u:?} -> search={s:?}"));
+                }
+                if s < d {
+                    beats_down.push(format!("[{tier}] {name}@{rate}: down={d:?} -> search={s:?}"));
+                }
+                if u < s {
+                    worse_than_up.push(format!("[{tier}] {name}@{rate}: up={u:?} search={s:?}"));
+                }
+                if d < s {
+                    worse_than_down
+                        .push(format!("[{tier}] {name}@{rate}: down={d:?} search={s:?}"));
+                }
+
+                for (item, prod, cons) in &ls {
+                    let pinned =
+                        DiClaimOrder::pinned([(item.as_str(), prod.as_str(), cons.as_str())]);
+                    if let Some(p) = ship(&sr, pinned) {
+                        if p < s {
+                            pin_beats_search.push(format!(
+                                "[{tier}] {name}@{rate}: pin {item}|{prod}|{cons} -> {p:?} beats search={s:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println!("\n=== RFC-059 shipped corpus verdict (DirectInsertion::Candidate) ===");
+    println!("  machine tiers swept:                {}", tiers.len());
+    println!("  item/rate/tier triples skipped:     {skipped}");
+    println!("  contended targets:                  {contended}");
+    println!("  no layout under some arm:           {unbuildable}");
+    println!("  search == both fixed arms:          {identical}");
+    println!("  search BEATS fixed upstream (P0):   {}", beats_up.len());
+    for x in &beats_up {
+        println!("      {x}");
+    }
+    println!("  search BEATS fixed downstream (P1): {}", beats_down.len());
+    for x in &beats_down {
+        println!("      {x}");
+    }
+    println!("  search WORSE than upstream:         {}", worse_than_up.len());
+    for x in &worse_than_up {
+        println!("      {x}");
+    }
+    println!("  search WORSE than downstream:       {}", worse_than_down.len());
+    for x in &worse_than_down {
+        println!("      {x}");
+    }
+    println!("  a PINNED assignment beats search:   {}", pin_beats_search.len());
+    for x in &pin_beats_search {
+        println!("      {x}");
+    }
+
+    assert!(
+        worse_than_up.is_empty() && worse_than_down.is_empty(),
+        "the search must never ship worse than a fixed arm — that is the whole \
+         safety claim, and it is what lets this land without a per-target \
+         opt-out:\n{}\n{}",
+        worse_than_up.join("\n"),
+        worse_than_down.join("\n")
+    );
+    assert!(
+        !beats_up.is_empty() && !beats_down.is_empty(),
+        "the search must beat BOTH fixed arms somewhere. If it only beats one, \
+         that arm is dominated and RFC-059's answer is to pick the other one \
+         rather than to search: beats_up={} beats_down={}",
+        beats_up.len(),
+        beats_down.len()
+    );
+    assert!(
+        pin_beats_search.is_empty(),
+        "a per-target assignment now beats the search — RFC-059 dropped P2/P3 \
+         on the finding that none did, so this reopens them:\n{}",
+        pin_beats_search.join("\n")
+    );
 }

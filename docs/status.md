@@ -127,6 +127,38 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
+**`rfc-059-di-coupling-assignment.md` (2026-07-31) — CLOSED, decided.** The DI
+dispatcher's claim order is no longer a loop direction: `DirectInsertionCandidate`
+**builds both static orders and keeps the better** (`DiClaimOrder::Search`, the
+default). Over every producible item at 1/5/20 per second across three machine
+tiers, **179 targets have a spec two couplings both want**, and neither fixed
+order dominates — downstream-first ships strictly better on 6 and strictly worse
+on 2. The search resolves all 8 optimally and is worse than a fixed arm on none.
+
+**P2 (greedy-by-gain) and P3 (optimal matching) are dropped**, on a stronger
+finding than the RFC's KC4 required: pinning each contended coupling to claim
+first and rebuilding, **no assignment beats the search on any target**. The
+per-target optimum is always one of the two static orders, so two arms are
+exhaustive rather than heuristic.
+
+Three calibration notes worth carrying forward:
+
+- **A one-tier sweep gave a confidently wrong answer.** On am3 alone,
+  downstream-first was better on 1 target and worse on 0 — a free flip, and it
+  was implemented before am1/am2 turned it into 6-better/2-worse. Shipping the
+  narrow answer would have regressed `small-electric-pole@5` by 37 entities on
+  am1. This is the second time in one RFC that a narrower instrument reported a
+  clean winner that widening removed (the first: a 15-target sample reporting
+  zero contention against the corpus's 179). **When a sweep reports a clean
+  sweep, widen an axis before believing it.**
+- **Quote `Candidate` numbers, not `Forced` ones.** Under `Forced`,
+  downstream-first clears every validation error on five am3 targets — a result
+  two orders of magnitude larger than the truth. `DirectInsertionCandidate`
+  refuses an error-laden layout before it ships, so those layouts never reached
+  anyone.
+- The RFC's motivating case, `rail`, **never contends** — its couplings die at
+  buildability, not at the contention check.
+
 **`rfc-057-topology-preserving-dense-repacking.md` multi-fold (2026-07-30,
 PR #500 — RFC ACTIVE, not closed)**: **multi-fold is Factorio-verified.**
 `chain-mil5ore` folds **three times**: 553x32 (17.3:1) to **153x141 (1.09:1)**

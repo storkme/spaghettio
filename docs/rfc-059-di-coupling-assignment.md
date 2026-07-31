@@ -13,7 +13,73 @@ and — equally in scope — proposes the possibility that the answer is "keep
 upstream-first, pin it with a test, and write down why." The point is to stop
 having an unexamined tie-break in a code path that now runs by default.
 
+## Outcome — decided, 2026-07-31
+
+**The claim order is SEARCHED, not chosen. P2 and P3 are dropped.**
+
+`DirectInsertionCandidate` now builds both static orders and keeps the better;
+`DiClaimOrder::Search` is the default. The RFC set out to pick a direction, and
+the measurement said neither one wins.
+
+Measured over every producible item at 1, 5 and 20 per second, across **three
+machine tiers**, under production `DirectInsertion::Candidate`:
+
+| | |
+|---|---:|
+| targets where a spec is contended | 179 |
+| of those, both fixed arms ship the same layout | 169 |
+| the search beats fixed **upstream** | **6** |
+| the search beats fixed **downstream** | **2** |
+| the search worse than either fixed arm | **0** |
+| a per-target assignment beating the search | **0** |
+| no layout under some arm (native refuses too — not a claim-order effect) | 2 |
+
+The eight differing targets, all of which the search resolves optimally:
+
+| target | tier | upstream | downstream | search ships |
+|---|---|---:|---:|---|
+| `display-panel@1` | am1 | 221 | **202** | 202 |
+| `land-mine@1` | am1 | 326 | **317** | 317 |
+| `small-electric-pole@5` | am1 | **126** | 163 | 126 |
+| `big-electric-pole@1` | am2 | 1146 | **1127** | 1127 |
+| `land-mine@1` | am2 | 312 | **296** | 296 |
+| `medium-electric-pole@5` | am2 | 2351 (2 warnings) | **2340** (0) | 2340 |
+| `small-electric-pole@5` | am2 | **109** | 136 | 109 |
+| `land-mine@1` | am3 | 294 | **282** | 282 |
+
+Note the direction flips: `small-electric-pole` wants upstream-first, everything
+else wants downstream. That is the whole finding — **a fixed order forfeits the
+other's wins**, and there is no rule of thumb separating the two groups that the
+search does not already apply exactly.
+
+The last table row is what ends the RFC. P2 (greedy-by-gain) and P3 (optimal
+matching) exist to reach assignments no fixed walk finds. Pinning each contended
+coupling to claim first and rebuilding found **none anywhere**: every contended
+target's optimum *is* one of the two static orders. So searching two arms is
+exhaustive over the reachable optimum, not a heuristic — there is nothing left
+for an estimator to estimate. KC2, which tests an estimator's ranking against
+ground truth, was never reached because its precondition failed first.
+
+Cost is one extra layout build on solves that have DI couplings. That is a
+different trade from the one Design rejects below: there the cost was a build
+*per candidate coupling*, unbounded in the coupling count; here it is a constant
+two.
+
+Reproduce: `probe_di_claim_order_shipped_corpus_verdict` (ignored, ~15 min
+release) asserts all four findings, so each fails loudly if the corpus moves.
+`di_claim_order_is_searched_not_fixed` is the fast pin, and it uses two fixtures
+that pull in **opposite** directions — so no fixed order can pass it.
+
 ## Motivation
+
+> **Superseded by measurement (2026-07-31).** The `rail` case below does **not
+> contend**: at 1, 5 and 10 per second from `iron-ore` the census reports zero
+> contention under both orders and identical layouts (269 entities at `rail@1` —
+> neither the 261 nor the 264 quoted here). `rail`'s couplings die at
+> **buildability**, before the contention check they were said to lose. The
+> section is kept as written because the reasoning it prompted was sound and the
+> RFC's question survived its motivating example being wrong — which is the case
+> for gating on a corpus sweep rather than on the example that started the work.
 
 Concrete and reproducible, from #473 (`iron-plate → iron-stick → rail`):
 
@@ -102,12 +168,16 @@ direction do we walk" is what hid it.
 
 Four policies, in increasing cost:
 
-| Policy | Rule | Cost |
-|---|---|---|
-| **P0 — upstream-first** | status quo; topological order claims | zero |
-| **P1 — downstream-first** | reverse the walk | zero |
-| **P2 — greedy by gain** | score each candidate coupling in isolation, claim in descending order of predicted gain | one extra pass per coupling |
-| **P3 — optimal matching** | max-weight matching on the SPEC graph, couplings as EDGES — general, not bipartite | small; contention sets are tiny |
+| Policy | Rule | Cost | Outcome |
+|---|---|---|---|
+| **P0 — upstream-first** | status quo; topological order claims | zero | measured, lost |
+| **P1 — downstream-first** | reverse the walk | zero | **shipped** |
+| **P2 — greedy by gain** | score each candidate coupling in isolation, claim in descending order of predicted gain | one extra pass per coupling | dropped, unbuilt |
+| **P3 — optimal matching** | max-weight matching on the SPEC graph, couplings as EDGES — general, not bipartite | small; contention sets are tiny | dropped, unbuilt |
+
+The rest of this section is the design as circulated, kept because P3's
+formulation was corrected in review and that correction is worth preserving for
+whoever reopens this. **The matching was never implemented** — see Outcome.
 
 **Predicted shape of the diff.** The dispatcher's claim loop
 (`bus/di_cell.rs`, the walk that produces fused specs) gains a policy parameter
@@ -148,6 +218,36 @@ static.
 ## Kill criteria
 
 **Required.** Any of these ends the work.
+
+**Verdicts (2026-07-31).** None tripped; the work ended by answering the
+question, not by a criterion firing.
+
+| # | verdict | measured |
+|---|---|---|
+| 1 | does not trip | 179 targets contend, not 0 |
+| 2 | **never evaluated** | no estimator was written — P2 was dropped on the finding below, so there was nothing to rank |
+| 3 | does not trip | see the cost table below |
+| 4 | subsumed | P3 buys nothing over P2, but neither buys anything over the two-arm search, which is a stronger negative than KC4 asks for |
+| 5 | does not trip | best single target 19 entities, 86 summed, and 2 validator warnings resolved — clear of all three bounds |
+
+KC2's "never evaluated" is the honest entry and it is not a dodge: the criterion
+bounds how long P2 may be attempted before being dropped, and P2 was dropped
+before the first attempt on evidence the criterion does not cover. A criterion
+that never fires because its subject was abandoned earlier is a criterion that
+was correctly scoped to a phase that did not run.
+
+KC5 is worth showing rather than asserting, because an earlier, narrower version
+of this measurement put it on a knife edge — 12 entities on one target, one above
+the per-target bound, resolving nothing. Widening the sweep moved every component
+well clear:
+
+| KC5 bound | trips if | measured |
+|---|---|---:|
+| per-target improvement | ≤ 5 entities | **19** (`display-panel@1`, `big-electric-pole@1`) |
+| corpus-summed improvement | ≤ 20 entities | **86** |
+| validator issues resolved | none, anywhere | **2 warnings** (`medium-electric-pole@5` am2) |
+
+All three conjuncts must hold for KC5 to revert; none does.
 
 1. **The question is empirically empty.** If phase 1 finds **every target's
    contention set empty** (output 2), close this RFC as *rejected — not a real
@@ -273,6 +373,28 @@ able to distinguish "policy had no effect" from "policy was not applied."
   exemption expires.
 - Full suite, clippy `-D warnings` on core and wasm, `tsc`, web tests.
 
+### What was run (2026-07-31)
+
+| plan item | done | note |
+|---|---|---|
+| change-surface sweep, policy named | yes | `di_change_surface_sweep` now prints the live claim order in its header |
+| never-degrades pin stays green | yes | `di_candidate_never_degrades_a_succeeding_bus_layout`, unchanged |
+| teeth test | yes | `di_claim_order_is_searched_not_fixed`, on two fixtures that want OPPOSITE arms; verified to fail when the policy is fixed either way |
+| rate sweep instead of a named rate | yes | 1/5/20 per second across every producible item and three machine tiers, plus `rail` at 1/5/10 from `iron-ore` |
+| tile-level assertion at a differing rate | **no** | see below |
+| sim the newly-built cell | yes, on a substitute | `land-mine@1` is unmeasurable (fluid boundary, uncalibrated harness path); `display-panel@1` on am1 simmed instead |
+| suite, clippy, wasm | yes | 1045 pass; `cargo clippy --workspace -D warnings` clean; wasm-pack build clean |
+
+**The tile-level assertion was not written, deliberately.** The plan asked for it
+"once a differing rate exists", expecting the difference to be a row cell whose
+`input_belt_ys` ↔ fused-spec contract needed pinning. The difference that
+materialised is not that: on every differing target the claim order changes
+**which candidate wins the decomposition search** — commonly native under one arm
+and DI under the other — so what needs pinning is the shipped layout's identity,
+not a cell's internal geometry. `di_claim_order_is_searched_not_fixed` asserts
+that on two targets that disagree about which arm wins. A tile-level assertion on
+the DI cell would pin geometry both arms agree on, which is the wrong invariant.
+
 ## Phasing
 
 1. **Measure P0 vs P1 across the corpus, sweeping rates on `rail`, and record
@@ -302,6 +424,21 @@ able to distinguish "policy had no effect" from "policy was not applied."
 
 Landing (1) alone is a legitimate outcome: the deliverable is a *decided*
 tie-break with evidence, not necessarily a new algorithm.
+
+### What actually happened
+
+(1) ran and produced all three outputs. (2) and (3) were **not built**, and the
+reason is a finding rather than a budget call — see Outcome: no target's best
+reachable assignment differs from both static orders, so a per-target policy has
+nothing to find. The gate on (2) was "contention beyond `rail`", which *is*
+satisfied — 57 targets contend, none of them `rail` — but satisfying a gate is
+permission to look, not an obligation to build, and looking is what phase 1's
+third output was for.
+
+Phase 1's own gate on (2) turned out to be the wrong test. It asked whether
+contention exists; the question that decides P2 is whether the OPTIMUM is
+reachable by a fixed walk. Those come apart exactly here: contention is
+widespread and the optimum is static everywhere.
 
 ## Decision log
 
@@ -373,3 +510,111 @@ tie-break with evidence, not necessarily a new algorithm.
   (Earlier drafts of this log narrated each editing slip in the tally itself,
   which added surface faster than it removed error. Trimmed on 2026-07-30: a
   decision log records calls made, not typos corrected.)
+
+- *2026-07-30 — KC1 does not trip, and the sample that said it would was
+  falsified.* The first phase-1 census (15 hand-picked targets) reported **zero**
+  contention anywhere and would have closed this RFC as *not a real contention in
+  practice*. The corpus sweep — every producible item at 1/5/20 per second, 714
+  target/rate pairs with couplings, 3296 couplings — found **57 contended
+  targets**. The sample was not merely small, it was **biased in the exact
+  direction that hides the effect**: it was picked around recipes where DI
+  visibly claims, and contention lives on HUB specs consumed by several recipes
+  (`electronic-circuit` 7 targets, `steel-plate` 5, `engine-unit` 4, `rocket` 3),
+  which is a different set. KC1's insistence on sweeping rather than sampling is
+  what caught it.
+
+- *2026-07-30 — the corpus sweep runs `place_rows`, not `build_bus_layout`.* The
+  claim loop is the entire order-dependent decision, so routing, poles and
+  validation are pure cost for a contention census. The full-layout version ran
+  39 minutes without finishing and was abandoned as a **bad instrument, not a
+  slow one**. Full layouts are then built only for the contended targets, which
+  is sound on KC1's own entailment: a target with no contention cannot differ.
+
+- *2026-07-31 — the motivating case does not contend at all.* `rail` at 1, 5 and
+  10 per second from `iron-ore` reports **zero** contention under both orders and
+  builds byte-identically — 269 entities at `rail@1`, matching neither the 261
+  nor the 264 the record disputes. So the earlier finding is not just
+  unreproducible (Motivation), it describes a state this corpus does not reach:
+  `rail`'s three couplings die at **buildability**, before the contention check
+  they were said to lose. The RFC's question survives its own motivating example
+  being wrong, which is the argument for gating on a corpus sweep rather than on
+  the case that prompted the work.
+
+- *2026-07-31 — `Forced` overstates the win by two orders of magnitude; the
+  shipped number is measured under `Candidate`.* Under `DirectInsertion::Forced`
+  P1 clears **every validation error on five targets** (P0: 3 errors each; P1: 0
+  errors, 0 warnings) — a spectacular-looking result. It is not the win.
+  `DirectInsertionCandidate` refuses its own layout on any error, so those
+  P0 layouts were never shipped to anyone; production runs `Candidate`, where the
+  same comparison is **12 entities on one target**. Reporting the `Forced`
+  figure would have been accurate about a layout nobody receives — the same
+  category error as a validator count that no longer discriminates
+  ([`validator-reporting.md`](validator-reporting.md)), arrived at from the
+  opposite direction. Every headline number in Outcome is a `Candidate` number
+  for this reason.
+
+- *2026-07-31 — a one-machine-tier sweep said "flip to P1"; widening it to three
+  said "neither order wins". The narrow instrument was wrong twice in this RFC,
+  the same way.* On `assembling-machine-3` alone, downstream-first was strictly
+  better on 1 of 57 contended targets and worse on **0** — a free flip, and it
+  was implemented and pinned as the decision. Sweeping am1 and am2 as well turned
+  that into **6 better, 2 worse**: `small-electric-pole@5` regresses 126 → 163
+  entities on am1 and 109 → 136 on am2, because am1/am2 give the same recipe a
+  different ROW STRUCTURE and the claim order acts on exactly that. Shipping the
+  am3-only answer would have regressed two working targets to gain five others.
+
+  This is the second time in one RFC that a narrower instrument returned a
+  confident answer in the direction of "there is a clean winner" — the first was
+  the 15-target sample reporting zero contention. Both were cheap to widen and
+  neither error was detectable from inside the narrow run. **The generalisable
+  rule: when a sweep reports a clean sweep, widen an axis before believing it.**
+
+- *2026-07-31 — the claim order is SEARCHED rather than chosen; P2 and P3
+  dropped.* Since neither static order dominates, `DirectInsertionCandidate`
+  builds both and keeps the better, ties to upstream so unaffected targets stay
+  bit-identical. This resolves all 8 differing targets optimally and is worse
+  than a fixed arm on none — asserted by measurement, not by the fact that the
+  picker picks the better arm, because the picker orders on (validator warnings,
+  layout warnings, entities) while `di_choice` gates component-wise against
+  native, and two orderings that look aligned can disagree.
+
+  P2/P3 are dropped on a stronger finding than KC4 asks for: pinning each
+  contended coupling to claim first and building the result, **no assignment
+  beats the search on any target**. A per-target policy can only pay where the
+  optimum is unreachable by a fixed walk, and here it never is — which also makes
+  two arms exhaustive rather than a heuristic.
+
+  Reversing Design's "rejected alternative" needed an argument, since that
+  section refuses score-driven claiming that builds each variant. The refusal
+  stands as written: it costs a build **per candidate coupling**, unbounded in
+  the coupling count. Two arms is a constant factor on solves that have couplings
+  at all, which is the same shape of cost #474 already accepted for DI itself.
+
+- *2026-07-31 — `DiClaimOrder::Pinned` kept although P2/P3 were dropped.* It is
+  measurement machinery for a policy that will not ship, which normally argues
+  for deleting it. Kept because it is the instrument that produced the negative,
+  and this RFC exists **because** the measurement that motivated it was taken
+  with an uncommitted scratch flag and could not be re-run. A negative result
+  with no executable form would repeat exactly that mistake; `Pinned` is what
+  lets a future reader re-derive "no per-target assignment wins" instead of
+  trusting this paragraph. It is also the mechanism P3 would apply through if the
+  corpus ever moves.
+
+  The same argument keeps `Upstream` and `Downstream` as public arms once the
+  default became `Search`: without them the corpus sweep could not measure the
+  search against the pre-RFC status quo, and "the search picks the better arm, so
+  it cannot be worse" would be an argument rather than a measurement.
+
+- *2026-07-31 — the sim obligation was discharged on a substitute target, and
+  the intended one is unmeasurable.* The verification plan requires simming any
+  newly-built cell the corpus starts producing. `land-mine@1` is where the search
+  first makes DI ship on am3, so it was exported and run — and returned a flat
+  **0/s on every item under both arms**, with the harness printing its own
+  caveat: the run has fluid boundaries, and infinity-pipe feed/void paths are
+  UNCALIBRATED (RFC-050 Phase 1). `land-mine` needs water and crude-oil, so the
+  verdict measures the harness, not the layout. Recorded rather than quietly
+  re-rolled, because a FAIL that is really a harness limitation is exactly the
+  artifact class [`sim-harness-forensics.md`](sim-harness-forensics.md) exists to
+  stop being read as a layout defect. `display-panel@1` on am1 was simmed
+  instead: same finding (DI newly ships under the search, 221 → 202 entities),
+  no fluid boundary.
