@@ -1280,20 +1280,25 @@ fn chain_refuses_multirow_internal_corridor() {
 /// ports at (0,2) and (2,2) — same y=2, UG-split, not a second row. The
 /// y-blind check refused this chain outright.
 ///
-/// Pins `compose_chain_with_capacity` directly (not the full
+/// Exercises `compose_chain_with_capacity` directly (not the full
 /// decomposition-search path — see
 /// `chain_am2_default_options_ships_cell_composed_rescue` below for
-/// that) against this exact scenario: must return `Ok`, with geometry
-/// byte-identical (via `geometry_hash`) to what base commit cc9fb340
-/// (the true pre-#433-work tree, plain `.find`-based port selection)
-/// produces — i.e. the fix's min-x tie-break must reproduce the exact
-/// westmost-port pick `.find` made, not merely "some" valid pick.
-/// Confirmed FAILS (refuses) on this PR's round-1 head (commit
-/// a6f21b25) and passes after the y-discrimination fix.
+/// that) against this exact scenario: must return `Ok`. Confirmed
+/// FAILS (refuses) on PR #533's round-1 head (commit a6f21b25) and
+/// passes after the y-discrimination fix.
+///
+/// History: this originally also pinned dims + `geometry_hash`
+/// byte-identical to base cc9fb340 (proving the min-x tie-break
+/// reproduced `.find`'s westmost pick — verified during the #533
+/// review round and recorded there). The pins were retired after the
+/// sibling test's native baseline flaked on PR #541's CI run —
+/// layout geometry is host-relative through the SAT crossing-zone
+/// solver (same class as the stress goldens, which are env-gated for
+/// exactly this reason; see docs/status.md). The refusal-regression
+/// teeth live in the `Ok` assert, not the pins.
 #[test]
 fn chain_am2_from_plate_steel_composes_ok_not_false_positive() {
     use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
-    use spaghettio_core::bus::cells::registry::geometry_hash;
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "steel-plate"]
         .iter()
         .map(|s| s.to_string())
@@ -1312,15 +1317,10 @@ fn chain_am2_from_plate_steel_composes_ok_not_false_positive() {
         .unwrap_or_else(|e| {
             panic!("same-row UG-split ports must NOT trigger the multi-row refusal: {e}")
         });
-    assert_eq!(
-        (l.width, l.height, l.entities.len()),
-        (131, 27, 750),
-        "pinned to base cc9fb340's pre-#433-work geometry (measured during the review round)"
-    );
-    assert_eq!(
-        geometry_hash(&l),
-        16181045263949429483,
-        "port selection must be byte-identical to the pre-fix westmost-port pick (base cc9fb340), not just same dims"
+    assert!(
+        l.entities.len() > 400,
+        "composed chain should be the full multi-cell layout (got {} entities) — a near-empty result means the compose path degenerated",
+        l.entities.len()
     );
 }
 
@@ -1333,10 +1333,13 @@ fn chain_am2_from_plate_steel_composes_ok_not_false_positive() {
 /// that rescue: `CellComposedCandidate` errored, so
 /// `select_best_decomposition` fell through to native's own inferior
 /// result. This asserts the DEFAULT-options end-to-end path ships the
-/// rescued cell-composed layout again, byte-identical (dims +
-/// `geometry_hash`) to base commit cc9fb340 — and that it is NOT the
-/// same layout `CellComposition::Off` (native-only) produces, proving
-/// the rescue is actually live, not coincidentally matching native.
+/// rescued cell-composed layout again: it must differ from what
+/// `CellComposition::Off` (native-only) produces and be substantially
+/// larger — the exact symptom shape of the regression (a silent
+/// fallback matches native). Formerly also pinned dims +
+/// `geometry_hash` byte-identical to base cc9fb340; retired after the
+/// native pin flaked on PR #541's CI run (host-relative SAT
+/// crossing-zone geometry — the stress-golden class, docs/status.md).
 #[test]
 fn chain_am2_default_options_ships_cell_composed_rescue() {
     use spaghettio_core::bus::cells::registry::geometry_hash;
@@ -1364,27 +1367,23 @@ fn chain_am2_default_options_ships_cell_composed_rescue() {
         },
     )
     .expect("native-only build must still succeed");
-    assert_eq!(
-        (native.width, native.height, native.entities.len()),
-        (23, 51, 430),
-        "native-only baseline (unaffected by chain.rs) — if this moved, the fixture drifted, not the fix"
-    );
     let default = layout::build_bus_layout(&sr, LayoutOptions::default())
         .expect("default options must compose (cell-composed rescue must not be silently lost)");
-    assert_eq!(
-        (default.width, default.height, default.entities.len()),
-        (131, 27, 750),
-        "default options must ship the cell-composed rescue, not fall back to native's inferior result"
-    );
-    assert_eq!(
-        geometry_hash(&default),
-        16181045263949429483,
-        "byte-identical to base cc9fb340's default-options result"
-    );
+    // No exact dims/hash pins here: layout geometry is host-relative
+    // through the SAT crossing-zone solver (this test's native pin came
+    // back (23, 50, 424) vs (23, 51, 430) on PR #541's CI run). The
+    // round-1 regression shape was "default silently falls back to
+    // native's inferior result", which these two asserts pin exactly.
     assert_ne!(
         geometry_hash(&default),
         geometry_hash(&native),
         "the rescue must actually differ from native-only — this is the whole point of the candidate"
+    );
+    assert!(
+        default.entities.len() > native.entities.len() * 3 / 2,
+        "default options must ship the (much larger) cell-composed rescue, not a near-native fallback: default={} native={}",
+        default.entities.len(),
+        native.entities.len()
     );
 }
 
