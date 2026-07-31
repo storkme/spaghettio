@@ -595,9 +595,6 @@ pub fn print_human(report: &Report) {
             .collect();
         println!("external inputs: {}", inputs.join(", "));
     }
-    if report.fluid_fed {
-        println!("NOTE: this run has fluid boundaries — infinity-pipe feed/void paths are UNCALIBRATED (no fixture has exercised them; RFC-050 Phase 1).");
-    }
     if report.uncalibrated_direction {
         println!("NOTE: at least one boundary is not south-facing — the jog geometry is a faithful vector generalization of the calibrated south-only prototype, but has never been measured live.");
     }

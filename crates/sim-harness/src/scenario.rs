@@ -23,7 +23,10 @@
 //! this module's own golden-fragment tests). Non-south directions are
 //! geometrically faithful but UNCALIBRATED — nothing has measured them
 //! against a live server yet (`Manifest::has_uncalibrated_direction`
-//! flags this for the report, same treatment as fluid boundaries).
+//! flags this for the report). Fluid boundaries used to carry the same
+//! kind of flag, but that note went stale once #373 fixed the defect it
+//! was warning about and later fixtures exercised the path clean — see
+//! `Manifest::has_fluid_boundary` and #537.
 //!
 //! # Feed vs. drain pickup-side asymmetry
 //!
@@ -461,9 +464,11 @@ end
 /// further along it, so no column can ever reach a jog row's height —
 /// the issue's proven consumer-side workaround ("order boundary_inputs
 /// west->east") becomes the harness's own default instead of a caller
-/// obligation. Fluid records don't jog (a single adjacent infinity-pipe
-/// tile — see `add_fluid_feed`) so they're excluded and don't consume a
-/// slot.
+/// obligation. Fluid records don't use this lateral jog mechanism (they
+/// place a single adjacent infinity-pipe tile via `add_fluid_feed`,
+/// staggered by depth instead) — but they DO consume a slot, ordered
+/// first within each direction group, ahead of items (see the depth
+/// layout below).
 fn feed_slots(records: &[BoundaryRecord]) -> Vec<i32> {
     // ONE ladder per direction, fluids FIRST (PR #515 review finding: a
     // separate fluid counter staggered fluids only against each other, so
