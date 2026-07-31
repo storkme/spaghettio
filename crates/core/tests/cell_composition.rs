@@ -980,11 +980,17 @@ fn cell_candidate_resolves_ec15_refusal() {
     // the asymmetry is real (an output belt is filled by inserters that
     // simply stall when it is full; an input belt is drained head-first
     // by consumers who buffer).
+    // #519 (2026-07-31): input-rate-delivery joins the adjudicated set —
+    // the consumption-decremented walker turns the row-input-belt-margin
+    // observation above into its concrete per-machine number (tail cable
+    // 5.0/s vs 7.5/s on the same zero-margin belt), and the ec15 sim
+    // measured the effect at −3.6% delivered (RFC-060 K60-3).
     assert!(
         issues
             .iter()
             .all(|i| i.category == "inserter-item-throughput"
-                || i.category == "row-input-belt-margin"),
+                || i.category == "row-input-belt-margin"
+                || i.category == "input-rate-delivery"),
         "only the adjudicated categories tolerated: {issues:?}"
     );
     assert_eq!(
@@ -1245,7 +1251,12 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
         );
         issues
             .iter()
-            .filter(|i| i.category.contains("inserter") || i.category == "input-rate-delivery")
+            // #519: input-rate-delivery dropped from this count — the L2
+            // gate proves the #383 INSERTER bind clears at the default
+            // capacity, and the decremented walker's flux reports are a
+            // different mechanism (belt tail starvation, sim-measured
+            // −3.6% on this chain), adjudicated in the sibling fixture.
+            .filter(|i| i.category.contains("inserter"))
             .count()
     };
     // L0 (raw unresearched) still shows the #383 input bind — guards the

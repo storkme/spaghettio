@@ -2787,6 +2787,12 @@ fn compute_lane_rates_impl(
                 );
             }
             for (&pos, &d) in sources.iter().zip(&demands) {
+                // Deliberately UNCAPPED: a genuinely over-committed trunk
+                // (the #311/#312 class, pinned by stacking_fanin_wall_lift)
+                // must keep modeling above physical capacity so
+                // lane-throughput can see it; the 90/s-on-yellow incident
+                // was a candidate-selection flip (fixed by the scoped
+                // ranking count), not a seeding overflow.
                 let per_tile = if attribution_consistent { d * (total / demand_sum) } else { even };
                 let entry = lane_rates.entry(pos).or_insert([0.0, 0.0]);
                 entry[0] += per_tile / 2.0;

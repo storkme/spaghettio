@@ -202,6 +202,25 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 ///
 /// Voider rows recirculate without a splitter, so they never reach this
 /// predicate; only `:selfloop:` and the tap tag identify a splitter branch.
+/// Warning count for CANDIDATE SELECTION (decomposition ranking, the
+/// never-worse channel contracts, the refusal tier). Excludes categories
+/// whose model is not yet calibrated enough to steer selection:
+/// `input-rate-delivery` gained real teeth from the #519 consumption
+/// decrement — honest REPORTING — but letting the new counts re-rank
+/// candidates flipped winners on configs where the audit then caught the
+/// new winner over-stamping physical capacity (stacking_ec_60s: a
+/// reporting recalibration must not silently change which layout ships).
+/// Lift the exemption deliberately once the flux model is sim-anchored
+/// (#519 follow-up), with the fixture drift adjudicated case by case.
+pub(crate) fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
+    issues
+        .iter()
+        .filter(|i| {
+            i.severity == Severity::Warning && i.category != "input-rate-delivery"
+        })
+        .count()
+}
+
 pub(crate) fn segment_is_priority_branch(seg: Option<&str>) -> bool {
     seg.is_some_and(|s| {
         s.contains(":selfloop:") || s.contains(crate::common::MERGE_TAP_SEGMENT_TAG)

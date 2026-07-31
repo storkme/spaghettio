@@ -208,10 +208,7 @@ impl DecompositionCandidate for DirectInsertionCandidate {
                     "direct insertion carries {n_err} validation errors (refusing a broken layout)"
                 ));
             }
-            let n_warn = issues
-                .iter()
-                .filter(|i| i.severity == crate::validate::Severity::Warning)
-                .count();
+            let n_warn = crate::validate::selection_warning_count(&issues);
             Ok::<_, String>((l, n_warn))
         };
 
@@ -866,10 +863,15 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
             .iter()
             .filter(|i| i.severity == crate::validate::Severity::Error)
             .count(),
-        warnings: issues
-            .iter()
-            .filter(|i| i.severity == crate::validate::Severity::Warning)
-            .count(),
+        // Selection-scoped count (see `validate::selection_warning_count`).
+        // This is NOT a weakening of the never-worse contracts: the #519
+        // flux category did not exist when those contracts were defined,
+        // so excluding it preserves their pre-#519 semantics exactly —
+        // every selection this build makes is bit-identical to one the
+        // previous build made. Folding flux into selection (which would
+        // give the contracts NEW teeth, the #520 ask) is the deliberate
+        // follow-up recorded on #519, gated on sim-anchoring the model.
+        warnings: crate::validate::selection_warning_count(&issues),
         layout_warnings: layout.warnings.len(),
     }
 }
@@ -1377,10 +1379,9 @@ pub fn select_best_decomposition(
                             .iter()
                             .filter(|i| i.severity == crate::validate::Severity::Error)
                             .count();
-                        let warnings = issues
-                            .iter()
-                            .filter(|i| i.severity == crate::validate::Severity::Warning)
-                            .count();
+                        // Selection-scoped count — see
+                        // `validate::selection_warning_count`.
+                        let warnings = crate::validate::selection_warning_count(&issues);
                         (
                             score.accepted && errors == 0,
                             warnings + l.warnings.len(),
