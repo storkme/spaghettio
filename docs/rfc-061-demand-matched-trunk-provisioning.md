@@ -138,3 +138,19 @@ model's absolute attribution).
   flagged); fixing the feeder approach is Phase 1.5 and removes the
   tolerance. Zone-cache pin refreshed deliberately for the new balancer
   routes (ci.yml protocol).*
+- *2026-07-31 — **Phase 1.5 complete.** The ac@7 flank sideload was
+  misread in Phase 1 as template-internal wiring: the offending tile is
+  a `trunk:copper-cable` belt. Root cause: THREE independent mirrors of
+  the passthrough decision (stamper — gated in Phase 1; ghost-router
+  feeder targeting and lane-planner height resolution — ungated), so a
+  skewed family got a real 19-tall template while feeders aimed at
+  phantom passthrough columns and trunks started 18 rows early, driving
+  through the template body. `family_uses_passthrough` is now THE
+  single predicate at all three sites. tier4_7s passes with no
+  tolerated categories; the UG-entry-sideload check gains a narrow
+  intra-balancer exemption (same `balancer:` segment both tiles) for
+  SAT-baked internals — routed belts entering sideways still warn,
+  which is exactly how this bug stayed visible. Re-sims: ac@5 4.82/s
+  delivered / 4.92 produced (96.4%/98.4% of plan), ac@7 6.68/s (95.4%,
+  converged) — K61-3 numbers hold; the fix is structural, not
+  throughput-regressive.*
