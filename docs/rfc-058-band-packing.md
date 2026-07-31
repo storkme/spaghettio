@@ -182,6 +182,48 @@ produced 0.00/s in Factorio while validating clean).
 Packing is gated behind a `LayoutOptions` flag, default off, until it clears
 its gates — same discipline as `compact_layout`.
 
+### Phase 4 design (2026-07-31): a packed geometry planner beside the bus planner, with an explicit refusal surface
+
+Read of `plan_bus_lanes` (1,667 lines) and the ghost-pipeline contracts,
+looking for kill criterion 5. The planner splits cleanly in two:
+
+- **Aggregation (~60%, geometry-free, reused verbatim):** consumer/producer
+  maps keyed `(item, module_id)`, DI-coupled consumer filtering, rate
+  totals and belt-tier selection, lane splitting, family construction.
+  Nothing here knows where anything is.
+- **Geometry (1D-specific, NOT modified — paralleled):** contiguous west
+  column strip (`x = i+1` + spacers), east-turning `tap_off_ys`, fluid
+  anchor staggering, balancer blocks demanding contiguous columns plus
+  `compute_extra_gaps` vertical slack, and the two-pass width negotiation
+  with `place_rows`. These assumptions are load-bearing and correct for
+  the linear bus; they are left untouched.
+
+The packed path is a **separate geometry planner** (`bus::bands`), fed by
+the same aggregation outputs, producing per-item **nets** instead of
+column lanes: a source anchor (external items at the arrangement's west
+edge; produced items at their band's output row) plus one tap anchor per
+consumer band's feed rows — the spike's model, made real. Bands are
+translated rigidly to their packed positions (the fold's per-segment
+transform precedent), and routing reuses the position-agnostic machinery
+the contracts promise: `Occupancy`, negotiated A\*, junction handling.
+Splitter tap stamping and balancer blocks are 1D-trunk concepts and do
+not carry over.
+
+**The refusal surface is what keeps KC5 from firing.** Packing refuses —
+and the decomposition candidate abstains, shipping the native bus — when
+the arrangement needs anything the packed planner does not model: any
+item over one lane's capacity (balancer families), `HorizontalStack`
+rows, partitioned modules (`module_id > 0`), or a band census below the
+packer's own floor. Every KC2-winning fixture is single-lane throughout,
+so the refusals cost none of the measured reach; they cost only claims
+the RFC never made. This is the same strictly-additive entry pattern
+cell composition and DI used: compete where you can build, abstain
+loudly where you cannot.
+
+KC5 verdict: **extension, not rewrite — the criterion does not fire.**
+`plan_bus_lanes` is not modified; the packed planner sits beside it
+behind the same flag, and the linear path stays byte-identical.
+
 ## Kill criteria
 
 1. **Transport eats the gain.** If, after real trunk routing, the **bounding-box
@@ -540,6 +582,19 @@ clears. Rationale in the decision log.
   −35.2% → −35.9% (`sci2-ore` 2,695 → 2,618; corridor tiles 454 → 428 and
   379 → 368): the shorter true-minimal corridors outweigh the stricter
   turn rule, so the verdict stands with a slightly wider margin.
+
+- **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
+  fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused
+  verbatim) and 1D-specific geometry (left untouched; paralleled by a
+  packed-geometry planner in `bus::bands` producing per-item source/tap
+  nets in packed coordinates, routed by the position-agnostic
+  Occupancy/A* machinery). The load-bearing scope decision: the packed
+  candidate REFUSES — abstains, native bus ships — on anything it does
+  not model: multi-lane items (balancer families), HorizontalStack rows,
+  partitioned modules. Every KC2 winner is single-lane, so the refusals
+  cost none of the measured reach. Full design in the Phase 4 design
+  section; implementation follows it behind the existing flag, with KC1
+  re-measured on the real planner before any phase-5 gate runs.
 
 - **2026-07-31 — phases 1–2 landed: placer-native bands and the flag-gated
   packer, both inert by construction.** New module `bus::bands`. Extraction
