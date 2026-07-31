@@ -176,6 +176,40 @@ Calibration notes worth carrying forward:
 - The RFC's motivating case, `rail`, **never contends** — its couplings die at
   buildability, not at the contention check.
 
+**#520 — the validator shipped a half-rate factory (2026-07-31).**
+`check_belt_flow_reachability` asked its question **per machine over the union of
+that machine's input belts**, so one fed input masked a starved one; and it did
+not model belt-to-belt lift inserters at all, so a lift's drop was not a source
+and its own pickup was never checked. Consequence, measured in a headless run:
+
+| `small-electric-pole@5` am1 | entities | planned | produced | verdict |
+|---|---:|---:|---:|---|
+| DI — what `main` shipped | 126 | 5.00/s | **2.52/s** | FAIL, −49.6% |
+| native — what ships with the fix | 163 | 5.00/s | **5.08/s** | PASS, +1.7% |
+
+Both converged, so the deficit is a steady state rather than a warmup artifact.
+The failing layout validated with **zero errors and zero warnings** and was 37
+entities denser, so `di_choice` preferred it — correctly, by every signal the
+engine had. `display-panel@1` am1 is the same defect at 0/s.
+
+Fixed by modelling lifts as both source and sink (which makes the check
+transitive and localises the fault at the starved pickup) and by replacing the
+per-machine BFS with one forward sweep from every source plus one backward sweep
+from every sink, tested per tile — stricter *and* cheaper. Recorded as instance
+**ten** in [`validator-reporting.md`](validator-reporting.md), with the rule it
+adds: a check that aggregates over a set must ask its question per element, not
+over the union.
+
+**Knock-on for RFC-059**: with the defect visible, downstream-first no longer
+loses on the two `small-electric-pole` targets — it dominates, and the two-arm
+search becomes equivalent to simply flipping the default. The flip is deliberately
+NOT made yet; it needs sim verification of the targets it improves, because the
+lesson here is precisely that a clean validator is not evidence a layout works.
+
+**Corpus-wide exposure is unmeasured.** Two shipped layouts are confirmed
+affected, found by following one lead. Sizing it means building every target on
+`origin/main` and on the fix and diffing shipped entity counts.
+
 **`rfc-057-topology-preserving-dense-repacking.md` multi-fold (2026-07-30,
 PR #500 — RFC ACTIVE, not closed)**: **multi-fold is Factorio-verified.**
 `chain-mil5ore` folds **three times**: 553x32 (17.3:1) to **153x141 (1.09:1)**
