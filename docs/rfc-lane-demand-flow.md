@@ -254,3 +254,49 @@ Per the CLAUDE.md layout-change protocol, plus:
   residual input-rate-delivery warnings on balancer-heavy layouts
   (tier4_am2 ×1, EC-30s ×4) vs many eliminations; a balancer-aware
   (black-box) demand pass would remove them.*
+- *2026-07-31 (#519, PR #525) — **Forward consumption decrement.** The
+  walker now subtracts each tile's summed per-inserter pickup demand
+  from its outflow (`outflow_after_pickup`; stored rates remain
+  ARRIVING rates), reusing this RFC's `base_demand` map. Rationale: the
+  undecremented model compared every inserter on a shared row belt
+  against the full head supply, making belt-order tail starvation
+  structurally invisible — RFC-060's ac@5 winner was E0/W0 while
+  sim-measuring 75% of plan. Four model corrections were forced by the
+  decrement making demand arithmetic load-bearing, each caught by a
+  sim-anchored fixture: physical utilization (ceil(count) understates
+  chain/mega-replicated machines; now machines-actually-placed, scoped
+  per row band vs duplicated-global via `resolve_row_spec_banded`),
+  self-loop draw exemption (kovarex's loop collapsed to 0.0 — a loop's
+  standing inventory is not consumption; scoped by the spec's own
+  `self_loop` declaration), and the two seeding calls below.*
+- *2026-07-31 (#519) — **External seeds are demand-weighted only when
+  attribution reconciles with the plan** (|Σ attributed − solver total|
+  ≤ 5% of total), else the conservation-obeying even split. The demand
+  pass propagates full downstream demand up EVERY merge branch —
+  correct as an upper bound for splitter ratios (its original job),
+  over-attributing in absolute terms (ec45: one 33.75/s row counted at
+  three sources, Σ = 1.5×; mil5's snake-fold compounded merges into
+  57/s modeled lanes under a briefly-tried per-source-optimistic rule,
+  and a proportional scale-down instead starved every row by the
+  over-attribution factor). The 5% band is the tolerance under which
+  chem5's exact Σd = 35.000 attribution qualifies while every observed
+  over-attribution (1.5×–2.5×) fails; seeds are deliberately uncapped
+  so genuinely over-committed trunks (#311/#312) stay visible
+  (`stacking_fanin_wall_lift` pins this). Merge-aware attribution is
+  the recorded follow-up on #519.*
+- *2026-07-31 (#519) — **`input-rate-delivery` is excluded from
+  candidate-selection warning counts** (`selection_warning_count`:
+  never-worse channels, refusal tier, DI-arm compare; the
+  never-degrades pins compare the same scoped channels). Stated
+  honestly (a #525 review finding corrected an earlier "bit-identical
+  to pre-#519" overclaim): the category pre-existed with nonzero
+  counts, so the exemption DOES change selection where candidates
+  already differed on it — the observed flip
+  (`stacking_fanin_wall_lift` S=2, DI takes cable off belts) is
+  adjudicated in that fixture. The exemption is a calibration
+  firewall: the recalibration multiplied the category's counts ~10×,
+  and letting the not-yet-sim-anchored model steer selection shipped a
+  physically over-stamped winner on `stacking_ec_60s`. Folding flux
+  into selection — giving the never-worse contracts the #520 teeth —
+  is the deliberate follow-up, gated on re-simming a fixed layout to
+  confirm modeled and measured numbers move together.*

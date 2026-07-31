@@ -8089,21 +8089,27 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     let over2 = audit(&l2, 2);
     assert!(over2.is_empty(), "tiles above physical stacked capacity at S=2: {over2:?}");
 
-    // Teeth: EITHER some belt genuinely carries more than one unstacked
-    // yellow belt (25/s cable > 15/s — the lift is real), OR the winner
-    // took copper-cable off the belts entirely (DI — the same capability
-    // gain the S=1 arm's comment carves out; #519's selection
-    // recalibration lets that candidate win at S=2 too, and a plan with
-    // no cable belts needs no lift). A plan with cable ON belts but no
-    // tile above 15/s would still fail: that would mean the wall demand
-    // silently vanished.
-    let any_over = l2.entities.iter().any(|e| e.rate.is_some_and(|r| r > 15.0));
-    let cable_on_belts = l2.entities.iter().any(|e| {
-        e.name.contains("transport-belt") && e.carries.as_deref() == Some("copper-cable")
-    });
+    // Teeth, on a DI-Off S=2 arm (review finding on #525: the default
+    // arm's winner takes cable off belts entirely since the #519
+    // selection recalibration, which made an either/or carve-out here
+    // vacuous — DI-Off forces cable ONTO belts, so this arm isolates the
+    // RFC-047 stacking lift the way the S=1 refusal arm does). It must
+    // build (S=1 DI-Off refuses; only the doubled ceiling makes it
+    // buildable), stay within the stacked audit, and genuinely use the
+    // lift: some belt above one unstacked yellow's 15/s.
+    let l2_belts = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..opts_with(2)
+        },
+    )
+    .unwrap_or_else(|e| panic!("S=2 with DI Off must build via the stacked lift: {e}"));
+    let over2b = audit(&l2_belts, 2);
+    assert!(over2b.is_empty(), "DI-Off S=2 arm above stacked capacity: {over2b:?}");
     assert!(
-        any_over || !cable_on_belts,
-        "no belt exceeds unstacked capacity yet copper-cable still rides belts — vacuous lift"
+        l2_belts.entities.iter().any(|e| e.rate.is_some_and(|r| r > 15.0)),
+        "no belt exceeds unstacked full-belt capacity on the DI-Off arm — vacuous lift"
     );
 }
 

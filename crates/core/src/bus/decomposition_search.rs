@@ -864,13 +864,19 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
             .filter(|i| i.severity == crate::validate::Severity::Error)
             .count(),
         // Selection-scoped count (see `validate::selection_warning_count`).
-        // This is NOT a weakening of the never-worse contracts: the #519
-        // flux category did not exist when those contracts were defined,
-        // so excluding it preserves their pre-#519 semantics exactly —
-        // every selection this build makes is bit-identical to one the
-        // previous build made. Folding flux into selection (which would
-        // give the contracts NEW teeth, the #520 ask) is the deliberate
-        // follow-up recorded on #519, gated on sim-anchoring the model.
+        // Honest scope statement (review finding on #525 corrected an
+        // earlier "bit-identical to pre-#519" overclaim here): the
+        // category PRE-EXISTED with nonzero counts, so excluding it DOES
+        // change selection on any config where candidates already
+        // differed in input-rate-delivery — the observed flips
+        // (stacking_fanin_wall_lift S=2, adjudicated in the fixture) are
+        // exactly that. The exemption is a calibration firewall, not a
+        // no-op: the #519 recalibration multiplied the category's counts
+        // ~10x, and letting an unanchored model steer selection shipped
+        // a physically over-stamped winner on stacking_ec_60s. Folding
+        // flux into selection (the #520 teeth) is the recorded follow-up,
+        // gated on sim-anchoring — decision log:
+        // docs/rfc-lane-demand-flow.md.
         warnings: crate::validate::selection_warning_count(&issues),
         layout_warnings: layout.warnings.len(),
     }
