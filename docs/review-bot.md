@@ -390,6 +390,47 @@ The tally is what matters here: a prohibition on parking has now been defeated
 three times, by a wakeup call, by prose, and by a tool's async return. Each fix
 addressed the mechanism in front of it. Only the obligation generalises.
 
+### Failure class 6: fourth recurrence, prompt mitigation exhausted, structural fix (2026-07-31)
+
+The fourth occurrence (run `30650165439` attempt 1, PR #535) defeated even the
+unconditional posting contract: two async `Agent` launches, a `ScheduleWakeup`,
+then the run *cancelled its own wakeup* — reasoning that background
+notifications would arrive on their own — and ended with zero activity. The
+contract was in the run's own prompt and was stepped over, not missed. Filed
+and investigated as [#538](https://github.com/storkme/spaghettio/issues/538);
+two findings settled the prompt-vs-structure question:
+
+1. The model wasn't disobeying — it was **misjudging its own state** (occurrence
+   2 waited for results already in its transcript; occurrence 4 believed no
+   wakeup was needed). No prompt phrasing corrects a confidently-held wrong
+   belief about what is pending.
+2. The #535 run artifact proved `Agent` (and the whole async family) is
+   **reachable via `ToolSearch` despite being absent from `--allowedTools`** —
+   no configuration had ever actually removed a parking capability.
+
+**Structural fixes shipped (#538):**
+
+1. `--disallowedTools` in `claude-code-review.yml` bans the non-`Agent` async
+   family (`ScheduleWakeup`, `Task*`, `Cron*`, `RemoteTrigger`, `Workflow`,
+   `PushNotification`) — none has a legitimate use in a one-shot review.
+   `Agent` itself stays allowed: the plugin's eligibility gate dispatches
+   through it; banning it needs a canary run first (tracked in #538's thread).
+2. `claude-review-auto-retry.yml` — a `workflow_run`-triggered job that reruns
+   failed review jobs automatically, capped at 3 attempts. Mechanism-agnostic:
+   it keys off the guard's red, not off predicting the next parking tool, and
+   automates the manual re-run that recovered all four occurrences. Benign
+   skips exit 0 and never trigger it; a genuinely broken run still reds to a
+   human at the cap.
+3. `workflow-guard` (ci.yml) now also asserts `--disallowedTools` is present
+   and the auto-retry workflow file exists, so a stock-template overwrite
+   (class 4) cannot silently drop either.
+
+If a fifth parking mechanism appears, expect the auto-retry to absorb it (the
+rerun has recovered 4/4 so far); the signature to watch for is repeated
+same-run attempts each failing the guard — that means the parking is
+deterministic for that PR, and the canary-gated `Agent` ban becomes the next
+lever.
+
 ## Forensics playbook
 
 **Run signatures** (from the action's result JSON in the job log — grep the
