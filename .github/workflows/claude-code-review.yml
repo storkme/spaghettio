@@ -225,58 +225,12 @@ jobs:
             echo "Fork PR ($HEAD_REPO != $REPO) — review step gated off, no secrets available. Needs session-side review."
             exit 0
           fi
-          # Description-edit runs carry no new commit, so head-SHA coverage is
-          # owned by whichever push event produced that head — every SHA gets
-          # an `opened` or `synchronize` run. Enforcing head-SHA coverage here
-          # would red a PR for a body edit whose cheap re-check legitimately
-          # had nothing to post.
-          #
-          # But the carve-out used to read "this cannot lose coverage on any
-          # SHA", and that was false: the concurrency group let an `edited` run
-          # CANCEL the push run whose coverage it defers to (#521, 2026-07-31).
-          # The group is now keyed by event class so that cannot recur — and
-          # this branch no longer takes it on trust either. Deferring to
-          # another run is only honest if that run left something behind, so a
-          # body edit on a PR with NO review anywhere in its lifetime fails
-          # instead of passing. Lifetime, not head-SHA: the point is to catch
-          # "never reviewed at all", not to demand a body edit re-review code.
-          if [ "${EVENT_ACTION:-}" = "edited" ]; then
-            # Three queries, each checked SEPARATELY and summed in the shell.
-            # Not one brace group piped to awk: a group's exit status is its
-            # LAST command's, so a transient failure in either of the first two
-            # would go undetected, contribute 0, and let this branch red a PR
-            # that does have reviews. A false red is the one direction this
-            # guard must never fail in — every other query here fails open.
-            any=0
-            for q in "pulls/$PR/reviews|length" \
-                     "pulls/$PR/comments|length" \
-                     "issues/$PR/comments|[.[] | select(.user.login == \"claude[bot]\")] | length"; do
-              path="${q%%|*}"; expr="${q#*|}"
-              # awk validates each line rather than summing blindly. A plain
-              # `{s+=$1}` coerces any non-numeric output to 0 and prints a
-              # perfectly numeric total, so garbage or an error body that still
-              # exits 0 would read as "no reviews" and red the PR. Exiting
-              # non-zero here trips `pipefail` and the fail-open below. `!seen`
-              # covers empty output for the same reason: absent data is not
-              # evidence of zero coverage.
-              if ! n=$(gh api "repos/$REPO/$path" --paginate --jq "$expr" | awk '
-                        /^[0-9]+$/ { s += $1; seen = 1; next }
-                        { bad = 1; exit 3 }
-                        END { if (bad || !seen) exit 3; print s + 0 }'); then
-                echo "::warning::guard: lifetime-coverage query ($path) failed or returned non-numeric output — failing open."; exit 0
-              fi
-              any=$((any + n))
-            done
-            if [ "${any:-0}" -gt 0 ]; then
-              echo "Description-edit run — no new head SHA, and the PR has $any review artifact(s); head coverage is enforced by the push events."
-              exit 0
-            fi
-            echo "::error::Description-edit run on a PR with ZERO review activity in its lifetime."
-            echo "This carve-out defers head-SHA coverage to the push events, which is only"
-            echo "honest if a push run actually reviewed something. None did — most likely the"
-            echo "code run was cancelled (check for a cancelled claude-review run at this SHA)."
-            exit 1
-          fi
+          # `edited` runs are handled AFTER the not-applicable carve-outs
+          # below, not here. Ordering is semantics in this step: putting the
+          # description-edit branch first meant a workflow-file PR — which the
+          # action never reviews, by anti-hijack design — hit the coverage
+          # requirement before reaching its own carve-out, producing an
+          # UNCLEARABLE red. Observed on #522, the PR that added the branch.
           # Fail-open on API errors: the guard is a safety net, and its own
           # flakiness must never block a merge. It fails ONLY on confirmed
           # zero-coverage abandonment.
@@ -320,6 +274,61 @@ jobs:
             else
               echo "::warning::guard: compare query failed — treating push as substantive."
             fi
+          fi
+          # Description-edit runs carry no new commit, so head-SHA coverage is
+          # owned by whichever push event produced that head — every SHA gets
+          # an `opened` or `synchronize` run. Enforcing head-SHA coverage here
+          # would red a PR for a body edit whose cheap re-check legitimately
+          # had nothing to post.
+          #
+          # But the carve-out used to read "this cannot lose coverage on any
+          # SHA", and that was false: the concurrency group let an `edited` run
+          # CANCEL the push run whose coverage it defers to (#521, 2026-07-31).
+          # The group is now keyed by event class so that cannot recur — and
+          # this branch no longer takes it on trust either. Deferring to
+          # another run is only honest if that run left something behind, so a
+          # body edit on a PR with NO review anywhere in its lifetime fails
+          # instead of passing. Lifetime, not head-SHA: the point is to catch
+          # "never reviewed at all", not to demand a body edit re-review code.
+          #
+          # Placed HERE, after every not-applicable carve-out, so it can only
+          # fire on a PR the action was actually supposed to review.
+          if [ "${EVENT_ACTION:-}" = "edited" ]; then
+            # Three queries, each checked SEPARATELY and summed in the shell.
+            # Not one brace group piped to awk: a group's exit status is its
+            # LAST command's, so a transient failure in either of the first two
+            # would go undetected, contribute 0, and let this branch red a PR
+            # that does have reviews. A false red is the one direction this
+            # guard must never fail in — every other query here fails open.
+            any=0
+            for q in "pulls/$PR/reviews|length" \
+                     "pulls/$PR/comments|length" \
+                     "issues/$PR/comments|[.[] | select(.user.login == \"claude[bot]\")] | length"; do
+              path="${q%%|*}"; expr="${q#*|}"
+              # awk validates each line rather than summing blindly. A plain
+              # `{s+=$1}` coerces any non-numeric output to 0 and prints a
+              # perfectly numeric total, so garbage or an error body that still
+              # exits 0 would read as "no reviews" and red the PR. Exiting
+              # non-zero here trips `pipefail` and the fail-open below. `!seen`
+              # covers empty output for the same reason: absent data is not
+              # evidence of zero coverage.
+              if ! n=$(gh api "repos/$REPO/$path" --paginate --jq "$expr" | awk '
+                        /^[0-9]+$/ { s += $1; seen = 1; next }
+                        { bad = 1; exit 3 }
+                        END { if (bad || !seen) exit 3; print s + 0 }'); then
+                echo "::warning::guard: lifetime-coverage query ($path) failed or returned non-numeric output — failing open."; exit 0
+              fi
+              any=$((any + n))
+            done
+            if [ "${any:-0}" -gt 0 ]; then
+              echo "Description-edit run — no new head SHA, and the PR has $any review artifact(s); head coverage is enforced by the push events."
+              exit 0
+            fi
+            echo "::error::Description-edit run on a PR with ZERO review activity in its lifetime."
+            echo "This carve-out defers head-SHA coverage to the push events, which is only"
+            echo "honest if a push run actually reviewed something. None did — most likely the"
+            echo "code run was cancelled (check for a cancelled claude-review run at this SHA)."
+            exit 1
           fi
           # Coverage must be on the CURRENT HEAD, not merely somewhere in the
           # PR's lifetime.

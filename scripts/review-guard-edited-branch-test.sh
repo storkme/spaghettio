@@ -4,6 +4,25 @@ REPO=o/r; PR=521
 CTR=$(mktemp)   # file-based counter: the previous stub incremented inside a
                 # command substitution, so the parent never saw it and case 4
                 # silently tested case 3 again.
+
+# The loop below is a COPY of the one in the workflow, because the workflow
+# cannot be dry-run and the block cannot be sourced out of a YAML `run:`.
+# A copy that drifts is worse than no test, so assert the shipped text still
+# contains the load-bearing lines before trusting any result below.
+WF=".github/workflows/claude-code-review.yml"
+if [ -f "$WF" ]; then
+  for needle in 'for q in "pulls/$PR/reviews|length"' \
+                '/^[0-9]+$/ { s += $1; seen = 1; next }' \
+                '{ bad = 1; exit 3 }' \
+                'END { if (bad || !seen) exit 3; print s + 0 }'; do
+    if ! grep -qF -- "$needle" "$WF"; then
+      echo "DRIFT: the workflow no longer contains: $needle" >&2
+      echo "This test is asserting behaviour the shipped guard may not have." >&2
+      exit 2
+    fi
+  done
+  echo "(drift check: workflow still contains the guard lines under test)"
+fi
 run_loop() {
   any=0
   for q in "pulls/$PR/reviews|length" \
