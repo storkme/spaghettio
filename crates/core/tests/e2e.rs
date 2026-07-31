@@ -199,6 +199,7 @@ fn run_e2e_with_strategy(
         strategy,
         spaghettio_core::bus::layout::RowLayout::default(),
         spaghettio_core::bus::layout::SurplusPolicy::default(),
+        true,
     )
 }
 
@@ -225,6 +226,38 @@ fn run_e2e_with_strategy_and_row_layout(
         strategy,
         row_layout,
         spaghettio_core::bus::layout::SurplusPolicy::default(),
+        true,
+    )
+}
+
+/// RFC-060: like `run_e2e_with_strategy_and_row_layout` but with the
+/// horizontal-stack candidate DISABLED — a pure single-combo pass. Used
+/// by `full_knob_sweep`'s baseline columns, which measure each
+/// strategy × row-layout combination in isolation; the default engine
+/// behavior (candidate competing) is the sweep's separate `default`
+/// column.
+fn run_e2e_pure_combo(
+    test_name: &str,
+    item: &str,
+    rate: f64,
+    machine: &str,
+    belt_tier: Option<&str>,
+    available_inputs: &FxHashSet<String>,
+    strategy: spaghettio_core::bus::layout::LayoutStrategy,
+    row_layout: spaghettio_core::bus::layout::RowLayout,
+) -> Result<E2EResult, String> {
+    run_e2e_inner(
+        test_name,
+        item,
+        rate,
+        machine,
+        belt_tier,
+        available_inputs,
+        &FxHashSet::default(),
+        strategy,
+        row_layout,
+        spaghettio_core::bus::layout::SurplusPolicy::default(),
+        false,
     )
 }
 
@@ -248,6 +281,7 @@ fn run_e2e_with_exclusions(
         spaghettio_core::bus::layout::LayoutStrategy::Pooled,
         spaghettio_core::bus::layout::RowLayout::default(),
         spaghettio_core::bus::layout::SurplusPolicy::default(),
+        true,
     )
 }
 
@@ -276,6 +310,7 @@ fn run_e2e_with_exclusions_and_surplus_policy(
         spaghettio_core::bus::layout::LayoutStrategy::Pooled,
         spaghettio_core::bus::layout::RowLayout::default(),
         surplus_policy,
+        true,
     )
 }
 
@@ -291,6 +326,7 @@ fn run_e2e_inner(
     strategy: spaghettio_core::bus::layout::LayoutStrategy,
     row_layout: spaghettio_core::bus::layout::RowLayout,
     surplus_policy: spaghettio_core::bus::layout::SurplusPolicy,
+    horizontal_candidate: bool,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     spaghettio_core::zone_cache::set_thread_source(Some(test_name));
@@ -318,6 +354,7 @@ fn run_e2e_inner(
             inserter_capacity: 0,
             cell_composition: Default::default(),
             splitter_tap_spacers: false,
+            horizontal_candidate,
             ..Default::default()
         },
     )
@@ -1206,6 +1243,10 @@ fn tier2_electronic_circuit_splitter_stamp_regression() {
     let opts = |di| layout::LayoutOptions {
         max_belt_tier: Some("fast-transport-belt".to_string()),
         direct_insertion: di,
+        // RFC-060: horizontal-stack resolves this refusal on the
+        // candidate path (a legit rescue for users), but this fixture
+        // asserts the BELT-capacity wall itself — isolate it like DI.
+        horizontal_candidate: false,
         ..Default::default()
     };
 
@@ -2183,7 +2224,11 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // beltspan-lastinrow: the 4 residual inserter-item-throughput were dual_input_row
     // last-in-row far sides capped at one long-handed inserter; extending the far belt
     // one tile clears them (4 -> 0). The input-rate-delivery (1) is unrelated and unchanged.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1)]);
+    // RFC-060 re-bless (2026-07-30): the horizontal-stack candidate wins
+    // this config strictly-better and DELETES the long-standing
+    // input-rate-delivery residual (was the tier-4 ladder's known
+    // warning; docs/status.md row updated with the RFC close-out).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -7812,6 +7857,67 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
     }
 }
 
+/// RFC-060: the horizontal-candidate never-worse contract, on configs
+/// where the bus (vertical) path succeeds. Mirrors
+/// `di_candidate_never_degrades_a_succeeding_bus_layout` exactly: every
+/// issue channel is a component-wise floor, not a lexicographic
+/// tiebreaker. Where the bus refuses (e.g. ec@15-am3-plates),
+/// horizontal resolving it is the additive win and is not constrained
+/// here.
+#[test]
+fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
+    let counts = |l: &spaghettio_core::models::LayoutResult, sr: &_| -> (usize, usize, usize) {
+        let issues = spaghettio_core::validate::validate(
+            l,
+            Some(sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+        )
+    };
+    for (item, rate, ins) in [
+        ("iron-gear-wheel", 10.0, &["iron-plate"][..]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"][..]),
+        ("electronic-circuit", 20.0, &["iron-ore", "copper-ore"][..]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("sulfuric-acid", 5.0, &["iron-plate", "sulfur", "water"][..]),
+    ] {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, rate, &inputs, "assembling-machine-3") else {
+            continue;
+        };
+        let off = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions { horizontal_candidate: false, ..Default::default() },
+        );
+        let Ok(off_l) = off else { continue };
+        let on_l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| {
+                panic!("{item}@{rate}: horizontal default must not turn a success into a refusal: {e}")
+            });
+        let (off_c, on_c) = (counts(&off_l, &sr), counts(&on_l, &sr));
+        assert!(
+            on_c.0 <= off_c.0 && on_c.1 <= off_c.1 && on_c.2 <= off_c.2,
+            "{item}@{rate}: horizontal candidate degraded the layout on at least one channel — \
+             (errors, warnings, layout_warnings) went {off_c:?} -> {on_c:?}"
+        );
+        // No-dual-input chains must be BIT-identical, not merely
+        // never-worse — the `any_dual_input_row` gate skips the extra
+        // pass entirely, and blueprint equality proves it.
+        if !ins.contains(&"copper-plate") && !ins.contains(&"copper-ore") {
+            assert_eq!(
+                blueprint::export(&off_l, item),
+                blueprint::export(&on_l, item),
+                "{item}@{rate}: no DualInput row, so candidate-on must be bit-identical"
+            );
+        }
+    }
+}
+
 /// RFC-047 Leg B/C lift differential (#312's exact repro config; see
 /// `quality_differential_ec_normal_vs_legendary`): EC@6/s legendary on
 /// yellow belts. copper-cable is 25/s (2 legendary AM3 machines @12.5/s)
@@ -8802,9 +8908,14 @@ fn di_change_surface_sweep() {
         }
     }
 
+    // The claim order is named in the header because RFC-059's verification
+    // plan required it: this sweep is the primary instrument for both RFCs, and
+    // its "identical" rows read the same whether a policy did nothing or was
+    // never applied. Printing the policy is what separates those.
     println!(
-        "\n#474 change surface on current main: {identical} identical, {better} DI-better, \
-         {} REGRESSED, {skipped} not-applicable",
+        "\n#474 change surface on current main (DI claim order: {:?}): {identical} identical, \
+         {better} DI-better, {} REGRESSED, {skipped} not-applicable",
+        layout::LayoutOptions::default().di_claim_order,
         regressed.len()
     );
     for r in &regressed {
@@ -8892,5 +9003,969 @@ fn merge_tap_does_not_shadow_di_on_pooled_yellow() {
     assert!(
         nc.0 <= oc.0 && nc.1 <= oc.1 && nc.2 <= oc.2,
         "DI regressed an issue channel on the merge-tap branch: {oc:?} -> {nc:?}"
+    );
+}
+
+/// Full knob sweep: strategy x row-layout across a representative corpus.
+/// Diagnostic companion to the sidebar-simplification work (issue #512) —
+/// maps which combination wins per case so the engine can eventually pick
+/// per-layout instead of asking the user. NOT a gate: no assertions on
+/// winners, it only reports. Run with the CI zone-cache pin for
+/// machine-independent numbers:
+///
+///   SPAGHETTIO_ZONE_CACHE_PATH=$PWD/crates/core/data/sat-zones-ci.bin \
+///     cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     full_knob_sweep --ignored --exact --nocapture
+///
+/// Writes a markdown report to target/tmp/knob-sweep.md.
+#[test]
+#[ntest::timeout(1_800_000)]
+#[ignore = "diagnostic sweep, ~5-15 min; run explicitly with --ignored"]
+fn full_knob_sweep() {
+    use spaghettio_core::bus::layout::{LayoutStrategy, RowLayout};
+    use std::fmt::Write as _;
+
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt_tier: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+    let ores5: &[&str] = &["iron-ore", "copper-ore", "coal", "water", "crude-oil"];
+    let plates5: &[&str] = &["iron-plate", "copper-plate", "coal", "crude-oil", "water"];
+    let cases: &[Case] = &[
+        Case { name: "gear@10 am1 plate", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-1", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "gear@10 am2 ore", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore"] },
+        Case { name: "gear@20 am2 plate", item: "iron-gear-wheel", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "ec@10 am1 ore yellow", item: "electronic-circuit", rate: 10.0, machine: "assembling-machine-1", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "ec@20 am2 ore", item: "electronic-circuit", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "ec@15 am3 plates", item: "electronic-circuit", rate: 15.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["iron-plate", "copper-plate"] },
+        Case { name: "plastic@10 chem", item: "plastic-bar", rate: 10.0, machine: "chemical-plant", belt_tier: None, inputs: &["petroleum-gas", "coal"] },
+        Case { name: "sulfuric@5 chem", item: "sulfuric-acid", rate: 5.0, machine: "chemical-plant", belt_tier: None, inputs: &["iron-plate", "sulfur", "water"] },
+        Case { name: "steel@5 ore", item: "steel-plate", rate: 5.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["iron-ore"] },
+        Case { name: "ac@1 am2 plates", item: "advanced-circuit", rate: 1.0, machine: "assembling-machine-2", belt_tier: None, inputs: plates5 },
+        Case { name: "ac@5 am2 plates yellow", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "ac@7 am2 plates yellow", item: "advanced-circuit", rate: 7.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "pu@2 am3 ore red", item: "processing-unit", rate: 2.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
+        Case { name: "pu@3 am3 ore red", item: "processing-unit", rate: 3.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
+    ];
+    // The four pure columns measure each combo in isolation
+    // (`horizontal_candidate` off); `default` is what the engine ships —
+    // Pooled + vertical native with the RFC-060 horizontal candidate
+    // competing under the never-worse contract.
+    let combos: &[(&str, LayoutStrategy, RowLayout, bool)] = &[
+        ("pool/vert", LayoutStrategy::Pooled, RowLayout::VerticalSplit, true),
+        ("pool/horiz", LayoutStrategy::Pooled, RowLayout::HorizontalStack, true),
+        ("part/vert", LayoutStrategy::PartitionedDecomposed, RowLayout::VerticalSplit, true),
+        ("part/horiz", LayoutStrategy::PartitionedDecomposed, RowLayout::HorizontalStack, true),
+        ("default", LayoutStrategy::Pooled, RowLayout::VerticalSplit, false),
+    ];
+
+    struct RunRow {
+        combo: &'static str,
+        errs: usize,
+        warns: usize,
+        entities: usize,
+        dims: (i32, i32),
+        density: f64,
+        candidate: String,
+        ms: u128,
+        refused: Option<String>,
+    }
+
+    let mut md = String::new();
+    let _ = writeln!(md, "# Knob sweep: strategy x row-layout\n");
+    let _ = writeln!(md, "{} cases x {} combos. Lexicographic winner key: (errors, warnings, entities).\n", cases.len(), combos.len());
+    let _ = writeln!(md, "## Per-run data\n");
+    let _ = writeln!(md, "| case | combo | errs | warns | entities | WxH | dens% | candidate | ms |");
+    let _ = writeln!(md, "|---|---|---|---|---|---|---|---|---|");
+
+    let mut winners: Vec<String> = Vec::new();
+    for case in cases {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        let mut rows: Vec<RunRow> = Vec::new();
+        for (label, strategy, row_layout, pure) in combos {
+            let test_name = format!("sweep {} {}", case.name, label.replace('/', "-"));
+            let started = std::time::Instant::now();
+            let result = if *pure {
+                run_e2e_pure_combo(
+                    &test_name, case.item, case.rate, case.machine, case.belt_tier, &inputs,
+                    *strategy, *row_layout,
+                )
+            } else {
+                run_e2e_with_strategy_and_row_layout(
+                    &test_name, case.item, case.rate, case.machine, case.belt_tier, &inputs,
+                    *strategy, *row_layout,
+                )
+            };
+            let ms = started.elapsed().as_millis();
+            let row = match result {
+                Ok(r) => {
+                    let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
+                    let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
+                    let candidate = r.trace_events.iter().find_map(|e| match e {
+                        TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
+                        _ => None,
+                    }).unwrap_or_else(|| "?".to_string());
+                    let density = density::score_density(&r.layout, (1, 1)).density;
+                    RunRow {
+                        combo: label, errs, warns,
+                        entities: r.layout.entities.len(),
+                        dims: (r.layout.width, r.layout.height),
+                        density, candidate, ms, refused: None,
+                    }
+                }
+                Err(e) => RunRow {
+                    combo: label, errs: usize::MAX, warns: usize::MAX, entities: usize::MAX,
+                    dims: (0, 0), density: 0.0, candidate: "-".to_string(), ms,
+                    refused: Some(e.chars().take(60).collect()),
+                },
+            };
+            eprintln!(
+                "  {:<24} {:<11} {:>6}  {}",
+                case.name, label, format!("{}ms", ms),
+                match &row.refused {
+                    Some(e) => format!("REFUSED: {e}"),
+                    None => format!("E{}/W{} {}ent {}x{} {:.1}% cand={}",
+                        row.errs, row.warns, row.entities, row.dims.0, row.dims.1,
+                        row.density * 100.0, row.candidate),
+                }
+            );
+            rows.push(row);
+        }
+        for r in &rows {
+            match &r.refused {
+                Some(e) => { let _ = writeln!(md, "| {} | {} | - | - | - | - | - | REFUSED: {} | {} |", case.name, r.combo, e, r.ms); }
+                None => { let _ = writeln!(md, "| {} | {} | {} | {} | {} | {}x{} | {:.1} | {} | {} |", case.name, r.combo, r.errs, r.warns, r.entities, r.dims.0, r.dims.1, r.density * 100.0, r.candidate, r.ms); }
+            }
+        }
+        let ok_rows: Vec<&RunRow> = rows.iter().filter(|r| r.refused.is_none()).collect();
+        let winner_line = if ok_rows.is_empty() {
+            format!("| {} | ALL REFUSED | - | - |", case.name)
+        } else {
+            let key = |r: &&RunRow| (r.errs, r.warns, r.entities);
+            let best = ok_rows.iter().min_by_key(|r| key(r)).unwrap();
+            let ties: Vec<&str> = ok_rows.iter().filter(|r| key(r) == key(best) && r.combo != best.combo).map(|r| r.combo).collect();
+            let baseline = rows.iter().find(|r| r.combo == "pool/vert").unwrap();
+            let vs_baseline = if baseline.refused.is_some() { "baseline refused".to_string() }
+                else if baseline.combo == best.combo || ties.contains(&"pool/vert") || key(&baseline) == key(best) { "= baseline".to_string() }
+                else {
+                    format!("E{}→{} W{}→{} ent{}→{}",
+                        baseline.errs, best.errs, baseline.warns, best.warns, baseline.entities, best.entities)
+                };
+            format!("| {} | {} | E{}/W{}/{}ent | {} |", case.name, best.combo,
+                best.errs, best.warns, best.entities,
+                if ties.is_empty() { vs_baseline } else { format!("{} (tie: {})", vs_baseline, ties.join(", ")) })
+        };
+        winners.push(winner_line);
+    }
+
+    let mut summary = String::new();
+    let _ = writeln!(summary, "\n## Winners (lexicographic: errors, then warnings, then entities)\n");
+    let _ = writeln!(summary, "| case | winner | key | vs pool/vert |");
+    let _ = writeln!(summary, "|---|---|---|---|");
+    for w in &winners { let _ = writeln!(summary, "{w}"); }
+    md.push_str(&summary);
+    eprintln!("{summary}");
+
+    std::fs::create_dir_all("target/tmp").ok();
+    std::fs::write("target/tmp/knob-sweep.md", &md).expect("write sweep report");
+    eprintln!("\nreport: crates/core/target/tmp/knob-sweep.md");
+}
+
+/// RFC-060 K60-3: export blueprint + manifest pairs for the flipped
+/// corpus cases in both arms (`on` = shipped default with the horizontal
+/// candidate competing, `off` = candidate disabled), for sim-harness
+/// verification. Tracked here so the K60-3 evidence is reproducible from
+/// a fresh clone (the RFC-050 "manifest generator is gitignored" gap bit
+/// the 2026-07-31 verification session).
+///
+///   SIM_PROBE_OUT=/tmp SPAGHETTIO_ZONE_CACHE_PATH=$PWD/crates/core/data/sat-zones-ci.bin \
+///     cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     rfc060_sim_export --ignored --exact --nocapture
+///
+/// Then per artifact pair:
+///   cargo run --release -p spaghettio_sim_harness -- run \
+///     --bp $OUT/<case>-<arm>.bp --manifest $OUT/<case>-<arm>.manifest.json \
+///     --warmup 216000 --out <case>-<arm>.report.json
+/// (long warmup per the deep-chain caveat in docs/sim-harness.md; pu3
+/// used 288000).
+#[test]
+#[ignore = "artifact exporter for sim runs; run explicitly with --ignored"]
+fn rfc060_sim_export() {
+    let ores5: &[&str] = &["iron-ore", "copper-ore", "coal", "water", "crude-oil"];
+    let plates5: &[&str] = &["iron-plate", "copper-plate", "coal", "crude-oil", "water"];
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt_tier: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+    let cases = [
+        Case { name: "ac5", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "ac7", item: "advanced-circuit", rate: 7.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "pu3", item: "processing-unit", rate: 3.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
+        Case { name: "ec15", item: "electronic-circuit", rate: 15.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["iron-plate", "copper-plate"] },
+    ];
+    let out = std::env::var("SIM_PROBE_OUT")
+        .unwrap_or_else(|_| snapshot_dir().to_string_lossy().into_owned());
+    std::fs::create_dir_all(&out).ok();
+    for case in &cases {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        for (arm, candidate) in [("on", true), ("off", false)] {
+            let label = format!("{}-{}", case.name, arm);
+            // Mirror run_e2e_inner exactly so the artifacts match the
+            // sweep's layouts bit for bit.
+            let solved = match solver::solve_with_exclusions(
+                case.item, case.rate, &inputs, case.machine, &FxHashSet::default(),
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{label}: SOLVER REFUSED: {e}");
+                    continue;
+                }
+            };
+            let lay = match layout::build_bus_layout(
+                &solved,
+                layout::LayoutOptions {
+                    max_belt_tier: case.belt_tier.map(|s| s.to_string()),
+                    merge_tap: false,
+                    stacking: 1,
+                    inserter_capacity: 0,
+                    splitter_tap_spacers: false,
+                    horizontal_candidate: candidate,
+                    ..Default::default()
+                },
+            ) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("{label}: LAYOUT REFUSED: {e}");
+                    continue;
+                }
+            };
+            let issues = match validate::validate(&lay, Some(&solved), LayoutStyle::Bus) {
+                Ok(v) => v,
+                Err(e) => e.issues,
+            };
+            let errs = issues.iter().filter(|i| i.severity == Severity::Error).count();
+            let warns = issues.iter().filter(|i| i.severity == Severity::Warning).count();
+            let (bp, manifest) = blueprint::export_with_manifest(&lay, &solved, &label);
+            std::fs::write(format!("{out}/{label}.bp"), &bp).expect("write bp");
+            std::fs::write(
+                format!("{out}/{label}.manifest.json"),
+                serde_json::to_string_pretty(&manifest).expect("manifest json"),
+            )
+            .expect("write manifest");
+            eprintln!(
+                "{label}: E{errs}/W{warns} {} entities {}x{} -> {out}/{label}.bp",
+                lay.entities.len(),
+                lay.width,
+                lay.height,
+            );
+        }
+    }
+}
+
+/// RFC-059 phase 1, outputs 2 and 3: does DI spec contention actually occur?
+///
+/// Kill criterion 1 closes the RFC as "not a real contention in practice" only
+/// if the corpus shows no layout difference between claim orders AND **every
+/// target's contention set is empty**. The second conjunct exists because a
+/// binary layout diff cannot distinguish "nothing was contended" from
+/// "contended, and two arbitrary orders happened to agree" — and KC2 identifies
+/// the latter as exactly where P2/P3 would earn their cost.
+///
+/// This reports the contention set (`DiCouplingContended`) and the per-coupling
+/// outcome (`DiCouplingClaimed`) per target. It is the instrument KC1 and KC2
+/// are written against; without it neither can be evaluated.
+#[test]
+#[ignore = "RFC-059 phase 1 — DI coupling contention census"]
+fn probe_di_coupling_contention() {
+    use spaghettio_core::trace::TraceEvent;
+    let cases: &[(&str, f64, &[&str])] = &[
+        ("rail", 1.0, &["iron-ore"]),
+        ("rail", 5.0, &["iron-ore"]),
+        ("rail", 10.0, &["iron-ore"]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        ("steel-plate", 5.0, &["iron-ore"]),
+        ("space-platform-foundation", 1.0, &["iron-plate", "copper-plate"]),
+        ("iron-stick", 5.0, &["iron-ore"]),
+        ("engine-unit", 2.0, &["iron-plate", "steel-plate"]),
+    ];
+
+    let mut any_contention = 0usize;
+    for (item, rate, ins) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, *rate, &inputs, "assembling-machine-3") else {
+            println!("  {item}@{rate}: solve failed — skipped");
+            continue;
+        };
+        // FORCED, not Candidate. Under `Candidate` the DI variant is built as a
+        // separate candidate whose trace stream is captured independently, and
+        // only the WINNER's stream is replayed — so a probe reading the global
+        // stream sees DI events only when DI wins, and reads "0 contention" on
+        // every target where it loses. That is the same defect this census
+        // exists to prevent, one level up. `Forced` runs DI in the native pass,
+        // so every coupling decision reaches the stream regardless of outcome.
+        let events = {
+            let _guard = spaghettio_core::trace::start_trace();
+            let opts = layout::LayoutOptions {
+                direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
+                ..Default::default()
+            };
+            let _ = layout::build_bus_layout(&sr, opts);
+            spaghettio_core::trace::drain_events()
+        };
+
+        let mut contended: Vec<String> = Vec::new();
+        let mut claimed: Vec<String> = Vec::new();
+        let mut refused: Vec<String> = Vec::new();
+        for e in &events {
+            match e {
+                TraceEvent::DiCouplingContended {
+                    contended_spec, loser_producer, loser_consumer, loser_item, blocked_side,
+                } => contended.push(format!(
+                    "{contended_spec} ({blocked_side}) blocked {loser_producer}->{loser_consumer} on {loser_item}"
+                )),
+                TraceEvent::DiCouplingClaimed { producer, consumer, item, variant } =>
+                    claimed.push(format!("{producer}->{consumer} on {item} [{variant}]")),
+                TraceEvent::DiCouplingRefused { producer, consumer, item, reason } =>
+                    refused.push(format!("{producer}->{consumer} on {item}: {reason}")),
+                _ => {}
+            }
+        }
+        if !contended.is_empty() {
+            any_contention += 1;
+        }
+        println!(
+            "  {item}@{rate}: {} claimed, {} CONTENDED, {} refused-before-contention",
+            claimed.len(),
+            contended.len(),
+            refused.len()
+        );
+        for c in &claimed { println!("      claimed:   {c}"); }
+        for c in &contended { println!("      contended: {c}"); }
+        let mut by_reason: std::collections::BTreeMap<&str, usize> = Default::default();
+        for r in &refused {
+            *by_reason.entry(r.rsplit(": ").next().unwrap_or("?")).or_default() += 1;
+        }
+        for (why, n) in &by_reason { println!("      refused:   {n} x {why}"); }
+    }
+    println!("\nRFC-059 KC1 gate: {any_contention} of {} targets show contention", cases.len());
+    println!("(KC1 may only trip if this is 0 AND no layout differs between claim orders)");
+}
+
+#[test]
+#[ignore = "RFC-059 phase 1 — does rail have DI couplings at all?"]
+fn probe_rail_di_couplings() {
+    for rate in [1.0, 5.0, 10.0] {
+        let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve("rail", rate, &inputs, "assembling-machine-3") else {
+            println!("rail@{rate}: solve failed"); continue;
+        };
+        println!("rail@{rate}: {} specs, di_couplings = {:?}",
+            sr.machines.len(), sr.di_couplings);
+    }
+}
+
+
+/// RFC-059 phase 1, output 1 + the consistency check KC1 specifies.
+///
+/// KC1 trips on the contention set alone, because contention-empty ENTAILS
+/// diff-empty: if no spec was ever eligible in two couplings, claim order cannot
+/// change which couplings claim. The P0-vs-P1 diff is therefore not an
+/// independent condition — it is a check on the instrument. Observing zero
+/// contention together with a non-empty diff means a coupling decision is being
+/// made somewhere the census cannot see, and phase 1 must fail loudly rather
+/// than quietly report both numbers.
+#[test]
+#[ignore = "RFC-059 phase 1 — P0 vs P1, and the entailment KC1 rests on"]
+fn probe_di_claim_order_p0_vs_p1() {
+    use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
+    use spaghettio_core::trace::TraceEvent;
+
+    let cases: &[(&str, f64, &[&str])] = &[
+        ("rail", 1.0, &["iron-ore"]),
+        ("rail", 5.0, &["iron-ore"]),
+        ("rail", 10.0, &["iron-ore"]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 5.0, &["iron-ore", "copper-ore"]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        ("steel-plate", 5.0, &["iron-ore"]),
+        ("steel-plate", 20.0, &["iron-ore"]),
+        ("space-platform-foundation", 1.0, &["iron-plate", "copper-plate"]),
+        ("iron-stick", 5.0, &["iron-ore"]),
+        ("engine-unit", 2.0, &["iron-plate", "steel-plate"]),
+        ("pipe", 5.0, &["iron-ore"]),
+        ("iron-gear-wheel", 10.0, &["iron-plate"]),
+        ("stone-brick", 5.0, &["stone"]),
+    ];
+
+    let build = |sr: &_, order: DiClaimOrder| {
+        let opts = layout::LayoutOptions {
+            direct_insertion: DirectInsertion::Forced,
+            di_claim_order: order,
+            ..Default::default()
+        };
+        let _guard = spaghettio_core::trace::start_trace();
+        let l = layout::build_bus_layout(sr, opts);
+        let contended = spaghettio_core::trace::drain_events()
+            .iter()
+            .filter(|e| matches!(e, TraceEvent::DiCouplingContended { .. }))
+            .count();
+        (l.map(|l| (l.width, l.height, l.entities.len())).ok(), contended)
+    };
+
+    let (mut differ, mut contended_targets, mut violations) = (0usize, 0usize, Vec::new());
+    for (item, rate, ins) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, *rate, &inputs, "assembling-machine-3") else { continue };
+        let (p0, c0) = build(&sr, DiClaimOrder::Upstream);
+        let (p1, _c1) = build(&sr, DiClaimOrder::Downstream);
+        let same = p0 == p1;
+        if !same { differ += 1; }
+        if c0 > 0 { contended_targets += 1; }
+        // The entailment KC1 rests on. A violation means the census is blind to
+        // a decision the claim order is making.
+        if c0 == 0 && !same {
+            violations.push(format!("{item}@{rate}: 0 contention but P0 {p0:?} != P1 {p1:?}"));
+        }
+        println!(
+            "  {item}@{rate}: contention={c0} P0={p0:?} P1={p1:?} {}",
+            if same { "same" } else { "DIFFER" }
+        );
+    }
+
+    println!(
+        "\nRFC-059 phase 1: {contended_targets} of {} targets contended, {differ} differ between P0/P1",
+        cases.len()
+    );
+    assert!(
+        violations.is_empty(),
+        "ENTAILMENT VIOLATED — contention-empty must imply diff-empty, so the census \
+         is missing a coupling decision:\n{}",
+        violations.join("\n")
+    );
+    if contended_targets == 0 {
+        println!("KC1 TRIPS on this sample: no spec was ever contended, so claim order is");
+        println!("provably irrelevant here. Widen to the full corpus before acting on it.");
+    }
+}
+
+/// RFC-059 phase 1, THE CORPUS SWEEP — kill criterion 1's verdict.
+///
+/// KC1 trips when every target's contention set is empty. Answered
+/// exhaustively: every producible item, at three rates, under both claim
+/// orders.
+///
+/// Runs `place_rows` DIRECTLY rather than `build_bus_layout`. The claim loop —
+/// the only thing that can produce contention — lives in `place_rows`, so
+/// routing, pole placement and validation are pure cost for this question. A
+/// full-layout version of this sweep ran 39 minutes without finishing and was
+/// abandoned as a bad instrument, not a slow one.
+///
+/// Skips are COUNTED, not silent: a sweep that quietly drops targets cannot
+/// support a claim about all of them.
+#[test]
+#[ignore = "RFC-059 phase 1 — corpus contention census, the KC1 verdict"]
+fn probe_di_contention_corpus_sweep() {
+    use spaghettio_core::bus::di_cell::DiClaimOrder;
+    use spaghettio_core::bus::placer::place_rows;
+    use spaghettio_core::bus::stacking_ctx::StackingCtx;
+    use spaghettio_core::bus::inserter_ladder::InserterTier;
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::trace::TraceEvent;
+
+    let items = spaghettio_core::recipe_db::all_producible_items();
+    let rates = [1.0f64, 5.0, 20.0];
+    let raw: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "water", "crude-oil"]
+        .iter().map(|s| s.to_string()).collect();
+
+    let (mut with_couplings, mut skipped_solve, mut no_couplings) = (0usize, 0usize, 0usize);
+    let (mut contended_targets, mut couplings_seen) = (0usize, 0usize);
+    let mut examples: Vec<String> = Vec::new();
+    let mut contended_pairs: Vec<(String, f64)> = Vec::new();
+
+    for name in &items {
+        for &rate in &rates {
+            let Ok(sr) = solver::solve(name, rate, &raw, "assembling-machine-3") else {
+                skipped_solve += 1;
+                continue;
+            };
+            if sr.di_couplings.is_empty() { no_couplings += 1; continue; }
+            with_couplings += 1;
+            couplings_seen += sr.di_couplings.len();
+
+            let census = |order: DiClaimOrder| -> (usize, Vec<String>) {
+                let _g = spaghettio_core::trace::start_trace();
+                let _ = place_rows(
+                    &sr.machines, &sr.dependency_order, 0, 0, None,
+                    InserterTier::default(), QualityTier::Normal, 0, None, None,
+                    spaghettio_core::bus::layout::RowLayout::default(),
+                    Some(order), &sr.di_couplings, &StackingCtx::unstacked(),
+                );
+                let ev = spaghettio_core::trace::drain_events();
+                let detail: Vec<String> = ev.iter().filter_map(|e| match e {
+                    TraceEvent::DiCouplingContended { contended_spec, loser_producer, loser_consumer, .. } =>
+                        Some(format!("{contended_spec}: {loser_producer}->{loser_consumer}")),
+                    _ => None,
+                }).collect();
+                (detail.len(), detail)
+            };
+
+            let (c0, d0) = census(DiClaimOrder::Upstream);
+            let (c1, _) = census(DiClaimOrder::Downstream);
+            if c0 > 0 || c1 > 0 {
+                contended_targets += 1;
+                contended_pairs.push((name.clone(), rate));
+                for d in d0.iter().take(2) { examples.push(format!("{name}@{rate}: {d}")); }
+            }
+        }
+    }
+
+    // Stage 2: on the targets that DO contend, does the claim order change the
+    // built layout? This is phase 1 output 1. Restricted to contended targets
+    // because a target with no contention cannot differ — that is the
+    // entailment KC1 rests on, and running full layouts corpus-wide to
+    // re-confirm it is what made the first version of this sweep unusable.
+    let mut differ: Vec<String> = Vec::new();
+    let mut same = 0usize;
+    for (name, rate) in &contended_pairs {
+        let inputs: FxHashSet<String> = raw.iter().cloned().collect();
+        let Ok(sr) = solver::solve(name, *rate, &inputs, "assembling-machine-3") else { continue };
+        let build = |order: DiClaimOrder| {
+            let opts = layout::LayoutOptions {
+                direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
+                di_claim_order: order,
+                ..Default::default()
+            };
+            layout::build_bus_layout(&sr, opts)
+                .map(|l| (l.width, l.height, l.entities.len()))
+                .ok()
+        };
+        let (a, b) = (build(DiClaimOrder::Upstream), build(DiClaimOrder::Downstream));
+        if a == b { same += 1; } else {
+            differ.push(format!("{name}@{rate}: P0={a:?} P1={b:?}"));
+        }
+    }
+
+    println!("\n=== RFC-059 phase 1 corpus contention census ===");
+    println!("  items swept:            {}", items.len());
+    println!("  target/rate pairs:      {}", items.len() * rates.len());
+    println!("  skipped (no solve):     {skipped_solve}");
+    println!("  solved, no couplings:   {no_couplings}");
+    println!("  solved WITH couplings:  {with_couplings}");
+    println!("  di_couplings seen:      {couplings_seen}");
+    println!("  targets CONTENDED:      {contended_targets}");
+    for e in examples.iter().take(20) { println!("      {e}"); }
+    println!("\n  contended targets rebuilt: {} same, {} DIFFER", same, differ.len());
+    for d in differ.iter().take(20) { println!("      {d}"); }
+
+    if contended_targets == 0 {
+        println!("\nKC1 TRIPS: no spec is contended anywhere in the corpus.");
+        // Kept as an unreachable-on-today's-corpus branch on purpose: it is what
+        // the census would print if a future recipe-DB change removed every
+        // contention, and a silent fall-through to the `differ.is_empty()` arm
+        // would then read as "contention is real but inconsequential".
+    } else if differ.is_empty() {
+        println!("\nKC1 does NOT trip on contention ({contended_targets} targets contend),");
+        println!("but claim order changes NO layout: every contended target builds identically");
+        println!("under P0 and P1. The contention is real and its resolution is inconsequential");
+        println!("on this corpus — which is a different finding from either KC1 branch.");
+    } else {
+        println!("\nKC1 does NOT trip: {contended_targets} targets contend and {} build",
+                 differ.len());
+        println!("differently under P0 vs P1. The question is real; proceed to phase 2.");
+    }
+}
+
+/// #520 / RFC-059: the engine can now SEE the jammed DI cell, so its own
+/// never-worse gate rejects it.
+///
+/// The defect this pins was invisible on every signal the engine had.
+/// `di-row:copper-cable:electronic-circuit` on am1 drops its output partway
+/// along an east-flowing merger belt and the consumer picks up UPSTREAM of that
+/// drop, so the pickup sits on permanently empty belt — the consumer starves
+/// while everything behind the drop backs up. It validated with zero errors and
+/// zero warnings and produced 0/s in a headless Factorio run, against native's
+/// measured 1.00/s.
+///
+/// `check_belt_flow_reachability` missed it for two compounding reasons, both
+/// now fixed: it asked its question PER MACHINE over the union of a machine's
+/// input belts (so `display-panel`'s healthy iron-plate belt satisfied the test
+/// and its starved electronic-circuit belt was never examined), and it did not
+/// model belt-to-belt lift inserters at all (so the lift's drop was not a source
+/// and its own pickup was never checked).
+///
+/// Three assertions, because "the layout is no longer selected" is weaker than
+/// "the engine knows why":
+///   1. the validator FLAGS the jammed variant, at the pickup tile;
+///   2. consequently the shipped layout under `Search` is the sim-verified one;
+///   3. `Search` still functions where nothing is broken.
+#[test]
+fn di_jammed_cell_is_visible_and_therefore_refused() {
+    use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
+
+    let raw: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "water", "crude-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let build = |item: &str, rate: f64, tier: &str, di: DirectInsertion, order: DiClaimOrder| {
+        let sr = solver::solve(item, rate, &raw, tier)
+            .unwrap_or_else(|e| panic!("{item}@{rate} on {tier} solves: {e}"));
+        let opts = layout::LayoutOptions {
+            direct_insertion: di,
+            di_claim_order: order,
+            ..Default::default()
+        };
+        let l = layout::build_bus_layout(&sr, opts)
+            .unwrap_or_else(|e| panic!("{item}@{rate} on {tier} lays out: {e}"));
+        let issues = spaghettio_core::validate::validate(
+            &l,
+            Some(&sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (l.entities.len(), issues)
+    };
+
+    // 1. The jammed variant is now visible, and the issue is positioned at the
+    //    starved pickup rather than at the machine that starves because of it.
+    let (jammed_ents, jammed_issues) = build(
+        "display-panel",
+        1.0,
+        "assembling-machine-1",
+        DirectInsertion::Forced,
+        DiClaimOrder::Downstream,
+    );
+    assert_eq!(jammed_ents, 202, "the jammed variant is the 202-entity one");
+    let reach: Vec<_> = jammed_issues
+        .iter()
+        .filter(|i| i.category == "belt-flow-reachability")
+        .collect();
+    assert!(
+        !reach.is_empty(),
+        "the jammed DI cell must be visible to the validator — it sims at 0/s. \
+         Issues seen: {:?}",
+        jammed_issues.iter().map(|i| &i.category).collect::<Vec<_>>()
+    );
+    assert!(
+        reach.iter().any(|i| i.message.contains("(8,26)")),
+        "the issue must point at the starved pickup tile (8,26), not at the \
+         machine three rows downstream: {:?}",
+        reach.iter().map(|i| &i.message).collect::<Vec<_>>()
+    );
+
+    // 2. So DI's own never-worse gate now declines it and the sim-verified
+    //    native layout ships — under BOTH the default and the search policy.
+    for order in [DiClaimOrder::default(), DiClaimOrder::Search] {
+        let (ents, issues) = build(
+            "display-panel",
+            1.0,
+            "assembling-machine-1",
+            DirectInsertion::Candidate,
+            order.clone(),
+        );
+        assert_eq!(
+            ents, 221,
+            "display-panel@1 am1 must ship the sim-verified 221-entity layout \
+             under {order:?}; 202 is the variant that sims at 0/s"
+        );
+        assert!(
+            issues.is_empty(),
+            "the shipped layout must stay clean under {order:?}: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    // 3. THE OTHER CONFIRMED HALF-RATE LAYOUT, and the reason this assertion
+    //    reads backwards from its first draft. `small-electric-pole@5` on am1
+    //    used to ship a 126-entity DI layout: denser than native's 163, clean
+    //    on every validator channel, and measured in a headless run at
+    //    **2.52/s against a planned 5.00/s** — converged, so a steady state
+    //    rather than a warmup artifact. Native measures 5.08/s. Same starved-lift
+    //    defect as display-panel, in a different coupling
+    //    (`copper-plate -> copper-cable`), which is why sweeping for the cell
+    //    rather than for the defect class missed it.
+    //
+    //    So 163 is the correct answer here and 126 must never ship again.
+    assert_eq!(
+        build("small-electric-pole", 5.0, "assembling-machine-1",
+              DirectInsertion::Candidate, DiClaimOrder::Search).0,
+        163,
+        "small-electric-pole@5 am1 must ship native (163); 126 is the DI layout \
+         that sims at 2.52/s against a planned 5.00/s"
+    );
+    // 4. `Search` still selects a DI cell where the cell is sound.
+    assert_eq!(
+        build("land-mine", 1.0, "assembling-machine-3",
+              DirectInsertion::Candidate, DiClaimOrder::Search).0,
+        282,
+        "Search keeps the downstream arm on land-mine@1 am3"
+    );
+}
+
+/// RFC-059's corpus verdict — the measurement that decided the policy.
+/// Ignored by default; it builds full layouts for every contended target under
+/// the search and both fixed arms, across three machine tiers.
+///
+/// Four numbers come out:
+///
+///   1. how often the SEARCH beats each fixed arm in what a caller RECEIVES;
+///   2. how often it is WORSE than the pre-RFC arm (`Upstream`) — this must be
+///      zero, and it is the whole safety claim, MEASURED rather than argued
+///      from the fact that the search picks the better arm. The arm picker
+///      orders on (validator warnings, layout warnings, entities) while
+///      `di_choice` gates component-wise against native, and two orderings that
+///      look aligned can disagree;
+///   3. whether either fixed arm dominates — the answer is no, which is why
+///      the RFC ships a search instead of a choice;
+///   4. whether any assignment reachable by pinning an individual coupling
+///      beats the search. That is the only evidence a per-target policy (P2's
+///      greedy-by-gain, P3's matching) could earn its cost.
+///
+/// Measured under `Candidate`, which is what production runs. Under `Forced`
+/// the arms differ far more loudly — downstream-first clears every validation
+/// error on five am3 targets — but `DirectInsertionCandidate` refuses an
+/// error-laden layout before it can ship, so the `Forced` numbers describe
+/// layouts nobody receives.
+///
+/// A target where NEITHER arm builds is counted separately from one where the
+/// search regresses. Collapsing them is a live defect this probe already had:
+/// two am2 targets fail under native as well, on an unrelated lane-capacity
+/// refusal, and a fall-through arm reported them as claim-order regressions.
+///
+/// NOT exhaustive over matchings: for k contended couplings it explores k+2
+/// assignments, not all 2^k subsets. So a "0" on line 4 bounds the achievable
+/// gain from BELOW, and is evidence rather than proof.
+#[test]
+#[ignore = "RFC-059 — the shipped corpus verdict: search vs both fixed arms"]
+fn probe_di_claim_order_shipped_corpus_verdict() {
+    use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
+    use spaghettio_core::bus::inserter_ladder::InserterTier;
+    use spaghettio_core::bus::placer::place_rows;
+    use spaghettio_core::bus::stacking_ctx::StackingCtx;
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::trace::TraceEvent;
+
+    let raw: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "water", "crude-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    let ship = |sr: &spaghettio_core::models::SolverResult, order: DiClaimOrder| {
+        let opts = layout::LayoutOptions {
+            direct_insertion: DirectInsertion::Candidate,
+            di_claim_order: order,
+            ..Default::default()
+        };
+        let l = layout::build_bus_layout(sr, opts).ok()?;
+        let issues = spaghettio_core::validate::validate(
+            &l,
+            Some(sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        Some((
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+            l.entities.len(),
+        ))
+    };
+
+    // The claim loop is the whole of the order-dependent decision, so the
+    // contention census runs `place_rows` alone — no routing, no poles.
+    let losers = |sr: &spaghettio_core::models::SolverResult, order: DiClaimOrder| {
+        let _g = spaghettio_core::trace::start_trace();
+        let _ = place_rows(
+            &sr.machines,
+            &sr.dependency_order,
+            0,
+            0,
+            None,
+            InserterTier::default(),
+            QualityTier::Normal,
+            0,
+            None,
+            None,
+            layout::RowLayout::default(),
+            Some(order),
+            &sr.di_couplings,
+            &StackingCtx::unstacked(),
+        );
+        spaghettio_core::trace::drain_events()
+            .iter()
+            .filter_map(|e| match e {
+                TraceEvent::DiCouplingContended {
+                    loser_producer,
+                    loser_consumer,
+                    loser_item,
+                    ..
+                } => Some((
+                    loser_item.clone(),
+                    loser_producer.clone(),
+                    loser_consumer.clone(),
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let items = spaghettio_core::recipe_db::all_producible_items();
+    let (mut contended, mut identical, mut skipped, mut unbuildable) =
+        (0usize, 0usize, 0usize, 0usize);
+    let (mut beats_up, mut beats_down, mut worse_than_up, mut worse_than_down) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut pin_beats_search: Vec<String> = Vec::new();
+
+    // Three machine tiers, not one. "Never worse" is the load-bearing claim and
+    // a single-tier sweep cannot support it: am1 has two ingredient slots and no
+    // fluid box, so the same recipe gets a different ROW STRUCTURE — which is
+    // exactly what the claim order acts on. An am3-only sweep reported one
+    // differing target and no regressions; widening it found eight and two.
+    // Most recipes refuse to solve on am1; those are COUNTED, because a
+    // shrinking denominator makes "never worse" easier to satisfy for the wrong
+    // reason.
+    let tiers = [
+        "assembling-machine-1",
+        "assembling-machine-2",
+        "assembling-machine-3",
+    ];
+    for tier in tiers {
+        for name in &items {
+            for &rate in &[1.0f64, 5.0, 20.0] {
+                let Ok(sr) = solver::solve(name, rate, &raw, tier) else {
+                    skipped += 1;
+                    continue;
+                };
+                if sr.di_couplings.is_empty() {
+                    continue;
+                }
+                let mut ls = losers(&sr, DiClaimOrder::Upstream);
+                ls.extend(losers(&sr, DiClaimOrder::Downstream));
+                ls.sort();
+                ls.dedup();
+                if ls.is_empty() {
+                    continue;
+                }
+                contended += 1;
+
+                let search = ship(&sr, DiClaimOrder::Search);
+                let up = ship(&sr, DiClaimOrder::Upstream);
+                let down = ship(&sr, DiClaimOrder::Downstream);
+                let (Some(s), Some(u), Some(d)) = (search, up, down) else {
+                    // No layout at all under one or more arms. On this corpus
+                    // that is always a refusal native shares (a lane-capacity
+                    // wall), never something the claim order caused — but it is
+                    // recorded on its own line so it can never be read as one.
+                    unbuildable += 1;
+                    continue;
+                };
+                if s == u && s == d {
+                    identical += 1;
+                }
+                if s < u {
+                    beats_up.push(format!("[{tier}] {name}@{rate}: up={u:?} -> search={s:?}"));
+                }
+                if s < d {
+                    beats_down.push(format!("[{tier}] {name}@{rate}: down={d:?} -> search={s:?}"));
+                }
+                if u < s {
+                    worse_than_up.push(format!("[{tier}] {name}@{rate}: up={u:?} search={s:?}"));
+                }
+                if d < s {
+                    worse_than_down
+                        .push(format!("[{tier}] {name}@{rate}: down={d:?} search={s:?}"));
+                }
+
+                for (item, prod, cons) in &ls {
+                    let pinned =
+                        DiClaimOrder::pinned([(item.as_str(), prod.as_str(), cons.as_str())]);
+                    if let Some(p) = ship(&sr, pinned) {
+                        if p < s {
+                            pin_beats_search.push(format!(
+                                "[{tier}] {name}@{rate}: pin {item}|{prod}|{cons} -> {p:?} beats search={s:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println!("\n=== RFC-059 shipped corpus verdict (DirectInsertion::Candidate) ===");
+    println!("  machine tiers swept:                {}", tiers.len());
+    println!("  item/rate/tier triples skipped:     {skipped}");
+    println!("  contended targets:                  {contended}");
+    println!("  no layout under some arm:           {unbuildable}");
+    println!("  search == both fixed arms:          {identical}");
+    println!("  search BEATS fixed upstream (P0):   {}", beats_up.len());
+    for x in &beats_up {
+        println!("      {x}");
+    }
+    println!("  search BEATS fixed downstream (P1): {}", beats_down.len());
+    for x in &beats_down {
+        println!("      {x}");
+    }
+    println!("  search WORSE than upstream:         {}", worse_than_up.len());
+    for x in &worse_than_up {
+        println!("      {x}");
+    }
+    println!("  search WORSE than downstream:       {}", worse_than_down.len());
+    for x in &worse_than_down {
+        println!("      {x}");
+    }
+    println!("  a PINNED assignment beats search:   {}", pin_beats_search.len());
+    for x in &pin_beats_search {
+        println!("      {x}");
+    }
+
+    assert!(
+        worse_than_up.is_empty() && worse_than_down.is_empty(),
+        "the search must never ship worse than a fixed arm — that is the whole \
+         safety claim, and it is what lets this land without a per-target \
+         opt-out:\n{}\n{}",
+        worse_than_up.join("\n"),
+        worse_than_down.join("\n")
+    );
+    // The probe must find SOMETHING, or it proves nothing about claim order.
+    assert!(
+        !beats_up.is_empty() || !beats_down.is_empty(),
+        "the search beats neither fixed arm anywhere — either the corpus moved \
+         or this probe has stopped discriminating"
+    );
+    // WHICH arm dominates is reported, not asserted, because the answer moved
+    // once the validator could see a starved pickup (#520). It used to be
+    // "neither": downstream looked strictly worse on the two
+    // `small-electric-pole@5` targets. Those were exactly the layouts where
+    // UPSTREAM shipped a validator-clean factory running at half its planned
+    // rate, so downstream was never worse there — it was better, and the
+    // measurement could not tell. With the defect visible, downstream is
+    // never worse and better on several targets, which makes the two-arm
+    // search equivalent to simply flipping the default.
+    if beats_down.is_empty() {
+        println!("\n  DOWNSTREAM DOMINATES: the search never beats it, so a fixed");
+        println!("  `Downstream` default would ship the same layouts for one build");
+        println!("  instead of two. RFC-059's KC4 logic applies — do not ship search");
+        println!("  machinery for a tie. Flipping needs sim verification of the");
+        println!("  targets it improves first; validator-clean is not enough (#520).");
+    } else if beats_up.is_empty() {
+        println!("\n  UPSTREAM DOMINATES: keep the status quo and drop the search.");
+    } else {
+        println!("\n  NEITHER ARM DOMINATES: the two-arm search earns its extra build.");
+    }
+    assert!(
+        pin_beats_search.is_empty(),
+        "a per-target assignment now beats the search — RFC-059 dropped P2/P3 \
+         on the finding that none did, so this reopens them:\n{}",
+        pin_beats_search.join("\n")
     );
 }

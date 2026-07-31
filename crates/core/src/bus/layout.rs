@@ -136,9 +136,22 @@ pub struct LayoutOptions {
     /// The solver always populates `di_couplings`; this only controls
     /// whether the placer acts on them.
     pub direct_insertion: crate::bus::di_cell::DirectInsertion,
+    /// Which coupling claims a contended DI spec (RFC-059). Default
+    /// `Upstream` = the status quo, so every existing layout is
+    /// byte-identical; `Downstream` is P1, the alternative phase 1 measures
+    /// against.
+    pub di_claim_order: crate::bus::di_cell::DiClaimOrder,
     /// RFC-057 topology-preserving post-layout compaction. Experimental and
     /// default off, so the normal pipeline remains byte-identical.
     pub compact_layout: bool,
+    /// RFC-060: run the horizontal-stack row layout as a scored
+    /// decomposition candidate when `row_layout` is `VerticalSplit` and
+    /// the solve has a `RowKind::DualInput` row. Default `true`; the
+    /// candidate may displace native only on a strict issue-channel
+    /// improvement (ties → native, bit-identical). `false` = pure
+    /// vertical (test baselines / debugging); force-horizontal remains
+    /// `row_layout: HorizontalStack`.
+    pub horizontal_candidate: bool,
     /// RFC-058 phase 2: plan band packing and record the plan as a
     /// `BandPackingPlanned` trace event. Positions only — nothing consumes
     /// them yet, so the layout geometry is identical with the flag on or
@@ -179,7 +192,13 @@ impl Default for LayoutOptions {
             // native pass is DI-free, so every layout DI does not
             // strictly improve stays bit-identical.
             direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
+            di_claim_order: crate::bus::di_cell::DiClaimOrder::default(),
             compact_layout: false,
+            // Default ON 2026-07-30 (RFC-060): same never-worse shape as
+            // `direct_insertion` above — the native pass stays vertical,
+            // the horizontal variant competes only where a DualInput row
+            // exists and wins only on strict improvement.
+            horizontal_candidate: true,
             band_packing: false,
         }
     }
@@ -723,7 +742,7 @@ fn layout_pass(
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
-        opts.direct_insertion.placer_acts(),
+        opts.direct_insertion.placer_acts().then_some(opts.di_claim_order.clone()),
         &solver_result.di_couplings,
         &stacking_ctx,
     );
@@ -785,7 +804,7 @@ fn layout_pass(
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
-                opts.direct_insertion.placer_acts(),
+                opts.direct_insertion.placer_acts().then_some(opts.di_claim_order.clone()),
                 &solver_result.di_couplings,
                 &stacking_ctx,
             );
@@ -3217,11 +3236,12 @@ mod tests {
         };
         if format!("{:?}", control.entities) != format!("{:?}", packed.entities) {
             assert_eq!(census(&control), census(&packed), "machine census must survive packing");
-            assert!(
-                (packed.width as i64) * (packed.height as i64)
-                    <= (control.width as i64) * (control.height as i64),
-                "a packed layout may not exceed the control's bounding box",
-            );
+            // No area assertion: density was kill criterion 1's claim and
+            // KC1 FIRED (RFC-058 concluded 2026-07-31) — the packed
+            // builder is a falsification record, and RFC-060's
+            // horizontal-stack candidate can legitimately make the native
+            // control tighter than the packed result. The flag contract
+            // is refusal-or-census-preserving-build plus a typed event.
         }
         let last_plan = events.iter().rev().find(|e| {
             matches!(

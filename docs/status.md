@@ -40,7 +40,7 @@ below are gated by the default (non-ignored) suite unless noted.
 | 1 | `iron-gear-wheel` | 1 recipe, 1 solid input | SOLVED — clean, incl. 20/s |
 | 2 | `electronic-circuit` | 2 recipes, 2 solid inputs | SOLVED — clean from ores; stress-gated at 20/22/23/30/35/40/s (yellow) and 60/s (red) from ore |
 | 3 | `plastic-bar` | 1 recipe, 1 fluid + 1 solid input | SOLVED — clean, incl. from crude; sulfuric-acid, heavy-oil cracking, and multi-machine advanced-oil-processing also gated at this tier |
-| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED — from plates fully clean; from ore (AM2) green with 1 known input-rate-delivery warning (pre-existing demand-pull modeling residual). Partitioned 4/s + 5/s and horizontal-stack 7/s stress-gated. |
+| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED — from plates fully clean; from ore (AM2) **validator-clean since RFC-060** (the horizontal-stack candidate wins strictly-better and deletes the long-standing input-rate-delivery residual), but **not sim-verified** — same AC-assembly/copper-cable-tap topology as `ac@5`, which [#519](https://github.com/storkme/spaghettio/issues/519) shows under-delivering by up to 25% despite E0/W0; treat as unconfirmed until sim-checked. Partitioned 4/s + 5/s and horizontal-stack 7/s stress-gated. |
 | 5 | `processing-unit` | Deep chain, multiple fluids | SOLVED — from ore (AM3, 2/s) fully clean; horizontal-stack gated at 2/s (pipe bypass) and 25/s (pole coverage). Higher-rate partitioned strategies still have junction + starvation issues — `partition_strategy_scoreboard_extended`. |
 | 6 | `flying-robot-frame` | Adds lubricant: advanced-oil-processing refinery rows with 3 fluid outputs | SOLVED via the USP chain (0 errors). No dedicated FRF fixture yet. |
 | 7 | `utility-science-pack` | Very deep chain (LDS + PU + FRF) | SOLVED — fully clean at 1/s (gauntlet 2026-07-21: 0 errors, 0 warnings, 6796 entities, 208×285). |
@@ -146,6 +146,88 @@ inert scaffolding, and the flag-gated builder as the reproducible
 falsification record. Full trail in the RFC's decision log (fifteen
 dated entries, two falsified hypotheses recorded en route).
 
+**`rfc-059-di-coupling-assignment.md` (2026-07-31) — CLOSED, decided: the
+tie-break stays P0, and the better policy is blocked on a validator blind spot.**
+
+The DI dispatcher's claim order decides which of two couplings fuses a contended
+spec. Over every producible item at 1/5/20 per second across three machine tiers,
+**179 targets contend** and **neither fixed order dominates** — downstream-first
+ships strictly better on 6 and strictly worse on 2. So a two-arm search
+(`DiClaimOrder::Search`: build both, keep the better) was built; it resolves all 8
+optimally and is worse than a fixed arm on none.
+
+**It is not the default, and the reason is the important part.** A headless run on
+`display-panel@1` / am1, controlled against the status quo:
+
+| arm | ships | validator | sim |
+|---|---|---|---|
+| `Upstream` (status quo) | native, 221 entities | 0 errors, 0 warnings | **PASS** — 1.00/s, converged |
+| `Search` | DI, 202 entities | 0 errors, 0 warnings | **FAIL** — 0.00/s, `full_output: 10` |
+
+The broken cell is `di-row:copper-cable:electronic-circuit` on am1 — RFC-053
+records that pair simming at 101.3%, at a different tier, so it is not broken
+everywhere. `Search` stays built and reachable so it can be re-verified once the
+cell is fixed. Tracked as
+[#520](https://github.com/storkme/spaghettio/issues/520).
+
+**P2 (greedy-by-gain) and P3 (optimal matching) are dropped** on a stronger
+finding than KC4 required: pinning each contended coupling to claim first and
+rebuilding, no assignment beats the two-arm search on any target. The per-target
+optimum is always one of the two static orders.
+
+Calibration notes worth carrying forward:
+
+- **"Never worse" in this project means "never worse as far as 36 functional
+  checks can tell."** #474's DI gate, RFC-057's fold and #511's compaction
+  transaction all rest on that substitution; this is the first time it has been
+  caught paying out. A validator-clean, denser layout was a dead factory.
+- **A one-tier sweep gave a confidently wrong answer.** On am3 alone
+  downstream-first was better on 1 target and worse on 0 — a free flip, and it
+  was implemented and defaulted before am1/am2 turned it into 6-better/2-worse.
+  Second time in one RFC that a narrower instrument reported a clean winner that
+  widening removed (the first: a 15-target sample reporting zero contention
+  against the corpus's 179). **When a sweep reports a clean sweep, widen an axis
+  before believing it.**
+- **Quote `Candidate` numbers, not `Forced` ones.** Under `Forced`,
+  downstream-first clears every validation error on five am3 targets — two orders
+  of magnitude larger than the shipped difference, because
+  `DirectInsertionCandidate` refuses an error-laden layout before it ships.
+- The RFC's motivating case, `rail`, **never contends** — its couplings die at
+  buildability, not at the contention check.
+
+**#520 — the validator shipped a half-rate factory (2026-07-31).**
+`check_belt_flow_reachability` asked its question **per machine over the union of
+that machine's input belts**, so one fed input masked a starved one; and it did
+not model belt-to-belt lift inserters at all, so a lift's drop was not a source
+and its own pickup was never checked. Consequence, measured in a headless run:
+
+| `small-electric-pole@5` am1 | entities | planned | produced | verdict |
+|---|---:|---:|---:|---|
+| DI — what `main` shipped | 126 | 5.00/s | **2.52/s** | FAIL, −49.6% |
+| native — what ships with the fix | 163 | 5.00/s | **5.08/s** | PASS, +1.7% |
+
+Both converged, so the deficit is a steady state rather than a warmup artifact.
+The failing layout validated with **zero errors and zero warnings** and was 37
+entities denser, so `di_choice` preferred it — correctly, by every signal the
+engine had. `display-panel@1` am1 is the same defect at 0/s.
+
+Fixed by modelling lifts as both source and sink (which makes the check
+transitive and localises the fault at the starved pickup) and by replacing the
+per-machine BFS with one forward sweep from every source plus one backward sweep
+from every sink, tested per tile — stricter *and* cheaper. Recorded as instance
+**ten** in [`validator-reporting.md`](validator-reporting.md), with the rule it
+adds: a check that aggregates over a set must ask its question per element, not
+over the union.
+
+**Knock-on for RFC-059**: with the defect visible, downstream-first no longer
+loses on the two `small-electric-pole` targets — it dominates, and the two-arm
+search becomes equivalent to simply flipping the default. The flip is deliberately
+NOT made yet; it needs sim verification of the targets it improves, because the
+lesson here is precisely that a clean validator is not evidence a layout works.
+
+**Corpus-wide exposure is unmeasured.** Two shipped layouts are confirmed
+affected, found by following one lead. Sizing it means building every target on
+`origin/main` and on the fix and diffing shipped entity counts.
 
 **`rfc-057-topology-preserving-dense-repacking.md` multi-fold (2026-07-30,
 PR #500 — RFC ACTIVE, not closed)**: **multi-fold is Factorio-verified.**
@@ -701,6 +783,7 @@ golden re-blesses across the arc. Full trail:
 - [#312 consumer-clamped fan-in refusal bites much earlier at high build quality](https://github.com/storkme/spaghettio/issues/312) — S=1; the wall now scales ×S with stacking (RFC-047 Leg C)
 - [#335 one unreached furnace bank in the legendary-express@60 fixture](https://github.com/storkme/spaghettio/issues/335)
 - [#336 (n,1) merge-tap unwired; late sideload check refuses those shapes by name](https://github.com/storkme/spaghettio/issues/336)
+- [#519 sideload-fed taps credited at both-lane rate by the lane walker](https://github.com/storkme/spaghettio/issues/519) — measured during RFC-060 K60-3: `ac@5` horizontal is E0/W0 yet sims at exactly 75% of plan (3 cable taps × one yellow lane = 22.5/s vs a 30/s demand); same signature at `ac@7` (−14.3%) and through the `pu@3` chain (−24%). Validator-clean ≠ delivers-at-plan until this closes.
 
 (Audited 2026-07-21: #65, #68, #136, #310 — previously cited here — are all
 closed. 2026-07-24: #334 closed — the (7,3)/(7,4) lane skew is ACCEPTED as a

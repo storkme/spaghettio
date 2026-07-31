@@ -211,6 +211,61 @@ pub fn remove_capped_events_since(start: usize) {
 pub enum TraceEvent {
     // Phase 1: Row Placement
     RowsPlaced { rows: Vec<RowInfo> },
+    /// A DI spec was eligible in a coupling that could not claim it, because
+    /// the spec was already fused into another cell (RFC-059 phase 1, output
+    /// 2/3). This is the CONTENTION signal: the dispatcher resolves such a
+    /// clash by iteration order, and a binary P0-vs-P1 layout diff cannot
+    /// distinguish "nothing was contended" from "contended, and both orders
+    /// happened to agree" — which is why kill criterion 1 gates on this rather
+    /// than on the diff alone.
+    DiCouplingContended {
+        /// The spec that was already claimed, blocking this coupling.
+        contended_spec: String,
+        /// The coupling that lost: `producer -> consumer on item`.
+        loser_producer: String,
+        loser_consumer: String,
+        loser_item: String,
+        /// Whether the blocked index was the producer or the consumer.
+        blocked_side: String,
+    },
+    /// A DI coupling was rejected BEFORE the contention check, so iteration
+    /// order never got to decide it (RFC-059 phase 1). Recorded because a
+    /// contention census is uninterpretable without it: a target reporting
+    /// zero contention because DI never engaged at all is a different fact
+    /// from one reporting zero because nothing was ever double-claimed, and
+    /// kill criterion 1 turns on exactly that distinction.
+    DiCouplingRefused {
+        producer: String,
+        consumer: String,
+        item: String,
+        /// `split-rows`, `producer-missing`, `producer-not-upstream`, or
+        /// `not-buildable`.
+        reason: String,
+    },
+    /// Which claim order the DI candidate kept, and what both arms scored
+    /// (RFC-059). Emitted once per DI candidate that built under both orders.
+    ///
+    /// Exists because the choice is otherwise invisible: on the corpus the two
+    /// arms agree on all but a handful of targets, so "DI won" says nothing
+    /// about which order produced it, and a regression that quietly stopped
+    /// running the second arm would look identical to one where both arms tied.
+    DiClaimOrderChosen {
+        /// `upstream` or `downstream`.
+        order: String,
+        upstream_entities: usize,
+        downstream_entities: usize,
+        upstream_warnings: usize,
+        downstream_warnings: usize,
+    },
+    /// A DI coupling successfully claimed both its specs — the per-coupling
+    /// outcome kill criterion 2 tests an estimator's ranking against.
+    DiCouplingClaimed {
+        producer: String,
+        consumer: String,
+        item: String,
+        /// `row` or `stacked`.
+        variant: String,
+    },
     RowSplit {
         recipe: String,
         original_count: usize,

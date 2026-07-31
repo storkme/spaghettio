@@ -627,6 +627,15 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
     }
 }
 
+/// RFC-060: whether any machine spec would build a `RowKind::DualInput`
+/// row. `DualInput` is the only row kind whose construction consults
+/// `RowLayout`, so a solve with none of them produces a bit-identical
+/// layout under either row layout — the decomposition search uses this
+/// to skip the horizontal-stack candidate pass entirely.
+pub(crate) fn any_dual_input_row(machines: &[crate::models::MachineSpec]) -> bool {
+    machines.iter().any(|m| matches!(row_kind(m), RowKind::DualInput))
+}
+
 /// Whether lane splitting is applicable to a spec/count combination.
 ///
 /// SingleInput, DualInput, TripleInput, chemical-plant FluidInput, and
@@ -2547,7 +2556,7 @@ pub fn place_rows(
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
-    direct_insertion: bool,
+    direct_insertion: Option<crate::bus::di_cell::DiClaimOrder>,
     di_couplings: &[crate::models::DICoupling],
     ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
@@ -2556,7 +2565,7 @@ pub fn place_rows(
     let mut y_cursor = y_offset;
     let mut max_width: i32 = 0;
 
-    let ordered = if direct_insertion {
+    let ordered = if direct_insertion.is_some() {
         order_specs(machines, dependency_order, di_couplings)
     } else {
         // DI off: pass empty couplings so order_specs is byte-identical
@@ -2573,7 +2582,7 @@ pub fn place_rows(
     // list — a plain map keyed by consumer_recipe would silently drop all
     // but the last coupling for such a consumer.
     let mut di_lookup: FxHashMap<&str, Vec<(&str, &str)>> = FxHashMap::default();
-    if direct_insertion {
+    if direct_insertion.is_some() {
         for c in di_couplings {
             di_lookup
                 .entry(c.consumer_recipe.as_str())
@@ -2621,10 +2630,77 @@ pub fn place_rows(
     // its second input at all).
     let mut cell_pairs: FxHashMap<usize, (usize, &str, bool)> = FxHashMap::default();
     let mut claimed: FxHashSet<usize> = FxHashSet::default();
-    if direct_insertion {
-        for (c_idx, c_spec) in ordered.iter().enumerate() {
+    if let Some(claim_order) = &direct_insertion {
+        // RFC-059: WHICH consumer gets to claim a contended spec first. The
+        // walk is topological, so `Upstream` (the status quo) lets the upstream
+        // coupling claim and the downstream one is never evaluated. This was
+        // never a decision — it is the loop's direction — and reversing it is
+        // P1, the alternative phase 1 measures P0 against.
+        //
+        // Only the ORDER of consideration changes. Eligibility is unaffected:
+        // the `p_idx >= c_idx` guard still requires the producer to sit upstream
+        // in `ordered`, so reversing cannot fuse a pair that was not already
+        // fusible — it can only change who wins when two couplings want one spec.
+        //
+        // `Pinned` is a THIRD axis over the same loop: the named couplings'
+        // consumers are visited first, in the order given, and within such a
+        // consumer its named coupling is offered first. It changes only who is
+        // ASKED first — every gate below still applies, so a pinned coupling
+        // that cannot build still loses and the rest still claim what is left.
+        use crate::bus::di_cell::DiClaimOrder;
+        let walk: Vec<usize> = match claim_order {
+            // `Search` is a candidate-level policy (build both, keep the
+            // better); a single placer call walks exactly one order, so it
+            // reads as the status-quo direction. Spelled out rather than
+            // grouped with `Upstream` in one arm, because silently treating an
+            // unhandled policy as P0 is how the RFC's original problem started.
+            DiClaimOrder::Upstream | DiClaimOrder::Search => (0..ordered.len()).collect(),
+            DiClaimOrder::Downstream => (0..ordered.len()).rev().collect(),
+            DiClaimOrder::Pinned(keys) => {
+                let mut seen: FxHashSet<usize> = FxHashSet::default();
+                let mut v: Vec<usize> = Vec::with_capacity(ordered.len());
+                for k in keys.iter() {
+                    if let Some(i) = ordered.iter().position(|s| s.recipe == k.consumer) {
+                        if seen.insert(i) {
+                            v.push(i);
+                        }
+                    }
+                }
+                for i in 0..ordered.len() {
+                    if seen.insert(i) {
+                        v.push(i);
+                    }
+                }
+                v
+            }
+        };
+        for c_idx in walk {
+            let c_spec = &ordered[c_idx];
             let Some(couplings) = di_lookup.get(c_spec.recipe.as_str()) else {
                 continue;
+            };
+            // Only `Pinned` reorders a consumer's own coupling list, and it
+            // sorts STABLY — so P0/P1 keep the untouched `di_couplings` order
+            // and stay byte-identical to before this variant existed.
+            let reordered: Vec<(&str, &str)> = match claim_order {
+                DiClaimOrder::Pinned(keys) => {
+                    let mut cs: Vec<(&str, &str)> = couplings.to_vec();
+                    cs.sort_by_key(|(item, producer)| {
+                        keys.iter()
+                            .position(|k| {
+                                k.item == *item
+                                    && k.producer == *producer
+                                    && k.consumer == c_spec.recipe
+                            })
+                            .unwrap_or(usize::MAX)
+                    });
+                    cs
+                }
+                _ => Vec::new(),
+            };
+            let couplings: &[(&str, &str)] = match claim_order {
+                DiClaimOrder::Pinned(_) => &reordered,
+                _ => couplings,
             };
             // Try every coupling this consumer has, not just a lone one.
             // A consumer coupled on two items cannot be a Phase-1 STACKED
@@ -2635,20 +2711,50 @@ pub fn place_rows(
             // silently excluded `electronic-circuit`, i.e. the corpus's
             // most common DI consumer, from ever being considered.
             for &(item, producer_recipe) in couplings {
+                let refuse = |reason: &str| {
+                    crate::trace::emit(crate::trace::TraceEvent::DiCouplingRefused {
+                        producer: producer_recipe.to_string(),
+                        consumer: c_spec.recipe.clone(),
+                        item: item.to_string(),
+                        reason: reason.to_string(),
+                    });
+                };
                 let same_recipe = |r: &str| ordered.iter().filter(|s| s.recipe == r).count();
                 if same_recipe(producer_recipe) != 1 || same_recipe(&c_spec.recipe) != 1 {
+                    refuse("split-rows");
                     continue;
                 }
                 let Some(p_idx) = ordered.iter().position(|s| s.recipe == producer_recipe) else {
+                    refuse("producer-missing");
                     continue;
                 };
                 if p_idx >= c_idx {
+                    refuse("producer-not-upstream");
                     continue;
                 }
                 // A spec may only be fused once. Without this, a producer
                 // that is itself a DI consumer could be claimed by two
                 // different cells and placed twice.
                 if claimed.contains(&p_idx) || claimed.contains(&c_idx) {
+                    // CONTENTION (RFC-059 phase 1). This coupling was eligible
+                    // and lost, because one of its specs is already fused. The
+                    // dispatcher resolves that by iteration order alone — see
+                    // the RFC; a binary P0-vs-P1 layout diff cannot tell this
+                    // case from "nothing was contended", which is why kill
+                    // criterion 1 gates on the contention set rather than the
+                    // diff.
+                    let blocked = if claimed.contains(&p_idx) {
+                        (ordered[p_idx].recipe.clone(), "producer")
+                    } else {
+                        (c_spec.recipe.clone(), "consumer")
+                    };
+                    crate::trace::emit(crate::trace::TraceEvent::DiCouplingContended {
+                        contended_spec: blocked.0,
+                        loser_producer: producer_recipe.to_string(),
+                        loser_consumer: c_spec.recipe.clone(),
+                        loser_item: item.to_string(),
+                        blocked_side: blocked.1.to_string(),
+                    });
                     continue;
                 }
                 // Buildability, not merely eligibility — and the FULL
@@ -2683,10 +2789,20 @@ pub fn place_rows(
                     && pair_is_arrangeable(ordered[p_idx], c_spec, item, true)
                     && trial(true);
                 if !(stacked_ok || row_ok) {
+                    refuse("not-buildable");
                     continue;
                 }
                 claimed.insert(p_idx);
                 claimed.insert(c_idx);
+                // The per-coupling outcome (RFC-059 phase 1, output 3): which
+                // coupling actually won a contended spec, which is the ground
+                // truth kill criterion 2 tests an estimator's ranking against.
+                crate::trace::emit(crate::trace::TraceEvent::DiCouplingClaimed {
+                    producer: producer_recipe.to_string(),
+                    consumer: c_spec.recipe.clone(),
+                    item: item.to_string(),
+                    variant: if stacked_ok { "stacked" } else { "row" }.to_string(),
+                });
                 cell_pairs.insert(c_idx, (p_idx, item, !stacked_ok));
                 break;
             }
@@ -2713,7 +2829,7 @@ pub fn place_rows(
         // houses the bridge inserter that spans from the producer's output
         // belt to the consumer's input belt. Without the gap, the belts
         // are too close for any inserter to bridge them.
-        let is_di_consumer = direct_insertion && di_lookup.contains_key(spec.recipe.as_str());
+        let is_di_consumer = direct_insertion.is_some() && di_lookup.contains_key(spec.recipe.as_str());
         if spec_idx > 0 {
             y_cursor += 2; // gap between recipes for lane balancers / DI bridge
         }
@@ -2948,7 +3064,7 @@ pub fn place_rows_from_result(
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
-    direct_insertion: bool,
+    direct_insertion: Option<crate::bus::di_cell::DiClaimOrder>,
     ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     place_rows(
@@ -3254,7 +3370,7 @@ mod tests {
     fn place_rows_single_recipe_no_split() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].machine_count, 1);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
@@ -3265,7 +3381,7 @@ mod tests {
         let (producer, consumer) = cell_pair();
         let machines = vec![consumer, producer];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
         assert_eq!(spans[1].spec.recipe, "iron-gear-wheel");
@@ -3276,7 +3392,7 @@ mod tests {
         // Second recipe starts at y_end_of_first + 2 (gap)
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].y_start, spans[0].y_end + 2);
     }
@@ -3285,7 +3401,7 @@ mod tests {
     fn place_rows_y_offset() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
         assert_eq!(spans[0].y_start, 5);
     }
 
@@ -3307,7 +3423,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
-            false,
+            None,
             &[],
 &StackingCtx::unstacked(),
         );
@@ -3356,7 +3472,7 @@ mod tests {
             InserterTier::default(), QualityTier::Normal,
             0, None, None,
             RowLayout::default(),
-            true, // direct_insertion ON
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), // direct_insertion ON
             &result.di_couplings,
             &StackingCtx::unstacked(),
         );
@@ -3403,7 +3519,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
-            false, // direct_insertion OFF
+            None, // direct_insertion OFF
             &couplings,
             &StackingCtx::unstacked(),
         );
@@ -3451,7 +3567,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
-            false,
+            None,
             &[],
 &StackingCtx::unstacked(),
         );
@@ -3519,7 +3635,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
-            false,
+            None,
             &[],
 &StackingCtx::unstacked(),
         );
@@ -3541,7 +3657,7 @@ mod tests {
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, total_height) =
-            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
+            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
 
         // Every span should have y_end > y_start
         for span in &spans {
@@ -3569,7 +3685,7 @@ mod tests {
         let dep_order = vec!["iron-plate".to_string()];
         let bus_width = 10;
         let (_, spans, max_width, _) =
-            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
+            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
 
         assert!(
             spans[0].row_width >= bus_width,
@@ -3597,11 +3713,11 @@ mod tests {
             None,
             Some(&extra_gaps),
             RowLayout::default(),
-            false,
+            None,
             &[],
 &StackingCtx::unstacked(),
         );
-        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
+        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
 
         // Second row should start 5 tiles later with gap
         assert_eq!(
@@ -3957,7 +4073,7 @@ mod tests {
         let (ents, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
         );
         assert_eq!(spans.len(), 1, "producer + consumer must fuse into one cell row, got {:?}",
             spans.iter().map(|s| s.spec.recipe.as_str()).collect::<Vec<_>>());
@@ -3997,7 +4113,7 @@ mod tests {
         let (ents, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
         );
         assert_eq!(spans.len(), 1, "guard: this asserts nothing unless a cell was actually fused");
         let y = spans[0].output_belt_y;
@@ -4048,7 +4164,7 @@ mod tests {
         let (ents, _spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            true, &couplings, &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &couplings, &StackingCtx::unstacked(),
         );
         // Since Phase 2 this pair legitimately fuses as a ROW cell (the
         // consumer is coupled east/west, leaving both faces free for its
@@ -4255,7 +4371,7 @@ mod tests {
         let (_, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            false, &gear_cell_couplings(), &StackingCtx::unstacked(),
+            None, &gear_cell_couplings(), &StackingCtx::unstacked(),
         );
         assert_eq!(spans.len(), 2, "DI off must not fuse");
     }
@@ -4304,7 +4420,7 @@ mod tests {
         let (_, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::Regular, QualityTier::Normal,
             0, None, None, RowLayout::default(),
-            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
         );
         assert_eq!(
             spans.len(), 2,
@@ -4326,7 +4442,7 @@ mod tests {
         let (ents, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
         );
         assert_eq!(spans.len(), 1, "guard: needs a fused cell to mean anything");
         let out_y = spans[0].output_belt_y;
@@ -4360,7 +4476,7 @@ mod tests {
             &machines, &dep_order, 0, 0, Some("express-transport-belt"),
             InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
         );
         assert_eq!(spans.len(), 1, "guard: needs a fused cell to mean anything");
         let in_y = spans[0].input_belt_y[0];

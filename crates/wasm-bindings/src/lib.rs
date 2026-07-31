@@ -121,11 +121,31 @@ fn layout_options(
             Some("off") => spaghettio_core::bus::cells::CellComposition::Off,
             _ => spaghettio_core::bus::cells::CellComposition::Candidate,
         },
+        // The engine default, which RFC-059 measured and deliberately left at
+        // `Upstream` (P0): the two-arm `Search` is better on every validator
+        // channel and ships a factory that produces 0/s on one target, so it
+        // stays off until #520 is fixed. Following the default rather than
+        // naming an arm is what keeps this boundary honest — when #520 clears
+        // and the default flips, the web app inherits it with no edit here.
+        //
+        // Deliberately NOT a URL knob: it is a settled tie-break, not a user
+        // trade-off, and the RFC's whole complaint was that it had been an
+        // implicit one. Naming it here rather than `..Default::default()`
+        // keeps the field list exhaustive — see the note below.
+        di_claim_order: spaghettio_core::bus::di_cell::DiClaimOrder::default(),
         // RFC-057 post-layout compaction, now reachable from the web surface.
         // Transactional: `compact_validated_geometry` commits a transform only
         // when validation is no worse than its input, so the worst case is
         // "no change", never a broken factory.
         compact_layout: compact_layout.as_deref() == Some("1"),
+        // RFC-060: the horizontal-stack candidate is engine policy, not a
+        // web-surface axis — pinned `true` (the engine default). The
+        // never-worse contract makes an escape hatch unnecessary for
+        // users; force-horizontal stays reachable via `row_layout`
+        // ("horizontal-stack" / `rl=hs`). A vertical-only debug param can
+        // be added here later if a real need appears (RFC-060 decision
+        // log, 2026-07-30).
+        horizontal_candidate: true,
         // RFC-058 phase 2 is engine-only: the packer emits a trace plan and
         // moves nothing, so there is no web surface to expose yet. Wire a
         // URL param here only when phase 4 gives the flag visible effect.

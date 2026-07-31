@@ -59,6 +59,118 @@ pub enum DirectInsertion {
     Forced,
 }
 
+/// Which order the dispatcher walks consumers when deciding who claims a
+/// contended DI spec (RFC-059).
+///
+/// A spec may be fused into at most one cell. When a spec is eligible in two
+/// couplings the winner is decided by ITERATION ORDER, which was never a
+/// decision anyone made — the walk is topological, so the upstream coupling
+/// claims and the downstream one is never evaluated.
+///
+/// This is an option rather than an env var on purpose. The measurement that
+/// motivated RFC-059 was taken with an uncommitted scratch flag and is
+/// consequently unrecoverable from the repository; a real option is what makes
+/// phase 1 reproducible.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum DiClaimOrder {
+    /// P0: consumers in topological order, so upstream claims.
+    ///
+    /// **The default, and RFC-059 deliberately left it that way.** The RFC
+    /// measured `Search` as better by every validator channel and then a
+    /// headless-Factorio run falsified the premise that made that safe: on
+    /// `display-panel@1` / am1, the arm `Search` prefers ships a DI row cell
+    /// that validates with **zero** errors and warnings and produces **0/s** in
+    /// game, where P0 ships native and measures 1.00/s. The gate DI relies on
+    /// is only as good as the validator, and there the validator is blind.
+    /// See RFC-059's decision log and #520.
+    #[default]
+    Upstream,
+    /// P1: consumers in reverse topological order, so the downstream coupling
+    /// claims a contended spec.
+    Downstream,
+    /// Build both static orders and keep the better one.
+    ///
+    /// **Measured-correct but NOT the default**, and the gap between those is
+    /// the whole of RFC-059's outcome. By every validator channel this is
+    /// strictly better than either fixed arm on the corpus and worse on none.
+    /// In a real Factorio it ships a jammed factory on at least one target
+    /// (`display-panel@1` am1), because the DI row cell it selects there is
+    /// physically broken while validating clean. Kept live and reachable so the
+    /// policy can be re-verified the moment that cell is fixed (#520) — deleting it
+    /// would mean re-deriving a measurement that took a corpus sweep across
+    /// three machine tiers.
+    ///
+    /// RFC-059 set out to choose between `Upstream` and `Downstream` and
+    /// measured that neither dominates: across three machine tiers,
+    /// `Downstream` ships a strictly better layout on 6 corpus targets and a
+    /// strictly worse one on 2. Any fixed choice forfeits the other's wins.
+    ///
+    /// Searching is exhaustive here, not heuristic. The same sweep pinned each
+    /// contended coupling to claim first and rebuilt: on no target did any
+    /// other assignment beat both static orders. So the per-target optimum is
+    /// always one of these two, which is why the RFC ships no gain estimator
+    /// and no matching solver.
+    ///
+    /// Only `DirectInsertion::Candidate` searches — it is a candidate-level
+    /// concept, and the placer, which walks one order per call, reads this as
+    /// `Upstream`. `Forced` is the single-variant A/B arm and is what the
+    /// search itself runs, so it must stay deterministic.
+    Search,
+    /// An explicit priority over individual couplings: the ones named here are
+    /// offered the claim first, in the order given, and everything else follows
+    /// in `Upstream` order behind them.
+    ///
+    /// Two jobs, both from RFC-059:
+    ///
+    /// - it is how phase 1 produces **output 3**, the per-coupling ground truth
+    ///   kill criterion 2 tests an estimator's ranking against. P0 and P1 sample
+    ///   only two points of an assignment space that is larger whenever one
+    ///   target has several contended specs sharing a coupling, so "which
+    ///   coupling wins this spec" cannot be answered by flipping the walk;
+    /// - it is the mechanism P3 would APPLY through. A matching is a set of
+    ///   couplings, and handing that set to the dispatcher as a priority is how
+    ///   the chosen assignment becomes a layout.
+    ///
+    /// Priority, not restriction: a pinned coupling that turns out unbuildable
+    /// still loses, and unpinned couplings still claim what is left. So this
+    /// cannot manufacture an infeasible assignment — the same gates apply.
+    Pinned(std::sync::Arc<Vec<DiCouplingKey>>),
+}
+
+/// One candidate coupling, by name rather than by index — `producer` and
+/// `consumer` are *recipe* names, matching `SolverResult::di_couplings`.
+///
+/// Names because the caller choosing a priority (a test, a matching solver)
+/// works from the solver's coupling list, and `ordered`'s indices are a
+/// placer-internal detail that does not survive being handed out.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DiCouplingKey {
+    pub item: String,
+    pub producer: String,
+    pub consumer: String,
+}
+
+impl DiCouplingKey {
+    pub fn new(item: &str, producer: &str, consumer: &str) -> Self {
+        Self {
+            item: item.to_string(),
+            producer: producer.to_string(),
+            consumer: consumer.to_string(),
+        }
+    }
+}
+
+impl DiClaimOrder {
+    /// Build a `Pinned` order from `(item, producer, consumer)` triples.
+    pub fn pinned<'a>(keys: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>) -> Self {
+        DiClaimOrder::Pinned(std::sync::Arc::new(
+            keys.into_iter()
+                .map(|(i, p, c)| DiCouplingKey::new(i, p, c))
+                .collect(),
+        ))
+    }
+}
+
 impl DirectInsertion {
     /// Does the PLACER act on `di_couplings` for this call? Only
     /// `Forced` does: under `Candidate` the native pass must stay
