@@ -504,8 +504,9 @@ pub struct PackedNet {
     pub item: String,
     pub is_fluid: bool,
     pub rate: f64,
-    /// Producing band index, or `None` for external inputs (west edge).
-    pub src_band: Option<usize>,
+    /// Producing band indices (all of them — every producer's output must
+    /// be collected), or empty for external inputs (west edge).
+    pub src_bands: Vec<usize>,
     /// Consuming band indices, deduplicated.
     pub dst_bands: Vec<usize>,
 }
@@ -523,13 +524,16 @@ pub fn build_packed_nets(
             span_to_band.insert(si, bi);
         }
     }
-    let mut producers: FxHashMap<&str, usize> = FxHashMap::default();
+    let mut producers: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
     let mut rates: FxHashMap<&str, f64> = FxHashMap::default();
     let mut fluid: FxHashMap<&str, bool> = FxHashMap::default();
     for (si, rs) in rows.iter().enumerate() {
         for out in &rs.spec.outputs {
             if let Some(&bi) = span_to_band.get(&si) {
-                producers.insert(out.item.as_str(), bi);
+                let v = producers.entry(out.item.as_str()).or_default();
+                if !v.contains(&bi) {
+                    v.push(bi);
+                }
             }
             *rates.entry(out.item.as_str()).or_default() +=
                 out.rate * rs.machine_count as f64;
@@ -547,15 +551,15 @@ pub fn build_packed_nets(
             if rs.di_input.iter().any(|(item, _)| item == &inp.item) {
                 continue;
             }
-            let src = producers.get(inp.item.as_str()).copied();
-            if src == Some(bi) {
+            let src = producers.get(inp.item.as_str()).cloned().unwrap_or_default();
+            if src == vec![bi] {
                 continue; // fed within its own band
             }
             let net = nets.entry(inp.item.clone()).or_insert_with(|| PackedNet {
                 item: inp.item.clone(),
                 is_fluid: *fluid.get(inp.item.as_str()).unwrap_or(&inp.is_fluid),
                 rate: *rates.get(inp.item.as_str()).unwrap_or(&0.0),
-                src_band: src,
+                src_bands: src.into_iter().filter(|&p| p != bi).collect(),
                 dst_bands: Vec::new(),
             });
             if !net.dst_bands.contains(&bi) {
@@ -569,12 +573,12 @@ pub fn build_packed_nets(
     // arrangement, or its west end is a validator-visible dead-end and a
     // sim drain has nothing to collect from.
     for out in &solver_result.external_outputs {
-        if let Some(&bi) = producers.get(out.item.as_str()) {
+        if let Some(bis) = producers.get(out.item.as_str()) {
             nets.push(PackedNet {
                 item: out.item.clone(),
                 is_fluid: out.is_fluid,
                 rate: out.rate,
-                src_band: Some(bi),
+                src_bands: bis.clone(),
                 dst_bands: Vec::new(),
             });
         }
@@ -749,18 +753,23 @@ pub fn route_packed_nets(
         // Starts are the output row's CONTINUATION tiles — reserved for
         // this band above, so they are always seedable and the corridor's
         // first belt physically receives the row's west flow.
-        let starts: Vec<(i32, i32)> = match net.src_band {
-            Some(bi) => {
-                let ox = origins[bi].0;
-                contents[bi]
-                    .row_indices
-                    .iter()
-                    .flat_map(|&si| {
-                        let y = row_y(bi, rows[si].output_belt_y);
-                        [(ox - 1, y), (ox - 2, y)]
-                    })
-                    .collect()
-            }
+        let stubs = |bi: usize| -> Vec<(i32, i32)> {
+            let ox = origins[bi].0;
+            contents[bi]
+                .row_indices
+                .iter()
+                .flat_map(|&si| {
+                    let y = row_y(bi, rows[si].output_belt_y);
+                    // ONLY the immediate continuation: seeding at ox-2
+                    // left (ox-1, y) unstamped and the row dead-ended
+                    // into the hole. ox-2 stays reserved as elbow room.
+                    [(ox - 1, y)]
+                })
+                .collect()
+        };
+        let primary = net.src_bands.first().copied();
+        let starts: Vec<(i32, i32)> = match primary {
+            Some(bi) => stubs(bi),
             None => (min.1..=max.1).map(|y| (min.0, y)).collect(),
         };
         // Corridor TREE state: plain straight belts of this net's earlier
@@ -846,10 +855,10 @@ pub fn route_packed_nets(
                 for p in [(dv.1, dv.0), (-dv.1, -dv.0)] {
                     let side = (j.0 + p.0, j.1 + p.1);
                     let entry = (side.0 + dv.0, side.1 + dv.1);
-                    if passable(&occ, side, true, net.src_band)
-                        && passable(&occ, side, false, net.src_band)
-                        && passable(&occ, entry, true, net.src_band)
-                        && passable(&occ, entry, false, net.src_band)
+                    if passable(&occ, side, true, primary)
+                        && passable(&occ, side, false, primary)
+                        && passable(&occ, entry, true, primary)
+                        && passable(&occ, entry, false, primary)
                     {
                         branch_from.insert(entry, (j, side, d));
                         starts.push(entry);
@@ -877,7 +886,7 @@ pub fn route_packed_nets(
                 FxHashMap::default();
             for &s in &starts {
                 for horiz in [true, false] {
-                    if passable(&occ, s, horiz, net.src_band) && !fed_by_foreign(s) {
+                    if passable(&occ, s, horiz, primary) && !fed_by_foreign(s) {
                         best.insert((s, horiz), 0);
                         open.push(Reverse((hfn(s), 0, s, horiz)));
                     }
@@ -903,10 +912,10 @@ pub fn route_packed_nets(
                 for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                     let nxt = (tile.0 + dx, tile.1 + dy);
                     let nh = dy == 0;
-                    if !passable(&occ, nxt, nh, net.src_band) || fed_by_foreign(nxt) {
+                    if !passable(&occ, nxt, nh, primary) || fed_by_foreign(nxt) {
                         continue;
                     }
-                    if nh != horiz && !passable(&occ, tile, nh, net.src_band) {
+                    if nh != horiz && !passable(&occ, tile, nh, primary) {
                         continue;
                     }
                     let nc = cost + 1;
@@ -922,8 +931,8 @@ pub fn route_packed_nets(
                 let seedable = starts
                     .iter()
                     .filter(|&&s| {
-                        passable(&occ, s, true, net.src_band)
-                            || passable(&occ, s, false, net.src_band)
+                        passable(&occ, s, true, primary)
+                            || passable(&occ, s, false, primary)
                     })
                     .count();
                 let sample: Vec<_> = starts.iter().take(3).collect();
@@ -931,7 +940,7 @@ pub fn route_packed_nets(
                     "net {}: no corridor from {:?} to band {dst} \
                      (starts {} seedable of {} {:?}, targets {})",
                     net.item,
-                    net.src_band,
+                    net.src_bands,
                     seedable,
                     starts.len(),
                     sample,
@@ -1048,6 +1057,111 @@ pub fn route_packed_nets(
                 };
                 let axis_in = (i > 0).then(|| path[i - 1].1 == t.1);
                 let axis_out = (i + 1 < path.len()).then(|| path[i + 1].1 == t.1);
+                let bits = occ.entry(t).or_insert(0);
+                match (axis_in, axis_out) {
+                    (Some(a), Some(b)) if a != b => *bits |= TURN,
+                    (Some(a), _) | (_, Some(a)) => *bits |= if a { H } else { V },
+                    _ => {}
+                }
+                belt_dirs.insert(t, (dir, Some(net.item.clone())));
+                net_belts.push((t, dir));
+                out.push(PlacedEntity {
+                    name: belt_name.to_string(),
+                    x: t.0,
+                    y: t.1,
+                    direction: dir,
+                    carries: Some(net.item.clone()),
+                    ..Default::default()
+                });
+            }
+        }
+
+        // Collector runs: every ADDITIONAL producer's output merges into
+        // the net's trunk (same-item sideload — legal), or its whole
+        // output row strands as a dead-end while consumers starve.
+        for &extra in net.src_bands.iter().skip(1) {
+            let starts = stubs(extra);
+            let targets: FxHashSet<(i32, i32)> =
+                net_belts.iter().map(|&(t, _)| t).collect();
+            if targets.is_empty() {
+                continue;
+            }
+            let (tx0, tx1) = (
+                targets.iter().map(|t| t.0).min().unwrap(),
+                targets.iter().map(|t| t.0).max().unwrap(),
+            );
+            let (ty0, ty1) = (
+                targets.iter().map(|t| t.1).min().unwrap(),
+                targets.iter().map(|t| t.1).max().unwrap(),
+            );
+            let hfn = |t: (i32, i32)| {
+                (tx0 - t.0).max(t.0 - tx1).max(0) + (ty0 - t.1).max(t.1 - ty1).max(0)
+            };
+            let mut open: BinaryHeap<Reverse<(i32, i32, (i32, i32), bool)>> = BinaryHeap::new();
+            let mut best: FxHashMap<((i32, i32), bool), i32> = FxHashMap::default();
+            let mut parent: FxHashMap<((i32, i32), bool), ((i32, i32), bool)> =
+                FxHashMap::default();
+            for &st in &starts {
+                for horiz in [true, false] {
+                    if passable(&occ, st, horiz, Some(extra)) {
+                        best.insert((st, horiz), 0);
+                        open.push(Reverse((hfn(st), 0, st, horiz)));
+                    }
+                }
+            }
+            let mut found: Option<Vec<(i32, i32)>> = None;
+            while let Some(Reverse((_, cost, tile, horiz))) = open.pop() {
+                if best.get(&(tile, horiz)).copied().unwrap_or(i32::MAX) < cost {
+                    continue;
+                }
+                if targets.contains(&tile) {
+                    let mut path = vec![tile];
+                    let mut cur = (tile, horiz);
+                    while let Some(&pr) = parent.get(&cur) {
+                        path.push(pr.0);
+                        cur = pr;
+                    }
+                    path.reverse();
+                    found = Some(path);
+                    break;
+                }
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let nxt = (tile.0 + dx, tile.1 + dy);
+                    let nh = dy == 0;
+                    if !passable(&occ, nxt, nh, Some(extra)) {
+                        continue;
+                    }
+                    if nh != horiz && !passable(&occ, tile, nh, Some(extra)) {
+                        continue;
+                    }
+                    let nc = cost + 1;
+                    if best.get(&(nxt, nh)).copied().unwrap_or(i32::MAX) <= nc {
+                        continue;
+                    }
+                    best.insert((nxt, nh), nc);
+                    parent.insert((nxt, nh), (tile, horiz));
+                    open.push(Reverse((nc + hfn(nxt), nc, nxt, nh)));
+                }
+            }
+            let Some(path) = found else {
+                return Err(format!(
+                    "net {}: collector from band {extra} cannot reach the trunk",
+                    net.item
+                ));
+            };
+            for (i, &t) in path.iter().enumerate() {
+                if i + 1 == path.len() {
+                    break; // last tile is ON the trunk — sideload, no stamp
+                }
+                let n = path[i + 1];
+                let dir = match (n.0 - t.0, n.1 - t.1) {
+                    (1, 0) => D::East,
+                    (-1, 0) => D::West,
+                    (0, 1) => D::South,
+                    _ => D::North,
+                };
+                let axis_in = (i > 0).then(|| path[i - 1].1 == t.1);
+                let axis_out = Some(n.1 == t.1);
                 let bits = occ.entry(t).or_insert(0);
                 match (axis_in, axis_out) {
                     (Some(a), Some(b)) if a != b => *bits |= TURN,
@@ -1224,7 +1338,7 @@ pub fn build_packed_layout(
     let height = entities.iter().map(|e| e.y).max().unwrap_or(0) + 1;
     let mut boundary_inputs = Vec::new();
     for net in &nets {
-        if net.src_band.is_none() {
+        if net.src_bands.is_empty() {
             if let Some(e) = entities
                 .iter()
                 .filter(|e| e.carries.as_deref() == Some(net.item.as_str()))
