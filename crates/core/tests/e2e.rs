@@ -9861,23 +9861,44 @@ fn di_claim_order_default_is_downstream_and_ships_the_working_big_pole() {
 /// tiers, three rates, and both reachable claim orders (`Upstream`/
 /// `Downstream` — `Search` tries both and `Candidate`'s default pins one, so
 /// together these cover every arm `DirectInsertionCandidate` can ever build)
-/// found the new refuse/shift logic reachable on exactly 11 distinct
-/// targets — and on every one of them, EVERY producer drop the coupling
-/// needs sits wider than a single downstream consumer machine's own 1-3
-/// tile column budget, so the bridge correctly refuses outright rather than
-/// shipping a partial-throughput layout. A full `build_bus_layout` diff
-/// (origin/main vs this fix) on all 11 targets under `Candidate` with
-/// `default()`/`Search`/`Upstream` (33 comparisons) is byte-identical:
-/// native already shipped on every one of them, because #524's
-/// belt-flow-reachability check already caught the old bridge's starvation
-/// and the never-worse gate already declined it. **What changes is that the
-/// declines are now honest at the SOURCE** — the placer itself refuses a
-/// bridge it cannot fill, rather than emitting a shape whose brokenness only
-/// the validator (or, as this fix's own first draft shows, only the sim
-/// harness) can catch. `small-electric-pole@5` am1 (this test's target) is
-/// the canonical instance: 3 producer drops spread across the belt for 3
-/// downstream machines, each with only a 3-tile column budget — too narrow
-/// to clear the last drop, so it refuses like every other touched target.
+/// found the new refuse logic reachable on exactly 11 distinct targets —
+/// and on every one of them, EVERY producer drop the coupling needs sits
+/// wider than a single downstream consumer machine's own 1-3 tile column
+/// budget, so the bridge correctly refuses outright rather than shipping a
+/// partial-throughput layout. A full `build_bus_layout` diff (origin/main
+/// vs this fix) on all 11 targets under `Candidate` with
+/// `default()`/`Search`/`Upstream` (33 comparisons) is byte-identical, i.e.
+/// this fix changes NOTHING that ships — but "byte-identical" is not the
+/// same claim as "native ships everywhere". On 32 of the 33 comparisons
+/// native does ship, because #524's belt-flow-reachability check already
+/// caught the old bridge's starvation and the never-worse gate already
+/// declined it. On the 33rd — `small-electric-pole@5` am2 under
+/// `Downstream`/`Search` — what ships (identically before and after this
+/// fix) is a 136-entity DI layout carrying one `input-rate-delivery`
+/// warning, beating native's clean 139-entity layout: the #519
+/// selection-firewall (flux warnings don't block selection) behaving
+/// exactly as designed, on a `di-row` cell this fix's own logic never
+/// touches (that arm's `copper-cable→small-electric-pole` coupling fuses
+/// directly, with no separate bridge to refuse). What changes for the 11
+/// touched targets is that the placer itself now refuses a bridge it
+/// cannot fill, rather than emitting a shape whose brokenness only the
+/// validator (or, as this fix's own first draft shows, only the sim
+/// harness) can catch. `small-electric-pole@5` **am1** (this test's
+/// target) is the canonical instance: 3 producer drops spread across the
+/// belt for 3 downstream machines, each with only a 3-tile column budget —
+/// too narrow to clear the last drop, so it refuses like every other
+/// touched target.
+///
+/// **F2 firewall (adversarial-review follow-up).** The shift-application
+/// path (moving a bridge's columns rather than refusing outright) is
+/// unexercised anywhere in this sweep — `DiBridgeShifted` fires on zero
+/// targets — and local review showed a shifted drop could in principle
+/// land east of a downstream machine's own near-feed pickup, silently
+/// under-feeding it (a different validator-clean-but-wrong shape). The
+/// shift machinery stays in `stamp_di_bridge` (dead code) behind
+/// `ALLOW_DI_BRIDGE_SHIFT = false`, refusing on any nonzero shift rather
+/// than only an overflowing one, until a real target needs it and can be
+/// sim-verified.
 ///
 /// Assertions:
 ///   1. `small-electric-pole@5` am1 ships NATIVE under every reachable
@@ -9893,11 +9914,18 @@ fn di_claim_order_default_is_downstream_and_ships_the_working_big_pole() {
 ///      repaired, not merely re-hidden. It is not validator-clean overall
 ///      (the refused bridge's bus-fallback hits a separate, pre-existing
 ///      ghost-router gap when a lane must route through a DI cell's own
-///      dead-end output belt — tracked as a #526 followup, and irrelevant
-///      to what ships since assertion 2 already confirms the gate declines
-///      the whole candidate).
+///      dead-end output belt — tracked as
+///      [#556](https://github.com/storkme/spaghettio/issues/556), and
+///      irrelevant to what ships since assertion 2 already confirms the
+///      gate declines the whole candidate).
 ///   4. `Search` still selects a DI cell where the cell is sound (an
 ///      unrelated target, confirming the fix didn't disturb DI generally).
+///
+/// The policy question #520 raised — whether `di_choice` should require
+/// more than validator parity before displacing native, now with a THIRD
+/// validator-clean-but-wrong exhibit (this fix's own first draft) — remains
+/// open, tracked as
+/// [#557](https://github.com/storkme/spaghettio/issues/557).
 #[test]
 fn di_jammed_cell_is_visible_and_therefore_refused() {
     use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};

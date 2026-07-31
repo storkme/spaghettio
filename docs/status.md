@@ -293,17 +293,27 @@ one, the coupling's producer drops sit wider than a single downstream
 consumer machine's own column budget, so the bridge correctly refuses
 outright. A full `build_bus_layout` diff (origin/main vs the fix) on all 11
 targets under `Candidate` with `default()`/`Search`/`Upstream` (33
-comparisons) is byte-identical: native already shipped everywhere, because
-#524's belt-flow-reachability check already caught the old bridge's
-starvation and the never-worse gate already declined it. What changes is
-that the placer itself now refuses a bridge it cannot fill, rather than
-depending on the validator (or, as this fix's own first draft shows, the
-sim harness) to catch it downstream — the small-electric-pole@5 canonical
-case (3 producer drops split across the belt for 3 downstream machines,
-each with only a 3-tile column budget) refuses like every other touched
-target. The policy question #520 raised — whether `di_choice` should
-require more than validator parity before displacing native — remains
-open; this fix answers only the geometry-repair half of #526.
+comparisons) is byte-identical, i.e. this fix changes NOTHING that ships —
+but "byte-identical" is not the same claim as "native ships everywhere".
+On 32 of the 33 comparisons native does ship, because #524's
+belt-flow-reachability check already caught the old bridge's starvation
+and the never-worse gate already declined it. On the 33rd —
+`small-electric-pole@5` am2 under `Downstream`/`Search` — what ships
+(identically before and after this fix) is a 136-entity DI layout carrying
+one `input-rate-delivery` warning, beating native's clean 139-entity
+layout: the #519 selection-firewall (flux warnings don't block selection)
+behaving exactly as designed, on a `di-row` cell this fix's own logic
+never touches (that arm's copper-cable→small-electric-pole coupling fuses
+directly, with no separate bridge to refuse). What changes for the 11
+touched targets is that the placer itself now refuses a bridge it cannot
+fill, rather than depending on the validator (or, as this fix's own first
+draft shows, the sim harness) to catch it downstream — the
+small-electric-pole@5 **am1** canonical case (3 producer drops split
+across the belt for 3 downstream machines, each with only a 3-tile column
+budget) refuses like every other touched target. The policy question #520
+raised — whether `di_choice` should require more than validator parity
+before displacing native — remains open; this fix answers only the
+geometry-repair half of #526.
 
 **`rfc-057-topology-preserving-dense-repacking.md` multi-fold (2026-07-30,
 PR #500 — RFC ACTIVE, not closed)**: **multi-fold is Factorio-verified.**

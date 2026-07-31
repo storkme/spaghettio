@@ -1779,7 +1779,13 @@ pub fn stamp_row_cell(
                 });
             }
             if no > 0 {
-                let this_x = mx + nf as i32;
+                // The RIGHTMOST out-inserter column for this consumer, not
+                // the first: `no` output columns are stamped at
+                // `mx + nf .. mx + nf + no - 1` below, and with `no >= 2`
+                // (the ordinary case when the output side needs a second
+                // reach-2 column — see the face-plan comment above) the
+                // first column is NOT this consumer's last drop.
+                let this_x = mx + nf as i32 + no as i32 - 1;
                 output_feed_x_min =
                     Some(output_feed_x_min.map_or(this_x, |cur| cur.max(this_x)));
             }
@@ -2102,6 +2108,36 @@ mod row_stamp_tests {
             .filter(|e| e.carries.as_deref() == Some("electronic-circuit") && e.name.contains("inserter"))
             .count();
         assert_eq!(out_ins, n_consumers);
+    }
+
+    /// #526 F1: `output_feed_x_min` must be the RIGHTMOST out-inserter
+    /// column of the LAST consumer, not its first. The canonical fixture's
+    /// `out_count == 2` (two output columns per consumer — EC's 2.5/s needs
+    /// two long-handed columns at L2), so this is exactly the shape an
+    /// `mx + nf` computation gets wrong: it would report the first of the
+    /// last consumer's two columns, one tile short of where the belt
+    /// actually finishes receiving that consumer's output.
+    #[test]
+    fn output_feed_x_min_is_the_last_consumers_rightmost_column() {
+        let (plan, l) = stamped();
+        // Last (rightmost) consumer in the sequence.
+        let last_consumer_idx = plan
+            .sequence
+            .iter()
+            .enumerate()
+            .filter(|&(_, &is_p)| !is_p)
+            .next_back()
+            .map(|(i, _)| i)
+            .expect("canonical plan has consumers");
+        let mx = plan.xs[last_consumer_idx];
+        let nf = 1; // spec().consumer_feed_count
+        let no = 2; // spec().out_count
+        assert_eq!(
+            l.output_feed_x_min,
+            mx + nf + no - 1,
+            "must be the last consumer's RIGHTMOST out-inserter column \
+             (mx + nf + no - 1), not its first (mx + nf)"
+        );
     }
 
     /// Feed inserters must actually reach their belts: the consumer's is

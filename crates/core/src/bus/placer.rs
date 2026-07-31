@@ -1828,14 +1828,39 @@ fn stamp_di_bridge(
     // single downstream machine's own column budget is often infeasible,
     // and refusing is the correct, honest outcome then — not a consolation
     // prize.
+    //
+    // #526 F2: FIREWALLED — refuse on ANY nonzero shift, not only an
+    // overflowing one. The shift-application machinery a few lines down is
+    // correct in principle but UNEXERCISED: a trace-instrumented sweep of
+    // every producible item x 3 machine tiers x 3 rates x both reachable
+    // claim orders found `DiBridgeShifted` firing on ZERO targets — every
+    // place this logic is reachable needs either `shift == 0` or an
+    // outright refusal, so the shift path itself has no corpus coverage
+    // and no sim measurement backing it. Local review additionally showed
+    // a shifted DROP column can land EAST of the downstream consumer's own
+    // near-feed pickup, silently under-feeding that one machine — a
+    // different, still "validator-clean but physically wrong" shape from
+    // the one this fix exists to close, and nothing in the current corpus
+    // exercises it to catch a regression there. So: treat any shift the
+    // same as an overflow — refuse — until a real target needs the shift
+    // path and it can be verified (sim-anchored, not just validator-clean)
+    // rather than merely reasoned about. The computation and the
+    // shift-application loop below are left in place, not deleted: this
+    // gate is the only thing keeping them dead code, and flipping it back
+    // on is a one-line change once that verification exists.
+    const ALLOW_DI_BRIDGE_SHIFT: bool = false;
     let min_dx = dxs.iter().copied().min().unwrap_or(0);
     let max_dx = dxs.iter().copied().max().unwrap_or(0);
     if let Some(feed_x_min) = producer.output_feed_x_min {
         for &mx in &mxs {
             let shift = (feed_x_min - (mx + min_dx)).max(0);
-            if max_dx + shift > mw as i32 - 1 {
+            let overflows = max_dx + shift > mw as i32 - 1;
+            if overflows || (shift > 0 && !ALLOW_DI_BRIDGE_SHIFT) {
                 crate::trace::emit(crate::trace::TraceEvent::GhostSpecFailed {
-                    spec_key: format!("di-bridge:{item}:upstream-of-feed"),
+                    spec_key: format!(
+                        "di-bridge:{item}:{}",
+                        if overflows { "upstream-of-feed" } else { "shift-firewalled" }
+                    ),
                     from_x: feed_x_min,
                     from_y: producer_belt_y,
                     to_x: mx,
