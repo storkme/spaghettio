@@ -422,6 +422,7 @@ mod tests {
             output_east: true,
             output_belt_x_min: 0,
             output_belt_x_max: 9,
+            output_feed_x_min: None,
             horizontal_stack: None,
             secondary_output_belt: None,
             sorted_output_belts: Vec::new(),

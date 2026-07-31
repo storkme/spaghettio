@@ -267,6 +267,54 @@ lesson here is precisely that a clean validator is not evidence a layout works.
 affected, found by following one lead. Sizing it means building every target on
 `origin/main` and on the fix and diffing shipped entity counts.
 
+**#526 — the geometry itself is repaired, and the fix's own first draft
+repeated the defect class it was fixing (2026-07-31).** `stamp_di_bridge`
+derived a bridge's pick/drop column purely from the downstream consumer's
+own alignment, with no way to know where an upstream DI-cell producer's
+belt actually carries its full output. The first attempted fix clamped a
+bridge's column to the LEFTMOST of a cell's several producer drops — which
+repairs belt-flow-**reachability** (no tile the validator inspects is ever
+literally, permanently empty) but not **throughput**: belts are
+one-directional, so a picker positioned before a LATER drop can never draw
+that drop's contribution, not occasionally but permanently. That "fixed"
+layout validated with zero errors and zero warnings and still measured
+**2.94/s against a 5.00/s plan** in a headless run — the `#520` trap,
+reproduced by the fix meant to close it, caught only because the
+verification protocol ran a real sim rather than trusting the validator's
+silence. Corrected by clamping to the RIGHTMOST (last) drop instead — only
+downstream of it has the belt seen every producer's contribution.
+
+**The corrected fix changes no shipped layout anywhere in the corpus.** A
+trace-instrumented sweep of every producible item across three machine
+tiers, three rates, and both reachable claim orders (`Upstream`/
+`Downstream` — together these cover every arm `DirectInsertionCandidate`
+can build) found the new logic reachable on 11 distinct targets. On every
+one, the coupling's producer drops sit wider than a single downstream
+consumer machine's own column budget, so the bridge correctly refuses
+outright. A full `build_bus_layout` diff (origin/main vs the fix) on all 11
+targets under `Candidate` with `default()`/`Search`/`Upstream` (33
+comparisons) is byte-identical, i.e. this fix changes NOTHING that ships —
+but "byte-identical" is not the same claim as "native ships everywhere".
+On 32 of the 33 comparisons native does ship, because #524's
+belt-flow-reachability check already caught the old bridge's starvation
+and the never-worse gate already declined it. On the 33rd —
+`small-electric-pole@5` am2 under `Downstream`/`Search` — what ships
+(identically before and after this fix) is a 136-entity DI layout carrying
+one `input-rate-delivery` warning, beating native's clean 139-entity
+layout: the #519 selection-firewall (flux warnings don't block selection)
+behaving exactly as designed, on a `di-row` cell this fix's own logic
+never touches (that arm's copper-cable→small-electric-pole coupling fuses
+directly, with no separate bridge to refuse). What changes for the 11
+touched targets is that the placer itself now refuses a bridge it cannot
+fill, rather than depending on the validator (or, as this fix's own first
+draft shows, the sim harness) to catch it downstream — the
+small-electric-pole@5 **am1** canonical case (3 producer drops split
+across the belt for 3 downstream machines, each with only a 3-tile column
+budget) refuses like every other touched target. The policy question #520
+raised — whether `di_choice` should require more than validator parity
+before displacing native — remains open; this fix answers only the
+geometry-repair half of #526.
+
 **`rfc-057-topology-preserving-dense-repacking.md` multi-fold (2026-07-30,
 PR #500 — RFC ACTIVE, not closed)**: **multi-fold is Factorio-verified.**
 `chain-mil5ore` folds **three times**: 553x32 (17.3:1) to **153x141 (1.09:1)**
@@ -820,7 +868,7 @@ golden re-blesses across the arc. Full trail:
 - [#456 flow-preserving compaction / the spaghettifier](https://github.com/storkme/spaghettio/issues/456) — design split into competing [RFC-055 compact linear chains](rfc-055-compact-cell-chain.md) and [RFC-056 folded chains](rfc-056-folded-cell-chain.md); both make validated cell rotations first-class and share one measured decision gate
 - [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135) — main compaction lever
 - [#527 parked: bus high-rate scaling cluster](https://github.com/storkme/spaghettio/issues/527) — #311 #312 #335 #336 #345, closed not-planned 2026-07-31; all real, none fixed; revisit at the cell-interface RFC. #311's merger wall still gates >45/s headline claims.
-- [#526 DI cell geometry: belt-to-belt lift picks upstream of its only feed](https://github.com/storkme/spaghettio/issues/526) — successor to #520; canonical cable→EC cell is claimed on 68 targets and ships on 0; #524 makes the defect visible so the never-worse gate declines, but the geometry itself is unrepaired
+- [#526 DI cell geometry: belt-to-belt lift picks upstream of its only feed](https://github.com/storkme/spaghettio/issues/526) — **geometry repaired 2026-07-31** (see the narrative entry above): `stamp_di_bridge` now refuses a bridge that can't clear a DI cell's LAST producer drop, rather than shipping a partial-throughput layout. Corpus-swept: changes zero shipped layouts (native already won everywhere via #524's gate). Still open: the policy question #520 raised, whether `di_choice` should require more than validator parity before displacing native
 - [#519 flux blind spot](https://github.com/storkme/spaghettio/issues/519) — **walker recalibrated 2026-07-31**: consumption decrement along rows (plus four model-artifact fixes found by fixture bisection) makes `input-rate-delivery` report tail starvation the sims measured (`ac@5` now E0/W7 at the exact machines its sim census showed empty; was E0/W0 at 75% of plan). Still open for: merge-aware demand attribution (the map over-attributes up every merge branch, so demand-weighted external seeding is consistency-gated), folding flux into candidate SELECTION (currently excluded — selections are bit-identical to pre-#519; giving the never-worse contracts flux teeth is the #520 ask), and re-simming a fixture to confirm a fix moves the measured number. Gauntlet/scoreboard warning totals recorded before 2026-07-31 pre-date the recalibration and undercount.
 
 (Audited 2026-07-21: #65, #68, #136, #310 — previously cited here — are all
