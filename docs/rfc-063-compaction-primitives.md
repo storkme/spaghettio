@@ -5,6 +5,12 @@ Evidence base: [`compaction-retro-2026-07.md`](compaction-retro-2026-07.md),
 which mines the decision logs of RFC-053 through RFC-061 and issues #135,
 #456, #507, #519, #520, #526.
 
+**2026-07-31 update: Phase A KILLED** (kill criterion 1 fired on the
+Phase A0 feasibility probe, before SAT ran — see Phase A's gate and the
+decision log). Phases B and C continue, at escalated bars (≥25% / −40.0%)
+per kill criterion 1's own pre-registered escalation rule. Maintenance
+residue from A0 tracked in #551.
+
 ## Summary
 
 This RFC funds the next compaction arc as three primitive-level attacks on
@@ -91,50 +97,46 @@ own, so the regenerated library must be measured, not assumed better.
 Factorio-SAT on `PATH`. This is a known dependency of the existing
 tooling, not new to this RFC, but it gates who can run Phase A locally.
 
-**Gate — numeric bar, revised by the Phase A0 probe (2026-07-31).**
-Superseded in place; see the decision log entry below for the full
-derivation. Original text ("the three oversized bands are 15, 10 and 8
-tiles tall … the pre-registered bar is ≥25% combined reduction … 33 → ≤
-24.75 tiles") rested on #135's 2026-04-11 measurement, which the A0 probe
-found stale — the live fixture no longer produces those bands or those
-shapes. Restated:
+**Gate — STATUS: Phase A KILLED, 2026-07-31 (kill criterion 1 fired on
+A0 evidence).** Original gate text ("the three oversized bands are 15,
+10 and 8 tiles tall … the pre-registered bar is ≥25% combined reduction
+… 33 → ≤ 24.75 tiles") is kept below for the record; it is no longer
+active. The Phase A0 feasibility probe (see decision log) found the
+premise underneath that bar — that row-height parity (~5-tall, "the
+~5-tile height an ordinary machine row already achieves") is physically
+approachable for these shapes — false: the best-known hand-optimized
+design for `(4,5)`, the shape driving the worst band, is 11 tiles tall,
+not ~5, and the realistically reachable combined gain against
+verified best-known-practice references is ≈8% on the gate fixture and
+≈6% on the holdout (bounding-box area, both measured against real
+downloaded community blueprints, not the idealized calculation the
+original bar used) — nowhere near ≥25%. Per RFC-058's own kill-criterion
+discipline, which this RFC explicitly inherits ("Stop; do not re-tune the
+packer" — RFC-058 KC1; reaffirmed at RFC-058's own kill, "the criterion's
+own text says stop; do not re-tune"), a missed pre-registered bar is not
+grounds to lower the bar to match what was measured. **Kill criterion 1
+therefore fires: Phase A cannot beat its ≥25% bar, established by A0
+evidence without running SAT.** See the decision log entry below for the
+full derivation, the escalated Phase B/C bars this triggers, and the
+maintenance residue spun off in its place.
 
-- **Baseline is the live measurement, not #135's.** On
-  `stress_electronic_circuit_30s_from_ore` as of 2026-07-31: three
-  balancer-driven bands at the same recipe transitions (copper-plate,
-  copper-cable, iron-plate), tile-heights **9, 17, 8** (34 combined,
-  shapes `(3,8)` direct / `(8,10)`→decomposed 2×`(4,5)` / `(2,10)`→
-  decomposed 2×`(1,5)`) — not #135's 15/10/8 (33 combined). Re-measure
-  again immediately before Phase A starts; this drifted once already in
-  three months and can drift again.
-- **Metric is whole-layout bounding-box area after real routing**, not
-  per-template tile-height. Height is retained as the *mechanism* to
-  watch (it is what `compute_extra_gaps` reserves and what made the
-  bands visible in the first place) but is not the pass/fail number — a
-  regenerated template that trades height for width could clear a
-  height-only bar while widening the bus enough to net zero area win.
-- **Pre-registered bar: ≥10% combined bounding-box-area reduction on
-  `stress_electronic_circuit_30s_from_ore`** (the gate fixture) **AND
-  ≥5% on `stress_electronic_circuit_60s_red_from_ore`** (the holdout,
-  added per the PR #547 review — prevents a regeneration overfit to the
-  gate fixture's specific shapes from passing on a fixture it wasn't
-  tuned against). Both measured after real routing. This bar is
-  deliberately lower than the original ≥25%: the A0 probe's own
-  template-level measurements (see decision log) found the real,
-  area-based headroom on the live baseline's three named shapes is
-  roughly 8% (gate fixture) and 6% (holdout) when substituting the best
-  community-verified reference design per shape — nowhere near the
-  idealized-ceiling arithmetic the original bar was built from, and one
-  of the three shapes (`(3,8)`) shows *no* headroom at all against the
-  best reference found. The bar is set at, not below, that measured
-  floor deliberately — Phase A must clear what off-the-shelf substitution
-  already demonstrates achievable, not merely match it, or it hasn't
-  earned the SAT budget.
-- AND zero regressions on the `balancer_lane_audit` / `KNOWN_IMBALANCED`
-  tripwires.
-- AND any layout whose templates changed is sim-anchored (headless
-  Factorio, long `--warmup` per the deep-chain rule) before being called
-  never-worse — validator parity is not sufficient per #520.
+*(Original gate text, retained for the record — no longer active:)* The
+three oversized bands are 15, 10 and 8 tiles tall (33 tiles combined)
+against a corpus where ordinary bands are almost always 5 tiles tall
+(RFC-058's census). If regeneration/decomposition reaches row-height
+parity — each balancer band shrinking toward the ~5-tile height an
+ordinary machine row already achieves — the idealized ceiling is
+`(33 − 15) / 33 = 54.5%`. Per the discipline RFC-058's own KC1 used (an
+obstacle-free estimate is not a real-routing number; that RFC halved its
+probe's −66.1% to set a −33.0% bar, and even that margin was thin), this
+RFC halves the idealized ceiling: the pre-registered bar is ≥25% combined
+reduction in the three named balancer bands' tile-height on
+`stress_electronic_circuit_30s_from_ore` (33 → ≤24.75 tiles), measured
+after real routing, not on the idealized calculation above. AND zero
+regressions on the `balancer_lane_audit` / `KNOWN_IMBALANCED` tripwires.
+AND any layout whose templates changed is sim-anchored (headless
+Factorio, long `--warmup` per the deep-chain rule) before being called
+never-worse — validator parity is not sufficient per #520.
 
 ### Phase B — wide-band reshaping: two machine rows sharing one belt row
 
@@ -151,14 +153,23 @@ carrying its own. That changes the cost structure `max_per_row` capping
 paid for — the belt row that dominated each extra sub-row's overhead is
 halved rather than duplicated.
 
-**Gate.** A bounded spike (not a full implementation) on the five
-width-dominant fixtures RFC-058's census named. Pre-registered before the
-spike runs, because it must clear a bar set by an already-measured failed
-alternative: **≥15% band-bbox reduction on those fixtures — three times
-`max_per_row` capping's already-falsified −5.3% ceiling, chosen so the
-new reshaping cannot be read as a rounding-noise win over the technique
-it is meant to beat** — with a never-worse, sim-anchored contract (no
-target that validates clean today ships denser and slower).
+**Gate — ESCALATED to ≥25%, 2026-07-31 (kill criterion 1 fired on Phase
+A0 evidence; see Phase A's gate and the decision log for the trigger).**
+A bounded spike (not a full implementation) on the five width-dominant
+fixtures RFC-058's census named. Pre-registered before the spike runs,
+because it must clear a bar set by an already-measured failed
+alternative: originally **≥15% band-bbox reduction on those fixtures —
+three times `max_per_row` capping's already-falsified −5.3% ceiling,
+chosen so the new reshaping cannot be read as a rounding-noise win over
+the technique it is meant to beat**. Kill criterion 1's own
+pre-registered escalation rule raises this to **≥25%** — Phase A's own
+missed bar — now that Phase A has failed to move the floor, on the
+reasoning kill criterion 1 states: a reshaping technique should not ship
+at a laxer standard than the more targeted, cheaper primitive that just
+failed. Both bars are bounding-box area (already the metric this gate
+used; the PR #547 gate refinements formally adopted at Phase A0 change
+nothing here). With a never-worse, sim-anchored contract (no target that
+validates clean today ships denser and slower).
 
 ### Phase C — DI-aware packing probe (successor named in #507)
 
@@ -174,16 +185,22 @@ under its tracking issue (#507): *"closing the pu1 gap means packing the
 DI candidate's rows — future work this RFC's phase-6 candidate wiring
 should inherit, not a silent re-basing of the gate."*
 
-**Gate.** An RFC-058-style throwaway spike (build nothing production-grade;
-answer the question and discard the code), capped at one day of session
-cost. Because this retests whether RFC-058's own *technique* clears its
-own *bar* under different inputs — not a new technique — the correct bar
-to re-clear is RFC-058's own: **KC1's −33.0% bounding-box-area bar**, on
-whichever DI-composed gate fixtures the spike can build. If DI composition
-does not change the packability picture (the spike lands within noise of
-RFC-058's −27.0% result), that is confirmatory evidence the floor is
-structural, not an input-distribution artifact, and this RFC's Phase C
-closes without further attempts.
+**Gate — ESCALATED to −40.0%, 2026-07-31 (kill criterion 1 fired on Phase
+A0 evidence; see Phase A's gate and the decision log for the trigger).**
+An RFC-058-style throwaway spike (build nothing production-grade; answer
+the question and discard the code), capped at one day of session cost.
+Because this retests whether RFC-058's own *technique* clears its own
+*bar* under different inputs — not a new technique — the correct bar to
+re-clear was originally RFC-058's own: **KC1's −33.0% bounding-box-area
+bar**, on whichever DI-composed gate fixtures the spike can build. Kill
+criterion 1's own pre-registered escalation rule raises this to
+**−40.0%** — a 7-point buffer above the bar RFC-058 already missed once —
+now that a related primitive-level attempt (Phase A) has also failed to
+move the floor, needing a wider margin to be persuasive than the
+original. If DI composition does not change the packability picture (the
+spike lands within noise of RFC-058's −27.0% result), that is
+confirmatory evidence the floor is structural, not an input-distribution
+artifact, and this RFC's Phase C closes without further attempts.
 
 **Prerequisite/parallel, not in scope.** #526 (repairing the DI flagship
 cell's belt-to-belt lift geometry, currently jammed or halved on its
@@ -241,7 +258,10 @@ evidence about packing.
 Pre-registered, at the RFC level (each phase also carries its own gate
 above):
 
-1. **If Phase A cannot beat its ≥25% bar, the logistics floor stands, and
+1. **STATUS: FIRED, 2026-07-31, on Phase A0 evidence (see decision
+   log) — Phase A killed before running SAT; Phase B and C bars
+   escalated below and in their own gate paragraphs above.**
+   **If Phase A cannot beat its ≥25% bar, the logistics floor stands, and
    Phases B and C's bars tighten rather than run at their originally
    stated levels.** Concretely: Phase B's bar rises from ≥15% to ≥25% —
    Phase A's own missed bar, on the reasoning that a reshaping technique
@@ -295,14 +315,17 @@ Per the layout-engine protocol in
 
 0. **This RFC circulated for review.** Design status; no engine code
    changes in this commit.
-1. **Phase A** — regenerate/decompose the balancer library primitives
-   against #135's named bands. Ordered first: oldest identified lever
-   (2026-04-11), narrowest scope, and the retro's own ranked-next list
-   puts it at #1 as "the only move that attacks the floor."
-2. **Phase B** — bounded spike on shared-belt-row wide-band reshaping,
-   gated on Phase A's outcome per kill criterion 1.
-3. **Phase C** — DI-aware packing throwaway spike, one day capped, gated
-   on Phase A's outcome per kill criterion 1 and on #526's DI-cell repair
+1. **Phase A — KILLED, 2026-07-31 (A0 probe, kill criterion 1 fired
+   before SAT ran).** Was: regenerate/decompose the balancer library
+   primitives against #135's named bands, ordered first as the oldest
+   identified lever (2026-04-11) and narrowest scope. Maintenance residue
+   spun off to #551.
+2. **Phase B** — bounded spike on shared-belt-row wide-band reshaping.
+   Gate escalated to ≥25% (was ≥15%), 2026-07-31, per kill criterion 1
+   firing on Phase A's outcome.
+3. **Phase C** — DI-aware packing throwaway spike, one day capped. Gate
+   escalated to −40.0% (was −33.0%), 2026-07-31, per kill criterion 1
+   firing on Phase A's outcome, and still gated on #526's DI-cell repair
    having landed enough that Phase C's packed candidates are built on
    working DI cells rather than inheriting #526's defect.
 4. **Default-on decisions**, per phase, only after that phase's gate
@@ -478,29 +501,68 @@ through the bar-tightening rule in kill criterion 1.
   regeneration.
 
   **4. Gate refinements adopted from PR #547's review (items 1 and 2).**
-  Both folded into the Phase A design section above, not left as
-  decision-log-only notes: (a) the gate is restated as whole-layout
+  Both folded into the design section above, not left as
+  decision-log-only notes: (a) the gate metric is whole-layout
   bounding-box area after real routing, with tile-height kept as the
-  named mechanism rather than the pass/fail number; (b) a holdout fixture
-  (`stress_electronic_circuit_60s_red_from_ore`) is now required to clear
-  its own (lower) bar alongside the gate fixture, so a regeneration
-  cannot pass by overfitting to `stress_ec30`'s specific shapes. Item 3
-  (Phase B's lane-contention pre-registration) is Phase B's concern, not
-  actioned here — left for whoever picks up that phase.
+  named mechanism rather than the pass/fail number — this was already
+  true of Phase B's and Phase C's gates (both already bbox-area-based;
+  only Phase A's was height-only) and now applies uniformly across all
+  three phases' gates, escalated or not; (b) a holdout fixture
+  (`stress_electronic_circuit_60s_red_from_ore`) was measured alongside
+  the gate fixture throughout this probe — see the table above — so any
+  future regeneration attempt inherits it as a standing check against
+  overfitting a single fixture's specific shapes. Item 3 (Phase B's
+  lane-contention pre-registration) is Phase B's concern, not actioned
+  here — left for whoever picks up that phase.
 
-  **A0 verdict: PROCEED to SAT regeneration, narrowly re-scoped —
-  BLOCKED on tooling setup in this environment.** Feasibility is not
-  falsified: real, community-verified headroom exists on two of the
-  three named shapes (`(4,5)` and the `(1,5)` atom), with `(4,5)`
-  specifically flagged as likely understated by community comparison
-  alone (stale search-bounds artifact, plausibly beatable further by a
-  same-day re-run). The third shape (`(3,8)`) shows no headroom against
-  the best reference found and should not be a Phase A target — spending
-  SAT budget re-searching it is not justified by this probe's evidence.
-  The RFC's original numeric bar is superseded (see Phase A design
-  section) by a lower, area-based, dual-fixture bar computed directly
-  from what this probe demonstrated reachable, rather than from the
-  stale #135 baseline's idealized-ceiling arithmetic. Whoever picks up
-  Phase A next: set up Factorio-SAT per the tooling verdict above, then
-  start with a single targeted regeneration of `(4,5)` (cheapest, most
-  promising, most isolated) before touching the rest of the library.
+  **5. Kill criterion 1 fires — Phase A killed at the funded-arc level,
+  not re-tuned.** The ≥25% bar (§Kill criteria, item 1) was derived from
+  an idealized ceiling that assumed row-height parity — shrinking each
+  named band toward "the ~5-tile height an ordinary machine row already
+  achieves" — is physically approachable. This probe's own measurements
+  falsify that assumption directly: the best-known hand-optimized design
+  found for `(4,5)`, the single largest contributor to the worst band, is
+  **11 tiles tall, not ~5** (`KafN8H7L/97`, verified via
+  `blueprint-analyze`), and the realistically reachable combined gain
+  against verified best-known-practice references — substituting the best
+  community design found for every improvable shape, keeping our own
+  template wherever it already wins — is **≈8.1% (bounding-box area) on
+  the gate fixture and ≈5.9% on the holdout**, not the ≥25% bar. This is
+  not a case for re-tuning the bar downward to what was measured: RFC-058
+  KC1's own text is explicit — *"Stop; do not re-tune the packer"* — and
+  its closing decision-log entry applied that literally when its own
+  measured result (−27.0%) missed its own bar (−33.0%): *"the criterion's
+  own text says stop; do not re-tune."* RFC-063 explicitly inherits that
+  discipline (Motivation: *"every gate in this RFC inherits that
+  lesson"*; Non-goals cites RFC-058's kill directly). Accordingly: **kill
+  criterion 1 fires, established by A0 evidence without running SAT.**
+  Per kill criterion 1's own pre-registered escalation rule (already
+  written into this RFC before A0 ran): **Phase B's bar rises from ≥15%
+  to ≥25%; Phase C's bar rises from RFC-058's −33.0% to −40.0%** — both
+  now stated explicitly in their own gate paragraphs above, dated
+  2026-07-31.
+
+  **6. Maintenance residue spun off — not a phase.** Killing Phase A at
+  the arc-funding level is not a claim that nothing here is worth fixing.
+  Two concrete, low-risk items fell out of the probe and are tracked in
+  **#551** rather than left to rot in this decision log: (a) regenerate
+  the `(4,5)` template specifically — its current height (17) sits
+  outside the height range (`[5,6,7,8]`) `generate_balancer_library.py`'s
+  own *current* search-bounds logic would even attempt for
+  `base_h = max(4,5) = 5`, so 17 is very likely a stale artifact predating
+  the current tuning, not a proven floor, and a fresh run under today's
+  bounds is plausibly capable of matching or beating the 11-tall community
+  reference on its own; (b) correct the stale `2026-04-11` doc-comment
+  baselines on both stress tests in `crates/core/tests/e2e.rs` and #135's
+  own stale numbers, all of which this probe found no longer match live
+  measurement. Expected payoff (~8% gate-fixture bbox area, per this
+  probe) is below the arc's step-change funding threshold, so this is
+  opportunistic maintenance to pick up once Factorio-SAT is set up for any
+  reason — not worth a dedicated session.
+
+  **A0 verdict: Phase A KILLED at the funded-arc level (kill criterion 1
+  fired). BLOCKED on tooling in this environment regardless** (moot for
+  Phase A now, but recorded for #551's maintenance work and any future
+  phase that needs SAT). Escalated bars now active: **Phase B ≥25%,
+  Phase C −40.0%** (both dated 2026-07-31 in their own gate paragraphs).
+  Maintenance residue tracked in **#551**, not funded as arc work.
