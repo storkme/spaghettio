@@ -495,3 +495,73 @@ pub fn translate_band_contents(
     }
     out
 }
+
+/// One item flow the packed builder must route: a source anchor and one
+/// tap per consumer band. Built from the same aggregation facts the bus
+/// planner uses (consumers per item, DI-filtered), in packed coordinates.
+#[derive(Debug, Clone)]
+pub struct PackedNet {
+    pub item: String,
+    pub is_fluid: bool,
+    pub rate: f64,
+    /// Producing band index, or `None` for external inputs (west edge).
+    pub src_band: Option<usize>,
+    /// Consuming band indices, deduplicated.
+    pub dst_bands: Vec<usize>,
+}
+
+/// Aggregate per-item nets over the packed bands. DI-fed inputs are
+/// skipped exactly as `plan_bus_lanes` skips them (`RowSpan::di_input`).
+pub fn build_packed_nets(
+    rows: &[RowSpan],
+    contents: &[BandContent],
+    solver_result: &crate::models::SolverResult,
+) -> Vec<PackedNet> {
+    let mut span_to_band: FxHashMap<usize, usize> = FxHashMap::default();
+    for (bi, c) in contents.iter().enumerate() {
+        for &si in &c.row_indices {
+            span_to_band.insert(si, bi);
+        }
+    }
+    let mut producers: FxHashMap<&str, usize> = FxHashMap::default();
+    let mut rates: FxHashMap<&str, f64> = FxHashMap::default();
+    let mut fluid: FxHashMap<&str, bool> = FxHashMap::default();
+    for (si, rs) in rows.iter().enumerate() {
+        for out in &rs.spec.outputs {
+            if let Some(&bi) = span_to_band.get(&si) {
+                producers.insert(out.item.as_str(), bi);
+            }
+            *rates.entry(out.item.as_str()).or_default() +=
+                out.rate * rs.machine_count as f64;
+            fluid.insert(out.item.as_str(), out.is_fluid);
+        }
+    }
+    for ext in &solver_result.external_inputs {
+        rates.entry(ext.item.as_str()).or_insert(ext.rate);
+        fluid.entry(ext.item.as_str()).or_insert(ext.is_fluid);
+    }
+    let mut nets: std::collections::BTreeMap<String, PackedNet> = Default::default();
+    for (si, rs) in rows.iter().enumerate() {
+        let Some(&bi) = span_to_band.get(&si) else { continue };
+        for inp in &rs.spec.inputs {
+            if rs.di_input.iter().any(|(item, _)| item == &inp.item) {
+                continue;
+            }
+            let src = producers.get(inp.item.as_str()).copied();
+            if src == Some(bi) {
+                continue; // fed within its own band
+            }
+            let net = nets.entry(inp.item.clone()).or_insert_with(|| PackedNet {
+                item: inp.item.clone(),
+                is_fluid: *fluid.get(inp.item.as_str()).unwrap_or(&inp.is_fluid),
+                rate: *rates.get(inp.item.as_str()).unwrap_or(&0.0),
+                src_band: src,
+                dst_bands: Vec::new(),
+            });
+            if !net.dst_bands.contains(&bi) {
+                net.dst_bands.push(bi);
+            }
+        }
+    }
+    nets.into_values().collect()
+}
