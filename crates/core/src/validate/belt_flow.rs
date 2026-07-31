@@ -2615,6 +2615,7 @@ fn compute_lane_rates_impl(
         if !machine_tiles_set.contains(&drop_pos) || !belt_dir_map.contains_key(&pickup_pos) {
             continue;
         }
+
         let mpos = match machine_by_tile.get(&drop_pos) {
             Some(&p) => p,
             None => continue,
@@ -2640,6 +2641,17 @@ fn compute_lane_rates_impl(
             Some(s) => *s,
             None => continue,
         };
+        // Self-loop draws are EXEMPT from consumption decrement (#519): a
+        // loop's standing inventory circulates — the machine draws from and
+        // re-feeds the same ring, and modeling the draw without the ring's
+        // closed-inventory semantics collapses the modeled flow to zero
+        // (kovarex's legendary arm read u-238 at 0.0/s on a loop the game
+        // sustains indefinitely). Scoped by the spec's own self_loop
+        // declaration, so a DIFFERENT consumer of the looped item (e.g. the
+        // voider row drawing u-238) still depletes normally.
+        if fallback_spec.self_loop.iter().any(|f| &f.item == item) {
+            continue;
+        }
         // Same position-resolved attribution as the injection loop above —
         // see `super::resolve_row_spec`'s doc comment.
         let (spec, band) = super::resolve_row_spec_banded(layout, recipe, me.y, fallback_spec);
