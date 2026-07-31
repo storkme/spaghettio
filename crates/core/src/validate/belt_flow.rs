@@ -1750,13 +1750,28 @@ pub fn check_underground_belt_entry_sideload(layout: &LayoutResult) -> Vec<Valid
     let mut issues = Vec::new();
 
     let mut belt_dir: FxHashMap<(i32, i32), EntityDirection> = FxHashMap::default();
+    // Segment id per tile, to recognize INTRA-BALANCER wiring (RFC-061
+    // Phase 1.5): SAT-baked library templates are lane-verified by the
+    // bake pipeline (rfc-balancer-bake-lane-validation), and their
+    // internals legitimately use single-lane tricks this check exists to
+    // forbid in ROUTED belts — the (6,6) template's internal splitter
+    // half feeds a west UG entrance from the north by design. Exempt a
+    // sideload only when BOTH tiles carry the SAME `balancer:` segment;
+    // a routed belt entering a balancer from the side still warns.
+    let mut seg_by_tile: FxHashMap<(i32, i32), &str> = FxHashMap::default();
     let mut ug_inputs: Vec<&PlacedEntity> = Vec::new();
 
     for e in &layout.entities {
         if is_surface_belt(&e.name) || is_splitter(&e.name) {
             belt_dir.insert((e.x, e.y), e.direction);
+            if let Some(seg) = e.segment_id.as_deref() {
+                seg_by_tile.insert((e.x, e.y), seg);
+            }
             if is_splitter(&e.name) {
                 belt_dir.insert(splitter_second_tile(e), e.direction);
+                if let Some(seg) = e.segment_id.as_deref() {
+                    seg_by_tile.insert(splitter_second_tile(e), seg);
+                }
             }
         } else if is_ug_belt(&e.name) {
             match e.io_type.as_deref() {
@@ -1769,10 +1784,20 @@ pub fn check_underground_belt_entry_sideload(layout: &LayoutResult) -> Vec<Valid
         }
     }
 
+    let same_balancer = |a: (i32, i32), b: Option<&str>| -> bool {
+        match (seg_by_tile.get(&a), b) {
+            (Some(sa), Some(sb)) => sa.starts_with("balancer:") && *sa == sb,
+            _ => false,
+        }
+    };
+
     for ug in &ug_inputs {
         let (ug_dx, ug_dy) = dir_to_vec(ug.direction);
         for (ndx, ndy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
             let (nx, ny) = (ug.x + ndx, ug.y + ndy);
+            if same_balancer((nx, ny), ug.segment_id.as_deref()) {
+                continue;
+            }
             if let Some(&n_dir) = belt_dir.get(&(nx, ny)) {
                 let (n_dx, n_dy) = dir_to_vec(n_dir);
                 if (nx + n_dx, ny + n_dy) != (ug.x, ug.y) {
