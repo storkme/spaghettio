@@ -262,3 +262,99 @@ pub fn plan_band_packing(rows: &[RowSpan], entities: &[PlacedEntity]) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4: packed layout construction. Design and scope: the "Phase 4
+// design" section of docs/rfc-058-band-packing.md. The packed candidate
+// REFUSES anything it does not model and the native bus ships instead —
+// the refusals below are the complete list, each typed so an abstention
+// names its cause (the FoldRefusal discipline).
+// ---------------------------------------------------------------------------
+
+/// Why the packed builder abstained. Emitted in the `BandPackingRefused`
+/// trace event's reason; the native pipeline runs unchanged afterward.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PackRefusal {
+    /// Any item's aggregate rate exceeds one lane of the belt tier — the
+    /// linear bus handles this with balancer families, which are a
+    /// 1D-trunk concept the packed planner deliberately does not model.
+    MultiLaneItem { item: String, rate: f64, lane_cap: f64 },
+    /// `RowLayout::HorizontalStack` rows carry K stacked trunks with
+    /// their own lane-planner contract; out of scope.
+    HorizontalStackRow { row: usize },
+    /// Partitioned modules (`module_id > 0`) key lanes per module; the
+    /// packed planner models one net per item only.
+    PartitionedModule { item: String },
+}
+
+impl std::fmt::Display for PackRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PackRefusal::MultiLaneItem { item, rate, lane_cap } => write!(
+                f,
+                "item {item} at {rate:.2}/s exceeds one {lane_cap:.1}/s lane — balancer families are out of packed scope"
+            ),
+            PackRefusal::HorizontalStackRow { row } => {
+                write!(f, "row {row} uses RowLayout::HorizontalStack — out of packed scope")
+            }
+            PackRefusal::PartitionedModule { item } => {
+                write!(f, "item {item} is partitioned (module_id > 0) — out of packed scope")
+            }
+        }
+    }
+}
+
+/// The complete refusal check for the packed path, run before any
+/// geometry work. Returns the FIRST refusal in a deterministic order
+/// (rows, then items alphabetically) or `None` when the packed planner
+/// models everything present.
+pub fn packing_refusal(
+    rows: &[RowSpan],
+    solver_result: &crate::models::SolverResult,
+    max_belt_tier: Option<&str>,
+) -> Option<PackRefusal> {
+    for (i, rs) in rows.iter().enumerate() {
+        if rs.horizontal_stack.is_some() {
+            return Some(PackRefusal::HorizontalStackRow { row: i });
+        }
+    }
+    let mut items: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    // External inputs need a lane each too — an over-capacity external
+    // would need the same balancer families produced items would.
+    for ext in &solver_result.external_inputs {
+        if !ext.is_fluid {
+            *items.entry(ext.item.clone()).or_default() += ext.rate;
+        }
+    }
+    for rs in rows {
+        for io in rs.spec.inputs.iter().chain(rs.spec.outputs.iter()) {
+            if io.module_id != 0 {
+                return Some(PackRefusal::PartitionedModule { item: io.item.clone() });
+            }
+        }
+        for out in &rs.spec.outputs {
+            if !out.is_fluid {
+                *items.entry(out.item.clone()).or_default() +=
+                    out.rate * rs.machine_count as f64;
+            }
+        }
+    }
+    let default_cap = crate::bus::lane_planner::LANE_CAPACITY_TABLE
+        .last()
+        .map(|(_, c)| *c)
+        .unwrap_or(15.0);
+    let lane_cap = max_belt_tier
+        .and_then(|tier| {
+            crate::bus::lane_planner::LANE_CAPACITY_TABLE
+                .iter()
+                .find(|(name, _)| *name == tier)
+                .map(|(_, cap)| *cap)
+        })
+        .unwrap_or(default_cap);
+    for (item, rate) in items {
+        if rate > lane_cap {
+            return Some(PackRefusal::MultiLaneItem { item, rate, lane_cap });
+        }
+    }
+    None
+}
