@@ -264,6 +264,77 @@ report panel in the web app to get the verdict banner plus a `sim-state`
 entity overlay tinting machines/belts/inserters by their simulated state
 — the fastest way to see *where* a FAIL is starving.
 
+## Reading the time-series
+
+`sim-state.json` and the machine census are a single frame — a snapshot
+at finalize. That answers "where is it stuck right now" but not "was it
+ever moving, and when did it stop" — the question #537 needed answered:
+a `land-mine@1` fixture measured 0/s, and the only evidence available was
+a final census (`fluid_ingredient_shortage: 2, item_ingredient_shortage:
+2, full_output: 4`) that reads equally well as "never started" or "ran
+fine for an hour then jammed". A rate-vs-time series distinguishes those
+at a glance; the final aggregate cannot.
+
+Every report now carries `timeseries`, one entry per checkpoint window
+(the same item-driven windows the target/intermediate rates are computed
+over — see "How a measurement window is chosen" above):
+
+```jsonc
+{
+  "tick": 10800,
+  "machines": [
+    {"unit": 142, "name": "assembling-machine-2", "x": 3, "y": -1,
+     "crafts_delta": 15.0, "status": "working"},
+    {"unit": 143, "name": "electric-furnace", "x": 5, "y": 2,
+     "crafts_delta": 0.0, "status": "item_ingredient_shortage"}
+  ],
+  "items": {"iron-gear-wheel": 30.0, "iron-plate": 0.0}
+}
+```
+
+- **`machines`** — every crafting machine (assembler/furnace; chemical
+  plants and refineries are `assembling-machine` prototypes, so they're
+  covered by the same filter used elsewhere in the harness), identified
+  by `unit` (Factorio's `unit_number` — stable across samples even where
+  name+position would collide, e.g. after a rebuild). `crafts_delta` is
+  the change in `products_finished` since the *previous* checkpoint (a
+  per-window count, not the running total); `status` is
+  `defines.entity_status` mapped to its short symbolic name (`working`,
+  `no_power`, `item_ingredient_shortage`, `full_output`, …) — the same
+  vocabulary the machine census already uses.
+- **`items`** — per planned item (from the manifest, not just the
+  target), the force production-statistics counter's delta over that
+  same window — the per-window value, not the cumulative aggregate
+  `raw_result.samples` already carries.
+
+`run --out report.json` puts this under `report.timeseries` (parsed,
+typed) and `raw_result.timeseries` (the raw Lua-emitted array); it's
+purely additive — a report captured before this field existed, or a
+`bless`/`check` baseline, parses it as an empty series rather than
+erroring, and `bless`/`check` never diff it (they only read specific
+named fields).
+
+`serve` writes the same per-window sample as CSV rows appended to
+`script-output/timeseries.csv` inside the run's scratch dir (path printed
+at startup) — long-format, one row per machine-or-item per window:
+
+```
+tick,kind,unit,name,x,y,crafts_delta,status,item,produced_delta
+10800,machine,142,assembling-machine-2,3,-1,15,working,,
+10800,item,,,,,,,iron-gear-wheel,30
+```
+
+`kind` distinguishes the two row shapes; filter on it before further
+processing (e.g. `awk -F, '$2=="machine"'`). This is the machine-readable
+record a maintainer eyeballing a live `serve` session at speed 10
+otherwise has none of — the CSV keeps growing as long as the server runs,
+independent of whether/when the scenario ever finalizes.
+
+For the diagnostic reading of a flat-zero vs ramp-then-decay vs
+stable-below-plan series, see
+["Reading time-series decay shapes"](sim-harness-forensics.md#reading-time-series-decay-shapes)
+in the forensics doc.
+
 ## Baselines (`bless` / `check`)
 
 ```bash

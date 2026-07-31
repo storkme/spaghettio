@@ -122,9 +122,64 @@ enough; the plug never clears. This is also why contamination is so
 destructive out of proportion to its rate: ~17 stray copper plates
 capped an entire factory.
 
+## Reading time-series decay shapes
+
+`report.timeseries` / `raw_result.timeseries` (per-window, since #537 —
+see [`sim-harness.md`](sim-harness.md#reading-the-time-series) for the
+schema) adds two things `samples` and `sim_state` don't have on their
+own: a **per-machine** series (not just per-item), and a series aligned
+to the **same checkpoint windows** the reported rates are computed over,
+rather than a fixed 20-second cadence. Read the shape of the target
+item's `items[target]` deltas across windows, cross-referenced against
+`machines[].status`, before reaching for any deeper forensics:
+
+- **Flat zero from tick 0** — every window's `crafts_delta`/`produced_delta`
+  is zero from the first checkpoint on, with machine `status` sitting on
+  a shortage from the start (`item_ingredient_shortage`,
+  `fluid_ingredient_shortage`). This implicates the **feed path**, not
+  the layout's internal throughput: the boundary kit, an exporter bug
+  severing a connection (#373's inverted pipe-to-ground direction was
+  exactly this shape), or a genuinely disconnected belt/pipe. The factory
+  never ran, so nothing downstream is informative — start at the
+  boundary, not the machine that's short.
+- **Ramp, then decay** — early windows show positive, often climbing,
+  deltas, followed by a decline back toward (or to) zero. This is the
+  buffer-fill mirage's OTHER half: not "converges while still filling"
+  (class 1, `docs/sim-harness-forensics.md` above) but the case where the
+  fill **empties into a jam** — a downstream dead end, a capacity
+  mismatch that only bites once buffers between stages exhaust, or a
+  kit-side chest that stops draining. The `machines[].status` series
+  across the same windows usually shows the transition directly: a
+  machine flips from `working` to `full_output` or a shortage status at
+  the same tick the deltas turn over.
+- **Stable, but below plan** — deltas settle into a flat, non-zero band
+  under the planned rate, with `status` steady (not flickering between
+  shortage states). This is the shape of a genuine capacity deficit —
+  too few machines, an inserter-throughput ceiling, an undersized belt —
+  the kind of thing the verdict machinery is designed to catch, and the
+  one shape that does NOT implicate the harness or a transient.
+
+**#537, the motivating case:** `land-mine@1` measured 0/s at
+`--warmup 288000` under both DI claim orders and all three machine
+tiers, with a census reading `fluid_ingredient_shortage: 2,
+item_ingredient_shortage: 2, full_output: 4` — a snapshot consistent with
+either "never started" or "ran fine, then jammed". The harness's own
+UNCALIBRATED-fluid-boundary note (see `report.rs`/`scenario.rs`,
+`fluid_fed`) was stale — #373 had already fixed the pipe-to-ground
+direction bug it was warning about — and got misread as the explanation,
+sending the investigation in the wrong direction (RFC-059's decision log,
+`docs/status.md`, and PR #535 all had to be corrected). A `timeseries`
+would have settled it in one look: flat zero from the first checkpoint
+onward is a feed-path defect a control (`plastic-bar@1` from crude-oil,
+which measures fine) doesn't share — no need to trust a note about the
+instrument that was true when written and false when read.
+
 ## Forensic playbook (in escalation order)
 
-1. **Trajectory first** (`samples`): bin per-item rates over game-time.
+1. **Trajectory first** (`samples`, and now `timeseries` for a
+   per-machine breakdown on the SAME checkpoint-window cadence the
+   reported rates use — see "Reading time-series decay shapes" above):
+   bin per-item rates over game-time.
    Distinguishes transient vs plateau vs oscillation, and the *order*
    in which stages diverge from plan points at the causal root.
 2. **Frame reading** (`sim_state`): machine statuses + inventories

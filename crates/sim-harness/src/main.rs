@@ -269,6 +269,15 @@ fn cmd_serve(args: &[String]) -> Result<(), String> {
     println!("install : {}", install_dir.display());
     println!("scenario: {scenario_name} (speed {speed}x, no tick ceiling)");
     println!("run dir : {} (kept)", run_dir.display());
+    // #537: the same per-checkpoint machine/item sampler that feeds
+    // `run`'s JSON `timeseries` also appends CSV rows here, so a human
+    // watching a `serve` session gets a machine-readable record of what
+    // they watched instead of nothing — see docs/sim-harness.md "Reading
+    // the time-series".
+    println!(
+        "timeseries: {} (CSV, appended each checkpoint window)",
+        run_dir.join("script-output").join("timeseries.csv").display()
+    );
     println!();
     println!("Connect a Factorio client of the SAME version via");
     println!("  Multiplayer -> Connect to address -> <host>:{port}");
