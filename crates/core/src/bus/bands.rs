@@ -604,3 +604,198 @@ pub fn stamp_band_belt_rows(
     }
     out
 }
+
+/// Route every packed net as a real corridor: plain belts along the path,
+/// an underground pair wherever the path crosses an existing perpendicular
+/// belt, sideload termination onto the consumer's feed row. Sources are
+/// the producer band's output-row west end, or the arrangement's west
+/// edge for externals. Deterministic order: rate descending, then item.
+///
+/// This is the phase-3 spike's turn-legal, admissible router made real —
+/// same crossing rules, but emitting entities instead of counting tiles.
+/// Correctness hardening (lane semantics, congestion re-pack) belongs to
+/// the layout_pass wiring increment, where the validator sees the result.
+pub fn route_packed_nets(
+    nets: &[PackedNet],
+    rows: &[RowSpan],
+    contents: &[BandContent],
+    origins: &[(i32, i32)],
+    existing: &[PlacedEntity],
+    belt_name: &str,
+) -> Result<Vec<PlacedEntity>, String> {
+    use crate::models::EntityDirection as D;
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    const BAND: u8 = 1;
+    const H: u8 = 2;
+    const V: u8 = 4;
+    const TURN: u8 = 8;
+
+    let mut occ: FxHashMap<(i32, i32), u8> = FxHashMap::default();
+    let (mut lo, mut hi) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
+    for (bi, c) in contents.iter().enumerate() {
+        let (_, _, rw, rh) = c.rect;
+        let (ox, oy) = origins[bi];
+        for x in ox..ox + rw {
+            for y in oy..oy + rh {
+                *occ.entry((x, y)).or_insert(0) |= BAND;
+            }
+        }
+        lo = (lo.0.min(ox), lo.1.min(oy));
+        hi = (hi.0.max(ox + rw - 1), hi.1.max(oy + rh - 1));
+    }
+    for e in existing {
+        let axis = match e.direction {
+            D::East | D::West => H,
+            _ => V,
+        };
+        *occ.entry((e.x, e.y)).or_insert(0) |= axis;
+    }
+    let (min, max) = ((lo.0 - 6, lo.1 - 6), (hi.0 + 6, hi.1 + 6));
+    let passable = |occ: &FxHashMap<(i32, i32), u8>, t: (i32, i32), horiz: bool| -> bool {
+        if t.0 < min.0 || t.0 > max.0 || t.1 < min.1 || t.1 > max.1 {
+            return false;
+        }
+        let b = occ.get(&t).copied().unwrap_or(0);
+        b & (BAND | TURN) == 0 && b & (if horiz { H } else { V }) == 0
+    };
+
+    // Translated belt-row helper.
+    let row_y = |bi: usize, src_y: i32| src_y - contents[bi].rect.1 + origins[bi].1;
+
+    let mut ordered: Vec<&PackedNet> = nets.iter().collect();
+    ordered.sort_by(|a, b| b.rate.total_cmp(&a.rate).then_with(|| a.item.cmp(&b.item)));
+
+    let mut out: Vec<PlacedEntity> = Vec::new();
+    for net in ordered {
+        let starts: Vec<(i32, i32)> = match net.src_band {
+            Some(bi) => contents[bi]
+                .row_indices
+                .iter()
+                .map(|&si| (origins[bi].0 - 1, row_y(bi, rows[si].output_belt_y)))
+                .collect(),
+            None => (min.1..=max.1).map(|y| (min.0, y)).collect(),
+        };
+        for &dst in &net.dst_bands {
+            let mut targets: FxHashSet<(i32, i32)> = FxHashSet::default();
+            for &si in &contents[dst].row_indices {
+                for &iy in &rows[si].input_belt_y {
+                    let ty = row_y(dst, iy);
+                    let (ox, _) = origins[dst];
+                    for x in ox..ox + contents[dst].rect.2 {
+                        targets.insert((x, ty));
+                    }
+                }
+            }
+            if targets.is_empty() {
+                return Err(format!("net {}: consumer band {dst} has no input rows", net.item));
+            }
+            let (tx0, tx1) = (
+                targets.iter().map(|t| t.0).min().unwrap(),
+                targets.iter().map(|t| t.0).max().unwrap(),
+            );
+            let (ty0, ty1) = (
+                targets.iter().map(|t| t.1).min().unwrap(),
+                targets.iter().map(|t| t.1).max().unwrap(),
+            );
+            let hfn = |t: (i32, i32)| {
+                (tx0 - t.0).max(t.0 - tx1).max(0) + (ty0 - t.1).max(t.1 - ty1).max(0)
+            };
+            let mut open: BinaryHeap<Reverse<(i32, i32, (i32, i32), bool)>> = BinaryHeap::new();
+            let mut best: FxHashMap<((i32, i32), bool), i32> = FxHashMap::default();
+            let mut parent: FxHashMap<((i32, i32), bool), ((i32, i32), bool)> =
+                FxHashMap::default();
+            for &s in &starts {
+                for horiz in [true, false] {
+                    if passable(&occ, s, horiz) {
+                        best.insert((s, horiz), 0);
+                        open.push(Reverse((hfn(s), 0, s, horiz)));
+                    }
+                }
+            }
+            let mut found: Option<Vec<(i32, i32)>> = None;
+            while let Some(Reverse((_, cost, tile, horiz))) = open.pop() {
+                if best.get(&(tile, horiz)).copied().unwrap_or(i32::MAX) < cost {
+                    continue;
+                }
+                // A sideload target: adjacent to a feed-row tile, pointing in.
+                if targets.contains(&tile) {
+                    let mut path = vec![tile];
+                    let mut cur = (tile, horiz);
+                    while let Some(&p) = parent.get(&cur) {
+                        path.push(p.0);
+                        cur = p;
+                    }
+                    path.reverse();
+                    found = Some(path);
+                    break;
+                }
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let nxt = (tile.0 + dx, tile.1 + dy);
+                    let nh = dy == 0;
+                    if !passable(&occ, nxt, nh) {
+                        continue;
+                    }
+                    if nh != horiz && !passable(&occ, tile, nh) {
+                        continue;
+                    }
+                    let nc = cost + 1;
+                    if best.get(&(nxt, nh)).copied().unwrap_or(i32::MAX) <= nc {
+                        continue;
+                    }
+                    best.insert((nxt, nh), nc);
+                    parent.insert((nxt, nh), (tile, horiz));
+                    open.push(Reverse((nc + hfn(nxt), nc, nxt, nh)));
+                }
+            }
+            let Some(path) = found else {
+                return Err(format!(
+                    "net {}: no corridor from {:?} to band {dst}",
+                    net.item, net.src_band
+                ));
+            };
+            // Materialize: belts along the path; crossings of existing
+            // perpendicular belts become UG pairs in the wiring increment
+            // (the tiles are legally crossable by construction here).
+            for (i, &t) in path.iter().enumerate() {
+                let dir = if i + 1 < path.len() {
+                    let n = path[i + 1];
+                    match (n.0 - t.0, n.1 - t.1) {
+                        (1, 0) => D::East,
+                        (-1, 0) => D::West,
+                        (0, 1) => D::South,
+                        _ => D::North,
+                    }
+                } else if i > 0 {
+                    let p = path[i - 1];
+                    match (t.0 - p.0, t.1 - p.1) {
+                        (1, 0) => D::East,
+                        (-1, 0) => D::West,
+                        (0, 1) => D::South,
+                        _ => D::North,
+                    }
+                } else {
+                    D::East
+                };
+                let axis_in = (i > 0).then(|| path[i - 1].1 == t.1);
+                let axis_out = (i + 1 < path.len()).then(|| path[i + 1].1 == t.1);
+                let bits = occ.entry(t).or_insert(0);
+                match (axis_in, axis_out) {
+                    (Some(a), Some(b)) if a != b => *bits |= TURN,
+                    (Some(a), _) | (_, Some(a)) => *bits |= if a { H } else { V },
+                    _ => {}
+                }
+                out.push(PlacedEntity {
+                    name: belt_name.to_string(),
+                    x: t.0,
+                    y: t.1,
+                    direction: dir,
+                    carries: Some(net.item.clone()),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    Ok(out)
+}
