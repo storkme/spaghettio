@@ -9216,35 +9216,40 @@ fn probe_di_contention_corpus_sweep() {
     }
 }
 
-/// RFC-059's DECISION, pinned: the DI candidate SEARCHES both claim orders and
-/// keeps the better one — so neither fixed order can pass this test.
+/// RFC-059's DECISION, pinned: the status quo (`Upstream`) stays live, and the
+/// measured-better `Search` policy stays reachable but off.
 ///
-/// This is the teeth test the RFC's verification plan required, and it needs
-/// teeth because a claim policy is nearly invisible: on all but a handful of
-/// corpus targets both orders ship byte-identical layouts, and the whole suite
-/// is green under either. "Tests pass" therefore says nothing about which
-/// policy is live.
+/// Both halves need pinning, and for different reasons.
 ///
-/// The two fixtures are chosen to pull in OPPOSITE directions, which is the
-/// whole point of the finding: `land-mine@1` is better under downstream-first,
-/// `small-electric-pole@5` on am1 is better under upstream-first. A regression
-/// to any single fixed order fails exactly one half. That is a stronger pin
-/// than the earlier single-fixture version, which a revert to upstream-first
-/// would have failed but a revert to downstream-first would have passed.
+/// **The default must stay `Upstream`** because a headless-Factorio run
+/// falsified the premise that made `Search` safe. On `display-panel@1` / am1 the
+/// arm `Search` prefers ships a `di-row:copper-cable:electronic-circuit` cell
+/// that the validator passes with zero errors and zero warnings and that
+/// produces **0/s in game** (jammed: `full_output: 10`), against native's
+/// measured 1.00/s under `Upstream`. Nothing in the test suite can see that, so
+/// this test names the fixture and asserts the working layout ships.
+///
+/// **`Search` must keep working** because it is the measured-correct policy
+/// modulo that one defect, and re-deriving the measurement means a corpus sweep
+/// across three machine tiers. Asserting it still picks the better arm is what
+/// stops it rotting into unreachable code while it waits for the cell fix.
 #[test]
-fn di_claim_order_is_searched_not_fixed() {
+fn di_claim_order_status_quo_ships_and_search_stays_reachable() {
     use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
+
+    assert_eq!(
+        DiClaimOrder::default(),
+        DiClaimOrder::Upstream,
+        "RFC-059 measured `Search` as better on every validator channel and kept \
+         `Upstream` anyway, because the sim showed the validator is blind to the \
+         cell `Search` selects on display-panel@1/am1. Flipping this default \
+         needs that cell fixed and re-simmed, not a one-line edit"
+    );
 
     let raw: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "water", "crude-oil"]
         .iter()
         .map(|s| s.to_string())
         .collect();
-
-    // `Candidate`, not `Forced`: this asserts what a CALLER RECEIVES. Under
-    // `Forced` the orders differ far more loudly — on `land-mine@1` upstream
-    // carries 3 validation errors and downstream none — but an error-laden DI
-    // layout is refused before it can ship, so quoting that difference would
-    // describe a layout nobody gets.
     let ship = |item: &str, rate: f64, tier: &str, di: DirectInsertion, order: DiClaimOrder| {
         let sr = solver::solve(item, rate, &raw, tier)
             .unwrap_or_else(|e| panic!("{item}@{rate} on {tier} solves: {e}"));
@@ -9269,52 +9274,58 @@ fn di_claim_order_is_searched_not_fixed() {
         )
     };
 
-    // Downstream-first wins here: 294 entities (native, because the upstream
-    // DI arm validates with errors and is refused) against 282.
-    let lm = ship(
-        "land-mine",
+    // THE SIM-VERIFIED LAYOUT. 221 entities is native: under `Upstream` the DI
+    // candidate's own arm carries 3 validation errors and is refused, so native
+    // ships — and native is what measured 1.00/s against plan.
+    let dflt = ship(
+        "display-panel",
         1.0,
-        "assembling-machine-3",
+        "assembling-machine-1",
         DirectInsertion::Candidate,
         DiClaimOrder::default(),
     );
-    let lm_up = ship(
-        "land-mine",
+    let searched = ship(
+        "display-panel",
         1.0,
-        "assembling-machine-3",
-        DirectInsertion::Forced,
-        DiClaimOrder::Upstream,
+        "assembling-machine-1",
+        DirectInsertion::Candidate,
+        DiClaimOrder::Search,
     );
     assert_eq!(
-        lm.3, 282,
-        "land-mine@1 must ship the downstream arm (282 entities); got {lm:?}. \
-         The upstream-forced arm scores {lm_up:?}, so if this is 294 the search \
-         is not running the second arm at all."
+        dflt.3, 221,
+        "display-panel@1 on am1 must ship the sim-verified native layout (221 \
+         entities); got {dflt:?}. 202 is the DI variant that sims at 0/s"
+    );
+    // The trap this guards, stated as an assertion rather than a comment: the
+    // rejected layout is DENSER and validator-clean. Any future scoring change
+    // that ranks on density or issue counts alone will pick it again.
+    assert!(
+        searched.3 < dflt.3 && (searched.0, searched.1, searched.2) == (0, 0, 0),
+        "the broken variant is supposed to look BETTER on every signal the engine \
+         has — if it no longer does, either the cell was fixed (re-sim and flip \
+         the default) or the corpus moved: default={dflt:?} search={searched:?}"
     );
 
-    // Upstream-first wins here: 126 entities against downstream's 166, which
-    // loses to native's 163 and is therefore refused. A policy fixed to
-    // downstream-first ships 163 here.
+    // `Search` still functions where it is not blocked: on am1
+    // `small-electric-pole@5` wants the upstream arm and on am3 `land-mine@1`
+    // wants the downstream one, so a search that had silently collapsed to one
+    // arm would fail one of these.
     let sep = ship(
         "small-electric-pole",
         5.0,
         "assembling-machine-1",
         DirectInsertion::Candidate,
-        DiClaimOrder::default(),
+        DiClaimOrder::Search,
     );
-    assert_eq!(
-        sep.3, 126,
-        "small-electric-pole@5 on am1 must ship the upstream arm (126 entities); \
-         got {sep:?}. 163 means the search kept the downstream arm's refusal and \
-         fell back to native"
+    assert_eq!(sep.3, 126, "Search keeps the upstream arm here; got {sep:?}");
+    let lm = ship(
+        "land-mine",
+        1.0,
+        "assembling-machine-3",
+        DirectInsertion::Candidate,
+        DiClaimOrder::Search,
     );
-
-    // Neither fixture regressed an issue channel — the never-worse property the
-    // whole RFC rests on. Asserted rather than assumed: the search picks on
-    // (warnings, layout warnings, entities), so a bug in that ordering would
-    // show up as a denser layout carrying more warnings.
-    assert_eq!((lm.0, lm.1, lm.2), (0, 0, 0), "land-mine@1 ships clean");
-    assert_eq!((sep.0, sep.1, sep.2), (0, 0, 0), "small-electric-pole@5 am1 ships clean");
+    assert_eq!(lm.3, 282, "Search keeps the downstream arm here; got {lm:?}");
 }
 
 /// RFC-059's corpus verdict — the measurement that decided the policy.

@@ -73,14 +73,32 @@ pub enum DirectInsertion {
 /// phase 1 reproducible.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DiClaimOrder {
-    /// P0: consumers in topological order, so upstream claims. The pre-RFC-059
-    /// behaviour, kept as an explicit arm so `Search` can be measured against
-    /// the status quo rather than assumed better than it.
+    /// P0: consumers in topological order, so upstream claims.
+    ///
+    /// **The default, and RFC-059 deliberately left it that way.** The RFC
+    /// measured `Search` as better by every validator channel and then a
+    /// headless-Factorio run falsified the premise that made that safe: on
+    /// `display-panel@1` / am1, the arm `Search` prefers ships a DI row cell
+    /// that validates with **zero** errors and warnings and produces **0/s** in
+    /// game, where P0 ships native and measures 1.00/s. The gate DI relies on
+    /// is only as good as the validator, and there the validator is blind.
+    /// See RFC-059's decision log and #520.
+    #[default]
     Upstream,
     /// P1: consumers in reverse topological order, so the downstream coupling
     /// claims a contended spec.
     Downstream,
-    /// **The default.** Build both static orders and keep the better one.
+    /// Build both static orders and keep the better one.
+    ///
+    /// **Measured-correct but NOT the default**, and the gap between those is
+    /// the whole of RFC-059's outcome. By every validator channel this is
+    /// strictly better than either fixed arm on the corpus and worse on none.
+    /// In a real Factorio it ships a jammed factory on at least one target
+    /// (`display-panel@1` am1), because the DI row cell it selects there is
+    /// physically broken while validating clean. Kept live and reachable so the
+    /// policy can be re-verified the moment that cell is fixed (#520) — deleting it
+    /// would mean re-deriving a measurement that took a corpus sweep across
+    /// three machine tiers.
     ///
     /// RFC-059 set out to choose between `Upstream` and `Downstream` and
     /// measured that neither dominates: across three machine tiers,
@@ -97,7 +115,6 @@ pub enum DiClaimOrder {
     /// concept, and the placer, which walks one order per call, reads this as
     /// `Upstream`. `Forced` is the single-variant A/B arm and is what the
     /// search itself runs, so it must stay deterministic.
-    #[default]
     Search,
     /// An explicit priority over individual couplings: the ones named here are
     /// offered the claim first, in the order given, and everything else follows
