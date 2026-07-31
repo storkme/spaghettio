@@ -654,6 +654,23 @@ clears. Rationale in the decision log.
   growth) or the honest conclusion that KC1 fires on the real planner —
   neither is decided yet, and no number in this entry is a pass.
 
+- **2026-07-31 — next-iteration direction fixed: per-net corridor TREES
+  with splitter branches.** Of the checkpoint's two options, smarter
+  routing is chosen over concluding KC1 fires — because the current
+  router duplicates a full corridor per (src, dst) pair, which is where
+  both the wasted area and the unroutability come from, and the bus's own
+  answer to one-producer-many-consumers is a trunk with splitter
+  tap-offs. Design: route a net's first consumer normally; every later
+  consumer may terminate on any tile of the net's OWN earlier corridor,
+  and the junction point becomes a SPLITTER (1→2, facing the trunk's flow
+  direction) whose second output starts the branch — same-item merging
+  stays forbidden across nets, so the foreign-feed rule and item
+  isolation hold. Expected effects: sci2's unroutable net regains a path
+  (it can join its own trunk), corridor tile counts drop materially, and
+  KC1 gets its honest re-measure on the tree router. If THAT still lands
+  below −33.0%, the criterion fires and the RFC stops — the option is
+  spent after this iteration.
+
 - **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
   fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused
   verbatim) and 1D-specific geometry (left untouched; paralleled by a
