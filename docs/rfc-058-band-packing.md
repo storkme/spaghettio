@@ -1,9 +1,10 @@
 # RFC-058: Band packing — 2D placement at row granularity
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phases 0 and 3 complete
-(KC2 cleared at 36.8% vs 30%; KC1 cleared at −35.9% vs −33.0%, narrowly —
-both 2026-07-31). Next: phases 1–2 scaffolding, then phase 4 (2D lane
-planning), with kill criterion 1 staying armed through phase 4.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Active — phases 0–3 complete
+(KC2 cleared at 36.8% vs 30%; KC1 cleared at −35.9% vs −33.0%, narrowly;
+placer-native extraction + flag-gated packer landed inert — all
+2026-07-31). Next: phase 4 (2D lane planning), where kill criterion 1 is
+re-evaluated on the real planner.**
 Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
 
 ## Summary
@@ -258,13 +259,15 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
    count, so it belongs with KC2's measurement (reordered 2026-07-31, see
    decision log).
 1. **Band extraction from `RowSpan`** — placer-native, replacing the probe's
-   y-projection. No behaviour change. **Deferred until the phase-3 gate
-   clears** (2026-07-31 reorder).
+   y-projection. No behaviour change. **Landed 2026-07-31** (`bus::bands`,
+   after the phase-3 gate cleared per the reorder): spans are the grouping
+   authority, geometry is measured from their own entities, and a parity
+   test pins the result against the probe's y-projection oracle.
 2. **Packer** — shelf packing with aspect cap and swept target width, behind a
    default-off flag. Emits positions only; nothing consumes them yet.
-   **Deferred until the phase-3 gate clears** (2026-07-31 reorder): the spike
-   consumes the probe's own packed positions, so the production packer is
-   scaffolding that only pays off if the premise survives.
+   **Landed 2026-07-31**: `LayoutOptions.band_packing` records the plan as
+   a `BandPackingPlanned` trace event (or a typed refusal); an inertness
+   test asserts entity-identical output with the flag on or off.
 3. **Trunk spike — throwaway code, all three gate fixtures.** Route trunks for
    the packed layouts with whatever is quickest and measure real bounding-box
    area and real transport against each control. Start with `sci1-ore` (4
@@ -537,3 +540,34 @@ clears. Rationale in the decision log.
   −35.2% → −35.9% (`sci2-ore` 2,695 → 2,618; corridor tiles 454 → 428 and
   379 → 368): the shorter true-minimal corridors outweigh the stricter
   turn rule, so the verdict stands with a slightly wider margin.
+
+- **2026-07-31 — phases 1–2 landed: placer-native bands and the flag-gated
+  packer, both inert by construction.** New module `bus::bands`. Extraction
+  takes the placer's `RowSpan`s as the grouping authority — each band
+  records the row indices that contribute to it, which is the linkage
+  phase 4's lane planner needs — while geometry is measured
+  footprint-aware from those spans' own machine and inserter entities.
+  Structural runs are collected within each span's y-range and merged
+  across spans when they touch (direct-insertion fusions), which
+  reproduces the probe's maximal-run semantics exactly. The probe keeps
+  its deliberately decoupled y-projection as the oracle;
+  `rfc058_placer_bands_match_y_projection` pins band rects, packed
+  dimensions, AND planned positions against it on the three gate fixtures
+  plus `gear15-ore` (a refusal case) — exact agreement. The packer is the
+  probe's shelf packer ported verbatim; the strict-`<` first-minimum
+  tie-break is documented as part of the published-numbers contract.
+
+  `LayoutOptions.band_packing` (default off) gates one call at the end of
+  `layout_pass`: extract, pack, and emit `BandPackingPlanned` (band rects,
+  control/packed dims, aspect, positions) or a typed `BandPackingRefused`.
+  Positions live in the trace and nowhere else — phase 2's "emits
+  positions only" is structural (the seam borrows everything immutably),
+  and `band_packing_option_is_inert_and_traced` asserts entity-identical
+  output flag-on vs flag-off. Candidate variants' inner runs do not
+  re-emit (same discipline as `compact_layout`'s inner-opts handling), and
+  the wasm surface pins the flag off until phase 4 gives it a visible
+  effect. Three intentional copies of the band/packing logic now exist —
+  engine (`bus::bands`), probe (frozen instrument), CI premise guard
+  (self-contained by design) — with the parity test and the guard holding
+  them together; consolidation would couple the oracle to the thing it
+  checks.

@@ -371,6 +371,10 @@ impl DecompositionCandidate for ModuleSizeSplit {
             splitter_tap_spacers: opts.splitter_tap_spacers,
             direct_insertion: opts.direct_insertion,
             compact_layout: false,
+            // Same discipline as compact_layout: the flag-gated RFC-058
+            // plan is emitted by the native pass, not re-emitted by every
+            // candidate variant's inner run.
+            band_packing: false,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
