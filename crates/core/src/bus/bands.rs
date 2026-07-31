@@ -563,7 +563,23 @@ pub fn build_packed_nets(
             }
         }
     }
-    nets.into_values().collect()
+    let mut nets: Vec<PackedNet> = nets.into_values().collect();
+    // External outputs get an edge net (empty dst_bands = route to the
+    // west edge): the target's output row must physically leave the
+    // arrangement, or its west end is a validator-visible dead-end and a
+    // sim drain has nothing to collect from.
+    for out in &solver_result.external_outputs {
+        if let Some(&bi) = producers.get(out.item.as_str()) {
+            nets.push(PackedNet {
+                item: out.item.clone(),
+                is_fluid: out.is_fluid,
+                rate: out.rate,
+                src_band: Some(bi),
+                dst_bands: Vec::new(),
+            });
+        }
+    }
+    nets
 }
 
 /// Stamp each band's own belt rows at their TRANSLATED positions: the
@@ -707,8 +723,24 @@ pub fn route_packed_nets(
             }
             None => (min.1..=max.1).map(|y| (min.0, y)).collect(),
         };
-        for &dst in &net.dst_bands {
+        // An empty dst set is an EDGE net: one corridor to the west edge.
+        let dsts: Vec<Option<usize>> = if net.dst_bands.is_empty() {
+            vec![None]
+        } else {
+            net.dst_bands.iter().map(|&d| Some(d)).collect()
+        };
+        for dst_opt in dsts {
             let mut targets: FxHashSet<(i32, i32)> = FxHashSet::default();
+            let dst = match dst_opt {
+                None => {
+                    for y in min.1..=max.1 {
+                        targets.insert((min.0, y));
+                    }
+                    usize::MAX
+                }
+                Some(d) => d,
+            };
+            if dst != usize::MAX {
             for &si in &contents[dst].row_indices {
                 for &iy in &rows[si].input_belt_y {
                     let ty = row_y(dst, iy);
@@ -717,6 +749,7 @@ pub fn route_packed_nets(
                         targets.insert((x, ty));
                     }
                 }
+            }
             }
             if targets.is_empty() {
                 return Err(format!("net {}: consumer band {dst} has no input rows", net.item));

@@ -6094,7 +6094,9 @@ fn probe_packed_overlap_diagnosis() {
         Ok(i) => i,
         Err(e) => e.issues,
     };
-    for i in issues.iter().filter(|i| i.category == "entity-overlap").take(8) {
+    let cat = std::env::var("SPAGHETTIO_DIAG_CATEGORY")
+        .unwrap_or_else(|_| "entity-overlap".into());
+    for i in issues.iter().filter(|i| i.category == cat).take(8) {
         println!("({:?},{:?}) {}", i.x, i.y, i.message);
         if let (Some(x), Some(y)) = (i.x, i.y) {
             for e in &l.entities {
