@@ -5887,14 +5887,23 @@ fn rfc058_placer_bands_match_y_projection() {
             direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
             ..Default::default()
         };
+        // Phase 4 makes flag-on RETURN the packed layout, so the oracle
+        // y-projection runs on a flag-OFF control built with identical
+        // options — the same native arrangement the plan event describes.
+        let control_opts = layout::LayoutOptions {
+            band_packing: false,
+            ..opts.clone()
+        };
+        let control = layout::build_bus_layout(&sr, control_opts)
+            .unwrap_or_else(|e| panic!("{label}: control refused: {e}"));
         let _guard = trace::start_trace();
-        let l = layout::build_bus_layout(&sr, opts)
+        let _packed = layout::build_bus_layout(&sr, opts)
             .unwrap_or_else(|e| panic!("{label}: layout refused: {e}"));
         let events = trace::drain_events();
         drop(_guard);
 
-        // Oracle: the probe's y-projection over the final layout.
-        let oracle = rfc058_extract_bands(&l);
+        // Oracle: the probe's y-projection over the control layout.
+        let oracle = rfc058_extract_bands(&control);
         let oracle_rects: Vec<(i32, i32, i32, i32)> =
             oracle.iter().map(|b| (b.x, b.y, b.w, b.h)).collect();
 
@@ -5935,7 +5944,18 @@ fn rfc058_placer_bands_match_y_projection() {
                     "{label}: planned positions diverge from the probe packer",
                 );
             }
-            TraceEvent::BandPackingRefused { bands, .. } => {
+            TraceEvent::BandPackingRefused { bands, reason, .. } => {
+                println!("{label}: refused: {reason}");
+                if reason.starts_with("packed-refusal:") {
+                    // A BUILDER refusal (scope or routing), not a packer
+                    // one: the plan may be packable while the build
+                    // legitimately abstains — e.g. pu1-plate under the
+                    // DI-Off isolation this test needs puts copper-cable
+                    // at 81/s on the bus, tripping the multi-lane scope
+                    // refusal that DI normally removes. The native layout
+                    // ships; nothing to compare.
+                    continue;
+                }
                 // The oracle must agree there is nothing to pack here:
                 // either too few bands, or no packing under the cap.
                 assert_eq!(*bands, oracle.len(), "{label}: refusal band count diverges");
@@ -5946,6 +5966,182 @@ fn rfc058_placer_bands_match_y_projection() {
                 );
             }
             _ => unreachable!(),
+        }
+    }
+}
+
+/// RFC-058 phase 4: KC1 re-measured on the REAL packed builder. The
+/// criterion's bar is −33.0% aggregate over its three gate fixtures;
+/// pu1-plate refuses in packed scope while the native pass is DI-free
+/// (copper-cable at 81/s needs balancer families), so this reports the
+/// buildable gate fixtures against their own controls and states the
+/// aggregate honestly rather than silently re-basing it.
+#[test]
+#[ignore = "RFC-058 phase 4 KC1 re-measure — run with --ignored --nocapture"]
+fn probe_packed_kc1_real_planner() {
+    let gate: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("pu1-plate", "processing-unit", 1.0, &["iron-plate", "copper-plate", "sulfuric-acid"], "assembling-machine-2"),
+    ];
+    let (mut agg_ctrl, mut agg_pack) = (0i64, 0i64);
+    let mut built_all = true;
+    for (label, item, rate, inputs, machine) in gate {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, *rate, &inputs_set, &MachinePalette::default(), machine,
+            &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap_or_else(|e| panic!("{label}: solve: {e}"));
+        let base = layout::LayoutOptions {
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        };
+        let control = layout::build_bus_layout(&sr, base.clone()).expect("control");
+        // KC1's control quantity is the band-bbox of the as-placed bands.
+        let ctrl_bands = rfc058_extract_bands(&control);
+        let (cw, ch) = {
+            let w = ctrl_bands.iter().map(|b| b.x + b.w).max().unwrap_or(0)
+                - ctrl_bands.iter().map(|b| b.x).min().unwrap_or(0);
+            let h = ctrl_bands.iter().map(|b| b.y + b.h).max().unwrap_or(0)
+                - ctrl_bands.iter().map(|b| b.y).min().unwrap_or(0);
+            (w, h)
+        };
+        let ctrl_area = (cw as i64) * (ch as i64);
+        let packed = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions { band_packing: true, ..base },
+        ).expect("packed build");
+        let identical =
+            format!("{:?}", control.entities) == format!("{:?}", packed.entities);
+        if identical {
+            println!("{label:<10} REFUSED (native shipped) — ctrl band-bbox {cw}x{ch}={ctrl_area}");
+            built_all = false;
+            continue;
+        }
+        // Criterion-scope area: the spike's KC1 quantity was bands +
+        // transport, with NO poles (the spike placed none), and the
+        // control side is the band-bbox — so the packed side measures
+        // non-pole entity extents, footprint-inclusive (#523 review:
+        // pole placement was inflating the packed bbox asymmetrically).
+        let (mut pxmin, mut pymin, mut pxmax, mut pymax) =
+            (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for e in &packed.entities {
+            if e.name.contains("electric-pole") {
+                continue;
+            }
+            let (w, h) = spaghettio_core::common::entity_size(&e.name);
+            pxmin = pxmin.min(e.x);
+            pymin = pymin.min(e.y);
+            pxmax = pxmax.max(e.x + w as i32 - 1);
+            pymax = pymax.max(e.y + h as i32 - 1);
+        }
+        let parea = ((pxmax - pxmin + 1) as i64) * ((pymax - pymin + 1) as i64);
+        agg_ctrl += ctrl_area;
+        agg_pack += parea;
+        println!(
+            "{label:<10} ctrl band-bbox {cw}x{ch}={ctrl_area}  packed {}x{}={parea} ({:+.1}%)",
+            pxmax - pxmin + 1,
+            pymax - pymin + 1,
+            (parea - ctrl_area) as f64 / ctrl_area as f64 * 100.0,
+        );
+    }
+    println!("\n=== KC1 on the real planner ===");
+    if agg_ctrl > 0 {
+        println!(
+            "  buildable-fixture aggregate: {agg_ctrl} -> {agg_pack} ({:+.1}%)  bar −33.0%",
+            (agg_pack - agg_ctrl) as f64 / agg_ctrl as f64 * 100.0,
+        );
+    }
+    if !built_all {
+        println!("  NOTE: not all three gate fixtures built — the three-fixture aggregate is NOT evaluated; record the scope gap in the decision log.");
+    }
+}
+
+/// RFC-058 phase 5, KC3: per-category validation parity, packed vs
+/// control, on the buildable gate fixtures.
+#[test]
+#[ignore = "RFC-058 phase 5 validation parity — run with --ignored --nocapture"]
+fn probe_packed_validation_parity() {
+    use spaghettio_core::validate::{self, LayoutStyle};
+    for (label, item, rate, inputs, machine) in [
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"][..], "assembling-machine-1"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"][..], "assembling-machine-2"),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(), machine,
+            &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let base = layout::LayoutOptions {
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        };
+        for (kind, opts) in [
+            ("control", base.clone()),
+            ("packed", layout::LayoutOptions { band_packing: true, ..base.clone() }),
+        ] {
+            let l = layout::build_bus_layout(&sr, opts).unwrap();
+            let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                Ok(i) => i,
+                Err(e) => e.issues,
+            };
+            let mut by_cat: std::collections::BTreeMap<(String, String), usize> = Default::default();
+            for i in &issues {
+                *by_cat.entry((format!("{:?}", i.severity), i.category.clone())).or_default() += 1;
+            }
+            println!("{label} {kind}: {} issues {:?}", issues.len(), by_cat);
+        }
+    }
+}
+
+/// RFC-058 phase 5 hardening: tile-level dump of packed sci1's
+/// entity-overlap errors — positions plus every entity on each tile.
+#[test]
+#[ignore = "RFC-058 phase 5 overlap diagnosis"]
+fn probe_packed_overlap_diagnosis() {
+    use spaghettio_core::validate::{self, LayoutStyle};
+    let inputs_set: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sci2 = std::env::var("SPAGHETTIO_DIAG_FIXTURE").as_deref() == Ok("sci2");
+    let (item, rate, machine) = if sci2 {
+        ("logistic-science-pack", 2.0, "assembling-machine-2")
+    } else {
+        ("automation-science-pack", 1.0, "assembling-machine-1")
+    };
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        item, rate, &inputs_set, &MachinePalette::default(),
+        machine, &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            band_packing: true,
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        },
+    ).unwrap();
+    let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+    let cat = std::env::var("SPAGHETTIO_DIAG_CATEGORY")
+        .unwrap_or_else(|_| "entity-overlap".into());
+    for i in issues.iter().filter(|i| i.category == cat).take(8) {
+        println!("({:?},{:?}) {}", i.x, i.y, i.message);
+        if let (Some(x), Some(y)) = (i.x, i.y) {
+            for e in &l.entities {
+                let (w, h) = spaghettio_core::common::entity_size(&e.name);
+                if e.x >= x - 2 && e.x <= x + 2 && e.y >= y - 2 && e.y <= y + 2 {
+                    let _ = (w, h);
+                    println!(
+                        "   near: {} ({},{}) {:?} io {:?} carries {:?}",
+                        e.name, e.x, e.y, e.direction, e.io_type, e.carries
+                    );
+                }
+            }
         }
     }
 }

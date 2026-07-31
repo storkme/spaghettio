@@ -127,6 +127,26 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
+**`rfc-058-band-packing.md` (2026-07-31, CONCLUDED — kill criterion 1
+fired in phase 4)**: 2D placement at row-band granularity, run
+evidence-first end to end in two days. Phases 0–3 cleared their gates
+(KC2 reach 36.8% vs 30% over a 38-row e2e census; throwaway trunk spike
+−35.9% vs −33.0%), and the phase-4 packed pipeline was built behind
+`LayoutOptions.band_packing` (placer-native bands, shelf packing with
+belt-footprint rects, corridor-tree routing with negotiated ordering,
+splitter junctions, UG crossings). The kill: as materialization was made
+physically legal — each fix from a tile-level diagnosis — the buildable
+gate aggregate fell monotonically (−44.0% corrupt → −34.6% tree →
+−27.0% legal on the faithful instrument #523's two review rounds
+forced — criterion-scope non-pole extents, honest footprints, scoring
+bypassed), landing six points below the bar with validation parity still
+distant (sci2: 5 dead-end errors, 63 reachability warnings). Falsified:
+band packing holding ≥33% real-bbox saving under legal single-lane
+trunk routing. What survives: the census + premise guards on main, the
+inert scaffolding, and the flag-gated builder as the reproducible
+falsification record. Full trail in the RFC's decision log (fifteen
+dated entries, two falsified hypotheses recorded en route).
+
 **`rfc-059-di-coupling-assignment.md` (2026-07-31) — CLOSED, decided: the
 tie-break stays P0, and the better policy is blocked on a validator blind spot.**
 

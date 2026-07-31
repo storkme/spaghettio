@@ -17,7 +17,7 @@ use crate::bus::partitioner::PartitionPlan;
 use crate::bus::placer::RowSpan;
 use crate::bus::stacking_ctx::StackingCtx;
 
-const LANE_CAPACITY_TABLE: &[(&str, f64)] = &[
+pub(crate) const LANE_CAPACITY_TABLE: &[(&str, f64)] = &[
     ("transport-belt", 7.5),
     ("fast-transport-belt", 15.0),
     ("express-transport-belt", 22.5),

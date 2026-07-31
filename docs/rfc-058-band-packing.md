@@ -1,10 +1,12 @@
 # RFC-058: Band packing — 2D placement at row granularity
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active — phases 0–3 complete
-(KC2 cleared at 36.8% vs 30%; KC1 cleared at −35.9% vs −33.0%, narrowly;
-placer-native extraction + flag-gated packer landed inert — all
-2026-07-31). Next: phase 4 (2D lane planning), where kill criterion 1 is
-re-evaluated on the real planner.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Concluded 2026-07-31 — kill
+criterion 1 FIRED in phase 4: the real planner under physically-legal
+routing, measured faithfully (criterion-scope non-pole extents, honest
+footprints, scoring bypassed), holds −27.0% against the −33.0% bar, with
+the trajectory adverse as correctness increased. Phases 0–3's evidence and the inert
+scaffolding stand; the packed builder remains flag-gated and default-off
+as the falsification record. See the final decision-log entry.**
 Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
 
 ## Summary
@@ -181,6 +183,65 @@ produced 0.00/s in Factorio while validating clean).
 
 Packing is gated behind a `LayoutOptions` flag, default off, until it clears
 its gates — same discipline as `compact_layout`.
+
+### Phase 4 design (2026-07-31): a packed geometry planner beside the bus planner, with an explicit refusal surface
+
+Read of `plan_bus_lanes` (1,667 lines) and the ghost-pipeline contracts,
+looking for kill criterion 5. The planner splits cleanly in two:
+
+- **Aggregation (~60%, geometry-free, reused verbatim):** consumer/producer
+  maps keyed `(item, module_id)`, DI-coupled consumer filtering, rate
+  totals and belt-tier selection, lane splitting, family construction.
+  Nothing here knows where anything is.
+- **Geometry (1D-specific, NOT modified — paralleled):** contiguous west
+  column strip (`x = i+1` + spacers), east-turning `tap_off_ys`, fluid
+  anchor staggering, balancer blocks demanding contiguous columns plus
+  `compute_extra_gaps` vertical slack, and the two-pass width negotiation
+  with `place_rows`. These assumptions are load-bearing and correct for
+  the linear bus; they are left untouched.
+
+The packed path is a **separate geometry planner** (`bus::bands`), fed by
+the same aggregation outputs, producing per-item **nets** instead of
+column lanes: a source anchor (external items at the arrangement's west
+edge; produced items at their band's output row) plus one tap anchor per
+consumer band's feed rows — the spike's model, made real. Bands are
+translated rigidly to their packed positions (the fold's per-segment
+transform precedent), and routing reuses the position-agnostic machinery
+the contracts promise: `Occupancy`, negotiated A\*, junction handling.
+Splitter tap stamping and balancer blocks are 1D-trunk concepts and do
+not carry over.
+
+**The refusal surface is what keeps KC5 from firing.** Packing refuses —
+and the decomposition candidate abstains, shipping the native bus — when
+the arrangement needs anything the packed planner does not model: any
+item over one lane's capacity (balancer families), `HorizontalStack`
+rows, partitioned modules (`module_id > 0`), or a band census below the
+packer's own floor. Every KC2-winning fixture is single-lane throughout,
+so the refusals cost none of the measured reach; they cost only claims
+the RFC never made. This is the same strictly-additive entry pattern
+cell composition and DI used: compete where you can build, abstain
+loudly where you cannot.
+
+**Two implementation specifics, fixed before code (2026-07-31).** First,
+phase 4 packs the **content rect**, not the structural rect: a band must
+carry its fluid pipe rows (and any other non-belt span content) rigidly,
+so the packing input is the span's y-range minus belt-only rows, with the
+x-extent of all non-belt entities. The phase 0–3 instruments measured
+structural rects (machines+inserters only) and their published numbers
+stand; the content rect adds a small area cost on fluid-carrying bands
+(`pu1-plate`'s chem rows), which the KC1 re-measure absorbs or reports.
+Second, the integration seam is INSIDE `layout_pass`, immediately after
+`place_rows` — the RFC's rejected-alternatives entry still holds: a
+post-pass over the finished layout would re-run lane planning with less
+information. When the flag is on and nothing refuses, the packed builder
+takes over (translate bands, plan nets, route, place poles, emit
+boundary records — the fold's 0.00/s lesson makes the records
+first-class, not an afterthought); on any refusal it emits the typed
+event and falls through to the untouched native pipeline.
+
+KC5 verdict: **extension, not rewrite — the criterion does not fire.**
+`plan_bus_lanes` is not modified; the packed planner sits beside it
+behind the same flag, and the linear path stays byte-identical.
 
 ## Kill criteria
 
@@ -540,6 +601,174 @@ clears. Rationale in the decision log.
   −35.2% → −35.9% (`sci2-ore` 2,695 → 2,618; corridor tiles 454 → 428 and
   379 → 368): the shorter true-minimal corridors outweigh the stricter
   turn rule, so the verdict stands with a slightly wider margin.
+
+- **2026-07-31 — phase 4 built end-to-end; KC1 on the real planner:
+  buildable-fixture aggregate −44.0% against the −33.0% bar.** The packed
+  pipeline (refusals → content-rect packing with the spike's 2..=8 gap
+  widening → rigid translation → inserter-aligned belt rows → corridor
+  routing with UG pairs at crossings → pole grid → boundary records) now
+  ships real layouts behind the flag: `sci1-ore` 990 → 512 (−48.3%),
+  `sci2-ore` 4,104 → 2,340 (−43.0%) — both beating the spike's estimates,
+  which reserved worst-case feed rows the real templates do not need.
+  Three router defects were caught by the tests and fixed: rect-blocking
+  made interior feed rows unreachable, a single-tile pickup was killed by
+  an earlier corridor's turn, and the fixed gap denied sci2.
+
+  **Scope gap, recorded not hidden: `pu1-plate` refuses on the real
+  planner** — the native pass is DI-free under the Candidate pattern, so
+  copper-cable rides the bus at 81/s and trips the multi-lane refusal
+  that DI normally removes. The three-fixture KC1 aggregate is therefore
+  NOT evaluated on the real planner; the buildable-fixture aggregate
+  (−44.0%) clears the bar with room, and closing the pu1 gap means
+  packing the DI candidate's rows — future work this RFC's phase-6
+  candidate wiring should inherit, not a silent re-basing of the gate.
+  Probe: `probe_packed_kc1_real_planner`.
+
+- **2026-07-31 — phase 5 opened: KC3 baseline measured, not yet parity.**
+  Controls validate at 0 issues; packed `sci1-ore` carries 48 (21
+  entity-overlap Errors, belt-dead-end, flow-reachability, throughput
+  warnings) and `sci2-ore` 156 (item-isolation, belt-loops, UG pairing,
+  power coverage among them) — `probe_packed_validation_parity` prints
+  the per-category tables. These are mechanical geometry defects of the
+  young builder (the class KC3 explicitly tolerates fixing, not the
+  criterion firing), and each category now gets the verification
+  protocol's treatment: snapshot-decode, tile-level inspection, fix,
+  re-measure — never trusting a count drop alone. KC4 (fast meter),
+  browser eyeball, and sim adjudication queue behind validation parity;
+  phase 6's candidate wiring stays blocked until KC3 closes.
+
+- **2026-07-31 — hardening loop, honest checkpoint: correctness rules are
+  eating the density, and one "0 issues" was the trap, caught.** The
+  foreign-feed legality rule (a tile a foreign-carrying belt points into
+  is unroutable) fixed the diagnosed item-isolation class — and made a
+  sci2 net unroutable at every gap, so the builder REFUSES sci2 and the
+  parity probe's "sci2 packed: 0 issues" was the native fallback
+  validating clean, not a fixed packed layout (the check-went-quiet
+  failure mode CLAUDE.md documents; caught by re-running the KC1 probe,
+  which detects refusal by entity identity). sci1 still builds at 30
+  issues but its saving fell to −28.9% — BELOW the −33.0% bar. Current
+  truth: no gate fixture both builds AND clears KC1 under the hardened
+  router. The tension is structural: each legality rule the validator
+  demands lengthens corridors or forces refusal, which is exactly the
+  trade KC1 exists to police. Next iterations owe either smarter routing
+  under the same rules (same-item merging instead of blanket overlap
+  bans, per-item feed-row assignment making sideloads legal, per-seam gap
+  growth) or the honest conclusion that KC1 fires on the real planner —
+  neither is decided yet, and no number in this entry is a pass.
+
+- **2026-07-31 — next-iteration direction fixed: per-net corridor TREES
+  with splitter branches.** Of the checkpoint's two options, smarter
+  routing is chosen over concluding KC1 fires — because the current
+  router duplicates a full corridor per (src, dst) pair, which is where
+  both the wasted area and the unroutability come from, and the bus's own
+  answer to one-producer-many-consumers is a trunk with splitter
+  tap-offs. Design: route a net's first consumer normally; every later
+  consumer may terminate on any tile of the net's OWN earlier corridor,
+  and the junction point becomes a SPLITTER (1→2, facing the trunk's flow
+  direction) whose second output starts the branch — same-item merging
+  stays forbidden across nets, so the foreign-feed rule and item
+  isolation hold. Expected effects: sci2's unroutable net regains a path
+  (it can join its own trunk), corridor tile counts drop materially, and
+  KC1 gets its honest re-measure on the tree router. If THAT still lands
+  below −33.0%, the criterion fires and the RFC stops — the option is
+  spent after this iteration.
+
+- **2026-07-31 — the tree-router iteration lands: sci2 builds again,
+  KC1's buildable aggregate clears at −34.6%, and sci1 validates
+  ERROR-FREE.** Five routing advances, each from a tile-level diagnosis:
+  splitter-carved branch junctions; feed-row west continuations;
+  negotiated net ordering (failing net promoted, one promotion per net
+  per gap) which is what actually unlocked sci2; multi-producer
+  collectors (the producer map kept ONE band per item — every other
+  producer's output row stranded); and immediate-continuation pickups
+  (seeding at ox−2 left a one-tile hole rows dead-ended into). State:
+  sci1 builds at −28.9% with 16 warnings and ZERO errors; sci2 at −36.0%
+  with 153 issues (4 dead-ends, 1 isolation, rest warnings); buildable
+  aggregate 5,094 → 3,331 (−34.6% vs the −33.0% bar). pu1 still refuses
+  on multi-lane scope. The KC1 tree-router condition from the previous
+  entry is MET on the buildable set; KC3 remains open (sci2 errors,
+  warning classes on both) and the loop's next diagnoses are queued in
+  the probes.
+
+- **2026-07-31 — open diagnosis, recorded for pickup: sci2's four
+  dead-ends are orphaned BRANCH stubs.** Neighborhood dumps
+  (`probe_packed_overlap_diagnosis`, now fixture-switchable via
+  `SPAGHETTIO_DIAG_FIXTURE=sci2`) show the pattern at (8,11): a gear
+  trunk runs north at x=7 with its carved splitter at (7,12); the branch
+  entry (8,11) is stamped East pointing into an EMPTY (9,11) while the
+  branch's continuation exists at (10,11) — a one-tile gap exactly where
+  the branch crossed the x=9 corridor, i.e. the crossing-to-UG
+  conversion did not fire for the branch's first crossing. Same class at
+  (26,27) and two south-pointing west-margin stubs. TWO hypotheses now
+  measured and falsified: the trailing-run sideload assumption (west-
+  continuation follow-through fill landed, no delta) and foreign-goal
+  acceptance (free-or-own-item goal rule landed, no delta — kept as
+  guards, both physically required). The class survives blind iteration;
+  next session opens the SNAPSHOT DEBUGGER on the sci2 packed layout
+  (SPAGHETTIO_DUMP_SNAPSHOTS=1 + the decoder in
+  docs/layout-snapshot-debugger.md) and walks the four stub tiles with
+  full entity context — then sci2's last isolation error, the warning
+  classes (reachability 63, power 49), the pu1 scope decision,
+  KC4/eyeball/sim, and phase 6's candidate wiring.
+
+- **2026-07-31 — KILL CRITERION 1 FIRES on the real planner; RFC-058
+  concludes.** The final materialization-correctness fix (the UG
+  entrance conversion must target the actual predecessor belt, not
+  `out.last_mut()` — the corruption the instrumented route dumps
+  exposed) forces legal-but-longer routes, and two rounds of #523 review
+  then corrected the MEASUREMENT itself: the packed bbox was anchor-only
+  with no minimum (understating), the pole grid drifted up to ~6 tiles
+  past the last real entity (inflating, and outside the criterion's
+  scope — the spike placed no poles), and a scoring flip could ship a
+  native-shaped K1 variant mislabelled as packed, so the flag now
+  bypasses candidate scoring outright (an instrument, not a candidate).
+  On the faithful instrument — packed artifact, criterion-scope
+  non-pole extents, honest footprints — the buildable-fixture aggregate
+  lands at **−27.0% (sci1 −27.3%, sci2 −26.9%), six points below the
+  −33.0% bar**. The trajectory across the hardening loop remains
+  adverse — −44.0% (naive, corrupt routing) → −34.6% (tree router,
+  still-corrupt materialization) → −27.0% (legal materialization,
+  faithful measurement) — with
+  KC3 parity still distant (sci2: 5 dead-ends, 1 isolation, 63
+  reachability warnings), so every remaining correctness repair can only
+  push density further below the bar. The tree router was pre-committed
+  as the LAST routing option ("the option is spent after this
+  iteration"), and the criterion's own text says stop; do not re-tune.
+
+  What stands: phases 0–3's measured evidence (KC2 36.8%; the spike's
+  −35.9% on a model now known to be generous about materialization
+  legality); the inert extraction/packer scaffolding on main; and this
+  branch's packed pipeline as the falsification instrument. What is
+  falsified: that 2D band packing can hold ≥33% real-bbox saving under
+  physically-legal single-lane trunk routing on the gate fixtures. The
+  phase-6 default-on question resolves NO by this evidence; phases 5–6
+  are closed by the kill, per the phasing section's own gate structure.
+  The flag and packed builder remain in-tree, default-off and inert, as
+  the reproducible record. Known latent defects in that record — found
+  by #523's two review rounds and deliberately left, since each fix
+  makes routing stricter or restores dropped transport and so moves
+  density further below the bar: the splitter carve can silently no-op
+  (re-selected junction, or a junction whose belt a crossing bridger
+  already renamed to UG); the collector loop lacks crossing/UG handling
+  and the foreign-feed filter; secondary/sorted output-belt rows are not
+  re-stamped (no gate fixture carries them); `src_bands` self-exclusion
+  is evaluated against the first consumer only; and the sketch pole grid
+  can exceed wire reach after free-tile drift (clamped to the pre-pole
+  extent, but not reach-verified). Each is annotated at its site in
+  `bus::bands`.
+
+- **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
+  fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused
+  verbatim) and 1D-specific geometry (left untouched; paralleled by a
+  packed-geometry planner in `bus::bands` producing per-item source/tap
+  nets in packed coordinates, routed by the position-agnostic
+  Occupancy/A* machinery). The load-bearing scope decision: the packed
+  candidate REFUSES — abstains, native bus ships — on anything it does
+  not model: multi-lane items (balancer families), HorizontalStack rows,
+  partitioned modules. Every KC2 winner is single-lane, so the refusals
+  cost none of the measured reach. Full design in the Phase 4 design
+  section; implementation follows it behind the existing flag, with KC1
+  re-measured on the real planner before any phase-5 gate runs.
 
 - **2026-07-31 — phases 1–2 landed: placer-native bands and the flag-gated
   packer, both inert by construction.** New module `bus::bands`. Extraction
