@@ -865,17 +865,45 @@ needed to look at the result, not a UI feature.
      taps east into AC's `row:advanced-circuit:belt-in:electronic-circuit`
      at y=87-89 (24 long-handed inserters, matching AC's 24-machine
      count), and the SAME trunk continues south past the tap to the
-     perimeter exit at (2,96) — `boundary_outputs` for electronic-circuit
-     is empty (correctly: Step 7's row-level merge was skipped for this
-     item; `surplus_exits` owns the physical claim instead). Residual: 4
-     `input-rate-delivery` **warnings** (not errors) on copper-cable, a
-     DIFFERENT shared item (AC draws 2 cable/craft directly, on top of
-     EC's own cable draw — the RFC's own Motivation table names this
-     second coupling edge) — an ordinary multi-consumer lane
-     untouched by this phase (copper-cable is not itself an external
-     target, so `solid_target_items` never gates it); a pre-existing
-     lane-balancing gap this phase's fixture is the first to exercise,
-     out of scope here, logged in the test output for visibility.
+     perimeter exit — `boundary_outputs` for electronic-circuit is empty
+     (correctly: Step 7's row-level merge was skipped for this item;
+     `surplus_exits` owns the physical claim instead).
+
+     **Residual account, corrected (RFC-062 Phase 2 review, F1) — what
+     this entry originally said, what was actually true, and why the gap
+     went unnoticed.** Originally recorded here: "Residual: 4
+     `input-rate-delivery` warnings (not errors) on copper-cable... a
+     pre-existing lane-balancing gap." **That was incomplete, not
+     wrong**: the fixture's own `eprintln!` printed "0 errors, 28
+     warnings" (visible in the original PR's test output), but the
+     write-up only ever inspected the `input-rate-delivery` category
+     subset (4 hits, all copper-cable) and never accounted for the other
+     24 — exactly the shape `docs/validator-reporting.md` rule 6 warns
+     about ("count, don't sample" — the write-up sampled one category and
+     silently dropped the rest). The 24 were `belt-flow-reachability`
+     warnings, one per AC machine ("items cannot leave"), caused by a
+     real bug: `lane_planner.rs`'s solid dual-purpose-lane exit was
+     `perimeter_exit_y = Some(total_height)`, but `total_height` is an
+     EXCLUSIVE bound (rows occupy `[0, total_height)`) — the exit landed
+     one row PAST the layout's real bottom edge (originally (2,96) on a
+     96-row layout). `check_belt_flow_reachability`'s belt-derived
+     boundary (`max_by` over every belt tile it can see) shifted down by
+     one row to match, demoting every legitimate y = total_height − 1
+     export tail — AC's own row among them — from "boundary" to
+     "interior". The fluid dual-purpose lane's identical `total_height +
+     exit_offset` convention never surfaces this: a fluid exit is a pipe,
+     invisible to this belt-only check's `on_boundary`. Fixed:
+     `perimeter_exit_y = Some(total_height - 1)` (now (2,95) on this
+     fixture). **Corrected, true account**: 0 errors, 4 warnings — all 4
+     `input-rate-delivery` on copper-cable, exactly as first described,
+     now with the belt-flow-reachability wave actually gone rather than
+     merely unmentioned. Copper-cable's own residual (AC draws 2
+     cable/craft directly, on top of EC's own cable draw — the RFC's own
+     Motivation table names this second coupling edge) is unchanged: an
+     ordinary multi-consumer lane, not itself an external target so
+     `solid_target_items` never gates it, out of scope here. The
+     mechanism fixture now asserts `belt-flow-reachability` warnings are
+     zero explicitly, not just folded into a total.
   2. **`ec_ac_default_options_candidate_choice`** — documents what the
      shipped-default engine (`cell_composition`/`direct_insertion` both
      `Candidate`) actually does with the real Phase-1 solver output.
@@ -936,11 +964,12 @@ needed to look at the result, not a UI feature.
      the general fix shape, not a uranium-specific patch.
 
   **N=1 regression.** Full suite run clean before AND after adding the
-  new tests: `cargo test --manifest-path crates/core/Cargo.toml` — 925
-  lib tests passed (920 Phase-1 baseline + 5 new
-  `check_shared_row_outflow_*` unit tests), 0 failures, 3 ignored
-  (unchanged); every existing integration-test file's pass count
-  unchanged; no `.fls` snapshot or golden file touched or regenerated.
+  new tests: `cargo test --manifest-path crates/core/Cargo.toml` — 926
+  lib tests passed (920 Phase-1 baseline + 6 new
+  `check_shared_row_outflow_*` unit tests, one added in the review fix
+  round below), 0 failures, 3 ignored (unchanged); every existing
+  integration-test file's pass count unchanged; no `.fls` snapshot or
+  golden file touched or regenerated.
   `is_final`'s new `internally_consumed_items` check only changes
   behavior when a row's own output item is BOTH in `final_items` AND
   appears in some non-voider machine's `inputs` — no existing
@@ -978,3 +1007,128 @@ needed to look at the result, not a UI feature.
   (c) Phase 3 (harness per-item verification plumbing) is unblocked by
   this phase — the EC+AC fixture now builds validator-clean under the
   native mechanism, which is Phase 3/4's prerequisite.
+
+- *2026-08-01 — Phase 2 adversarial review fix round: one blocking
+  finding fixed (F1), the over-claim direction gained a severity split
+  (F2), two teeth items added (F3, F4), two reviewer observations
+  recorded.*
+
+  **F1 (blocking, fixed).** `lane_planner.rs`'s solid dual-purpose-lane
+  exit set `perimeter_exit_y = Some(total_height)`. `total_height` is an
+  EXCLUSIVE bound (rows occupy `[0, total_height)`, the same convention
+  `RowSpan::y_end` uses) — the exit landed one row PAST the layout's real
+  bottom edge. `check_belt_flow_reachability`'s belt-derived boundary
+  (`max_by` over every belt tile) shifted to match, demoting every
+  legitimate `y = total_height − 1` export tail from "boundary" to
+  "interior": 24 false `belt-flow-reachability` warnings, one per AC
+  machine, on the canonical fixture (0 errors either way — this was
+  always warning-severity, never a build blocker, which is exactly why
+  it survived the original `errors.is_empty()` assertion). The fluid
+  dual-purpose lane's identical `total_height + exit_offset` convention
+  never surfaces this: a fluid exit is a pipe, invisible to this belt-
+  only check. Fixed: `Some(total_height - 1)`. Verified: the mechanism
+  fixture's warning count drops from 28 to 4 (the 4 copper-cable
+  `input-rate-delivery` warnings, unchanged and out of scope), and the
+  fixture now asserts `belt-flow-reachability` warnings are zero
+  explicitly rather than folding them into an unexamined total — see the
+  corrected residual account inline above (Phase 2's original entry) for
+  what went wrong the first time and why.
+
+  **F2 — over-claim severity split, decided and documented.** Naively
+  comparing BUILT totals alone (every `MachineSpec`'s machine count
+  independently ceiled) hard-errors on legitimate ceil-slack contention:
+  reviewer-measured on EC@10.4/s + AC@3.05/s, claimed (10.4 target + 6.25
+  built taps) = 16.65 > produced (built) 16.5 — the sole issue on an
+  otherwise-clean layout. The producer's and the tap's consumer are two
+  INDEPENDENT `MachineSpec`s, each ceiled on its own; nothing guarantees
+  their rounding slack cancels, so a built-only comparison conflates
+  "genuine demand overrun" with "two roundings that both happened to
+  round up." Decision: `check_shared_row_outflow_conservation` now also
+  computes the same totals from the LP's RAW (un-ceiled)
+  `MachineSpec::count` — the net-flow LP's own row-conservation identity
+  guarantees `target_plan + taps_plan + surplus_plan ≈ production_plan`
+  unless something is genuinely wrong at the plan level, not just the
+  build level. Only a PLAN-level over-claim (`claimed_plan >
+  production_plan`) is `Severity::Error`; a BUILT-only over-claim (plan
+  balances, built doesn't) is `Severity::Warning` with a distinct
+  message — still surfaced (the row has zero headroom for its exact
+  built machine-count pairing, worth knowing about), just not a claim
+  that a consumer or the export will actually starve. `target`/`surplus`
+  needed no plan/built split of their own — the solver never ceils a
+  target rate or a surplus remainder, so those two terms are already
+  plan-precision on both sides of the comparison; only the tap term
+  (drawn from a `MachineSpec::count` that gets independently ceiled by
+  the placer) does. New unit test
+  `shared_row_outflow_conservation_overclaim_is_warning_when_only_ceil_
+  slack` (`validate/mod.rs`) reproduces the reviewer's shape with a
+  minimal synthetic pair (producer count 10.0 exact, consumer count
+  6.001 — `ceil(6.001) = 7`) and asserts `Severity::Warning`; the
+  existing `shared_row_outflow_conservation_flags_overclaim` test
+  (integer machine counts, no ceil slack) now documents explicitly that
+  it's pinning the OTHER branch (`Severity::Error`) and must stay there.
+
+  **F3 — site 3 (ghost_router Step 7's `output_items` skip) was
+  untested; teeth added.** Reverting the skip alone (leaving the
+  dual-purpose lane's own routing intact) doesn't change the mechanism
+  fixture's error/warning counts by itself — Phase 0's original collision
+  came from site 1 (`is_final` forcing `output_east=true`), which site 3
+  alone can't undo, so a count-based assertion would have stayed green
+  under a site-3 revert. Added a direct assertion instead: no entity in
+  the mechanism fixture carries `segment_id ==
+  Some("merger:electronic-circuit")` — `output_merger::merge_output_rows`
+  always stamps that exact segment tag, so its absence is site 3's real
+  signature. Noted alongside it, for a future reader: reverting site 3
+  also flips `output_items.len()` from 1 (`["advanced-circuit"]`) to 2
+  (`["electronic-circuit", "advanced-circuit"]`), which changes Step 7's
+  `merge_x_cursor` start from the single-item convention (0) to the
+  multi-item one (`row_spans.iter().map(row_width).max() + 1`) — every
+  merger entity's x-position would shift east, a second, independent
+  signal a reverted site 3 would trip.
+
+  **F4 — fixture 2's winner assertion pinned to identity, not just
+  presence.** `ec_ac_default_options_candidate_choice` previously
+  asserted only `winner.is_some()` while the decision log's own text
+  claimed the test "pins the winner's identity" — the assertion didn't
+  back that claim. Changed to `assert_eq!(winner.as_deref(),
+  Some("native"), ...)`. Noted in the test and here: `#553`'s DI-scoring
+  changes (concurrent work in this session) could legitimately flip which
+  candidate wins this shape later — if it does, this assertion failing is
+  the intended visibility, not a false alarm; update it deliberately and
+  re-verify the CONFIRMED/else branch still matches reality rather than
+  loosening the assertion back to `is_some()`.
+
+  **Reviewer observations, recorded verbatim-in-spirit.**
+  - The under-claim direction's "physically exported" standard is a
+    **record backed by an entity at the recorded tile**, not a flow or
+    rate measurement. A belt can satisfy this check while under-
+    delivering, or — per `docs/validator-reporting.md`'s own history —
+    being disconnected one tile further along a chain the check never
+    walks. The sim harness (Phase 3/4) remains the real bar for "the
+    claimed rate actually moves in-game"; this check only closes the
+    "nothing there at all" gap Phase 0 observed, nothing stronger.
+  - **Untested shape, named as a Phase 3 fixture candidate**: target +
+    taps + surplus all live on ONE item at once, specifically U-238 as a
+    target under multi-target with kovarex excluded, where U-238 is
+    ALSO internally consumed (so it drives Step 7b's D2a merge from a
+    row that `is_final`'s new gate has flipped west, per this phase's own
+    site-1 change) — a genuinely three-way collision this phase's two
+    adversarial fixtures each exercise only two of the three axes of
+    (`ec_ac_shared_row_native_mechanism_zero_errors`: target+taps, no
+    surplus; `u235_u238_target_and_surplus_overlap`: target+surplus, no
+    taps). Not constructed this round — the recipe-graph shape needed
+    (an item that is simultaneously a D2b secondary output, a Step-7b
+    surplus source, AND a `solid_target_items`-gated dual-purpose-lane
+    consumer) doesn't exist in the current recipe DB without a
+    synthetic/hand-built `SolverResult`, and building one well enough to
+    be a trustworthy regression net (not just a fragile one-off) is
+    real, Phase-3-sized work, not a fix-round add-on.
+
+  **Verification.** `cargo test --manifest-path crates/core/Cargo.toml`
+  — 926 lib tests passed (925 + 1 new: the F2 ceil-slack-warning unit
+  test), 0 failures, 3 ignored (unchanged); every other suite unchanged;
+  `layout_multi_target`'s 3 tests all green with the new F1/F3/F4
+  assertions in place; no `.fls` snapshot or golden file touched.
+  `cargo clippy -p spaghettio_core -- -D warnings` clean. As predicted,
+  the mechanism fixture's warning count is the only behavioral diff from
+  this round (28 → 4) — no error-count change, no other fixture's
+  pass/fail flipped.

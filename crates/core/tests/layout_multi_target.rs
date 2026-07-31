@@ -87,6 +87,28 @@ fn ec_ac_shared_row_native_mechanism_zero_errors() {
         errors
     );
 
+    // RFC-062 Phase 2 review finding (F1): `perimeter_exit_y` landing one
+    // row PAST the layout's real bottom edge (`total_height`, an
+    // EXCLUSIVE bound, instead of `total_height - 1`) shifted
+    // `check_belt_flow_reachability`'s belt-derived boundary (its
+    // `on_boundary` is computed from `max_by` over every belt tile) and
+    // demoted every legitimate y = total_height-1 export tail from
+    // "boundary" to "interior" — 24 false `belt-flow-reachability`
+    // "items cannot leave" warnings, one per AC machine. The fluid
+    // dual-purpose lane never hit this: a fluid exit is a pipe, invisible
+    // to this belt-only check. Asserted explicitly (not just folded into
+    // the total warning count) because the original fixture printed "28
+    // warnings" and only inspected the `input-rate-delivery` subset,
+    // which is exactly how this went unnoticed the first time.
+    let belt_flow_reachability_warnings: Vec<_> =
+        warnings.iter().filter(|i| i.category == "belt-flow-reachability").collect();
+    assert!(
+        belt_flow_reachability_warnings.is_empty(),
+        "expected zero belt-flow-reachability warnings — a non-empty count here means the \
+         perimeter exit is shifting the belt boundary again, got: {:#?}",
+        belt_flow_reachability_warnings
+    );
+
     // Neither new failure direction should fire on the fixed mechanism —
     // this is the check's own "stays quiet on the case it was built to
     // pass" regression.
@@ -180,6 +202,36 @@ fn ec_ac_shared_row_native_mechanism_zero_errors() {
         "no real belt entity carrying electronic-circuit at the recorded perimeter exit ({exit_x},{exit_y})"
     );
 
+    // Site 3 (ghost_router.rs Step 7's `output_items` skip) is otherwise
+    // untested: reverting it alone (still routing electronic-circuit
+    // through Step 7's row-level merge IN ADDITION to the lane) doesn't
+    // change the error/warning counts above by itself — Phase 0's
+    // original collision came from `is_final` (site 1) forcing
+    // `output_east=true`, which site 3 alone cannot undo. The direct
+    // signal is the absence of a `merger:electronic-circuit` segment —
+    // Step 7's `merge_output_rows` always stamps `segment_id =
+    // Some(format!("merger:{item}"))`, so a reverted site 3 would leave
+    // this vestigial (electronic-circuit's row is west-flowing per site
+    // 1, so the merge would source from the wrong belt entirely, but the
+    // segment tag would still appear).
+    //
+    // Side effect worth noting for a future reader diffing this test: a
+    // reverted site 3 also changes `output_items.len()` from 1
+    // (`["advanced-circuit"]`, electronic-circuit skipped) to 2
+    // (`["electronic-circuit", "advanced-circuit"]`), which flips Step
+    // 7's `merge_x_cursor` from its single-item start (0) to its
+    // multi-item start (`row_spans.iter().map(row_width).max() + 1`) —
+    // every merger entity's x-position would shift east. That's a
+    // SECOND independent signal (position drift) a reverted site 3
+    // would trip, on top of the segment-tag check below.
+    assert!(
+        !layout.entities.iter().any(|e| {
+            e.segment_id.as_deref() == Some("merger:electronic-circuit")
+        }),
+        "found a `merger:electronic-circuit` segment — site 3 (ghost_router Step 7's \
+         output_items skip) isn't suppressing the row-level merge for the dual-purpose-lane item"
+    );
+
     // AC's machines must actually exist and be fed — cross-check the
     // solver's AC machine count against real entities in the layout.
     let ac_machines_solver = solver_result
@@ -253,7 +305,24 @@ fn ec_ac_default_options_candidate_choice() {
     // known-broken (Phase 0), and asserting success would just be
     // deleted the next time someone "fixes" this test instead of the
     // underlying candidate.
-    assert!(winner.is_some(), "expected a DecompositionChosen trace event");
+    //
+    // Asserting the IDENTITY, not just presence (RFC-062 Phase 2 review
+    // F4) — `winner.is_some()` alone doesn't back the decision log's
+    // claim that this pins which candidate wins. `PR #553`'s DI-scoring
+    // changes (concurrent work, same session) could legitimately flip
+    // this later; if it does, THIS assertion is the visibility that
+    // matters — update it deliberately rather than let the test go on
+    // "passing" while silently exercising a different candidate than the
+    // decision log describes.
+    assert_eq!(
+        winner.as_deref(),
+        Some("native"),
+        "expected the native candidate to win the EC+AC shape on the real Phase-1 solver \
+         output (Phase 0's cell-composition confound was observed on a hand-built \
+         SolverResult and doesn't reproduce here) — if this legitimately changed (e.g. a \
+         DI-scoring or decomposition-search update), update this assertion deliberately and \
+         re-verify the CONFIRMED/else branch below still matches reality"
+    );
     if winner.as_deref() != Some("native") && !ec_exported {
         eprintln!(
             "CONFIRMED (Phase 0 finding, reproduced on the real Phase-1 solver output): \

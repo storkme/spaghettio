@@ -509,6 +509,27 @@ pub fn check_stranded_byproducts(
 ///   actually produces — the row cannot honor every claim and something
 ///   downstream starves. The main invariant `docs/rfc-062-multi-target-
 ///   outputs.md`'s Layout section calls for.
+///
+///   **Severity split, added after review (RFC-062 Phase 2 fix round):**
+///   naively comparing BUILT numbers alone (every machine count
+///   independently ceiled — the same rounding `bus::placer::place_rows`
+///   applies) hard-errors on legitimate ceil-slack contention: measured
+///   on EC@10.4/s + AC@3.05/s, claimed (10.4 target + 6.25 built taps) =
+///   16.65 > produced (built) 16.5, the sole issue on an otherwise-clean
+///   layout. The row's PRODUCER count and the tap's CONSUMER count are
+///   two INDEPENDENT `MachineSpec`s, each ceiled on its own — nothing
+///   guarantees their slack cancels, so this is not a bug, it's built-
+///   capacity contention between two roundings that both individually
+///   round up. Fix: also compute the same totals from the LP's RAW
+///   (un-ceiled) `MachineSpec::count` — the row-conservation identity
+///   the net-flow LP solves guarantees these balance (`target_plan +
+///   taps_plan + surplus_plan ≈ production_plan`) UNLESS something is
+///   genuinely wrong at the plan level, not just the build level. Only
+///   a PLAN-level overclaim is `Severity::Error`; a BUILT-only overclaim
+///   (plan balances, built doesn't) is `Severity::Warning` with a
+///   distinct message — still surfaced (this row has zero headroom for
+///   its exact built machine-count pairing, worth knowing), just not a
+///   build-blocking claim of a starved consumer.
 /// - **Under-claim** (`shared-row-outflow-underclaim`): the item has a
 ///   target rate AND at least one other live claim (tap or surplus), but
 ///   no PHYSICAL export record (`boundary_outputs`/`surplus_exits`,
@@ -518,7 +539,16 @@ pub fn check_stranded_byproducts(
 ///   silent failure under the cell-composed candidate — EC's target
 ///   export dropped from `boundary_outputs` entirely, zero validator
 ///   errors raised. See the Phase 2 decision log for why this direction
-///   was added rather than left as a documented gap.
+///   was added rather than left as a documented gap. NOTE (review
+///   finding, recorded here so it isn't mistaken for a stronger claim
+///   later): "physically exported" here means a ledger record backed by
+///   a real entity carrying the right item AT the recorded tile — it is
+///   NOT a flow/rate measurement. A belt can satisfy this check while
+///   under-delivering (or, per `docs/validator-reporting.md`'s own
+///   history, being disconnected one tile further along). The sim
+///   harness (Phase 3/4) remains the real bar for "the export actually
+///   moves the claimed rate in-game" — this check only closes the
+///   "nothing there at all" gap.
 pub fn check_shared_row_outflow_conservation(
     layout: &LayoutResult,
     solver: &SolverResult,
@@ -526,6 +556,7 @@ pub fn check_shared_row_outflow_conservation(
     use rustc_hash::FxHashMap;
 
     let ceiled = |count: f64| if count > 0.0 { count.ceil().max(1.0) } else { 0.0 };
+    let planned = |count: f64| count.max(0.0);
 
     let mut target_rate: FxHashMap<&str, f64> = FxHashMap::default();
     for ext in &solver.external_outputs {
@@ -539,19 +570,26 @@ pub fn check_shared_row_outflow_conservation(
             *surplus_rate.entry(sur.item.as_str()).or_insert(0.0) += sur.rate;
         }
     }
-    let mut production: FxHashMap<&str, f64> = FxHashMap::default();
+    // BUILT (ceiled per-`MachineSpec` count — what actually gets placed)
+    // and PLAN (the LP's raw, un-ceiled count) production/tap totals,
+    // side by side — the severity split above needs both.
+    let mut production_built: FxHashMap<&str, f64> = FxHashMap::default();
+    let mut production_plan: FxHashMap<&str, f64> = FxHashMap::default();
     let mut producer_recipes: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
     for m in &solver.machines {
-        let count = ceiled(m.count);
+        let built = ceiled(m.count);
+        let plan = planned(m.count);
         for out in &m.outputs {
             if out.is_fluid {
                 continue;
             }
-            *production.entry(out.item.as_str()).or_insert(0.0) += out.rate * count;
+            *production_built.entry(out.item.as_str()).or_insert(0.0) += out.rate * built;
+            *production_plan.entry(out.item.as_str()).or_insert(0.0) += out.rate * plan;
             producer_recipes.entry(out.item.as_str()).or_default().push(m.recipe.as_str());
         }
     }
-    let mut tap_demand: FxHashMap<&str, f64> = FxHashMap::default();
+    let mut tap_demand_built: FxHashMap<&str, f64> = FxHashMap::default();
+    let mut tap_demand_plan: FxHashMap<&str, f64> = FxHashMap::default();
     for m in &solver.machines {
         // A voider's draw is bus-invisible by design (see the matching
         // exclusion in `bus::placer::place_rows`'s `internally_consumed_
@@ -560,27 +598,29 @@ pub fn check_shared_row_outflow_conservation(
         if m.voider {
             continue;
         }
-        let count = ceiled(m.count);
+        let built = ceiled(m.count);
+        let plan = planned(m.count);
         for inp in &m.inputs {
             if inp.is_fluid {
                 continue;
             }
-            *tap_demand.entry(inp.item.as_str()).or_insert(0.0) += inp.rate * count;
+            *tap_demand_built.entry(inp.item.as_str()).or_insert(0.0) += inp.rate * built;
+            *tap_demand_plan.entry(inp.item.as_str()).or_insert(0.0) += inp.rate * plan;
         }
     }
 
     const EPS: f64 = 1e-6;
     let mut issues = Vec::new();
-    for (&item, &prod) in &production {
+    for (&item, &prod_built) in &production_built {
         let target = target_rate.get(item).copied().unwrap_or(0.0);
-        let taps = tap_demand.get(item).copied().unwrap_or(0.0);
+        let taps_built = tap_demand_built.get(item).copied().unwrap_or(0.0);
         let surplus = surplus_rate.get(item).copied().unwrap_or(0.0);
 
         // "Shared" means at least two of {target, taps, surplus} are
         // live — a pure export, a pure intermediate, or a pure byproduct
         // alone never collides; the solver's own conservation already
         // guarantees those are correct.
-        let live_claims = (target > EPS) as u8 + (taps > EPS) as u8 + (surplus > EPS) as u8;
+        let live_claims = (target > EPS) as u8 + (taps_built > EPS) as u8 + (surplus > EPS) as u8;
         if live_claims < 2 {
             continue;
         }
@@ -593,23 +633,54 @@ pub fn check_shared_row_outflow_conservation(
         });
         let (px, py) = producer_pos.map(|e| (e.x, e.y)).unwrap_or((0, 0));
 
-        let claimed = target + taps + surplus;
-        if claimed > prod + EPS {
-            issues.push(
-                ValidationIssue::with_pos(
-                    Severity::Error,
-                    "shared-row-outflow-overclaim",
-                    format!(
-                        "{item}: shared row claims {claimed:.3}/s ({target:.3}/s export + \
-                         {taps:.3}/s internal taps + {surplus:.3}/s surplus) but only \
-                         produces {prod:.3}/s — the export or an internal consumer will \
-                         be starved in-game",
-                    ),
-                    px,
-                    py,
-                )
-                .with_detail(prod, claimed),
-            );
+        let claimed_built = target + taps_built + surplus;
+        if claimed_built > prod_built + EPS {
+            let prod_plan = production_plan.get(item).copied().unwrap_or(0.0);
+            let taps_plan = tap_demand_plan.get(item).copied().unwrap_or(0.0);
+            // `target`/`surplus` are already plan-precision (the solver
+            // never ceils a target rate or a surplus remainder) — only
+            // the tap side needs a separate plan-level total.
+            let claimed_plan = target + taps_plan + surplus;
+            if claimed_plan > prod_plan + EPS {
+                issues.push(
+                    ValidationIssue::with_pos(
+                        Severity::Error,
+                        "shared-row-outflow-overclaim",
+                        format!(
+                            "{item}: shared row claims {claimed_built:.3}/s ({target:.3}/s \
+                             export + {taps_built:.3}/s internal taps + {surplus:.3}/s \
+                             surplus) but only produces {prod_built:.3}/s — the plan-level \
+                             totals also overclaim ({claimed_plan:.3}/s claimed vs \
+                             {prod_plan:.3}/s planned production), so this is a genuine \
+                             demand overrun, not ceiling slack — the export or an internal \
+                             consumer will be starved in-game",
+                        ),
+                        px,
+                        py,
+                    )
+                    .with_detail(prod_built, claimed_built),
+                );
+            } else {
+                issues.push(
+                    ValidationIssue::with_pos(
+                        Severity::Warning,
+                        "shared-row-outflow-overclaim",
+                        format!(
+                            "{item}: shared row's BUILT claims ({claimed_built:.3}/s = \
+                             {target:.3}/s export + {taps_built:.3}/s internal taps + \
+                             {surplus:.3}/s surplus) exceed its BUILT production \
+                             ({prod_built:.3}/s), but the underlying PLAN rates balance \
+                             ({claimed_plan:.3}/s claimed vs {prod_plan:.3}/s produced) — \
+                             this row has zero headroom for its exact machine-count \
+                             pairing (two independently-ceiled `MachineSpec`s whose slack \
+                             doesn't cancel), not a genuine demand overrun",
+                        ),
+                        px,
+                        py,
+                    )
+                    .with_detail(prod_built, claimed_built),
+                );
+            }
         }
 
         if target > EPS {
@@ -637,7 +708,7 @@ pub fn check_shared_row_outflow_conservation(
                     format!(
                         "{item}: target export ({target:.3}/s) has no physical export \
                          record (boundary_outputs/surplus_exits) backed by a real entity \
-                         — the row also has {taps:.3}/s of internal taps and \
+                         — the row also has {taps_built:.3}/s of internal taps and \
                          {surplus:.3}/s of surplus, so a dual-purpose-lane mechanism was \
                          expected but the export path was silently dropped",
                     ),
@@ -1249,8 +1320,12 @@ mod tests {
 
     /// Bump the target so export (11) + taps (6) = 17 exceeds the row's
     /// real 16.5/s production — one positioned
-    /// `shared-row-outflow-overclaim` error, not a count folded into a
-    /// message (docs/validator-reporting.md rule 1).
+    /// `shared-row-outflow-overclaim` ERROR, not a count folded into a
+    /// message (docs/validator-reporting.md rule 1). `ec_ac_shared_row_
+    /// solver`'s machine counts (11.0, 24.0) are both exact integers, so
+    /// PLAN and BUILT totals are identical here — this is a genuine
+    /// plan-level overclaim, not the ceil-slack case the next test
+    /// covers, and must stay `Error`.
     #[test]
     fn shared_row_outflow_conservation_flags_overclaim() {
         let solver = ec_ac_shared_row_solver(11.0);
@@ -1270,6 +1345,92 @@ mod tests {
         let detail = overclaims[0].detail.as_ref().expect("over-claim issue must carry IssueDetail");
         assert!((detail.delivered - 16.5).abs() < 1e-9, "delivered should be the row's real production: {detail:?}");
         assert!((detail.needed - 17.0).abs() < 1e-9, "needed should be the claimed total: {detail:?}");
+    }
+
+    /// F2 (RFC-062 Phase 2 review fix round): reproduces the reviewer's
+    /// measured shape — two INDEPENDENTLY ceiled `MachineSpec`s (producer
+    /// count 10.0 exact, consumer count 6.001) whose BUILT totals collide
+    /// (claimed 10.5 > produced 10.0) purely because the consumer's own
+    /// ceiling rounds 6.001 up to a whole 7 machines, while the PLAN
+    /// (raw, un-ceiled) totals comfortably balance (claimed 9.501 ≤
+    /// planned 10.0). Must be `Warning`, not `Error` — this is built-
+    /// capacity contention between two independent roundings, not a
+    /// genuine demand overrun (the reviewer's own EC@10.4+AC@3.05 example
+    /// is the same shape, just with the real recipe's numbers).
+    #[test]
+    fn shared_row_outflow_conservation_overclaim_is_warning_when_only_ceil_slack() {
+        let solver = SolverResult {
+            machines: vec![
+                MachineSpec {
+                    entity: "assembling-machine-2".to_string(),
+                    recipe: "electronic-circuit".to_string(),
+                    count: 10.0,
+                    outputs: vec![ItemFlow {
+                        item: "electronic-circuit".to_string(),
+                        rate: 1.0,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                    ..Default::default()
+                },
+                MachineSpec {
+                    entity: "assembling-machine-2".to_string(),
+                    recipe: "advanced-circuit".to_string(),
+                    count: 6.001,
+                    inputs: vec![ItemFlow {
+                        item: "electronic-circuit".to_string(),
+                        rate: 1.0,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                    ..Default::default()
+                },
+            ],
+            external_outputs: vec![ItemFlow {
+                item: "electronic-circuit".to_string(),
+                rate: 3.5,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            ..Default::default()
+        };
+        // A real physical export claim, so this test isolates the
+        // severity split — without it the under-claim direction would
+        // also fire (target > 0, no boundary/surplus_exits record),
+        // which is a different finding this test doesn't probe.
+        let layout = LayoutResult {
+            entities: vec![
+                ec_producer_entity(),
+                PlacedEntity {
+                    name: "transport-belt".to_string(),
+                    x: 5,
+                    y: 30,
+                    carries: Some("electronic-circuit".to_string()),
+                    ..Default::default()
+                },
+            ],
+            width: 30,
+            height: 30,
+            surplus_exits: vec![("electronic-circuit".to_string(), 5, 30)],
+            ..Default::default()
+        };
+        let issues = check_shared_row_outflow_conservation(&layout, &solver);
+        let overclaims: Vec<_> =
+            issues.iter().filter(|i| i.category == "shared-row-outflow-overclaim").collect();
+        assert_eq!(overclaims.len(), 1, "expected exactly one over-claim issue: {issues:#?}");
+        assert_eq!(
+            overclaims[0].severity,
+            Severity::Warning,
+            "ceil-slack-only overclaim must be a Warning, not an Error: {:#?}",
+            overclaims[0]
+        );
+        let detail = overclaims[0].detail.as_ref().expect("over-claim issue must carry IssueDetail");
+        assert!((detail.delivered - 10.0).abs() < 1e-9, "delivered should be BUILT production: {detail:?}");
+        assert!((detail.needed - 10.5).abs() < 1e-9, "needed should be BUILT claimed total: {detail:?}");
+        assert!(
+            !issues.iter().any(|i| i.category == "shared-row-outflow-underclaim"),
+            "expected no under-claim issue — a real physical export record is present: {issues:#?}"
+        );
     }
 
     /// Target + taps are both live (a "shared row" by the check's own

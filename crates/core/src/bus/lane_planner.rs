@@ -440,12 +440,29 @@ pub fn plan_bus_lanes(
     // No staggering needed (unlike fluids): solid belts don't auto-merge
     // like adjacent pipes do, so two dual-purpose lanes exiting at the
     // same y on different columns are just two parallel belts.
+    //
+    // `total_height - 1`, NOT `total_height`: `total_height` is an
+    // EXCLUSIVE bound (rows occupy `[0, total_height)`, same convention
+    // as `RowSpan::y_end`), so `total_height` itself is one row PAST the
+    // last real row. A solid belt is visible to
+    // `check_belt_flow_reachability`'s belt-derived boundary (unlike a
+    // fluid exit, which is a pipe and invisible to that check's
+    // belt-only `on_boundary` — the fluid `total_height + exit_offset`
+    // convention above never hits this because of that, not because it's
+    // right): stamping one row past the layout's real bottom edge SHIFTS
+    // `max_by` down by one, demoting every legitimate y = total_height-1
+    // export tail (e.g. AC's own row) from "boundary" to "interior" and
+    // producing a wave of false `belt-flow-reachability` "items cannot
+    // leave" warnings on every machine downstream of one (RFC-062 Phase 2
+    // review finding, reproduced: all 24 of AC's machines). Landing on
+    // the last real row instead keeps the exit ON the existing boundary
+    // rather than inventing a new, deeper one.
     for lane in &mut lanes {
         if !lane.is_fluid
             && !lane.consumer_rows.is_empty()
             && solid_target_items.contains(lane.item.as_str())
         {
-            lane.perimeter_exit_y = Some(total_height);
+            lane.perimeter_exit_y = Some(total_height - 1);
         }
     }
 
