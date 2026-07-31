@@ -5258,9 +5258,17 @@ fn rfc058_band_packing_premise_holds() {
 /// recorded so the denominator is arguable rather than mysterious:
 /// strategy/row-layout variants are normalised to the default bus path,
 /// duplicate tuples are listed once (`source` names one owning test), and
-/// `#[ignore]`d tests are out — which excludes `measure_utility_10s_am3`
-/// and, notably, `pipe_belt_processing_unit_1s_routes` (pu1-plate): the
-/// KC1 gate fixture is NOT part of KC2's denominator.
+/// `#[ignore]`d tests are out — which excludes `measure_utility_10s_am3`,
+/// `fixture_source_ec_15s_am1_yellow_from_ore`, the ignored stress trio
+/// (`ac_partitioned_7s`, `ac_45s`, `pu_20s` — pu20 was an 85-band packable
+/// winner, so this rule costs the numerator too) and, notably,
+/// `pipe_belt_processing_unit_1s_routes` (pu1-plate): the KC1 gate fixture
+/// is NOT part of KC2's denominator. Two non-ignored requests are also out
+/// because this harness cannot express them —
+/// `fulgora_scrap_sorter_mechanism_present` needs the recycling-aware
+/// `solve_fulgora` path, and `cable13u_bridged_row_lane_throughput_clean`
+/// solves at `QualityTier::Uncommon` — so "every distinct request" is
+/// exact only over default-quality, non-recycling solves.
 ///
 /// KC2 asks what fraction of this corpus has >=3 bands and no
 /// width-dominant band. The aspect cap is consequential (it alone refuses
@@ -5308,7 +5316,6 @@ fn probe_band_census_e2e_corpus() {
         Case { label: "ec10-plate", source: "tier2_electronic_circuit", item: "electronic-circuit", rate: 10.0, machine: A2, belt: None, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
         Case { label: "ec10-plate-am1-red", source: "tier2_electronic_circuit_splitter_stamp_regression", item: "electronic-circuit", rate: 10.0, machine: A1, belt: RED, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
         Case { label: "ec10-ore-yellow", source: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 10.0, machine: A1, belt: YELLOW, inputs: ORES, excluded: &[] },
-        Case { label: "ec15-ore-yellow", source: "fixture_source_ec_15s_am1_yellow_from_ore", item: "electronic-circuit", rate: 15.0, machine: A1, belt: YELLOW, inputs: ORES, excluded: &[] },
         Case { label: "ec20-ore", source: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: A2, belt: None, inputs: ORES, excluded: &[] },
         Case { label: "plastic10-gas", source: "tier3_plastic_bar", item: "plastic-bar", rate: 10.0, machine: CHEM, belt: None, inputs: &["petroleum-gas", "coal"], excluded: &[] },
         Case { label: "plastic10-crude", source: "tier3_plastic_bar_from_crude", item: "plastic-bar", rate: 10.0, machine: CHEM, belt: None, inputs: &["crude-oil", "coal"], excluded: &[] },
@@ -5319,14 +5326,12 @@ fn probe_band_census_e2e_corpus() {
         Case { label: "ac1-nauvis", source: "tier4_advanced_circuit_from_plates", item: "advanced-circuit", rate: 1.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
         Case { label: "ac4-nauvis", source: "stress_advanced_circuit_partitioned_4s_from_plates", item: "advanced-circuit", rate: 4.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
         Case { label: "ac5-nauvis", source: "stress_advanced_circuit_partitioned_5s_from_plates", item: "advanced-circuit", rate: 5.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
-        Case { label: "ac7-nauvis", source: "stress_advanced_circuit_partitioned_7s_from_plates", item: "advanced-circuit", rate: 7.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
+        Case { label: "ac7-nauvis-yellow", source: "tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing", item: "advanced-circuit", rate: 7.0, machine: A2, belt: YELLOW, inputs: NAUVIS5, excluded: &[] },
         Case { label: "ac5-ore-yellow", source: "tier4_advanced_circuit_from_ore_am2", item: "advanced-circuit", rate: 5.0, machine: A2, belt: YELLOW, inputs: ORES5, excluded: &[] },
-        Case { label: "ac45-plates", source: "stress_advanced_circuit_45s_from_plates", item: "advanced-circuit", rate: 45.0, machine: A2, belt: None, inputs: &["iron-plate", "copper-plate", "plastic-bar"], excluded: &[] },
         Case { label: "pu2-ore-red", source: "tier5_processing_unit_from_ore_am3", item: "processing-unit", rate: 2.0, machine: A3, belt: RED, inputs: ORES5, excluded: &[] },
         Case { label: "pu2-ore-hs", source: "tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass", item: "processing-unit", rate: 2.0, machine: A3, belt: None, inputs: &["iron-ore", "copper-ore", "stone", "coal", "water", "crude-oil"], excluded: &[] },
         Case { label: "pu2.5-plates-hs", source: "tier5_processing_unit_25s_horizontal_stack_pole_coverage", item: "processing-unit", rate: 2.5, machine: A3, belt: None, inputs: PU9, excluded: &[] },
         Case { label: "pu2-am2-red", source: "processing_unit_2s_am2_fast_belts_validation_baseline", item: "processing-unit", rate: 2.0, machine: A2, belt: RED, inputs: PU9, excluded: &[] },
-        Case { label: "pu20-plates", source: "stress_processing_unit_20s_from_plates", item: "processing-unit", rate: 20.0, machine: A3, belt: None, inputs: &["iron-plate", "copper-plate", "plastic-bar", "sulfuric-acid"], excluded: &[] },
         Case { label: "u235-kovarex", source: "tier_kovarex_self_loop", item: "uranium-235", rate: 0.1, machine: A3, belt: None, inputs: &["uranium-238"], excluded: &["uranium-processing"] },
         Case { label: "u235-up", source: "tier_uranium_processing_surplus_export", item: "uranium-235", rate: 0.05, machine: A3, belt: None, inputs: &["uranium-ore"], excluded: &["kovarex-enrichment-process"] },
         Case { label: "pentapod0.2", source: "tier_pentapod_egg_self_loop", item: "pentapod-egg", rate: 0.2, machine: A3, belt: None, inputs: &["nutrients", "water"], excluded: &[] },
@@ -5411,7 +5416,7 @@ fn probe_band_census_e2e_corpus() {
     println!("  >=3 bands: {ge3}/{n} ({:.0}%)", pct(ge3));
     for (i, cap) in caps.iter().enumerate() {
         println!(
-            "  >=3 bands AND packable at {cap}:1: {}/{n} ({:.0}%) — KC2 bar is 30%",
+            "  >=3 bands AND packable at {cap}:1: {}/{n} ({:.1}%) — KC2 bar is 30%",
             packable[i],
             pct(packable[i]),
         );
