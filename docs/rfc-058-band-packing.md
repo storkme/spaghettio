@@ -1,6 +1,6 @@
 # RFC-058: Band packing — 2D placement at row granularity
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Design (circulated for review)**.
+Registry: [`rfcs.md`](rfcs.md). Status: **Active (Phase 0)**.
 Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
 
 ## Summary
@@ -246,11 +246,18 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
 ## Phasing
 
 0. **Reach measurement** — band census across the e2e corpus. Answers kill
-   criterion 2 before any packer exists.
+   criterion 2 before any packer exists. Carries the aspect-cap sweep
+   originally assigned to phase 2: the cap changes KC2's applicable-fixture
+   count, so it belongs with KC2's measurement (reordered 2026-07-31, see
+   decision log).
 1. **Band extraction from `RowSpan`** — placer-native, replacing the probe's
-   y-projection. No behaviour change.
+   y-projection. No behaviour change. **Deferred until the phase-3 gate
+   clears** (2026-07-31 reorder).
 2. **Packer** — shelf packing with aspect cap and swept target width, behind a
    default-off flag. Emits positions only; nothing consumes them yet.
+   **Deferred until the phase-3 gate clears** (2026-07-31 reorder): the spike
+   consumes the probe's own packed positions, so the production packer is
+   scaffolding that only pays off if the premise survives.
 3. **Trunk spike — throwaway code, all three gate fixtures.** Route trunks for
    the packed layouts with whatever is quickest and measure real bounding-box
    area and real transport against each control. Start with `sci1-ore` (4
@@ -280,6 +287,11 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
 Phases 0–2 are cheap, land independently, and are not evidence. Phase 3 is the
 gate: it is deliberately throwaway so that a negative result costs a day rather
 than the lane-planner rewrite.
+
+**Execution order (2026-07-31): 0 → 3 → 1 → 2 → 4 → 5 → 6.** The spike runs
+on the probe's packed positions, so phases 1 and 2 are not prerequisites for
+it — they are production scaffolding for phase 4, built only if the gate
+clears. Rationale in the decision log.
 
 ## Relationship to earlier RFCs
 
@@ -389,3 +401,33 @@ than the lane-planner rewrite.
 
   The 3:1 aspect cap is acknowledged as arbitrary and consequential — it alone
   refuses `insert3-ore` at 3.16:1 — with a sweep assigned to phase 2.
+
+- **2026-07-31 — band structure is host-geometry-relative; corpus aggregates
+  must be read like stress goldens.** Re-running the committed phase-0
+  instrument on a second machine, at the same commit with no core changes in
+  between, reproduced the three gate fixtures and the winners aggregate
+  exactly (−66.1% KC1 baseline, −64.5% winners, −38.1% transport) but
+  extracted **3 bands from `ec10-ore` where the #510 run saw 1**, moving the
+  corpus headline from −39.6% (7 multi-band) to −35.4% (8 multi-band).
+  Layout geometry is already known to vary with host SAT-cache state — the
+  reason stress goldens are never enforced in CI without pinning the cache —
+  and band extraction inherits that. Consequences: the premise-drift guard's
+  loose ≥50% bounds on the gate fixtures are the right shape (exact corpus
+  pins would flap across machines); phase 0's census reports KC2 as measured
+  on one named machine, not as a portable constant; and any KC2 result within
+  a few points of the 30% bar must be re-run on a second machine before the
+  criterion is called.
+
+- **2026-07-31 — execution order changed to 0 → 3 → 1 → 2 (phases 1–2
+  deferred behind the spike).** As circulated, the plan built the placer-native
+  band extractor and the flagged packer before the trunk spike. Both are
+  production scaffolding for phase 4, and the spike does not need them — it
+  consumes packed positions the phase-0 probe already computes. Building them
+  first would repeat, in miniature, the shape this RFC's own phasing section
+  criticises: cheap green work stacked ahead of the phase that can kill the
+  premise (RFC-057 died in its expensive phase after exactly that pattern).
+  The aspect-cap sweep moves from phase 2 into phase 0 for the same reason:
+  the cap changes KC2's applicable-fixture count, so it is part of KC2's
+  measurement, not a packer tuning knob. Nothing about the gates changes —
+  KC2 is still evaluated at phase 0, KC1 still at the spike, and all three
+  gate fixtures are still required before phase 4 starts.
