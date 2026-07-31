@@ -87,9 +87,10 @@ on every push:
 - **Rate headroom caveat (S=1 only)**: *unstacked* final-product output
   above one belt's capacity is still over-committed onto a single merger
   belt and the lane-throughput check doesn't visit merger tiles
-  ([#311](https://github.com/storkme/spaghettio/issues/311)) — treat
+  ([#311](https://github.com/storkme/spaghettio/issues/311), parked →
+  cluster [#527](https://github.com/storkme/spaghettio/issues/527)) — treat
   unstacked >45/s "clean" results as routing-verified but not
-  throughput-verified until #311 closes.
+  throughput-verified until the merger defect is fixed.
 
 ### Scaling walls (scaling gauntlet run 2026-07-22 post-RFC-047, release, 180s/cell budget)
 
@@ -108,6 +109,7 @@ First walls: logistic 5/s (inserter-item-throughput×3), military 5/s
 (honest refusal: RFC-047's late sideload check names a stone-brick
 25/s-over-22.5/s sideload-fed single trunk; the (n,1) merge-tap fallback
 that would fix it is [#336](https://github.com/storkme/spaghettio/issues/336)
+(parked → cluster [#527](https://github.com/storkme/spaghettio/issues/527))
 — note 10/s passes, the wall is shape-specific, not monotone), chemical
 10/s (belt-loop, underground-belt, unresolved-junction×2), production 1/s
 (the known 8), utility 2/s (belt-loop, underground-belt,
@@ -534,9 +536,11 @@ supply radii, and wire reach are quality-aware; functional entities get
 `PlacedEntity.quality` stamped; validators rate each entity by its own
 tier; export emits (and the parser reads) the lua-api `quality` field.
 Normal is bit-identical to pre-RFC. The 60 EC/s legendary headline stays
-capped at 45/s until [#311](https://github.com/storkme/spaghettio/issues/311)
-closes; [#312](https://github.com/storkme/spaghettio/issues/312) tracks the
-quality-magnified consumer-clamped fan-in wall. **In-game import anchor
+capped at 45/s while [#311](https://github.com/storkme/spaghettio/issues/311)'s
+merger defect stands (parked → cluster
+[#527](https://github.com/storkme/spaghettio/issues/527));
+[#312](https://github.com/storkme/spaghettio/issues/312) (parked, same
+cluster) tracks the quality-magnified consumer-clamped fan-in wall. **In-game import anchor
 still open** (user-run). Full trail: [`rfc-build-quality.md`](rfc-build-quality.md)
 decision log; renderer constraints learned en route: `web/CLAUDE.md`.
 
@@ -780,17 +784,19 @@ golden re-blesses across the arc. Full trail:
 
 - [#456 flow-preserving compaction / the spaghettifier](https://github.com/storkme/spaghettio/issues/456) — design split into competing [RFC-055 compact linear chains](rfc-055-compact-cell-chain.md) and [RFC-056 folded chains](rfc-056-folded-cell-chain.md); both make validated cell rotations first-class and share one measured decision gate
 - [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135) — main compaction lever
-- [#311 output merger over-commits a single final belt; lane-throughput check never visits merger tiles](https://github.com/storkme/spaghettio/issues/311) — gates >45/s headline claims
-- [#312 consumer-clamped fan-in refusal bites much earlier at high build quality](https://github.com/storkme/spaghettio/issues/312) — S=1; the wall now scales ×S with stacking (RFC-047 Leg C)
-- [#335 one unreached furnace bank in the legendary-express@60 fixture](https://github.com/storkme/spaghettio/issues/335)
-- [#336 (n,1) merge-tap unwired; late sideload check refuses those shapes by name](https://github.com/storkme/spaghettio/issues/336)
+- [#527 parked: bus high-rate scaling cluster](https://github.com/storkme/spaghettio/issues/527) — #311 #312 #335 #336 #345, closed not-planned 2026-07-31; all real, none fixed; revisit at the cell-interface RFC. #311's merger wall still gates >45/s headline claims.
+- [#526 DI cell geometry: belt-to-belt lift picks upstream of its only feed](https://github.com/storkme/spaghettio/issues/526) — successor to #520; canonical cable→EC cell is claimed on 68 targets and ships on 0; #524 makes the defect visible so the never-worse gate declines, but the geometry itself is unrepaired
 - [#519 flux blind spot](https://github.com/storkme/spaghettio/issues/519) — **walker recalibrated 2026-07-31**: consumption decrement along rows (plus four model-artifact fixes found by fixture bisection) makes `input-rate-delivery` report tail starvation the sims measured (`ac@5` now E0/W7 at the exact machines its sim census showed empty; was E0/W0 at 75% of plan). Still open for: merge-aware demand attribution (the map over-attributes up every merge branch, so demand-weighted external seeding is consistency-gated), folding flux into candidate SELECTION (currently excluded — selections are bit-identical to pre-#519; giving the never-worse contracts flux teeth is the #520 ask), and re-simming a fixture to confirm a fix moves the measured number. Gauntlet/scoreboard warning totals recorded before 2026-07-31 pre-date the recalibration and undercount.
 
 (Audited 2026-07-21: #65, #68, #136, #310 — previously cited here — are all
 closed. 2026-07-24: #334 closed — the (7,3)/(7,4) lane skew is ACCEPTED as a
 documented limitation (user call), guarded by `balancer_lane_audit`'s
 KNOWN_IMBALANCED tripwire; #266's (5,8) MX1 limit accepted the same way,
-guarded in `balancer_classify`. Both revocable on re-bake or field failure.)
+guarded in `balancer_classify`. Both revocable on re-bake or field failure.
+2026-07-31, 28-issue audit: #513 and #429 closed as shipped — RFC-060 and
+RFC-053 respectively; #429's geometry residue filed as #526. #311/#312/
+#335/#336/#345 closed not-planned into parked cluster #527, revisit at the
+cell-interface RFC.)
 
 ## Deferred tooling tasks
 
