@@ -60,6 +60,12 @@ pub fn generate_cell_layout_with_capacity(
         // Same recursion guard, for the same reason: a `Candidate` DI
         // default would spawn a DI candidate inside every cell sub-solve.
         direct_insertion: crate::bus::di_cell::DirectInsertion::Off,
+        // RFC-060: cell geometry must be candidate-independent —
+        // derivation feeds the sim registry, and the EC sub-builds carry
+        // exactly the warnings the horizontal candidate strictly
+        // improves, so leaving it on silently re-shapes chain-ec15/ec30
+        // off their blessed baselines (measured 2026-07-30).
+        horizontal_candidate: false,
         inserter_capacity,
         ..Default::default()
     };

@@ -144,6 +144,14 @@ pub struct LayoutOptions {
     /// RFC-057 topology-preserving post-layout compaction. Experimental and
     /// default off, so the normal pipeline remains byte-identical.
     pub compact_layout: bool,
+    /// RFC-060: run the horizontal-stack row layout as a scored
+    /// decomposition candidate when `row_layout` is `VerticalSplit` and
+    /// the solve has a `RowKind::DualInput` row. Default `true`; the
+    /// candidate may displace native only on a strict issue-channel
+    /// improvement (ties → native, bit-identical). `false` = pure
+    /// vertical (test baselines / debugging); force-horizontal remains
+    /// `row_layout: HorizontalStack`.
+    pub horizontal_candidate: bool,
     /// RFC-058 phase 2: plan band packing and record the plan as a
     /// `BandPackingPlanned` trace event. Positions only — nothing consumes
     /// them yet, so the layout geometry is identical with the flag on or
@@ -186,6 +194,11 @@ impl Default for LayoutOptions {
             direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
             di_claim_order: crate::bus::di_cell::DiClaimOrder::default(),
             compact_layout: false,
+            // Default ON 2026-07-30 (RFC-060): same never-worse shape as
+            // `direct_insertion` above — the native pass stays vertical,
+            // the horizontal variant competes only where a DualInput row
+            // exists and wins only on strict improvement.
+            horizontal_candidate: true,
             band_packing: false,
         }
     }

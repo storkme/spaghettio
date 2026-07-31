@@ -324,15 +324,25 @@ local function add_feed(s, force, head_x, head_y, ox, oy, lx, ly, depth, item, b
   table.insert(storage.feeds[item], {chests = chests, fed = 0})
 end
 
--- Fluid FEED: infinity-pipe adjacent to the boundary tile, auto-maintained
--- by the game (no periodic script refill needed). UNCALIBRATED (RFC-050:
--- "mark clearly ... fluid paths are UNCALIBRATED, no fixture has exercised
--- them yet") — geometry and API verified live only for a standalone
--- infinity-pipe (kit-probe), never against a real fluid-consuming factory.
-local function add_fluid_feed(s, force, head_x, head_y, ox, oy, item)
-  local px, py = head_x + ox, head_y + oy
+-- Fluid FEED: infinity-pipe at the far end of an ISOLATED ug-pipe run.
+-- A bare infinity-pipe on the tile beyond the port merges with the
+-- neighboring feed's when two fluid ports are adjacent (pu3: crude@38
+-- + water@39 became ONE network; crude won and the acid chain never
+-- ran — K60-3 forensics 2026-07-31). ug-pipe bodies have no lateral
+-- connections, so runs in adjacent columns stay isolated; the per-feed
+-- `dist` stagger keeps the surface caps (the only merge-capable tiles)
+-- non-adjacent. Runtime pipe-to-ground direction = the surface-opening
+-- side (verified from a pasted port's sim dump: port dir=north, opening
+-- north). Rate remains UNCALIBRATED (RFC-050), but no longer cross-feeds.
+local function add_fluid_feed(s, force, head_x, head_y, ox, oy, dist, item)
   local ok, err = pcall(function()
-    local ip = s.create_entity{name = "infinity-pipe", position = {px, py}, force = force}
+    s.create_entity{name = "pipe-to-ground", position = {head_x + ox, head_y + oy},
+                    direction = dir_from_vec(-ox, -oy), force = force}
+    s.create_entity{name = "pipe-to-ground",
+                    position = {head_x + ox * (1 + dist), head_y + oy * (1 + dist)},
+                    direction = dir_from_vec(ox, oy), force = force}
+    local ip = s.create_entity{name = "infinity-pipe",
+                    position = {head_x + ox * (2 + dist), head_y + oy * (2 + dist)}, force = force}
     ip.set_infinity_pipe_filter{name = item, percentage = 1, mode = "exactly"}
   end)
   if not ok then storage.fluid_errors[item .. "@feed"] = tostring(err) end
@@ -455,17 +465,27 @@ end
 /// tile — see `add_fluid_feed`) so they're excluded and don't consume a
 /// slot.
 fn feed_slots(records: &[BoundaryRecord]) -> Vec<i32> {
+    // ONE ladder per direction, fluids FIRST (PR #515 review finding: a
+    // separate fluid counter staggered fluids only against each other, so
+    // a fluid ug-run could land exactly on an item rig's jog row and
+    // stack silently). Fluids take slots 0..f-1 — their occupied band
+    // (out-tiles 1..=2+dist, dist = 2+2*slot, max 2+2f) sits strictly
+    // below the shallowest item band ([2+6f, 6+6f] for item slot f), so
+    // no item jog row or chest bank can ever reach a fluid column's
+    // tiles. Items keep their lateral-sorted relative order (the #363
+    // invariant), just offset by f.
     let mut by_dir: BTreeMap<u8, Vec<usize>> = BTreeMap::new();
     for (i, rec) in records.iter().enumerate() {
-        if !rec.is_fluid {
-            by_dir.entry(rec.direction).or_default().push(i);
-        }
+        by_dir.entry(rec.direction).or_default().push(i);
     }
     let mut slots = vec![0i32; records.len()];
     for idxs in by_dir.into_values() {
         let lateral = rot90(records[idxs[0]].direction().vector());
         let mut idxs = idxs;
-        idxs.sort_by_key(|&i| records[i].x * lateral.0 + records[i].y * lateral.1);
+        // Fluids-first, then lateral position within each class.
+        idxs.sort_by_key(|&i| {
+            (!records[i].is_fluid, records[i].x * lateral.0 + records[i].y * lateral.1)
+        });
         for (slot, i) in idxs.into_iter().enumerate() {
             slots[i] = slot as i32;
         }
@@ -500,9 +520,25 @@ fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
         y = rec.y,
     );
     if rec.is_fluid {
+        // Fluids hold the FRONT of the direction's ladder (see
+        // `feed_slots`), so `slot` here is the fluid's rank 0..f-1 and
+        // the staggered run length keeps every surface cap ≥2 tiles from
+        // its neighbors while staying below every item band. The ug span
+        // (gap = dist-1 = 1+2*slot) hits the game's 9-tile limit at
+        // slot 4 — six or more fluid feeds on ONE boundary side would
+        // need chained hops, which no manifest has ever required; fail
+        // loudly rather than fabricate a rate.
+        assert!(
+            slot <= 4,
+            "more than 5 fluid boundary feeds on one side (slot {slot} for {}): \
+             the ug-run stagger cannot exceed the game's 9-tile span; extend \
+             add_fluid_feed with chained hops before running this fixture",
+            rec.item
+        );
+        let dist = 2 + 2 * slot;
         let _ = writeln!(
             out,
-            "    add_fluid_feed(s, force, head_x, head_y, {ox}, {oy}, \"{item}\")",
+            "    add_fluid_feed(s, force, head_x, head_y, {ox}, {oy}, {dist}, \"{item}\")",
             ox = outward.0,
             oy = outward.1,
             item = rec.item,
@@ -1361,6 +1397,21 @@ mod tests {
         tiles
     }
 
+    /// The fluid feed's occupied tiles: the whole outward column through
+    /// the infinity cap (out-tiles 1..=2+dist). Conservative — the ug
+    /// gap tiles hold no entity — but claiming them keeps the disjointness
+    /// argument independent of that detail.
+    fn fluid_feed_footprint(
+        head: (i32, i32),
+        into: (i32, i32),
+        dist: i32,
+    ) -> std::collections::HashSet<(i32, i32)> {
+        let outward = neg(into);
+        (1..=2 + dist)
+            .map(|t| (head.0 + outward.0 * t, head.1 + outward.1 * t))
+            .collect()
+    }
+
     fn south_feed(item: &str, x: i32) -> BoundaryRecord {
         BoundaryRecord {
             item: item.into(),
@@ -1372,16 +1423,32 @@ mod tests {
         }
     }
 
-    /// Asserts every record's `feed_footprint` (using the depth `feed_slots`
-    /// assigns it) is pairwise disjoint from every other's — the direct
-    /// geometry-level check for #363's "rigs self-collide" datum.
+    fn south_fluid_feed(item: &str, x: i32) -> BoundaryRecord {
+        BoundaryRecord {
+            item: item.into(),
+            x,
+            y: 0,
+            direction: 8, // south
+            is_fluid: true,
+            entity: "pipe-to-ground".into(),
+        }
+    }
+
+    /// Asserts every record's footprint (item rig or fluid ug-run, using
+    /// the slot `feed_slots` assigns it) is pairwise disjoint from every
+    /// other's — the direct geometry-level check for #363's "rigs
+    /// self-collide" datum, extended to fluid feeds (PR #515 review).
     fn assert_feed_footprints_disjoint(records: &[BoundaryRecord]) {
         let slots = feed_slots(records);
         let mut occupied: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
         for (i, rec) in records.iter().enumerate() {
             let into = rec.direction().vector();
             let depth = 4 + 6 * slots[i];
-            let footprint = feed_footprint((rec.x, rec.y), into, depth);
+            let footprint = if rec.is_fluid {
+                fluid_feed_footprint((rec.x, rec.y), into, 2 + 2 * slots[i])
+            } else {
+                feed_footprint((rec.x, rec.y), into, depth)
+            };
             for tile in &footprint {
                 assert!(
                     !occupied.contains(tile),
@@ -1420,6 +1487,50 @@ mod tests {
     fn feed_footprints_disjoint_at_1_tile_pitch_forward_order() {
         let records = vec![south_feed("a", 0), south_feed("b", 1), south_feed("c", 2)];
         assert_feed_footprints_disjoint(&records);
+    }
+
+    /// Fluids and items interleaved on ONE boundary side (PR #515 review
+    /// finding: the old separate fluid counter staggered fluids only
+    /// against each other, so a fluid ug-run could land exactly on an
+    /// item rig's jog row and stack silently). Fluids must take the
+    /// ladder front — every fluid tile strictly below every item band —
+    /// and the combined footprint set must be pairwise disjoint even at
+    /// 1-tile pitch with fluid columns inside the item span.
+    #[test]
+    fn mixed_fluid_and_item_feeds_share_one_ladder_disjointly() {
+        let records = vec![
+            south_feed("iron-ore", 0),
+            south_fluid_feed("crude-oil", 1),
+            south_feed("copper-ore", 2),
+            south_fluid_feed("water", 3),
+            south_feed("coal", 4),
+        ];
+        assert_feed_footprints_disjoint(&records);
+        let slots = feed_slots(&records);
+        let fluid_slots: std::collections::BTreeSet<i32> = [slots[1], slots[3]].into();
+        let item_slots: std::collections::BTreeSet<i32> = [slots[0], slots[2], slots[4]].into();
+        assert_eq!(fluid_slots, [0, 1].into(), "fluids must hold the ladder front");
+        assert_eq!(item_slots, [2, 3, 4].into(), "items must shift above the fluids");
+    }
+
+    /// A sixth same-side fluid would need a ug span beyond the game's
+    /// 9-tile limit; the codegen must refuse loudly, not fabricate.
+    #[test]
+    #[should_panic(expected = "more than 5 fluid boundary feeds")]
+    fn six_fluid_feeds_on_one_side_panic() {
+        let mut m = fixture();
+        for x in 10..16 {
+            m.boundary_inputs.push(BoundaryRecord {
+                item: format!("fluid-{x}"),
+                x,
+                y: 0,
+                direction: 8,
+                is_fluid: true,
+                entity: "pipe-to-ground".into(),
+            });
+        }
+        let params = RunParams::defaults_for(&m, "test-sixfluid".into(), 16, Some(18000));
+        build_control_lua(&m, "0eNBPFAKE", &params);
     }
 
     #[test]
@@ -1465,7 +1576,35 @@ mod tests {
         });
         let params = RunParams::defaults_for(&m, "test-fluid".into(), 16, Some(18000));
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
-        assert!(lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, \"water\")"));
+        assert!(lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"water\")"));
+    }
+
+    /// Two ADJACENT fluid ports must get different ug-run lengths, or
+    /// their infinity caps sit side by side and merge into one network —
+    /// the pu3 crude/water cross-feed (K60-3 forensics 2026-07-31).
+    #[test]
+    fn adjacent_fluid_feeds_get_staggered_run_lengths() {
+        let mut m = fixture();
+        for (x, item) in [(38, "crude-oil"), (39, "water")] {
+            m.boundary_inputs.push(BoundaryRecord {
+                item: item.into(),
+                x,
+                y: 0,
+                direction: 8,
+                is_fluid: true,
+                entity: "pipe-to-ground".into(),
+            });
+        }
+        let params = RunParams::defaults_for(&m, "test-fluid2".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        let crude = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"crude-oil\")");
+        let water = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 4, \"water\")");
+        let crude_swap = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 4, \"crude-oil\")");
+        let water_swap = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"water\")");
+        assert!(
+            (crude && water) || (crude_swap && water_swap),
+            "adjacent fluid feeds must get dist 2 and 4 (either order)"
+        );
     }
 
     #[test]

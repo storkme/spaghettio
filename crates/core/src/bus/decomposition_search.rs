@@ -256,6 +256,67 @@ impl DecompositionCandidate for DirectInsertionCandidate {
     }
 }
 
+/// RFC-060: the horizontal-stack row-layout candidate. Builds the layout
+/// with `RowLayout::HorizontalStack` so it can be compared against the
+/// vertical-split native one.
+///
+/// Like `DirectInsertionCandidate` (and for the same measured reason),
+/// this does **not** compete in the generic score ranking when native
+/// succeeded: horizontal rows are typically denser (sweep: +7–10pp
+/// density on the AC/PU cases), so the density-dominated soft score
+/// would let it win layouts where it regresses warnings. Its safety is
+/// structural — see `horizontal_choice` in [`select_best_decomposition`]:
+/// strict improvement on both issue channels, ties to native.
+pub struct HorizontalStackCandidate;
+
+impl DecompositionCandidate for HorizontalStackCandidate {
+    fn name(&self) -> &str {
+        "horizontal-stack"
+    }
+
+    fn produce(
+        &self,
+        solver_result: &SolverResult,
+        opts: &LayoutOptions,
+    ) -> Result<LayoutResult, String> {
+        if !opts.horizontal_candidate {
+            return Err("horizontal-stack candidate is disabled".to_string());
+        }
+        if !matches!(opts.row_layout, super::layout::RowLayout::VerticalSplit) {
+            return Err("row layout already forced".to_string());
+        }
+        let mut hs_opts = opts.clone();
+        hs_opts.row_layout = super::layout::RowLayout::HorizontalStack;
+        let l = run_layout_with_retry(solver_result, &hs_opts)?;
+        // Self-validate before competing, same as `DirectInsertionCandidate`:
+        // `score_layout.accepted` never runs the full validator, so an
+        // error-laden horizontal layout would reach real callers as a
+        // silently broken `Ok`. Errors refuse; warnings pass here and are
+        // weighed by `horizontal_choice` instead. (Conscious conservatism,
+        // RFC-060 decision log: an E1 horizontal never displaces an E10
+        // native — on sweep evidence horizontal's wins all land at E0, so
+        // the forgone region is empty.)
+        let issues =
+            crate::validate::validate(&l, Some(solver_result), crate::validate::LayoutStyle::Bus)
+                .map_err(|e| {
+                    format!(
+                        "horizontal-stack failed validation: {}",
+                        e.to_string().lines().next().unwrap_or("")
+                    )
+                })?;
+        let n_err = issues
+            .iter()
+            .filter(|i| i.severity == crate::validate::Severity::Error)
+            .count();
+        if n_err > 0 {
+            return Err(format!(
+                "horizontal-stack carries {n_err} validation errors (refusing a broken layout)"
+            ));
+        }
+        Ok(l)
+    }
+}
+
 /// RFC-051 Phase B: the cell-composition candidate. Runs only under
 /// `LayoutOptions.cell_composition == Candidate` (default Off) on
 /// chain-eligible solves (solid tree-with-fan-out; `cells::chain::
@@ -447,6 +508,9 @@ impl DecompositionCandidate for ModuleSizeSplit {
             // reverted to P0 inside the partitioned path would report P0-vs-P0.
             di_claim_order: opts.di_claim_order.clone(),
             compact_layout: false,
+            // Inert at this depth (run_layout_with_retry does not
+            // re-enter the search); carried for faithfulness.
+            horizontal_candidate: opts.horizontal_candidate,
             // Same discipline as compact_layout: the flag-gated RFC-058
             // plan is emitted by the native pass, not re-emitted by every
             // candidate variant's inner run.
@@ -1032,6 +1096,31 @@ pub fn select_best_decomposition(
         CandidateRun::skipped("direct-insertion")
     };
 
+    // Horizontal-stack candidate (RFC-060). Gated on the mode AND on the
+    // solve actually having a `RowKind::DualInput` row — the only row
+    // kind whose construction consults `RowLayout`, so "no dual-input
+    // row" means the variant would be bit-identical and the extra full
+    // layout pass is pure waste (same cost-control shape as `try_di`'s
+    // `di_couplings` gate). catch_unwind because the horizontal template
+    // path is the least-exercised in the pipeline.
+    let try_horizontal = opts.horizontal_candidate
+        && matches!(opts.row_layout, super::layout::RowLayout::VerticalSplit)
+        // Forced DI is an explicit topology request (the A/B debug
+        // control) — a competing variant must not displace it. Same
+        // stand-down `try_cells` applies, and found the same way: the
+        // `di_bridge_feeds_cable_only_at_high_research` unit test
+        // asserts stamped DI under Forced, and the horizontal variant
+        // won and returned a DI-free layout.
+        && opts.direct_insertion != crate::bus::di_cell::DirectInsertion::Forced
+        && super::placer::any_dual_input_row(&solver_result.machines);
+    let horizontal_run = if try_horizontal {
+        run_candidate_catch_unwind("horizontal-stack", solver_result, || {
+            HorizontalStackCandidate.produce(solver_result, &opts)
+        })
+    } else {
+        CandidateRun::skipped("horizontal-stack")
+    };
+
     // K=1 shape-fix follow-up. When Native's layout has missing-balancer
     // warnings on K=1 items (the (4, 9) coprime trap on PU@3/s ore-red
     // copper-plate), enroll those items in the partition plan with a
@@ -1179,6 +1268,60 @@ pub fn select_best_decomposition(
             .then_some(DI_IDX)
     });
 
+    // RFC-060: the horizontal-vs-native decision. Identical shape and
+    // rules to `di_choice` above: returns `Some(H_IDX)` only when
+    // horizontal WINS, never `Some(NATIVE_IDX)`; ties go to native so
+    // any layout horizontal does not strictly improve stays
+    // bit-identical; and `None` when native produced nothing, so the
+    // generic ranking (which admits horizontal exactly then, via
+    // `ranking_len`) weighs it against `cell-composed` and DI instead of
+    // it auto-winning a refusal.
+    const H_IDX: usize = 6;
+    let horizontal_choice: Option<usize> =
+        horizontal_run.outcome.as_ref().and_then(|(hs_layout, hs_score)| {
+            let (nat_layout, _nat_score) = native_run.outcome.as_ref()?;
+            let start = crate::trace::peek_events_len();
+            let hs_counts = count_issues(hs_layout, solver_result);
+            let nat_counts = count_issues(nat_layout, solver_result);
+            crate::trace::truncate_events(start);
+            let strictly_better_issues = hs_counts.strictly_better_than(&nat_counts);
+            // v1 deliberately has NO equal-issues-and-denser arm (unlike
+            // `di_choice`): measured on the first full-suite run, that
+            // arm's wins are ≤5% entity shaves on already-CLEAN layouts,
+            // and their cost was flipping ten pinned structural
+            // artifacts across two suites (stacking per-tile audits,
+            // cell registry hashes, EC fixtures). Horizontal displaces
+            // native only where native has issues to fix; clean layouts
+            // stay bit-identical. Revisit alongside RFC-058 packing
+            // (RFC-060 decision log, 2026-07-30).
+            (hs_score.accepted && strictly_better_issues).then_some(H_IDX)
+        });
+
+    // When BOTH scoped candidates beat native, resolve them pairwise
+    // with the same rule, ties → DI (the earlier candidate — consistent
+    // with the array's earliest-index preference). Deliberately not a
+    // 3-way generic score, for the same reason neither candidate rides
+    // the soft score against native (RFC-060 design note).
+    let scoped_choice: Option<usize> = match (di_choice, horizontal_choice) {
+        (Some(_), Some(_)) => {
+            let (di_layout, _) =
+                di_run.outcome.as_ref().expect("di_choice implies an outcome");
+            let (hs_layout, _) = horizontal_run
+                .outcome
+                .as_ref()
+                .expect("horizontal_choice implies an outcome");
+            let start = crate::trace::peek_events_len();
+            let di_counts = count_issues(di_layout, solver_result);
+            let hs_counts = count_issues(hs_layout, solver_result);
+            crate::trace::truncate_events(start);
+            // Consistent with horizontal_choice's strictly-better-only
+            // rule: no density tiebreak, ties → DI.
+            let hs_wins = hs_counts.strictly_better_than(&di_counts);
+            Some(if hs_wins { H_IDX } else { DI_IDX })
+        }
+        (d, h) => d.or(h),
+    };
+
     // Validation-tiered selection (#392), part 1: the per-candidate
     // clean flags. `validate()` emits a `ValidationCompleted` trace
     // event per call, so this MUST run before the sink reattach below,
@@ -1206,32 +1349,51 @@ pub fn select_best_decomposition(
         merge_tap_run.outcome.as_ref(),
         cells_run.outcome.as_ref(),
         di_run.outcome.as_ref(),
+        horizontal_run.outcome.as_ref(),
     ];
     let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
-    let clean_flags: [Option<bool>; 6] = if merge_tap_choice.is_none()
-        && di_choice.is_none()
+    let clean_flags: [Option<(bool, usize)>; 7] = if merge_tap_choice.is_none()
+        && scoped_choice.is_none()
         && n_layouts > 1
     {
         let start = crate::trace::peek_events_len();
         let flags = tier_outcomes.map(|o| {
             o.map(|(l, score)| {
-                score.accepted
-                    && match crate::validate::validate(
-                        l,
-                        Some(solver_result),
-                        crate::validate::LayoutStyle::Bus,
-                    ) {
-                        Ok(issues) => issues
+                // (error-free, warning key). The key orders the
+                // error-free tier below: RFC-060 made the refusal path
+                // multi-candidate (cells, DI, horizontal), and a
+                // score-only order re-admits the density-over-warnings
+                // class THERE that `ranking_len` blocks on the success
+                // path — horizontal's denser 0-error/6-warning ec@15
+                // must not outrank DI's 0/0 resolution (pinned by
+                // `cell_candidate_resolves_ec15_refusal`).
+                match crate::validate::validate(
+                    l,
+                    Some(solver_result),
+                    crate::validate::LayoutStyle::Bus,
+                ) {
+                    Ok(issues) => {
+                        let errors = issues
                             .iter()
-                            .all(|i| i.severity != crate::validate::Severity::Error),
-                        Err(_) => false,
+                            .filter(|i| i.severity == crate::validate::Severity::Error)
+                            .count();
+                        let warnings = issues
+                            .iter()
+                            .filter(|i| i.severity == crate::validate::Severity::Warning)
+                            .count();
+                        (
+                            score.accepted && errors == 0,
+                            warnings + l.warnings.len(),
+                        )
                     }
+                    Err(_) => (false, usize::MAX),
+                }
             })
         });
         crate::trace::truncate_events(start);
         flags
     } else {
-        [None; 6]
+        [None; 7]
     };
 
     // Re-attach the sink before replaying the winner's events. Score
@@ -1252,6 +1414,7 @@ pub fn select_best_decomposition(
         &merge_tap_run.events,
         &cells_run.events,
         &di_run.events,
+        &horizontal_run.events,
     ] {
         for ev in events {
             if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
@@ -1265,13 +1428,14 @@ pub fn select_best_decomposition(
     // layout — same behaviour as today's pipeline when shape-fix can't
     // resolve a (n, m) trap).
     // Index order MUST match NATIVE_IDX (0) / MERGE_TAP_IDX (3) above.
-    let (native_err, k1_err, split_err, merge_tap_err, cells_err, di_err) = (
+    let (native_err, k1_err, split_err, merge_tap_err, cells_err, di_err, horizontal_err) = (
         native_run.error.clone(),
         k1_run.error.clone(),
         split_run.error.clone(),
         merge_tap_run.error.clone(),
         cells_run.error.clone(),
         di_run.error.clone(),
+        horizontal_run.error.clone(),
     );
     // Whether DI may enter the generic ranking at all. It may ONLY when
     // native produced nothing: then there is no bit-identity to protect
@@ -1280,7 +1444,11 @@ pub fn select_best_decomposition(
     // ties-to-native rule is the never-worse guarantee — letting it into
     // a density-dominated ranking there would re-admit exactly the
     // warning regressions that guarantee exists to block.
-    let ranking_len = if native_run.outcome.is_some() { DI_IDX } else { DI_IDX + 1 };
+    // (RFC-060: the same slice bound now confines BOTH scoped candidates
+    // — DI at 5 and horizontal-stack at 6 — to their pairwise choices
+    // when native succeeded; both enter the generic ranking only on a
+    // native refusal, where there is no bit-identity to protect.)
+    let ranking_len = if native_run.outcome.is_some() { DI_IDX } else { H_IDX + 1 };
 
     // DI is LAST so that, when it does reach the generic ranking, the
     // earliest-index tie-break still favours native.
@@ -1292,13 +1460,14 @@ pub fn select_best_decomposition(
     // `clean_flags[DI_IDX]` is simply never read. That slice is the whole
     // mechanism; there is no `None` pin (`tier_outcomes` populates DI like
     // any other candidate).
-    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 6] = [
+    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 7] = [
         (native_run.outcome, native_run.events, "native"),
         (k1_run.outcome, k1_run.events, "k1-shape-fix"),
         (split_run.outcome, split_run.events, "size-split-2"),
         (merge_tap_run.outcome, merge_tap_run.events, "merge-tap"),
         (cells_run.outcome, cells_run.events, "cell-composed"),
         (di_run.outcome, di_run.events, "direct-insertion"),
+        (horizontal_run.outcome, horizontal_run.events, "horizontal-stack"),
     ];
 
     // Find best accepted candidate (highest score). The candidates
@@ -1336,21 +1505,40 @@ pub fn select_best_decomposition(
     // computed pre-reattach above); if none is clean, fall through to
     // today's pick (still returns the error-laden best rather than
     // refusing — callers see the errors, behavior unchanged).
+    // RFC-060 warnings-first ordering is SCOPED to the refusal path
+    // (native produced nothing) — the case it was built for: horizontal's
+    // 0-error/6-warning ec@15 resolution must not outrank DI's genuinely
+    // clean 0/0. When native produced a layout this tier keeps #392's
+    // original score-first order, so every success-path selection is
+    // bit-identical to pre-RFC-060 behavior. (PR #515 review finding:
+    // this comparator is also reached on the native-success path via the
+    // `.or()` chain below, so an unscoped reorder would have widened the
+    // change beyond the stated refusal-tier intent.)
+    let native_refused = candidates[NATIVE_IDX].0.is_none();
     let best_error_free_idx = candidates[..ranking_len]
         .iter()
         .enumerate()
         .filter_map(|(i, (outcome, _, _))| {
-            if clean_flags[i] != Some(true) {
+            let (clean, warn_key) = clean_flags[i]?;
+            if !clean {
                 return None;
             }
-            outcome.as_ref().map(|(_, score)| (i, score.score))
+            outcome.as_ref().map(|(_, score)| (i, warn_key, score.score))
         })
-        .max_by(|(ia, a), (ib, b)| {
-            a.partial_cmp(b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(ib.cmp(ia))
+        // Refusal path: warnings (asc), then score (desc), then earliest
+        // index — within the error-free tier a quieter layout beats a
+        // denser one (see the clean_flags comment; RFC-060 decision log).
+        // Success path: score (desc), then earliest index — the original
+        // #392 order, unchanged.
+        .min_by(|(ia, wa, sa), (ib, wb, sb)| {
+            let score_ord = sb.partial_cmp(sa).unwrap_or(std::cmp::Ordering::Equal);
+            if native_refused {
+                wa.cmp(wb).then(score_ord).then(ia.cmp(ib))
+            } else {
+                score_ord.then(ia.cmp(ib))
+            }
         })
-        .map(|(i, _)| i);
+        .map(|(i, _, _)| i);
 
     // The scoped Pooled merge-tap decision (error-count metric, ties → Native)
     // overrides the generic accepted-by-score pick when it ran; then the
@@ -1384,10 +1572,14 @@ pub fn select_best_decomposition(
     //   NATIVE_IDX — native beat merge-tap, so native is the incumbent, and
     //     `di_choice` is exactly a DI-vs-native comparison. DI gets its say,
     //     falling back to native when it does not win.
+    // (RFC-060: `di_choice` in the arms below became `scoped_choice` —
+    // the DI/horizontal pairwise resolution — so neither scoped
+    // candidate can shadow the other; the merge-tap non-shadowing
+    // structure is unchanged.)
     let winner_idx = match merge_tap_choice {
         Some(MERGE_TAP_IDX) => Some(MERGE_TAP_IDX),
-        Some(_) => di_choice.or(Some(NATIVE_IDX)),
-        None => di_choice,
+        Some(_) => scoped_choice.or(Some(NATIVE_IDX)),
+        None => scoped_choice,
     }
     .or(best_error_free_idx)
     .or(best_accepted_idx)
@@ -1401,7 +1593,7 @@ pub fn select_best_decomposition(
         let details: Vec<String> = candidates
             .iter()
             .map(|(_, _, name)| name.to_string())
-            .zip([&native_err, &k1_err, &split_err, &merge_tap_err, &cells_err, &di_err])
+            .zip([&native_err, &k1_err, &split_err, &merge_tap_err, &cells_err, &di_err, &horizontal_err])
             .map(|(name, err)| {
                 format!("{name}: {}", err.as_deref().unwrap_or("did not run"))
             })

@@ -199,6 +199,7 @@ fn run_e2e_with_strategy(
         strategy,
         spaghettio_core::bus::layout::RowLayout::default(),
         spaghettio_core::bus::layout::SurplusPolicy::default(),
+        true,
     )
 }
 
@@ -225,6 +226,38 @@ fn run_e2e_with_strategy_and_row_layout(
         strategy,
         row_layout,
         spaghettio_core::bus::layout::SurplusPolicy::default(),
+        true,
+    )
+}
+
+/// RFC-060: like `run_e2e_with_strategy_and_row_layout` but with the
+/// horizontal-stack candidate DISABLED — a pure single-combo pass. Used
+/// by `full_knob_sweep`'s baseline columns, which measure each
+/// strategy × row-layout combination in isolation; the default engine
+/// behavior (candidate competing) is the sweep's separate `default`
+/// column.
+fn run_e2e_pure_combo(
+    test_name: &str,
+    item: &str,
+    rate: f64,
+    machine: &str,
+    belt_tier: Option<&str>,
+    available_inputs: &FxHashSet<String>,
+    strategy: spaghettio_core::bus::layout::LayoutStrategy,
+    row_layout: spaghettio_core::bus::layout::RowLayout,
+) -> Result<E2EResult, String> {
+    run_e2e_inner(
+        test_name,
+        item,
+        rate,
+        machine,
+        belt_tier,
+        available_inputs,
+        &FxHashSet::default(),
+        strategy,
+        row_layout,
+        spaghettio_core::bus::layout::SurplusPolicy::default(),
+        false,
     )
 }
 
@@ -248,6 +281,7 @@ fn run_e2e_with_exclusions(
         spaghettio_core::bus::layout::LayoutStrategy::Pooled,
         spaghettio_core::bus::layout::RowLayout::default(),
         spaghettio_core::bus::layout::SurplusPolicy::default(),
+        true,
     )
 }
 
@@ -276,6 +310,7 @@ fn run_e2e_with_exclusions_and_surplus_policy(
         spaghettio_core::bus::layout::LayoutStrategy::Pooled,
         spaghettio_core::bus::layout::RowLayout::default(),
         surplus_policy,
+        true,
     )
 }
 
@@ -291,6 +326,7 @@ fn run_e2e_inner(
     strategy: spaghettio_core::bus::layout::LayoutStrategy,
     row_layout: spaghettio_core::bus::layout::RowLayout,
     surplus_policy: spaghettio_core::bus::layout::SurplusPolicy,
+    horizontal_candidate: bool,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     spaghettio_core::zone_cache::set_thread_source(Some(test_name));
@@ -318,6 +354,7 @@ fn run_e2e_inner(
             inserter_capacity: 0,
             cell_composition: Default::default(),
             splitter_tap_spacers: false,
+            horizontal_candidate,
             ..Default::default()
         },
     )
@@ -1206,6 +1243,10 @@ fn tier2_electronic_circuit_splitter_stamp_regression() {
     let opts = |di| layout::LayoutOptions {
         max_belt_tier: Some("fast-transport-belt".to_string()),
         direct_insertion: di,
+        // RFC-060: horizontal-stack resolves this refusal on the
+        // candidate path (a legit rescue for users), but this fixture
+        // asserts the BELT-capacity wall itself — isolate it like DI.
+        horizontal_candidate: false,
         ..Default::default()
     };
 
@@ -2183,7 +2224,11 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // beltspan-lastinrow: the 4 residual inserter-item-throughput were dual_input_row
     // last-in-row far sides capped at one long-handed inserter; extending the far belt
     // one tile clears them (4 -> 0). The input-rate-delivery (1) is unrelated and unchanged.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1)]);
+    // RFC-060 re-bless (2026-07-30): the horizontal-stack candidate wins
+    // this config strictly-better and DELETES the long-standing
+    // input-rate-delivery residual (was the tier-4 ladder's known
+    // warning; docs/status.md row updated with the RFC close-out).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -7812,6 +7857,67 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
     }
 }
 
+/// RFC-060: the horizontal-candidate never-worse contract, on configs
+/// where the bus (vertical) path succeeds. Mirrors
+/// `di_candidate_never_degrades_a_succeeding_bus_layout` exactly: every
+/// issue channel is a component-wise floor, not a lexicographic
+/// tiebreaker. Where the bus refuses (e.g. ec@15-am3-plates),
+/// horizontal resolving it is the additive win and is not constrained
+/// here.
+#[test]
+fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
+    let counts = |l: &spaghettio_core::models::LayoutResult, sr: &_| -> (usize, usize, usize) {
+        let issues = spaghettio_core::validate::validate(
+            l,
+            Some(sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+        )
+    };
+    for (item, rate, ins) in [
+        ("iron-gear-wheel", 10.0, &["iron-plate"][..]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"][..]),
+        ("electronic-circuit", 20.0, &["iron-ore", "copper-ore"][..]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("sulfuric-acid", 5.0, &["iron-plate", "sulfur", "water"][..]),
+    ] {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, rate, &inputs, "assembling-machine-3") else {
+            continue;
+        };
+        let off = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions { horizontal_candidate: false, ..Default::default() },
+        );
+        let Ok(off_l) = off else { continue };
+        let on_l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| {
+                panic!("{item}@{rate}: horizontal default must not turn a success into a refusal: {e}")
+            });
+        let (off_c, on_c) = (counts(&off_l, &sr), counts(&on_l, &sr));
+        assert!(
+            on_c.0 <= off_c.0 && on_c.1 <= off_c.1 && on_c.2 <= off_c.2,
+            "{item}@{rate}: horizontal candidate degraded the layout on at least one channel — \
+             (errors, warnings, layout_warnings) went {off_c:?} -> {on_c:?}"
+        );
+        // No-dual-input chains must be BIT-identical, not merely
+        // never-worse — the `any_dual_input_row` gate skips the extra
+        // pass entirely, and blueprint equality proves it.
+        if !ins.contains(&"copper-plate") && !ins.contains(&"copper-ore") {
+            assert_eq!(
+                blueprint::export(&off_l, item),
+                blueprint::export(&on_l, item),
+                "{item}@{rate}: no DualInput row, so candidate-on must be bit-identical"
+            );
+        }
+    }
+}
+
 /// RFC-047 Leg B/C lift differential (#312's exact repro config; see
 /// `quality_differential_ec_normal_vs_legendary`): EC@6/s legendary on
 /// yellow belts. copper-cable is 25/s (2 legendary AM3 machines @12.5/s)
@@ -8898,6 +9004,270 @@ fn merge_tap_does_not_shadow_di_on_pooled_yellow() {
         nc.0 <= oc.0 && nc.1 <= oc.1 && nc.2 <= oc.2,
         "DI regressed an issue channel on the merge-tap branch: {oc:?} -> {nc:?}"
     );
+}
+
+/// Full knob sweep: strategy x row-layout across a representative corpus.
+/// Diagnostic companion to the sidebar-simplification work (issue #512) —
+/// maps which combination wins per case so the engine can eventually pick
+/// per-layout instead of asking the user. NOT a gate: no assertions on
+/// winners, it only reports. Run with the CI zone-cache pin for
+/// machine-independent numbers:
+///
+///   SPAGHETTIO_ZONE_CACHE_PATH=$PWD/crates/core/data/sat-zones-ci.bin \
+///     cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     full_knob_sweep --ignored --exact --nocapture
+///
+/// Writes a markdown report to target/tmp/knob-sweep.md.
+#[test]
+#[ntest::timeout(1_800_000)]
+#[ignore = "diagnostic sweep, ~5-15 min; run explicitly with --ignored"]
+fn full_knob_sweep() {
+    use spaghettio_core::bus::layout::{LayoutStrategy, RowLayout};
+    use std::fmt::Write as _;
+
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt_tier: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+    let ores5: &[&str] = &["iron-ore", "copper-ore", "coal", "water", "crude-oil"];
+    let plates5: &[&str] = &["iron-plate", "copper-plate", "coal", "crude-oil", "water"];
+    let cases: &[Case] = &[
+        Case { name: "gear@10 am1 plate", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-1", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "gear@10 am2 ore", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore"] },
+        Case { name: "gear@20 am2 plate", item: "iron-gear-wheel", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "ec@10 am1 ore yellow", item: "electronic-circuit", rate: 10.0, machine: "assembling-machine-1", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "ec@20 am2 ore", item: "electronic-circuit", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "ec@15 am3 plates", item: "electronic-circuit", rate: 15.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["iron-plate", "copper-plate"] },
+        Case { name: "plastic@10 chem", item: "plastic-bar", rate: 10.0, machine: "chemical-plant", belt_tier: None, inputs: &["petroleum-gas", "coal"] },
+        Case { name: "sulfuric@5 chem", item: "sulfuric-acid", rate: 5.0, machine: "chemical-plant", belt_tier: None, inputs: &["iron-plate", "sulfur", "water"] },
+        Case { name: "steel@5 ore", item: "steel-plate", rate: 5.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["iron-ore"] },
+        Case { name: "ac@1 am2 plates", item: "advanced-circuit", rate: 1.0, machine: "assembling-machine-2", belt_tier: None, inputs: plates5 },
+        Case { name: "ac@5 am2 plates yellow", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "ac@7 am2 plates yellow", item: "advanced-circuit", rate: 7.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "pu@2 am3 ore red", item: "processing-unit", rate: 2.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
+        Case { name: "pu@3 am3 ore red", item: "processing-unit", rate: 3.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
+    ];
+    // The four pure columns measure each combo in isolation
+    // (`horizontal_candidate` off); `default` is what the engine ships —
+    // Pooled + vertical native with the RFC-060 horizontal candidate
+    // competing under the never-worse contract.
+    let combos: &[(&str, LayoutStrategy, RowLayout, bool)] = &[
+        ("pool/vert", LayoutStrategy::Pooled, RowLayout::VerticalSplit, true),
+        ("pool/horiz", LayoutStrategy::Pooled, RowLayout::HorizontalStack, true),
+        ("part/vert", LayoutStrategy::PartitionedDecomposed, RowLayout::VerticalSplit, true),
+        ("part/horiz", LayoutStrategy::PartitionedDecomposed, RowLayout::HorizontalStack, true),
+        ("default", LayoutStrategy::Pooled, RowLayout::VerticalSplit, false),
+    ];
+
+    struct RunRow {
+        combo: &'static str,
+        errs: usize,
+        warns: usize,
+        entities: usize,
+        dims: (i32, i32),
+        density: f64,
+        candidate: String,
+        ms: u128,
+        refused: Option<String>,
+    }
+
+    let mut md = String::new();
+    let _ = writeln!(md, "# Knob sweep: strategy x row-layout\n");
+    let _ = writeln!(md, "{} cases x {} combos. Lexicographic winner key: (errors, warnings, entities).\n", cases.len(), combos.len());
+    let _ = writeln!(md, "## Per-run data\n");
+    let _ = writeln!(md, "| case | combo | errs | warns | entities | WxH | dens% | candidate | ms |");
+    let _ = writeln!(md, "|---|---|---|---|---|---|---|---|---|");
+
+    let mut winners: Vec<String> = Vec::new();
+    for case in cases {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        let mut rows: Vec<RunRow> = Vec::new();
+        for (label, strategy, row_layout, pure) in combos {
+            let test_name = format!("sweep {} {}", case.name, label.replace('/', "-"));
+            let started = std::time::Instant::now();
+            let result = if *pure {
+                run_e2e_pure_combo(
+                    &test_name, case.item, case.rate, case.machine, case.belt_tier, &inputs,
+                    *strategy, *row_layout,
+                )
+            } else {
+                run_e2e_with_strategy_and_row_layout(
+                    &test_name, case.item, case.rate, case.machine, case.belt_tier, &inputs,
+                    *strategy, *row_layout,
+                )
+            };
+            let ms = started.elapsed().as_millis();
+            let row = match result {
+                Ok(r) => {
+                    let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
+                    let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
+                    let candidate = r.trace_events.iter().find_map(|e| match e {
+                        TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
+                        _ => None,
+                    }).unwrap_or_else(|| "?".to_string());
+                    let density = density::score_density(&r.layout, (1, 1)).density;
+                    RunRow {
+                        combo: label, errs, warns,
+                        entities: r.layout.entities.len(),
+                        dims: (r.layout.width, r.layout.height),
+                        density, candidate, ms, refused: None,
+                    }
+                }
+                Err(e) => RunRow {
+                    combo: label, errs: usize::MAX, warns: usize::MAX, entities: usize::MAX,
+                    dims: (0, 0), density: 0.0, candidate: "-".to_string(), ms,
+                    refused: Some(e.chars().take(60).collect()),
+                },
+            };
+            eprintln!(
+                "  {:<24} {:<11} {:>6}  {}",
+                case.name, label, format!("{}ms", ms),
+                match &row.refused {
+                    Some(e) => format!("REFUSED: {e}"),
+                    None => format!("E{}/W{} {}ent {}x{} {:.1}% cand={}",
+                        row.errs, row.warns, row.entities, row.dims.0, row.dims.1,
+                        row.density * 100.0, row.candidate),
+                }
+            );
+            rows.push(row);
+        }
+        for r in &rows {
+            match &r.refused {
+                Some(e) => { let _ = writeln!(md, "| {} | {} | - | - | - | - | - | REFUSED: {} | {} |", case.name, r.combo, e, r.ms); }
+                None => { let _ = writeln!(md, "| {} | {} | {} | {} | {} | {}x{} | {:.1} | {} | {} |", case.name, r.combo, r.errs, r.warns, r.entities, r.dims.0, r.dims.1, r.density * 100.0, r.candidate, r.ms); }
+            }
+        }
+        let ok_rows: Vec<&RunRow> = rows.iter().filter(|r| r.refused.is_none()).collect();
+        let winner_line = if ok_rows.is_empty() {
+            format!("| {} | ALL REFUSED | - | - |", case.name)
+        } else {
+            let key = |r: &&RunRow| (r.errs, r.warns, r.entities);
+            let best = ok_rows.iter().min_by_key(|r| key(r)).unwrap();
+            let ties: Vec<&str> = ok_rows.iter().filter(|r| key(r) == key(best) && r.combo != best.combo).map(|r| r.combo).collect();
+            let baseline = rows.iter().find(|r| r.combo == "pool/vert").unwrap();
+            let vs_baseline = if baseline.refused.is_some() { "baseline refused".to_string() }
+                else if baseline.combo == best.combo || ties.contains(&"pool/vert") || key(&baseline) == key(best) { "= baseline".to_string() }
+                else {
+                    format!("E{}→{} W{}→{} ent{}→{}",
+                        baseline.errs, best.errs, baseline.warns, best.warns, baseline.entities, best.entities)
+                };
+            format!("| {} | {} | E{}/W{}/{}ent | {} |", case.name, best.combo,
+                best.errs, best.warns, best.entities,
+                if ties.is_empty() { vs_baseline } else { format!("{} (tie: {})", vs_baseline, ties.join(", ")) })
+        };
+        winners.push(winner_line);
+    }
+
+    let mut summary = String::new();
+    let _ = writeln!(summary, "\n## Winners (lexicographic: errors, then warnings, then entities)\n");
+    let _ = writeln!(summary, "| case | winner | key | vs pool/vert |");
+    let _ = writeln!(summary, "|---|---|---|---|");
+    for w in &winners { let _ = writeln!(summary, "{w}"); }
+    md.push_str(&summary);
+    eprintln!("{summary}");
+
+    std::fs::create_dir_all("target/tmp").ok();
+    std::fs::write("target/tmp/knob-sweep.md", &md).expect("write sweep report");
+    eprintln!("\nreport: crates/core/target/tmp/knob-sweep.md");
+}
+
+/// RFC-060 K60-3: export blueprint + manifest pairs for the flipped
+/// corpus cases in both arms (`on` = shipped default with the horizontal
+/// candidate competing, `off` = candidate disabled), for sim-harness
+/// verification. Tracked here so the K60-3 evidence is reproducible from
+/// a fresh clone (the RFC-050 "manifest generator is gitignored" gap bit
+/// the 2026-07-31 verification session).
+///
+///   SIM_PROBE_OUT=/tmp SPAGHETTIO_ZONE_CACHE_PATH=$PWD/crates/core/data/sat-zones-ci.bin \
+///     cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     rfc060_sim_export --ignored --exact --nocapture
+///
+/// Then per artifact pair:
+///   cargo run --release -p spaghettio_sim_harness -- run \
+///     --bp $OUT/<case>-<arm>.bp --manifest $OUT/<case>-<arm>.manifest.json \
+///     --warmup 216000 --out <case>-<arm>.report.json
+/// (long warmup per the deep-chain caveat in docs/sim-harness.md; pu3
+/// used 288000).
+#[test]
+#[ignore = "artifact exporter for sim runs; run explicitly with --ignored"]
+fn rfc060_sim_export() {
+    let ores5: &[&str] = &["iron-ore", "copper-ore", "coal", "water", "crude-oil"];
+    let plates5: &[&str] = &["iron-plate", "copper-plate", "coal", "crude-oil", "water"];
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt_tier: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+    let cases = [
+        Case { name: "ac5", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "ac7", item: "advanced-circuit", rate: 7.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "pu3", item: "processing-unit", rate: 3.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
+        Case { name: "ec15", item: "electronic-circuit", rate: 15.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["iron-plate", "copper-plate"] },
+    ];
+    let out = std::env::var("SIM_PROBE_OUT")
+        .unwrap_or_else(|_| snapshot_dir().to_string_lossy().into_owned());
+    std::fs::create_dir_all(&out).ok();
+    for case in &cases {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        for (arm, candidate) in [("on", true), ("off", false)] {
+            let label = format!("{}-{}", case.name, arm);
+            // Mirror run_e2e_inner exactly so the artifacts match the
+            // sweep's layouts bit for bit.
+            let solved = match solver::solve_with_exclusions(
+                case.item, case.rate, &inputs, case.machine, &FxHashSet::default(),
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{label}: SOLVER REFUSED: {e}");
+                    continue;
+                }
+            };
+            let lay = match layout::build_bus_layout(
+                &solved,
+                layout::LayoutOptions {
+                    max_belt_tier: case.belt_tier.map(|s| s.to_string()),
+                    merge_tap: false,
+                    stacking: 1,
+                    inserter_capacity: 0,
+                    splitter_tap_spacers: false,
+                    horizontal_candidate: candidate,
+                    ..Default::default()
+                },
+            ) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("{label}: LAYOUT REFUSED: {e}");
+                    continue;
+                }
+            };
+            let issues = match validate::validate(&lay, Some(&solved), LayoutStyle::Bus) {
+                Ok(v) => v,
+                Err(e) => e.issues,
+            };
+            let errs = issues.iter().filter(|i| i.severity == Severity::Error).count();
+            let warns = issues.iter().filter(|i| i.severity == Severity::Warning).count();
+            let (bp, manifest) = blueprint::export_with_manifest(&lay, &solved, &label);
+            std::fs::write(format!("{out}/{label}.bp"), &bp).expect("write bp");
+            std::fs::write(
+                format!("{out}/{label}.manifest.json"),
+                serde_json::to_string_pretty(&manifest).expect("manifest json"),
+            )
+            .expect("write manifest");
+            eprintln!(
+                "{label}: E{errs}/W{warns} {} entities {}x{} -> {out}/{label}.bp",
+                lay.entities.len(),
+                lay.width,
+                lay.height,
+            );
+        }
+    }
 }
 
 /// RFC-059 phase 1, outputs 2 and 3: does DI spec contention actually occur?

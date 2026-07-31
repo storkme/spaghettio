@@ -138,6 +138,14 @@ fn layout_options(
         // when validation is no worse than its input, so the worst case is
         // "no change", never a broken factory.
         compact_layout: compact_layout.as_deref() == Some("1"),
+        // RFC-060: the horizontal-stack candidate is engine policy, not a
+        // web-surface axis — pinned `true` (the engine default). The
+        // never-worse contract makes an escape hatch unnecessary for
+        // users; force-horizontal stays reachable via `row_layout`
+        // ("horizontal-stack" / `rl=hs`). A vertical-only debug param can
+        // be added here later if a real need appears (RFC-060 decision
+        // log, 2026-07-30).
+        horizontal_candidate: true,
         // RFC-058 phase 2 is engine-only: the packer emits a trace plan and
         // moves nothing, so there is no web surface to expose yet. Wire a
         // URL param here only when phase 4 gives the flag visible effect.
