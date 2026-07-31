@@ -799,3 +799,135 @@ pub fn route_packed_nets(
     }
     Ok(out)
 }
+
+/// Phase-4 orchestrator: refuse or build the packed layout. Packs CONTENT
+/// rects (pipe rows travel with their band, per the RFC's implementation
+/// note), translates band cargo, stamps inserter-aligned belt rows,
+/// routes every net, and lays a simple 7-step pole grid (medium poles:
+/// 7x7 supply, wire reach 9 > 7 keeps the grid one network). Boundary
+/// records: external inputs at each corridor's west-edge entry; the
+/// target's record stays on its producer's west-flowing output row —
+/// where items physically arrive (the fold's 0.00/s lesson: records must
+/// describe real flow, and this one does).
+///
+/// NOT yet called from layout_pass — the call-site flip is the next
+/// increment, together with the phase-2 inertness test's update to the
+/// phase-4 contract (flag on = packed layout or typed refusal).
+pub fn build_packed_layout(
+    rows: &[RowSpan],
+    row_entities: &[PlacedEntity],
+    solver_result: &crate::models::SolverResult,
+    max_belt_tier: Option<&str>,
+) -> Result<crate::models::LayoutResult, String> {
+    if let Some(r) = packing_refusal(rows, solver_result, max_belt_tier) {
+        return Err(format!("packed-refusal: {r}"));
+    }
+    let bands = extract_bands(rows, row_entities);
+    if bands.len() < 3 {
+        return Err(format!("packed-refusal: {} bands — below the 3-band floor", bands.len()));
+    }
+    let contents = band_contents(&bands, rows, row_entities);
+    let pseudo: Vec<Band> = contents
+        .iter()
+        .enumerate()
+        .map(|(i, c)| Band {
+            x: c.rect.0,
+            y: c.rect.1,
+            w: c.rect.2,
+            h: c.rect.3,
+            row_indices: c.row_indices.clone(),
+            recipes: bands[i].recipes.clone(),
+        })
+        .collect();
+    let plan = best_pack(&pseudo, GAP, MAX_ASPECT)
+        .ok_or_else(|| "packed-refusal: no packing within the aspect cap".to_string())?;
+    // Shift origins so belt rows above the top shelf stay in-bounds.
+    let origins: Vec<(i32, i32)> =
+        plan.positions.iter().map(|&(x, y)| (x + 2, y + 3)).collect();
+    let mut entities = translate_band_contents(&contents, &origins, row_entities);
+    let belt = crate::common::belt_entity_for_rate(f64::INFINITY, max_belt_tier);
+    entities.extend(stamp_band_belt_rows(rows, &contents, &origins, belt));
+    let nets = build_packed_nets(rows, &contents, solver_result);
+    let corridors =
+        route_packed_nets(&nets, rows, &contents, &origins, &entities, belt)?;
+    entities.extend(corridors);
+
+    // Pole grid over the arrangement extent, on free tiles only.
+    let occupied: FxHashSet<(i32, i32)> = entities
+        .iter()
+        .flat_map(|e| {
+            let (w, h) = entity_size(&e.name);
+            (0..w as i32)
+                .flat_map(move |dx| (0..h as i32).map(move |dy| (e.x + dx, e.y + dy)))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let max_x = entities.iter().map(|e| e.x).max().unwrap_or(0);
+    let max_y = entities.iter().map(|e| e.y).max().unwrap_or(0);
+    let mut poles = Vec::new();
+    for gy in (0..=max_y + 3).step_by(7) {
+        for gx in (0..=max_x + 3).step_by(7) {
+            if let Some(free) = (0..4)
+                .flat_map(|dy| (0..4).map(move |dx| (gx + dx, gy + dy)))
+                .find(|t| !occupied.contains(t))
+            {
+                poles.push(PlacedEntity {
+                    name: "medium-electric-pole".to_string(),
+                    x: free.0,
+                    y: free.1,
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    entities.extend(poles);
+
+    let width = entities.iter().map(|e| e.x).max().unwrap_or(0) + 1;
+    let height = entities.iter().map(|e| e.y).max().unwrap_or(0) + 1;
+    let mut boundary_inputs = Vec::new();
+    for net in &nets {
+        if net.src_band.is_none() {
+            if let Some(e) = entities
+                .iter()
+                .filter(|e| e.carries.as_deref() == Some(net.item.as_str()))
+                .min_by_key(|e| e.x)
+            {
+                boundary_inputs.push(crate::models::BoundaryRecord {
+                    item: net.item.clone(),
+                    x: e.x,
+                    y: e.y,
+                    direction: e.direction,
+                    is_fluid: net.is_fluid,
+                    entity: e.name.clone(),
+                });
+            }
+        }
+    }
+    let mut boundary_outputs = Vec::new();
+    for out in &solver_result.external_outputs {
+        for (bi, c) in contents.iter().enumerate() {
+            for &si in &c.row_indices {
+                if rows[si].spec.outputs.iter().any(|o| o.item == out.item) {
+                    let y = rows[si].output_belt_y - c.rect.1 + origins[bi].1;
+                    boundary_outputs.push(crate::models::BoundaryRecord {
+                        item: out.item.clone(),
+                        x: origins[bi].0,
+                        y,
+                        direction: crate::models::EntityDirection::West,
+                        is_fluid: out.is_fluid,
+                        entity: belt.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(crate::models::LayoutResult {
+        entities,
+        width,
+        height,
+        boundary_inputs,
+        boundary_outputs,
+        ..Default::default()
+    })
+}
