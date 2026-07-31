@@ -75,23 +75,51 @@ pub enum DirectInsertion {
 pub enum DiClaimOrder {
     /// P0: consumers in topological order, so upstream claims.
     ///
-    /// **The default, and RFC-059 deliberately left it that way.** The RFC
-    /// measured `Search` as better by every validator channel and then a
-    /// headless-Factorio run falsified the premise that made that safe: on
-    /// `display-panel@1` / am1, the arm `Search` prefers ships a DI row cell
-    /// that validates with **zero** errors and warnings and produces **0/s** in
-    /// game, where P0 ships native and measures 1.00/s. The gate DI relies on
-    /// is only as good as the validator, and there the validator is blind.
-    /// See RFC-059's decision log and #520.
-    #[default]
+    /// The pre-RFC-059 default, kept as an explicit arm so `Downstream` can be
+    /// measured against the status quo rather than assumed better than it. It
+    /// lost on evidence: see `Downstream`.
     Upstream,
-    /// P1: consumers in reverse topological order, so the downstream coupling
-    /// claims a contended spec.
+    /// P1, and **the default** since RFC-059's sim close-out: consumers in
+    /// reverse topological order, so the downstream coupling claims a contended
+    /// spec.
+    ///
+    /// Chosen on measurement, and the measurement took two rounds because the
+    /// first instrument was wrong. Across three machine tiers, `Downstream` is
+    /// never worse than `Upstream` on any of the 179 contended corpus targets
+    /// and strictly better on 6.
+    ///
+    /// That was **not** true before #520 fixed the validator's starved-pickup
+    /// blind spot: two targets then appeared to favour `Upstream`, which is why
+    /// this RFC first concluded that neither order dominates. Those two are the
+    /// `small-electric-pole@5` layouts where `Upstream` shipped a factory
+    /// measured at 2.52/s against a planned 5.00/s — it was never ahead there,
+    /// the instrument just could not see the deficit.
+    ///
+    /// The deciding evidence is in-game, not the validator, because RFC-059's
+    /// own lesson is that a clean validator is not evidence a layout works.
+    /// Headless runs on the three flip targets that produce a usable verdict —
+    /// the other three are `land-mine` at am1/am2/am3, which returns 0/s under
+    /// BOTH arms for reasons not yet understood (#537), so it is evidence
+    /// neither way:
+    ///
+    /// | target, am2 | `Upstream` | `Downstream` |
+    /// |---|---|---|
+    /// | `small-electric-pole@5` | 139 ents, PASS 5.00/s | 136 ents, PASS 5.00/s |
+    /// | `big-electric-pole@1` | 1146 ents, **FAIL 0.51/s** | 1127 ents, **PASS 1.10/s** |
+    /// | `medium-electric-pole@5` | 2351 ents, PASS 5.00/s | 2340 ents, PASS 4.98/s |
+    ///
+    /// `big-electric-pole@1` is the one that settles it: the status quo ships a
+    /// factory running at **half its planned rate**, with 43 machines working
+    /// against 96 under `Downstream`, and the flip repairs it. The entity
+    /// savings were the least of it.
+    #[default]
     Downstream,
     /// Build both static orders and keep the better one.
     ///
-    /// **Measured-correct but NOT the default**, and the gap between those is
-    /// the whole of RFC-059's outcome. By every validator channel this is
+    /// **Not the default, and no longer needed:** `Downstream` matches it on
+    /// every corpus target, so the second build buys nothing (KC4's "do not ship
+    /// machinery for a tie", one level up). Kept as the instrument that
+    /// re-derives the corpus verdict. By every validator channel this is
     /// strictly better than either fixed arm on the corpus and worse on none.
     /// In a real Factorio it ships a jammed factory on at least one target
     /// (`display-panel@1` am1), because the DI row cell it selects there is
@@ -100,10 +128,13 @@ pub enum DiClaimOrder {
     /// would mean re-deriving a measurement that took a corpus sweep across
     /// three machine tiers.
     ///
-    /// RFC-059 set out to choose between `Upstream` and `Downstream` and
-    /// measured that neither dominates: across three machine tiers,
-    /// `Downstream` ships a strictly better layout on 6 corpus targets and a
-    /// strictly worse one on 2. Any fixed choice forfeits the other's wins.
+    /// RFC-059 set out to choose between `Upstream` and `Downstream` and first
+    /// measured that neither dominates — `Downstream` better on 6 corpus targets
+    /// and worse on 2 — which is why this variant exists. **That reading was an
+    /// artefact of the validator's starved-pickup blind spot (#520):** the two
+    /// targets it "lost" were ones where `Upstream` shipped a factory running at
+    /// half its planned rate. With the blind spot fixed, `Downstream` is never
+    /// worse and this arm has nothing left to buy.
     ///
     /// Searching is exhaustive here, not heuristic. The same sweep pinned each
     /// contended coupling to claim first and rebuilt: on no target did any
