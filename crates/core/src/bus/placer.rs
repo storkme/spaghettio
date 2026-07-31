@@ -21,12 +21,24 @@ fn max_lane_capacity() -> f64 {
         .fold(0.0_f64, f64::max)
 }
 
-/// Resolve the effective input-side per-lane capacity given an optional tier cap.
+/// Input-side planning margin for ROW SIZING (#519 layout-side fix): a
+/// row input belt planned at 100% of nominal starves its tail machines in
+/// converged steady state — the head machines absorb the whole belt
+/// (#448's zero-margin measurement; the sims record a level-invariant
+/// ~5% structural residual on exactly-loaded belts, docs/status.md).
+/// Sizing rows against 95% of nominal makes the split decision leave that
+/// headroom. Applies ONLY to row splitting — never to belt-tier choice
+/// (user-capped, docs/factorio-mechanics.md) or trunk sizing.
+pub(crate) const ROW_INPUT_PLANNING_MARGIN: f64 = 0.95;
+
+/// Resolve the effective input-side per-lane capacity given an optional
+/// tier cap, derated by [`ROW_INPUT_PLANNING_MARGIN`].
 fn effective_in_lane_cap(max_belt_tier: Option<&str>) -> f64 {
-    match max_belt_tier {
-        Some(tier) => lane_capacity(tier),
-        None => max_lane_capacity(),
-    }
+    ROW_INPUT_PLANNING_MARGIN
+        * match max_belt_tier {
+            Some(tier) => lane_capacity(tier),
+            None => max_lane_capacity(),
+        }
 }
 
 /// Belt tier for a row's INPUT belt — always picks the maximum
