@@ -2333,15 +2333,45 @@ fn compute_lane_rates_impl(
         .map(|s| (s.recipe.as_str(), s))
         .collect();
     let mut machine_entity: FxHashMap<(i32, i32), &PlacedEntity> = FxHashMap::default();
+    // Physical machine positions per recipe, for `physical_utilization` —
+    // but ONLY for recipes owned by a single MachineSpec. Voider/self-loop
+    // siblings share a recipe name across specs (recipe_to_spec collapses
+    // them last-wins), and pooling every physical machine against one
+    // sibling's count wrecks the ratio (uranium fixtures regressed until
+    // this guard).
+    let mut spec_count_by_recipe: FxHashMap<&str, usize> = FxHashMap::default();
+    for spec in &sr.machines {
+        *spec_count_by_recipe.entry(spec.recipe.as_str()).or_insert(0) += 1;
+    }
     let mut machine_ys_by_recipe: FxHashMap<&str, Vec<i32>> = FxHashMap::default();
     for e in &layout.entities {
         if is_machine_entity(&e.name) {
             machine_entity.insert((e.x, e.y), e);
             if let Some(r) = e.recipe.as_deref() {
-                machine_ys_by_recipe.entry(r).or_default().push(e.y);
+                if spec_count_by_recipe.get(r).copied().unwrap_or(0) == 1 {
+                    machine_ys_by_recipe.entry(r).or_default().push(e.y);
+                }
             }
         }
     }
+    // Recipes whose effective_rows bands carry REAL per-row counts (they
+    // sum to the recipe total, within rounding) — see
+    // `physical_utilization`'s scope rule.
+    let per_row_count_recipes: FxHashSet<&str> = {
+        let mut band_count_sum: FxHashMap<&str, f64> = FxHashMap::default();
+        for row in &layout.effective_rows {
+            *band_count_sum.entry(row.spec.recipe.as_str()).or_insert(0.0) += row.spec.count;
+        }
+        band_count_sum
+            .into_iter()
+            .filter(|(r, sum)| {
+                recipe_to_spec
+                    .get(*r)
+                    .is_some_and(|s| (s.count - sum).abs() < 1e-6)
+            })
+            .map(|(r, _)| r)
+            .collect()
+    };
 
     // Pass 1: qualifying output inserters, keyed by (machine origin, item).
     // A machine's production is SHARED by all its output inserters — the
@@ -2397,7 +2427,7 @@ fn compute_lane_rates_impl(
         // scales demand, or a fast machine at fractional count overstates
         // the lane rate (e.g. a 0.06-count foundry pressing transport-belt
         // at 16/s nominal seeds 16/s onto a lane that actually carries 1/s).
-        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe);
+        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe, &per_row_count_recipes);
         let rate = spec
             .outputs
             .iter()
@@ -2613,7 +2643,7 @@ fn compute_lane_rates_impl(
         // Same position-resolved attribution as the injection loop above —
         // see `super::resolve_row_spec`'s doc comment.
         let (spec, band) = super::resolve_row_spec_banded(layout, recipe, me.y, fallback_spec);
-        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe);
+        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe, &per_row_count_recipes);
         let required = spec
             .inputs
             .iter()
@@ -2707,7 +2737,13 @@ fn compute_lane_rates_impl(
             }
         }
         // Second pass: seed each source tile, split evenly across the belt's
-        // two lanes.
+        // two lanes. Each source gets its visible demand plus an even share
+        // of the UNATTRIBUTED residual (total − Σdemand): the demand pass is
+        // blind past some structures (self-loop recirculation, voider rows —
+        // seeding zero there fabricated starvation on the uranium fixtures),
+        // so the residual keeps blind trunks supplied. Fully-invisible
+        // demand degrades to the old even split; fully-visible demand is
+        // purely demand-weighted; Σseeds = max(total, scaled) either way.
         for (item, sources) in &sources_by_item {
             let total = external_rates[item];
             let demands: Vec<f64> = sources
@@ -2715,10 +2751,13 @@ fn compute_lane_rates_impl(
                 .map(|pos| demand.get(pos).copied().unwrap_or(0.0))
                 .collect();
             let demand_sum: f64 = demands.iter().sum();
-            let even = total / sources.len() as f64;
-            let scale = if demand_sum > total { total / demand_sum } else { 1.0 };
+            let (scale, residual_even) = if demand_sum > total {
+                (total / demand_sum, 0.0)
+            } else {
+                (1.0, (total - demand_sum) / sources.len() as f64)
+            };
             for (&pos, &d) in sources.iter().zip(&demands) {
-                let per_tile = if demand_sum > 0.0 { d * scale } else { even };
+                let per_tile = d * scale + residual_even;
                 let entry = lane_rates.entry(pos).or_insert([0.0, 0.0]);
                 entry[0] += per_tile / 2.0;
                 entry[1] += per_tile / 2.0;
@@ -3285,20 +3324,30 @@ fn lane_transfer(
 /// both the demand each machine draws and the output each machine injects
 /// by 1/16. Undecremented propagation never noticed; the consumption
 /// decrement made the overstatement eat 20/s from an 18.75/s belt and
-/// fabricate a tail deficit on a sim-verified-at-plan layout. Scope: the
-/// resolved row band for partition siblings, the whole layout for the
-/// recipe-global fallback spec.
+/// fabricate a tail deficit on a sim-verified-at-plan layout.
+///
+/// Scope rule: `effective_rows` bands carry PER-ROW counts for partition
+/// siblings (band counts sum to the recipe total — count within the band)
+/// but DUPLICATED GLOBAL counts for throughput-split rows (each band
+/// repeats the total — count across the whole layout, or a 2-row split
+/// would cap utilization at 1.0 and lose the fractional machine: uranium
+/// 85.71/86 regressed to 1.0). Recipes shared by multiple specs
+/// (voider/self-loop siblings) are excluded upstream and fall back to
+/// `utilization_for`.
 fn physical_utilization(
     spec: &crate::models::MachineSpec,
     band: Option<(i32, i32)>,
     machine_ys_by_recipe: &FxHashMap<&str, Vec<i32>>,
+    per_row_count_recipes: &FxHashSet<&str>,
 ) -> f64 {
     let Some(ys) = machine_ys_by_recipe.get(spec.recipe.as_str()) else {
         return utilization_for(spec);
     };
     let n = match band {
-        Some((y0, y1)) => ys.iter().filter(|&&y| y >= y0 && y < y1).count(),
-        None => ys.len(),
+        Some((y0, y1)) if per_row_count_recipes.contains(spec.recipe.as_str()) => {
+            ys.iter().filter(|&&y| y >= y0 && y < y1).count()
+        }
+        _ => ys.len(),
     };
     if n == 0 {
         return utilization_for(spec);
@@ -3467,15 +3516,45 @@ pub fn check_input_rate_delivery(
         .map(|s| (s.recipe.as_str(), s))
         .collect();
     let mut machine_entity: FxHashMap<(i32, i32), &PlacedEntity> = FxHashMap::default();
+    // Physical machine positions per recipe, for `physical_utilization` —
+    // but ONLY for recipes owned by a single MachineSpec. Voider/self-loop
+    // siblings share a recipe name across specs (recipe_to_spec collapses
+    // them last-wins), and pooling every physical machine against one
+    // sibling's count wrecks the ratio (uranium fixtures regressed until
+    // this guard).
+    let mut spec_count_by_recipe: FxHashMap<&str, usize> = FxHashMap::default();
+    for spec in &sr.machines {
+        *spec_count_by_recipe.entry(spec.recipe.as_str()).or_insert(0) += 1;
+    }
     let mut machine_ys_by_recipe: FxHashMap<&str, Vec<i32>> = FxHashMap::default();
     for e in &layout.entities {
         if is_machine_entity(&e.name) {
             machine_entity.insert((e.x, e.y), e);
             if let Some(r) = e.recipe.as_deref() {
-                machine_ys_by_recipe.entry(r).or_default().push(e.y);
+                if spec_count_by_recipe.get(r).copied().unwrap_or(0) == 1 {
+                    machine_ys_by_recipe.entry(r).or_default().push(e.y);
+                }
             }
         }
     }
+    // Recipes whose effective_rows bands carry REAL per-row counts (they
+    // sum to the recipe total, within rounding) — see
+    // `physical_utilization`'s scope rule.
+    let per_row_count_recipes: FxHashSet<&str> = {
+        let mut band_count_sum: FxHashMap<&str, f64> = FxHashMap::default();
+        for row in &layout.effective_rows {
+            *band_count_sum.entry(row.spec.recipe.as_str()).or_insert(0.0) += row.spec.count;
+        }
+        band_count_sum
+            .into_iter()
+            .filter(|(r, sum)| {
+                recipe_to_spec
+                    .get(*r)
+                    .is_some_and(|s| (s.count - sum).abs() < 1e-6)
+            })
+            .map(|(r, _)| r)
+            .collect()
+    };
 
     let mut belt_carries: FxHashMap<(i32, i32), Option<String>> = FxHashMap::default();
     for e in &layout.entities {
@@ -3608,7 +3687,7 @@ pub fn check_input_rate_delivery(
         // strict — up to 10× for a fractional machine (sulfuric-acid at 5/s
         // wants 0.1 machines running at 10% speed), 1/16 for chain-replicated
         // rows (see `physical_utilization`).
-        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe);
+        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe, &per_row_count_recipes);
         let required_rate = spec
             .inputs
             .iter()
