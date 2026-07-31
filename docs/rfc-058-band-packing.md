@@ -2,8 +2,8 @@
 
 Registry: [`rfcs.md`](rfcs.md). Status: **Concluded 2026-07-31 — kill
 criterion 1 FIRED in phase 4: the real planner under physically-legal
-routing holds −31.1% against the −33.0% bar, with the trajectory adverse
-as correctness increased. Phases 0–3's evidence and the inert
+routing and an honest footprint-inclusive bbox holds −23.3% against the
+−33.0% bar, with the trajectory adverse as correctness increased. Phases 0–3's evidence and the inert
 scaffolding stand; the packed builder remains flag-gated and default-off
 as the falsification record. See the final decision-log entry.**
 Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
@@ -714,11 +714,15 @@ clears. Rationale in the decision log.
   concludes.** The final materialization-correctness fix (the UG
   entrance conversion must target the actual predecessor belt, not
   `out.last_mut()` — the corruption the instrumented route dumps
-  exposed) forces legal-but-longer routes: sci2 re-packs at 72×39 and
-  the buildable-fixture aggregate lands at **−31.1%, below the −33.0%
-  bar**. The trajectory across the hardening loop is monotonically
-  adverse — −44.0% (naive, corrupt routing) → −34.6% (tree router,
-  still-corrupt materialization) → −31.1% (legal materialization) — with
+  exposed) forces legal-but-longer routes, and #523's review then caught
+  the packed bbox being computed anchor-only with no minimum —
+  understating the area the criterion is measured in. With
+  footprint-inclusive, origin-normalised dimensions the
+  buildable-fixture aggregate lands at **−23.3% (sci1 −20.0%, sci2
+  −24.1%), ten points below the −33.0% bar**. The trajectory across the
+  hardening loop is monotonically adverse — −44.0% (naive, corrupt
+  routing) → −34.6% (tree router, still-corrupt materialization) →
+  −23.3% (legal materialization, honest bbox) — with
   KC3 parity still distant (sci2: 5 dead-ends, 1 isolation, 63
   reachability warnings), so every remaining correctness repair can only
   push density further below the bar. The tree router was pre-committed

@@ -69,7 +69,7 @@ backfill the status next time the doc is touched.
 | RFC-055 | 2026-07-26 | [`rfc-055-compact-cell-chain.md`](rfc-055-compact-cell-chain.md) | Design — competes with RFC-056; #456 |
 | RFC-056 | 2026-07-26 | [`rfc-056-folded-cell-chain.md`](rfc-056-folded-cell-chain.md) | Design — competes with RFC-055; #456 |
 | RFC-057 | 2026-07-26 | [`rfc-057-topology-preserving-dense-repacking.md`](rfc-057-topology-preserving-dense-repacking.md) | Active |
-| RFC-058 | 2026-07-30 | [`rfc-058-band-packing.md`](rfc-058-band-packing.md) | **Concluded 2026-07-31 — KC1 fired in phase 4.** Phases 0–3 cleared their gates (KC2 36.8%; spike −35.9%), but the real planner under physically-legal routing holds only −31.1% vs the −33.0% bar, trajectory adverse as correctness increased. Falsified: 2D band packing holding ≥33% under legal single-lane trunk routing. Inert scaffolding + flag-gated builder remain in-tree as the record. Tracking #507 |
+| RFC-058 | 2026-07-30 | [`rfc-058-band-packing.md`](rfc-058-band-packing.md) | **Concluded 2026-07-31 — KC1 fired in phase 4.** Phases 0–3 cleared their gates (KC2 36.8%; spike −35.9%), but the real planner under physically-legal routing holds only −23.3% vs the −33.0% bar (honest footprint-inclusive bbox, per #523 review), trajectory adverse as correctness increased. Falsified: 2D band packing holding ≥33% under legal single-lane trunk routing. Inert scaffolding + flag-gated builder remain in-tree as the record. Tracking #507 |
 | RFC-059 | 2026-07-30 | [`rfc-059-di-coupling-assignment.md`](rfc-059-di-coupling-assignment.md) | Design (circulated for review) — split out of #473; DI spec→cell contention is a matching problem, not a walk order; phase 1 must first establish a reproducible rate |
 
 Next number: **RFC-060**.

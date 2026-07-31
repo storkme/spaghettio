@@ -14,6 +14,17 @@
 //! other, and the CI premise guard keeps a third self-contained copy so a
 //! defect here cannot blind it. The duplication is intentional.
 //!
+//! **RFC-058 concluded 2026-07-31 — kill criterion 1 fired.** The phase-4
+//! packed builder below is a FALSIFICATION RECORD: flag-gated, default
+//! off, never shipped. #523's review found three further latent defects,
+//! annotated at their sites and deliberately left unfixed (fixing them
+//! cannot change the conclusion — each makes routing stricter or restores
+//! dropped transport, moving density further below the bar): the splitter
+//! carve can no-op when a later branch re-selects a carved junction; the
+//! collector loop skips crossing/UG handling and the foreign-feed filter;
+//! and secondary/sorted output-belt rows are not re-stamped, dropping
+//! those products' transport (no gate fixture has them).
+//!
 //! Packing (phase 2) is the phase-0 probe's shelf packer, ported verbatim:
 //! target width swept from the widest band to twice the control width,
 //! source and height-descending order, minimum bounding-box area under an
@@ -1385,8 +1396,28 @@ pub fn build_packed_layout(
     }
     entities.extend(poles);
 
-    let width = entities.iter().map(|e| e.x).max().unwrap_or(0) + 1;
-    let height = entities.iter().map(|e| e.y).max().unwrap_or(0) + 1;
+    // Footprint-inclusive, origin-normalised dimensions: anchor-only max
+    // with no min understated the bbox (review finding on #523) — and this
+    // number feeds KC1, so it must be the honest one. West-edge corridors
+    // can sit at negative x; shift everything to a 0-origin first.
+    let min_x = entities.iter().map(|e| e.x).min().unwrap_or(0);
+    let min_y = entities.iter().map(|e| e.y).min().unwrap_or(0);
+    if min_x != 0 || min_y != 0 {
+        for e in &mut entities {
+            e.x -= min_x;
+            e.y -= min_y;
+        }
+    }
+    let width = entities
+        .iter()
+        .map(|e| e.x + entity_size(&e.name).0 as i32)
+        .max()
+        .unwrap_or(0);
+    let height = entities
+        .iter()
+        .map(|e| e.y + entity_size(&e.name).1 as i32)
+        .max()
+        .unwrap_or(0);
     let mut boundary_inputs = Vec::new();
     for net in &nets {
         if net.src_bands.is_empty() {
@@ -1411,10 +1442,10 @@ pub fn build_packed_layout(
         for (bi, c) in contents.iter().enumerate() {
             for &si in &c.row_indices {
                 if rows[si].spec.outputs.iter().any(|o| o.item == out.item) {
-                    let y = rows[si].output_belt_y - c.rect.1 + origins[bi].1;
+                    let y = rows[si].output_belt_y - c.rect.1 + origins[bi].1 - min_y;
                     boundary_outputs.push(crate::models::BoundaryRecord {
                         item: out.item.clone(),
-                        x: origins[bi].0,
+                        x: origins[bi].0 - min_x,
                         y,
                         direction: crate::models::EntityDirection::West,
                         is_fluid: out.is_fluid,

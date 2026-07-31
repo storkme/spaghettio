@@ -137,7 +137,8 @@ belt-footprint rects, corridor-tree routing with negotiated ordering,
 splitter junctions, UG crossings). The kill: as materialization was made
 physically legal — each fix from a tile-level diagnosis — the buildable
 gate aggregate fell monotonically (−44.0% corrupt → −34.6% tree →
-−31.1% legal), landing below the bar with validation parity still
+−23.3% legal with the honest footprint-inclusive bbox #523's review
+forced), landing ten points below the bar with validation parity still
 distant (sci2: 5 dead-end errors, 63 reachability warnings). Falsified:
 band packing holding ≥33% real-bbox saving under legal single-lane
 trunk routing. What survives: the census + premise guards on main, the
