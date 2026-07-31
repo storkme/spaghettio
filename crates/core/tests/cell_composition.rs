@@ -5425,3 +5425,396 @@ fn probe_band_census_e2e_corpus() {
         );
     }
 }
+
+/// RFC-058 Phase 3: the trunk spike — kill criterion 1's gate, on all three
+/// gate fixtures.
+///
+/// Phases 0–2 are cheap and prove nothing about whether trunks fit; this is
+/// the deliberately-throwaway measurement that does. Bands are packed with
+/// `rfc058_best_pack` (the phase-0 packer, 3:1 cap), then every band-to-band
+/// item flow is routed as a real 1-tile corridor with A*:
+///
+/// - band rectangles are opaque obstacles;
+/// - corridors may cross each other only PERPENDICULARLY (the underground
+///   dive every real bus crossing uses); same-axis overlap is forbidden, and
+///   corner tiles are hard-blocked for everyone (a UG cannot dive through a
+///   turn);
+/// - every band gets REAL full-width belt rows reserved before any routing:
+///   `ceil(distinct inputs / 2)` feed rows above it (a belt carries two
+///   lanes, so two items per feed row — the dual-input row template's
+///   capability; fluids count as inputs too, a pipe row being no thinner)
+///   and one output row below. This is the row's shared-belt structure the
+///   RFC's premise rests on, and it is what a single-tile-termination model
+///   would silently omit. Reserved rows count as transport tiles;
+/// - a flow STARTS on its producer's output row and terminates on any tile
+///   of its consumer's feed rows (a sideload/merge point). Inserter-column
+///   specificity, splitters and poles are out of scope, and every flow gets
+///   exactly ONE lane (all gate-fixture flows are far below one belt's
+///   capacity);
+/// - external inputs enter from the arrangement's west edge, the target item
+///   exits east — matching the control bus's edge-fed shape;
+/// - if any flow fails to route, or a band's reserved rows collide with a
+///   neighbouring band, the whole arrangement is re-packed with a wider gap
+///   (2 → 8) and every flow re-routed from scratch.
+///
+/// The score is the REAL bounding box — band rects plus every corridor tile —
+/// against the control's as-placed band-bbox, the same quantity kill
+/// criterion 1's 10,729-tile baseline is measured in. KC1: the three-fixture
+/// aggregate saving must beat −33.0% (half the obstacle-free −66.1%).
+///
+/// Like every RFC-058 number, host-geometry-relative; the KC1 verdict is
+/// recorded in the RFC decision log with the machine it was measured on.
+#[test]
+#[ignore = "RFC-058 Phase 3 trunk spike — run with --ignored --nocapture"]
+fn probe_trunk_spike_gate_fixtures() {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    // One aggregated item flow between two bands (or an edge, when None).
+    #[derive(Clone, Debug)]
+    struct Flow {
+        item: String,
+        src: Option<usize>,
+        dst: Option<usize>,
+        rate: f64,
+    }
+
+    // Occupancy bits per tile.
+    const BAND: u8 = 1;
+    const HCOR: u8 = 2;
+    const VCOR: u8 = 4;
+    const TURN: u8 = 8;
+
+    struct Grid {
+        occ: FxHashMap<(i32, i32), u8>,
+        min: (i32, i32),
+        max: (i32, i32),
+    }
+
+    impl Grid {
+        fn passable(&self, t: (i32, i32), horizontal: bool) -> bool {
+            if t.0 < self.min.0 || t.0 > self.max.0 || t.1 < self.min.1 || t.1 > self.max.1 {
+                return false;
+            }
+            let bits = self.occ.get(&t).copied().unwrap_or(0);
+            if bits & (BAND | TURN) != 0 {
+                return false;
+            }
+            let axis = if horizontal { HCOR } else { VCOR };
+            bits & axis == 0
+        }
+    }
+
+    // Multi-source, multi-target A* returning the path, or None. Visited
+    // state is (tile, entry axis) because crossing legality depends on the
+    // axis a corridor occupies a tile with.
+    fn route(
+        grid: &Grid,
+        starts: &[(i32, i32)],
+        targets: &FxHashSet<(i32, i32)>,
+        goal_hint: (i32, i32),
+    ) -> Option<Vec<(i32, i32)>> {
+        let h = |t: (i32, i32)| (t.0 - goal_hint.0).abs() + (t.1 - goal_hint.1).abs();
+        let mut open: BinaryHeap<Reverse<(i32, i32, (i32, i32), bool)>> = BinaryHeap::new();
+        let mut best: FxHashMap<((i32, i32), bool), i32> = FxHashMap::default();
+        let mut parent: FxHashMap<((i32, i32), bool), ((i32, i32), bool)> = FxHashMap::default();
+        for &s in starts {
+            for horizontal in [true, false] {
+                if !grid.passable(s, horizontal) {
+                    continue;
+                }
+                if best.get(&(s, horizontal)).is_none_or(|&c| c > 0) {
+                    best.insert((s, horizontal), 0);
+                    open.push(Reverse((h(s), 0, s, horizontal)));
+                }
+            }
+        }
+        while let Some(Reverse((_, cost, tile, horizontal))) = open.pop() {
+            if best.get(&(tile, horizontal)).copied().unwrap_or(i32::MAX) < cost {
+                continue;
+            }
+            if targets.contains(&tile) {
+                let mut path = vec![tile];
+                let mut cur = (tile, horizontal);
+                while let Some(&p) = parent.get(&cur) {
+                    path.push(p.0);
+                    cur = p;
+                }
+                path.reverse();
+                return Some(path);
+            }
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let next = (tile.0 + dx, tile.1 + dy);
+                let next_h = dy == 0;
+                if !grid.passable(next, next_h) {
+                    continue;
+                }
+                let ncost = cost + 1;
+                if best.get(&(next, next_h)).copied().unwrap_or(i32::MAX) <= ncost {
+                    continue;
+                }
+                best.insert((next, next_h), ncost);
+                parent.insert((next, next_h), (tile, horizontal));
+                open.push(Reverse((ncost + h(next), ncost, next, next_h)));
+            }
+        }
+        None
+    }
+
+    // Stamp a routed path: each tile takes the axis it is traversed on;
+    // a tile where the axis changes is a corner and blocks everything.
+    fn stamp(grid: &mut Grid, path: &[(i32, i32)]) {
+        for (i, &t) in path.iter().enumerate() {
+            let axis_in = if i > 0 { Some(path[i - 1].1 == t.1) } else { None };
+            let axis_out = if i + 1 < path.len() { Some(path[i + 1].1 == t.1) } else { None };
+            let bits = grid.occ.entry(t).or_insert(0);
+            match (axis_in, axis_out) {
+                (Some(a), Some(b)) if a != b => *bits |= TURN,
+                (Some(a), _) | (_, Some(a)) => *bits |= if a { HCOR } else { VCOR },
+                (None, None) => {}
+            }
+        }
+    }
+
+    let gate: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("pu1-plate", "processing-unit", 1.0, &["iron-plate", "copper-plate", "sulfuric-acid"], "assembling-machine-2"),
+    ];
+
+    let (mut agg_ctrl, mut agg_real) = (0i64, 0i64);
+
+    for (label, item, rate, inputs, machine) in gate {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap_or_else(|e| panic!("{label}: solver refused: {e}"));
+        let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| panic!("{label}: layout refused: {e}"));
+        let bands = rfc058_extract_bands(&l);
+        let (cw, ch) = rfc058_bbox(&bands);
+        let ctrl_area = (cw as i64) * (ch as i64);
+
+        // Aggregate flows at (src band, dst band, item) granularity from the
+        // solver's machine specs, splitting a recipe's demand evenly across
+        // the bands that carry it — the same convention as the probe's
+        // transport proxy. Producer selection (nearest by centre) happens
+        // per packing attempt, because "nearest" changes when bands move.
+        let mut item_producers: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+        for spec in &sr.machines {
+            for out in &spec.outputs {
+                for (i, b) in bands.iter().enumerate() {
+                    if b.recipes.iter().any(|r| r == &spec.recipe) {
+                        item_producers.entry(out.item.as_str()).or_default().push(i);
+                    }
+                }
+            }
+        }
+        let target_producers: Vec<usize> = sr
+            .external_outputs
+            .iter()
+            .flat_map(|out| item_producers.get(out.item.as_str()).cloned().unwrap_or_default())
+            .collect();
+
+        let mut demand: Vec<(usize, String, f64)> = Vec::new();
+        for spec in &sr.machines {
+            let consumers: Vec<usize> = bands
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.recipes.iter().any(|r| r == &spec.recipe))
+                .map(|(i, _)| i)
+                .collect();
+            if consumers.is_empty() {
+                continue;
+            }
+            for inp in &spec.inputs {
+                let per = inp.rate * spec.count / consumers.len() as f64;
+                for &ci in &consumers {
+                    demand.push((ci, inp.item.clone(), per));
+                }
+            }
+        }
+
+        // Widen the packing gap until every flow routes. GAP starts at the
+        // probe's 2; each retry re-packs and re-routes everything.
+        let mut solved: Option<(i32, i64, i64, usize, usize, usize)> = None;
+        'gaps: for gap in 2..=8 {
+            let Some((_, _, _, packed)) = rfc058_best_pack(&bands, gap, 3.0) else {
+                continue;
+            };
+
+            let bmin_x = packed.iter().map(|b| b.x).min().unwrap();
+            let bmin_y = packed.iter().map(|b| b.y).min().unwrap();
+            let bmax_x = packed.iter().map(|b| b.x + b.w - 1).max().unwrap();
+            let bmax_y = packed.iter().map(|b| b.y + b.h - 1).max().unwrap();
+            let mut grid = Grid {
+                occ: FxHashMap::default(),
+                min: (bmin_x - 6, bmin_y - 6),
+                max: (bmax_x + 6, bmax_y + 6),
+            };
+            for b in &packed {
+                for x in b.x..b.x + b.w {
+                    for y in b.y..b.y + b.h {
+                        *grid.occ.entry((x, y)).or_insert(0) |= BAND;
+                    }
+                }
+            }
+
+            // Reserve each band's real belt rows BEFORE any through-routing:
+            // ceil(distinct inputs / 2) full-width feed rows above (two lanes
+            // per belt), one output row below. A reservation landing on a
+            // band tile, or on another band's reservation, means this gap
+            // cannot physically hold the rows the bands need — widen.
+            let mut band_inputs: Vec<FxHashSet<&str>> = vec![FxHashSet::default(); packed.len()];
+            for (ci, item, _) in &demand {
+                band_inputs[*ci].insert(item.as_str());
+            }
+            let feed_row_count = |i: usize| band_inputs[i].len().div_ceil(2) as i32;
+            let mut reserved_tiles = 0usize;
+            let mut reserve_ok = true;
+            'bands: for (i, b) in packed.iter().enumerate() {
+                let mut rows: Vec<i32> = (1..=feed_row_count(i)).map(|k| b.y - k).collect();
+                rows.push(b.y + b.h); // output row
+                for row in rows {
+                    for x in b.x..b.x + b.w {
+                        let bits = grid.occ.entry((x, row)).or_insert(0);
+                        if *bits & (BAND | HCOR) != 0 {
+                            reserve_ok = false;
+                            break 'bands;
+                        }
+                        *bits |= HCOR;
+                        reserved_tiles += 1;
+                    }
+                }
+            }
+            if !reserve_ok {
+                println!("{label}: gap {gap}: reserved belt rows collide — widening");
+                continue 'gaps;
+            }
+
+            // A producer's flows leave from its output row (or a 2-tile
+            // extension past either end — a belt extends); a consumer's
+            // flows arrive by sideloading anywhere onto its feed rows.
+            let out_row = |b: &Rfc058Band| -> Vec<(i32, i32)> {
+                (b.x - 2..b.x + b.w + 2).map(|x| (x, b.y + b.h)).collect()
+            };
+            let feed_tiles = |i: usize, b: &Rfc058Band| -> Vec<(i32, i32)> {
+                let mut v = Vec::new();
+                for k in 1..=feed_row_count(i) {
+                    for x in b.x..b.x + b.w {
+                        v.push((x, b.y - k));
+                    }
+                }
+                v
+            };
+            let centre = |b: &Rfc058Band| (b.x + b.w / 2, b.y + b.h / 2);
+
+            // Nearest-producer selection on the PACKED geometry, then one
+            // aggregated flow per (src, dst, item).
+            let mut flows: FxHashMap<(Option<usize>, Option<usize>, String), f64> =
+                FxHashMap::default();
+            for (ci, item, per) in &demand {
+                let src = item_producers.get(item.as_str()).and_then(|ps| {
+                    ps.iter()
+                        .filter(|&&pi| pi != *ci)
+                        .min_by_key(|&&pi| {
+                            let (px, py) = centre(&packed[pi]);
+                            let (cx, cy) = centre(&packed[*ci]);
+                            (px - cx).abs() + (py - cy).abs()
+                        })
+                        .copied()
+                });
+                if item_producers.contains_key(item.as_str()) && src.is_none() {
+                    continue; // self-supplied within the band
+                }
+                *flows.entry((src, Some(*ci), item.clone())).or_default() += per;
+            }
+            for &pi in &target_producers {
+                *flows
+                    .entry((Some(pi), None, format!("OUT:{item}")))
+                    .or_default() += *rate / target_producers.len().max(1) as f64;
+            }
+            let mut flows: Vec<Flow> = flows
+                .into_iter()
+                .map(|((src, dst, item), rate)| Flow { item, src, dst, rate })
+                .collect();
+            flows.sort_by(|a, b| {
+                b.rate
+                    .total_cmp(&a.rate)
+                    .then_with(|| a.item.cmp(&b.item))
+                    .then_with(|| a.dst.cmp(&b.dst))
+                    .then_with(|| a.src.cmp(&b.src))
+            });
+
+            let west: Vec<(i32, i32)> = (grid.min.1..=grid.max.1).map(|y| (grid.min.0, y)).collect();
+            let east: FxHashSet<(i32, i32)> =
+                (grid.min.1..=grid.max.1).map(|y| (grid.max.0, y)).collect();
+
+            let mut corridor_tiles = 0usize;
+            let n_flows = flows.len();
+            for f in &flows {
+                let starts: Vec<(i32, i32)> = match f.src {
+                    Some(pi) => out_row(&packed[pi]),
+                    None => west.clone(),
+                };
+                let (targets, hint): (FxHashSet<(i32, i32)>, (i32, i32)) = match f.dst {
+                    Some(ci) => (
+                        feed_tiles(ci, &packed[ci]).into_iter().collect(),
+                        centre(&packed[ci]),
+                    ),
+                    None => (east.clone(), (grid.max.0, (grid.min.1 + grid.max.1) / 2)),
+                };
+                let Some(path) = route(&grid, &starts, &targets, hint) else {
+                    println!(
+                        "{label}: gap {gap}: flow {} {:?}->{:?} failed to route — widening",
+                        f.item, f.src, f.dst,
+                    );
+                    continue 'gaps;
+                };
+                corridor_tiles += path.len();
+                stamp(&mut grid, &path);
+            }
+
+            // Real bbox: band rects plus every corridor tile.
+            let (mut lo_x, mut lo_y, mut hi_x, mut hi_y) = (bmin_x, bmin_y, bmax_x, bmax_y);
+            for (&(x, y), &bits) in &grid.occ {
+                if bits & (HCOR | VCOR | TURN) != 0 {
+                    lo_x = lo_x.min(x);
+                    lo_y = lo_y.min(y);
+                    hi_x = hi_x.max(x);
+                    hi_y = hi_y.max(y);
+                }
+            }
+            let real = ((hi_x - lo_x + 1) as i64) * ((hi_y - lo_y + 1) as i64);
+            solved = Some((gap, real, ctrl_area, n_flows, corridor_tiles, reserved_tiles));
+            break;
+        }
+
+        let Some((gap, real, ctrl, n_flows, corridor_tiles, reserved_tiles)) = solved else {
+            panic!("{label}: no gap in 2..=8 routes all flows — KC1 cannot be evaluated");
+        };
+        agg_ctrl += ctrl;
+        agg_real += real;
+        println!(
+            "{label:<10} ctrl {cw}x{ch}={ctrl}  packed+trunks {real} ({:+.1}%)  gap={gap} flows={n_flows} belt_rows={reserved_tiles} corridors={corridor_tiles}",
+            (real - ctrl) as f64 / ctrl as f64 * 100.0,
+        );
+    }
+
+    let saving = (agg_ctrl - agg_real) as f64 / agg_ctrl as f64 * 100.0;
+    println!("\n=== RFC-058 KC1 (trunk spike, three-fixture aggregate) ===");
+    println!(
+        "  control {agg_ctrl} -> packed+trunks {agg_real}  saving {saving:.1}%  (bar: 33.0%, obstacle-free estimate: 66.1%)"
+    );
+    println!(
+        "  KC1 {}",
+        if saving >= 33.0 { "CLEARS" } else { "FAILS — stop; do not re-tune the packer" }
+    );
+}
