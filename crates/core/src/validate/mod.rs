@@ -260,12 +260,29 @@ pub(crate) fn resolve_row_spec<'a>(
     y: i32,
     fallback_spec: &'a MachineSpec,
 ) -> &'a MachineSpec {
+    resolve_row_spec_banded(layout, recipe, y, fallback_spec).0
+}
+
+/// Like [`resolve_row_spec`] but also returns the matched row's `[y_start,
+/// y_end)` band, `None` when the fallback (recipe-global) spec applied.
+/// The band is the spec's SCOPE: a per-machine utilization derived from
+/// physically-placed machines must count within it (per-row for partition
+/// siblings, layout-wide for the global fallback) — see
+/// `belt_flow::physical_utilization` (#519 fallout: chain/mega replication
+/// places ceil-per-copy machines, so `ceil(spec.count)` understates the
+/// physical count and `utilization_for` over-states per-machine rates).
+pub(crate) fn resolve_row_spec_banded<'a>(
+    layout: &'a LayoutResult,
+    recipe: &str,
+    y: i32,
+    fallback_spec: &'a MachineSpec,
+) -> (&'a MachineSpec, Option<(i32, i32)>) {
     layout
         .effective_rows
         .iter()
         .find(|row| row.spec.recipe == recipe && y >= row.y_start && y < row.y_end)
-        .map(|row| &row.spec)
-        .unwrap_or(fallback_spec)
+        .map(|row| (&row.spec, Some((row.y_start, row.y_end))))
+        .unwrap_or((fallback_spec, None))
 }
 
 /// Emits one error per connected component of unresolved tiles. The

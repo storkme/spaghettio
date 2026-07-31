@@ -2333,9 +2333,13 @@ fn compute_lane_rates_impl(
         .map(|s| (s.recipe.as_str(), s))
         .collect();
     let mut machine_entity: FxHashMap<(i32, i32), &PlacedEntity> = FxHashMap::default();
+    let mut machine_ys_by_recipe: FxHashMap<&str, Vec<i32>> = FxHashMap::default();
     for e in &layout.entities {
         if is_machine_entity(&e.name) {
             machine_entity.insert((e.x, e.y), e);
+            if let Some(r) = e.recipe.as_deref() {
+                machine_ys_by_recipe.entry(r).or_default().push(e.y);
+            }
         }
     }
 
@@ -2381,7 +2385,7 @@ fn compute_lane_rates_impl(
         // `super::resolve_row_spec`'s doc comment for the
         // partition-sibling rationale (`docs/rfc-inserter-sizing.md`
         // Phase 1 finding).
-        let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
+        let (spec, band) = super::resolve_row_spec_banded(layout, recipe, me.y, fallback_spec);
         let carried_item = match belt_carries.get(&drop_pos).and_then(|c| c.as_deref()) {
             Some(i) => i,
             None => continue,
@@ -2393,7 +2397,7 @@ fn compute_lane_rates_impl(
         // scales demand, or a fast machine at fractional count overstates
         // the lane rate (e.g. a 0.06-count foundry pressing transport-belt
         // at 16/s nominal seeds 16/s onto a lane that actually carries 1/s).
-        let utilization = utilization_for(spec);
+        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe);
         let rate = spec
             .outputs
             .iter()
@@ -2608,8 +2612,8 @@ fn compute_lane_rates_impl(
         };
         // Same position-resolved attribution as the injection loop above —
         // see `super::resolve_row_spec`'s doc comment.
-        let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
-        let utilization = utilization_for(spec);
+        let (spec, band) = super::resolve_row_spec_banded(layout, recipe, me.y, fallback_spec);
+        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe);
         let required = spec
             .inputs
             .iter()
@@ -2631,13 +2635,50 @@ fn compute_lane_rates_impl(
         .map(|&p| (p, lane_injections.get(&p).copied().unwrap_or([0.0, 0.0])))
         .collect();
 
+    // Convergence budget (RFC kill criterion 2): a HARD `3 × segment_count`,
+    // bounding both the demand pass and the forward fixed-point pass. Here a
+    // belt "segment" is one tile of the belt graph — the walker's actual
+    // propagation unit. This is the reading under which the hard budget
+    // accommodates the walker's *pre-existing*, demand-independent balancer
+    // convergence: a bare (3, 3) library template (33 tiles) needs 90
+    // even-split iterations, which `3 × distinct-segment-ids` (= 3) cannot
+    // cover but `3 × belt_tiles` (= 99) does — and it stays meaningful, since
+    // a well-conditioned fixed point converges in O(tiles) and only genuine
+    // oscillation/divergence exceeds 3× that. Measured max across the corpus
+    // is 313 iters on the 5118-tile utility layout (0.02 × its budget); the
+    // kill criterion fires nowhere. See docs/rfc-lane-demand-flow.md.
+    // (Computed BEFORE the external seeding since #519: the seeds are
+    // demand-weighted, so the backward demand pass must already have run.)
+    let segment_count = belt_dir_map.len().max(1);
+    let budget = 3 * segment_count;
+
+    let (demand, demand_sweeps) = compute_demand(
+        &belt_dir_map,
+        &feeders,
+        &splitter_sibling,
+        &ug_output_tiles,
+        &ug_output_to_input,
+        &ug_input_dir,
+        &base_demand,
+        budget,
+    );
+
     // Seed graph-source belts that carry external input items. External inputs
     // come from outside the layout and have no upstream producer in the belt
     // graph — without this seeding, rate propagation starts at 0 and every
     // downstream consumer of an external input is incorrectly flagged as
-    // starved. We distribute each item's total external rate across its source
-    // tiles so the validator sees the actual per-belt flow the layout engine
-    // intended.
+    // starved.
+    //
+    // Seeds are DEMAND-WEIGHTED (#519): a boundary trunk physically supplies
+    // whatever its consumers pull (up to belt capacity) — the solver total is
+    // an aggregate, not a per-trunk allotment. The old even split
+    // under-supplied high-demand trunks and over-supplied low-demand ones
+    // (chem5: iron-plate 35/s over six trunks = 5.83 each against one row's
+    // 6.25/s draw — a fabricated 0.42/s tail deficit on a sim-verified
+    // layout). Each source now seeds its own backward-propagated downstream
+    // demand, scaled down proportionally if the demands exceed the solver
+    // total (a genuine aggregate shortfall stays visible), and falling back
+    // to the even split when no demand is attributable (unmodeled consumers).
     let external_rates: FxHashMap<&str, f64> = sr
         .external_inputs
         .iter()
@@ -2665,12 +2706,19 @@ fn compute_lane_rates_impl(
                 }
             }
         }
-        // Second pass: seed each source tile with its share of the total rate,
-        // split evenly across the belt's two lanes.
+        // Second pass: seed each source tile, split evenly across the belt's
+        // two lanes.
         for (item, sources) in &sources_by_item {
             let total = external_rates[item];
-            let per_tile = total / sources.len() as f64;
-            for &pos in sources {
+            let demands: Vec<f64> = sources
+                .iter()
+                .map(|pos| demand.get(pos).copied().unwrap_or(0.0))
+                .collect();
+            let demand_sum: f64 = demands.iter().sum();
+            let even = total / sources.len() as f64;
+            let scale = if demand_sum > total { total / demand_sum } else { 1.0 };
+            for (&pos, &d) in sources.iter().zip(&demands) {
+                let per_tile = if demand_sum > 0.0 { d * scale } else { even };
                 let entry = lane_rates.entry(pos).or_insert([0.0, 0.0]);
                 entry[0] += per_tile / 2.0;
                 entry[1] += per_tile / 2.0;
@@ -2941,32 +2989,6 @@ fn compute_lane_rates_impl(
             notify_ug_deps(pos, &mut in_degree, &mut queue);
         }
     }
-
-    // Convergence budget (RFC kill criterion 2): a HARD `3 × segment_count`,
-    // bounding both the demand pass and the forward fixed-point pass. Here a
-    // belt "segment" is one tile of the belt graph — the walker's actual
-    // propagation unit. This is the reading under which the hard budget
-    // accommodates the walker's *pre-existing*, demand-independent balancer
-    // convergence: a bare (3, 3) library template (33 tiles) needs 90
-    // even-split iterations, which `3 × distinct-segment-ids` (= 3) cannot
-    // cover but `3 × belt_tiles` (= 99) does — and it stays meaningful, since
-    // a well-conditioned fixed point converges in O(tiles) and only genuine
-    // oscillation/divergence exceeds 3× that. Measured max across the corpus
-    // is 313 iters on the 5118-tile utility layout (0.02 × its budget); the
-    // kill criterion fires nowhere. See docs/rfc-lane-demand-flow.md.
-    let segment_count = belt_dir_map.len().max(1);
-    let budget = 3 * segment_count;
-
-    let (demand, demand_sweeps) = compute_demand(
-        &belt_dir_map,
-        &feeders,
-        &splitter_sibling,
-        &ug_output_tiles,
-        &ug_output_to_input,
-        &ug_input_dir,
-        &base_demand,
-        budget,
-    );
 
     // Underground-belt input → its paired output (tunnel exit). A splitter
     // whose output feeds a UG-input has its immediate downstream *inside* the
@@ -3255,6 +3277,35 @@ fn lane_transfer(
     }
 }
 
+/// Per-machine utilization derived from the machines the layout PHYSICALLY
+/// placed for `spec`'s scope (#519 fallout). `utilization_for` divides by
+/// `ceil(spec.count)`, but chain/mega replication quantizes per COPY:
+/// chem5's copper-cable count 15 places 8+8 = 16 machines across K=2
+/// copies, so per-machine rates scaled by count/ceil(count) = 1.0 overstate
+/// both the demand each machine draws and the output each machine injects
+/// by 1/16. Undecremented propagation never noticed; the consumption
+/// decrement made the overstatement eat 20/s from an 18.75/s belt and
+/// fabricate a tail deficit on a sim-verified-at-plan layout. Scope: the
+/// resolved row band for partition siblings, the whole layout for the
+/// recipe-global fallback spec.
+fn physical_utilization(
+    spec: &crate::models::MachineSpec,
+    band: Option<(i32, i32)>,
+    machine_ys_by_recipe: &FxHashMap<&str, Vec<i32>>,
+) -> f64 {
+    let Some(ys) = machine_ys_by_recipe.get(spec.recipe.as_str()) else {
+        return utilization_for(spec);
+    };
+    let n = match band {
+        Some((y0, y1)) => ys.iter().filter(|&&y| y >= y0 && y < y1).count(),
+        None => ys.len(),
+    };
+    if n == 0 {
+        return utilization_for(spec);
+    }
+    (spec.count / n as f64).min(1.0)
+}
+
 /// A tile's outflow after its own input-inserter pickups take their share
 /// (#519): `consumed` — the tile's summed per-inserter demand from
 /// `base_demand` — is subtracted proportionally across the two lanes,
@@ -3416,9 +3467,13 @@ pub fn check_input_rate_delivery(
         .map(|s| (s.recipe.as_str(), s))
         .collect();
     let mut machine_entity: FxHashMap<(i32, i32), &PlacedEntity> = FxHashMap::default();
+    let mut machine_ys_by_recipe: FxHashMap<&str, Vec<i32>> = FxHashMap::default();
     for e in &layout.entities {
         if is_machine_entity(&e.name) {
             machine_entity.insert((e.x, e.y), e);
+            if let Some(r) = e.recipe.as_deref() {
+                machine_ys_by_recipe.entry(r).or_default().push(e.y);
+            }
         }
     }
 
@@ -3546,14 +3601,14 @@ pub fn check_input_rate_delivery(
         // `super::resolve_row_spec`'s doc comment for the
         // partition-sibling rationale (`docs/rfc-inserter-sizing.md`
         // Phase 1 finding).
-        let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
-        // spec.inputs[].rate is the per-machine input rate at full utilization.
-        // The layout places ceil(spec.count) physical machines, each running at
-        // spec.count / ceil(spec.count) utilization — scale the required rate
-        // accordingly or the check is too strict by up to 10× when the solver
-        // needs a fractional machine (e.g. sulfuric-acid at 5/s wants only 0.1
-        // machines but the physical machine runs at 10% speed).
-        let utilization = utilization_for(spec);
+        let (spec, band) = super::resolve_row_spec_banded(layout, recipe, me.y, fallback_spec);
+        // spec.inputs[].rate is the per-machine input rate at full
+        // utilization; scale by the PHYSICAL utilization (planned count over
+        // machines actually placed in the spec's scope) or the check is too
+        // strict — up to 10× for a fractional machine (sulfuric-acid at 5/s
+        // wants 0.1 machines running at 10% speed), 1/16 for chain-replicated
+        // rows (see `physical_utilization`).
+        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe);
         let required_rate = spec
             .inputs
             .iter()
