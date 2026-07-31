@@ -9169,3 +9169,98 @@ fn full_knob_sweep() {
     std::fs::write("target/tmp/knob-sweep.md", &md).expect("write sweep report");
     eprintln!("\nreport: crates/core/target/tmp/knob-sweep.md");
 }
+
+/// RFC-060 K60-3: export blueprint + manifest pairs for the flipped
+/// corpus cases in both arms (`on` = shipped default with the horizontal
+/// candidate competing, `off` = candidate disabled), for sim-harness
+/// verification. Tracked here so the K60-3 evidence is reproducible from
+/// a fresh clone (the RFC-050 "manifest generator is gitignored" gap bit
+/// the 2026-07-31 verification session).
+///
+///   SIM_PROBE_OUT=/tmp SPAGHETTIO_ZONE_CACHE_PATH=$PWD/crates/core/data/sat-zones-ci.bin \
+///     cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     rfc060_sim_export --ignored --exact --nocapture
+///
+/// Then per artifact pair:
+///   cargo run --release -p spaghettio_sim_harness -- run \
+///     --bp $OUT/<case>-<arm>.bp --manifest $OUT/<case>-<arm>.manifest.json \
+///     --warmup 216000 --out <case>-<arm>.report.json
+/// (long warmup per the deep-chain caveat in docs/sim-harness.md; pu3
+/// used 288000).
+#[test]
+#[ignore = "artifact exporter for sim runs; run explicitly with --ignored"]
+fn rfc060_sim_export() {
+    let ores5: &[&str] = &["iron-ore", "copper-ore", "coal", "water", "crude-oil"];
+    let plates5: &[&str] = &["iron-plate", "copper-plate", "coal", "crude-oil", "water"];
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt_tier: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+    let cases = [
+        Case { name: "ac5", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "ac7", item: "advanced-circuit", rate: 7.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: plates5 },
+        Case { name: "pu3", item: "processing-unit", rate: 3.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: ores5 },
+        Case { name: "ec15", item: "electronic-circuit", rate: 15.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["iron-plate", "copper-plate"] },
+    ];
+    let out = std::env::var("SIM_PROBE_OUT")
+        .unwrap_or_else(|_| snapshot_dir().to_string_lossy().into_owned());
+    std::fs::create_dir_all(&out).ok();
+    for case in &cases {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        for (arm, candidate) in [("on", true), ("off", false)] {
+            let label = format!("{}-{}", case.name, arm);
+            // Mirror run_e2e_inner exactly so the artifacts match the
+            // sweep's layouts bit for bit.
+            let solved = match solver::solve_with_exclusions(
+                case.item, case.rate, &inputs, case.machine, &FxHashSet::default(),
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{label}: SOLVER REFUSED: {e}");
+                    continue;
+                }
+            };
+            let lay = match layout::build_bus_layout(
+                &solved,
+                layout::LayoutOptions {
+                    max_belt_tier: case.belt_tier.map(|s| s.to_string()),
+                    merge_tap: false,
+                    stacking: 1,
+                    inserter_capacity: 0,
+                    splitter_tap_spacers: false,
+                    horizontal_candidate: candidate,
+                    ..Default::default()
+                },
+            ) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("{label}: LAYOUT REFUSED: {e}");
+                    continue;
+                }
+            };
+            let issues = match validate::validate(&lay, Some(&solved), LayoutStyle::Bus) {
+                Ok(v) => v,
+                Err(e) => e.issues,
+            };
+            let errs = issues.iter().filter(|i| i.severity == Severity::Error).count();
+            let warns = issues.iter().filter(|i| i.severity == Severity::Warning).count();
+            let (bp, manifest) = blueprint::export_with_manifest(&lay, &solved, &label);
+            std::fs::write(format!("{out}/{label}.bp"), &bp).expect("write bp");
+            std::fs::write(
+                format!("{out}/{label}.manifest.json"),
+                serde_json::to_string_pretty(&manifest).expect("manifest json"),
+            )
+            .expect("write manifest");
+            eprintln!(
+                "{label}: E{errs}/W{warns} {} entities {}x{} -> {out}/{label}.bp",
+                lay.entities.len(),
+                lay.width,
+                lay.height,
+            );
+        }
+    }
+}
