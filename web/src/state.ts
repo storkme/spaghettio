@@ -52,6 +52,9 @@ export interface FormState {
    * bus, so enabling this never makes a layout worse — it is opt-in only
    * because coverage is still narrow (fluids and modules refuse). */
   directInsertion: boolean;
+  /** RFC-057 post-layout compaction (`?compact=1`). Off by default: it
+   * rewrites geometry, so a bookmarked URL must keep rendering what it did. */
+  compactLayout: boolean;
   /** Global module policy, compact form `<kind><tier><quality?>` —
    * `s`peed / `p`roductivity, tier 1–3, optional module-quality initial
    * (`u`/`r`/`e`/`l`), e.g. "s2", "p3l". null = no modules (today's
@@ -153,6 +156,7 @@ export const URL_KEY_BY_CATEGORY: Record<string, string> = {
 /** Back-compat alias: the legacy single-machine URL parameter used to
  * configure the assembler tier. Read into `machines.crafting`. */
 const LEGACY_MACHINE_KEY = "machine";
+const COMPACT_EXTRAS_KEY = "compact";
 
 // Hash-form (Bucket B) URL scheme:
 //
@@ -335,6 +339,7 @@ function readHashState(): FormState | null {
   const inserterCapacity =
     irShort && (KNOWN_INSERTER_CAPACITY as readonly string[]).includes(irShort) ? irShort : null;
   const directInsertion = extras.get(DIRECT_INSERTION_EXTRAS_KEY) === "1";
+  const compactLayout = extras.get(COMPACT_EXTRAS_KEY) === "1";
   const mShort = extras.get("m");
   const modules = mShort && MODULES_RE.test(mShort) ? mShort : null;
   const ciRaw = extras.get("ci");
@@ -360,7 +365,7 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, modules, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, modules, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -418,12 +423,13 @@ function readQueryState(): FormState {
       ? rawInserterCapacity
       : null;
   const directInsertion = params.get("direct_insertion") === "1";
+  const compactLayout = params.get("compact") === "1";
   const rawModules = params.get("modules");
   const modules = rawModules && MODULES_RE.test(rawModules) ? rawModules : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, modules, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, modules, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -505,6 +511,9 @@ function formatHashState(state: FormState): string {
     (KNOWN_INSERTER_CAPACITY as readonly string[]).includes(state.inserterCapacity)
   ) {
     extras.set(INSERTER_CAPACITY_EXTRAS_KEY, state.inserterCapacity);
+  }
+  if (state.compactLayout) {
+    extras.set(COMPACT_EXTRAS_KEY, "1");
   }
   if (state.directInsertion) {
     extras.set(DIRECT_INSERTION_EXTRAS_KEY, "1");

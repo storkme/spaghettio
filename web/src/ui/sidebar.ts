@@ -605,6 +605,21 @@ export function renderSidebar(
     "debugging.";
   targetBody.appendChild(makeField("Direct insertion", directInsertionCb));
 
+  // RFC-057 post-layout compaction. Off by default because it rewrites
+  // geometry — a bookmarked URL must keep rendering what it did — but it is
+  // safe to enable: the pass commits a transform only where validation is no
+  // worse than its input, so the worst case is no change.
+  const compactCb = document.createElement("input");
+  compactCb.type = "checkbox";
+  compactCb.className = "sb-checkbox";
+  compactCb.title =
+    "Compact the finished layout (RFC-057): replace long surface belt runs " +
+    "with underground pairs, then delete redundant rows and columns. Each " +
+    "step is kept only if the layout still validates no worse, so the worst " +
+    "case is no change. On the largest corpus layout this is -26% bounding " +
+    "box and -45% entities.";
+  targetBody.appendChild(makeField("Compact layout", compactCb));
+
   // Layout strategy. Phase 0b of `rfc-modular-production` shipped the
   // dropdown; the surviving `partitioned-decomposed` variant produces
   // strictly ≤ Pooled errors on every case in the corpus. The deprecated
@@ -843,6 +858,7 @@ export function renderSidebar(
   if (urlState.stacking) stackingSelect.value = urlState.stacking;
   if (urlState.inserterCapacity) inserterCapacitySelect.value = urlState.inserterCapacity;
   directInsertionCb.checked = urlState.directInsertion === true;
+  compactCb.checked = urlState.compactLayout === true;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
@@ -908,6 +924,7 @@ export function renderSidebar(
     writeUrlState({
       item: targetItem,
       rate: targetRate,
+      compactLayout: compactCb.checked,
       machines: palette,
       inputs: checkedDefaults,
       belt: beltSelect.value || null,
@@ -994,8 +1011,9 @@ export function renderSidebar(
       const stacking = stackingSelect.value || undefined;
       const inserterCapacity = inserterCapacitySelect.value || undefined;
       const directInsertion = directInsertionCb.checked;
+      const compactLayout = compactCb.checked;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -1033,6 +1051,7 @@ export function renderSidebar(
   inserterTierSelect.addEventListener("change", scheduleAutoSolve);
   qualitySelect.addEventListener("change", scheduleAutoSolve);
   directInsertionCb.addEventListener("change", scheduleAutoSolve);
+  compactCb.addEventListener("change", scheduleAutoSolve);
   modulesSelect.addEventListener("change", scheduleAutoSolve);
   moduleQualitySelect.addEventListener("change", scheduleAutoSolve);
   wireModeSelect.addEventListener("change", scheduleAutoSolve);

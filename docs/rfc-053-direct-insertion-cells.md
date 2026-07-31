@@ -2186,6 +2186,107 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   hand-waved prerequisite into a file:line change with a test to write
   first. Every one of those was cheaper found before building than after.*
 
+- *2026-07-26 — **The north-input-B design is BUILT, and building it
+  falsified the premise that motivated it.** The three-solid-input row
+  cell works and is verified at tile level. It also unlocks nothing on
+  its own, because the face count was never `rail`'s only blocker.*
+
+  ***What shipped.*** *The prerequisite first, as its own commit: the
+  same-item guard now checks all solid-input pairs instead of the first.
+  The test was written before the gate moved and **demonstrated to have
+  teeth** — relaxing the count to three WITHOUT the fix fails it on
+  `producer's belt input == consumer's second other input`, exactly the
+  pair `.find()` never looked at. It passes vacuously at a count of two,
+  which is the point: the net was in place before the fall.*
+
+  *Then the geometry. Belt B is the outer north row, one above the
+  producer's belt, fed by a reach-2 inserter sharing the producer's feed
+  row over the consumer's columns. All three of the review's risk
+  predictions held. The inserter swings OVER the producer's belt rather
+  than sitting on it, so no underground gap is needed — the
+  `RowKind::QuadInput` precedent turned out to be the harder version of
+  the same idea, not the same one.*
+
+  ***Two constraints the review did not name, both found by deriving the
+  drop tile rather than trusting the sketch.*** *B's inserter sits at
+  `machine_y - 1` and drops at `machine_y + 1`, so:*
+
+  - *a producer more than **one tile taller** lifts that drop above a
+    bottom-aligned consumer's body and the item lands on nothing.
+    **Foundry(5) over assembler(3) is exactly this case** — the shipped
+    fluid pairs would have been silently broken by a version of this
+    change that only relaxed the count.*
+  - *a piped producer's run already occupies the feed row, which is
+    where B's inserters go.*
+
+  *Both refuse explicitly. The tile-level test asserts the drop lands
+  **inside** the consumer, which is the assertion that would have caught
+  either.*
+
+  ***The falsified premise.*** *`rail` still does not build a cell, and
+  the reason is not face allocation at all:*
+
+  ```text
+  COUPLING iron-plate -> iron-stick on iron-plate    <- claimed first
+  COUPLING iron-stick -> rail       on iron-stick    <- never tried
+  ```
+
+  *The chain is `iron-plate → iron-stick → rail`. A spec may only be
+  fused once, so the dispatcher's greedy walk — consumers in topological
+  order, upstream first — claims `iron-stick` for a STACKED cell with
+  `iron-plate` and never reaches the row cell that motivated all of this.
+  **`iron-stick → rail` is skipped before eligibility is even
+  evaluated.** Confirmed by instrumenting the dispatch: the only three
+  couplings it prints for `rail` are the two foundry ones (correctly
+  refused) and the upstream pair.*
+
+  *Forcing the downstream coupling to claim first (consumers in reverse
+  order, behind a scratch env flag) builds it: `di-row:iron-stick:rail`,
+  **0 validation issues**, 261 entities against the forward order's 264.
+  So the geometry is right and reachable — by a policy this RFC has not
+  agreed.*
+
+  ***Why that policy change is NOT in this commit.*** *It decides which
+  pair gets fused for every DI layout in the corpus, and the evidence for
+  flipping it is thin: `electronic-circuit@10`, `steel-plate@5` and
+  `iron-gear-wheel@10` are byte-identical under both orders, the full
+  suite is green under both, and the win on the one target that changes
+  is **3 entities at one rate** (see the correction below on WHICH rate).
+  A green suite is weak evidence here — nearly every test runs with
+  `direct_insertion: false`. Flipping a corpus-wide tie-break on one
+  marginal case at one rate is the exploration-overruns-its-evidence
+  shape the kill criteria exist to stop.*
+
+  ***Correction (2026-07-30, review of #508):*** *this entry originally named
+  `rail@1` as the winning rate and said the straddle does not balance at
+  `rail@5`. That contradicts this document's own coupling table above, which
+  reports `plan_row_straddle` balancing at exactly **5/s and 10/s** of 12 sampled
+  rates, with 1/s explicitly unbalanced (`P1:C1, 3.0 vs 1.5`). Both statements
+  cannot hold, and the measurement came from a scratch env flag that was never
+  committed — so the winning rate is **not recoverable from this record** and
+  neither figure should be quoted. The table's claim is the more specific and
+  self-consistent of the two (it lists the sample and the failing arithmetic), so
+  5/s or 10/s is the likelier location, but that is inference, not measurement.
+  Establishing it is phase 1 of the DI coupling-assignment RFC, proposed in
+  **#509** (RFC-059) and not yet merged at the time of writing — cited by PR
+  rather than by filename precisely because the file does not exist on `main`
+  yet, and a link that 404s is worse than a pointer that names its own state. Recorded rather
+  than silently corrected because the wrong half is not identifiable from the
+  document alone.*
+
+  ***Status: the capability is built, tested and inert.*** *No corpus
+  target reaches it today. The open question is not geometric any more —
+  it is **how the dispatcher should choose when one spec is a candidate
+  in two cells**, which is a matching problem, not an ordering accident.
+  Whoever picks it up should note the current rule has no principle
+  behind it: upstream-first is iteration order, not a decision.*
+
+  ***Correction to the entry above.*** *That entry called 3+ inputs "face
+  allocation, not straddle" and scoped the work at 351 instances. The
+  first half is right about the geometry and wrong about the blocker; the
+  351 figure counts pairs that the dispatcher will not offer to the cell
+  builder in the first place. **Neither number has ever been an estimate
+  of what relaxing the face count would deliver — which is zero.***
 - *2026-07-26 — **`direct_insertion: true` as a blunt default is
   REFUSED by measurement. Attempted on request, reverted the same
   session.** The flip is one line; the case for it was wrong.*

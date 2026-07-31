@@ -41,6 +41,12 @@ fn layout_options(
     // "off" | "on" | anything else (incl. absent) -> Candidate, the
     // engine default. Same shape as `cell_composition` below.
     direct_insertion: Option<String>,
+    // RFC-057 post-layout compaction. "1" enables; absent/anything else is
+    // off, so every existing URL keeps byte-identical geometry. Opt-in
+    // rather than default because it rewrites geometry the user may have
+    // bookmarked, and because it can trade a slightly taller box for a
+    // large entity saving — a call the user should make, not the engine.
+    compact_layout: Option<String>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -115,11 +121,11 @@ fn layout_options(
             Some("off") => spaghettio_core::bus::cells::CellComposition::Off,
             _ => spaghettio_core::bus::cells::CellComposition::Candidate,
         },
-        // RFC-057 post-layout compaction: experimental, and deliberately not
-        // reachable from the web surface yet. It is an opt-in post-pass over
-        // an already-validated layout, so exposing it is a UI decision, not a
-        // fallback-semantics one — hard-false until that decision is made.
-        compact_layout: false,
+        // RFC-057 post-layout compaction, now reachable from the web surface.
+        // Transactional: `compact_validated_geometry` commits a transform only
+        // when validation is no worse than its input, so the worst case is
+        // "no change", never a broken factory.
+        compact_layout: compact_layout.as_deref() == Some("1"),
         // RFC-060: the horizontal-stack candidate is engine policy, not a
         // web-surface axis — pinned `true` (the engine default). The
         // never-worse contract makes an escape hatch unnecessary for
@@ -313,10 +319,11 @@ pub fn layout(
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
     direct_insertion: Option<String>,
+    compact_layout: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion, compact_layout),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -339,10 +346,11 @@ pub fn layout_traced(
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
     direct_insertion: Option<String>,
+    compact_layout: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion, compact_layout),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -409,6 +417,7 @@ pub fn layout_streaming(
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
     direct_insertion: Option<String>,
+    compact_layout: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -422,7 +431,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion, compact_layout),
         on_event,
     )
     .map_err(|e| JsError::new(&e))

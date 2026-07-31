@@ -3594,7 +3594,7 @@ fn export_fold_pair_for_sim() {
     let folded = fold_snake(&compact, &[mid]).expect("midpoint fold must succeed");
     // The 3-fold the search picks (#492). Exported alongside the verified pair
     // so one sim run compares control / 1-fold / 3-fold on identical inputs.
-    let fold3 = fold_snake(&compact, &[130, 259, 390]).expect("3-fold must succeed");
+    let fold3 = fold_snake(&compact, &[138, 276, 414]).expect("3-fold must succeed");
 
     std::fs::create_dir_all("target/tmp").unwrap();
     for (tag, l) in [
@@ -4737,4 +4737,490 @@ fn rfc057_island_placement_keeps_terminals_disjoint() {
         materialized += 1;
     }
     assert_eq!(materialized, cases.len());
+}
+
+/// RFC-058 Phase 0 instrument: band census + packing headroom.
+///
+/// This reproduces every number the RFC cites, so its premise is checkable by
+/// anyone picking the work up rather than asserted from a probe that only ever
+/// existed on one machine. It answers two things:
+///
+/// - **Kill criterion 2 (reach)** — how many fixtures have >=3 bands and no
+///   width-dominant band. The RFC's 40-50% is over these ten hand-picked
+///   fixtures, NOT the e2e corpus, and is explicitly not treated as settled.
+/// - **The headroom estimate** — band-bbox and rate-weighted transport for the
+///   best aspect-capped shelf packing against the as-placed control.
+///
+/// Both figures are obstacle-free and exclude trunk corridor space, so the
+/// area saving is an upper bound. Closing that gap is what RFC-058's phase-3
+/// trunk spike exists to do; nothing here can stand in for it.
+///
+/// `#[ignore]` because it builds ten layouts (~30s) and reports rather than
+/// asserts — the same shape as `probe_fold_corpus`.
+#[test]
+#[ignore = "RFC-058 Phase 0 probe — run with --ignored --nocapture"]
+fn probe_band_packing_headroom() {
+    use spaghettio_core::common::{entity_size, is_machine_entity};
+    use spaghettio_core::models::{LayoutResult, SolverResult};
+
+    #[derive(Clone, Debug)]
+    struct Band {
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        recipes: Vec<String>,
+    }
+    impl Band {
+        fn cx(&self) -> f64 {
+            self.x as f64 + self.w as f64 / 2.0
+        }
+        fn cy(&self) -> f64 {
+            self.y as f64 + self.h as f64 / 2.0
+        }
+    }
+
+    // A band is a maximal run of rows containing machines or inserters. Trunk
+    // belts span all rows and are deliberately NOT band-forming — they are the
+    // transport being priced, not the structure being packed.
+    fn extract_bands(l: &LayoutResult) -> Vec<Band> {
+        let h = l.height.max(0) as usize;
+        let mut structural = vec![false; h];
+        for e in &l.entities {
+            if is_machine_entity(&e.name) || e.name.contains("inserter") {
+                let (_, eh) = entity_size(&e.name);
+                for dy in 0..eh as i32 {
+                    let y = e.y + dy;
+                    if y >= 0 && (y as usize) < h {
+                        structural[y as usize] = true;
+                    }
+                }
+            }
+        }
+        let mut bands = Vec::new();
+        let mut y = 0usize;
+        while y < h {
+            if !structural[y] {
+                y += 1;
+                continue;
+            }
+            let start = y;
+            while y < h && structural[y] {
+                y += 1;
+            }
+            let end = y - 1;
+            let (mut xmin, mut xmax) = (i32::MAX, i32::MIN);
+            let mut recipes: FxHashSet<String> = FxHashSet::default();
+            for e in &l.entities {
+                if !(is_machine_entity(&e.name) || e.name.contains("inserter")) {
+                    continue;
+                }
+                if e.y < start as i32 || e.y > end as i32 {
+                    continue;
+                }
+                let (ew, _) = entity_size(&e.name);
+                xmin = xmin.min(e.x);
+                xmax = xmax.max(e.x + ew as i32 - 1);
+                if let Some(r) = &e.recipe {
+                    recipes.insert(r.clone());
+                }
+            }
+            if xmin > xmax {
+                continue;
+            }
+            let mut recipes: Vec<String> = recipes.into_iter().collect();
+            recipes.sort();
+            bands.push(Band {
+                x: xmin,
+                y: start as i32,
+                w: xmax - xmin + 1,
+                h: (end - start + 1) as i32,
+                recipes,
+            });
+        }
+        bands
+    }
+
+    // Rate-weighted transport: for every (band, consumed item) pair, Manhattan
+    // distance to the nearest band producing it, times planned rate. External
+    // inputs are priced from a spine at x=0.
+    //
+    // This is a PROXY and it has a known directional risk, recorded in the
+    // RFC: real bus transport runs down a trunk then across to a row, which is
+    // close to Manhattan for the stacked control but not necessarily for a
+    // packed layout whose bands are no longer in one column. It may therefore
+    // flatter packing. The area result does not depend on it.
+    fn transport_cost(bands: &[Band], sr: &SolverResult) -> f64 {
+        let mut produced_by: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+        for spec in &sr.machines {
+            for out in &spec.outputs {
+                for (i, b) in bands.iter().enumerate() {
+                    if b.recipes.iter().any(|r| r == &spec.recipe) {
+                        produced_by.entry(out.item.as_str()).or_default().push(i);
+                    }
+                }
+            }
+        }
+        let mut total = 0.0;
+        for spec in &sr.machines {
+            let consumers: Vec<usize> = bands
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.recipes.iter().any(|r| r == &spec.recipe))
+                .map(|(i, _)| i)
+                .collect();
+            if consumers.is_empty() {
+                continue;
+            }
+            for inp in &spec.inputs {
+                let rate = inp.rate * spec.count;
+                for &ci in &consumers {
+                    let c = &bands[ci];
+                    let d = match produced_by.get(inp.item.as_str()) {
+                        Some(ps) if !ps.is_empty() => ps
+                            .iter()
+                            .map(|&pi| {
+                                let p = &bands[pi];
+                                (p.cx() - c.cx()).abs() + (p.cy() - c.cy()).abs()
+                            })
+                            .fold(f64::INFINITY, f64::min),
+                        _ => c.cx(),
+                    };
+                    total += rate * d / consumers.len() as f64;
+                }
+            }
+        }
+        total
+    }
+
+    fn bbox(bands: &[Band]) -> (i32, i32) {
+        let w = bands.iter().map(|b| b.x + b.w).max().unwrap_or(0)
+            - bands.iter().map(|b| b.x).min().unwrap_or(0);
+        let h = bands.iter().map(|b| b.y + b.h).max().unwrap_or(0)
+            - bands.iter().map(|b| b.y).min().unwrap_or(0);
+        (w, h)
+    }
+
+    fn shelf_pack(bands: &[Band], target_w: i32, gap: i32, sort_desc: bool) -> Vec<Band> {
+        let mut idx: Vec<usize> = (0..bands.len()).collect();
+        if sort_desc {
+            idx.sort_by_key(|&i| std::cmp::Reverse((bands[i].h, bands[i].w, i)));
+        }
+        let mut out = bands.to_vec();
+        let (mut x, mut y, mut shelf_h) = (0, 0, 0);
+        for &i in &idx {
+            let (w, h) = (bands[i].w, bands[i].h);
+            if x > 0 && x + w > target_w {
+                x = 0;
+                y += shelf_h + gap;
+                shelf_h = 0;
+            }
+            out[i].x = x;
+            out[i].y = y;
+            x += w + gap;
+            shelf_h = shelf_h.max(h);
+        }
+        out
+    }
+
+    // Minimising bbox AREA alone drives every packing to a one-shelf ribbon
+    // (all bands side by side). That is the shape this workstream exists to
+    // remove — pu4-raw ships one at 2752x90 — so area is only a valid
+    // objective under an aspect cap. 3:1 is the RFC's value; it is arbitrary
+    // and consequential (insert3-ore packs at 3.16:1 and is refused), and
+    // RFC-058 phase 2 owns sweeping it.
+    const MAX_ASPECT: f64 = 3.0;
+    const GAP: i32 = 2;
+
+    let cases: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("gear15-ore", "iron-gear-wheel", 15.0, &["iron-ore"], "assembling-machine-2"),
+        ("ec10-ore", "electronic-circuit", 10.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("ec15-plate", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "assembling-machine-2"),
+        ("belt5-ore", "transport-belt", 5.0, &["iron-ore"], "assembling-machine-2"),
+        ("insert3-ore", "inserter", 3.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("gear5-plate", "iron-gear-wheel", 5.0, &["iron-plate"], "assembling-machine-1"),
+        ("pu1-plate", "processing-unit", 1.0, &["iron-plate", "copper-plate", "sulfuric-acid"], "assembling-machine-2"),
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("lds2-plate", "low-density-structure", 2.0, &["iron-plate", "copper-plate", "plastic-bar"], "assembling-machine-2"),
+    ];
+
+    let (mut multi_band, mut packable) = (0usize, 0usize);
+    let (mut corpus_ctrl, mut corpus_packed) = (0i64, 0i64);
+    let (mut win_ctrl, mut win_packed) = (0i64, 0i64);
+    let (mut win_tx_ctrl, mut win_tx_packed) = (0.0f64, 0.0f64);
+    // Kill criterion 1's baseline is the aggregate over ONLY the three
+    // fixtures that criterion names — not the four-fixture figure.
+    let gate = ["sci1-ore", "sci2-ore", "pu1-plate"];
+    let (mut gate_ctrl, mut gate_packed, mut gate_n) = (0i64, 0i64, 0usize);
+
+    for (label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        ) else {
+            println!("{label:<13} solver refused");
+            continue;
+        };
+        let Ok(l) = layout::build_bus_layout(&sr, layout::LayoutOptions::default()) else {
+            println!("{label:<13} layout refused");
+            continue;
+        };
+        let bands = extract_bands(&l);
+        let dims: Vec<(i32, i32)> = bands.iter().map(|b| (b.w, b.h)).collect();
+        // Two gates, deliberately distinct.
+        //
+        // The CORPUS aggregate includes every fixture with >1 band, counting
+        // unpackable ones at their control area — excluding them would bias
+        // the headline toward winners, the exact defect review caught in the
+        // RFC itself. That is what reproduces the RFC's −39.6%.
+        //
+        // KC2 REACH counts only fixtures with >=3 bands as candidates: two
+        // bands admit at most two shelves, which is a stacking choice rather
+        // than a packing problem, and counting them would inflate the figure
+        // the criterion turns on.
+        if bands.len() < 2 {
+            println!("{label:<13} bands={} — nothing to pack {dims:?}", bands.len());
+            continue;
+        }
+        let kc2_candidate = bands.len() >= 3;
+        multi_band += 1;
+        let (cw, ch) = bbox(&bands);
+        let ctrl_area = (cw as i64) * (ch as i64);
+        let ctrl_tx = transport_cost(&bands, &sr);
+
+        let widest = bands.iter().map(|b| b.w).max().unwrap_or(1);
+        let mut best: Option<(i64, f64, i32, i32)> = None;
+        for sort_desc in [false, true] {
+            let mut t = widest;
+            while t <= cw.max(widest) * 2 {
+                let packed = shelf_pack(&bands, t, GAP, sort_desc);
+                let (w, h) = bbox(&packed);
+                let aspect = w.max(h) as f64 / w.min(h).max(1) as f64;
+                if aspect <= MAX_ASPECT {
+                    let area = (w as i64) * (h as i64);
+                    if best.as_ref().is_none_or(|(ba, _, _, _)| area < *ba) {
+                        best = Some((area, transport_cost(&packed, &sr), w, h));
+                    }
+                }
+                t += 2;
+            }
+        }
+
+        corpus_ctrl += ctrl_area;
+        match best {
+            Some((barea, btx, bw, bh)) => {
+                if kc2_candidate {
+                    packable += 1;
+                }
+                corpus_packed += barea;
+                win_ctrl += ctrl_area;
+                win_packed += barea;
+                win_tx_ctrl += ctrl_tx;
+                win_tx_packed += btx;
+                if gate.contains(label) {
+                    gate_ctrl += ctrl_area;
+                    gate_packed += barea;
+                    gate_n += 1;
+                }
+                println!(
+                    "{label:<13} bands={:<2} ctrl {cw}x{ch}={ctrl_area:<6} -> {bw}x{bh}={barea:<6} \
+                     area {:+6.1}%  transport {:+7.1}%  {dims:?}",
+                    bands.len(),
+                    (barea as f64 - ctrl_area as f64) / ctrl_area as f64 * 100.0,
+                    (btx - ctrl_tx) / ctrl_tx.max(1e-9) * 100.0,
+                );
+            }
+            None => {
+                // Unpackable fixtures stay at their control area in the corpus
+                // aggregate — counting only the winners would be selection bias.
+                corpus_packed += ctrl_area;
+                println!(
+                    "{label:<13} bands={:<2} ctrl {cw}x{ch}={ctrl_area:<6} -> no packing within \
+                     {MAX_ASPECT}:1 (width-dominant band) {dims:?}",
+                    bands.len(),
+                );
+            }
+        }
+    }
+
+    let pct = |new: f64, old: f64| (new - old) / old * 100.0;
+    println!("\n=== RFC-058 headroom ===");
+    println!(
+        "  corpus  ({multi_band} multi-band): band-bbox {corpus_ctrl} -> {corpus_packed} ({:+.1}%)",
+        pct(corpus_packed as f64, corpus_ctrl as f64),
+    );
+    println!(
+        "  winners ({packable} packable):    band-bbox {win_ctrl} -> {win_packed} ({:+.1}%), \
+         transport {:.0} -> {:.0} ({:+.1}%)",
+        pct(win_packed as f64, win_ctrl as f64),
+        win_tx_ctrl,
+        win_tx_packed,
+        pct(win_tx_packed, win_tx_ctrl),
+    );
+    println!(
+        "  KC1 baseline ({gate_n}/{} gate fixtures contributing): {gate_ctrl} -> {gate_packed} \
+         ({:+.1}%), so the KC1 bar is half that: {:+.1}%{}",
+        gate.len(),
+        pct(gate_packed as f64, gate_ctrl as f64),
+        pct(gate_packed as f64, gate_ctrl as f64) / 2.0,
+        if gate_n == gate.len() { "" } else { "  <-- INCOMPLETE: a gate fixture no longer packs, so this baseline is not comparable to the RFC's" },
+    );
+    println!(
+        "  KC2 reach: {packable}/{} fixtures packable ({:.0}%) — bar is 30%, but the \n\
+         \x20            corpus that settles KC2 is the e2e corpus, not these ten.",
+        cases.len(),
+        packable as f64 / cases.len() as f64 * 100.0,
+    );
+}
+
+/// RFC-058's premise must not evaporate silently.
+///
+/// `probe_band_packing_headroom` reports; this asserts. The RFC's design rests
+/// on measured numbers, and a placer change could quietly invalidate them —
+/// leaving an RFC that reads as evidence-backed while its evidence is stale.
+/// That is the failure shape `docs/validator-reporting.md` records nine times:
+/// a check going quiet is not the same as a problem being absent.
+///
+/// Bounds are deliberately loose. The point is to catch "the premise is gone",
+/// not to pin exact geometry — pinning would break on every placer tweak and
+/// get muted, which is worse than not asserting at all. Tight numbers live in
+/// the probe's output and in the RFC's decision log.
+#[test]
+fn rfc058_band_packing_premise_holds() {
+    use spaghettio_core::common::{entity_size, is_machine_entity};
+    use spaghettio_core::models::LayoutResult;
+
+    fn band_rects(l: &LayoutResult) -> Vec<(i32, i32, i32, i32)> {
+        let h = l.height.max(0) as usize;
+        let mut structural = vec![false; h];
+        for e in &l.entities {
+            if is_machine_entity(&e.name) || e.name.contains("inserter") {
+                let (_, eh) = entity_size(&e.name);
+                for dy in 0..eh as i32 {
+                    let y = e.y + dy;
+                    if y >= 0 && (y as usize) < h {
+                        structural[y as usize] = true;
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        let mut y = 0usize;
+        while y < h {
+            if !structural[y] {
+                y += 1;
+                continue;
+            }
+            let start = y;
+            while y < h && structural[y] {
+                y += 1;
+            }
+            let end = y - 1;
+            let (mut xmin, mut xmax) = (i32::MAX, i32::MIN);
+            for e in &l.entities {
+                if !(is_machine_entity(&e.name) || e.name.contains("inserter")) {
+                    continue;
+                }
+                if e.y < start as i32 || e.y > end as i32 {
+                    continue;
+                }
+                let (ew, _) = entity_size(&e.name);
+                xmin = xmin.min(e.x);
+                xmax = xmax.max(e.x + ew as i32 - 1);
+            }
+            if xmin <= xmax {
+                out.push((xmin, start as i32, xmax - xmin + 1, (end - start + 1) as i32));
+            }
+        }
+        out
+    }
+
+    // The three fixtures kill criterion 1 names. Its baseline is the aggregate
+    // over exactly these — not the four-fixture figure quoted in Motivation,
+    // which includes the weakest packer and would set a more lenient bar.
+    let cases: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("pu1-plate", "processing-unit", 1.0, &["iron-plate", "copper-plate", "sulfuric-acid"], "assembling-machine-2"),
+    ];
+
+    let (mut ctrl_total, mut packed_total) = (0i64, 0i64);
+    for (label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap_or_else(|e| panic!("{label}: solver refused: {e}"));
+        let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| panic!("{label}: layout refused: {e}"));
+        let bands = band_rects(&l);
+        assert!(
+            bands.len() >= 3,
+            "{label}: {} bands — RFC-058 needs >=3 to pack; if the placer now emits \
+             fewer, the RFC's fixture choice is stale",
+            bands.len(),
+        );
+
+        let cw = bands.iter().map(|b| b.0 + b.2).max().unwrap()
+            - bands.iter().map(|b| b.0).min().unwrap();
+        let ch = bands.iter().map(|b| b.1 + b.3).max().unwrap()
+            - bands.iter().map(|b| b.1).min().unwrap();
+        ctrl_total += (cw as i64) * (ch as i64);
+
+        // Best aspect-capped shelf packing, same construction as the probe.
+        let widest = bands.iter().map(|b| b.2).max().unwrap();
+        let mut best = i64::MAX;
+        for &sort_desc in &[false, true] {
+            let mut order: Vec<usize> = (0..bands.len()).collect();
+            if sort_desc {
+                order.sort_by_key(|&i| std::cmp::Reverse((bands[i].3, bands[i].2, i)));
+            }
+            let mut t = widest;
+            while t <= cw.max(widest) * 2 {
+                let (mut x, mut y, mut shelf_h, mut mx, mut my) = (0, 0, 0, 0, 0);
+                for &i in &order {
+                    let (w, h) = (bands[i].2, bands[i].3);
+                    if x > 0 && x + w > t {
+                        x = 0;
+                        y += shelf_h + 2;
+                        shelf_h = 0;
+                    }
+                    x += w + 2;
+                    shelf_h = shelf_h.max(h);
+                    mx = mx.max(x - 2);
+                    my = my.max(y + shelf_h);
+                }
+                let aspect = mx.max(my) as f64 / mx.min(my).max(1) as f64;
+                if aspect <= 3.0 {
+                    best = best.min((mx as i64) * (my as i64));
+                }
+                t += 2;
+            }
+        }
+        assert!(best < i64::MAX, "{label}: no packing within 3:1 aspect");
+        packed_total += best;
+    }
+
+    let saving = (ctrl_total - packed_total) as f64 / ctrl_total as f64 * 100.0;
+    assert!(
+        saving >= 50.0,
+        "RFC-058's kill-criterion-1 baseline has drifted: band-bbox saving over the three \
+         gate fixtures is {saving:.1}% ({ctrl_total} -> {packed_total}), against the {:.1}% \
+         the RFC records. The criterion's -33.0% bar is half that baseline, so a materially \
+         different number makes the gate wrong — update the RFC before relying on it.",
+        66.1,
+    );
 }

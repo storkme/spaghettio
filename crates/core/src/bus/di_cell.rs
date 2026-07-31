@@ -1295,12 +1295,10 @@ pub struct RowCellSpec<'a> {
     /// Coupling inserter — reach-1, sits in the 1-tile gap.
     pub coupler: &'a str,
     pub coupler_rate: f64,
-    /// `(item, belt_entity, feed_inserter)` for the producer's belt-fed
-    /// input, then the consumer's. The producer's belt is the OUTER row
-    /// (reached by a reach-2 inserter stepping over the inner belt), the
-    /// consumer's is the inner row at reach 1.
     /// `(item, belt, feed_inserter)` for a SOLID-fed producer. Ignored
-    /// when `producer_fluid` is set.
+    /// when `producer_fluid` is set. This belt is the producer's own, on
+    /// the NORTH face at reach-1 — see the sketch on `stamp_row_cell` for
+    /// the row assignments.
     pub producer_input: (&'a str, &'a str, &'a str),
     /// `Some((fluid_item, pipe_entity))` when the producer's inputs are
     /// ALL fluid — `casting-copper-cable` (molten-copper → copper-cable),
@@ -1321,6 +1319,18 @@ pub struct RowCellSpec<'a> {
     /// registered against that one run. A second, different fluid would
     /// need a second run on a face the cell does not have.
     pub consumer_fluid: Option<(&'a str, &'a str)>,
+    /// `(item, belt, feed_inserter)` for the consumer's SECOND belt-fed
+    /// input — the three-solid-input shape (`iron-stick -> rail`, whose
+    /// consumer wants stone AND steel-plate alongside the coupled stick).
+    ///
+    /// It lands on the NORTH face, one row ABOVE the producer's belt, fed
+    /// by a reach-2 inserter sharing the producer's feed row over the
+    /// CONSUMER's columns (the two roles' columns are disjoint, so they
+    /// never contend). North rather than south because the south face is
+    /// already full — feed plus output — and because moving the OUTPUT to
+    /// make room is not a stamping change but an `output_merger` rework:
+    /// that merger assumes a south-facing chain universally.
+    pub consumer_input_b: Option<(&'a str, &'a str, &'a str)>,
     /// Inserters per machine face. The output face needs reach-2 (it steps
     /// over the consumer's input belt), and long-handed is the only
     /// reach-2 inserter (I8a) at 2.40/s at L2 — under the 2.5/s an EC
@@ -1328,6 +1338,7 @@ pub struct RowCellSpec<'a> {
     /// not an edge case. Ignoring these counts silently under-feeds.
     pub producer_feed_count: usize,
     pub consumer_feed_count: usize,
+    pub consumer_feed_b_count: usize,
     pub out_count: usize,
     pub output_item: &'a str,
     pub output_belt: &'a str,
@@ -1337,9 +1348,13 @@ pub struct RowCellSpec<'a> {
 /// Stamp a horizontal row cell with its belts.
 ///
 /// ```text
+///   y0-1                consumer input belt B, only in the three-solid-
+///                       input shape (absent otherwise)
 ///   y0                  producer input belt, or the PIPE run when the
 ///                       producer is fluid-fed
-///   y1                  producer feed inserters, reach-1 (none when piped)
+///   y1                  producer feed inserters, reach-1 (none when piped),
+///                       sharing the row with B's reach-2 feed inserters
+///                       over the consumer's columns
 ///   y2 .. y2+h-1        machines, interleaved P/C at plan.xs,
 ///                       BOTTOM-aligned so both roles share a south face
 ///   y2+h                face row: consumer feed reach-1 + output reach-2
@@ -1391,6 +1406,41 @@ pub fn stamp_row_cell(
     //                       belt below) + output (reach-2, steps over it)
     //   y2+h+1              consumer input belt
     //   y2+h+2              output belt
+    // The consumer's SECOND belt-fed input, when it has one, goes one row
+    // ABOVE the producer's belt and is picked by a reach-2 inserter sharing
+    // the producer's feed row:
+    //
+    //   y0-1                consumer input belt B   (north, outer)
+    //   y0                  producer input belt     (north, inner)
+    //   y1                  producer feed reach-1 over PRODUCER columns,
+    //                       consumer feed B reach-2 over CONSUMER columns
+    //
+    // The reach-2 inserter passes OVER the producer's belt at y0 — an
+    // inserter interacts with its pick and drop tiles only, never with what
+    // it swings across — so no underground gap is needed, unlike
+    // `RowKind::QuadInput` where the inserter sits ON the belt row itself.
+    //
+    // Two constraints follow from the drop tile, and both are enforced
+    // rather than assumed. The inserter sits at `y1 = machine_y - 1` and
+    // drops at `y1 + 2 = machine_y + 1`, so:
+    //   - the CONSUMER must reach that row. Bottom-alignment puts its top
+    //     at `machine_y + (max_h - consumer_h)`, so a producer more than
+    //     ONE tile taller lifts the drop above the consumer's body and the
+    //     item lands on nothing. Foundry(5) over assembler(3) is exactly
+    //     this case, which is why the shipped fluid pairs are excluded.
+    //   - the consumer must be at least 2 tall, or `machine_y + 1` is past
+    //     its bottom.
+    let b_belt = spec.consumer_input_b;
+    if b_belt.is_some() {
+        // A piped producer puts its pipe run on the feed row (see the pipe
+        // stamp below), which is exactly where B's inserters would go.
+        if spec.producer_fluid.is_some() {
+            return None;
+        }
+        if producer_h - consumer_h > 1 || consumer_h < 2 {
+            return None;
+        }
+    }
     let p_belt_y = y0;
     let p_feed_y = y0 + 1;
     let machine_y = y0 + 2;
@@ -1425,6 +1475,9 @@ pub fn stamp_row_cell(
     };
     if spec.producer_fluid.is_none() {
         belt_run(&mut ents, p_belt_y, spec.producer_input.1, spec.producer_input.0);
+    }
+    if let Some((item, belt, _)) = b_belt {
+        belt_run(&mut ents, p_belt_y - 1, belt, item);
     }
     if let Some((item, belt, _)) = spec.consumer_input {
         belt_run(&mut ents, c_belt_y, belt, item);
@@ -1502,6 +1555,29 @@ pub fn stamp_row_cell(
             // the high ones, so they never contend for a tile. A consumer
             // whose only solid ingredient is the coupled one has no feed at
             // all and gives the whole face to its output.
+            // North face, reach-2: picks belt B two rows up, swinging over
+            // the producer's belt, and drops into this machine's second
+            // row. Shares `p_feed_y` with the producer's own feed
+            // inserters, which sit over the PRODUCER's columns — disjoint
+            // by construction, since each role's inserters are placed
+            // within its own footprint.
+            if let Some((item, _, inserter)) = b_belt {
+                let nb = spec.consumer_feed_b_count.max(1);
+                if nb > consumer_w as usize {
+                    return None;
+                }
+                for dx in cols(consumer_w, nb) {
+                    ents.push(PlacedEntity {
+                        name: inserter.to_string(),
+                        x: mx + dx,
+                        y: p_feed_y,
+                        direction: EntityDirection::South,
+                        carries: Some(item.to_string()),
+                        segment_id: Some(seg.clone()),
+                        ..Default::default()
+                    });
+                }
+            }
             let nf = if spec.consumer_input.is_some() { spec.consumer_feed_count.max(1) } else { 0 };
             let no = spec.out_count.max(1);
             if nf + no > consumer_w as usize {
@@ -1591,6 +1667,12 @@ pub fn stamp_row_cell(
     if spec.consumer_input.is_some() {
         input_belt_ys.push(c_belt_y);
     }
+    // B goes LAST, not in geometric order — the contract is that this list
+    // and the fused spec's solid inputs agree INDEX for INDEX, not that
+    // either is sorted by y. Appending keeps every existing index stable.
+    if b_belt.is_some() {
+        input_belt_ys.push(p_belt_y - 1);
+    }
     let y_top = ents.iter().map(|e| e.y).min().unwrap_or(y0);
     Some(RowCellLayout {
         entities: ents,
@@ -1629,6 +1711,8 @@ mod row_stamp_tests {
             out_inserter: "long-handed-inserter",
             producer_feed_count: 1,
             consumer_feed_count: 1,
+            consumer_input_b: None,
+            consumer_feed_b_count: 0,
             out_count: 2,
         }
     }
@@ -1668,6 +1752,8 @@ mod row_stamp_tests {
             out_inserter: "inserter",
             producer_feed_count: 0,
             consumer_feed_count: 0,
+            consumer_input_b: None,
+            consumer_feed_b_count: 0,
             out_count: 1,
         }
     }
