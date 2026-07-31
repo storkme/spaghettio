@@ -26,6 +26,7 @@
 //! - [`junction`] — `Junction` snapshot type consumed by strategies
 
 pub mod balancer;
+pub mod bands;
 pub mod cells;
 pub mod compaction;
 pub mod balancer_classify;

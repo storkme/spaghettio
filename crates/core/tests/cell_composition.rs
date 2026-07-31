@@ -5833,3 +5833,110 @@ fn probe_trunk_spike_gate_fixtures() {
         if saving >= 33.0 { "CLEARS" } else { "FAILS — stop; do not re-tune the packer" }
     );
 }
+
+/// RFC-058 phase 1 parity: the engine's placer-native band extraction
+/// (`bus::bands::extract_bands`, grouped by `RowSpan`) must agree with the
+/// phase-0 probe's deliberately decoupled y-projection on the layouts both
+/// can see. The probe stays the oracle — its published numbers are the
+/// RFC's evidence — so a disagreement here means the placer-native path is
+/// wrong, not the probe.
+///
+/// Also pins phase-2 packing parity: the positions the engine records in
+/// `BandPackingPlanned` must reproduce `rfc058_best_pack` on the same
+/// bands (same sweep, same tie-break).
+///
+/// Runs with cell composition and DI forced OFF so the native pass — the
+/// one that emits the trace event — is also the layout that wins, keeping
+/// the comparison apples-to-apples.
+#[test]
+fn rfc058_placer_bands_match_y_projection() {
+    use spaghettio_core::trace::{self, TraceEvent};
+
+    let cases: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("pu1-plate", "processing-unit", 1.0, &["iron-plate", "copper-plate", "sulfuric-acid"], "assembling-machine-2"),
+        ("gear15-ore", "iron-gear-wheel", 15.0, &["iron-ore"], "assembling-machine-2"),
+    ];
+
+    for (label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap_or_else(|e| panic!("{label}: solver refused: {e}"));
+
+        let opts = layout::LayoutOptions {
+            band_packing: true,
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        };
+        let _guard = trace::start_trace();
+        let l = layout::build_bus_layout(&sr, opts)
+            .unwrap_or_else(|e| panic!("{label}: layout refused: {e}"));
+        let events = trace::drain_events();
+        drop(_guard);
+
+        // Oracle: the probe's y-projection over the final layout.
+        let oracle = rfc058_extract_bands(&l);
+        let oracle_rects: Vec<(i32, i32, i32, i32)> =
+            oracle.iter().map(|b| (b.x, b.y, b.w, b.h)).collect();
+
+        let last_plan = events
+            .iter()
+            .rev()
+            .find(|e| {
+                matches!(
+                    e,
+                    TraceEvent::BandPackingPlanned { .. } | TraceEvent::BandPackingRefused { .. }
+                )
+            })
+            .unwrap_or_else(|| panic!("{label}: no band-packing event emitted"));
+
+        match last_plan {
+            TraceEvent::BandPackingPlanned {
+                band_rects,
+                packed_w,
+                packed_h,
+                positions,
+                ..
+            } => {
+                assert_eq!(
+                    band_rects, &oracle_rects,
+                    "{label}: placer-native band rects diverge from the y-projection oracle",
+                );
+                let oracle_pack = rfc058_best_pack(&oracle, 2, 3.0)
+                    .unwrap_or_else(|| panic!("{label}: oracle packs but engine claims a plan?"));
+                assert_eq!(
+                    (*packed_w, *packed_h),
+                    (oracle_pack.1, oracle_pack.2),
+                    "{label}: packed dimensions diverge from the probe packer",
+                );
+                let oracle_positions: Vec<(i32, i32)> =
+                    oracle_pack.3.iter().map(|b| (b.x, b.y)).collect();
+                assert_eq!(
+                    positions, &oracle_positions,
+                    "{label}: planned positions diverge from the probe packer",
+                );
+            }
+            TraceEvent::BandPackingRefused { bands, .. } => {
+                // The oracle must agree there is nothing to pack here:
+                // either too few bands, or no packing under the cap.
+                assert_eq!(*bands, oracle.len(), "{label}: refusal band count diverges");
+                assert!(
+                    oracle.len() < 3 || rfc058_best_pack(&oracle, 2, 3.0).is_none(),
+                    "{label}: engine refused but the oracle packs {} bands",
+                    oracle.len(),
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+}

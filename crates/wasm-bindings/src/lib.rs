@@ -126,6 +126,10 @@ fn layout_options(
         // when validation is no worse than its input, so the worst case is
         // "no change", never a broken factory.
         compact_layout: compact_layout.as_deref() == Some("1"),
+        // RFC-058 phase 2 is engine-only: the packer emits a trace plan and
+        // moves nothing, so there is no web surface to expose yet. Wire a
+        // URL param here only when phase 4 gives the flag visible effect.
+        band_packing: false,
         // No `..Default::default()`: adding `direct_insertion` completed
         // the field list, and a no-op struct update is a clippy error
         // under the workspace's `-D warnings`. A field added to
