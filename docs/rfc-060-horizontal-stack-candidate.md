@@ -175,3 +175,48 @@ bit-identically (all 6 simple cases). Full table: #513.
   flipped-case sims (`ac@5`, `ac@7`, `pu@2`, `pu@3`, `ec@15`, long
   warmup) are the ready-for-review gate and must run from a
   harness-capable machine.*
+- *2026-07-31 — `pu@2` drops OUT of the K60-3 flipped set: with the
+  density arm gone it stays bit-identical native (sweep: 6499 entities
+  both columns), so there is no differential to measure. Four cases
+  remain; artifacts regenerated from a harness-capable machine via the
+  now-tracked `rfc060_sim_export` e2e exporter (committed this session
+  to close the RFC-050 reproducibility gap — E/W signatures reproduce
+  exactly; entity counts on SAT-routed cases can drift ±3 with
+  zone-cache state).*
+- *2026-07-31 — **K60-3 measured: no trip.** All arms simmed at
+  `--warmup 216000` (pu3: 288000), converged. Per case, delivered/s
+  (on = shipped default with the candidate, off = candidate disabled):
+  `ac5` **3.75 (−25%) vs 0.00** — native E4/W11 deadlocks outright;
+  `ac7` **6.00 (−14.3%) vs 0.00** — native E10/W64 deadlocks;
+  `ec15` **14.45 (−3.6% WARN) vs 14.18 (−5.5% WARN)** — the off arm is
+  the cell-composed rescue (this branch's #392 reorder lets cells
+  resolve the old native refusal even without horizontal; raw bus still
+  refuses, pinned by `cell_candidate_resolves_ec15_refusal`).
+  In every measurable case the candidate's delivery is at or far above
+  native's; the winner key is not lying. pu3 recorded separately below
+  (first run invalidated by a harness defect).*
+- *2026-07-31 — Harness defect found and fixed during K60-3: pu3's
+  crude-oil@(38,0) and water@(39,0) boundary ports are ADJACENT, and
+  the kit's bare infinity-pipes (one tile beyond each port) merged into
+  a single network — crude won, the water trunk carried crude, the
+  sulfuric-acid chain never ran, and both pu3 arms measured 0.00/s with
+  436 machines `full_output`. Fix in `crates/sim-harness/scenario.rs`:
+  each fluid feed now sits behind an isolated ug-pipe run with per-slot
+  staggered length so the merge-capable surface caps never touch. No
+  blessed baseline exercises fluid feeds (all five are solid chains),
+  so no re-bless. The invalid first runs are kept in the session
+  artifacts, not cited as evidence.*
+- *2026-07-31 — **New measured finding (does not trip K60-3, tracked
+  separately): the flux blind spot is real and quantified.** `ac5-on`
+  is E0/W0 yet delivers 75.0% of plan (drift +0.0%, converged): the EC
+  row's copper-cable arrives via three tap drops that fill ONE lane of
+  yellow (~7.5/s each, 22.5/s against a 30/s demand) → EC pins at
+  exactly 7.5/s → AC at exactly 3.75/s, while cable machines sit
+  `full_output` and 10/40 AC machines never receive a single item.
+  `ac7-on` same mechanism, milder (−14.3%). The `belt_flow` lane walker
+  models sideload-to-one-lane semantics but credited this chain at
+  both-lane rate — zero warnings. K60-3's comparator holds (native
+  delivers 0.00), so the graduation stands; the validator calibration
+  gap is tracked in
+  [#519](https://github.com/storkme/spaghettio/issues/519) with the
+  tile-level forensics.*
