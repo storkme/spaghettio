@@ -270,12 +270,21 @@ pub(crate) fn max_machines_for_belt_both_lanes(
 /// top of the HS row, so its per-row demand is bounded by `K × belt_cap`,
 /// not a single belt. The output belt and the low-demand input₁ are
 /// still single belts and so still constrain machines per row.
+///
+/// `out_stack` mirrors `max_machines_for_belt_both_lanes` (RFC-047-1b):
+/// the output belt here is filled the same both-lanes way (the row's
+/// single output belt, not a sideloaded one), so a stack-loaded output
+/// belt carries `×S` per lane and the per-row cap must scale with it or
+/// this row shape fragments unnecessarily under stacking (#338). At
+/// `S == 1` `lane_capacity_stacked == lane_capacity`, so this is
+/// bit-identical to the pre-fix behaviour for the default corpus.
 pub(crate) fn max_machines_for_belt_horizontal_stack(
     spec: &MachineSpec,
     belt_name: &str,
     max_belt_tier: Option<&str>,
+    out_stack: u8,
 ) -> usize {
-    let out_lane_cap = lane_capacity(belt_name);
+    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack);
     let in_lane_cap = effective_in_lane_cap(max_belt_tier);
     let mut max_m: f64 = 999.0;
 
@@ -2930,7 +2939,7 @@ pub fn place_rows(
             // HS feeds input₀ via K stacked trunks, so only output and
             // input₁ constrain machines per row.
             let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
-            max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier)
+            max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier, out_stack)
         } else {
             let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
             max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack)
