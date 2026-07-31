@@ -43,6 +43,40 @@
   letter-spacing: 0;
 }
 
+/* ---- Collapsible section (Advanced / Engine debug, issue #512) ---- */
+.sb-section-header-collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+.sb-section-header-collapsible:hover { color: #9ca3af; }
+.sb-section-chevron {
+  font-size: 9px;
+  width: 8px;
+  flex-shrink: 0;
+}
+.sb-section-header .sb-section-changed-count {
+  margin-left: auto;
+  color: #b5cea8;
+  font-weight: 400;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+.sb-section-reset {
+  margin-left: 6px;
+  background: none;
+  border: 1px solid #333;
+  border-radius: 3px;
+  color: #6b7280;
+  font-size: 9px;
+  padding: 1px 5px;
+  cursor: pointer;
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.sb-section-reset:hover { border-color: #555; color: #ccc; }
+.sb-section-collapsible-body { padding-top: 2px; }
+
 /* ---- Inputs ---- */
 .sb-input {
   width: 100%;
