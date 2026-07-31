@@ -681,6 +681,7 @@ golden re-blesses across the arc. Full trail:
 - [#312 consumer-clamped fan-in refusal bites much earlier at high build quality](https://github.com/storkme/spaghettio/issues/312) — S=1; the wall now scales ×S with stacking (RFC-047 Leg C)
 - [#335 one unreached furnace bank in the legendary-express@60 fixture](https://github.com/storkme/spaghettio/issues/335)
 - [#336 (n,1) merge-tap unwired; late sideload check refuses those shapes by name](https://github.com/storkme/spaghettio/issues/336)
+- [#519 sideload-fed taps credited at both-lane rate by the lane walker](https://github.com/storkme/spaghettio/issues/519) — measured during RFC-060 K60-3: `ac@5` horizontal is E0/W0 yet sims at exactly 75% of plan (3 cable taps × one yellow lane = 22.5/s vs a 30/s demand); same signature at `ac@7` (−14.3%) and through the `pu@3` chain (−24%). Validator-clean ≠ delivers-at-plan until this closes.
 
 (Audited 2026-07-21: #65, #68, #136, #310 — previously cited here — are all
 closed. 2026-07-24: #334 closed — the (7,3)/(7,4) lane skew is ACCEPTED as a
