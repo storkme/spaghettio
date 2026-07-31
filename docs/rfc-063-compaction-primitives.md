@@ -1,15 +1,22 @@
 # RFC-063: Compaction primitives — attacking the logistics floor
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Design (circulated for review)**.
+Registry: [`rfcs.md`](rfcs.md). Status: **Concluded 2026-08-01 — all three
+phases adjudicated.** Phase A killed at A0; Phase B killed on paper; Phase C's
+DI-composed packing spike CLEARS its escalated −40.0% bar on 2/3 gate
+fixtures (aggregate −49.9%) but funds no production follow-on. See the
+close-out entry at the end of the decision log for the full verdict,
+per-fixture numbers, the RFC-064 dual-metrics table, and why none of the
+three verdicts transfer to RFC-064's aspect-ratio/transit framing.
 Evidence base: [`compaction-retro-2026-07.md`](compaction-retro-2026-07.md),
 which mines the decision logs of RFC-053 through RFC-061 and issues #135,
 #456, #507, #519, #520, #526.
 
 **2026-07-31 update: Phase A KILLED** (kill criterion 1 fired on the
 Phase A0 feasibility probe, before SAT ran — see Phase A's gate and the
-decision log). Phases B and C continue, at escalated bars (≥25% / −40.0%)
-per kill criterion 1's own pre-registered escalation rule. Maintenance
-residue from A0 tracked in #551.
+decision log). **Phase B KILLED the same day**, on paper analysis before a
+prototype template was written (see its gate and decision log). **2026-08-01:
+Phase C spike run, and the RFC concluded** — see the close-out entry at the
+end of the decision log.
 
 ## Summary
 
@@ -181,6 +188,16 @@ validates clean today ships denser and slower).
 
 ### Phase C — DI-aware packing probe (successor named in #507)
 
+**Status: CLEARED 2026-08-01, on the DI-composed spike — see the decision
+log.** Escalated −40.0% bar cleared on the buildable set (`sci1-ore`
+−47.4%, `sci2-ore` −50.6%, aggregate −49.9%, a 9.9-point margin);
+`pu1-plate` still refuses, for a different reason than this section
+assumed (see below and the decision log). No production wiring is funded
+from this result — see the RFC's close-out entry for why (un-sim-anchored
+validation debt inherited from RFC-058's frozen builder, and an
+aspect-ratio *regression* on the same candidates per RFC-064's
+dual-recorded metrics).
+
 **Approach.** RFC-058's `pu1-plate` gate fixture refused on the real
 planner because the native pass is DI-free under the `Candidate` pattern:
 copper-cable rides the bus at 81/s and trips the multi-lane refusal that
@@ -335,10 +352,15 @@ Per the layout-engine protocol in
    escalated to −40.0% (was −33.0%), 2026-07-31, per kill criterion 1
    firing on Phase A's outcome, and still gated on #526's DI-cell repair
    having landed enough that Phase C's packed candidates are built on
-   working DI cells rather than inheriting #526's defect.
+   working DI cells rather than inheriting #526's defect. **Run
+   2026-08-01: spike clears the escalated bar on 2/3 gate fixtures
+   (−49.9% aggregate) — see the decision log for the full method, numbers,
+   and why no production wiring follows.**
 4. **Default-on decisions**, per phase, only after that phase's gate
    clears on sim evidence — no phase is promoted to default on validator
-   parity alone (kill criterion 3).
+   parity alone (kill criterion 3). **Not reached for Phase C** — the
+   spike never sim-anchors (out of scope for a one-day throwaway), so this
+   step does not fire for it; see the close-out entry.
 
 Phases are independent; a phase's kill does not cancel the others, except
 through the bar-tightening rule in kill criterion 1.
@@ -708,3 +730,271 @@ through the bar-tightening rule in kill criterion 1.
   also killed (A0) and Phase B killed here, Phase C (DI-aware packing
   probe, still gated on #526's DI-cell repair per its own prerequisite) is
   RFC-063's only phase not yet resolved.
+
+- **2026-08-01 — Phase C spike run: escalated −40.0% bar CLEARS on the two
+  buildable DI-composed gate fixtures (−49.9% aggregate); `pu1-plate` still
+  refuses, for a different reason than assumed; RFC-064 dual-metrics
+  recorded.** #526 (`fix(di-cell): DI bridge no longer picks upstream of
+  its only feed`, commit `24ffa186`) merged before this spike ran, per the
+  RFC's own prerequisite — DI composition now refuses broken cells
+  honestly instead of shipping a partial-throughput layout, which is what
+  makes this spike's inputs meaningful.
+
+  **Method.** No new packing code was written. This spike reuses RFC-058's
+  own phase-4 real-planner builder (`bus::bands`, gated by
+  `LayoutOptions.band_packing`, in-tree and frozen since RFC-058's
+  2026-07-31 close-out) unmodified, and reuses `probe_packed_kc1_real_planner`'s
+  exact structure (RFC-058's own real-planner KC1 re-measure) with one
+  change: `direct_insertion: DirectInsertion::Forced` in place of `Off`, on
+  both sides of the packing comparison. `Forced`, not `Candidate`, is
+  required — `band_packing: true` makes `build_bus_layout` bypass
+  `decomposition_search` and call `layout_pass` directly with the caller's
+  `opts` (`layout.rs`'s own comment: "band_packing is a measurement
+  instrument, not a candidate"), and `DirectInsertion::placer_acts()` — the
+  switch deciding whether the placer honours `di_couplings` — returns true
+  only for `Forced` (`di_cell.rs`); `Candidate` passed straight to
+  `layout_pass`, bypassing the scored competition that normally decides
+  whether DI wins, behaves exactly like `Off` at the placer. So "compose DI
+  rows first" for this spike means `Forced` on both the control and the
+  packed build, isolating the packing effect from the DI effect — the same
+  discipline RFC-058's own control/packed pair used (there, `Off` on both
+  sides).
+
+  Three builds per gate fixture, one `SolverResult` each (DI changes
+  placement, not the solve):
+
+  1. **native** — `LayoutOptions::default()` (today's shipped pipeline: DI
+     `Candidate`, cell-composition `Candidate`, `HorizontalStack` candidate
+     on, no packing). This is RFC-064's own "native incumbent" definition
+     (*"the layout the existing decomposition search would otherwise
+     produce for the same solve"*) — deliberately NOT the DI-composed
+     control below — and is what `AR_score`/`Transit_score` are computed
+     against, per RFC-064 §Metrics.
+  2. **DI-composed control** — `cell_composition: Off, direct_insertion:
+     Forced, band_packing: false`. The input the packing technique sees,
+     per this RFC's "compose DI rows first" instruction.
+  3. **DI-composed packed** — (2) plus `band_packing: true`. Byte-identical
+     entities to (2) means the packer refused on this input (the same
+     refusal-detection idiom `probe_packed_kc1_real_planner` uses).
+
+  Bbox metric: non-pole entity bounding-box area, RFC-058's own
+  criterion-scope convention (the one #523's two review rounds forced into
+  the real-planner instrument) — (2) vs (3) is the Phase C gate quantity.
+  `AR(L) = max(w,h)/min(w,h)` and `AR_score` computed exactly per RFC-064
+  §(a), on the same non-pole bbox, (3) vs (1). `Transit`: RFC-064 asks for
+  real per-edge routed physical path length, explicitly allowing an honest
+  estimate where that isn't available; no builder here (or RFC-058's own
+  inherited scaffolding) attributes physical routed length per production
+  edge, so this spike reuses RFC-058's OWN pre-existing transport proxy
+  verbatim (`probe_band_packing_headroom`'s `transport_cost`: Σ rate ×
+  Manhattan(producer-band-centre, consumer-band-centre), external inputs
+  priced from the west edge) — labelled an ESTIMATE throughout, on (3) vs
+  (1)'s extracted bands. RFC-058's own Motivation section already names
+  this proxy as its weakest number; that caveat is inherited unchanged, not
+  resolved here. Validation issue counts (`validate::validate`,
+  `LayoutStyle::Bus`) were recorded on (2) and (3) for honesty — NOT gated,
+  and no sim anchor was run (kill criterion 3 is explicitly out of scope
+  for a one-day throwaway spike, per this RFC's own text: *"build nothing
+  production-grade; answer the question and discard the code"*). Spike
+  code (`probe_phase_c_di_composed_packing_spike`, ~130 lines added to
+  `crates/core/tests/cell_composition.rs` for this session, run with
+  `--ignored --nocapture`) is reverted before this PR's diff, per the RFC's
+  throwaway-spike contract — no packing code changed anywhere; only the
+  options passed to the existing `band_packing`/`direct_insertion` flags
+  varied between builds.
+
+  **Bbox results — the Phase C gate:**
+
+  | fixture | DI-ctrl bbox | DI-packed bbox | Δ | vs −40.0% bar |
+  |---|---|---|---:|---|
+  | `sci1-ore` | 38×36 = 1,368 | 36×20 = 720 | −47.4% | clears |
+  | `sci2-ore` | 67×70 = 4,690 | 61×38 = 2,318 | −50.6% | clears |
+  | `pu1-plate` | — | REFUSED | n/a | not evaluated |
+  | **aggregate (2 buildable)** | **6,058** | **3,038** | **−49.9%** | **clears, +9.9pp margin** |
+
+  `pu1-plate` refusal — same *symptom* as RFC-058's own real-planner scope
+  gap (`PackRefusal::MultiLaneItem`: *"item copper-cable at 81.00/s exceeds
+  one 22.5/s lane — balancer families are out of packed scope"*), but NOT
+  the same *cause* this RFC assumed. `sr.di_couplings` for this fixture,
+  measured today, does not contain a `copper-cable → electronic-circuit`
+  coupling at all — the couplings the solver actually proposes are
+  `advanced-circuit → processing-unit` and a Gleba-recipe plastic-bar chain
+  (`jellynut-processing → bioflux → bioplastic → advanced-circuit`),
+  because the fixture's allowed external inputs (iron-plate, copper-plate,
+  sulfuric-acid) no longer resolve to a petroleum-gas/coal plastic-bar
+  source under the current recipe DB, so the net-flow solver routes around
+  it. #526 repairs bridge GEOMETRY for couplings the solver already
+  proposes; it does not create new couplings, so it cannot touch this gap.
+  This is the same corpus-drift pattern Phase A0's own entry already named
+  (*"three months of RFC-057/058/060/061 landing has moved these
+  numbers"*) — RFC-058's `pu1-plate` scope gap has MOVED, not closed, and
+  closing it now would mean a solver-recipe-selection change, out of scope
+  for this RFC entirely.
+
+  **RFC-064 Phase 3 incoming evidence — dual-recorded per the owner's
+  arrangement**, `AR(L)` and the transit proxy computed against `native`
+  (`LayoutOptions::default()`, per RFC-064's own "native incumbent"
+  definition — deliberately NOT the DI-composed control above):
+
+  | fixture | native bbox | native AR | DI-packed bbox | packed AR | AR_score | entities native→packed (ΔEntities%) | transit(est) native→packed | Transit_score(est) |
+  |---|---|---:|---|---:|---:|---|---|---:|
+  | `sci1-ore` | 38×36 | 1.056 | 36×20 | 1.800 | **−13.400** | 281→265 (−5.7%) | 118→80 | **+0.315** |
+  | `sci2-ore` | 68×79 | 1.162 | 61×38 | 1.605 | **−2.742** | 925→836 (−9.6%) | 1,576→760 | **+0.518** |
+  | `pu1-plate` | — | — | REFUSED | — | — | — | — | — |
+
+  Honesty notes on the RFC-064 numbers, not silently dropped:
+
+  - **Both fixtures' `AR_score` is strongly NEGATIVE — the bbox win comes
+    with an aspect-ratio REGRESSION.** Both native layouts are already
+    close to square (AR 1.056, 1.162) because these are small,
+    low-band-count fixtures; the shelf packer optimises purely for AREA
+    under its 3:1 aspect CAP (RFC-058's own design), with no incentive to
+    preserve or improve squareness once under the cap, so it happily trades
+    a near-square native for a more elongated packed shape (AR 1.800,
+    1.605) in exchange for less area. This is a concrete, on-fixture
+    illustration of the RFC-064 premise that bbox-area and aspect-ratio are
+    genuinely different objectives, not two views of the same one — a
+    technique can clear a −40% bbox bar and fail an aspect-ratio bar on the
+    identical candidate.
+  - **`Transit_score` is estimated, not measured**, via RFC-058's own
+    band-centre Manhattan proxy, carrying that proxy's known, previously
+    recorded directional risk (it may flatter packing on a 2D-rearranged
+    layout more than on the stacked native control; RFC-058's own
+    Motivation section). Both fixtures show a real transit IMPROVEMENT
+    under this proxy, consistent with RFC-058's own finding that packing
+    shortens transport where it applies — but this is the SAME caveat
+    RFC-058 always carried, unresolved here.
+  - **Entity count FELL, not grew** (−5.7%, −9.6%), unlike RFC-064's own
+    folding calibration anchor (+26%). This spike doesn't illustrate the
+    "spend entities freely to pack tighter" tetris trade RFC-064 is built
+    around — DI composition itself removes belt entities (the coupled item
+    skips the bus entirely), and that saving dominates whatever the packer
+    spent, so this data point is compatible with RFC-064's framing but
+    doesn't exercise its central premise.
+  - **Validation debt is real and un-sim-anchored — this is a packability
+    measurement, not a shippable density win.** DI-composed control:
+    `sci1-ore` 0 issues, `sci2-ore` 13. DI-composed packed: `sci1-ore` 38
+    issues, `sci2-ore` 131 — the same order of magnitude as RFC-058's own
+    real-planner KC3 baseline on the identical (non-DI) fixtures (sci1 48,
+    sci2 156, RFC-058's phase-5 decision log). The packed builder is
+    RFC-058's frozen, inert #523-era instrument, carrying every defect that
+    RFC-058's own decision log enumerated at its kill and deliberately left
+    unfixed (the splitter-carve no-op, the collector loop's missing
+    crossing/UG/foreign-feed handling, etc.) — RFC-058's own trajectory
+    (−66.1% idealized → −35.9% spike → −44.0% naive-real → −34.6%
+    tree-router → −27.0% legal-and-faithful) shows every correctness fix
+    pushed density DOWN, monotonically, across five re-measures. This
+    spike's −49.9% therefore almost certainly OVERSTATES what a
+    fully-hardened, legally-routed re-measure would show, by an unmeasured
+    amount — exactly the caveat RFC-058's own text requires attaching to a
+    spike-quality number, and exactly why kill criterion 3 (sim-anchored
+    never-worse) is never claimed here.
+
+  **Verdict: Phase C's escalated −40.0% bar CLEARS on the buildable set**
+  (−49.9% aggregate, `sci1-ore`/`sci2-ore`, +9.9pp margin) — this is NOT
+  within noise of RFC-058's own −27.0% real-planner result, so per this
+  RFC's own pre-registered contrapositive (*"if the spike lands within
+  noise of RFC-058's −27.0% result, that is confirmatory evidence the floor
+  is structural"*), DI composition DOES change the packability picture for
+  these two fixtures, materially. `pu1-plate` — the fixture DI was
+  specifically named to rescue — still refuses, for a solver-coupling-
+  selection reason unrelated to #526's scope, so this RFC's own scope gap
+  MOVED rather than closed. Per this RFC's own one-day throwaway-spike
+  design (*"build nothing production-grade; answer the question and
+  discard the code"*), this closes Phase C's question — the answer is "yes,
+  DI composition changes the picture, on the fixtures where it applies
+  today" — without funding further production wiring: the correctness
+  debt, the un-sim-anchored bbox number, and the negative `AR_score` result
+  all argue against promoting this further under RFC-063's own bbox-area
+  framing, and RFC-064 Phase 3 inherits the dual-recorded numbers above as
+  its own *"informative, not authoritative"* incoming evidence, per its own
+  text. Spike code reverted before this PR's diff — the numbers above are
+  the sole surviving record.
+
+- **2026-08-01 — RFC-063 CONCLUDED: all three phases adjudicated, no
+  further phases funded.**
+
+  **Phase A** — KILLED at the A0 feasibility probe (2026-07-31), before SAT
+  ran: the ≥25% bounding-box bar is unreachable against verified
+  community-best balancer references (≈8.1% gate-fixture / ≈5.9% holdout
+  measured ceiling). Maintenance residue (regenerate the likely-stale
+  `(4,5)` template; correct stale doc-comment baselines) spun off to #551,
+  not funded as arc work.
+
+  **Phase B** — KILLED on paper analysis (2026-07-31), before a prototype
+  template was written: the "wasted lane" the design section assumed does
+  not hold against the current templates (`can_lane_split` already claims
+  it for free), and the one real savings mechanism left (deleting one
+  duplicate belt-tile-row per merged pair) caps at 5.00–7.14%
+  (row-kind-structural), under a third of the escalated ≥25% bar.
+
+  **Phase C** — the DI-aware packing spike (2026-08-01) CLEARS its
+  escalated −40.0% bbox-area bar on the two DI-composed gate fixtures it
+  could build (`sci1-ore`, `sci2-ore`; aggregate −49.9%), confirming DI
+  composition changes the packability picture rather than confirming the
+  floor is structural — see the decision-log entry above for the full
+  method, numbers, and caveats. `pu1-plate` still refuses, for a
+  solver-coupling gap unrelated to #526's scope. No production wiring is
+  funded from this result: it is a one-day throwaway spike by design, the
+  packed candidates carry substantial un-sim-anchored validation debt
+  inherited from RFC-058's own frozen builder, and RFC-058's own trajectory
+  across five re-measures shows every correctness-hardening pass pushed
+  measured density down — this spike's number is very likely an upper
+  bound on what a hardened re-measure would show.
+
+  **Overall conclusion, per this RFC's own framing.** The Motivation
+  section's central claim — *"every gram of shipped density over the arc
+  came from candidates inside the decomposition search... never from a
+  post-pass over a finished layout"* — stands, reinforced rather than
+  contradicted by all three phases: Phase A (a primitive-level template
+  attack) and Phase B (a primitive-level reshaping spike) both failed to
+  clear their bars; Phase C, the one phase that DID clear its bar, did so
+  specifically by feeding DI composition — a decomposition-search-level
+  primitive (RFC-053) — INTO the post-pass technique (RFC-058's packer)
+  first, and even then only on 2/3 gate fixtures, with un-sim-anchored
+  correctness debt and (per the dual-recorded RFC-064 numbers) an
+  aspect-ratio REGRESSION on the very candidates that cleared the bbox bar.
+  Nothing in this RFC moves the logistics floor as a shippable, default-path
+  density win. This RFC's own non-goals stand confirmed: whole-factory/
+  post-pass repacking (as a bbox-area objective) remains closed pending a
+  primitive-level change, which Phase C's own result — packing needs a
+  primitive feeding it, not the other way round — reaffirms rather than
+  reopens.
+
+  **The owner's 2026-07-31 objective contest, recorded explicitly: these
+  three verdicts are scoped to the bounding-box-area objective and do NOT
+  transfer to RFC-064's aspect-ratio/transit framing.**
+  [`RFC-064`](rfc-064-spaghetti-objective.md) was opened the same day
+  specifically because the project owner contested whether bbox-area was
+  ever the right objective, and RFC-064's own Non-goals section already
+  states this in the other direction (*"RFC-063's Phase A/B kills stand for
+  [the bbox] objective; this RFC does not reopen them and does not
+  re-litigate their numbers... citing them as evidence against *this*
+  objective would be a category error"*). This close-out states the same
+  boundary from RFC-063's side: Phase A's ≈8.1%/5.9% ceiling, Phase B's
+  5.00–7.14% ceiling, and Phase C's −49.9% (or its refusal on `pu1-plate`)
+  are all bbox-area-objective numbers, adjudicated against bbox-area-
+  objective bars, and say nothing by themselves about `AR_score` or
+  `Transit_score` — RFC-064's own metrics. Phase C's dual-recorded numbers
+  above are the concrete demonstration: the same packed candidates that
+  clear a bbox bar by 9.9 points score `AR_score` **−13.4** and **−2.7** —
+  a clear regression, not a rounding difference — against the native
+  incumbent under RFC-064's aspect-ratio definition. A reader who takes
+  RFC-063's bbox verdicts as evidence about RFC-064's objective would reach
+  the opposite conclusion the data supports. RFC-064 Phase 3
+  (row-granularity rigid packing, RFC-058 rescored) inherits Phase C's
+  dual-recorded `AR_score`/`Transit_score`/entity numbers as its own
+  arranged *"informative, not authoritative"* incoming evidence, per
+  RFC-064's own text — this RFC does not pre-empt that phase's own gate
+  (`AR_score ≥ 0.5`) or verdict.
+
+  **RFC-063 status: CONCLUDED, all three phases adjudicated, no further
+  phases funded here.** Phase C's spike code is not merged (throwaway per
+  its own gate); its measurement is fully quoted above. Follow-on work, if
+  any, routes through RFC-064 Phase 3 (which already knows to treat this
+  evidence as informative) or a fresh RFC, not a re-opening of this one —
+  consistent with kill criterion 1's own "stop; do not re-tune" discipline,
+  applied here not because Phase C failed (it didn't) but because what it
+  proves is narrower than a production decision: DI composition helps
+  packability where DI itself already applies, on today's corpus, measured
+  without correctness hardening or sim anchoring.
