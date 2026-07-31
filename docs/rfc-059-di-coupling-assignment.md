@@ -479,7 +479,7 @@ able to distinguish "policy had no effect" from "policy was not applied."
 | teeth test | yes | `di_claim_order_default_is_downstream_and_ships_the_working_big_pole` pins the flip on the target where the arms differ in RATE, not density; `di_jammed_cell_is_visible_and_therefore_refused` pins #520's blind spot. Both verified to fail when sabotaged |
 | rate sweep instead of a named rate | yes | 1/5/20 per second across every producible item and three machine tiers, plus `rail` at 1/5/10 from `iron-ore` |
 | tile-level assertion at a differing rate | **no** | see below |
-| sim the newly-built cell | yes — **and it changed the outcome** | `land-mine@1` is unmeasurable (fluid boundary, uncalibrated harness path); `display-panel@1` on am1 showed the searched policy shipping a validator-clean factory that produces 0/s |
+| sim the newly-built cell | yes — **and it changed the outcome** | `display-panel@1` on am1 showed the searched policy shipping a validator-clean factory that produces 0/s. `land-mine@1` also read 0/s and was first written off as an uncalibrated fluid path; that was wrong and it is now unexplained (#537) |
 | suite, clippy, wasm | yes | 1047 pass / 0 fail (single invocation, post-rebase onto RFC-058 #516/#517/#518); `cargo clippy --workspace -D warnings` clean; wasm-pack build clean |
 
 **The tile-level assertion was not written, deliberately.** The plan asked for it
@@ -781,13 +781,20 @@ widespread and the optimum is static everywhere.
   newly-built cell the corpus starts producing, and that requirement is the only
   reason this RFC did not ship a regression.
 
-  `land-mine@1` was the first candidate and is **unmeasurable**: it needs water
-  and crude-oil, and the harness prints its own caveat that infinity-pipe
-  feed/void paths are UNCALIBRATED (RFC-050 Phase 1). Both arms returned a flat
-  0/s, which measures the harness rather than the layout — recorded rather than
-  quietly re-rolled, because a FAIL that is really a harness limitation is exactly
-  the artifact class [`sim-harness-forensics.md`](sim-harness-forensics.md) exists
-  to stop being read as a layout defect.
+  `land-mine@1` was the first candidate and returned a flat 0/s under both arms.
+  It was written off here as **unmeasurable** — it needs water and crude-oil, and
+  the harness prints a caveat that infinity-pipe feed/void paths are UNCALIBRATED
+  (RFC-050 Phase 1) — on the reasoning that a FAIL which is really a harness
+  limitation is exactly the artifact class
+  [`sim-harness-forensics.md`](sim-harness-forensics.md) exists to stop being read
+  as a layout defect.
+
+  **That was wrong, and the correction is below (2026-07-31, the flip entry).**
+  The caveat is stale: the fluid path was fixed in #373, and a `plastic-bar@1`
+  control sims PASS at 1.70/s with the same caveat printed. `land-mine@1`'s 0/s is
+  unexplained, not benign — #537. Reading the artifact class correctly and reading
+  the instrument's self-report correctly are two different skills, and this
+  paragraph got the first right and the second wrong.
 
   `display-panel@1` on am1 has no fluid boundary and gave a clean controlled
   answer. The status quo ships native and measures **1.00/s produced, 1.01/s

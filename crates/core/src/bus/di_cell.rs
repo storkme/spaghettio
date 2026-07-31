@@ -97,9 +97,10 @@ pub enum DiClaimOrder {
     ///
     /// The deciding evidence is in-game, not the validator, because RFC-059's
     /// own lesson is that a clean validator is not evidence a layout works.
-    /// Headless runs on the three flip targets the harness can measure
-    /// (`land-mine` needs fluid boundaries, which are uncalibrated — RFC-050
-    /// Phase 1):
+    /// Headless runs on the three flip targets that produce a usable verdict —
+    /// the other three are `land-mine` at am1/am2/am3, which returns 0/s under
+    /// BOTH arms for reasons not yet understood (#537), so it is evidence
+    /// neither way:
     ///
     /// | target, am2 | `Upstream` | `Downstream` |
     /// |---|---|---|
