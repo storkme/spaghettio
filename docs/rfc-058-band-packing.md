@@ -1,6 +1,10 @@
 # RFC-058: Band packing — 2D placement at row granularity
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Design (circulated for review)**.
+Registry: [`rfcs.md`](rfcs.md). Status: **Active — phases 0–3 complete
+(KC2 cleared at 36.8% vs 30%; KC1 cleared at −35.9% vs −33.0%, narrowly;
+placer-native extraction + flag-gated packer landed inert — all
+2026-07-31). Next: phase 4 (2D lane planning), where kill criterion 1 is
+re-evaluated on the real planner.**
 Tracking: [#507](https://github.com/storkme/spaghettio/issues/507).
 
 ## Summary
@@ -203,7 +207,8 @@ its gates — same discipline as `compact_layout`.
 2. **Reach is too narrow.** If fewer than **30%** of the e2e corpus has ≥3
    bands and no width-dominant band, the technique cannot pay for its
    complexity regardless of how well it works where it applies. Measure this
-   in Phase 0, before writing the packer.
+   in Phase 0, before writing the packer. *(Evaluated 2026-07-31: cleared at
+   36.8%, cap-insensitive across 3:1–4:1 — see decision log.)*
 3. **Correctness regression that isn't mechanical.** If packed candidates
    validate worse than their controls (new categories, or higher counts in any
    category) and the cause is not a mechanical record-relocation fix, stop.
@@ -217,7 +222,10 @@ its gates — same discipline as `compact_layout`.
 
 Criterion 1 is the one this RFC exists to test. The probe deliberately could
 not measure it: it prices band-to-band distance, not trunk corridors, so the
-−66.1% excludes the space trunks will consume.
+−66.1% excludes the space trunks will consume. *(Evaluated 2026-07-31 by the
+phase-3 spike: cleared at −35.9%, a 2.9-point margin — see decision log. The
+criterion stays armed through phase 4; the spike's model is throwaway and
+the real lane planner must re-clear it.)*
 
 ## Verification plan
 
@@ -246,11 +254,20 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
 ## Phasing
 
 0. **Reach measurement** — band census across the e2e corpus. Answers kill
-   criterion 2 before any packer exists.
+   criterion 2 before any packer exists. Carries the aspect-cap sweep
+   originally assigned to phase 2: the cap changes KC2's applicable-fixture
+   count, so it belongs with KC2's measurement (reordered 2026-07-31, see
+   decision log).
 1. **Band extraction from `RowSpan`** — placer-native, replacing the probe's
-   y-projection. No behaviour change.
+   y-projection. No behaviour change. **Landed 2026-07-31** (`bus::bands`,
+   after the phase-3 gate cleared per the reorder): spans are the grouping
+   authority, geometry is measured from their own entities, and a parity
+   test pins the result against the probe's y-projection oracle.
 2. **Packer** — shelf packing with aspect cap and swept target width, behind a
    default-off flag. Emits positions only; nothing consumes them yet.
+   **Landed 2026-07-31**: `LayoutOptions.band_packing` records the plan as
+   a `BandPackingPlanned` trace event (or a typed refusal); an inertness
+   test asserts entity-identical output with the flag on or off.
 3. **Trunk spike — throwaway code, all three gate fixtures.** Route trunks for
    the packed layouts with whatever is quickest and measure real bounding-box
    area and real transport against each control. Start with `sci1-ore` (4
@@ -280,6 +297,11 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
 Phases 0–2 are cheap, land independently, and are not evidence. Phase 3 is the
 gate: it is deliberately throwaway so that a negative result costs a day rather
 than the lane-planner rewrite.
+
+**Execution order (2026-07-31): 0 → 3 → 1 → 2 → 4 → 5 → 6.** The spike runs
+on the probe's packed positions, so phases 1 and 2 are not prerequisites for
+it — they are production scaffolding for phase 4, built only if the gate
+clears. Rationale in the decision log.
 
 ## Relationship to earlier RFCs
 
@@ -389,3 +411,163 @@ than the lane-planner rewrite.
 
   The 3:1 aspect cap is acknowledged as arbitrary and consequential — it alone
   refuses `insert3-ore` at 3.16:1 — with a sweep assigned to phase 2.
+
+- **2026-07-31 — band structure is host-geometry-relative; corpus aggregates
+  must be read like stress goldens.** Re-running the committed phase-0
+  instrument on a second machine, at the same commit with no core changes in
+  between, reproduced the three gate fixtures and the winners aggregate
+  exactly (−66.1% KC1 baseline, −64.5% winners, −38.1% transport) but
+  extracted **3 bands from `ec10-ore` where the #510 run saw 1**, moving the
+  corpus headline from −39.6% (7 multi-band) to −35.4% (8 multi-band).
+  Layout geometry is already known to vary with host SAT-cache state — the
+  reason stress goldens are never enforced in CI without pinning the cache —
+  and band extraction inherits that. Consequences: the premise-drift guard's
+  loose ≥50% bounds on the gate fixtures are the right shape (exact corpus
+  pins would flap across machines); phase 0's census reports KC2 as measured
+  on one named machine, not as a portable constant; and any KC2 result within
+  a few points of the 30% bar must be re-run on a second machine before the
+  criterion is called.
+
+- **2026-07-31 — execution order changed to 0 → 3 → 1 → 2 (phases 1–2
+  deferred behind the spike).** As circulated, the plan built the placer-native
+  band extractor and the flagged packer before the trunk spike. Both are
+  production scaffolding for phase 4, and the spike does not need them — it
+  consumes packed positions the phase-0 probe already computes. Building them
+  first would repeat, in miniature, the shape this RFC's own phasing section
+  criticises: cheap green work stacked ahead of the phase that can kill the
+  premise (RFC-057 died in its expensive phase after exactly that pattern).
+  The aspect-cap sweep moves from phase 2 into phase 0 for the same reason:
+  the cap changes KC2's applicable-fixture count, so it is part of KC2's
+  measurement, not a packer tuning knob. Nothing about the gates changes —
+  KC2 is still evaluated at phase 0, KC1 still at the spike, and all three
+  gate fixtures are still required before phase 4 starts.
+
+- **2026-07-31 — Phase 0 complete: KC2 clears at 36.8%, and the aspect cap
+  turns out not to matter on the real corpus.** The census
+  (`probe_band_census_e2e_corpus` in `crates/core/tests/cell_composition.rs`)
+  transcribes every distinct production request exercised by a non-ignored
+  test in `e2e.rs` — 38 rows; the inclusion rule lives in the test's doc
+  comment. Two consequences worth naming. `pu1-plate`, a KC1 gate fixture,
+  is **not** in KC2's denominator, because its owning e2e test
+  (`pipe_belt_processing_unit_1s_routes`) is `#[ignore]`d. And the rule cuts
+  the numerator too: `pu20-plates` — measured during the census as an
+  85-band packable winner at −81% (145×735 → 166×124) — is excluded the
+  same way, so it stands as evidence that reach extends beyond the counted
+  corpus, not as part of the 36.8%. (The first transcription violated its
+  own rule on 4 rows — three ignored stress tests and one ignored fixture
+  source — and claimed completeness while missing expressible requests; two
+  rounds of #516 review caught all of it, the second round by auditing
+  every remaining non-ignored test. The numbers here are from the corrected
+  38-row corpus.)
+
+  All 38 rows built. 19/38 (50%) have ≥3 bands; **14/38 (36.8%) also pack,
+  against the 30% bar**. The sweep (3.0 / 3.5 / 4.0) changes nothing — 14/38
+  at every cap. The probe-corpus concern (`insert3-ore` refused at 3.16:1)
+  does not generalise: on the e2e corpus every ≥3-band fixture either packs
+  inside 3:1 or is width-dominant beyond 4:1. The 3:1 default stands and the
+  sweep obligation from the reorder entry is discharged.
+
+  Two honesty notes on the margin. First, one packable row (`ec10-plate`, 3
+  bands, 30×15 control) packs at exactly ±0%; KC2's wording counts it, but
+  excluding zero-gain rows gives 13/38 (34.2%) — the verdict does not hinge
+  on it. Second, this is one machine's geometry (see the sensitivity entry
+  above); the margin is ~2.6 fixtures, and the packable set is dominated by
+  deep multi-band fixtures (8–23 bands) whose candidacy small band-count
+  jitter cannot flip, so the second-machine re-run is not being demanded.
+
+  Findings that shape later phases: width-dominance is the *entire* failure
+  mode among ≥3-band candidates (5/19 — `ec20-ore`, `ac4-nauvis`,
+  `ac5-nauvis`, `pu2-ore-hs`, `pu2.5-plates-hs`; widest bands 96–692 tiles,
+  all smelter or assembler mega-rows), which sharpens the case for a
+  separate wide-band RFC. Belt tier shapes candidacy more than rate does: `ac7-nauvis-yellow`
+  (the yellow-capped AC@7) splits into 16 narrow bands and packs at −78%,
+  while the uncapped ignored variant of the same request is a 169-wide
+  monolith. In-corpus winners save −63% to −78% (`ac7-nauvis-yellow` 16
+  bands, `pu2-ore-red` 23 bands at −77%), consistent with the probe corpus.
+  And band extraction has a benign artifact — `ec10-plate` yields a 1-tall
+  inserter-only band [(30,5), (20,1), (21,5)] — to keep in mind when phase 1
+  makes `RowSpan` the source of truth.
+
+- **2026-07-31 — Phase 3 trunk spike: KC1 clears at −35.9% against the
+  −33.0% bar. Narrowly — and the margin's history is the real content of
+  this entry.** The spike (`probe_trunk_spike_gate_fixtures`) packs the gate
+  fixtures with the phase-0 packer, then routes every band-to-band item flow
+  as a 1-tile A\* corridor: band rects opaque, perpendicular crossings
+  allowed (the UG dive), same-axis overlap forbidden, corners opaque, global
+  gap widening (2→8) on any failure. Score = real bounding box of bands +
+  belt rows + corridors, against the control band-bbox — the same quantity
+  as KC1's 10,729-tile baseline, which this machine reproduces exactly.
+
+  The first model let a flow terminate on any tile touching its destination
+  band, and it reported **−54.3%** with every fixture routing at gap 2. That
+  number was discarded as too generous, not recorded as a pass: a band's
+  machines are fed by full-width belt rows — the shared-belt structure the
+  whole RFC is premised on — and a single-tile termination silently omits
+  them. With `ceil(distinct inputs / 2)` feed rows above each band and one
+  output row below reserved *before* any through-routing, sci2 needs gap 6,
+  pu1 gap 4, and the result is:
+
+  | fixture | control | packed+trunks | saving | gap | flows | belt-row tiles | corridor tiles |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | `sci1-ore` | 990 | 672 | −32.1% | 2 | 6 | 102 | 55 |
+  | `sci2-ore` | 4,104 | 2,618 | −36.2% | 6 | 14 | 301 | 428 |
+  | `pu1-plate` | 5,635 | 3,584 | −36.4% | 4 | 20 | 603 | 368 |
+  | **aggregate** | **10,729** | **6,874** | **−35.9%** | | | | |
+
+  KC1 is defined on the aggregate; `sci1-ore` individually sits at −32.1%.
+  Trunk cost consumed roughly half the obstacle-free −66.1% — the exact
+  tolerance the criterion was written around.
+
+  Model honesty, both directions. Conservative choices: same-axis corridor
+  overlap is forbidden even for the same item (reality merges and splits);
+  gap widening is global (one congested seam widens every shelf boundary);
+  feed rows are sized per band with no sharing between vertically adjacent
+  bands (reality could direct-sideload a neighbour's output row). Generous
+  choices: poles and balancers are absent; lane-to-item assignment within a
+  feed row is not checked (capacity is sized at two items per row but
+  which-item-which-lane is unmodelled); fluids are priced as belt lanes;
+  external inputs are assumed available anywhere on the west edge. Net
+  lean is conservative, but the 2.9-point margin is thin enough that phase
+  4's real lane planner must treat −33.0% as a live bar, not a cleared
+  formality — kill criterion 1 stays armed through phase 4.
+
+  Two router defects found by #517's review were fixed and re-measured
+  before this entry's numbers were frozen: a corridor could TURN on a tile
+  it was only entitled to cross (the corner check ignored pre-existing
+  perpendicular occupancy — generous), and the A\* heuristic aimed at a
+  hint point instead of the target set, making it inadmissible and the
+  corridors non-minimal (conservative). The fixes move the aggregate
+  −35.2% → −35.9% (`sci2-ore` 2,695 → 2,618; corridor tiles 454 → 428 and
+  379 → 368): the shorter true-minimal corridors outweigh the stricter
+  turn rule, so the verdict stands with a slightly wider margin.
+
+- **2026-07-31 — phases 1–2 landed: placer-native bands and the flag-gated
+  packer, both inert by construction.** New module `bus::bands`. Extraction
+  takes the placer's `RowSpan`s as the grouping authority — each band
+  records the row indices that contribute to it, which is the linkage
+  phase 4's lane planner needs — while geometry is measured
+  footprint-aware from those spans' own machine and inserter entities.
+  Structural runs are collected within each span's y-range and merged
+  across spans when they touch (direct-insertion fusions), which
+  reproduces the probe's maximal-run semantics exactly. The probe keeps
+  its deliberately decoupled y-projection as the oracle;
+  `rfc058_placer_bands_match_y_projection` pins band rects, packed
+  dimensions, AND planned positions against it on the three gate fixtures
+  plus `gear15-ore` (a refusal case) — exact agreement. The packer is the
+  probe's shelf packer ported verbatim; the strict-`<` first-minimum
+  tie-break is documented as part of the published-numbers contract.
+
+  `LayoutOptions.band_packing` (default off) gates one call at the end of
+  `layout_pass`: extract, pack, and emit `BandPackingPlanned` (band rects,
+  control/packed dims, aspect, positions) or a typed `BandPackingRefused`.
+  Positions live in the trace and nowhere else — phase 2's "emits
+  positions only" is structural (the seam borrows everything immutably),
+  and `band_packing_option_is_inert_and_traced` asserts entity-identical
+  output flag-on vs flag-off. Candidate variants' inner runs do not
+  re-emit (same discipline as `compact_layout`'s inner-opts handling), and
+  the wasm surface pins the flag off until phase 4 gives it a visible
+  effect. Three intentional copies of the band/packing logic now exist —
+  engine (`bus::bands`), probe (frozen instrument), CI premise guard
+  (self-contained by design) — with the parity test and the guard holding
+  them together; consolidation would couple the oracle to the thing it
+  checks.

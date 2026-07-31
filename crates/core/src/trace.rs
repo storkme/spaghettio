@@ -211,6 +211,61 @@ pub fn remove_capped_events_since(start: usize) {
 pub enum TraceEvent {
     // Phase 1: Row Placement
     RowsPlaced { rows: Vec<RowInfo> },
+    /// A DI spec was eligible in a coupling that could not claim it, because
+    /// the spec was already fused into another cell (RFC-059 phase 1, output
+    /// 2/3). This is the CONTENTION signal: the dispatcher resolves such a
+    /// clash by iteration order, and a binary P0-vs-P1 layout diff cannot
+    /// distinguish "nothing was contended" from "contended, and both orders
+    /// happened to agree" — which is why kill criterion 1 gates on this rather
+    /// than on the diff alone.
+    DiCouplingContended {
+        /// The spec that was already claimed, blocking this coupling.
+        contended_spec: String,
+        /// The coupling that lost: `producer -> consumer on item`.
+        loser_producer: String,
+        loser_consumer: String,
+        loser_item: String,
+        /// Whether the blocked index was the producer or the consumer.
+        blocked_side: String,
+    },
+    /// A DI coupling was rejected BEFORE the contention check, so iteration
+    /// order never got to decide it (RFC-059 phase 1). Recorded because a
+    /// contention census is uninterpretable without it: a target reporting
+    /// zero contention because DI never engaged at all is a different fact
+    /// from one reporting zero because nothing was ever double-claimed, and
+    /// kill criterion 1 turns on exactly that distinction.
+    DiCouplingRefused {
+        producer: String,
+        consumer: String,
+        item: String,
+        /// `split-rows`, `producer-missing`, `producer-not-upstream`, or
+        /// `not-buildable`.
+        reason: String,
+    },
+    /// Which claim order the DI candidate kept, and what both arms scored
+    /// (RFC-059). Emitted once per DI candidate that built under both orders.
+    ///
+    /// Exists because the choice is otherwise invisible: on the corpus the two
+    /// arms agree on all but a handful of targets, so "DI won" says nothing
+    /// about which order produced it, and a regression that quietly stopped
+    /// running the second arm would look identical to one where both arms tied.
+    DiClaimOrderChosen {
+        /// `upstream` or `downstream`.
+        order: String,
+        upstream_entities: usize,
+        downstream_entities: usize,
+        upstream_warnings: usize,
+        downstream_warnings: usize,
+    },
+    /// A DI coupling successfully claimed both its specs — the per-coupling
+    /// outcome kill criterion 2 tests an estimator's ranking against.
+    DiCouplingClaimed {
+        producer: String,
+        consumer: String,
+        item: String,
+        /// `row` or `stacked`.
+        variant: String,
+    },
     RowSplit {
         recipe: String,
         original_count: usize,
@@ -614,6 +669,33 @@ pub enum TraceEvent {
         /// Recipe name for each row that got widened (parallel to `gaps`).
         /// Lets the UI label the panel without cross-referencing other events.
         recipes: Vec<String>,
+    },
+
+    /// RFC-058 phase 2 (flag-gated, default off): the band packer planned
+    /// a 2D arrangement for the placer's row bands. Positions land HERE
+    /// and nowhere else — nothing consumes them yet, so this event is the
+    /// phase-2 deliverable and the diagnosable record of what the packer
+    /// would do. `band_rects` is the placer-native extraction (phase 1);
+    /// `positions` is index-aligned with it.
+    BandPackingPlanned {
+        /// As-placed (x, y, w, h) per band, extraction order.
+        band_rects: Vec<(i32, i32, i32, i32)>,
+        control_w: i32,
+        control_h: i32,
+        packed_w: i32,
+        packed_h: i32,
+        /// Achieved aspect in tenths — integral, like the fold search score.
+        aspect10: i64,
+        /// Planned packed origin per band, index-aligned with `band_rects`.
+        positions: Vec<(i32, i32)>,
+    },
+
+    /// RFC-058 phase 2: the packer ran and refused — too few bands, or a
+    /// width-dominant band no swept target width fits under the aspect cap.
+    BandPackingRefused {
+        bands: usize,
+        widest_band: i32,
+        reason: String,
     },
 
     /// The reactive power-repair pass (RFC `docs/rfc-power-reservation.md`

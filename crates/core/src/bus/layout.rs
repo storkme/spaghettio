@@ -136,6 +136,11 @@ pub struct LayoutOptions {
     /// The solver always populates `di_couplings`; this only controls
     /// whether the placer acts on them.
     pub direct_insertion: crate::bus::di_cell::DirectInsertion,
+    /// Which coupling claims a contended DI spec (RFC-059). Default
+    /// `Upstream` = the status quo, so every existing layout is
+    /// byte-identical; `Downstream` is P1, the alternative phase 1 measures
+    /// against.
+    pub di_claim_order: crate::bus::di_cell::DiClaimOrder,
     /// RFC-057 topology-preserving post-layout compaction. Experimental and
     /// default off, so the normal pipeline remains byte-identical.
     pub compact_layout: bool,
@@ -147,6 +152,12 @@ pub struct LayoutOptions {
     /// vertical (test baselines / debugging); force-horizontal remains
     /// `row_layout: HorizontalStack`.
     pub horizontal_candidate: bool,
+    /// RFC-058 phase 2: plan band packing and record the plan as a
+    /// `BandPackingPlanned` trace event. Positions only — nothing consumes
+    /// them yet, so the layout geometry is identical with the flag on or
+    /// off (a focused test pins this). Default off; stays off until kill
+    /// criterion 1 clears again on the real phase-4 lane planner.
+    pub band_packing: bool,
 }
 
 impl Default for LayoutOptions {
@@ -181,12 +192,14 @@ impl Default for LayoutOptions {
             // native pass is DI-free, so every layout DI does not
             // strictly improve stays bit-identical.
             direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
+            di_claim_order: crate::bus::di_cell::DiClaimOrder::default(),
             compact_layout: false,
             // Default ON 2026-07-30 (RFC-060): same never-worse shape as
             // `direct_insertion` above — the native pass stays vertical,
             // the horizontal variant competes only where a DualInput row
             // exists and wins only on strict improvement.
             horizontal_candidate: true,
+            band_packing: false,
         }
     }
 }
@@ -729,7 +742,7 @@ fn layout_pass(
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
-        opts.direct_insertion.placer_acts(),
+        opts.direct_insertion.placer_acts().then_some(opts.di_claim_order.clone()),
         &solver_result.di_couplings,
         &stacking_ctx,
     );
@@ -791,7 +804,7 @@ fn layout_pass(
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
-                opts.direct_insertion.placer_acts(),
+                opts.direct_insertion.placer_acts().then_some(opts.di_claim_order.clone()),
                 &solver_result.di_couplings,
                 &stacking_ctx,
             );
@@ -1356,6 +1369,13 @@ fn layout_pass(
             })
         })
         .collect();
+
+    // RFC-058 phase 2: flag-gated band packing plan. Emits trace events
+    // only — positions are recorded, nothing consumes them, and the
+    // entity list is untouched by construction (the call takes `&`).
+    if opts.band_packing {
+        crate::bus::bands::plan_band_packing(&row_spans, &all_entities);
+    }
 
     Ok((
         LayoutResult {
@@ -3141,6 +3161,81 @@ mod tests {
     /// `inserter-direction` (which would otherwise flag them as touching no
     /// machine) nor `belt-flow-reachability` (which would otherwise call the
     /// producer's bridge-consumed output belt a dead-end) fires on them.
+    /// RFC-058 phase 2 inertness gate: `band_packing` may add trace events
+    /// and NOTHING else. The packer emits positions only — nothing
+    /// consumes them — so the entity list must be identical with the flag
+    /// on or off, and a flag-on build must record either a plan or a
+    /// typed refusal (a silent flag would be indistinguishable from a
+    /// broken one).
+    #[test]
+    fn band_packing_option_is_inert_and_traced() {
+        use crate::trace::{self, TraceEvent};
+        let inputs: FxHashSet<String> =
+            ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+        let sr = crate::solver::solve_with_exclusions(
+            "automation-science-pack",
+            1.0,
+            &inputs,
+            "assembling-machine-1",
+            &FxHashSet::default(),
+        )
+        .expect("solve sci1");
+        let control = build_bus_layout(&sr, LayoutOptions::default()).expect("control layout");
+        let _guard = trace::start_trace();
+        let packed = build_bus_layout(
+            &sr,
+            LayoutOptions {
+                band_packing: true,
+                ..Default::default()
+            },
+        )
+        .expect("flag-on layout");
+        let events = trace::drain_events();
+
+        assert_eq!(
+            format!("{:?}", control.entities),
+            format!("{:?}", packed.entities),
+            "band_packing must not move a single entity",
+        );
+        let last_plan = events.iter().rev().find(|e| {
+            matches!(
+                e,
+                TraceEvent::BandPackingPlanned { .. } | TraceEvent::BandPackingRefused { .. }
+            )
+        });
+        match last_plan {
+            None => panic!("flag-on build recorded neither a plan nor a refusal"),
+            Some(TraceEvent::BandPackingPlanned {
+                band_rects,
+                positions,
+                control_w,
+                control_h,
+                packed_w,
+                packed_h,
+                ..
+            }) => {
+                assert_eq!(
+                    band_rects.len(),
+                    positions.len(),
+                    "one planned position per extracted band",
+                );
+                assert!(
+                    (*packed_w as i64) * (*packed_h as i64)
+                        <= (*control_w as i64) * (*control_h as i64),
+                    "a packing the cap admits never exceeds the control area \
+                     (worst case is the control arrangement itself)",
+                );
+            }
+            Some(TraceEvent::BandPackingRefused { bands, .. }) => {
+                // Band structure is host-geometry-relative (RFC-058
+                // decision log 2026-07-31), so a refusal here is legal —
+                // but only the typed kinds the packer can actually emit.
+                assert!(*bands >= 1, "refusal must still report extracted bands");
+            }
+            Some(_) => unreachable!(),
+        }
+    }
+
     #[test]
     fn compact_layout_option_is_explicit_and_validated() {
         let inputs: FxHashSet<String> =

@@ -4739,6 +4739,163 @@ fn rfc057_island_placement_keeps_terminals_disjoint() {
     assert_eq!(materialized, cases.len());
 }
 
+// ---------------------------------------------------------------------------
+// RFC-058 band helpers, shared by the phase-0 probes below.
+//
+// A band is a maximal run of rows containing machines or inserters. Trunk
+// belts span all rows and are deliberately NOT band-forming — they are the
+// transport being priced, not the structure being packed.
+//
+// `rfc058_band_packing_premise_holds` (the CI guard) intentionally does NOT
+// use these helpers: it keeps its own self-contained copy so a defect
+// introduced here cannot blind the guard that exists to catch drift.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+struct Rfc058Band {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    recipes: Vec<String>,
+}
+
+impl Rfc058Band {
+    fn cx(&self) -> f64 {
+        self.x as f64 + self.w as f64 / 2.0
+    }
+    fn cy(&self) -> f64 {
+        self.y as f64 + self.h as f64 / 2.0
+    }
+}
+
+fn rfc058_extract_bands(l: &spaghettio_core::models::LayoutResult) -> Vec<Rfc058Band> {
+    use spaghettio_core::common::{entity_size, is_machine_entity};
+    let h = l.height.max(0) as usize;
+    let mut structural = vec![false; h];
+    for e in &l.entities {
+        if is_machine_entity(&e.name) || e.name.contains("inserter") {
+            let (_, eh) = entity_size(&e.name);
+            for dy in 0..eh as i32 {
+                let y = e.y + dy;
+                if y >= 0 && (y as usize) < h {
+                    structural[y as usize] = true;
+                }
+            }
+        }
+    }
+    let mut bands = Vec::new();
+    let mut y = 0usize;
+    while y < h {
+        if !structural[y] {
+            y += 1;
+            continue;
+        }
+        let start = y;
+        while y < h && structural[y] {
+            y += 1;
+        }
+        let end = y - 1;
+        let (mut xmin, mut xmax) = (i32::MAX, i32::MIN);
+        let mut recipes: FxHashSet<String> = FxHashSet::default();
+        for e in &l.entities {
+            if !(is_machine_entity(&e.name) || e.name.contains("inserter")) {
+                continue;
+            }
+            if e.y < start as i32 || e.y > end as i32 {
+                continue;
+            }
+            let (ew, _) = entity_size(&e.name);
+            xmin = xmin.min(e.x);
+            xmax = xmax.max(e.x + ew as i32 - 1);
+            if let Some(r) = &e.recipe {
+                recipes.insert(r.clone());
+            }
+        }
+        if xmin > xmax {
+            continue;
+        }
+        let mut recipes: Vec<String> = recipes.into_iter().collect();
+        recipes.sort();
+        bands.push(Rfc058Band {
+            x: xmin,
+            y: start as i32,
+            w: xmax - xmin + 1,
+            h: (end - start + 1) as i32,
+            recipes,
+        });
+    }
+    bands
+}
+
+fn rfc058_bbox(bands: &[Rfc058Band]) -> (i32, i32) {
+    let w = bands.iter().map(|b| b.x + b.w).max().unwrap_or(0)
+        - bands.iter().map(|b| b.x).min().unwrap_or(0);
+    let h = bands.iter().map(|b| b.y + b.h).max().unwrap_or(0)
+        - bands.iter().map(|b| b.y).min().unwrap_or(0);
+    (w, h)
+}
+
+fn rfc058_shelf_pack(
+    bands: &[Rfc058Band],
+    target_w: i32,
+    gap: i32,
+    sort_desc: bool,
+) -> Vec<Rfc058Band> {
+    let mut idx: Vec<usize> = (0..bands.len()).collect();
+    if sort_desc {
+        idx.sort_by_key(|&i| std::cmp::Reverse((bands[i].h, bands[i].w, i)));
+    }
+    let mut out = bands.to_vec();
+    let (mut x, mut y, mut shelf_h) = (0, 0, 0);
+    for &i in &idx {
+        let (w, h) = (bands[i].w, bands[i].h);
+        if x > 0 && x + w > target_w {
+            x = 0;
+            y += shelf_h + gap;
+            shelf_h = 0;
+        }
+        out[i].x = x;
+        out[i].y = y;
+        x += w + gap;
+        shelf_h = shelf_h.max(h);
+    }
+    out
+}
+
+/// Best aspect-capped shelf packing: target width swept from the widest band
+/// to twice the control width, both source and height-descending order, and
+/// the minimum bounding-box area under `max_aspect` wins. Returns
+/// `(area, w, h, packed)`, or None when no packing fits the cap — a
+/// width-dominant band. Selection is by area alone with strict `<`, so the
+/// first candidate at the minimum wins; iteration order is part of the
+/// contract (the probe's published numbers depend on it).
+fn rfc058_best_pack(
+    bands: &[Rfc058Band],
+    gap: i32,
+    max_aspect: f64,
+) -> Option<(i64, i32, i32, Vec<Rfc058Band>)> {
+    let (cw, _) = rfc058_bbox(bands);
+    let widest = bands.iter().map(|b| b.w).max().unwrap_or(1);
+    let mut best: Option<(i64, i32, i32, Vec<Rfc058Band>)> = None;
+    for sort_desc in [false, true] {
+        let mut t = widest;
+        while t <= cw.max(widest) * 2 {
+            let packed = rfc058_shelf_pack(bands, t, gap, sort_desc);
+            let (w, h) = rfc058_bbox(&packed);
+            let aspect = w.max(h) as f64 / w.min(h).max(1) as f64;
+            if aspect <= max_aspect {
+                let area = (w as i64) * (h as i64);
+                if best.as_ref().is_none_or(|(ba, _, _, _)| area < *ba) {
+                    best = Some((area, w, h, packed));
+                }
+            }
+            t += 2;
+        }
+    }
+    best
+}
+
 /// RFC-058 Phase 0 instrument: band census + packing headroom.
 ///
 /// This reproduces every number the RFC cites, so its premise is checkable by
@@ -4760,86 +4917,7 @@ fn rfc057_island_placement_keeps_terminals_disjoint() {
 #[test]
 #[ignore = "RFC-058 Phase 0 probe — run with --ignored --nocapture"]
 fn probe_band_packing_headroom() {
-    use spaghettio_core::common::{entity_size, is_machine_entity};
-    use spaghettio_core::models::{LayoutResult, SolverResult};
-
-    #[derive(Clone, Debug)]
-    struct Band {
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        recipes: Vec<String>,
-    }
-    impl Band {
-        fn cx(&self) -> f64 {
-            self.x as f64 + self.w as f64 / 2.0
-        }
-        fn cy(&self) -> f64 {
-            self.y as f64 + self.h as f64 / 2.0
-        }
-    }
-
-    // A band is a maximal run of rows containing machines or inserters. Trunk
-    // belts span all rows and are deliberately NOT band-forming — they are the
-    // transport being priced, not the structure being packed.
-    fn extract_bands(l: &LayoutResult) -> Vec<Band> {
-        let h = l.height.max(0) as usize;
-        let mut structural = vec![false; h];
-        for e in &l.entities {
-            if is_machine_entity(&e.name) || e.name.contains("inserter") {
-                let (_, eh) = entity_size(&e.name);
-                for dy in 0..eh as i32 {
-                    let y = e.y + dy;
-                    if y >= 0 && (y as usize) < h {
-                        structural[y as usize] = true;
-                    }
-                }
-            }
-        }
-        let mut bands = Vec::new();
-        let mut y = 0usize;
-        while y < h {
-            if !structural[y] {
-                y += 1;
-                continue;
-            }
-            let start = y;
-            while y < h && structural[y] {
-                y += 1;
-            }
-            let end = y - 1;
-            let (mut xmin, mut xmax) = (i32::MAX, i32::MIN);
-            let mut recipes: FxHashSet<String> = FxHashSet::default();
-            for e in &l.entities {
-                if !(is_machine_entity(&e.name) || e.name.contains("inserter")) {
-                    continue;
-                }
-                if e.y < start as i32 || e.y > end as i32 {
-                    continue;
-                }
-                let (ew, _) = entity_size(&e.name);
-                xmin = xmin.min(e.x);
-                xmax = xmax.max(e.x + ew as i32 - 1);
-                if let Some(r) = &e.recipe {
-                    recipes.insert(r.clone());
-                }
-            }
-            if xmin > xmax {
-                continue;
-            }
-            let mut recipes: Vec<String> = recipes.into_iter().collect();
-            recipes.sort();
-            bands.push(Band {
-                x: xmin,
-                y: start as i32,
-                w: xmax - xmin + 1,
-                h: (end - start + 1) as i32,
-                recipes,
-            });
-        }
-        bands
-    }
+    use spaghettio_core::models::SolverResult;
 
     // Rate-weighted transport: for every (band, consumed item) pair, Manhattan
     // distance to the nearest band producing it, times planned rate. External
@@ -4850,7 +4928,7 @@ fn probe_band_packing_headroom() {
     // close to Manhattan for the stacked control but not necessarily for a
     // packed layout whose bands are no longer in one column. It may therefore
     // flatter packing. The area result does not depend on it.
-    fn transport_cost(bands: &[Band], sr: &SolverResult) -> f64 {
+    fn transport_cost(bands: &[Rfc058Band], sr: &SolverResult) -> f64 {
         let mut produced_by: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
         for spec in &sr.machines {
             for out in &spec.outputs {
@@ -4891,36 +4969,6 @@ fn probe_band_packing_headroom() {
             }
         }
         total
-    }
-
-    fn bbox(bands: &[Band]) -> (i32, i32) {
-        let w = bands.iter().map(|b| b.x + b.w).max().unwrap_or(0)
-            - bands.iter().map(|b| b.x).min().unwrap_or(0);
-        let h = bands.iter().map(|b| b.y + b.h).max().unwrap_or(0)
-            - bands.iter().map(|b| b.y).min().unwrap_or(0);
-        (w, h)
-    }
-
-    fn shelf_pack(bands: &[Band], target_w: i32, gap: i32, sort_desc: bool) -> Vec<Band> {
-        let mut idx: Vec<usize> = (0..bands.len()).collect();
-        if sort_desc {
-            idx.sort_by_key(|&i| std::cmp::Reverse((bands[i].h, bands[i].w, i)));
-        }
-        let mut out = bands.to_vec();
-        let (mut x, mut y, mut shelf_h) = (0, 0, 0);
-        for &i in &idx {
-            let (w, h) = (bands[i].w, bands[i].h);
-            if x > 0 && x + w > target_w {
-                x = 0;
-                y += shelf_h + gap;
-                shelf_h = 0;
-            }
-            out[i].x = x;
-            out[i].y = y;
-            x += w + gap;
-            shelf_h = shelf_h.max(h);
-        }
-        out
     }
 
     // Minimising bbox AREA alone drives every packing to a one-shelf ribbon
@@ -4972,7 +5020,7 @@ fn probe_band_packing_headroom() {
             println!("{label:<13} layout refused");
             continue;
         };
-        let bands = extract_bands(&l);
+        let bands = rfc058_extract_bands(&l);
         let dims: Vec<(i32, i32)> = bands.iter().map(|b| (b.w, b.h)).collect();
         // Two gates, deliberately distinct.
         //
@@ -4991,27 +5039,12 @@ fn probe_band_packing_headroom() {
         }
         let kc2_candidate = bands.len() >= 3;
         multi_band += 1;
-        let (cw, ch) = bbox(&bands);
+        let (cw, ch) = rfc058_bbox(&bands);
         let ctrl_area = (cw as i64) * (ch as i64);
         let ctrl_tx = transport_cost(&bands, &sr);
 
-        let widest = bands.iter().map(|b| b.w).max().unwrap_or(1);
-        let mut best: Option<(i64, f64, i32, i32)> = None;
-        for sort_desc in [false, true] {
-            let mut t = widest;
-            while t <= cw.max(widest) * 2 {
-                let packed = shelf_pack(&bands, t, GAP, sort_desc);
-                let (w, h) = bbox(&packed);
-                let aspect = w.max(h) as f64 / w.min(h).max(1) as f64;
-                if aspect <= MAX_ASPECT {
-                    let area = (w as i64) * (h as i64);
-                    if best.as_ref().is_none_or(|(ba, _, _, _)| area < *ba) {
-                        best = Some((area, transport_cost(&packed, &sr), w, h));
-                    }
-                }
-                t += 2;
-            }
-        }
+        let best = rfc058_best_pack(&bands, GAP, MAX_ASPECT)
+            .map(|(area, w, h, packed)| (area, transport_cost(&packed, &sr), w, h));
 
         corpus_ctrl += ctrl_area;
         match best {
@@ -5223,4 +5256,696 @@ fn rfc058_band_packing_premise_holds() {
          different number makes the gate wrong — update the RFC before relying on it.",
         66.1,
     );
+}
+
+/// RFC-058 Phase 0: band census over the e2e corpus — the reach measurement
+/// kill criterion 2 turns on.
+///
+/// The corpus is every distinct production request (item, rate, machine,
+/// belt, inputs, exclusions) exercised by a non-ignored test in
+/// `crates/core/tests/e2e.rs`, transcribed 2026-07-31. Inclusion rule,
+/// recorded so the denominator is arguable rather than mysterious:
+/// strategy/row-layout variants are normalised to the default bus path,
+/// duplicate tuples are listed once (`source` names one owning test), and
+/// `#[ignore]`d tests are out — which excludes `measure_utility_10s_am3`,
+/// `fixture_source_ec_15s_am1_yellow_from_ore`, the ignored stress trio
+/// (`ac_partitioned_7s`, `ac_45s`, `pu_20s` — pu20 was an 85-band packable
+/// winner, so this rule costs the numerator too) and, notably,
+/// `pipe_belt_processing_unit_1s_routes` (pu1-plate): the KC1 gate fixture
+/// is NOT part of KC2's denominator. Two non-ignored requests are also out
+/// because this harness cannot express them —
+/// `fulgora_scrap_sorter_mechanism_present` needs the recycling-aware
+/// `solve_fulgora` path, and `cable13u_bridged_row_lane_throughput_clean`
+/// solves at `QualityTier::Uncommon` — so "every distinct request" is
+/// exact only over default-quality, non-recycling solves. (The Legendary
+/// leg of `quality_differential_ec_normal_vs_legendary` is excluded the
+/// same way; its Normal leg is the `ec4-plate-am3-red` row.)
+///
+/// KC2 asks what fraction of this corpus has >=3 bands and no
+/// width-dominant band. The aspect cap is consequential (it alone refuses
+/// insert3-ore at 3.16:1 in the probe corpus), so applicability is
+/// reported as a function of the cap instead of inheriting 3:1.
+///
+/// Band structure is host-geometry-relative (RFC-058 decision log,
+/// 2026-07-31: ec10-ore extracts 1 or 3 bands depending on the machine's
+/// SAT-cache state). Treat these numbers like stress goldens — comparable
+/// on one machine, not portable constants — and re-run on a second machine
+/// before calling KC2 if the result lands within a few points of the 30%
+/// bar.
+#[test]
+#[ignore = "RFC-058 Phase 0 census — run with --ignored --nocapture"]
+fn probe_band_census_e2e_corpus() {
+    struct Case {
+        label: &'static str,
+        source: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt: Option<&'static str>,
+        inputs: &'static [&'static str],
+        excluded: &'static [&'static str],
+    }
+    const A1: &str = "assembling-machine-1";
+    const A2: &str = "assembling-machine-2";
+    const A3: &str = "assembling-machine-3";
+    const CHEM: &str = "chemical-plant";
+    const REFINERY: &str = "oil-refinery";
+    const YELLOW: Option<&'static str> = Some("transport-belt");
+    const RED: Option<&'static str> = Some("fast-transport-belt");
+    const ORES: &[&str] = &["iron-ore", "copper-ore"];
+    const NAUVIS5: &[&str] = &["iron-plate", "copper-plate", "coal", "crude-oil", "water"];
+    const ORES5: &[&str] = &["iron-ore", "copper-ore", "coal", "water", "crude-oil"];
+    const PU9: &[&str] = &[
+        "iron-plate", "copper-plate", "steel-plate", "stone", "coal",
+        "water", "crude-oil", "iron-ore", "copper-ore",
+    ];
+
+    let cases: &[Case] = &[
+        Case { label: "gear10-plate", source: "tier1_iron_gear_wheel", item: "iron-gear-wheel", rate: 10.0, machine: A1, belt: None, inputs: &["iron-plate"], excluded: &[] },
+        Case { label: "gear10-ore", source: "tier1_iron_gear_wheel_from_ore", item: "iron-gear-wheel", rate: 10.0, machine: A2, belt: None, inputs: &["iron-ore"], excluded: &[] },
+        Case { label: "gear20-plate", source: "tier1_iron_gear_wheel_20s", item: "iron-gear-wheel", rate: 20.0, machine: A2, belt: None, inputs: &["iron-plate"], excluded: &[] },
+        Case { label: "ec10-plate", source: "tier2_electronic_circuit", item: "electronic-circuit", rate: 10.0, machine: A2, belt: None, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
+        Case { label: "ec10-plate-am1-red", source: "tier2_electronic_circuit_splitter_stamp_regression", item: "electronic-circuit", rate: 10.0, machine: A1, belt: RED, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
+        Case { label: "ec4-plate-am3-red", source: "quality_differential_ec_normal_vs_legendary (Normal leg)", item: "electronic-circuit", rate: 4.0, machine: A3, belt: RED, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
+        Case { label: "ec10-ore-yellow", source: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 10.0, machine: A1, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec20-ore", source: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: A2, belt: None, inputs: ORES, excluded: &[] },
+        Case { label: "plastic10-gas", source: "tier3_plastic_bar", item: "plastic-bar", rate: 10.0, machine: CHEM, belt: None, inputs: &["petroleum-gas", "coal"], excluded: &[] },
+        Case { label: "plastic10-crude", source: "tier3_plastic_bar_from_crude", item: "plastic-bar", rate: 10.0, machine: CHEM, belt: None, inputs: &["crude-oil", "coal"], excluded: &[] },
+        Case { label: "sulfuric5", source: "tier3_sulfuric_acid", item: "sulfuric-acid", rate: 5.0, machine: CHEM, belt: None, inputs: &["iron-plate", "sulfur", "water"], excluded: &[] },
+        Case { label: "lightoil5-hoc", source: "tier3_heavy_oil_cracking", item: "light-oil", rate: 5.0, machine: CHEM, belt: None, inputs: &["water", "heavy-oil"], excluded: &["advanced-oil-processing", "coal-liquefaction"] },
+        Case { label: "gas12-aop", source: "tier3_advanced_oil_processing_multi_machine", item: "petroleum-gas", rate: 12.0, machine: REFINERY, belt: None, inputs: &["water", "crude-oil"], excluded: &[] },
+        Case { label: "gas24-aop", source: "tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation", item: "petroleum-gas", rate: 24.0, machine: REFINERY, belt: None, inputs: &["water", "crude-oil"], excluded: &["basic-oil-processing", "coal-liquefaction"] },
+        Case { label: "ac1-nauvis", source: "tier4_advanced_circuit_from_plates", item: "advanced-circuit", rate: 1.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
+        Case { label: "ac4-nauvis", source: "stress_advanced_circuit_partitioned_4s_from_plates", item: "advanced-circuit", rate: 4.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
+        Case { label: "ac5-nauvis", source: "stress_advanced_circuit_partitioned_5s_from_plates", item: "advanced-circuit", rate: 5.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
+        Case { label: "ac7-nauvis-yellow", source: "tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing", item: "advanced-circuit", rate: 7.0, machine: A2, belt: YELLOW, inputs: NAUVIS5, excluded: &[] },
+        Case { label: "ac5-ore-yellow", source: "tier4_advanced_circuit_from_ore_am2", item: "advanced-circuit", rate: 5.0, machine: A2, belt: YELLOW, inputs: ORES5, excluded: &[] },
+        Case { label: "pu2-ore-red", source: "tier5_processing_unit_from_ore_am3", item: "processing-unit", rate: 2.0, machine: A3, belt: RED, inputs: ORES5, excluded: &[] },
+        Case { label: "pu2-ore-hs", source: "tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass", item: "processing-unit", rate: 2.0, machine: A3, belt: None, inputs: &["iron-ore", "copper-ore", "stone", "coal", "water", "crude-oil"], excluded: &[] },
+        Case { label: "pu2.5-plates-hs", source: "tier5_processing_unit_25s_horizontal_stack_pole_coverage", item: "processing-unit", rate: 2.5, machine: A3, belt: None, inputs: PU9, excluded: &[] },
+        Case { label: "pu2-am2-red", source: "processing_unit_2s_am2_fast_belts_validation_baseline", item: "processing-unit", rate: 2.0, machine: A2, belt: RED, inputs: PU9, excluded: &[] },
+        Case { label: "u235-kovarex", source: "tier_kovarex_self_loop", item: "uranium-235", rate: 0.1, machine: A3, belt: None, inputs: &["uranium-238"], excluded: &["uranium-processing"] },
+        Case { label: "u235-up", source: "tier_uranium_processing_surplus_export", item: "uranium-235", rate: 0.05, machine: A3, belt: None, inputs: &["uranium-ore"], excluded: &["kovarex-enrichment-process"] },
+        Case { label: "pentapod0.2", source: "tier_pentapod_egg_self_loop", item: "pentapod-egg", rate: 0.2, machine: A3, belt: None, inputs: &["nutrients", "water"], excluded: &[] },
+        Case { label: "fish0.15", source: "tier_fish_breeding_self_loop", item: "raw-fish", rate: 0.15, machine: A3, belt: RED, inputs: &["nutrients", "water"], excluded: &[] },
+        Case { label: "bacteria1", source: "tier_bacteria_self_loop_regression", item: "iron-bacteria", rate: 1.0, machine: A3, belt: None, inputs: &["bioflux"], excluded: &["iron-bacteria"] },
+        Case { label: "superconductor1", source: "phase0e1_superconductor_electromagnetic_plant", item: "superconductor", rate: 1.0, machine: A3, belt: None, inputs: &["holmium-plate", "copper-plate", "plastic-bar", "light-oil"], excluded: &[] },
+        Case { label: "fusioncell1", source: "phase0e1_fusion_power_cell_cryogenic_plant", item: "fusion-power-cell", rate: 1.0, machine: A3, belt: None, inputs: &["lithium-plate", "holmium-plate", "ammonia"], excluded: &[] },
+        Case { label: "molteniron5", source: "phase0e1_molten_iron_foundry", item: "molten-iron", rate: 5.0, machine: A3, belt: None, inputs: &["iron-ore", "calcite"], excluded: &[] },
+        Case { label: "biolube5", source: "phase0e1_biolubricant_biochamber", item: "lubricant", rate: 5.0, machine: A3, belt: None, inputs: &["jelly"], excluded: &[] },
+        Case { label: "ec22-ore-yellow", source: "stress_electronic_circuit_22s_from_ore", item: "electronic-circuit", rate: 22.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec23-ore-yellow", source: "stress_electronic_circuit_23s_from_ore", item: "electronic-circuit", rate: 23.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec30-ore-yellow", source: "stress_electronic_circuit_30s_from_ore", item: "electronic-circuit", rate: 30.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec35-ore-yellow", source: "stress_electronic_circuit_35s_from_ore", item: "electronic-circuit", rate: 35.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec40-ore-yellow", source: "stress_electronic_circuit_40s_from_ore", item: "electronic-circuit", rate: 40.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec60-ore-red", source: "stress_electronic_circuit_60s_red_from_ore", item: "electronic-circuit", rate: 60.0, machine: A2, belt: RED, inputs: ORES, excluded: &[] },
+    ];
+
+    const GAP: i32 = 2;
+    let caps = [3.0f64, 3.5, 4.0];
+
+    let mut built = 0usize;
+    let mut ge3 = 0usize;
+    let mut packable = [0usize; 3];
+
+    for c in cases {
+        let inputs: FxHashSet<String> = c.inputs.iter().map(|s| s.to_string()).collect();
+        let excluded: FxHashSet<String> = c.excluded.iter().map(|s| s.to_string()).collect();
+        let sr = match solver::solve_with_exclusions(c.item, c.rate, &inputs, c.machine, &excluded) {
+            Ok(sr) => sr,
+            Err(e) => {
+                println!("{:<20} SOLVER REFUSED ({}) — counted in the denominator: {e}", c.label, c.source);
+                continue;
+            }
+        };
+        let l = match layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                max_belt_tier: c.belt.map(|s| s.to_string()),
+                ..Default::default()
+            },
+        ) {
+            Ok(l) => l,
+            Err(e) => {
+                println!("{:<20} LAYOUT REFUSED ({}) — counted in the denominator: {e}", c.label, c.source);
+                continue;
+            }
+        };
+        built += 1;
+        let bands = rfc058_extract_bands(&l);
+        let dims: Vec<(i32, i32)> = bands.iter().map(|b| (b.w, b.h)).collect();
+        let (cw, ch) = rfc058_bbox(&bands);
+        if bands.len() < 3 {
+            println!(
+                "{:<20} bands={:<2} ctrl {cw}x{ch} — below the 3-band floor  {dims:?}",
+                c.label,
+                bands.len(),
+            );
+            continue;
+        }
+        ge3 += 1;
+        let ctrl_area = (cw as i64) * (ch as i64);
+        let mut cells = String::new();
+        for (i, &cap) in caps.iter().enumerate() {
+            match rfc058_best_pack(&bands, GAP, cap) {
+                Some((area, w, h, _)) => {
+                    packable[i] += 1;
+                    cells.push_str(&format!(
+                        "  {cap}:1 {w}x{h} ({:+.0}%)",
+                        (area - ctrl_area) as f64 / ctrl_area as f64 * 100.0,
+                    ));
+                }
+                None => cells.push_str(&format!("  {cap}:1 —")),
+            }
+        }
+        println!("{:<20} bands={:<2} ctrl {cw}x{ch}{cells}  {dims:?}", c.label, bands.len());
+    }
+
+    let n = cases.len();
+    let pct = |k: usize| k as f64 / n as f64 * 100.0;
+    println!("\n=== RFC-058 KC2: reach over the e2e corpus ===");
+    println!("  corpus rows: {n} ({built} built; refusals stay in the denominator)");
+    println!("  >=3 bands: {ge3}/{n} ({:.0}%)", pct(ge3));
+    for (i, cap) in caps.iter().enumerate() {
+        println!(
+            "  >=3 bands AND packable at {cap}:1: {}/{n} ({:.1}%) — KC2 bar is 30%",
+            packable[i],
+            pct(packable[i]),
+        );
+    }
+}
+
+/// RFC-058 Phase 3: the trunk spike — kill criterion 1's gate, on all three
+/// gate fixtures.
+///
+/// Phases 0–2 are cheap and prove nothing about whether trunks fit; this is
+/// the deliberately-throwaway measurement that does. Bands are packed with
+/// `rfc058_best_pack` (the phase-0 packer, 3:1 cap), then every band-to-band
+/// item flow is routed as a real 1-tile corridor with A*:
+///
+/// - band rectangles are opaque obstacles;
+/// - corridors may cross each other only PERPENDICULARLY (the underground
+///   dive every real bus crossing uses); same-axis overlap is forbidden, and
+///   corner tiles are hard-blocked for everyone (a UG cannot dive through a
+///   turn);
+/// - every band gets REAL full-width belt rows reserved before any routing:
+///   `ceil(distinct inputs / 2)` feed rows above it (a belt carries two
+///   lanes, so two items per feed row — the dual-input row template's
+///   capability; fluids count as inputs too, a pipe row being no thinner)
+///   and one output row below. This is the row's shared-belt structure the
+///   RFC's premise rests on, and it is what a single-tile-termination model
+///   would silently omit. Reserved rows count as transport tiles;
+/// - a flow STARTS on its producer's output row and terminates on any tile
+///   of its consumer's feed rows (a sideload/merge point). Inserter-column
+///   specificity, splitters and poles are out of scope, and every flow gets
+///   exactly ONE lane (all gate-fixture flows are far below one belt's
+///   capacity);
+/// - external inputs enter from the arrangement's west edge, the target item
+///   exits east — matching the control bus's edge-fed shape;
+/// - if any flow fails to route, or a band's reserved rows collide with a
+///   neighbouring band, the whole arrangement is re-packed with a wider gap
+///   (2 → 8) and every flow re-routed from scratch.
+///
+/// The score is the REAL bounding box — band rects plus every corridor tile —
+/// against the control's as-placed band-bbox, the same quantity kill
+/// criterion 1's 10,729-tile baseline is measured in. KC1: the three-fixture
+/// aggregate saving must beat −33.0% (half the obstacle-free −66.1%).
+///
+/// Like every RFC-058 number, host-geometry-relative; the KC1 verdict is
+/// recorded in the RFC decision log with the machine it was measured on.
+#[test]
+#[ignore = "RFC-058 Phase 3 trunk spike — run with --ignored --nocapture"]
+fn probe_trunk_spike_gate_fixtures() {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    // One aggregated item flow between two bands (or an edge, when None).
+    #[derive(Clone, Debug)]
+    struct Flow {
+        item: String,
+        src: Option<usize>,
+        dst: Option<usize>,
+        rate: f64,
+    }
+
+    // Occupancy bits per tile.
+    const BAND: u8 = 1;
+    const HCOR: u8 = 2;
+    const VCOR: u8 = 4;
+    const TURN: u8 = 8;
+
+    struct Grid {
+        occ: FxHashMap<(i32, i32), u8>,
+        min: (i32, i32),
+        max: (i32, i32),
+    }
+
+    impl Grid {
+        fn passable(&self, t: (i32, i32), horizontal: bool) -> bool {
+            if t.0 < self.min.0 || t.0 > self.max.0 || t.1 < self.min.1 || t.1 > self.max.1 {
+                return false;
+            }
+            let bits = self.occ.get(&t).copied().unwrap_or(0);
+            if bits & (BAND | TURN) != 0 {
+                return false;
+            }
+            let axis = if horizontal { HCOR } else { VCOR };
+            bits & axis == 0
+        }
+    }
+
+    // Multi-source, multi-target A* returning the path, or None. Visited
+    // state is (tile, entry axis) because crossing legality depends on the
+    // axis a corridor occupies a tile with.
+    fn route(
+        grid: &Grid,
+        starts: &[(i32, i32)],
+        targets: &FxHashSet<(i32, i32)>,
+    ) -> Option<Vec<(i32, i32)>> {
+        // Admissible heuristic: Manhattan distance to the targets' bounding
+        // rectangle. Every target lies inside the rect, so this never
+        // exceeds the true remaining cost and is 0 on every target tile —
+        // a hint-point heuristic here was inadmissible (h > 0 on targets)
+        // and could return non-shortest corridors.
+        let tx0 = targets.iter().map(|t| t.0).min().unwrap_or(0);
+        let tx1 = targets.iter().map(|t| t.0).max().unwrap_or(0);
+        let ty0 = targets.iter().map(|t| t.1).min().unwrap_or(0);
+        let ty1 = targets.iter().map(|t| t.1).max().unwrap_or(0);
+        let h = move |t: (i32, i32)| {
+            (tx0 - t.0).max(t.0 - tx1).max(0) + (ty0 - t.1).max(t.1 - ty1).max(0)
+        };
+        let mut open: BinaryHeap<Reverse<(i32, i32, (i32, i32), bool)>> = BinaryHeap::new();
+        let mut best: FxHashMap<((i32, i32), bool), i32> = FxHashMap::default();
+        let mut parent: FxHashMap<((i32, i32), bool), ((i32, i32), bool)> = FxHashMap::default();
+        for &s in starts {
+            for horizontal in [true, false] {
+                if !grid.passable(s, horizontal) {
+                    continue;
+                }
+                if best.get(&(s, horizontal)).is_none_or(|&c| c > 0) {
+                    best.insert((s, horizontal), 0);
+                    open.push(Reverse((h(s), 0, s, horizontal)));
+                }
+            }
+        }
+        while let Some(Reverse((_, cost, tile, horizontal))) = open.pop() {
+            if best.get(&(tile, horizontal)).copied().unwrap_or(i32::MAX) < cost {
+                continue;
+            }
+            if targets.contains(&tile) {
+                let mut path = vec![tile];
+                let mut cur = (tile, horizontal);
+                while let Some(&p) = parent.get(&cur) {
+                    path.push(p.0);
+                    cur = p;
+                }
+                path.reverse();
+                return Some(path);
+            }
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let next = (tile.0 + dx, tile.1 + dy);
+                let next_h = dy == 0;
+                if !grid.passable(next, next_h) {
+                    continue;
+                }
+                // Changing axis makes `tile` a corner, which occupies BOTH
+                // axes there — so the current tile must be free on the new
+                // axis too. Without this, a corridor could turn on top of a
+                // reserved belt row or another corridor's straight run it
+                // was only ever allowed to CROSS.
+                if next_h != horizontal && !grid.passable(tile, next_h) {
+                    continue;
+                }
+                let ncost = cost + 1;
+                if best.get(&(next, next_h)).copied().unwrap_or(i32::MAX) <= ncost {
+                    continue;
+                }
+                best.insert((next, next_h), ncost);
+                parent.insert((next, next_h), (tile, horizontal));
+                open.push(Reverse((ncost + h(next), ncost, next, next_h)));
+            }
+        }
+        None
+    }
+
+    // Stamp a routed path: each tile takes the axis it is traversed on;
+    // a tile where the axis changes is a corner and blocks everything.
+    fn stamp(grid: &mut Grid, path: &[(i32, i32)]) {
+        for (i, &t) in path.iter().enumerate() {
+            let axis_in = if i > 0 { Some(path[i - 1].1 == t.1) } else { None };
+            let axis_out = if i + 1 < path.len() { Some(path[i + 1].1 == t.1) } else { None };
+            let bits = grid.occ.entry(t).or_insert(0);
+            match (axis_in, axis_out) {
+                (Some(a), Some(b)) if a != b => *bits |= TURN,
+                (Some(a), _) | (_, Some(a)) => *bits |= if a { HCOR } else { VCOR },
+                (None, None) => {}
+            }
+        }
+    }
+
+    let gate: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("pu1-plate", "processing-unit", 1.0, &["iron-plate", "copper-plate", "sulfuric-acid"], "assembling-machine-2"),
+    ];
+
+    let (mut agg_ctrl, mut agg_real) = (0i64, 0i64);
+
+    for (label, item, rate, inputs, machine) in gate {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap_or_else(|e| panic!("{label}: solver refused: {e}"));
+        let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| panic!("{label}: layout refused: {e}"));
+        let bands = rfc058_extract_bands(&l);
+        let (cw, ch) = rfc058_bbox(&bands);
+        let ctrl_area = (cw as i64) * (ch as i64);
+
+        // Aggregate flows at (src band, dst band, item) granularity from the
+        // solver's machine specs, splitting a recipe's demand evenly across
+        // the bands that carry it — the same convention as the probe's
+        // transport proxy. Producer selection (nearest by centre) happens
+        // per packing attempt, because "nearest" changes when bands move.
+        let mut item_producers: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+        for spec in &sr.machines {
+            for out in &spec.outputs {
+                for (i, b) in bands.iter().enumerate() {
+                    if b.recipes.iter().any(|r| r == &spec.recipe) {
+                        item_producers.entry(out.item.as_str()).or_default().push(i);
+                    }
+                }
+            }
+        }
+        let target_producers: Vec<usize> = sr
+            .external_outputs
+            .iter()
+            .flat_map(|out| item_producers.get(out.item.as_str()).cloned().unwrap_or_default())
+            .collect();
+
+        let mut demand: Vec<(usize, String, f64)> = Vec::new();
+        for spec in &sr.machines {
+            let consumers: Vec<usize> = bands
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.recipes.iter().any(|r| r == &spec.recipe))
+                .map(|(i, _)| i)
+                .collect();
+            if consumers.is_empty() {
+                continue;
+            }
+            for inp in &spec.inputs {
+                let per = inp.rate * spec.count / consumers.len() as f64;
+                for &ci in &consumers {
+                    demand.push((ci, inp.item.clone(), per));
+                }
+            }
+        }
+
+        // Widen the packing gap until every flow routes. GAP starts at the
+        // probe's 2; each retry re-packs and re-routes everything.
+        let mut solved: Option<(i32, i64, i64, usize, usize, usize)> = None;
+        'gaps: for gap in 2..=8 {
+            let Some((_, _, _, packed)) = rfc058_best_pack(&bands, gap, 3.0) else {
+                continue;
+            };
+
+            let bmin_x = packed.iter().map(|b| b.x).min().unwrap();
+            let bmin_y = packed.iter().map(|b| b.y).min().unwrap();
+            let bmax_x = packed.iter().map(|b| b.x + b.w - 1).max().unwrap();
+            let bmax_y = packed.iter().map(|b| b.y + b.h - 1).max().unwrap();
+            let mut grid = Grid {
+                occ: FxHashMap::default(),
+                min: (bmin_x - 6, bmin_y - 6),
+                max: (bmax_x + 6, bmax_y + 6),
+            };
+            for b in &packed {
+                for x in b.x..b.x + b.w {
+                    for y in b.y..b.y + b.h {
+                        *grid.occ.entry((x, y)).or_insert(0) |= BAND;
+                    }
+                }
+            }
+
+            // Reserve each band's real belt rows BEFORE any through-routing:
+            // ceil(distinct inputs / 2) full-width feed rows above (two lanes
+            // per belt), one output row below. A reservation landing on a
+            // band tile, or on another band's reservation, means this gap
+            // cannot physically hold the rows the bands need — widen.
+            let mut band_inputs: Vec<FxHashSet<&str>> = vec![FxHashSet::default(); packed.len()];
+            for (ci, item, _) in &demand {
+                band_inputs[*ci].insert(item.as_str());
+            }
+            let feed_row_count = |i: usize| band_inputs[i].len().div_ceil(2) as i32;
+            let mut reserved_tiles = 0usize;
+            let mut reserve_ok = true;
+            'bands: for (i, b) in packed.iter().enumerate() {
+                let mut rows: Vec<i32> = (1..=feed_row_count(i)).map(|k| b.y - k).collect();
+                rows.push(b.y + b.h); // output row
+                for row in rows {
+                    for x in b.x..b.x + b.w {
+                        let bits = grid.occ.entry((x, row)).or_insert(0);
+                        if *bits & (BAND | HCOR) != 0 {
+                            reserve_ok = false;
+                            break 'bands;
+                        }
+                        *bits |= HCOR;
+                        reserved_tiles += 1;
+                    }
+                }
+            }
+            if !reserve_ok {
+                println!("{label}: gap {gap}: reserved belt rows collide — widening");
+                continue 'gaps;
+            }
+
+            // A producer's flows leave from its output row (or a 2-tile
+            // extension past either end — a belt extends); a consumer's
+            // flows arrive by sideloading anywhere onto its feed rows.
+            let out_row = |b: &Rfc058Band| -> Vec<(i32, i32)> {
+                (b.x - 2..b.x + b.w + 2).map(|x| (x, b.y + b.h)).collect()
+            };
+            let feed_tiles = |i: usize, b: &Rfc058Band| -> Vec<(i32, i32)> {
+                let mut v = Vec::new();
+                for k in 1..=feed_row_count(i) {
+                    for x in b.x..b.x + b.w {
+                        v.push((x, b.y - k));
+                    }
+                }
+                v
+            };
+            let centre = |b: &Rfc058Band| (b.x + b.w / 2, b.y + b.h / 2);
+
+            // Nearest-producer selection on the PACKED geometry, then one
+            // aggregated flow per (src, dst, item).
+            let mut flows: FxHashMap<(Option<usize>, Option<usize>, String), f64> =
+                FxHashMap::default();
+            for (ci, item, per) in &demand {
+                let src = item_producers.get(item.as_str()).and_then(|ps| {
+                    ps.iter()
+                        .filter(|&&pi| pi != *ci)
+                        .min_by_key(|&&pi| {
+                            let (px, py) = centre(&packed[pi]);
+                            let (cx, cy) = centre(&packed[*ci]);
+                            (px - cx).abs() + (py - cy).abs()
+                        })
+                        .copied()
+                });
+                if item_producers.contains_key(item.as_str()) && src.is_none() {
+                    continue; // self-supplied within the band
+                }
+                *flows.entry((src, Some(*ci), item.clone())).or_default() += per;
+            }
+            for &pi in &target_producers {
+                *flows
+                    .entry((Some(pi), None, format!("OUT:{item}")))
+                    .or_default() += *rate / target_producers.len().max(1) as f64;
+            }
+            let mut flows: Vec<Flow> = flows
+                .into_iter()
+                .map(|((src, dst, item), rate)| Flow { item, src, dst, rate })
+                .collect();
+            flows.sort_by(|a, b| {
+                b.rate
+                    .total_cmp(&a.rate)
+                    .then_with(|| a.item.cmp(&b.item))
+                    .then_with(|| a.dst.cmp(&b.dst))
+                    .then_with(|| a.src.cmp(&b.src))
+            });
+
+            let west: Vec<(i32, i32)> = (grid.min.1..=grid.max.1).map(|y| (grid.min.0, y)).collect();
+            let east: FxHashSet<(i32, i32)> =
+                (grid.min.1..=grid.max.1).map(|y| (grid.max.0, y)).collect();
+
+            let mut corridor_tiles = 0usize;
+            let n_flows = flows.len();
+            for f in &flows {
+                let starts: Vec<(i32, i32)> = match f.src {
+                    Some(pi) => out_row(&packed[pi]),
+                    None => west.clone(),
+                };
+                let targets: FxHashSet<(i32, i32)> = match f.dst {
+                    Some(ci) => feed_tiles(ci, &packed[ci]).into_iter().collect(),
+                    None => east.clone(),
+                };
+                let Some(path) = route(&grid, &starts, &targets) else {
+                    println!(
+                        "{label}: gap {gap}: flow {} {:?}->{:?} failed to route — widening",
+                        f.item, f.src, f.dst,
+                    );
+                    continue 'gaps;
+                };
+                corridor_tiles += path.len();
+                stamp(&mut grid, &path);
+            }
+
+            // Real bbox: band rects plus every corridor tile.
+            let (mut lo_x, mut lo_y, mut hi_x, mut hi_y) = (bmin_x, bmin_y, bmax_x, bmax_y);
+            for (&(x, y), &bits) in &grid.occ {
+                if bits & (HCOR | VCOR | TURN) != 0 {
+                    lo_x = lo_x.min(x);
+                    lo_y = lo_y.min(y);
+                    hi_x = hi_x.max(x);
+                    hi_y = hi_y.max(y);
+                }
+            }
+            let real = ((hi_x - lo_x + 1) as i64) * ((hi_y - lo_y + 1) as i64);
+            solved = Some((gap, real, ctrl_area, n_flows, corridor_tiles, reserved_tiles));
+            break;
+        }
+
+        let Some((gap, real, ctrl, n_flows, corridor_tiles, reserved_tiles)) = solved else {
+            panic!("{label}: no gap in 2..=8 routes all flows — KC1 cannot be evaluated");
+        };
+        agg_ctrl += ctrl;
+        agg_real += real;
+        println!(
+            "{label:<10} ctrl {cw}x{ch}={ctrl}  packed+trunks {real} ({:+.1}%)  gap={gap} flows={n_flows} belt_rows={reserved_tiles} corridors={corridor_tiles}",
+            (real - ctrl) as f64 / ctrl as f64 * 100.0,
+        );
+    }
+
+    let saving = (agg_ctrl - agg_real) as f64 / agg_ctrl as f64 * 100.0;
+    println!("\n=== RFC-058 KC1 (trunk spike, three-fixture aggregate) ===");
+    println!(
+        "  control {agg_ctrl} -> packed+trunks {agg_real}  saving {saving:.1}%  (bar: 33.0%, obstacle-free estimate: 66.1%)"
+    );
+    println!(
+        "  KC1 {}",
+        if saving >= 33.0 { "CLEARS" } else { "FAILS — stop; do not re-tune the packer" }
+    );
+}
+
+/// RFC-058 phase 1 parity: the engine's placer-native band extraction
+/// (`bus::bands::extract_bands`, grouped by `RowSpan`) must agree with the
+/// phase-0 probe's deliberately decoupled y-projection on the layouts both
+/// can see. The probe stays the oracle — its published numbers are the
+/// RFC's evidence — so a disagreement here means the placer-native path is
+/// wrong, not the probe.
+///
+/// Also pins phase-2 packing parity: the positions the engine records in
+/// `BandPackingPlanned` must reproduce `rfc058_best_pack` on the same
+/// bands (same sweep, same tie-break).
+///
+/// Runs with cell composition and DI forced OFF so the native pass — the
+/// one that emits the trace event — is also the layout that wins, keeping
+/// the comparison apples-to-apples.
+#[test]
+fn rfc058_placer_bands_match_y_projection() {
+    use spaghettio_core::trace::{self, TraceEvent};
+
+    let cases: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("sci1-ore", "automation-science-pack", 1.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("pu1-plate", "processing-unit", 1.0, &["iron-plate", "copper-plate", "sulfuric-acid"], "assembling-machine-2"),
+        ("gear15-ore", "iron-gear-wheel", 15.0, &["iron-ore"], "assembling-machine-2"),
+    ];
+
+    for (label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap_or_else(|e| panic!("{label}: solver refused: {e}"));
+
+        let opts = layout::LayoutOptions {
+            band_packing: true,
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        };
+        let _guard = trace::start_trace();
+        let l = layout::build_bus_layout(&sr, opts)
+            .unwrap_or_else(|e| panic!("{label}: layout refused: {e}"));
+        let events = trace::drain_events();
+        drop(_guard);
+
+        // Oracle: the probe's y-projection over the final layout.
+        let oracle = rfc058_extract_bands(&l);
+        let oracle_rects: Vec<(i32, i32, i32, i32)> =
+            oracle.iter().map(|b| (b.x, b.y, b.w, b.h)).collect();
+
+        let last_plan = events
+            .iter()
+            .rev()
+            .find(|e| {
+                matches!(
+                    e,
+                    TraceEvent::BandPackingPlanned { .. } | TraceEvent::BandPackingRefused { .. }
+                )
+            })
+            .unwrap_or_else(|| panic!("{label}: no band-packing event emitted"));
+
+        match last_plan {
+            TraceEvent::BandPackingPlanned {
+                band_rects,
+                packed_w,
+                packed_h,
+                positions,
+                ..
+            } => {
+                assert_eq!(
+                    band_rects, &oracle_rects,
+                    "{label}: placer-native band rects diverge from the y-projection oracle",
+                );
+                let oracle_pack = rfc058_best_pack(&oracle, 2, 3.0)
+                    .unwrap_or_else(|| panic!("{label}: oracle packs but engine claims a plan?"));
+                assert_eq!(
+                    (*packed_w, *packed_h),
+                    (oracle_pack.1, oracle_pack.2),
+                    "{label}: packed dimensions diverge from the probe packer",
+                );
+                let oracle_positions: Vec<(i32, i32)> =
+                    oracle_pack.3.iter().map(|b| (b.x, b.y)).collect();
+                assert_eq!(
+                    positions, &oracle_positions,
+                    "{label}: planned positions diverge from the probe packer",
+                );
+            }
+            TraceEvent::BandPackingRefused { bands, .. } => {
+                // The oracle must agree there is nothing to pack here:
+                // either too few bands, or no packing under the cap.
+                assert_eq!(*bands, oracle.len(), "{label}: refusal band count diverges");
+                assert!(
+                    oracle.len() < 3 || rfc058_best_pack(&oracle, 2, 3.0).is_none(),
+                    "{label}: engine refused but the oracle packs {} bands",
+                    oracle.len(),
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
 }
