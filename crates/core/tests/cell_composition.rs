@@ -6068,3 +6068,41 @@ fn probe_packed_validation_parity() {
         }
     }
 }
+
+/// RFC-058 phase 5 hardening: tile-level dump of packed sci1's
+/// entity-overlap errors — positions plus every entity on each tile.
+#[test]
+#[ignore = "RFC-058 phase 5 overlap diagnosis"]
+fn probe_packed_overlap_diagnosis() {
+    use spaghettio_core::validate::{self, LayoutStyle};
+    let inputs_set: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "automation-science-pack", 1.0, &inputs_set, &MachinePalette::default(),
+        "assembling-machine-1", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            band_packing: true,
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        },
+    ).unwrap();
+    let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+    for i in issues.iter().filter(|i| i.category == "entity-overlap").take(8) {
+        println!("({:?},{:?}) {}", i.x, i.y, i.message);
+        if let (Some(x), Some(y)) = (i.x, i.y) {
+            for e in &l.entities {
+                let (w, h) = spaghettio_core::common::entity_size(&e.name);
+                if x >= e.x && x < e.x + w as i32 && y >= e.y && y < e.y + h as i32 {
+                    println!("   at tile: {} anchor ({},{}) dir {:?} carries {:?}", e.name, e.x, e.y, e.direction, e.carries);
+                }
+            }
+        }
+    }
+}

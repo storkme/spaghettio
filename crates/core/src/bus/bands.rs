@@ -583,23 +583,38 @@ pub fn stamp_band_belt_rows(
     for (bi, c) in contents.iter().enumerate() {
         let (_rx, ry, rw, _) = c.rect;
         let (ox, oy) = origins[bi];
+        // Adjacent spans in one band can SHARE a source belt row (the
+        // upper span's output is the lower span's input); collect rows
+        // once per y, output taking precedence — inserters pick from the
+        // row regardless of its flow direction, and the west flow is what
+        // the corridor pickup needs.
+        let mut row_dirs: std::collections::BTreeMap<i32, EntityDirection> =
+            std::collections::BTreeMap::new();
         for &si in &c.row_indices {
             let rs = &rows[si];
-            let mut stamp_row = |src_y: i32, dir: EntityDirection| {
-                for dx in 0..rw {
-                    out.push(PlacedEntity {
-                        name: belt_name.to_string(),
-                        x: ox + dx,
-                        y: src_y - ry + oy,
-                        direction: dir,
-                        ..Default::default()
-                    });
-                }
-            };
             for &iy in &rs.input_belt_y {
-                stamp_row(iy, EntityDirection::East);
+                row_dirs.entry(iy).or_insert(EntityDirection::East);
             }
-            stamp_row(rs.output_belt_y, EntityDirection::West);
+            row_dirs.insert(rs.output_belt_y, EntityDirection::West);
+        }
+        for (src_y, dir) in row_dirs {
+            if std::env::var("SPAGHETTIO_BANDS_DEBUG").is_ok() {
+                eprintln!(
+                    "band {bi}: src_y {src_y} -> y {} dir {dir:?} x {}..{}",
+                    src_y - ry + oy,
+                    ox,
+                    ox + rw - 1
+                );
+            }
+            for dx in 0..rw {
+                out.push(PlacedEntity {
+                    name: belt_name.to_string(),
+                    x: ox + dx,
+                    y: src_y - ry + oy,
+                    direction: dir,
+                    ..Default::default()
+                });
+            }
         }
     }
     out
@@ -923,6 +938,24 @@ pub fn build_packed_layout(
         return Err(format!("packed-refusal: {} bands — below the 3-band floor", bands.len()));
     }
     let contents = band_contents(&bands, rows, row_entities);
+    // A band's belt rows can OVERHANG its content rect (an input row two
+    // above the top inserter row); pack the FULL footprint — rect grown by
+    // each band's top/bottom overhang — or stacked shelves collide exactly
+    // where the overlap diagnosis found 21 double-stamped tiles on sci1.
+    let overhang: Vec<(i32, i32)> = contents
+        .iter()
+        .map(|c| {
+            let (mut top, mut bot) = (0i32, 0i32);
+            for &si in &c.row_indices {
+                let rs = &rows[si];
+                for &y in rs.input_belt_y.iter().chain([rs.output_belt_y].iter()) {
+                    top = top.max(c.rect.1 - y);
+                    bot = bot.max(y - (c.rect.1 + c.rect.3 - 1));
+                }
+            }
+            (top, bot)
+        })
+        .collect();
     let pseudo: Vec<Band> = contents
         .iter()
         .enumerate()
@@ -930,7 +963,7 @@ pub fn build_packed_layout(
             x: c.rect.0,
             y: c.rect.1,
             w: c.rect.2,
-            h: c.rect.3,
+            h: c.rect.3 + overhang[i].0 + overhang[i].1,
             row_indices: c.row_indices.clone(),
             recipes: bands[i].recipes.clone(),
         })
@@ -949,9 +982,15 @@ pub fn build_packed_layout(
             last_err = format!("no packing within the aspect cap at gap {gap}");
             continue;
         };
-        // Shift origins so belt rows above the top shelf stay in-bounds.
-        let origins: Vec<(i32, i32)> =
-            plan.positions.iter().map(|&(x, y)| (x + 2, y + 3)).collect();
+        // Origins place the CONTENT rect: shift each band down by its own
+        // top overhang (the packed slot already reserves it), plus a
+        // global margin so the top shelf's rows stay in-bounds.
+        let origins: Vec<(i32, i32)> = plan
+            .positions
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y))| (x + 2, y + 3 + overhang[i].0))
+            .collect();
         let mut entities = translate_band_contents(&contents, &origins, row_entities);
         entities.extend(stamp_band_belt_rows(rows, &contents, &origins, belt));
         match route_packed_nets(&nets, rows, &contents, &origins, &entities, belt) {
