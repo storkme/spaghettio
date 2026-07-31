@@ -140,6 +140,14 @@ never-worse — validator parity is not sufficient per #520.
 
 ### Phase B — wide-band reshaping: two machine rows sharing one belt row
 
+**Status: KILLED 2026-07-31, on paper analysis, before a prototype was
+built — see the decision log.** Ceiling 5.00–7.14% (row-kind-derived)
+against the **governing ≥25% bar** (escalated from ≥15% same-day when
+Phase A killed at A0, firing kill criterion 1) — misses both; the design
+section's "wasted lane" premise below does not hold against the current
+templates (`can_lane_split` already fills it for free). Kept as written
+for the record of what was proposed.
+
 **Approach.** RFC-058's phase-0 census found width-dominance is the
 *entire* failure mode among ≥3-band candidates (5 of 19: `ec20-ore`,
 `ac4-nauvis`, `ac5-nauvis`, `pu2-ore-hs`, `pu2.5-plates-hs`; widest bands
@@ -566,3 +574,137 @@ through the bar-tightening rule in kill criterion 1.
   phase that needs SAT). Escalated bars now active: **Phase B ≥25%,
   Phase C −40.0%** (both dated 2026-07-31 in their own gate paragraphs).
   Maintenance residue tracked in **#551**, not funded as arc work.
+- **2026-07-31 — kill criterion 1 fired: Phase A killed at the A0 probe
+  stage (≥25% bar unreachable per measured community-best balancer
+  ceilings), escalating Phase B's bar from ≥15% to ≥25%.** Per the RFC's
+  own kill criterion 1, this happened *before* this spike's paper analysis
+  concluded; the numbers below are evaluated against **≥25% as the
+  governing bar**, with the original ≥15% carried alongside as context,
+  not as the bar the verdict is judged against.
+
+- **2026-07-31 — Phase B killed on paper analysis, before a prototype
+  template was written.** The RFC's own escape hatch fired: "a paper
+  analysis against `docs/factorio-mechanics.md` lane rules may kill this
+  in an hour." It did, in about that time, via two independent findings —
+  either alone caps the reshaping under both bars.
+
+  **Finding 1 — the "wasted lane" the design section assumes does not
+  exist in the current templates.** Phase B's motivating claim is that "the
+  belt row that dominated each extra sub-row's overhead is halved rather
+  than duplicated" — i.e. a row's own output belt normally wastes its near
+  lane (I5: inserter drops fill only the far lane), so pairing two rows to
+  fill both lanes from opposite sides reclaims it. But
+  `crates/core/src/bus/placer.rs`'s `can_lane_split` (~line 656) already
+  turns this on **unconditionally** whenever a row has ≥2 machines, for
+  every row kind these fixtures use (`SingleInput`/`DualInput`/
+  `TripleInput`/`FluidInput`). `templates.rs`'s `sideload_bridge` /
+  `stamp_inline_bridge_a` fills the second lane via a 6-tile bridge stamped
+  **inline** — `bridge_y` coincides with the existing output-inserter row,
+  `output_y` with the existing output-belt row (module comment: "machines
+  now pack tight with the bridge stamped inline") — at **zero row-height
+  cost**. Every one of the five named fixtures' widest bands has 30–230+
+  machines (96–692-tile range, this session's re-run below), so `count ≥
+  2` always holds and the near lane is already claimed for free. There is
+  no idle lane sitting in these rows for a sibling row to claim.
+
+  **Finding 2 — the only belt that IS safe to share caps the geometry at
+  ~5–7%, independent of Finding 1.** Reframing what the reshaping actually
+  buys once Finding 1 is accounted for: not "reclaim an idle lane," but
+  "delete one duplicate belt-tile-row when two same-recipe sub-rows are
+  paired instead of stacked." Concretely, for a mirrored pair (row A's
+  machines facing south into a shared output belt, row B's mirrored
+  north into the same belt, each contributing the far lane on its own
+  side per I5 — this is lane-safe, the same complementary-fill mechanism
+  `sideload_bridge` already exploits, just via physical placement instead
+  of a bridge): two independent rows of height `H` cost `2H` tile-rows;
+  the merged pair costs `2H − 1` (one shared belt-row instead of two).
+  Ceiling = `1/(2H)`. `RowKind`'s own doc comments give `H` per kind (all
+  msz=3 — furnace/assembler, confirmed factorio-mechanics.md M7):
+  `SingleInput` H=7 → **7.14%**, `DualInput` H=8 → **6.25%**,
+  `TripleInput` H=9 → **5.56%**, `QuadInput` H=10 → **5.00%**. Width
+  cancels in the area computation (splitting a row into narrower sub-rows
+  doesn't change total tiles by itself — the same reason `max_per_row`
+  capping alone measured near-zero, −0.9%, on 2026-07-30), so this ceiling
+  applies directly to band-bbox area, not just to one row's height. Best
+  case across every row kind in the corpus (`SingleInput`) is **7.14%**,
+  under **half** the original ≥15% bar and **under a third of the
+  escalated ≥25% bar** that governs per kill criterion 1 (Phase A killed
+  at A0, above).
+
+  **The first wall, answered directly per the spike's pre-registration:**
+  output-side sharing (above) is lane-safe. Input-side sharing is not, and
+  is excluded from the ceiling above. `max_machines_for_belt_both_lanes`'s
+  own doc comment (`placer.rs` ~line 211) states it plainly: "the tap-off
+  sideloads into the input belt, which (by B8) fills only one lane" — a
+  row's local input belt is conventionally fed single-lane from the trunk
+  regardless of whether its own inserters could in principle draw both
+  lanes (I6). Sharing it between two rows would need the trunk tap-off
+  itself widened to a two-lane feed (a separate, non-trivial change, not
+  "share a belt row") and then resolve two independent inserter sets (one
+  per row, opposite sides) competing for pickup from the same belt tile —
+  unmodeled contention with no existing precedent in this codebase and
+  squarely RFC-047 territory, as pre-registered. The nearest prior art,
+  `di_cell.rs`'s producer/consumer row-sharing (~line 1696, "South face
+  shares one row: reach-1 feeds from the inner belt, reach-2 outputs over
+  it"), solves a different problem — one coupled item flowing
+  producer→consumer on disjoint columns of the same row — not two
+  independent inserter sets competing for the same belt's flow. A fully
+  aggressive design that also chains input-sharing between successive
+  row-pairs asymptotically approaches ~25% as row count → ∞, but only by
+  accepting this unresolved risk, and the fixtures' realistic sub-row
+  counts under a sane `max_per_row` split are nowhere near that limit.
+  Not pursued.
+
+  **Fixture numbers** (`probe_band_census_e2e_corpus`, re-run this
+  session; band structure is host-geometry-relative per RFC-058's own
+  2026-07-31 entry, so read as one machine's measurement):
+
+  | fixture | bands | control bbox | widest band | width-dominant on this host? |
+  |---|---:|---|---:|---|
+  | `ec20-ore` | 6 | 144×49 | 144 | yes (refuses 3:1/3.5:1/4:1) |
+  | `ac4-nauvis` | 5 | 97×45 | 97 | yes (refuses 3:1/3.5:1/4:1) |
+  | `ac5-nauvis` | 6 | 121×53 | 121 | yes (refuses 3:1/3.5:1/4:1) |
+  | `pu2-ore-hs` | 18 | 192×184 | 192 | yes (refuses 3:1/3.5:1/4:1) |
+  | `pu2.5-plates-hs` | 14 | 73×159 | 73 | **no** — packs at 3:1, 77×40 (−73%) |
+
+  **Ceiling vs both bars**, per row kind (structural — applies uniformly,
+  not fixture-by-fixture, since the mechanism is "one belt-tile-row saved
+  per merged pair" regardless of which fixture the pair sits in):
+
+  | row kind | H (tile-rows) | ceiling `1/(2H)` | vs original ≥15% | vs escalated ≥25% |
+  |---|---:|---:|---|---|
+  | `SingleInput` (best case) | 7 | **7.14%** | misses by ~2.1× | misses by ~3.5× |
+  | `DualInput` | 8 | 6.25% | misses by ~2.4× | misses by ~4.0× |
+  | `TripleInput` | 9 | 5.56% | misses by ~2.7× | misses by ~4.5× |
+  | `QuadInput` | 10 | 5.00% | misses by ~3.0× | misses by ~5.0× |
+
+  Every row kind these fixtures use misses **both** bars; the escalation
+  (≥15%→≥25%) doesn't change which side of the line the result falls on —
+  it was already a clean miss at the original bar, just a closer one.
+
+  Reported honestly, not silently dropped: `pu2.5-plates-hs` reproduced as
+  width-dominant in RFC-058's original 2026-07-31 census but packs cleanly
+  under ordinary band-packing on this host/run — the same host-sensitivity
+  RFC-058 already documented (its own `ec10-ore` extracted 1 vs 3 bands
+  across two machines at the same commit). Its exclusion here leaves 4/5
+  fixtures as Phase B's live test population; the verdict is unaffected —
+  the ceiling above is structural (row-kind height, not fixture-specific),
+  so it applies uniformly and none of the 4 remaining fixtures can clear
+  15% by construction.
+
+  **Verdict: KILLED against the governing ≥25% bar** (escalated by kill
+  criterion 1 when Phase A killed at A0, same date — see above). The
+  ceiling (5.00–7.14%, row-kind-derived) would also have been a clean KILL
+  against the original ≥15% bar on its own merits — this is not a case of
+  the escalation flipping a would-be pass into a fail; the reshaping never
+  cleared either line. No prototype template, no measurement harness, and
+  no sim anchor were built — the RFC's own kill-criterion-3 sim-anchoring
+  duty never triggers because nothing reached "validates clean" to anchor.
+  Disposition: **KILLED**, no residue — Phase B's premise (an idle lane
+  free for the taking) is false against the current template
+  implementation, and the one savings mechanism that does exist once
+  that's corrected (deleting one duplicate belt-tile-row per merged pair)
+  cannot reach a third of the governing bar in the best case. With Phase A
+  also killed (A0) and Phase B killed here, Phase C (DI-aware packing
+  probe, still gated on #526's DI-cell repair per its own prerequisite) is
+  RFC-063's only phase not yet resolved.
