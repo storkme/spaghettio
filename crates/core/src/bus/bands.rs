@@ -653,6 +653,7 @@ pub fn route_packed_nets(
     origins: &[(i32, i32)],
     existing: &[PlacedEntity],
     belt_name: &str,
+    priority: &[String],
 ) -> Result<Vec<PlacedEntity>, String> {
     use crate::models::EntityDirection as D;
     use std::cmp::Reverse;
@@ -733,6 +734,15 @@ pub fn route_packed_nets(
 
     let mut ordered: Vec<&PackedNet> = nets.iter().collect();
     ordered.sort_by(|a, b| b.rate.total_cmp(&a.rate).then_with(|| a.item.cmp(&b.item)));
+    // Negotiated ordering: promoted items route FIRST (the ghost router's
+    // rip-up discipline in miniature) — a net that failed last attempt
+    // claims its corridor before the nets that walled it in.
+    for promo in priority.iter().rev() {
+        if let Some(pos) = ordered.iter().position(|n| &n.item == promo) {
+            let n = ordered.remove(pos);
+            ordered.insert(0, n);
+        }
+    }
 
     let mut out: Vec<PlacedEntity> = Vec::new();
     for net in ordered {
@@ -752,6 +762,16 @@ pub fn route_packed_nets(
                     .collect()
             }
             None => (min.1..=max.1).map(|y| (min.0, y)).collect(),
+        };
+        // Corridor TREE state: plain straight belts of this net's earlier
+        // corridors are junction candidates — a later consumer's branch
+        // starts at a splitter carved into the trunk (decision log,
+        // 2026-07-31 tree-router entry).
+        let mut net_belts: Vec<((i32, i32), D)> = Vec::new();
+        let splitter_name = match belt_name {
+            "express-transport-belt" => "express-splitter",
+            "fast-transport-belt" => "fast-splitter",
+            _ => "splitter",
         };
         // An empty dst set is an EDGE net: one corridor to the west edge.
         let dsts: Vec<Option<usize>> = if net.dst_bands.is_empty() {
@@ -778,6 +798,14 @@ pub fn route_packed_nets(
                     for x in ox..ox + contents[dst].rect.2 {
                         targets.insert((x, ty));
                     }
+                    // West CONTINUATION of the east-flowing feed row —
+                    // how a real bus feeds a row: the belt starts west of
+                    // it. Fresh approach tiles outside the crowded gap
+                    // interior; sci2's copper-cable net walled out of
+                    // band 5's feed row at every gap without these.
+                    for x in ox - 4..ox {
+                        targets.insert((x, ty));
+                    }
                 }
             }
             }
@@ -795,6 +823,39 @@ pub fn route_packed_nets(
             let hfn = |t: (i32, i32)| {
                 (tx0 - t.0).max(t.0 - tx1).max(0) + (ty0 - t.1).max(t.1 - ty1).max(0)
             };
+            // Branch entries: for each straight trunk tile j (flow d) with
+            // free (j+p, j+p+d) on a perpendicular side p, the entry tile
+            // j+p+d may seed a branch — materialization then carves a
+            // splitter into the trunk at j covering (j, j+p).
+            let mut branch_from: FxHashMap<(i32, i32), ((i32, i32), (i32, i32), D)> =
+                FxHashMap::default();
+            let mut starts = starts.clone();
+            for &(j, d) in &net_belts {
+                let dv = match d {
+                    D::East => (1, 0),
+                    D::West => (-1, 0),
+                    D::South => (0, 1),
+                    D::North => (0, -1),
+                };
+                let straight = net_belts.iter().any(|&(t, td)| {
+                    t == (j.0 + dv.0, j.1 + dv.1) && td == d
+                });
+                if !straight {
+                    continue;
+                }
+                for p in [(dv.1, dv.0), (-dv.1, -dv.0)] {
+                    let side = (j.0 + p.0, j.1 + p.1);
+                    let entry = (side.0 + dv.0, side.1 + dv.1);
+                    if passable(&occ, side, true, net.src_band)
+                        && passable(&occ, side, false, net.src_band)
+                        && passable(&occ, entry, true, net.src_band)
+                        && passable(&occ, entry, false, net.src_band)
+                    {
+                        branch_from.insert(entry, (j, side, d));
+                        starts.push(entry);
+                    }
+                }
+            }
             let fed_by_foreign = |t: (i32, i32)| -> bool {
                 [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {
                     let n = (t.0 + dx, t.1 + dy);
@@ -884,6 +945,20 @@ pub fn route_packed_nets(
             // pair whose entrance/exit replace the plain belts on either
             // side. Turn-legality guarantees crossings are straight, and a
             // run longer than the tier's reach fails the net (gap widens).
+            if let Some(&(j, side, d)) = path.first().and_then(|t| branch_from.get(t)) {
+                // Carve the junction: the trunk belt at j becomes a
+                // splitter covering (j, side), anchored top-left.
+                if let Some(tb) = out
+                    .iter_mut()
+                    .find(|e| (e.x, e.y) == j && e.name == belt_name)
+                {
+                    tb.name = splitter_name.to_string();
+                    tb.x = j.0.min(side.0);
+                    tb.y = j.1.min(side.1);
+                    tb.direction = d;
+                }
+                *occ.entry(side).or_insert(0) |= BAND;
+            }
             let mut belt_tiles: FxHashSet<(i32, i32)> = existing
                 .iter()
                 .chain(out.iter())
@@ -980,6 +1055,7 @@ pub fn route_packed_nets(
                     _ => {}
                 }
                 belt_dirs.insert(t, (dir, Some(net.item.clone())));
+                net_belts.push((t, dir));
                 out.push(PlacedEntity {
                     name: belt_name.to_string(),
                     x: t.0,
@@ -1074,16 +1150,38 @@ pub fn build_packed_layout(
             .enumerate()
             .map(|(i, &(x, y))| (x + 2, y + 3 + overhang[i].0))
             .collect();
-        let mut entities = translate_band_contents(&contents, &origins, row_entities);
-        entities.extend(stamp_band_belt_rows(rows, &contents, &origins, belt));
-        match route_packed_nets(&nets, rows, &contents, &origins, &entities, belt) {
-            Ok(corridors) => {
-                entities.extend(corridors);
-                built = Some(entities);
-                used_origins = origins;
-                break;
+        let base_entities = translate_band_contents(&contents, &origins, row_entities);
+        let mut base = base_entities.clone();
+        base.extend(stamp_band_belt_rows(rows, &contents, &origins, belt));
+        // Negotiation: on failure, promote the failing net and retry this
+        // gap — up to one promotion per net — before widening.
+        let mut priority: Vec<String> = Vec::new();
+        let mut done = false;
+        for _attempt in 0..=nets.len() {
+            match route_packed_nets(&nets, rows, &contents, &origins, &base, belt, &priority) {
+                Ok(corridors) => {
+                    let mut entities = base.clone();
+                    entities.extend(corridors);
+                    built = Some(entities);
+                    used_origins = origins.clone();
+                    done = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = format!("gap {gap}: {e}");
+                    let failed = nets
+                        .iter()
+                        .map(|n| n.item.clone())
+                        .find(|it| e.contains(&format!("net {it}:")));
+                    match failed {
+                        Some(it) if !priority.contains(&it) => priority.insert(0, it),
+                        _ => break,
+                    }
+                }
             }
-            Err(e) => last_err = format!("gap {gap}: {e}"),
+        }
+        if done {
+            break;
         }
     }
     let Some(mut entities) = built else {
