@@ -629,6 +629,16 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
         let items: Vec<String> = manifest.planned_rates.keys().map(|k| format!("\"{k}\"")).collect();
         let _ = writeln!(out, "local PLANNED_ITEMS = {{{}}}", items.join(", "));
     }
+    // Per-machine/per-item time-series (#537 motivation): a rate-vs-time
+    // series distinguishes "feed never arrived" (flat zero from tick 0)
+    // from "buffer-fill mirage then jam" (ramp, then decay) at a glance —
+    // neither shape is visible from the final aggregate alone. `run`
+    // collects it into `storage.timeseries` for the JSON report
+    // regardless of mode; CSV appending to script-output is `serve`-only
+    // (`operator_qol`), so a human watching live gets a machine-readable
+    // record on disk without a measurement run paying the extra file I/O.
+    let _ = writeln!(out, "local WRITE_TIMESERIES_CSV = {}", params.operator_qol);
+    let _ = writeln!(out, "local TIMESERIES_CSV_FILE = \"timeseries.csv\"");
 
     out.push_str(
         r#"
@@ -697,6 +707,16 @@ script.on_init(function()
   storage.kit_errors = {}
   storage.finalized = false
   storage.converged = false
+  -- Time-series bookkeeping (#537): storage.machine_last_crafts /
+  -- storage.item_last_produced hold each machine's/item's cumulative
+  -- counter AS OF the previous checkpoint, so every window's delta is a
+  -- true per-window value rather than a running total re-derived later.
+  storage.timeseries = {}
+  storage.machine_last_crafts, storage.item_last_produced = {}, {}
+  if WRITE_TIMESERIES_CSV then
+    helpers.write_file(TIMESERIES_CSV_FILE,
+      "tick,kind,unit,name,x,y,crafts_delta,status,item,produced_delta\n", false)
+  end
   game.speed = "#,
     );
     let _ = writeln!(out, "{}", params.speed);
@@ -1029,6 +1049,7 @@ local function finalize(s, converged)
     factory_eeis = storage.factory_eeis, pole_networks = storage.net_count,
     proxies_fulfilled = storage.proxies_fulfilled,
     samples = storage.samples, checkpoints = storage.checkpoints,
+    timeseries = storage.timeseries,
     machine_census = census, converged = storage.converged, final_tick = game.tick,
     fluid_errors = storage.fluid_errors, kit_errors = storage.kit_errors,
     -- Realized capacity bonuses after tech-state parity (#370) — the
@@ -1127,6 +1148,54 @@ script.on_nth_tick(60, function(ev)
           delivered = delivered, window_ticks = d_ticks, window_items = d_items,
           short_sampled = not by_items})
         n = n + 1
+
+        -- Per-window machine + item time-series (#537): sampled on the
+        -- SAME cadence as the checkpoint windows above (item-driven, not
+        -- a fixed tick period), so a series entry always corresponds to
+        -- one closed window. Machines are identified by unit_number —
+        -- stable across samples even if two machines share a name and
+        -- (after a crash/rebuild) even a position. `products_finished`
+        -- is a live cumulative counter per machine; the delta against
+        -- the value recorded at the previous checkpoint is this
+        -- window's craft count, mirroring how the target/intermediate
+        -- item rates are already derived from cumulative production
+        -- stats above.
+        do
+          local ts_machines, csv_lines = {}, {}
+          for _, m in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
+            local uid = m.unit_number
+            local crafts = m.products_finished or 0
+            local prev_crafts = storage.machine_last_crafts[uid] or 0
+            local delta = crafts - prev_crafts
+            local status = stn(m.status)
+            local mx = math.floor(m.position.x - storage.offx) + LX0
+            local my = math.floor(m.position.y - storage.offy) + LY0
+            table.insert(ts_machines, {unit = uid, name = m.name, x = mx, y = my,
+              crafts_delta = delta, status = status})
+            storage.machine_last_crafts[uid] = crafts
+            if WRITE_TIMESERIES_CSV then
+              table.insert(csv_lines,
+                table.concat({ev.tick, "machine", uid, m.name, mx, my, delta, status, "", ""}, ","))
+            end
+          end
+          local ts_items = {}
+          for _, item in ipairs(PLANNED_ITEMS) do
+            local cur = produced_count(item)
+            local prev_item = storage.item_last_produced[item] or 0
+            local idelta = cur - prev_item
+            ts_items[item] = idelta
+            storage.item_last_produced[item] = cur
+            if WRITE_TIMESERIES_CSV then
+              table.insert(csv_lines,
+                table.concat({ev.tick, "item", "", "", "", "", "", "", item, idelta}, ","))
+            end
+          end
+          table.insert(storage.timeseries, {tick = ev.tick, machines = ts_machines, items = ts_items})
+          if WRITE_TIMESERIES_CSV and #csv_lines > 0 then
+            helpers.write_file(TIMESERIES_CSV_FILE, table.concat(csv_lines, "\n") .. "\n", true)
+          end
+        end
+
         -- Convergence = the trailing STABILITY_WINDOWS window rates all
         -- agree, compared widest-vs-narrowest rather than pairwise.
         --
@@ -1665,6 +1734,55 @@ mod tests {
                 "{label}: the lab-surface teleport must survive"
             );
         }
+    }
+
+    /// #537: the checkpoint-window loop must sample per-machine crafts
+    /// deltas + status and per-item produced deltas, and the finalize
+    /// write must surface them under a `timeseries` key in
+    /// harness-result.json (additive alongside `checkpoints`/`samples`).
+    #[test]
+    fn timeseries_sampling_present_in_generated_lua() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "test-ts".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(lua.contains("storage.timeseries = {}"));
+        assert!(lua.contains("storage.machine_last_crafts, storage.item_last_produced = {}, {}"));
+        // Sampled inside the checkpoint-close branch, over crafting
+        // machines only (assembling-machine/furnace, same filter as the
+        // existing sim-state dump and machine census).
+        assert!(lua.contains(
+            "for _, m in pairs(s.find_entities_filtered{type = {\"assembling-machine\", \"furnace\"}}) do"
+        ));
+        assert!(lua.contains("local crafts = m.products_finished or 0"));
+        assert!(lua.contains("crafts_delta = delta, status = status"));
+        assert!(lua.contains("table.insert(storage.timeseries, {tick = ev.tick, machines = ts_machines, items = ts_items})"));
+        // Surfaced in the JSON report, additive next to the existing keys.
+        assert!(lua.contains("timeseries = storage.timeseries,"));
+        assert!(lua.contains("samples = storage.samples, checkpoints = storage.checkpoints,"));
+    }
+
+    /// CSV appending to script-output is `serve`-only (`operator_qol`) —
+    /// a measurement run (`run`) must not pay the extra file I/O, and
+    /// must not create the file at all.
+    #[test]
+    fn csv_timeseries_only_enabled_under_operator_qol() {
+        let m = fixture();
+        let plain = RunParams::defaults_for(&m, "t".into(), 16, Some(18000));
+        let plain_lua = build_control_lua(&m, "0eNBPFAKE", &plain);
+        assert!(plain_lua.contains("local WRITE_TIMESERIES_CSV = false"));
+
+        let served = RunParams::defaults_for(&m, "t".into(), 1, Some(18000)).with_operator_qol();
+        let served_lua = build_control_lua(&m, "0eNBPFAKE", &served);
+        assert!(served_lua.contains("local WRITE_TIMESERIES_CSV = true"));
+
+        // Both variants emit the SAME sampling code (runtime-gated), not
+        // a duplicated code path per mode.
+        assert!(plain_lua.contains("if WRITE_TIMESERIES_CSV then"));
+        assert!(served_lua.contains("if WRITE_TIMESERIES_CSV then"));
+        assert!(plain_lua.contains("local TIMESERIES_CSV_FILE = \"timeseries.csv\""));
+
+        // The CSV header names the schema columns, written once at init.
+        assert!(served_lua.contains("tick,kind,unit,name,x,y,crafts_delta,status,item,produced_delta"));
     }
 
     #[test]

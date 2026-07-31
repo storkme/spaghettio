@@ -95,6 +95,44 @@ pub struct MeasurementQuality {
     pub checkpoints: usize,
 }
 
+/// One crafting machine's state at a single checkpoint window close.
+/// Identified by `unit` (Factorio's `unit_number`) — stable across
+/// samples even where `name`/position alone would collide (#537).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MachineSample {
+    pub unit: u64,
+    pub name: String,
+    /// Tile coordinates. `f64` rather than an integer type: Factorio's
+    /// `helpers.table_to_json` is not guaranteed to encode a whole-number
+    /// Lua float without a decimal point, and `serde_json::Value::as_i64`
+    /// returns `None` (not a rounded value) for a JSON number parsed with
+    /// one — silently dropping the entry via `filter_map` rather than
+    /// erroring loudly. `f64` reads either encoding without loss for tile-
+    /// scale coordinates.
+    pub x: f64,
+    pub y: f64,
+    /// Delta of `products_finished` since the previous checkpoint (not a
+    /// running total) — this window's craft count.
+    pub crafts_delta: f64,
+    /// `defines.entity_status` mapped to its short symbolic name (e.g.
+    /// `"working"`, `"no_power"`, `"item_ingredient_shortage"`).
+    pub status: String,
+}
+
+/// One checkpoint window's machine + item time-series sample. Sampled on
+/// the SAME cadence as the checkpoint windows the rates in `items` (the
+/// report's `ItemReport`s) are already computed over — a series entry
+/// always corresponds to one closed window, not a fixed wall-clock tick.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TimeseriesPoint {
+    pub tick: u64,
+    pub machines: Vec<MachineSample>,
+    /// item -> produced-count delta since the previous checkpoint (the
+    /// per-window value the force production statistics counter moved
+    /// by, not the cumulative total).
+    pub items: BTreeMap<String, f64>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Report {
     pub label: String,
@@ -136,6 +174,14 @@ pub struct Report {
     /// self-audits the assignment into `kit_errors` at init.
     pub inserter_stack_size_bonus: f64,
     pub bulk_inserter_capacity_bonus: f64,
+    /// Per-machine + per-item rate-vs-time record, one entry per closed
+    /// checkpoint window (#537 — see `docs/sim-harness.md`'s "Reading the
+    /// time-series" section). Additive field: absent or malformed
+    /// `timeseries` in `raw_result` (e.g. a report captured before this
+    /// field existed) parses to an empty vec rather than an error, so
+    /// older reports and `baseline.rs`'s targeted-field reads are
+    /// unaffected.
+    pub timeseries: Vec<TimeseriesPoint>,
 }
 
 fn get_u64(v: &serde_json::Value, key: &str) -> u64 {
@@ -190,6 +236,47 @@ fn rate_over_window(series: &[(f64, f64)], window_start: Option<f64>) -> Option<
     } else {
         Some((v1 - v0) / dt)
     }
+}
+
+/// Parse `raw_result.timeseries` into typed points. Tolerant of a missing
+/// or malformed key (older `raw_result`s pre-date this field) — returns
+/// an empty vec rather than propagating an error, matching how the rest
+/// of `compute` treats absent optional fields (`get(...).unwrap_or(...)`
+/// throughout).
+fn parse_timeseries(result: &serde_json::Value) -> Vec<TimeseriesPoint> {
+    result
+        .get("timeseries")
+        .and_then(|t| t.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|point| {
+            let tick = point.get("tick")?.as_u64()?;
+            let machines = point
+                .get("machines")
+                .and_then(|m| m.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|m| {
+                    Some(MachineSample {
+                        unit: m.get("unit")?.as_u64()?,
+                        name: m.get("name")?.as_str()?.to_string(),
+                        x: m.get("x")?.as_f64()?,
+                        y: m.get("y")?.as_f64()?,
+                        crafts_delta: m.get("crafts_delta")?.as_f64()?,
+                        status: m.get("status")?.as_str()?.to_string(),
+                    })
+                })
+                .collect();
+            let items = point
+                .get("items")
+                .and_then(|i| i.as_object())
+                .into_iter()
+                .flatten()
+                .filter_map(|(k, v)| v.as_f64().map(|v| (k.clone(), v)))
+                .collect();
+            Some(TimeseriesPoint { tick, machines, items })
+        })
+        .collect()
 }
 
 fn delta_pct(measured: Option<f64>, planned: f64) -> Option<f64> {
@@ -402,6 +489,7 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
             .get("bulk_inserter_capacity_bonus")
             .and_then(|v| v.as_f64())
             .unwrap_or(-1.0),
+        timeseries: parse_timeseries(result),
     }
 }
 
@@ -550,6 +638,14 @@ pub fn print_human(report: &Report) {
         }
     }
     println!();
+    if !report.timeseries.is_empty() {
+        println!(
+            "timeseries: {} checkpoint window(s) recorded (per-machine crafts_delta/status, \
+             per-item produced_delta) — see the `timeseries` key in --out, or docs/sim-harness.md \
+             \"Reading the time-series\".",
+            report.timeseries.len()
+        );
+    }
     println!("OVERALL: {}", report.overall_verdict);
 }
 
@@ -766,5 +862,67 @@ mod tests {
         let report = compute(&m, &result);
         assert!(!report.fluid_fed);
         assert!(!report.uncalibrated_direction);
+    }
+
+    /// #537: a rate-vs-time series distinguishes "feed never arrived"
+    /// from "buffer-fill mirage then jam" at a glance. Pins the schema —
+    /// per-checkpoint tick + per-machine {unit, name, x, y, crafts_delta,
+    /// status} + per-item produced_delta — round-trips out of a raw
+    /// `timeseries` array the way the generated Lua emits it.
+    #[test]
+    fn timeseries_parses_per_checkpoint_machine_and_item_deltas() {
+        let m = fixture_manifest();
+        let result = serde_json::json!({
+            "checkpoints": [], "samples": [],
+            "timeseries": [
+                {
+                    "tick": 9000,
+                    "machines": [
+                        {"unit": 42, "name": "assembling-machine-2", "x": 3, "y": -1,
+                         "crafts_delta": 12.0, "status": "working"},
+                        {"unit": 43, "name": "electric-furnace", "x": 5, "y": 2,
+                         "crafts_delta": 0.0, "status": "item_ingredient_shortage"}
+                    ],
+                    "items": {"iron-gear-wheel": 24.0, "iron-plate": 48.0}
+                },
+                {
+                    "tick": 10800,
+                    "machines": [
+                        {"unit": 42, "name": "assembling-machine-2", "x": 3, "y": -1,
+                         "crafts_delta": 15.0, "status": "working"}
+                    ],
+                    "items": {"iron-gear-wheel": 30.0}
+                }
+            ]
+        });
+        let report = compute(&m, &result);
+        assert_eq!(report.timeseries.len(), 2);
+        let first = &report.timeseries[0];
+        assert_eq!(first.tick, 9000);
+        assert_eq!(first.machines.len(), 2);
+        let am = first.machines.iter().find(|ms| ms.unit == 42).unwrap();
+        assert_eq!(am.name, "assembling-machine-2");
+        assert_eq!(am.x, 3.0);
+        assert_eq!(am.y, -1.0);
+        assert_eq!(am.crafts_delta, 12.0);
+        assert_eq!(am.status, "working");
+        let starved = first.machines.iter().find(|ms| ms.unit == 43).unwrap();
+        assert_eq!(starved.status, "item_ingredient_shortage");
+        assert_eq!(first.items.get("iron-gear-wheel"), Some(&24.0));
+        assert_eq!(first.items.get("iron-plate"), Some(&48.0));
+        assert_eq!(report.timeseries[1].tick, 10800);
+        assert_eq!(report.timeseries[1].machines[0].crafts_delta, 15.0);
+    }
+
+    /// A `raw_result` from before this field existed (or `bless`/`check`'s
+    /// hand-built test fixtures) must parse cleanly to an empty series
+    /// rather than erroring — additive-only per the PR's compatibility
+    /// requirement.
+    #[test]
+    fn timeseries_absent_defaults_to_empty_vec() {
+        let m = fixture_manifest();
+        let result = serde_json::json!({"checkpoints": [], "samples": []});
+        let report = compute(&m, &result);
+        assert!(report.timeseries.is_empty());
     }
 }
