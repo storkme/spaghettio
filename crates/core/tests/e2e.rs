@@ -8037,6 +8037,96 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     );
 }
 
+/// #338: `max_machines_for_belt_horizontal_stack`'s output-belt cap was
+/// stacking-blind — it used unstacked `lane_capacity` while its call site
+/// (`place_rows`) already threads `out_stack` into `belt_entity_for_rate_stacked`
+/// for the belt-tier pick. Same asymmetry RFC-047-1b fixed in the sibling
+/// `max_machines_for_belt_both_lanes`.
+///
+/// Fixture: `small-electric-pole` (wood + copper-cable, 0 fluid — a genuine
+/// `RowKind::DualInput`), AM1, quality Normal, S=2, yellow (`transport-belt`)
+/// max tier, `RowLayout::HorizontalStack` forced. Recipe is 1 wood + 2
+/// copper-cable → 1 pole: copper-cable is the higher-rate input (input₀,
+/// skipped — fed via K stacked trunks); wood is input₁ (kept in the cap
+/// check). Per machine at AM1: output 2.0/s, input₁ (wood) 1.0/s — output
+/// is the tighter constraint. Target rate 14.0/s solves to 7 machines.
+///
+/// - Pre-fix: `out_lane_cap = lane_capacity(yellow) = 7.5` (unstacked) →
+///   `max_per_row = floor(7.5/2.0)*2 = 6` — output-bound, and 7 > 6 forces
+///   a `RowSplit` into 2 rows despite S=2 doubling the belt's real capacity.
+/// - Post-fix: `out_lane_cap = lane_capacity_stacked(yellow, 2) = 15` →
+///   `max_per_row = floor(15/2.0)*2 = 14` ≥ 7 machines → one row, no split.
+///
+/// Verified against the unfixed function (temporarily reverted to
+/// `lane_capacity(belt_name)`, no `out_stack` param): this test panics on
+/// the `RowSplit` assertion below (`split_into: 2`) pre-fix, and passes
+/// post-fix — a test that never failed proves nothing.
+#[test]
+fn stacking_hs_dual_input_output_cap() {
+    use spaghettio_core::bus::layout::{
+        build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy,
+    };
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> =
+        ["wood", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "small-electric-pole",
+        14.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-1",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let opts = LayoutOptions {
+        strategy: LayoutStrategy::Pooled,
+        surplus_policy: SurplusPolicy::default(),
+        max_belt_tier: Some("transport-belt".to_string()),
+        row_layout: RowLayout::HorizontalStack,
+        max_inserter_tier: Default::default(),
+        quality: QualityTier::Normal,
+        wire_mode: Default::default(),
+        merge_tap: false,
+        stacking: 2,
+        inserter_capacity: 0,
+        cell_composition: Default::default(),
+        splitter_tap_spacers: false,
+        ..Default::default()
+    };
+
+    let _guard = trace::start_trace();
+    let layout = build_bus_layout(&sr, opts)
+        .unwrap_or_else(|e| panic!("HS layout at S=2 must build: {e}"));
+    let events = trace::drain_events();
+
+    let splits: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            TraceEvent::RowSplit { recipe, original_count, split_into, .. }
+                if recipe == "small-electric-pole" =>
+            {
+                Some((*original_count, *split_into))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        splits.is_empty(),
+        "small-electric-pole's HorizontalStack row fragmented under stacking \
+         (out_stack should have lifted the output-belt cap to fit all 7 \
+         machines in one row): {splits:?}"
+    );
+
+    let issues = validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("validate: {e:?}"));
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "expected 0 errors, got {errors:?}");
+}
+
 /// RFC-046: `stacking > 1` under an inserter cap below Stack is an
 /// incoherent config (belts cannot stack without stack inserters, BS2)
 /// — refused by name at layout entry, never silently degraded.
