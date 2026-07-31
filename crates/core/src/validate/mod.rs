@@ -486,6 +486,241 @@ pub fn check_stranded_byproducts(
         .collect()
 }
 
+/// RFC-062 Phase 2: a "shared row" produces an item with more than one
+/// live physical claim on it at once — some combination of an external
+/// target export, an internal consumer's tap-off, and a surplus export —
+/// where two independent mechanisms (`ghost_router` Step 7's row-level
+/// export merge and `lane_planner`'s dual-purpose-lane tap-offs) each
+/// place a claim on the same producer row/lane. Nothing before this check
+/// cross-validated those claims against what the row actually builds.
+///
+/// Rates are all solver-side, using the CEILED per-`MachineSpec` machine
+/// count — the same rounding `bus::placer::place_rows` applies turning
+/// the LP's continuous count into a physical row, so `production` here
+/// matches what actually gets built, not the LP's (possibly fractional)
+/// demand.
+///
+/// Two failure directions, both positioned at a real producer-machine
+/// entity for the item (rule 4, `docs/validator-reporting.md`: a solver
+/// row is a claim, the entity at its tile is the fact):
+///
+/// - **Over-claim** (`shared-row-outflow-overclaim`, the RFC's primary
+///   ask): target rate + tap demand + surplus rate exceeds what the row
+///   actually produces — the row cannot honor every claim and something
+///   downstream starves. The main invariant `docs/rfc-062-multi-target-
+///   outputs.md`'s Layout section calls for.
+///
+///   **Severity split, added after review (RFC-062 Phase 2 fix round):**
+///   naively comparing BUILT numbers alone (every machine count
+///   independently ceiled — the same rounding `bus::placer::place_rows`
+///   applies) hard-errors on legitimate ceil-slack contention: measured
+///   on EC@10.4/s + AC@3.05/s, claimed (10.4 target + 6.25 built taps) =
+///   16.65 > produced (built) 16.5, the sole issue on an otherwise-clean
+///   layout. The row's PRODUCER count and the tap's CONSUMER count are
+///   two INDEPENDENT `MachineSpec`s, each ceiled on its own — nothing
+///   guarantees their slack cancels, so this is not a bug, it's built-
+///   capacity contention between two roundings that both individually
+///   round up. Fix: also compute the same totals from the LP's RAW
+///   (un-ceiled) `MachineSpec::count` — the row-conservation identity
+///   the net-flow LP solves guarantees these balance (`target_plan +
+///   taps_plan + surplus_plan ≈ production_plan`) UNLESS something is
+///   genuinely wrong at the plan level, not just the build level. Only
+///   a PLAN-level overclaim is `Severity::Error`; a BUILT-only overclaim
+///   (plan balances, built doesn't) is `Severity::Warning` with a
+///   distinct message — still surfaced (this row has zero headroom for
+///   its exact built machine-count pairing, worth knowing), just not a
+///   build-blocking claim of a starved consumer.
+/// - **Under-claim** (`shared-row-outflow-underclaim`): the item has a
+///   target rate AND at least one other live claim (tap or surplus), but
+///   no PHYSICAL export record (`boundary_outputs`/`surplus_exits`,
+///   entity-cross-checked, matching `check_stranded_byproducts`'s and
+///   `check_boundary_record_integrity`'s standard) exists for it at all.
+///   Added after RFC-062 Phase 0's own probe observed exactly this
+///   silent failure under the cell-composed candidate — EC's target
+///   export dropped from `boundary_outputs` entirely, zero validator
+///   errors raised. See the Phase 2 decision log for why this direction
+///   was added rather than left as a documented gap. NOTE (review
+///   finding, recorded here so it isn't mistaken for a stronger claim
+///   later): "physically exported" here means a ledger record backed by
+///   a real entity carrying the right item AT the recorded tile — it is
+///   NOT a flow/rate measurement. A belt can satisfy this check while
+///   under-delivering (or, per `docs/validator-reporting.md`'s own
+///   history, being disconnected one tile further along). The sim
+///   harness (Phase 3/4) remains the real bar for "the export actually
+///   moves the claimed rate in-game" — this check only closes the
+///   "nothing there at all" gap.
+pub fn check_shared_row_outflow_conservation(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+) -> Vec<ValidationIssue> {
+    use rustc_hash::FxHashMap;
+
+    let ceiled = |count: f64| if count > 0.0 { count.ceil().max(1.0) } else { 0.0 };
+    let planned = |count: f64| count.max(0.0);
+
+    let mut target_rate: FxHashMap<&str, f64> = FxHashMap::default();
+    for ext in &solver.external_outputs {
+        if !ext.is_fluid {
+            *target_rate.entry(ext.item.as_str()).or_insert(0.0) += ext.rate;
+        }
+    }
+    let mut surplus_rate: FxHashMap<&str, f64> = FxHashMap::default();
+    for sur in &solver.surplus_outputs {
+        if !sur.is_fluid {
+            *surplus_rate.entry(sur.item.as_str()).or_insert(0.0) += sur.rate;
+        }
+    }
+    // BUILT (ceiled per-`MachineSpec` count — what actually gets placed)
+    // and PLAN (the LP's raw, un-ceiled count) production/tap totals,
+    // side by side — the severity split above needs both.
+    let mut production_built: FxHashMap<&str, f64> = FxHashMap::default();
+    let mut production_plan: FxHashMap<&str, f64> = FxHashMap::default();
+    let mut producer_recipes: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
+    for m in &solver.machines {
+        let built = ceiled(m.count);
+        let plan = planned(m.count);
+        for out in &m.outputs {
+            if out.is_fluid {
+                continue;
+            }
+            *production_built.entry(out.item.as_str()).or_insert(0.0) += out.rate * built;
+            *production_plan.entry(out.item.as_str()).or_insert(0.0) += out.rate * plan;
+            producer_recipes.entry(out.item.as_str()).or_default().push(m.recipe.as_str());
+        }
+    }
+    let mut tap_demand_built: FxHashMap<&str, f64> = FxHashMap::default();
+    let mut tap_demand_plan: FxHashMap<&str, f64> = FxHashMap::default();
+    for m in &solver.machines {
+        // A voider's draw is bus-invisible by design (see the matching
+        // exclusion in `bus::placer::place_rows`'s `internally_consumed_
+        // items` and `lane_planner::plan_bus_lanes`'s `item_to_consumers`)
+        // — it never competes with a target export for the same lane.
+        if m.voider {
+            continue;
+        }
+        let built = ceiled(m.count);
+        let plan = planned(m.count);
+        for inp in &m.inputs {
+            if inp.is_fluid {
+                continue;
+            }
+            *tap_demand_built.entry(inp.item.as_str()).or_insert(0.0) += inp.rate * built;
+            *tap_demand_plan.entry(inp.item.as_str()).or_insert(0.0) += inp.rate * plan;
+        }
+    }
+
+    const EPS: f64 = 1e-6;
+    let mut issues = Vec::new();
+    for (&item, &prod_built) in &production_built {
+        let target = target_rate.get(item).copied().unwrap_or(0.0);
+        let taps_built = tap_demand_built.get(item).copied().unwrap_or(0.0);
+        let surplus = surplus_rate.get(item).copied().unwrap_or(0.0);
+
+        // "Shared" means at least two of {target, taps, surplus} are
+        // live — a pure export, a pure intermediate, or a pure byproduct
+        // alone never collides; the solver's own conservation already
+        // guarantees those are correct.
+        let live_claims = (target > EPS) as u8 + (taps_built > EPS) as u8 + (surplus > EPS) as u8;
+        if live_claims < 2 {
+            continue;
+        }
+
+        let producer_pos = producer_recipes.get(item).and_then(|recipes| {
+            layout
+                .entities
+                .iter()
+                .find(|e| e.recipe.as_deref().map(|r| recipes.contains(&r)).unwrap_or(false))
+        });
+        let (px, py) = producer_pos.map(|e| (e.x, e.y)).unwrap_or((0, 0));
+
+        let claimed_built = target + taps_built + surplus;
+        if claimed_built > prod_built + EPS {
+            let prod_plan = production_plan.get(item).copied().unwrap_or(0.0);
+            let taps_plan = tap_demand_plan.get(item).copied().unwrap_or(0.0);
+            // `target`/`surplus` are already plan-precision (the solver
+            // never ceils a target rate or a surplus remainder) — only
+            // the tap side needs a separate plan-level total.
+            let claimed_plan = target + taps_plan + surplus;
+            if claimed_plan > prod_plan + EPS {
+                issues.push(
+                    ValidationIssue::with_pos(
+                        Severity::Error,
+                        "shared-row-outflow-overclaim",
+                        format!(
+                            "{item}: shared row claims {claimed_built:.3}/s ({target:.3}/s \
+                             export + {taps_built:.3}/s internal taps + {surplus:.3}/s \
+                             surplus) but only produces {prod_built:.3}/s — the plan-level \
+                             totals also overclaim ({claimed_plan:.3}/s claimed vs \
+                             {prod_plan:.3}/s planned production), so this is a genuine \
+                             demand overrun, not ceiling slack — the export or an internal \
+                             consumer will be starved in-game",
+                        ),
+                        px,
+                        py,
+                    )
+                    .with_detail(prod_built, claimed_built),
+                );
+            } else {
+                issues.push(
+                    ValidationIssue::with_pos(
+                        Severity::Warning,
+                        "shared-row-outflow-overclaim",
+                        format!(
+                            "{item}: shared row's BUILT claims ({claimed_built:.3}/s = \
+                             {target:.3}/s export + {taps_built:.3}/s internal taps + \
+                             {surplus:.3}/s surplus) exceed its BUILT production \
+                             ({prod_built:.3}/s), but the underlying PLAN rates balance \
+                             ({claimed_plan:.3}/s claimed vs {prod_plan:.3}/s produced) — \
+                             this row has zero headroom for its exact machine-count \
+                             pairing (two independently-ceiled `MachineSpec`s whose slack \
+                             doesn't cancel), not a genuine demand overrun",
+                        ),
+                        px,
+                        py,
+                    )
+                    .with_detail(prod_built, claimed_built),
+                );
+            }
+        }
+
+        if target > EPS {
+            let physically_exported = layout.boundary_outputs.iter().any(|r| {
+                r.item == item
+                    && layout.entities.iter().any(|e| {
+                        e.x == r.x
+                            && e.y == r.y
+                            && e.carries.as_deref() == Some(item)
+                            && crate::common::is_belt_entity(&e.name)
+                    })
+            }) || layout.surplus_exits.iter().any(|(ei, ex, ey)| {
+                ei == item
+                    && layout.entities.iter().any(|e| {
+                        e.x == *ex
+                            && e.y == *ey
+                            && e.carries.as_deref() == Some(item)
+                            && crate::common::is_belt_entity(&e.name)
+                    })
+            });
+            if !physically_exported {
+                issues.push(ValidationIssue::with_pos(
+                    Severity::Error,
+                    "shared-row-outflow-underclaim",
+                    format!(
+                        "{item}: target export ({target:.3}/s) has no physical export \
+                         record (boundary_outputs/surplus_exits) backed by a real entity \
+                         — the row also has {taps_built:.3}/s of internal taps and \
+                         {surplus:.3}/s of surplus, so a dual-purpose-lane mechanism was \
+                         expected but the export path was silently dropped",
+                    ),
+                    px,
+                    py,
+                ));
+            }
+        }
+    }
+    issues
+}
+
 pub fn check_unresolved_junctions(layout: &LayoutResult) -> Vec<ValidationIssue> {
     let tiles = unresolved_region_tiles(layout);
     if tiles.is_empty() {
@@ -664,6 +899,11 @@ pub fn validate(
         Box::new(|| {
             solver
                 .map(|s| check_stranded_byproducts(layout, s))
+                .unwrap_or_default()
+        }),
+        Box::new(|| {
+            solver
+                .map(|s| check_shared_row_outflow_conservation(layout, s))
                 .unwrap_or_default()
         }),
         Box::new(|| belt_structural::check_belt_inserter_conflict(layout)),
@@ -984,5 +1224,293 @@ mod tests {
     fn layout_style_equality() {
         assert_eq!(LayoutStyle::Bus, LayoutStyle::Bus);
         assert_ne!(LayoutStyle::Bus, LayoutStyle::Spaghetti);
+    }
+
+    // ── check_shared_row_outflow_conservation (RFC-062 Phase 2) ────────────
+
+    /// EC+AC shape, hand-numbers matching the RFC-062 Phase 0 decision
+    /// log: an `electronic-circuit` row built to 16.5/s (11 AM2 machines
+    /// at 1.5/s each) serving both AC's 6.0/s ingredient draw and a
+    /// 10.0/s export target. `machine_count` is a synthetic
+    /// (entity, recipe) pair — one entity per producer/consumer, matching
+    /// what `producer_recipes` needs to resolve a position.
+    fn ec_ac_shared_row_solver(ec_target_rate: f64) -> SolverResult {
+        SolverResult {
+            machines: vec![
+                MachineSpec {
+                    entity: "assembling-machine-2".to_string(),
+                    recipe: "electronic-circuit".to_string(),
+                    count: 11.0,
+                    outputs: vec![ItemFlow {
+                        item: "electronic-circuit".to_string(),
+                        rate: 1.5,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                    ..Default::default()
+                },
+                MachineSpec {
+                    entity: "assembling-machine-2".to_string(),
+                    recipe: "advanced-circuit".to_string(),
+                    count: 24.0,
+                    inputs: vec![ItemFlow {
+                        item: "electronic-circuit".to_string(),
+                        rate: 0.25,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                    ..Default::default()
+                },
+            ],
+            external_outputs: vec![ItemFlow {
+                item: "electronic-circuit".to_string(),
+                rate: ec_target_rate,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn ec_producer_entity() -> PlacedEntity {
+        PlacedEntity {
+            name: "assembling-machine-2".to_string(),
+            x: 5,
+            y: 1,
+            recipe: Some("electronic-circuit".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// The row's real production (16.5/s) covers export (10) + taps (6) =
+    /// 16 with slack — the KC2 canonical case, and the check must stay
+    /// quiet on it (validator-reporting rule 5: quiet is not evidence of
+    /// correctness on its own, but a check that fires on the FIXED case
+    /// is simply wrong).
+    #[test]
+    fn shared_row_outflow_conservation_quiet_when_within_capacity() {
+        let solver = ec_ac_shared_row_solver(10.0);
+        let layout = LayoutResult {
+            entities: vec![ec_producer_entity()],
+            width: 30,
+            height: 30,
+            boundary_outputs: vec![crate::models::BoundaryRecord {
+                item: "electronic-circuit".to_string(),
+                x: 5,
+                y: 30,
+                direction: EntityDirection::South,
+                is_fluid: false,
+                entity: "transport-belt".to_string(),
+            }],
+            surplus_exits: vec![("electronic-circuit".to_string(), 5, 30)],
+            ..Default::default()
+        };
+        // Physical entity at the recorded exit, matching the record.
+        let mut layout = layout;
+        layout.entities.push(PlacedEntity {
+            name: "transport-belt".to_string(),
+            x: 5,
+            y: 30,
+            carries: Some("electronic-circuit".to_string()),
+            ..Default::default()
+        });
+        let issues = check_shared_row_outflow_conservation(&layout, &solver);
+        assert!(issues.is_empty(), "expected no issues on the within-capacity case: {issues:#?}");
+    }
+
+    /// Bump the target so export (11) + taps (6) = 17 exceeds the row's
+    /// real 16.5/s production — one positioned
+    /// `shared-row-outflow-overclaim` ERROR, not a count folded into a
+    /// message (docs/validator-reporting.md rule 1). `ec_ac_shared_row_
+    /// solver`'s machine counts (11.0, 24.0) are both exact integers, so
+    /// PLAN and BUILT totals are identical here — this is a genuine
+    /// plan-level overclaim, not the ceil-slack case the next test
+    /// covers, and must stay `Error`.
+    #[test]
+    fn shared_row_outflow_conservation_flags_overclaim() {
+        let solver = ec_ac_shared_row_solver(11.0);
+        let layout = LayoutResult {
+            entities: vec![ec_producer_entity()],
+            width: 30,
+            height: 30,
+            ..Default::default()
+        };
+        let issues = check_shared_row_outflow_conservation(&layout, &solver);
+        let overclaims: Vec<_> =
+            issues.iter().filter(|i| i.category == "shared-row-outflow-overclaim").collect();
+        assert_eq!(overclaims.len(), 1, "expected exactly one over-claim issue: {issues:#?}");
+        assert_eq!(overclaims[0].severity, Severity::Error);
+        assert_eq!(overclaims[0].x, Some(5));
+        assert_eq!(overclaims[0].y, Some(1));
+        let detail = overclaims[0].detail.as_ref().expect("over-claim issue must carry IssueDetail");
+        assert!((detail.delivered - 16.5).abs() < 1e-9, "delivered should be the row's real production: {detail:?}");
+        assert!((detail.needed - 17.0).abs() < 1e-9, "needed should be the claimed total: {detail:?}");
+    }
+
+    /// F2 (RFC-062 Phase 2 review fix round): reproduces the reviewer's
+    /// measured shape — two INDEPENDENTLY ceiled `MachineSpec`s (producer
+    /// count 10.0 exact, consumer count 6.001) whose BUILT totals collide
+    /// (claimed 10.5 > produced 10.0) purely because the consumer's own
+    /// ceiling rounds 6.001 up to a whole 7 machines, while the PLAN
+    /// (raw, un-ceiled) totals comfortably balance (claimed 9.501 ≤
+    /// planned 10.0). Must be `Warning`, not `Error` — this is built-
+    /// capacity contention between two independent roundings, not a
+    /// genuine demand overrun (the reviewer's own EC@10.4+AC@3.05 example
+    /// is the same shape, just with the real recipe's numbers).
+    #[test]
+    fn shared_row_outflow_conservation_overclaim_is_warning_when_only_ceil_slack() {
+        let solver = SolverResult {
+            machines: vec![
+                MachineSpec {
+                    entity: "assembling-machine-2".to_string(),
+                    recipe: "electronic-circuit".to_string(),
+                    count: 10.0,
+                    outputs: vec![ItemFlow {
+                        item: "electronic-circuit".to_string(),
+                        rate: 1.0,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                    ..Default::default()
+                },
+                MachineSpec {
+                    entity: "assembling-machine-2".to_string(),
+                    recipe: "advanced-circuit".to_string(),
+                    count: 6.001,
+                    inputs: vec![ItemFlow {
+                        item: "electronic-circuit".to_string(),
+                        rate: 1.0,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                    ..Default::default()
+                },
+            ],
+            external_outputs: vec![ItemFlow {
+                item: "electronic-circuit".to_string(),
+                rate: 3.5,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            ..Default::default()
+        };
+        // A real physical export claim, so this test isolates the
+        // severity split — without it the under-claim direction would
+        // also fire (target > 0, no boundary/surplus_exits record),
+        // which is a different finding this test doesn't probe.
+        let layout = LayoutResult {
+            entities: vec![
+                ec_producer_entity(),
+                PlacedEntity {
+                    name: "transport-belt".to_string(),
+                    x: 5,
+                    y: 30,
+                    carries: Some("electronic-circuit".to_string()),
+                    ..Default::default()
+                },
+            ],
+            width: 30,
+            height: 30,
+            surplus_exits: vec![("electronic-circuit".to_string(), 5, 30)],
+            ..Default::default()
+        };
+        let issues = check_shared_row_outflow_conservation(&layout, &solver);
+        let overclaims: Vec<_> =
+            issues.iter().filter(|i| i.category == "shared-row-outflow-overclaim").collect();
+        assert_eq!(overclaims.len(), 1, "expected exactly one over-claim issue: {issues:#?}");
+        assert_eq!(
+            overclaims[0].severity,
+            Severity::Warning,
+            "ceil-slack-only overclaim must be a Warning, not an Error: {:#?}",
+            overclaims[0]
+        );
+        let detail = overclaims[0].detail.as_ref().expect("over-claim issue must carry IssueDetail");
+        assert!((detail.delivered - 10.0).abs() < 1e-9, "delivered should be BUILT production: {detail:?}");
+        assert!((detail.needed - 10.5).abs() < 1e-9, "needed should be BUILT claimed total: {detail:?}");
+        assert!(
+            !issues.iter().any(|i| i.category == "shared-row-outflow-underclaim"),
+            "expected no under-claim issue — a real physical export record is present: {issues:#?}"
+        );
+    }
+
+    /// Target + taps are both live (a "shared row" by the check's own
+    /// gate) but NO physical export record exists at all — the RFC-062
+    /// Phase 0 "dropped export under the cell-composed candidate" finding,
+    /// reproduced as a minimal synthetic case. The under-claim direction
+    /// exists specifically to catch this: `check_belt_network_topology`'s
+    /// own output-network check stays silent when `belt_starts` is
+    /// entirely empty (see the Phase 2 decision log).
+    #[test]
+    fn shared_row_outflow_conservation_flags_missing_export_record() {
+        let solver = ec_ac_shared_row_solver(10.0);
+        let layout = LayoutResult {
+            entities: vec![ec_producer_entity()],
+            width: 30,
+            height: 30,
+            // Deliberately no `boundary_outputs`/`surplus_exits` entry for
+            // electronic-circuit at all.
+            ..Default::default()
+        };
+        let issues = check_shared_row_outflow_conservation(&layout, &solver);
+        let underclaims: Vec<_> =
+            issues.iter().filter(|i| i.category == "shared-row-outflow-underclaim").collect();
+        assert_eq!(underclaims.len(), 1, "expected exactly one under-claim issue: {issues:#?}");
+        assert_eq!(underclaims[0].severity, Severity::Error);
+        assert_eq!(underclaims[0].x, Some(5));
+        assert_eq!(underclaims[0].y, Some(1));
+    }
+
+    /// A `surplus_exits` ledger entry alone, with no matching physical
+    /// entity, must not satisfy the under-claim check — a ledger without
+    /// the entity is exactly the stalled-machine bug this direction
+    /// exists to catch (mirrors `check_stranded_byproducts`'s own
+    /// standard).
+    #[test]
+    fn shared_row_outflow_conservation_ledger_without_entity_still_flags() {
+        let solver = ec_ac_shared_row_solver(10.0);
+        let layout = LayoutResult {
+            entities: vec![ec_producer_entity()],
+            width: 30,
+            height: 30,
+            // Record claims an exit at (5,30), but no entity carrying
+            // electronic-circuit actually sits there.
+            surplus_exits: vec![("electronic-circuit".to_string(), 5, 30)],
+            ..Default::default()
+        };
+        let issues = check_shared_row_outflow_conservation(&layout, &solver);
+        assert!(
+            issues.iter().any(|i| i.category == "shared-row-outflow-underclaim"),
+            "a surplus_exits record with no backing entity must still be flagged: {issues:#?}"
+        );
+    }
+
+    /// A row with only ONE live claim (a pure internal intermediate, or a
+    /// pure export with no internal consumer) is not "shared" — the
+    /// solver's own flow conservation already guarantees it's correct, so
+    /// the check must stay quiet regardless of production/tap numbers.
+    #[test]
+    fn shared_row_outflow_conservation_ignores_non_shared_rows() {
+        let solver = SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-2".to_string(),
+                recipe: "electronic-circuit".to_string(),
+                count: 1.0,
+                outputs: vec![ItemFlow {
+                    item: "electronic-circuit".to_string(),
+                    rate: 0.1,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                ..Default::default()
+            }],
+            // No external_outputs, no other machine consumes it: a purely
+            // internal (or in this case fully unclaimed) item.
+            ..Default::default()
+        };
+        let layout = LayoutResult { entities: vec![ec_producer_entity()], width: 30, height: 30, ..Default::default() };
+        assert!(
+            check_shared_row_outflow_conservation(&layout, &solver).is_empty(),
+            "a row with fewer than 2 live claims must never be flagged"
+        );
     }
 }

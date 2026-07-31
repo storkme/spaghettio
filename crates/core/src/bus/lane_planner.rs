@@ -202,6 +202,24 @@ pub fn plan_bus_lanes(
         .filter(|f| f.is_fluid)
         .map(|f| f.item.as_str())
         .collect();
+    // RFC-062 Phase 2: solid targets that are ALSO consumed internally
+    // (the EC+AC shared-row shape) get the same dual-purpose-lane
+    // treatment, generalized from the fluid-only gate above. Deliberately
+    // NARROWER than the fluid gate: a fluid target with ZERO internal
+    // consumers still needs the lane (`ghost_router` Step 7 never builds
+    // a row-level east merge for fluids at all, per its `!ext.is_fluid`
+    // filter), but a solid target with zero internal consumers keeps its
+    // existing row-level `is_final`/`output_east` export path untouched —
+    // widening this to every solid target would give every single-target
+    // solid layout a lane it doesn't need, breaking kill criterion 5
+    // (N=1 bit-identical). Membership is finalized below, once real
+    // (post-DI-filter) consumer rows are known for each item.
+    let solid_target_items: FxHashSet<&str> = solver_result
+        .external_outputs
+        .iter()
+        .filter(|f| !f.is_fluid)
+        .map(|f| f.item.as_str())
+        .collect();
     let mut lanes: Vec<BusLane> = Vec::new();
     // Keyed by `(item, module_id)`. `module_id == 0` under Pooled and
     // for non-partitioned items; > 0 distinguishes per-consumer modules
@@ -409,6 +427,42 @@ pub fn plan_bus_lanes(
                     }
                 }
             }
+        }
+    }
+
+    // Mark solid dual-purpose lanes for perimeter exit — RFC-062 Phase 2,
+    // the solid-item mirror of the fluid block above. Restricted to lanes
+    // with real (post-DI-filter) consumer rows: a pure-export solid
+    // target (no internal consumer) never gets a lane at all here — it
+    // keeps the existing row-level `is_final`/`output_east` export path,
+    // untouched, which is what keeps the N=1 case bit-identical.
+    //
+    // No staggering needed (unlike fluids): solid belts don't auto-merge
+    // like adjacent pipes do, so two dual-purpose lanes exiting at the
+    // same y on different columns are just two parallel belts.
+    //
+    // `total_height - 1`, NOT `total_height`: `total_height` is an
+    // EXCLUSIVE bound (rows occupy `[0, total_height)`, same convention
+    // as `RowSpan::y_end`), so `total_height` itself is one row PAST the
+    // last real row. A solid belt is visible to
+    // `check_belt_flow_reachability`'s belt-derived boundary (unlike a
+    // fluid exit, which is a pipe and invisible to that check's
+    // belt-only `on_boundary` — the fluid `total_height + exit_offset`
+    // convention above never hits this because of that, not because it's
+    // right): stamping one row past the layout's real bottom edge SHIFTS
+    // `max_by` down by one, demoting every legitimate y = total_height-1
+    // export tail (e.g. AC's own row) from "boundary" to "interior" and
+    // producing a wave of false `belt-flow-reachability` "items cannot
+    // leave" warnings on every machine downstream of one (RFC-062 Phase 2
+    // review finding, reproduced: all 24 of AC's machines). Landing on
+    // the last real row instead keeps the exit ON the existing boundary
+    // rather than inventing a new, deeper one.
+    for lane in &mut lanes {
+        if !lane.is_fluid
+            && !lane.consumer_rows.is_empty()
+            && solid_target_items.contains(lane.item.as_str())
+        {
+            lane.perimeter_exit_y = Some(total_height - 1);
         }
     }
 
