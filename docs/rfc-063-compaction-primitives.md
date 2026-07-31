@@ -91,23 +91,50 @@ own, so the regenerated library must be measured, not assumed better.
 Factorio-SAT on `PATH`. This is a known dependency of the existing
 tooling, not new to this RFC, but it gates who can run Phase A locally.
 
-**Gate — numeric bar derived from #135's own data.** The three oversized
-bands are 15, 10 and 8 tiles tall (33 tiles combined) against a corpus
-where ordinary bands are almost always 5 tiles tall (RFC-058's census).
-If regeneration/decomposition reaches row-height parity — each balancer
-band shrinking toward the ~5-tile height an ordinary machine row already
-achieves — the idealized ceiling is `(33 − 15) / 33 = 54.5%`. Per the
-discipline RFC-058's own KC1 used (an obstacle-free estimate is not a
-real-routing number; that RFC halved its probe's −66.1% to set a −33.0%
-bar, and even that margin was thin), this RFC halves the idealized
-ceiling: **the pre-registered bar is ≥25% combined reduction in the three
-named balancer bands' tile-height on `stress_electronic_circuit_30s_from_ore`
-(33 → ≤24.75 tiles), measured after real routing, not on the idealized
-calculation above.** AND zero regressions on the `balancer_lane_audit` /
-`KNOWN_IMBALANCED` tripwires. AND any layout whose templates changed is
-sim-anchored (headless Factorio, long `--warmup` per the deep-chain rule)
-before being called never-worse — validator parity is not
-sufficient per #520.
+**Gate — numeric bar, revised by the Phase A0 probe (2026-07-31).**
+Superseded in place; see the decision log entry below for the full
+derivation. Original text ("the three oversized bands are 15, 10 and 8
+tiles tall … the pre-registered bar is ≥25% combined reduction … 33 → ≤
+24.75 tiles") rested on #135's 2026-04-11 measurement, which the A0 probe
+found stale — the live fixture no longer produces those bands or those
+shapes. Restated:
+
+- **Baseline is the live measurement, not #135's.** On
+  `stress_electronic_circuit_30s_from_ore` as of 2026-07-31: three
+  balancer-driven bands at the same recipe transitions (copper-plate,
+  copper-cable, iron-plate), tile-heights **9, 17, 8** (34 combined,
+  shapes `(3,8)` direct / `(8,10)`→decomposed 2×`(4,5)` / `(2,10)`→
+  decomposed 2×`(1,5)`) — not #135's 15/10/8 (33 combined). Re-measure
+  again immediately before Phase A starts; this drifted once already in
+  three months and can drift again.
+- **Metric is whole-layout bounding-box area after real routing**, not
+  per-template tile-height. Height is retained as the *mechanism* to
+  watch (it is what `compute_extra_gaps` reserves and what made the
+  bands visible in the first place) but is not the pass/fail number — a
+  regenerated template that trades height for width could clear a
+  height-only bar while widening the bus enough to net zero area win.
+- **Pre-registered bar: ≥10% combined bounding-box-area reduction on
+  `stress_electronic_circuit_30s_from_ore`** (the gate fixture) **AND
+  ≥5% on `stress_electronic_circuit_60s_red_from_ore`** (the holdout,
+  added per the PR #547 review — prevents a regeneration overfit to the
+  gate fixture's specific shapes from passing on a fixture it wasn't
+  tuned against). Both measured after real routing. This bar is
+  deliberately lower than the original ≥25%: the A0 probe's own
+  template-level measurements (see decision log) found the real,
+  area-based headroom on the live baseline's three named shapes is
+  roughly 8% (gate fixture) and 6% (holdout) when substituting the best
+  community-verified reference design per shape — nowhere near the
+  idealized-ceiling arithmetic the original bar was built from, and one
+  of the three shapes (`(3,8)`) shows *no* headroom at all against the
+  best reference found. The bar is set at, not below, that measured
+  floor deliberately — Phase A must clear what off-the-shelf substitution
+  already demonstrates achievable, not merely match it, or it hasn't
+  earned the SAT budget.
+- AND zero regressions on the `balancer_lane_audit` / `KNOWN_IMBALANCED`
+  tripwires.
+- AND any layout whose templates changed is sim-anchored (headless
+  Factorio, long `--warmup` per the deep-chain rule) before being called
+  never-worse — validator parity is not sufficient per #520.
 
 ### Phase B — wide-band reshaping: two machine rows sharing one belt row
 
@@ -328,3 +355,152 @@ through the bar-tightening rule in kill criterion 1.
   now sits directly after RFC-062's in `docs/rfcs.md`, so no reconciling
   merge is needed. Status: Design, no phases started. Evidence base is
   `docs/compaction-retro-2026-07.md`, itself committed in this same PR.
+
+- **2026-07-31 — Phase A0 feasibility probe (PR #547 review, item 2).**
+  Executed the nearly-free probe the coordinating session's PR #547
+  review comment proposed before funding SAT time: measure whether
+  hand-optimized community balancers can already beat #135's named
+  bands. Also formally adopts that review's item 1 (gate refinements)
+  into Phase A's design section above. Full method and result:
+
+  **1. Tooling verdict: Factorio-SAT is NOT installed in this
+  environment — Phase A regeneration is BLOCKED until it is.**
+  `external/` contains only `README.md` (setup instructions), no
+  `external/factorio-sat` checkout; no `factorio-sat`/`fsat` binary on
+  `PATH`; `pip show factorio-sat` finds nothing.
+  `scripts/generate_balancer_library.py` needs a project-local
+  `external/factorio-sat/.venv` (not a system package) built from
+  `git clone https://github.com/R-O-C-K-E-T/Factorio-SAT.git
+  external/factorio-sat && cd external/factorio-sat && uv venv .venv
+  --python 3.12 && .venv/bin/python -m ensurepip --upgrade &&
+  .venv/bin/python -m pip install --editable .` (documented in
+  `external/README.md`). The prerequisite toolchain for that setup is
+  already present on this machine (`uv` at `~/.local/bin/uv`, `python3.12`
+  at `/usr/bin/python3.12`), so setup is a straightforward clone + venv
+  build (network + a native `kissat` build; not attempted here — out of
+  scope for a feasibility probe), not a missing-toolchain blocker. This
+  is orthogonal to the feasibility question below, which was answered
+  without running SAT locally.
+
+  **2. Shape identification.** #135's issue body (2026-04-11) names only
+  band tile-heights (15/10/8) and the recipe transitions they sit at
+  (copper-plate→copper-cable→iron-plate), not exact `(n,m)` shapes.
+  Re-ran `stress_electronic_circuit_30s_from_ore` with
+  `SPAGHETTIO_DUMP_SNAPSHOTS=1` and decoded the `.fls` snapshot's trace
+  events (`BalancerStamped`, `InterRowBand`) to get shapes directly —
+  **the live 2026-07-31 fixture no longer matches #135's numbers.**
+  `crates/core/tests/e2e.rs`'s own doc-comment baseline for both stress
+  tests is stale in the same direction (`stress_electronic_circuit_30s_from_ore`:
+  documented `entities=11232 … total_gap_tiles=33 … max_gap=15` vs.
+  measured `entities=4966 … total_gap_tiles=34 … max_gap=17`;
+  `stress_electronic_circuit_60s_red_from_ore`: documented `bands=3 …
+  total_gap_tiles=22 … max_gap=12` vs. measured `bands=9 …
+  total_gap_tiles=40 … max_gap=11`) — three months of RFC-057/058/060/061
+  landing has moved these numbers and nobody re-baselined the comments.
+  Live shapes, gate fixture (`stress_electronic_circuit_30s_from_ore`):
+
+  | Band (item) | Shape (n,m) | Stamping | Height |
+  |---|---|---|---|
+  | copper-plate | (3,8) | direct template | 9 |
+  | copper-cable | (8,10) | gcd-decomposed → 2×(4,5) | 17 |
+  | iron-plate | (2,10) | gcd-decomposed → 2×(1,5) | 8 |
+
+  Live shapes, holdout fixture (`stress_electronic_circuit_60s_red_from_ore`,
+  named below):
+
+  | Band (item) | Shape (n,m) | Stamping | Height |
+  |---|---|---|---|
+  | copper-plate | (3,6) | direct template | 9 |
+  | copper-cable | (6,7) | direct template | 11 |
+  | iron-plate | (2,7) | direct template | 8 |
+
+  The decomposition itself (`family_stamp_plan`'s gcd search,
+  `crates/core/src/bus/balancer.rs`) is *already* doing part of what
+  Phase A's approach proposed ("decompose wide 1→M templates into
+  row-gap-sized sub-balancers") — it landed as ordinary balancer-stamping
+  machinery, not attributed to this RFC, so Phase A's actual remaining
+  lever is narrower than the design section implies: regenerate the
+  *sub-templates* the decomposition already selects, not invent
+  decomposition from scratch.
+
+  **3. Community-height comparison.** No in-repo blueprint corpus covers
+  balancers (`crates/mining-cli`'s `blueprint-analyze` exists but the
+  fixture corpus it's normally pointed at has none — searched for
+  `corpus`/`fixture` blueprint files repo-wide, found none). Used
+  Raynquist's balancer collection on FactorioBin (`KafN8H7L`), the
+  standard community balancer book WebSearch surfaced repeatedly across
+  independent queries. Downloaded the actual blueprint string for every
+  shape below (`curl` on the FactorioBin CDN URL — not the page's prose,
+  which one fetch already got subtly wrong) and measured it with
+  `cargo run -p spaghettio_mining --bin blueprint-analyze`, our own tool,
+  rather than trusting the site's stated dimensions:
+
+  | Shape | Ours (W×H, area) | Community (W×H, area) | Area Δ | Height Δ | Source |
+  |---|---|---|---|---|---|
+  | (3,8) | 8×9, 72 | 8×10, 80 | **ours already smaller** (+11%) | ours already shorter | `KafN8H7L/26` |
+  | (4,5) | 5×17, 85 | 7×11, 77 | community −9% | community −35% (17→11) | `KafN8H7L/97` |
+  | (8,10)/(10,8) | 10×17†, 170 | 10×16, 160 | community −6% | community −6% (17→16) | `KafN8H7L/310` |
+  | (1,5) atom‡ | 5×8, 40 | 5×7, 35 | community −12.5% | community −12.5% (8→7) | `KafN8H7L/138` |
+  | (2,7) [holdout] | 7×8, 56 | 8×6, 48 | community −14% | not comparable (orientation) | `KafN8H7L/149` |
+  | (3,6) [holdout] | 6×9, 54 | 7×7, 49 | community −9% | not comparable (orientation) | `KafN8H7L/90` |
+  | (6,7) [holdout] | 10×11, 110 | 10×11, 110 | **parity** | parity | `KafN8H7L/115` |
+
+  † our (8,10) is not a direct template — decomposed 2×(4,5), footprint
+  is 2 stamps side by side. ‡ the (1,5) atom is what our (2,10) band
+  decomposes to; no direct 2-to-10/10-to-2 design surfaced in the
+  community collection within search budget, so the atom-level shape our
+  own decomposition already uses is the fair comparison.
+
+  Reading the table: **5 of 7 shapes have real, verified headroom (6–14%
+  area) in a single hobbyist collection; 1 is at parity; 1 (`(3,8)`,
+  the shape driving the *smallest* of the three bands) is a case where
+  our current template already beats the best community reference
+  found.** This is not the balancer-theoretic-minimum wall the review
+  comment worried about — but it is also nowhere near the RFC's original
+  54.5%-idealized / 25%-bar arithmetic, which was a height-only estimate.
+  Recomputed on **area** (the review's own requested correction): swapping
+  in the best verified reference per shape reduces the gate fixture's
+  three named bands' combined template area from 322→296 tiles² (≈8.1%)
+  and the holdout's from 220→207 tiles² (≈5.9%) — both used directly as
+  this entry's revised bar (see the Phase A design section above).
+
+  **Notable anomaly: `(4,5)` is very likely a stale SAT solve, not a
+  proven floor.** `generate_balancer_library.py`'s own current search
+  bounds for `base_h = max(n,m) = 5` sweep heights `[5, 6, 7, 8]`
+  (`find_balancer`, the `elif base_h >= 5` branch) — height **17** is
+  outside every height that codepath, unmodified, would even attempt
+  today. The template must predate the current tuning of those bounds
+  and has never been regenerated since. This is the single largest
+  contributor to the worst band (copper-cable, height 17, the tallest of
+  the three) and — independent of the community comparison — a strong
+  candidate for "just re-run the existing script on this one shape and
+  see what height it finds," before any script changes or full-library
+  regeneration.
+
+  **4. Gate refinements adopted from PR #547's review (items 1 and 2).**
+  Both folded into the Phase A design section above, not left as
+  decision-log-only notes: (a) the gate is restated as whole-layout
+  bounding-box area after real routing, with tile-height kept as the
+  named mechanism rather than the pass/fail number; (b) a holdout fixture
+  (`stress_electronic_circuit_60s_red_from_ore`) is now required to clear
+  its own (lower) bar alongside the gate fixture, so a regeneration
+  cannot pass by overfitting to `stress_ec30`'s specific shapes. Item 3
+  (Phase B's lane-contention pre-registration) is Phase B's concern, not
+  actioned here — left for whoever picks up that phase.
+
+  **A0 verdict: PROCEED to SAT regeneration, narrowly re-scoped —
+  BLOCKED on tooling setup in this environment.** Feasibility is not
+  falsified: real, community-verified headroom exists on two of the
+  three named shapes (`(4,5)` and the `(1,5)` atom), with `(4,5)`
+  specifically flagged as likely understated by community comparison
+  alone (stale search-bounds artifact, plausibly beatable further by a
+  same-day re-run). The third shape (`(3,8)`) shows no headroom against
+  the best reference found and should not be a Phase A target — spending
+  SAT budget re-searching it is not justified by this probe's evidence.
+  The RFC's original numeric bar is superseded (see Phase A design
+  section) by a lower, area-based, dual-fixture bar computed directly
+  from what this probe demonstrated reachable, rather than from the
+  stale #135 baseline's idealized-ceiling arithmetic. Whoever picks up
+  Phase A next: set up Factorio-SAT per the tooling verdict above, then
+  start with a single targeted regeneration of `(4,5)` (cheapest, most
+  promising, most isolated) before touching the rest of the library.
