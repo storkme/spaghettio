@@ -202,6 +202,25 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 ///
 /// Voider rows recirculate without a splitter, so they never reach this
 /// predicate; only `:selfloop:` and the tap tag identify a splitter branch.
+/// Warning count for CANDIDATE SELECTION (decomposition ranking, the
+/// never-worse channel contracts, the refusal tier). Excludes categories
+/// whose model is not yet calibrated enough to steer selection:
+/// `input-rate-delivery` gained real teeth from the #519 consumption
+/// decrement — honest REPORTING — but letting the new counts re-rank
+/// candidates flipped winners on configs where the audit then caught the
+/// new winner over-stamping physical capacity (stacking_ec_60s: a
+/// reporting recalibration must not silently change which layout ships).
+/// Lift the exemption deliberately once the flux model is sim-anchored
+/// (#519 follow-up), with the fixture drift adjudicated case by case.
+pub(crate) fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
+    issues
+        .iter()
+        .filter(|i| {
+            i.severity == Severity::Warning && i.category != "input-rate-delivery"
+        })
+        .count()
+}
+
 pub(crate) fn segment_is_priority_branch(seg: Option<&str>) -> bool {
     seg.is_some_and(|s| {
         s.contains(":selfloop:") || s.contains(crate::common::MERGE_TAP_SEGMENT_TAG)
@@ -260,12 +279,29 @@ pub(crate) fn resolve_row_spec<'a>(
     y: i32,
     fallback_spec: &'a MachineSpec,
 ) -> &'a MachineSpec {
+    resolve_row_spec_banded(layout, recipe, y, fallback_spec).0
+}
+
+/// Like [`resolve_row_spec`] but also returns the matched row's `[y_start,
+/// y_end)` band, `None` when the fallback (recipe-global) spec applied.
+/// The band is the spec's SCOPE: a per-machine utilization derived from
+/// physically-placed machines must count within it (per-row for partition
+/// siblings, layout-wide for the global fallback) — see
+/// `belt_flow::physical_utilization` (#519 fallout: chain/mega replication
+/// places ceil-per-copy machines, so `ceil(spec.count)` understates the
+/// physical count and `utilization_for` over-states per-machine rates).
+pub(crate) fn resolve_row_spec_banded<'a>(
+    layout: &'a LayoutResult,
+    recipe: &str,
+    y: i32,
+    fallback_spec: &'a MachineSpec,
+) -> (&'a MachineSpec, Option<(i32, i32)>) {
     layout
         .effective_rows
         .iter()
         .find(|row| row.spec.recipe == recipe && y >= row.y_start && y < row.y_end)
-        .map(|row| &row.spec)
-        .unwrap_or(fallback_spec)
+        .map(|row| (&row.spec, Some((row.y_start, row.y_end))))
+        .unwrap_or((fallback_spec, None))
 }
 
 /// Emits one error per connected component of unresolved tiles. The

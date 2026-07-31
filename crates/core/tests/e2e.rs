@@ -1077,7 +1077,10 @@ fn tier2_electronic_circuit() {
     // its FULL 2-lane nominal (the old 1.733 floor was measured through
     // an input-bound cell), so the cable row's 30.0/s on red is within
     // budget and the historical warning is gone.
-    assert_warnings_exactly(&result, &[]);
+    // #519 re-bless: one tail-of-row deficit surfaced by the
+    // consumption-decremented walker (the family ec15-from-plates
+    // sim-measured at −3.6%).
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 1)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -1151,7 +1154,14 @@ fn tier2_electronic_circuit_from_ore() {
     // mechanism sim-measured per-machine on chain-ec15). Every other
     // belt-in group in this same fixture sits at 80% or below and stays
     // silent, so this is a discriminating hit, not a blanket trip.
-    assert_warnings_exactly(&result, &[("row-input-belt-margin", 1)]);
+    // #519 re-bless: the consumption-decremented walker surfaces the ore
+    // rows' tail starvation the blessed sim baseline has recorded since
+    // 2026-07-22 (ec10 FAIL at −50%, #352, "validator-clean") — the check
+    // finally agrees with the measurement.
+    assert_warnings_exactly(
+        &result,
+        &[("input-rate-delivery", 3), ("row-input-belt-margin", 1)],
+    );
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -1812,7 +1822,9 @@ fn tier4_advanced_circuit_partitioned() {
     // now resolves each machine's spec by row position first (falling back
     // to the recipe-keyed lookup only when no row matches), which
     // disambiguates the siblings and re-pins this to its true count.
-    assert_warnings_exactly(&result, &[]);
+    // #519 re-bless: two tail-of-row deficits surfaced by the
+    // consumption-decremented walker (the ac@5 sim-measured class).
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 2)]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
@@ -1906,6 +1918,10 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             i.category != "inserter-throughput"
                 && i.category != "inserter-item-throughput"
                 && i.category != "row-output-lane-budget"
+                // #519: honest tail-deficit reporting (29 hits on this
+                // chain's coal/plate/cable rows) is orthogonal to this
+                // test's SAT-zone concern, like the categories above.
+                && i.category != "input-rate-delivery"
         })
         .copied()
         .collect();
@@ -2228,7 +2244,12 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // this config strictly-better and DELETES the long-standing
     // input-rate-delivery residual (was the tier-4 ladder's known
     // warning; docs/status.md row updated with the RFC close-out).
-    assert_warnings_exactly(&result, &[]);
+    // #519 re-bless (2026-07-31): the decremented walker finds 8 tail
+    // deficits on the horizontal winner — the SAME topology ac@5-from-
+    // plates sim-measured at 75% of plan (E0/W0 at the time). This is the
+    // check catching up with the measured flux gap, not a layout change;
+    // status.md's tier-4 row already carries the not-sim-verified caveat.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 11)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -2285,7 +2306,11 @@ fn tier5_processing_unit_from_ore_am3() {
     // cap found across every EC-chain fixture: bridged fast-belt-out
     // Re-calibrated 2026-07-24 (#383/#431): full 2-lane nominal covers
     // all five rows — the historical warnings are gone.
-    assert_warnings_exactly(&result, &[]);
+    // #519 re-bless: 32 tail-of-row deficits across the chain's coal /
+    // copper-plate / copper-cable / plastic rows — the same uniform
+    // −24% chain signature pu@3 sim-measured (RFC-060 K60-3, converged,
+    // warmup-flat). The check now reports what the sim already proved.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 32)]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -4451,7 +4476,13 @@ fn stress_electronic_circuit_60s_red_from_ore() {
             // chain-ec15/mega-chain-pu4raw). Neighbouring rows in the same
             // fixture sit at 90%/75%/50% and correctly stay silent, so
             // this is not a blanket trip. 0 -> 5.
-            max_warnings: 5,
+            // #519 (2026-07-31): +45 input-rate-delivery — the
+            // consumption-decremented walker turns #448's 5 zero-margin
+            // belt-margin observations into per-machine tail-starvation
+            // reports across the same 100%-loaded smelter/cable rows (the
+            // class the logistic/military sims measured at −40/−48% while
+            // "validator-clean"). 5 -> 50; tighten as flux fixes land.
+            max_warnings: 50,
             max_errors_by_category: Default::default(),
         },
     );
@@ -7418,9 +7449,17 @@ fn quality_ec_45s_express_legendary_from_ore() {
             i.category, i.message
         );
     }
+    // #519 re-bless (2026-07-31): 1 -> 18. The decremented walker expands
+    // the single known residual into per-machine reports: ~10 are the
+    // honest internal-chain class (copper-plate/copper-cable tails, the
+    // ac@5-measured shape), the ore-row remainder is the even-split
+    // seeding approximation on this balancer-fed layout (merge-demand
+    // over-attribution keeps the demand-weighted path gated off here —
+    // the recorded #519 follow-up). Both shrink as calibration lands.
     assert!(
-        issues.len() <= 1,
-        "expected at most the single known input-rate-delivery residual, got {issues:?}"
+        issues.len() == 18,
+        "expected the 18 adjudicated input-rate-delivery residuals (#519), got {}: {issues:?}",
+        issues.len()
     );
 
     // rfc-043-pole-band-thinning kill criterion 2 pin: single-band mode at
@@ -7815,7 +7854,18 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
         .unwrap_or_else(|e| e.issues);
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
-            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            // Selection-scoped warning count (#519): the engine's DI choice
+            // deliberately excludes the new flux category (its counts did
+            // not exist when this contract was defined; the engine's
+            // selections stay bit-identical to pre-#519). This pin asserts
+            // the contract the engine ENFORCES; giving it flux teeth is
+            // the #519/#520 follow-up, gated on sim-anchoring the model.
+            issues
+                .iter()
+                .filter(|i| {
+                    i.severity == Severity::Warning && i.category != "input-rate-delivery"
+                })
+                .count(),
             l.warnings.len(),
         )
     };
@@ -7875,7 +7925,18 @@ fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
         .unwrap_or_else(|e| e.issues);
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
-            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            // Selection-scoped warning count (#519): the engine's DI choice
+            // deliberately excludes the new flux category (its counts did
+            // not exist when this contract was defined; the engine's
+            // selections stay bit-identical to pre-#519). This pin asserts
+            // the contract the engine ENFORCES; giving it flux teeth is
+            // the #519/#520 follow-up, gated on sim-anchoring the model.
+            issues
+                .iter()
+                .filter(|i| {
+                    i.severity == Severity::Warning && i.category != "input-rate-delivery"
+                })
+                .count(),
             l.warnings.len(),
         )
     };
@@ -8028,12 +8089,27 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     let over2 = audit(&l2, 2);
     assert!(over2.is_empty(), "tiles above physical stacked capacity at S=2: {over2:?}");
 
-    // Teeth: some belt genuinely carries more than one unstacked yellow belt
-    // (25/s cable trunk / row output > 15/s), proving the lift is real — the
-    // config is only buildable because stacking doubled the per-belt ceiling.
+    // Teeth, on a DI-Off S=2 arm (review finding on #525: the default
+    // arm's winner takes cable off belts entirely since the #519
+    // selection recalibration, which made an either/or carve-out here
+    // vacuous — DI-Off forces cable ONTO belts, so this arm isolates the
+    // RFC-047 stacking lift the way the S=1 refusal arm does). It must
+    // build (S=1 DI-Off refuses; only the doubled ceiling makes it
+    // buildable), stay within the stacked audit, and genuinely use the
+    // lift: some belt above one unstacked yellow's 15/s.
+    let l2_belts = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..opts_with(2)
+        },
+    )
+    .unwrap_or_else(|e| panic!("S=2 with DI Off must build via the stacked lift: {e}"));
+    let over2b = audit(&l2_belts, 2);
+    assert!(over2b.is_empty(), "DI-Off S=2 arm above stacked capacity: {over2b:?}");
     assert!(
-        l2.entities.iter().any(|e| e.rate.is_some_and(|r| r > 15.0)),
-        "no belt exceeds unstacked full-belt capacity — vacuous lift"
+        l2_belts.entities.iter().any(|e| e.rate.is_some_and(|r| r > 15.0)),
+        "no belt exceeds unstacked full-belt capacity on the DI-Off arm — vacuous lift"
     );
 }
 
@@ -8829,7 +8905,18 @@ fn di_change_surface_sweep() {
         .unwrap_or_else(|e| e.issues);
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
-            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            // Selection-scoped warning count (#519): the engine's DI choice
+            // deliberately excludes the new flux category (its counts did
+            // not exist when this contract was defined; the engine's
+            // selections stay bit-identical to pre-#519). This pin asserts
+            // the contract the engine ENFORCES; giving it flux teeth is
+            // the #519/#520 follow-up, gated on sim-anchoring the model.
+            issues
+                .iter()
+                .filter(|i| {
+                    i.severity == Severity::Warning && i.category != "input-rate-delivery"
+                })
+                .count(),
             l.warnings.len(),
         )
     };
