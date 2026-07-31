@@ -220,3 +220,22 @@ bit-identically (all 6 simple cases). Full table: #513.
   gap is tracked in
   [#519](https://github.com/storkme/spaghettio/issues/519) with the
   tile-level forensics.*
+- *2026-07-31 — **pu3 re-run on the fixed kit: K60-3 holds on the last
+  case.** `pu3-on` (E0/W35) delivers **2.47/s (−17.6%)** with the chain
+  flat at ~−24% (cable/plates/EC all −24%, the #519 single-lane-tap
+  signature; the PU stage's machine-count ceiling absorbs it back to
+  −17.6%). Formally `converged=false` at drift +2.4%, but the window
+  series (2.57→2.47→2.52→2.49→2.55→2.48→2.55→2.49→2.52) is oscillation
+  around 2.51, not a ramp — quantization noise on 300-item windows, not
+  a buffer-fill transient. `pu3-off` (native, E11/W149) delivers
+  **0.00/s** — a genuine deadlock (380 `full_output` + 82 starved), not
+  a kit artifact, on the fixed kit. Comparative verdict: 2.47 ≫ 0; no
+  flipped case sims below native. K60-3 does not trip; the draft→ready
+  gate is cleared.*
+- *2026-07-31 — pu3-on warmup sweep per the deep-chain rule: re-run at
+  `--warmup 432000` (2 game-hours) CONVERGES at **2.53/s delivered
+  (−15.7%, drift +1.5%)** vs 2.47 at 288k — flat against warmup, so the
+  deficit is real, not a buffer-fill transient. Chain still uniformly
+  ~−24% (EC −23.9%, AC −23.7%): the #519 single-lane-tap mechanism is
+  warmup-invariant. Recorded as the case's honest floor; #519's fix
+  should move it.*
