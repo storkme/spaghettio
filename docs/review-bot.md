@@ -339,36 +339,6 @@ stopped being true on 2026-07-29 when the guard moved to head-SHA coverage
 (class 6's fix). That understated the consequence of a skip to the one reader
 whose behaviour it was trying to change. Corrected in the same PR.
 
-### Failure class 6 recurred a FOURTH time — with the fix live in its own prompt (2026-07-31)
-
-Tracked as [#538](https://github.com/storkme/spaghettio/issues/538). PR #535, run
-`30650165439`: `num_turns: 5`, `subtype: success`, `reviews=0 inline=0
-bot_summaries=0`.
-
-```
-[11][21] Agent(...) x 2   -> async, return immediately
-[29] "Both agents launched in the background ... I'll wait for both to complete"
-[30] ScheduleWakeup({delaySeconds: 90, reason: "Waiting on the two haiku agents"})
-[36] "notifications arrive automatically, so I don't need to schedule a wakeup"
-[37] END
-```
-
-It called the banned tool, then **talked itself out of it**, then waited
-passively — which in a one-shot job is stopping.
-
-**What makes this one decisive rather than another tally mark: #522's fix was in
-this run's prompt and was ignored.** The job log carries four occurrences each of
-`THE POSTING CONTRACT, and it is` and `may return IMMEDIATELY`. So the
-unconditional posting obligation, written specifically because the previous entry
-concluded that banning mechanisms could not work, is itself now defeated.
-
-Three phrasings have each failed: a ban on one tool (#416), a ban on parking
-generally (#511), an unconditional obligation to post (#521 → #522). **Prompt-level
-mitigation is exhausted; the next fix has to remove the capability.**
-`--allowedTools` adds to the defaults rather than restricting them, which is why
-`Agent` and `ScheduleWakeup` are reachable at all — `--disallowedTools` is the
-lever. See #538 for why that is a trade rather than a free fix.
-
 ### Failure class 6 recurred a THIRD time: an async subagent launch (2026-07-31)
 
 Same head as class 10, one run later. PR #521, run `30624630414`:
