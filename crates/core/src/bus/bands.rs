@@ -26,7 +26,7 @@
 use crate::bus::placer::RowSpan;
 use crate::common::{entity_size, is_machine_entity};
 use crate::models::PlacedEntity;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The probe's aspect cap. Phase 0 swept 3.0–4.0 and the applicable-fixture
 /// count did not move, so 3:1 stands (RFC-058 decision log, 2026-07-31).
@@ -357,4 +357,141 @@ pub fn packing_refusal(
         }
     }
     None
+}
+
+/// The rigid content of one band for phase-4 translation: every source
+/// row its spans carry EXCEPT belt rows (transport, re-planned) — pipe
+/// rows and any other non-belt span content travel with the band. See
+/// the RFC's "content rect" implementation note (2026-07-31).
+#[derive(Debug, Clone)]
+pub struct BandContent {
+    /// Source rows (ys) that translate rigidly with this band.
+    pub content_ys: Vec<i32>,
+    /// Content rect in source coordinates: (x, y, w, h) over non-belt,
+    /// non-pole entities anchored in `content_ys`.
+    pub rect: (i32, i32, i32, i32),
+    pub row_indices: Vec<usize>,
+}
+
+fn is_transport(name: &str) -> bool {
+    name.ends_with("transport-belt")
+        || name.ends_with("underground-belt")
+        || name.ends_with("splitter")
+}
+
+/// Compute each band's rigid content. A span's non-belt rows are
+/// assigned to the nearest of the span's own bands (a span can split
+/// into several bands when a belt row divides its structural runs).
+pub fn band_contents(
+    bands: &[Band],
+    rows: &[RowSpan],
+    entities: &[PlacedEntity],
+) -> Vec<BandContent> {
+    let mut belt_ys_per_span: Vec<FxHashSet<i32>> = Vec::with_capacity(rows.len());
+    for rs in rows {
+        let mut s: FxHashSet<i32> = rs.input_belt_y.iter().copied().collect();
+        s.insert(rs.output_belt_y);
+        if let Some((_, y)) = &rs.secondary_output_belt {
+            s.insert(*y);
+        }
+        for (_, y) in &rs.sorted_output_belts {
+            s.insert(*y);
+        }
+        belt_ys_per_span.push(s);
+    }
+
+    // span index -> bands that contain it, for nearest-band assignment.
+    let mut span_bands: Vec<Vec<usize>> = vec![Vec::new(); rows.len()];
+    for (bi, b) in bands.iter().enumerate() {
+        for &si in &b.row_indices {
+            span_bands[si].push(bi);
+        }
+    }
+
+    let mut content_ys: Vec<Vec<i32>> = vec![Vec::new(); bands.len()];
+    for (si, rs) in rows.iter().enumerate() {
+        if span_bands[si].is_empty() {
+            continue;
+        }
+        for y in rs.y_start..rs.y_end {
+            if belt_ys_per_span[si].contains(&y) {
+                continue;
+            }
+            let owner = span_bands[si]
+                .iter()
+                .copied()
+                .min_by_key(|&bi| {
+                    let b = &bands[bi];
+                    (b.y - y).max(y - (b.y + b.h - 1)).max(0)
+                })
+                .unwrap();
+            content_ys[owner].push(y);
+        }
+    }
+
+    bands
+        .iter()
+        .enumerate()
+        .map(|(bi, b)| {
+            let mut ys = std::mem::take(&mut content_ys[bi]);
+            ys.sort_unstable();
+            ys.dedup();
+            let yset: FxHashSet<i32> = ys.iter().copied().collect();
+            let (mut xmin, mut xmax, mut ymin, mut ymax) =
+                (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+            for e in entities {
+                if is_transport(&e.name) || e.name.contains("electric-pole") {
+                    continue;
+                }
+                if !yset.contains(&e.y) {
+                    continue;
+                }
+                let (ew, eh) = entity_size(&e.name);
+                xmin = xmin.min(e.x);
+                xmax = xmax.max(e.x + ew as i32 - 1);
+                ymin = ymin.min(e.y);
+                ymax = ymax.max(e.y + eh as i32 - 1);
+            }
+            if xmin > xmax {
+                // Degenerate (no entities): fall back to the structural rect.
+                (xmin, xmax, ymin, ymax) = (b.x, b.x + b.w - 1, b.y, b.y + b.h - 1);
+            }
+            BandContent {
+                content_ys: ys,
+                rect: (xmin, ymin, xmax - xmin + 1, ymax - ymin + 1),
+                row_indices: b.row_indices.clone(),
+            }
+        })
+        .collect()
+}
+
+/// Rigidly translate each band's content entities so content-rect origins
+/// land on `origins[i]` (packed coordinates). Transport and poles are NOT
+/// carried — belts are re-planned and poles re-placed by the packed
+/// builder. Returns the translated entities.
+pub fn translate_band_contents(
+    contents: &[BandContent],
+    origins: &[(i32, i32)],
+    entities: &[PlacedEntity],
+) -> Vec<PlacedEntity> {
+    let mut y_to_band: FxHashMap<i32, usize> = FxHashMap::default();
+    for (bi, c) in contents.iter().enumerate() {
+        for &y in &c.content_ys {
+            y_to_band.insert(y, bi);
+        }
+    }
+    let mut out = Vec::new();
+    for e in entities {
+        if is_transport(&e.name) || e.name.contains("electric-pole") {
+            continue;
+        }
+        let Some(&bi) = y_to_band.get(&e.y) else { continue };
+        let (rx, ry, _, _) = contents[bi].rect;
+        let (ox, oy) = origins[bi];
+        let mut moved = e.clone();
+        moved.x = e.x - rx + ox;
+        moved.y = e.y - ry + oy;
+        out.push(moved);
+    }
+    out
 }
