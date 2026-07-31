@@ -1304,10 +1304,25 @@ pub fn check_belt_flow_reachability(
         }
     }
     let mut reported: FxHashSet<(i32, i32)> = FxHashSet::default();
+    // A tile that is BOTH a drop and a pickup is fed by the drop, even though
+    // the one-step-in seeding cannot see it: the seeding exists to stop a tile
+    // supplying itself, and a drop AT the tile is a different thing from the
+    // tile being its own upstream. Caught in review of this change — it is the
+    // common shape, since `stamp_di_bridge`'s pickup column and a producer's own
+    // output-drop column both land at `mx+1` under the default row geometry.
+    //
+    // Deliberately NOT `!source_tiles.contains(&t)`: `source_tiles` also holds
+    // every boundary tile, and letting a pickup satisfy itself by sitting on the
+    // boundary is the laxity the seeding was added to remove. Only an actual
+    // drop at the tile counts.
     let mut unfed: Vec<(i32, i32)> = machines_by_input
         .keys()
         .chain(lift_pickup_tiles.iter())
-        .filter(|&&t| !fed.contains(&t))
+        .filter(|&&t| {
+            !fed.contains(&t)
+                && !output_belt_tiles.contains(&t)
+                && !lift_drop_tiles.contains(&t)
+        })
         .copied()
         .collect();
     unfed.sort();
@@ -1363,9 +1378,21 @@ pub fn check_belt_flow_reachability(
             }
         }
     }
+    // Mirror of the input-side allowance: items leave a tile that something
+    // picks FROM, even when that tile is the machine's own drop tile. The old
+    // code encoded this only for DI bridges, by testing the INCLUSIVE
+    // `downstream` set against `di_bridge_pickup_tiles` while using the strict
+    // `downstream_beyond` for every other arm. That asymmetry was load-bearing
+    // and undocumented; it is stated here and extended to the other pickup
+    // kinds, which have the same physics.
     let mut stuck: Vec<(i32, i32)> = machines_by_output
         .keys()
-        .filter(|&&t| !drains.contains(&t))
+        .filter(|&&t| {
+            !drains.contains(&t)
+                && !input_belt_tiles.contains(&t)
+                && !di_bridge_pickup_tiles.contains(&t)
+                && !lift_pickup_tiles.contains(&t)
+        })
         .copied()
         .collect();
     stuck.sort();
@@ -4224,6 +4251,109 @@ mod tests {
             .filter(|i| i.message.contains("cannot leave"))
             .collect();
         assert_eq!(errors.len(), 1);
+    }
+
+    /// Regression for the same-tile false positive on the OUTPUT side (#524
+    /// review): a DI bridge picks straight off the producer's own drop tile.
+    ///
+    /// The tile is in `sink_tiles` but never in the strictly-one-step-upstream
+    /// `drains` closure, so a membership test alone reported "items cannot
+    /// leave" on a working layout. This is the COMMON shape rather than a corner
+    /// case — `stamp_di_bridge`'s pickup column and the producer's own
+    /// output-drop column both land at `mx + 1` under the default row geometry —
+    /// and because `di_choice` gates on being better on every channel, the
+    /// spurious warning would have suppressed correct DI layouts.
+    #[test]
+    fn flow_reachability_di_bridge_on_own_drop_tile_is_not_stuck() {
+        let sr = simple_solver(5.0, 2.5);
+        let mut entities = vec![
+            PlacedEntity {
+                name: "assembling-machine-3".to_string(),
+                x: 3,
+                y: 0,
+                direction: EntityDirection::North,
+                recipe: Some("iron-gear-wheel".to_string()),
+                ..Default::default()
+            },
+            inserter(4, -1, EntityDirection::South), // input: picks (4,-2)
+        ];
+        for x in 0..5 {
+            entities.push(belt(x, -2, EntityDirection::East));
+        }
+        // Output inserter drops on (4,4); that belt flows nowhere...
+        entities.push(inserter(4, 3, EntityDirection::South));
+        entities.push(belt(4, 4, EntityDirection::North));
+        // ...because a DI bridge lifts straight off it. South-facing at (4,5)
+        // picks from (4,4) and carries to the consumer.
+        let mut bridge = inserter(4, 5, EntityDirection::South);
+        bridge.segment_id = Some("di-bridge:iron-gear-wheel".to_string());
+        entities.push(bridge);
+        let lr = LayoutResult {
+            entities,
+            width: 20,
+            height: 20,
+            ..Default::default()
+        };
+        let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
+        let stuck: Vec<_> = issues
+            .iter()
+            .filter(|i| i.message.contains("cannot leave"))
+            .collect();
+        assert!(
+            stuck.is_empty(),
+            "a DI bridge picking off the producer's own drop tile is a valid \
+             exit: {stuck:?}"
+        );
+    }
+
+    /// Mirror of the above on the INPUT side: a belt-to-belt lift drops onto the
+    /// exact tile another inserter picks from. That tile is a genuine, active
+    /// source, but the one-step-in seeding excluded it from `fed`.
+    ///
+    /// The geometry mirrors `flow_reachability_output_dead_end_fails`
+    /// deliberately. A first draft put the machine where its input inserter's
+    /// drop tile missed the machine footprint, so the pickup was never
+    /// classified as a machine input and never checked — the test passed with
+    /// the fix AND with it sabotaged, i.e. it asserted nothing.
+    #[test]
+    fn flow_reachability_lift_drop_on_pickup_tile_is_fed() {
+        let sr = simple_solver(5.0, 2.5);
+        let mut entities = vec![
+            PlacedEntity {
+                name: "assembling-machine-3".to_string(),
+                x: 3,
+                y: 0,
+                direction: EntityDirection::North,
+                recipe: Some("iron-gear-wheel".to_string()),
+                ..Default::default()
+            },
+            // Machine input: picks from (4,-2).
+            inserter(4, -1, EntityDirection::South),
+        ];
+        // (4,-2) is isolated: nothing FLOWS into it. Its only supply is the lift.
+        entities.push(belt(4, -2, EntityDirection::South));
+        // A fed run along y = -4, reaching the boundary at x = 0.
+        for x in 0..5 {
+            entities.push(belt(x, -4, EntityDirection::East));
+        }
+        // Lift at (4,-3) facing South: picks (4,-4) off the fed run, drops (4,-2)
+        // — the machine's pickup tile.
+        entities.push(inserter(4, -3, EntityDirection::South));
+        let lr = LayoutResult {
+            entities,
+            width: 20,
+            height: 20,
+            ..Default::default()
+        };
+        let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
+        let unfed: Vec<_> = issues
+            .iter()
+            .filter(|i| i.message.contains("nothing feeds its pickup belt at (4,-2)"))
+            .collect();
+        assert!(
+            unfed.is_empty(),
+            "a lift dropping onto the pickup tile feeds it: {unfed:?}"
+        );
     }
 
     // --- check_belt_dead_ends: UG output ---

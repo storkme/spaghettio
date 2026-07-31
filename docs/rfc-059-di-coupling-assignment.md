@@ -681,6 +681,26 @@ widespread and the optimum is static everywhere.
   the coupling count. Two arms is a constant factor on solves that have couplings
   at all, which is the same shape of cost #474 already accepted for DI itself.
 
+- *2026-07-31 — the default flip to `Downstream` is DEFERRED, not declined.*
+  Fixing #520's validator blind spot changed this RFC's measurement: the search
+  now beats fixed upstream on 6 targets and fixed downstream on **0**, so
+  downstream-first dominates and the two-arm `Search` is equivalent to simply
+  flipping the default — KC4's "do not ship machinery for a tie", one level up.
+  The two targets that made downstream look worse (`small-electric-pole@5` on am1
+  and am2) were the ones where UPSTREAM shipped a factory measured at 2.52/s
+  against a planned 5.00/s; downstream was never worse there, and the instrument
+  could not tell.
+
+  Not flipped in the same change, and the reason is this RFC's own lesson rather
+  than caution: the evidence for the flip is a re-run of the validator, and #520
+  is the demonstration that a clean validator is not evidence a layout works.
+  The flip needs sim verification of the targets it improves —
+  `display-panel@1`, `land-mine@1` at three tiers, `big-electric-pole@1`,
+  `medium-electric-pole@5` — of which only `display-panel@1` has been simmed.
+  Recorded here rather than only in Outcome because RFC-059 owns
+  `DiClaimOrder::default()`, so deferring a change to it is a call made on this
+  RFC's subject.
+
 - *2026-07-31 — `DiClaimOrder::Pinned` kept although P2/P3 were dropped.* It is
   measurement machinery for a policy that will not ship, which normally argues
   for deleting it. Kept because it is the instrument that produced the negative,
