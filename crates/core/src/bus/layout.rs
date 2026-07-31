@@ -136,6 +136,11 @@ pub struct LayoutOptions {
     /// The solver always populates `di_couplings`; this only controls
     /// whether the placer acts on them.
     pub direct_insertion: crate::bus::di_cell::DirectInsertion,
+    /// Which coupling claims a contended DI spec (RFC-059). Default
+    /// `Upstream` = the status quo, so every existing layout is
+    /// byte-identical; `Downstream` is P1, the alternative phase 1 measures
+    /// against.
+    pub di_claim_order: crate::bus::di_cell::DiClaimOrder,
     /// RFC-057 topology-preserving post-layout compaction. Experimental and
     /// default off, so the normal pipeline remains byte-identical.
     pub compact_layout: bool,
@@ -179,6 +184,7 @@ impl Default for LayoutOptions {
             // native pass is DI-free, so every layout DI does not
             // strictly improve stays bit-identical.
             direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
+            di_claim_order: crate::bus::di_cell::DiClaimOrder::default(),
             compact_layout: false,
             band_packing: false,
         }
@@ -723,7 +729,7 @@ fn layout_pass(
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
-        opts.direct_insertion.placer_acts(),
+        opts.direct_insertion.placer_acts().then_some(opts.di_claim_order.clone()),
         &solver_result.di_couplings,
         &stacking_ctx,
     );
@@ -785,7 +791,7 @@ fn layout_pass(
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
-                opts.direct_insertion.placer_acts(),
+                opts.direct_insertion.placer_acts().then_some(opts.di_claim_order.clone()),
                 &solver_result.di_couplings,
                 &stacking_ctx,
             );

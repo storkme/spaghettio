@@ -154,32 +154,105 @@ impl DecompositionCandidate for DirectInsertionCandidate {
         if opts.direct_insertion != crate::bus::di_cell::DirectInsertion::Candidate {
             return Err("direct insertion is not in Candidate mode".to_string());
         }
-        let mut di_opts = opts.clone();
-        di_opts.direct_insertion = crate::bus::di_cell::DirectInsertion::Forced;
-        let l = run_layout_with_retry(solver_result, &di_opts)?;
-        // Self-validate before competing, for the same reason
-        // `CellComposedCandidate` does: `score_layout.accepted` never
-        // runs the full validator, so an error-laden DI layout would
-        // reach real callers as a silently broken `Ok`. Errors refuse;
-        // warnings pass here and are weighed by `di_choice` instead.
-        let issues =
-            crate::validate::validate(&l, Some(solver_result), crate::validate::LayoutStyle::Bus)
-                .map_err(|e| {
-                    format!(
-                        "direct insertion failed validation: {}",
-                        e.to_string().lines().next().unwrap_or("")
-                    )
-                })?;
-        let n_err = issues
-            .iter()
-            .filter(|i| i.severity == crate::validate::Severity::Error)
-            .count();
-        if n_err > 0 {
-            return Err(format!(
-                "direct insertion carries {n_err} validation errors (refusing a broken layout)"
-            ));
+
+        // RFC-059: the claim order is an internal SEARCH AXIS, not a policy.
+        //
+        // When a spec is eligible in two couplings, only one may fuse, and which
+        // one wins is decided by the direction the dispatcher walks consumers.
+        // The RFC set out to pick a direction and measured instead that
+        // **neither dominates**: over every producible item at 1/5/20 per second
+        // across three machine tiers, downstream-first ships a strictly better
+        // layout on 6 targets and a strictly worse one on 2. Picking either
+        // fixed direction forfeits the other's wins.
+        //
+        // What made the choice unnecessary is a second measurement: on **no**
+        // target does any other assignment beat both static orders. Pinning each
+        // contended coupling to claim first and rebuilding never found a third
+        // answer. So the per-target optimum is always one of these two, and
+        // trying both is not a heuristic — it is exhaustive over the reachable
+        // set, which is why this RFC ships no estimator (P2) and no matching
+        // solver (P3).
+        //
+        // Cost is one extra layout build on solves that have couplings, and it
+        // buys a result that is never worse than either fixed order by
+        // construction. That is a different trade from the one the RFC's Design
+        // section rejected: there the cost was a build **per candidate
+        // coupling**, unbounded in the coupling count; here it is a constant 2.
+        let arm = |order: crate::bus::di_cell::DiClaimOrder| {
+            let mut di_opts = opts.clone();
+            di_opts.direct_insertion = crate::bus::di_cell::DirectInsertion::Forced;
+            di_opts.di_claim_order = order;
+            let l = run_layout_with_retry(solver_result, &di_opts)?;
+            // Self-validate before competing, for the same reason
+            // `CellComposedCandidate` does: `score_layout.accepted` never
+            // runs the full validator, so an error-laden DI layout would
+            // reach real callers as a silently broken `Ok`. Errors refuse;
+            // warnings pass here and are weighed by `di_choice` instead.
+            let issues = crate::validate::validate(
+                &l,
+                Some(solver_result),
+                crate::validate::LayoutStyle::Bus,
+            )
+            .map_err(|e| {
+                format!(
+                    "direct insertion failed validation: {}",
+                    e.to_string().lines().next().unwrap_or("")
+                )
+            })?;
+            let n_err = issues
+                .iter()
+                .filter(|i| i.severity == crate::validate::Severity::Error)
+                .count();
+            if n_err > 0 {
+                return Err(format!(
+                    "direct insertion carries {n_err} validation errors (refusing a broken layout)"
+                ));
+            }
+            let n_warn = issues
+                .iter()
+                .filter(|i| i.severity == crate::validate::Severity::Warning)
+                .count();
+            Ok::<_, String>((l, n_warn))
+        };
+
+        // Two arms only under `Search`, which is NOT the default — `Upstream`
+        // is (RFC-059: the search is measured better on every validator channel
+        // and ships a 0/s factory on one target, so it waits on #520). Every
+        // other value pins a single arm, and that is also how the corpus sweep
+        // measures the search against the pre-RFC status quo rather than
+        // asserting that picking the better arm cannot be worse.
+        if opts.di_claim_order != crate::bus::di_cell::DiClaimOrder::Search {
+            return arm(opts.di_claim_order.clone()).map(|(l, _)| l);
         }
-        Ok(l)
+        let upstream = arm(crate::bus::di_cell::DiClaimOrder::Upstream);
+        let downstream = arm(crate::bus::di_cell::DiClaimOrder::Downstream);
+        match (upstream, downstream) {
+            // Both built: keep the better on (validator warnings, then density).
+            // Errors are already zero on both — an arm carrying any refuses
+            // above — so warnings are the first channel that can separate them.
+            // TIES GO TO UPSTREAM, which is the pre-RFC behaviour: a tie must
+            // stay bit-identical to what shipped before, or every unaffected
+            // target in the corpus becomes a diff to explain.
+            (Ok((lu, wu)), Ok((ld, wd))) => {
+                let downstream_wins =
+                    (wd, ld.warnings.len(), ld.entities.len()) < (wu, lu.warnings.len(), lu.entities.len());
+                crate::trace::emit(crate::trace::TraceEvent::DiClaimOrderChosen {
+                    order: if downstream_wins { "downstream" } else { "upstream" }.to_string(),
+                    upstream_entities: lu.entities.len(),
+                    downstream_entities: ld.entities.len(),
+                    upstream_warnings: wu,
+                    downstream_warnings: wd,
+                });
+                Ok(if downstream_wins { ld } else { lu })
+            }
+            // One arm refused. This is the ordinary case, not an error: a claim
+            // order that fuses the wrong pair produces a layout DI's own gate
+            // rejects, and the other order's result is then the honest answer.
+            (Ok((l, _)), Err(_)) | (Err(_), Ok((l, _))) => Ok(l),
+            // Both refused — report upstream's reason, so the message a caller
+            // sees is unchanged from before this candidate had two arms.
+            (Err(e), Err(_)) => Err(e),
+        }
     }
 }
 
@@ -370,6 +443,9 @@ impl DecompositionCandidate for ModuleSizeSplit {
             cell_composition: opts.cell_composition,
             splitter_tap_spacers: opts.splitter_tap_spacers,
             direct_insertion: opts.direct_insertion,
+            // Inherited, not defaulted: a claim-order measurement that silently
+            // reverted to P0 inside the partitioned path would report P0-vs-P0.
+            di_claim_order: opts.di_claim_order.clone(),
             compact_layout: false,
             // Same discipline as compact_layout: the flag-gated RFC-058
             // plan is emitted by the native pass, not re-emitted by every
