@@ -688,36 +688,56 @@ pub fn route_packed_nets(
         hi = (hi.0.max(e.x), hi.1.max(e.y));
     }
     let (min, max) = ((lo.0 - 6, lo.1 - 6), (hi.0 + 6, hi.1 + 6));
-    let passable = |occ: &FxHashMap<(i32, i32), u8>, t: (i32, i32), horiz: bool| -> bool {
+
+    // Translated belt-row helper.
+    let row_y = |bi: usize, src_y: i32| src_y - contents[bi].rect.1 + origins[bi].1;
+
+    // Each band's output-row CONTINUATION stub — (ox-1, y) and (ox-2, y) —
+    // is reserved for that band's own nets before any routing: the pickup
+    // must physically continue the west-flowing row, and an earlier
+    // corridor turning on the stub previously left zero seedable starts.
+    let mut reserved: FxHashMap<(i32, i32), usize> = FxHashMap::default();
+    for (bi, c) in contents.iter().enumerate() {
+        let ox = origins[bi].0;
+        for &si in &c.row_indices {
+            let y = row_y(bi, rows[si].output_belt_y);
+            reserved.insert((ox - 1, y), bi);
+            reserved.insert((ox - 2, y), bi);
+        }
+    }
+    let passable = |occ: &FxHashMap<(i32, i32), u8>,
+                    t: (i32, i32),
+                    horiz: bool,
+                    me: Option<usize>| -> bool {
         if t.0 < min.0 || t.0 > max.0 || t.1 < min.1 || t.1 > max.1 {
             return false;
+        }
+        if let Some(&owner) = reserved.get(&t) {
+            if me != Some(owner) {
+                return false;
+            }
         }
         let b = occ.get(&t).copied().unwrap_or(0);
         b & (BAND | TURN) == 0 && b & (if horiz { H } else { V }) == 0
     };
-
-    // Translated belt-row helper.
-    let row_y = |bi: usize, src_y: i32| src_y - contents[bi].rect.1 + origins[bi].1;
 
     let mut ordered: Vec<&PackedNet> = nets.iter().collect();
     ordered.sort_by(|a, b| b.rate.total_cmp(&a.rate).then_with(|| a.item.cmp(&b.item)));
 
     let mut out: Vec<PlacedEntity> = Vec::new();
     for net in ordered {
-        // The whole output row plus 2-tile extensions is the start set —
-        // the spike's shape. A single west-end pickup tile proved fragile:
-        // an earlier net's corridor turning on that exact tile left zero
-        // seedable starts (caught by the parity test on sci2-ore).
+        // Starts are the output row's CONTINUATION tiles — reserved for
+        // this band above, so they are always seedable and the corridor's
+        // first belt physically receives the row's west flow.
         let starts: Vec<(i32, i32)> = match net.src_band {
             Some(bi) => {
-                let (ox, _) = origins[bi];
-                let rw = contents[bi].rect.2;
+                let ox = origins[bi].0;
                 contents[bi]
                     .row_indices
                     .iter()
                     .flat_map(|&si| {
                         let y = row_y(bi, rows[si].output_belt_y);
-                        (ox - 2..ox + rw + 2).map(move |x| (x, y))
+                        [(ox - 1, y), (ox - 2, y)]
                     })
                     .collect()
             }
@@ -771,7 +791,7 @@ pub fn route_packed_nets(
                 FxHashMap::default();
             for &s in &starts {
                 for horiz in [true, false] {
-                    if passable(&occ, s, horiz) {
+                    if passable(&occ, s, horiz, net.src_band) {
                         best.insert((s, horiz), 0);
                         open.push(Reverse((hfn(s), 0, s, horiz)));
                     }
@@ -797,10 +817,10 @@ pub fn route_packed_nets(
                 for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                     let nxt = (tile.0 + dx, tile.1 + dy);
                     let nh = dy == 0;
-                    if !passable(&occ, nxt, nh) {
+                    if !passable(&occ, nxt, nh, net.src_band) {
                         continue;
                     }
-                    if nh != horiz && !passable(&occ, tile, nh) {
+                    if nh != horiz && !passable(&occ, tile, nh, net.src_band) {
                         continue;
                     }
                     let nc = cost + 1;
@@ -815,7 +835,10 @@ pub fn route_packed_nets(
             let Some(path) = found else {
                 let seedable = starts
                     .iter()
-                    .filter(|&&s| passable(&occ, s, true) || passable(&occ, s, false))
+                    .filter(|&&s| {
+                        passable(&occ, s, true, net.src_band)
+                            || passable(&occ, s, false, net.src_band)
+                    })
                     .count();
                 let sample: Vec<_> = starts.iter().take(3).collect();
                 return Err(format!(
