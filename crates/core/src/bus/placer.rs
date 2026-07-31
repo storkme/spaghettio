@@ -104,20 +104,28 @@ pub struct RowSpan {
     /// A `di-row`/`di-cell` fuses producer and consumer machines into one
     /// row, but ONLY the consumer-role machines emit the coupled item onto
     /// the belt — the producer-role machines feed it via the DI coupler,
-    /// never a belt. So a cell's belt can be empty for several tiles west
-    /// of its first real drop (whichever comes first: the leftmost
-    /// consumer-role machine's own column), while `output_belt_x_min`
-    /// still reports the CELL's geometric left edge (needed for row-width
-    /// and merger bookkeeping elsewhere).
+    /// never a belt. So a cell's belt has several DISCRETE drop points, not
+    /// continuous coverage, while `output_belt_x_min` still reports the
+    /// CELL's geometric left edge (needed for row-width and merger
+    /// bookkeeping elsewhere).
     ///
-    /// #526: `stamp_di_bridge` used to derive a bridge's pickup x purely
-    /// from the DOWNSTREAM consumer's own alignment, with no way to learn
-    /// that the upstream cell's belt was still empty there — the pickup
-    /// landed upstream of the cell's only drop, so the belt segment under
-    /// it was permanently empty and the bridge starved (`di-row:copper-
-    /// cable:electronic-circuit` on `display-panel@1`, `di-cell:copper-
-    /// plate:copper-cable` on `small-electric-pole@5`). This field lets
-    /// the bridge clamp its pickup downstream of the real drop instead.
+    /// This is the RIGHTMOST (last) drop's own column, not the leftmost.
+    /// Belts are one-directional: a picker positioned before the last drop
+    /// can never see that drop's item (it can only travel further
+    /// downstream), so it permanently misses that drop's whole share, not
+    /// merely an occasional empty tile. #526's first cut got this wrong —
+    /// clamped to the LEFTMOST drop, which fixes belt-flow-reachability
+    /// (no tile is ever literally empty) but not throughput (a picker
+    /// upstream of a later drop still can't draw it), and shipped a layout
+    /// that validated clean yet measured 2.94/s against a 5.00/s plan in
+    /// the sim harness — the exact "validates clean, physically wrong"
+    /// trap #520 is itself about. Only downstream of the LAST drop has the
+    /// belt seen every producer's contribution.
+    ///
+    /// `stamp_di_bridge` used to derive a bridge's pickup x purely from the
+    /// DOWNSTREAM consumer's own alignment, with no way to learn where an
+    /// upstream cell's drops actually are. This field lets it clamp (or
+    /// refuse) instead.
     pub output_feed_x_min: Option<i32>,
     /// `Some(_)` when this row uses `RowLayout::HorizontalStack`. The
     /// lane planner reads this to allocate K trunk lanes for the
@@ -1788,24 +1796,38 @@ fn stamp_di_bridge(
     // which for an ordinary producer row is safe — its output belt has
     // content from `output_belt_x_min` on, because every machine along it
     // drops there. A DI CELL producer is different: only its consumer-role
-    // machines emit onto the belt, so coverage can start well east of the
-    // row's own left edge. `producer.output_feed_x_min` (`Some` only for
-    // cells) says where. A bridge whose pick/drop column sits upstream of
-    // that finds permanently empty belt — the exact defect #520/#526 found
-    // twice (`di-row:copper-cable:electronic-circuit` on `display-panel@1`,
-    // `di-cell:copper-plate:copper-cable` on `small-electric-pole@5`).
+    // machines emit onto the belt, at several DISCRETE columns, and
+    // `producer.output_feed_x_min` (`Some` only for cells) is the RIGHTMOST
+    // (last) one — the point past which the belt has seen every producer's
+    // contribution. A bridge whose pick/drop column sits upstream of that
+    // can only ever draw drops at or before its own column: belts are
+    // one-directional, so a later drop's item can never reach an earlier
+    // tile. That is not merely "sometimes reads an empty tile" (the shape
+    // #520 first diagnosed) — it is a permanent, structural cap on how much
+    // of the cell's total output that bridge can ever receive. Getting this
+    // half-right (clamping to the LEFTMOST drop instead) shipped a layout
+    // that validated clean yet measured 2.94/s against a 5.00/s plan in the
+    // sim harness — caught only because the verification protocol runs a
+    // real headless measurement rather than trusting the validator's
+    // silence.
     //
     // Fix: shift this machine's WHOLE column set east by whatever is needed
-    // to clear `feed_x_min`, preserving the relative spacing between its
-    // `dxs` (so sibling columns for the same machine never collapse onto
-    // one tile). A south-facing bridge's pick and drop share one x, so the
-    // shift moves both together; that is safe for the DROP side too,
-    // because the consumer's own feed inserter is further downstream still
-    // and a later drop still reaches it. If the shift would push a column
-    // past this machine's own span (`[mx, mx + mw - 1]`) it would collide
-    // with the NEXT machine's dedicated columns instead of merely arriving
-    // later — refuse the whole bridge rather than emit that, the
-    // established pattern here being "refuse rather than under-feed".
+    // to clear `feed_x_min` (the LAST drop), preserving the relative
+    // spacing between its `dxs` (so sibling columns for the same machine
+    // never collapse onto one tile). A south-facing bridge's pick and drop
+    // share one x, so the shift moves both together; that is safe for the
+    // DROP side too, because the consumer's own feed inserter is further
+    // downstream still and a later drop still reaches it. If the shift
+    // would push a column past this machine's own span (`[mx, mx + mw -
+    // 1]`) it would collide with the NEXT machine's dedicated columns
+    // instead of merely arriving later — refuse the whole bridge rather
+    // than emit that, the established pattern here being "refuse rather
+    // than under-feed". This is a STRICTER test than the leftmost-drop
+    // version: with several producer-role machines contributing drops
+    // spread across the cell's width, clearing the LAST one from within a
+    // single downstream machine's own column budget is often infeasible,
+    // and refusing is the correct, honest outcome then — not a consolation
+    // prize.
     let min_dx = dxs.iter().copied().min().unwrap_or(0);
     let max_dx = dxs.iter().copied().max().unwrap_or(0);
     if let Some(feed_x_min) = producer.output_feed_x_min {
@@ -1826,11 +1848,17 @@ fn stamp_di_bridge(
 
     let mut entities = Vec::new();
     let seg = Some(format!("di-bridge:{item}:{}", consumer_spec.recipe));
+    let mut max_shift_applied = 0i32;
+    let mut shifted_columns = 0usize;
     for &mx in &mxs {
         let shift = match producer.output_feed_x_min {
             Some(feed_x_min) => (feed_x_min - (mx + min_dx)).max(0),
             None => 0,
         };
+        if shift > 0 {
+            max_shift_applied = max_shift_applied.max(shift);
+            shifted_columns += dxs.len();
+        }
         for &dx in &dxs {
             entities.push(PlacedEntity {
                 name: plan.entity.to_string(),
@@ -1842,6 +1870,15 @@ fn stamp_di_bridge(
                 ..Default::default()
             });
         }
+    }
+    if shifted_columns > 0 {
+        crate::trace::emit(crate::trace::TraceEvent::DiBridgeShifted {
+            item: item.to_string(),
+            producer_recipe: producer.spec.recipe.clone(),
+            consumer_recipe: consumer_spec.recipe.clone(),
+            shift: max_shift_applied,
+            columns: shifted_columns,
+        });
     }
     let _ = ctx; // stacking not yet wired for DI bridges
     entities

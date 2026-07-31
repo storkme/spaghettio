@@ -9831,52 +9831,73 @@ fn di_claim_order_default_is_downstream_and_ships_the_working_big_pole() {
 }
 
 /// #520 / #524 / #526: the engine can SEE a jammed DI cell (#524), and #526
-/// repairs the GEOMETRY CLASS so a working DI cell can win where the shape
-/// allows it, rather than only ever declining honestly.
+/// repairs the GEOMETRY CLASS itself — a belt-to-belt bridge no longer picks
+/// off a DI cell's output belt at a column that permanently misses some of
+/// its total supply.
 ///
-/// The root cause (#520): a belt-to-belt lift inserter's pickup sat UPSTREAM
-/// of its belt's only feed drop, so the pickup read permanently empty belt.
-/// `stamp_di_bridge` derived a bridge's pick/drop column purely from the
-/// DOWNSTREAM consumer's own alignment, with no way to know that an upstream
-/// DI-CELL producer's output belt is only fed from its consumer-role
-/// machines' own columns onward — never from the cell's geometric left edge.
-/// Fixed (#526) by `RowSpan::output_feed_x_min`, which a DI cell populates
-/// with its real leftmost fed column; `stamp_di_bridge` now shifts a
-/// bridge's columns downstream of it (preserving relative spacing so
-/// sibling columns for one machine never collapse onto the same tile), or
-/// REFUSES the whole bridge when no shift fits within the consumer
-/// machine's own column budget — refusing is always safe, an under-fed
-/// bridge is not.
+/// The root cause (#520): a bridge's pick/drop column was derived purely
+/// from the DOWNSTREAM consumer's own alignment, with no way to know where
+/// an upstream DI-cell producer's belt actually carries its full output.
+/// **#526's first attempt at a fix was itself wrong, and the sim harness is
+/// what caught it.** It clamped a bridge's column to the LEFTMOST of the
+/// cell's several producer drops, which fixes belt-flow-REACHABILITY (no
+/// tile the validator inspects is ever literally, permanently empty) but
+/// not THROUGHPUT: belts are one-directional, so a picker positioned before
+/// a LATER drop can never draw that drop's contribution — not occasionally,
+/// permanently. That "fixed" layout validated with zero errors and zero
+/// warnings and still measured **2.94/s against a 5.00/s plan** in a
+/// headless run — the exact "validates clean, physically wrong" trap #520
+/// is itself about, reproduced by the fix meant to close it. Corrected by
+/// clamping to the RIGHTMOST (last) drop instead — `RowSpan::
+/// output_feed_x_min`, despite the name, now holds that last-drop column —
+/// which only downstream of it has the belt seen every producer's
+/// contribution. `stamp_di_bridge` shifts a bridge's columns to clear it
+/// (preserving relative spacing so sibling columns for one machine never
+/// collapse onto the same tile), or REFUSES the whole bridge when no shift
+/// fits within the consumer machine's own column budget.
 ///
-/// The two confirmed instances of the class diverge on outcome, and BOTH are
-/// correct under the never-worse gate:
-///   - `small-electric-pole@5` am1: the shift is one tile and fits, so the
-///     repaired 126-entity DI layout now SHIPS AND WINS under `Candidate`/
-///     `Search` (down from native's 163) — see the PR for the sim-harness
-///     measurement confirming it delivers at plan, not just validates clean.
-///   - `display-panel@1` am1: the row cell's real feed sits five tiles from
-///     the downstream consumer's own 3-wide column budget — too far for any
-///     shift to close, so the bridge correctly REFUSES outright and DI
-///     declines the coupling; native's 221-entity layout ships exactly as
-///     it did after #524.
+/// **The corrected fix changes NO shipped layout anywhere in the corpus.**
+/// A trace-instrumented sweep of every producible item across three machine
+/// tiers, three rates, and both reachable claim orders (`Upstream`/
+/// `Downstream` — `Search` tries both and `Candidate`'s default pins one, so
+/// together these cover every arm `DirectInsertionCandidate` can ever build)
+/// found the new refuse/shift logic reachable on exactly 11 distinct
+/// targets — and on every one of them, EVERY producer drop the coupling
+/// needs sits wider than a single downstream consumer machine's own 1-3
+/// tile column budget, so the bridge correctly refuses outright rather than
+/// shipping a partial-throughput layout. A full `build_bus_layout` diff
+/// (origin/main vs this fix) on all 11 targets under `Candidate` with
+/// `default()`/`Search`/`Upstream` (33 comparisons) is byte-identical:
+/// native already shipped on every one of them, because #524's
+/// belt-flow-reachability check already caught the old bridge's starvation
+/// and the never-worse gate already declined it. **What changes is that the
+/// declines are now honest at the SOURCE** — the placer itself refuses a
+/// bridge it cannot fill, rather than emitting a shape whose brokenness only
+/// the validator (or, as this fix's own first draft shows, only the sim
+/// harness) can catch. `small-electric-pole@5` am1 (this test's target) is
+/// the canonical instance: 3 producer drops spread across the belt for 3
+/// downstream machines, each with only a 3-tile column budget — too narrow
+/// to clear the last drop, so it refuses like every other touched target.
 ///
 /// Assertions:
-///   1. `small-electric-pole@5` am1 now ships the repaired, WORKING 126-ent
-///      DI layout under `Candidate`/`Search` — the ship-and-win case.
-///   2. `display-panel@1` am1 still ships the sim-verified 221-ent native
-///      layout, validator-clean, under both `default()` and `Search` — the
-///      honest-decline case.
+///   1. `small-electric-pole@5` am1 ships NATIVE under every reachable
+///      claim order — unchanged from before #526, but now via a placer
+///      that refuses the broken bridge itself rather than depending on the
+///      validator downstream.
+///   2. `display-panel@1` am1 — the OTHER confirmed instance of the class —
+///      ships the sim-verified 221-entity native layout, validator-clean,
+///      under both `default()` and `Search`.
 ///   3. The FORCED diagnostic variant behind that decline no longer carries
-///      the original starvation (no `belt-flow-reachability` issue at the
-///      old pickup tile) — the geometry class is actually repaired, not
-///      merely re-hidden. It is NOT validator-clean (the refused bridge's
-///      fallback — routing the item over the bus instead — hits a separate,
-///      pre-existing ghost-router gap when a bus lane must route through a
-///      DI row cell's own private output belt; tracked as 526-followups,
-///      not shipped because assertion 2 already confirms the gate declines
-///      it), so this only checks the ORIGINAL defect is gone, not that the
-///      diagnostic variant is issue-free.
-///   4. `Search` still selects a DI cell where the cell is sound.
+///      the ORIGINAL starvation signature (no `belt-flow-reachability`
+///      issue at the old pickup tile) — the geometry class is genuinely
+///      repaired, not merely re-hidden. It is not validator-clean overall
+///      (the refused bridge's bus-fallback hits a separate, pre-existing
+///      ghost-router gap when a lane must route through a DI cell's own
+///      dead-end output belt — tracked as a #526 followup, and irrelevant
+///      to what ships since assertion 2 already confirms the gate declines
+///      the whole candidate).
+///   4. `Search` still selects a DI cell where the cell is sound (an
+///      unrelated target, confirming the fix didn't disturb DI generally).
 #[test]
 fn di_jammed_cell_is_visible_and_therefore_refused() {
     use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
@@ -9904,27 +9925,31 @@ fn di_jammed_cell_is_visible_and_therefore_refused() {
         (l.entities.len(), issues)
     };
 
-    // 1. THE SHIP-AND-WIN CASE. `small-electric-pole@5` am1 used to ship a
-    //    126-entity DI layout that validated clean but measured **2.52/s
-    //    against a planned 5.00/s** (converged, so a steady state — see
-    //    #520). #524 made that visible and native's 163-entity layout
-    //    shipped instead. #526 repairs the geometry itself, so the SAME
-    //    126-entity layout now ships again — but this time genuinely
-    //    working (see the PR's sim-harness measurement).
-    let (repaired_ents, repaired_issues) = build(
-        "small-electric-pole", 5.0, "assembling-machine-1",
-        DirectInsertion::Candidate, DiClaimOrder::Search,
-    );
-    assert_eq!(
-        repaired_ents, 126,
-        "small-electric-pole@5 am1 must ship the REPAIRED 126-entity DI \
-         layout now that #526 fixes the lift-vs-feed ordering"
-    );
-    assert!(
-        repaired_issues.is_empty(),
-        "the repaired layout must be validator-clean: {:?}",
-        repaired_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
-    );
+    // 1. `small-electric-pole@5` am1 still ships native (163) under every
+    //    reachable order — the geometry class is repaired (the bridge now
+    //    refuses honestly instead of silently under-feeding), but there is
+    //    no shift that clears the cell's LAST drop within a single
+    //    downstream machine's own column budget, so DI cannot win here.
+    //    This used to ship a 126-entity DI layout measured at 2.52/s
+    //    against a 5.00/s plan (#520); #524 made the starvation visible so
+    //    the never-worse gate already declined it before this fix landed.
+    for order in [DiClaimOrder::default(), DiClaimOrder::Search, DiClaimOrder::Upstream] {
+        let (ents, issues) = build(
+            "small-electric-pole", 5.0, "assembling-machine-1",
+            DirectInsertion::Candidate, order.clone(),
+        );
+        assert_eq!(
+            ents, 163,
+            "small-electric-pole@5 am1 must ship native (163) under {order:?}: \
+             no shift clears the cell's last drop within a single downstream \
+             machine's column budget"
+        );
+        assert!(
+            issues.is_empty(),
+            "the shipped layout must stay clean under {order:?}: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
 
     // 2. THE HONEST-DECLINE CASE. `display-panel@1` am1's row cell has no
     //    shift that fits the downstream consumer's column budget (a 5-tile

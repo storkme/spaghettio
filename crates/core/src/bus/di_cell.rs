@@ -812,11 +812,21 @@ pub struct DiCellLayout {
     pub output_belt_y: i32,
     pub x_min: i32,
     pub x_max: i32,
-    /// Leftmost x at which the output belt ACTUALLY carries `output_item` —
-    /// the leftmost consumer's own output-inserter column, not `x_min` (the
-    /// producer row may start well to the left with no output drop over its
-    /// own columns at all). #526: a downstream `stamp_di_bridge` that picks
-    /// up west of this tile finds permanently empty belt.
+    /// Leftmost x at which the output belt carries the FULL cumulative
+    /// output of every consumer's out-inserter — the RIGHTMOST (last)
+    /// drop's own column, not the leftmost. Belts are one-directional: a
+    /// pickup west of a given drop can never see that drop's item (it can
+    /// only move further east), so a picker positioned before the LAST drop
+    /// systematically misses that drop's entire share, not merely reads an
+    /// occasional empty tile. #526 first got this wrong by clamping to the
+    /// leftmost drop instead: it fixed reachability (no tile is ever
+    /// literally empty) but not throughput (the last drop's flow is
+    /// permanently unreachable by every picker upstream of it) — caught by
+    /// the sim harness measuring 2.94/s against a 5.00/s plan despite a
+    /// validator-clean layout, the same "validates clean, physically wrong"
+    /// trap #520 itself is about. A downstream `stamp_di_bridge` that picks
+    /// up west of THIS tile can still read nonzero belt (so the old bug is
+    /// gone) but cannot draw the LAST drop's contribution.
     pub output_feed_x_min: i32,
 }
 
@@ -918,11 +928,14 @@ pub fn stamp_di_cell_io(
     }
 
     // The belt spans the whole cell (`x_min..=x_max` above), but only the
-    // consumer machines drop onto it — the leftmost one's own column is
-    // where real content first appears. `consumer_xs` is non-empty here:
-    // `plan_straddle` refuses a plan with zero consumers.
+    // consumer machines drop onto it. A picker needs the RIGHTMOST
+    // (last) consumer's own column, not the leftmost: belts are
+    // one-directional, so only downstream of every drop has the belt seen
+    // the FULL cumulative output (#526 — see the field doc). `consumer_xs`
+    // is non-empty here: `plan_straddle` refuses a plan with zero
+    // consumers.
     let output_feed_x_min = x0
-        + plan.consumer_xs.iter().copied().min().unwrap_or(0)
+        + plan.consumer_xs.iter().copied().max().unwrap_or(0)
         + mid;
 
     Some(DiCellLayout {
@@ -1440,13 +1453,13 @@ pub struct RowCellLayout {
     pub output_belt_y: i32,
     pub x_min: i32,
     pub x_max: i32,
-    /// Leftmost x at which the output belt ACTUALLY carries the output
-    /// item — the leftmost CONSUMER-role machine's own output-inserter
-    /// column. In a row cell only consumer machines emit onto this belt
-    /// (producers hand off through the DI coupler), and the sequence often
-    /// leads with a producer (`plan_row_straddle`'s tie-break prefers
-    /// `PCPC…`), so the belt can be empty for one or more machine-widths
-    /// west of this tile. See `DiCellLayout::output_feed_x_min` (#526).
+    /// Leftmost x at which the output belt carries the FULL cumulative
+    /// output of every consumer-role machine's out-inserter — the
+    /// RIGHTMOST (last) consumer's own column, not the leftmost. See
+    /// `DiCellLayout::output_feed_x_min`'s doc for why: belts are
+    /// one-directional, so a picker upstream of the last drop permanently
+    /// misses that drop's whole share rather than merely reading an
+    /// occasional empty tile (#526).
     pub output_feed_x_min: i32,
 }
 
@@ -1625,8 +1638,9 @@ pub fn stamp_row_cell(
     let seg = format!("di-row:{}:{}", spec.item, spec.consumer_recipe);
     let mut ents = Vec::new();
     let mut fluid_ports: Vec<(String, i32, i32)> = Vec::new();
-    // Leftmost x actually fed onto the output belt — tracked over every
-    // consumer's out-inserter column as they're stamped below (#526).
+    // Leftmost x at which the output belt carries the FULL cumulative
+    // output — the RIGHTMOST consumer out-inserter column, tracked as
+    // they're stamped below (#526; see `RowCellLayout::output_feed_x_min`).
     let mut output_feed_x_min: Option<i32> = None;
 
     let belt_run = |ents: &mut Vec<PlacedEntity>, y: i32, name: &str, carries: &str| {
@@ -1765,9 +1779,9 @@ pub fn stamp_row_cell(
                 });
             }
             if no > 0 {
-                let first_x = mx + nf as i32;
+                let this_x = mx + nf as i32;
                 output_feed_x_min =
-                    Some(output_feed_x_min.map_or(first_x, |cur| cur.min(first_x)));
+                    Some(output_feed_x_min.map_or(this_x, |cur| cur.max(this_x)));
             }
             for j in 0..no as i32 {
                 ents.push(PlacedEntity {
@@ -1861,8 +1875,12 @@ pub fn stamp_row_cell(
         // Always `Some` by construction: `no = spec.out_count.max(1)` and
         // `plan.sequence` contains at least one consumer (`plan_row_straddle`
         // refuses `consumer_count == 0`), so the loop above visits at least
-        // one consumer with `no > 0`. `x_min` is a defensive fallback only.
-        output_feed_x_min: output_feed_x_min.unwrap_or(x_min),
+        // one consumer with `no > 0`. `x_max` is a defensive fallback only,
+        // and deliberately the CONSERVATIVE bound (rather than `x_min`): a
+        // caller reading this field treats it as a floor for safe pickup, so
+        // an unreachable fallback should overstate the floor, not understate
+        // it.
+        output_feed_x_min: output_feed_x_min.unwrap_or(x_max),
     })
 }
 

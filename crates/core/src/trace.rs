@@ -900,6 +900,19 @@ pub enum TraceEvent {
         to_x: i32,
         to_y: i32,
     },
+    /// #526: `stamp_di_bridge` shifted a bridge column downstream of a DI
+    /// cell producer's LAST drop (`RowSpan::output_feed_x_min`) — emitted
+    /// only when `shift > 0`, i.e. the naive consumer-aligned column would
+    /// have missed some of the cell's total output (permanently, not just
+    /// occasionally — belts are one-directional). `columns` counts how many
+    /// bridge inserters moved for this producer/consumer pair.
+    DiBridgeShifted {
+        item: String,
+        producer_recipe: String,
+        consumer_recipe: String,
+        shift: i32,
+        columns: usize,
+    },
 
     // Ghost routing (Phase 3) — emitted by resolve_clusters in ghost_router.rs
     GhostClusterSolved {
