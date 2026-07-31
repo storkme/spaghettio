@@ -688,6 +688,21 @@ clears. Rationale in the decision log.
   warning classes on both) and the loop's next diagnoses are queued in
   the probes.
 
+- **2026-07-31 — open diagnosis, recorded for pickup: sci2's four
+  dead-ends are orphaned BRANCH stubs.** Neighborhood dumps
+  (`probe_packed_overlap_diagnosis`, now fixture-switchable via
+  `SPAGHETTIO_DIAG_FIXTURE=sci2`) show the pattern at (8,11): a gear
+  trunk runs north at x=7 with its carved splitter at (7,12); the branch
+  entry (8,11) is stamped East pointing into an EMPTY (9,11) while the
+  branch's continuation exists at (10,11) — a one-tile gap exactly where
+  the branch crossed the x=9 corridor, i.e. the crossing-to-UG
+  conversion did not fire for the branch's first crossing. Same class at
+  (26,27) and two south-pointing west-margin stubs. Next: reproduce with
+  the dumps, fix the conversion at branch-entry crossings, re-measure
+  both probes — then sci2's last isolation error, the warning classes
+  (reachability 63, power 49), the pu1 scope decision, KC4/eyeball/sim,
+  and phase 6's candidate wiring.
+
 - **2026-07-31 — phase 4 designed; kill criterion 5 evaluated and does not
   fire.** `plan_bus_lanes` divides into geometry-free aggregation (reused
   verbatim) and 1D-specific geometry (left untouched; paralleled by a
