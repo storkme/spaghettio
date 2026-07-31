@@ -565,3 +565,42 @@ pub fn build_packed_nets(
     }
     nets.into_values().collect()
 }
+
+/// Stamp each band's own belt rows at their TRANSLATED positions: the
+/// row templates' inserters pick from the original `input_belt_y` /
+/// `output_belt_y` tiles, so the packed feed and output belts must land
+/// exactly where those rows translate to — not at rect-relative guesses.
+/// Input rows flow EAST (inserters pick anywhere along them), output
+/// rows flow WEST toward the corridor pickup at the band's west edge.
+pub fn stamp_band_belt_rows(
+    rows: &[RowSpan],
+    contents: &[BandContent],
+    origins: &[(i32, i32)],
+    belt_name: &str,
+) -> Vec<PlacedEntity> {
+    use crate::models::EntityDirection;
+    let mut out = Vec::new();
+    for (bi, c) in contents.iter().enumerate() {
+        let (_rx, ry, rw, _) = c.rect;
+        let (ox, oy) = origins[bi];
+        for &si in &c.row_indices {
+            let rs = &rows[si];
+            let mut stamp_row = |src_y: i32, dir: EntityDirection| {
+                for dx in 0..rw {
+                    out.push(PlacedEntity {
+                        name: belt_name.to_string(),
+                        x: ox + dx,
+                        y: src_y - ry + oy,
+                        direction: dir,
+                        ..Default::default()
+                    });
+                }
+            };
+            for &iy in &rs.input_belt_y {
+                stamp_row(iy, EntityDirection::East);
+            }
+            stamp_row(rs.output_belt_y, EntityDirection::West);
+        }
+    }
+    out
+}
