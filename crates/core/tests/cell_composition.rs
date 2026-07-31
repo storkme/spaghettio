@@ -6077,9 +6077,15 @@ fn probe_packed_overlap_diagnosis() {
     use spaghettio_core::validate::{self, LayoutStyle};
     let inputs_set: FxHashSet<String> =
         ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sci2 = std::env::var("SPAGHETTIO_DIAG_FIXTURE").as_deref() == Ok("sci2");
+    let (item, rate, machine) = if sci2 {
+        ("logistic-science-pack", 2.0, "assembling-machine-2")
+    } else {
+        ("automation-science-pack", 1.0, "assembling-machine-1")
+    };
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "automation-science-pack", 1.0, &inputs_set, &MachinePalette::default(),
-        "assembling-machine-1", &FxHashSet::default(), QualityTier::Normal,
+        item, rate, &inputs_set, &MachinePalette::default(),
+        machine, &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
     let l = layout::build_bus_layout(
         &sr,
