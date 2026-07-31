@@ -389,3 +389,160 @@ needed to look at the result, not a UI feature.
   to address simultaneous multi-target solving or layout; the complexity
   ladder in `docs/status.md` and every existing RFC/issue are single-target
   throughout.
+
+- *2026-07-31 — Phase 0 spike run: kill criterion 1 evaluated, PROCEED
+  (with a wider fix shape than the RFC's leading hypothesis).*
+
+  **Setup.** Hand-built a `SolverResult` in a local probe
+  (`crates/core/examples/rfc062_phase0_shared_ec_row.rs`, gitignored per
+  `CLAUDE.md`'s example-scripts convention — no solver code ran). Two
+  `MachineSpec`s on `assembling-machine-2`, flow numbers matching the real
+  `electronic-circuit`/`advanced-circuit` recipes at AM2 crafting speed
+  (0.75): EC row supplies its own 10/s export target *plus* AC's 6/s
+  ingredient draw (16/s combined demand; the row's machine count ceils to
+  11, so the row's actual built rate is 16.5/s — visible later in the
+  trace as `RowSplit { original_count: 11, ... output_rate=16.5/s }`), AC
+  row supplies its 3/s export target from 24 machines. `external_outputs`
+  = `[EC@10/s, AC@3/s]`; `external_inputs` covers iron-plate/copper-cable/
+  plastic-bar so no upstream smelting chain is needed. `di_couplings` left
+  empty by construction — EC has two claims on it (export + AC's
+  ingredient draw), so it would not qualify for direct-insertion even
+  under a real solve. Ran `build_bus_layout_traced` directly on this
+  struct.
+
+  **A confound found and removed before the real test.** Under plain
+  `LayoutOptions::default()` (`cell_composition: Candidate`,
+  `direct_insertion: Candidate` — both flipped on by RFC-051/RFC-059),
+  the decomposition search's RFC-051 cell-composed candidate wins this
+  exact EC→AC coupling shape and produces a *different* structure
+  entirely: single-row-per-recipe with `corr:`/`row:...:belt-in` segment
+  tags, silently using `assembling-machine-3` regardless of the
+  `assembling-machine-2` this `SolverResult` specified, and — under an
+  earlier belt-tier-capped run of the same fixture — `boundary_outputs`
+  contained *only* `advanced-circuit`, with electronic-circuit's own
+  target export dropped entirely and no validator error raised for it.
+  Kill criterion 1 names the **native** mechanisms specifically
+  (`ghost_router.rs` Step 7, `lane_planner.rs` `item_to_consumers`,
+  `perimeter_exit_y`) — those live outside the cell-composed path, so the
+  probe was re-run with `cell_composition`/`direct_insertion` forced
+  `Off` to isolate them. **This confound is itself a real Phase 1/2
+  finding, not just a probe artifact**: under today's shipped defaults,
+  the EC+AC N=2 fixture may never actually exercise the mechanism this
+  RFC is generalizing — the cell-composed candidate wins the race first.
+  Phase 2's verification plan needs an explicit check of which candidate
+  wins the real EC+AC fixture, not an assumption that it's the native
+  path.
+
+  **Observations, native path only (`cell_composition`/`direct_insertion`
+  forced `Off`).** Both claims on the shared EC row get built, and they
+  physically collide:
+  - `LanesPlanned` trace confirms `lane_planner.rs`'s `item_to_consumers`
+    claim is real, not hypothetical: a `BusLane` for `electronic-circuit`
+    exists with `producer_row=Some(0)`, `extra_producer_rows=[1]` (the EC
+    row got split into two row-spans — `RowSplit` at `max_per_row=10,
+    output_rate=16.5/s`), `consumer_rows=[2]` (the AC row),
+    `x=6`, `tap_off_ys=[19]`.
+  - Simultaneously, `placer.rs`'s `is_final` (EC ∈ `external_outputs`)
+    drives `output_east=true` for both EC row-spans, so each row's own
+    output belt is built running **east** the row's full width
+    (`row:electronic-circuit:belt-out`), feeding straight into Step 7's
+    export merge (`merger:electronic-circuit`) and out to a real boundary
+    exit: `boundary_outputs` lists `electronic-circuit @ (82,29)`,
+    undisturbed and physically complete.
+  - The lane's tap-off needs a **west**-facing return belt sourcing the
+    same row's own output position — observed in the entity dump as
+    `ghost:flow:electronic-circuit:6:ret:8` (and `:ret:16` on the second
+    row-split), sitting on the exact same `output_belt_y` row as the
+    east-flowing merger belts, pointed the opposite direction. The
+    junction/crossing solver tries every strategy at the collision seed
+    (`(5,1)`: `perpendicular_template`, `sat-surface`, `sat-1ug-native`,
+    `sat-2ug-native`, `sat-native`, `eviction`, `sat-1ug-upgrade`,
+    `sat-2ug-upgrade`, `sat`, across 4 seed-variant directions) — every
+    one comes back `Unsatisfiable`. It gives up
+    (`JunctionGrowthCapped { region_tiles: 81, reason: "tile_cap" }`),
+    leaving the "ret" tap an orphaned ghost stub with no real source.
+    The export merge even tries tunnelling underground specifically to
+    dodge the ret-tap tile (`merger:electronic-circuit` goes
+    underground at x=25, resurfaces at x=27) and *still* lands head-on
+    at the tunnel mouth — the identical pattern repeats independently on
+    both EC row-splits (`(25,8)`/`(26,8)` and `(22,16)`/`(23,16)`).
+  - **Net physical result**: the export claim wins the tile-level fight
+    (it was built first, at row-build time, before `lane_planner` ever
+    runs, and its footprint is left undisturbed); the internal-tap claim
+    loses completely. Validator: 5 errors (1 `unresolved-junction` at
+    `(5,1)`, 4 `belt-junction` HEAD-ON pairs — the two independent
+    row-split collisions), 43 warnings — of which **all 24** of AC's
+    machines individually report `input-rate-delivery`: `delivers 0.0/s
+    but machine needs 0.2/s of electronic-circuit` (total, not partial,
+    starvation of the internal-consumer claim; per
+    `docs/validator-reporting.md` these are correctly emitted as
+    one-positioned-issue-per-instance, not folded into a count — the
+    validator did not go quiet here). EC's own ingredient delivery is
+    also collaterally degraded (6 `belt-flow-reachability` warnings on
+    the row's own pickup belts) — a downstream consequence of the same
+    junction cluster failing, not an independent defect. The validator's
+    own caveat applies: "orphan ghost belts in this cluster are excluded
+    from belt-adjacency checks" — the true blast radius of this specific
+    unresolved cluster is plausibly larger than the 5 counted errors.
+
+  **Kill criterion 1 verdict: PROCEED**, but the fix is broader than
+  "extend the `perimeter_exit_y` filter" alone. Argued from the observed
+  geometry, not speculation: the physical row **templates** need no new
+  geometry at all — `templates.rs::output_dir(output_east)` already
+  builds identical machine/inserter/belt geometry for either direction,
+  just flipping the belt's facing. What's structurally wrong is
+  *sequencing and ownership*, not shape:
+  1. `is_final` (`placer.rs:~2948`) commits the row's belt direction at
+     row-**build** time from "is this item a target" alone, before
+     `plan_bus_lanes` ever runs and with no visibility into whether the
+     item also has an internal consumer.
+  2. `perimeter_exit_y`'s dual-purpose gate is fluid-only by construction
+     — confirmed directly in code, not inferred: `lane_planner.rs:198-202`
+     builds `surplus_fluid_items` by chaining `surplus_outputs` and
+     `external_outputs` then `.filter(|f| f.is_fluid)`, so a solid target
+     item never qualifies for the exit-extension this probe needed.
+  3. Step 7 (`ghost_router.rs:3439-3444`) unconditionally rebuilds
+     `output_items` from `solver_result.external_outputs.iter().filter(|ext|
+     !ext.is_fluid ...)` — every non-fluid target gets an independent
+     row-level east merge, with no way to skip a row a dual-purpose lane
+     already claims.
+
+  Fluids already avoid this exact collision, and the precedent is exact:
+  Step 7's own filter is `!ext.is_fluid` — fluid targets get **no**
+  row-level east merge at all and rely wholly on the lane's
+  `perimeter_exit_y` reaching the boundary (confirmed at
+  `ghost_router.rs:3442`). The fix Phase 2 needs is the solid-item mirror
+  of that pattern, touching three coordinated existing sites rather than
+  inventing a fourth:
+  1. `is_final` must also check "does any other row's `spec.inputs`
+     consume this item" and, if so, **not** force `output_east=true` —
+     treat it as an ordinary internally-routed producer row.
+  2. Generalize `surplus_fluid_items` (`lane_planner.rs:198-202`) to also
+     cover non-fluid `external_outputs` items that have a real
+     `consumer_rows` entry — the dual-purpose-lane shape already modeled
+     for fluids applies to solids verbatim once the gate is item-generic.
+  3. Step 7's `output_items` (`ghost_router.rs:3439-3444`) must skip any
+     target item that got a dual-purpose lane instead of a row-level
+     `output_east`, mirroring the existing fluid skip.
+
+  No new physical row/belt/inserter template anywhere in this — every row
+  still stamps from the same `SingleInput`/`DualInput`/`TripleInput`
+  template family. What changes is which **one** mechanism (row-local
+  east belt vs. lane trunk) gets to own a shared item's physical port,
+  decided consistently before the row is built, instead of two
+  independent mechanisms each building their own claim on the same tile
+  and leaving the junction solver to referee an unsatisfiable conflict.
+
+  **For Phase 1/2**: (a) the cell-composition confound above — verify
+  which candidate wins the real EC+AC fixture once the solver change
+  lands, don't assume native; (b) the three-site fix list above is the
+  Phase 2 scope, not a single-field change — budget accordingly; (c) the
+  new outflow-conservation validator invariant this RFC's Layout section
+  calls for should also assert that a dual-purpose lane's claimed export
+  + internal-tap total never exceeds the row's real production rate,
+  the solid-item analogue of the same check already implied for fluids.
+
+  **Verification**: `cargo test --manifest-path crates/core/Cargo.toml`
+  run clean, one pass, after the probe was added (production code
+  untouched — the probe is additive-only and gitignored). No production
+  files changed in this phase.
