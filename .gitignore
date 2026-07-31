@@ -45,7 +45,15 @@ web/dist/
 web/src/wasm-pkg/
 
 
-/crates/core/examples/
+# Local-only debug scripts. Note the trailing `/*` rather than `/`: a negation
+# cannot re-include a file whose PARENT DIRECTORY is excluded, because git never
+# descends into it. Excluding the contents instead leaves the directory visible
+# so the exception below can apply.
+/crates/core/examples/*
+# ...except the sim generator. `docs/sim-harness.md` recorded "on a fresh clone
+# there is no tracked way to produce the pair" as a known gap; this closes it
+# while keeping every other script in the directory local-only.
+!/crates/core/examples/sim_export.rs
 
 # not sure what this is even lol
 *:Zone.Identifier
