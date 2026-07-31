@@ -278,6 +278,67 @@ a plain re-run produced the 6-turn park above. So this is not stochastic in
 the way class 5 is — re-running is not the remedy, and two consecutive silent
 no-ops on one head is the signal to stop re-running and pull the artifact.
 
+### Failure class 10: a description-edit run cancelled the code run (2026-07-31)
+
+The first genuinely *structural* green-with-no-review: nothing crashed, nothing
+was denied, no agent gave up. Two runs raced and the wrong one survived.
+
+On PR #521, at head `269dc3e3`:
+
+| run | event | outcome |
+|---|---|---|
+| `30624281369` | code review | **cancelled** 38s in |
+| `30624312907` | `edited` (body) | **success**, 1m4s, `reviews=0 inline=0 bot_summaries=0` |
+
+`claude-review` went green with zero review activity, and the guard agreed it
+should.
+
+**Both halves were behaving as designed.** The concurrency group
+(`claude-review-<pr>`, `cancel-in-progress: true`) exists so a burst of pushes
+does not leave several runs reviewing superseded heads — its comment justified
+cancelling on the grounds that "the surviving run reviews the only SHA that can
+be merged." The `edited` handler exists so body-scoped findings can be confirmed
+closed without an 11-minute re-review, and its guard branch skips head-SHA
+enforcement because "coverage is enforced by the push events."
+
+Composed, they contradict: an `edited` run deliberately does **not** review the
+diff, so when it wins the cancellation race the survivor reviews nothing — and
+then defers coverage to the push event it just killed. Each comment was true in
+isolation and the pair was false.
+
+**Sequence that triggers it**, and it is an ordinary one: push a branch, open a
+PR, then edit the PR body within the review's 8-11 minute window. Anyone who
+opens a PR and immediately corrects a number in the description hits it.
+
+**Two fixes, deliberately redundant:**
+
+1. The concurrency group is keyed by event class —
+   `claude-review-<pr>-<body|code>` — so body edits and code runs are in
+   separate groups and cannot cancel each other.
+2. The guard's `edited` branch no longer takes the deferral on trust. Deferring
+   is only honest if a push run left something behind, so a body edit on a PR
+   with **zero** review artifacts anywhere in its lifetime now fails. Lifetime,
+   not head-SHA: the point is to catch "never reviewed at all" without demanding
+   that a body edit re-review code.
+
+Fix 1 prevents this specific race; fix 2 catches any future route to the same
+end state, since the failure is "the guard passed a PR nothing ever reviewed"
+rather than "these two events raced".
+
+**The generalisable lesson is about the comments, not the code.** Both carve-outs
+carried a written justification, and each justification quantified over the other
+mechanism's behaviour without naming it — "the surviving run reviews" assumed
+every survivor reviews; "coverage is enforced by the push events" assumed the
+push events still exist. When a carve-out's rationale depends on another
+mechanism's behaviour, name that mechanism in the comment, because that is what
+makes the dependency visible when the other one changes.
+
+Also caught in the same log: the review prompt still told the agent that "the
+guard below only checks that the PR has SOME review in its lifetime", which
+stopped being true on 2026-07-29 when the guard moved to head-SHA coverage
+(class 6's fix). That understated the consequence of a skip to the one reader
+whose behaviour it was trying to change. Corrected in the same PR.
+
 ## Forensics playbook
 
 **Run signatures** (from the action's result JSON in the job log — grep the

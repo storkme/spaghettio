@@ -16,8 +16,18 @@ on:
 # several runs racing over superseded heads. Cancelling is safe *because* the
 # guard enforces coverage on the CURRENT head: the surviving run reviews the
 # only SHA that can be merged. Keyed by PR so PRs never cancel each other.
+#
+# Keyed by EVENT CLASS as well, and that half is load-bearing. The reasoning
+# above holds only while the survivor actually reviews the diff. A `edited`
+# (description) run deliberately does NOT — it re-checks body-scoped findings
+# and nothing else — so when a body edit cancelled a code run, the survivor
+# reviewed nothing and its guard branch skipped too. Net: green check, zero
+# review. Observed 2026-07-31 on #521: run 30624281369 (code, 38s in) was
+# cancelled by run 30624312907 (`edited`), which passed on the
+# "coverage is enforced by the push events" carve-out — the push event whose
+# coverage it deferred to being the one it had just killed.
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
+  group: claude-review-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' && 'body' || 'code' }}
   cancel-in-progress: true
 
 jobs:
@@ -114,10 +124,11 @@ jobs:
             end is indistinguishable from a crash and fails the check.
             — Re-review rule: "I already reviewed this PR" is NOT a valid
             skip when new commits have landed since. This job fires on
-            every push, and the guard below only checks that the PR has
-            SOME review in its lifetime, so a skip here means the new
-            commits get no review at all — which is exactly how a PR that
-            was reviewed at its third commit merged at its ninth (#481,
+            every push, and the guard below enforces coverage on the
+            CURRENT HEAD SHA, so a skip here means the new commits get no
+            review at all AND the check goes red — which is exactly how a
+            PR that was reviewed at its third commit merged at its ninth
+            (#481,
             2026-07-29: four real bugs found, then six further commits
             including the fixes for those bugs went unreviewed). When
             ${{ github.event.action }} is `synchronize`, review the
@@ -201,12 +212,36 @@ jobs:
           fi
           # Description-edit runs carry no new commit, so head-SHA coverage is
           # owned by whichever push event produced that head — every SHA gets
-          # an `opened` or `synchronize` run. Enforcing here would red a PR for
-          # a body edit whose cheap re-check legitimately had nothing to post.
-          # Carving this out cannot lose coverage on any SHA.
+          # an `opened` or `synchronize` run. Enforcing head-SHA coverage here
+          # would red a PR for a body edit whose cheap re-check legitimately
+          # had nothing to post.
+          #
+          # But the carve-out used to read "this cannot lose coverage on any
+          # SHA", and that was false: the concurrency group let an `edited` run
+          # CANCEL the push run whose coverage it defers to (#521, 2026-07-31).
+          # The group is now keyed by event class so that cannot recur — and
+          # this branch no longer takes it on trust either. Deferring to
+          # another run is only honest if that run left something behind, so a
+          # body edit on a PR with NO review anywhere in its lifetime fails
+          # instead of passing. Lifetime, not head-SHA: the point is to catch
+          # "never reviewed at all", not to demand a body edit re-review code.
           if [ "${EVENT_ACTION:-}" = "edited" ]; then
-            echo "Description-edit run — no new head SHA; coverage is enforced by the push events."
-            exit 0
+            if ! any=$( { gh api "repos/$REPO/pulls/$PR/reviews" --paginate --jq 'length'
+                          gh api "repos/$REPO/pulls/$PR/comments" --paginate --jq 'length'
+                          gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                            --jq '[.[] | select(.user.login == "claude[bot]")] | length'
+                        } | awk '{s+=$1} END {print s+0}'); then
+              echo "::warning::guard: lifetime-coverage query failed — failing open."; exit 0
+            fi
+            if [ "${any:-0}" -gt 0 ]; then
+              echo "Description-edit run — no new head SHA, and the PR has $any review artifact(s); head coverage is enforced by the push events."
+              exit 0
+            fi
+            echo "::error::Description-edit run on a PR with ZERO review activity in its lifetime."
+            echo "This carve-out defers head-SHA coverage to the push events, which is only"
+            echo "honest if a push run actually reviewed something. None did — most likely the"
+            echo "code run was cancelled (check for a cancelled claude-review run at this SHA)."
+            exit 1
           fi
           # Fail-open on API errors: the guard is a safety net, and its own
           # flakiness must never block a merge. It fails ONLY on confirmed
