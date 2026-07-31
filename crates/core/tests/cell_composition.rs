@@ -1206,6 +1206,65 @@ fn chain_capacity_reaches_the_placer() {
     );
 }
 
+/// #433: an INTERNAL (producer-cell → consumer-cell) corridor targets
+/// exactly one inbound port per ingredient today. A multi-row consumer
+/// cell exposes one port PER ROW for the same item (extract.rs's
+/// one-port-per-connected-run grouping) — pre-fix, the corridor wired
+/// only the first row's port, leaving every row past it silently
+/// starved: `compose_chain` returned `Ok` with a broken layout (rows
+/// ≥2 read `item-ingredient-shortage` in-sim, per #433's own evidence).
+/// Post-fix it refuses loudly instead.
+///
+/// Forcing the split: EC's OWN cell generation naturally splits into 2
+/// rows once its rate crosses ~16/s (empirically probed). But at a
+/// REAL solved rate, copper-cable's total output (3x EC's, from the
+/// recipe ratio) hits the 45/s ratio-quantization ceiling first and
+/// forces K=2 copies — which halves the per-copy EC rate straight back
+/// under the row-split threshold. That's exactly why the path is
+/// latent on every registered chain fixture (#383's decision log).
+/// To force the split without the quantizer intervening, this test
+/// takes a real solved `SolverResult` and overrides ONLY the
+/// copper-cable spec's `count` (test-only, not flow-conserving) to
+/// keep its total output under the 45/s quantum while leaving the EC
+/// spec's own rate untouched — `required_copies` stays at K=1, EC's
+/// cell still splits into 2 rows, and the internal corridor is
+/// exercised exactly as `compose_chain` would drive it for any future
+/// recipe/rate combination whose consumer cell splits under its own
+/// steam.
+#[test]
+fn chain_refuses_multirow_internal_corridor() {
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let mut sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        16.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    for m in sr.machines.iter_mut() {
+        if m.recipe == "copper-cable" {
+            // 5.0/s per machine * 8 = 40.0/s, under the 45/s quantum
+            // (the unmodified solve's 9.6 machines = 48.0/s would push
+            // required_copies to K=2 and mask the bug — see doc comment).
+            m.count = 8.0;
+        }
+    }
+    let err = compose_chain_with_capacity(&sr, 2).expect_err(
+        "a multi-row consumer cell must refuse the internal corridor, not silently wire row 1 and starve the rest",
+    );
+    assert!(
+        err.contains("electronic-circuit") && err.contains("in-ports for copper-cable") && err.contains("#433"),
+        "unexpected refusal message: {err}"
+    );
+}
+
 /// #383 (2026-07-24): the EC@15 chain — the canonical #383 fixture —
 /// carries input-inserter-throughput warnings at the raw L0 world but
 /// composes inserter-clean at the L2 engine default (the input bind
