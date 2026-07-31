@@ -15,12 +15,21 @@ having an unexamined tie-break in a code path that now runs by default.
 
 ## Outcome — decided, 2026-07-31
 
-**The tie-break stays `Upstream` (P0). The measured-better policy is built,
-reachable, and deliberately not the default.** P2 and P3 are dropped.
+**The tie-break is `Downstream` (P1).** P2 and P3 are dropped.
 
-This is the second outcome the Summary contemplated — "keep upstream-first, pin
-it with a test, and write down why" — and it is reached on evidence rather than
-by declining to act.
+> **Superseded twice, and the sequence is the point.** This section first read
+> "the tie-break stays `Upstream`", because the measurement then available said
+> `Downstream` lost on two targets. #520 showed those two layouts were physically
+> broken in a way the validator could not see, and headless runs on the three
+> measurable flip targets then settled it in `Downstream`'s favour — including
+> one where the status quo ships a factory at **half its planned rate**. The
+> earlier text is preserved below as what was honestly concluded from what the
+> engine could then measure.
+
+The Summary framed two possible answers — replace the tie-break, or keep
+upstream-first and write down why. It is the first, reached on in-game
+measurement after the validator-only measurement had twice pointed the other
+way.
 
 ### What the measurement said
 
@@ -58,7 +67,12 @@ per-coupling cost Design rejects.
 
 That conclusion was implemented, defaulted, pinned, and then falsified.
 
-### Why it is not the default
+### Why it was held back — superseded, kept as the record
+
+> Everything in this subsection was true when written and is no longer the
+> conclusion. It is preserved because the reasoning is what bought the sim runs
+> that overturned it.
+
 
 **A headless-Factorio run on `display-panel@1` / am1, controlled against the
 status quo:**
@@ -88,10 +102,9 @@ one working factory, and the corpus offers no way to tell which of the other 7 a
 in the same state — sim is per-target and off the critical path.
 
 `DiClaimOrder::Search` is kept live rather than deleted: it is correct modulo one
-cell, and re-deriving the measurement means the three-tier sweep again. The pin
-`di_claim_order_status_quo_ships_and_search_stays_reachable` asserts both halves
-— that the default ships the sim-verified layout, and that `Search` still picks
-the better arm where nothing blocks it.
+cell, and re-deriving the measurement means the three-tier sweep again. (It
+remains non-default after the flip too, for a different reason — `Downstream`
+now matches it on every corpus target, so the second build buys nothing.)
 
 ### What this RFC delivered
 
@@ -141,10 +154,11 @@ Two consequences:
 - The two-arm `Search` is now **equivalent to a fixed `Downstream`** on every
   corpus target, so it buys nothing over flipping the default — KC4's own logic
   ("do not ship matching machinery for a tie") applied one level up.
-- **The flip is not made here.** It needs sim verification of the targets it
-  improves first. The whole content of #520 is that validator-clean is not
-  evidence a layout works, and shipping a policy change on the strength of a
-  re-run of the same validator would repeat the mistake this RFC just made.
+- **The flip was not made in that change.** It needed sim verification of the
+  targets it improves first, because the whole content of #520 is that
+  validator-clean is not evidence a layout works. Those runs were done and the
+  flip landed — see the decision log; `big-electric-pole@1` turned out to be a
+  half-rate factory under the status quo, not a 19-entity density question.
 
 ## Motivation
 
@@ -462,7 +476,7 @@ able to distinguish "policy had no effect" from "policy was not applied."
 |---|---|---|
 | change-surface sweep, policy named | yes | `di_change_surface_sweep` now prints the live claim order in its header |
 | never-degrades pin stays green | yes | `di_candidate_never_degrades_a_succeeding_bus_layout`, unchanged |
-| teeth test | yes | `di_claim_order_status_quo_ships_and_search_stays_reachable`; asserts the sim-verified layout ships AND that the blocked policy still picks the better arm |
+| teeth test | yes | `di_claim_order_default_is_downstream_and_ships_the_working_big_pole` pins the flip on the target where the arms differ in RATE, not density; `di_jammed_cell_is_visible_and_therefore_refused` pins #520's blind spot. Both verified to fail when sabotaged |
 | rate sweep instead of a named rate | yes | 1/5/20 per second across every producible item and three machine tiers, plus `rail` at 1/5/10 from `iron-ore` |
 | tile-level assertion at a differing rate | **no** | see below |
 | sim the newly-built cell | yes — **and it changed the outcome** | `land-mine@1` is unmeasurable (fluid boundary, uncalibrated harness path); `display-panel@1` on am1 showed the searched policy shipping a validator-clean factory that produces 0/s |
@@ -475,7 +489,7 @@ materialised is not that: on every differing target the claim order changes
 **which candidate wins the decomposition search** — commonly native under one arm
 and DI under the other — so what needs pinning is the shipped layout's identity,
 not a cell's internal geometry.
-`di_claim_order_status_quo_ships_and_search_stays_reachable` asserts that: on
+`di_jammed_cell_is_visible_and_therefore_refused` asserts that: on
 `display-panel@1` the default must ship the sim-verified 221-entity layout, and
 the rejected variant must still look better on every signal the engine has, so a
 future scoring change cannot silently re-select it. It then checks `Search` on two
@@ -692,14 +706,38 @@ widespread and the optimum is static everywhere.
   could not tell.
 
   Not flipped in the same change, and the reason is this RFC's own lesson rather
-  than caution: the evidence for the flip is a re-run of the validator, and #520
+  than caution: the evidence for the flip was a re-run of the validator, and #520
   is the demonstration that a clean validator is not evidence a layout works.
-  The flip needs sim verification of the targets it improves —
-  `display-panel@1`, `land-mine@1` at three tiers, `big-electric-pole@1`,
-  `medium-electric-pole@5` — of which only `display-panel@1` has been simmed.
-  Recorded here rather than only in Outcome because RFC-059 owns
-  `DiClaimOrder::default()`, so deferring a change to it is a call made on this
-  RFC's subject.
+
+- *2026-07-31 — FLIPPED to `Downstream`, on in-game evidence. The deferral above
+  is discharged.* Six headless runs, three targets under both arms, same harness
+  and `--warmup 288000`, only the claim order differing:
+
+  | target, am2 | `Upstream` | `Downstream` |
+  |---|---|---|
+  | `small-electric-pole@5` | 139 ents, PASS 5.00/s | 136 ents, PASS 5.00/s |
+  | `big-electric-pole@1` | 1146 ents, **FAIL 0.51/s** (43 working) | 1127 ents, **PASS 1.10/s** (96 working) |
+  | `medium-electric-pole@5` | 2351 ents, PASS 5.00/s | 2340 ents, PASS 4.98/s |
+
+  `big-electric-pole@1` is what settled it, and it inverts the framing this RFC
+  had carried all along. The flip was argued as an entity-density improvement
+  worth 70 entities; it is actually a **correctness fix**. The status quo ships a
+  factory at half its planned rate with 43 of 96 machines idle, and `Downstream`
+  repairs it. Every claim-order comparison in this document before that run
+  measured density and issue counts, which is precisely the pair of signals #520
+  showed cannot see this failure.
+
+  **What was NOT verified, stated plainly.** Three of the six improving targets
+  are `land-mine` at am1/am2/am3 (−9, −16, −12 entities). `land-mine` needs water
+  and crude-oil, and the harness's infinity-pipe feed/void paths are uncalibrated
+  (RFC-050 Phase 1) — both arms return a flat 0/s, which measures the harness.
+  Those three are accepted on the corpus never-worse result alone. If the fluid
+  boundary is calibrated, they are the first thing to re-check.
+
+  The proportionality argument that justified deferring is also gone: "70 entities
+  is a thin prize" was the reason to wait, and the prize turned out to be a
+  repaired factory. The deferral was still right — it is what bought the sim runs
+  that found this.
 
 - *2026-07-31 — `DiClaimOrder::Pinned` kept although P2/P3 were dropped.* It is
   measurement machinery for a policy that will not ship, which normally argues

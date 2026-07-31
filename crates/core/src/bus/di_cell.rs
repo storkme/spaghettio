@@ -75,18 +75,39 @@ pub enum DirectInsertion {
 pub enum DiClaimOrder {
     /// P0: consumers in topological order, so upstream claims.
     ///
-    /// **The default, and RFC-059 deliberately left it that way.** The RFC
-    /// measured `Search` as better by every validator channel and then a
-    /// headless-Factorio run falsified the premise that made that safe: on
-    /// `display-panel@1` / am1, the arm `Search` prefers ships a DI row cell
-    /// that validates with **zero** errors and warnings and produces **0/s** in
-    /// game, where P0 ships native and measures 1.00/s. The gate DI relies on
-    /// is only as good as the validator, and there the validator is blind.
-    /// See RFC-059's decision log and #520.
-    #[default]
+    /// The pre-RFC-059 default, kept as an explicit arm so `Downstream` can be
+    /// measured against the status quo rather than assumed better than it. It
+    /// lost on evidence: see `Downstream`.
     Upstream,
-    /// P1: consumers in reverse topological order, so the downstream coupling
-    /// claims a contended spec.
+    /// P1, and **the default** since RFC-059's sim close-out: consumers in
+    /// reverse topological order, so the downstream coupling claims a contended
+    /// spec.
+    ///
+    /// Chosen on measurement, and the measurement took two rounds because the
+    /// first instrument was wrong. Across three machine tiers, `Downstream` is
+    /// never worse than `Upstream` on any of the 179 contended corpus targets
+    /// and strictly better on 6. That claim was ALSO true before #520 fixed the
+    /// validator's starved-pickup blind spot — but it was true for the wrong
+    /// reason then, and two targets appeared to favour `Upstream` because the
+    /// layouts it shipped there were physically broken in a way nothing could
+    /// see.
+    ///
+    /// The deciding evidence is in-game, not the validator, because RFC-059's
+    /// own lesson is that a clean validator is not evidence a layout works.
+    /// Headless runs on the three flip targets the harness can measure
+    /// (`land-mine` needs fluid boundaries, which are uncalibrated — RFC-050
+    /// Phase 1):
+    ///
+    /// | target, am2 | `Upstream` | `Downstream` |
+    /// |---|---|---|
+    /// | `small-electric-pole@5` | 139 ents, PASS 5.00/s | 136 ents, PASS 5.00/s |
+    /// | `big-electric-pole@1` | 1146 ents, **FAIL 0.51/s** | 1127 ents, **PASS 1.10/s** |
+    /// | `medium-electric-pole@5` | 2351 ents, PASS 5.00/s | 2340 ents, PASS 4.98/s |
+    ///
+    /// `big-electric-pole@1` is the one that settles it: the status quo ships a
+    /// factory running at **half its planned rate** with 43 of its machines idle,
+    /// and the flip repairs it. The entity savings were the least of it.
+    #[default]
     Downstream,
     /// Build both static orders and keep the better one.
     ///
