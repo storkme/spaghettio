@@ -69,7 +69,7 @@ backfill the status next time the doc is touched.
 | RFC-055 | 2026-07-26 | [`rfc-055-compact-cell-chain.md`](rfc-055-compact-cell-chain.md) | Design — competes with RFC-056; #456 |
 | RFC-056 | 2026-07-26 | [`rfc-056-folded-cell-chain.md`](rfc-056-folded-cell-chain.md) | Design — competes with RFC-055; #456 |
 | RFC-057 | 2026-07-26 | [`rfc-057-topology-preserving-dense-repacking.md`](rfc-057-topology-preserving-dense-repacking.md) | Active |
-| RFC-058 | 2026-07-30 | [`rfc-058-band-packing.md`](rfc-058-band-packing.md) | Design (circulated for review) — 2D placement at ROW-BAND granularity; premise measured before writing: −39.6% band-bbox corpus-wide over 7 multi-band fixtures (−64.5% on the 4 where it applies), transport −38.1%, all obstacle-free. Tracking #507 |
+| RFC-058 | 2026-07-30 | [`rfc-058-band-packing.md`](rfc-058-band-packing.md) | Active — 2D placement at ROW-BAND granularity. Phase 0 complete 2026-07-31: **KC2 cleared at 36.8%** (14/38 e2e-corpus rows ≥3 bands and packable, bar 30%, cap-insensitive 3:1–4:1); in-corpus winners save −63% to −78% band-bbox. Next: Phase 3 trunk spike (KC1). Tracking #507 |
 | RFC-059 | 2026-07-30 | [`rfc-059-di-coupling-assignment.md`](rfc-059-di-coupling-assignment.md) | Design (circulated for review) — split out of #473; DI spec→cell contention is a matching problem, not a walk order; phase 1 must first establish a reproducible rate |
 
 Next number: **RFC-060**.

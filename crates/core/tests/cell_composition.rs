@@ -4730,6 +4730,163 @@ fn rfc057_island_placement_keeps_terminals_disjoint() {
     assert_eq!(materialized, cases.len());
 }
 
+// ---------------------------------------------------------------------------
+// RFC-058 band helpers, shared by the phase-0 probes below.
+//
+// A band is a maximal run of rows containing machines or inserters. Trunk
+// belts span all rows and are deliberately NOT band-forming — they are the
+// transport being priced, not the structure being packed.
+//
+// `rfc058_band_packing_premise_holds` (the CI guard) intentionally does NOT
+// use these helpers: it keeps its own self-contained copy so a defect
+// introduced here cannot blind the guard that exists to catch drift.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+struct Rfc058Band {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    recipes: Vec<String>,
+}
+
+impl Rfc058Band {
+    fn cx(&self) -> f64 {
+        self.x as f64 + self.w as f64 / 2.0
+    }
+    fn cy(&self) -> f64 {
+        self.y as f64 + self.h as f64 / 2.0
+    }
+}
+
+fn rfc058_extract_bands(l: &spaghettio_core::models::LayoutResult) -> Vec<Rfc058Band> {
+    use spaghettio_core::common::{entity_size, is_machine_entity};
+    let h = l.height.max(0) as usize;
+    let mut structural = vec![false; h];
+    for e in &l.entities {
+        if is_machine_entity(&e.name) || e.name.contains("inserter") {
+            let (_, eh) = entity_size(&e.name);
+            for dy in 0..eh as i32 {
+                let y = e.y + dy;
+                if y >= 0 && (y as usize) < h {
+                    structural[y as usize] = true;
+                }
+            }
+        }
+    }
+    let mut bands = Vec::new();
+    let mut y = 0usize;
+    while y < h {
+        if !structural[y] {
+            y += 1;
+            continue;
+        }
+        let start = y;
+        while y < h && structural[y] {
+            y += 1;
+        }
+        let end = y - 1;
+        let (mut xmin, mut xmax) = (i32::MAX, i32::MIN);
+        let mut recipes: FxHashSet<String> = FxHashSet::default();
+        for e in &l.entities {
+            if !(is_machine_entity(&e.name) || e.name.contains("inserter")) {
+                continue;
+            }
+            if e.y < start as i32 || e.y > end as i32 {
+                continue;
+            }
+            let (ew, _) = entity_size(&e.name);
+            xmin = xmin.min(e.x);
+            xmax = xmax.max(e.x + ew as i32 - 1);
+            if let Some(r) = &e.recipe {
+                recipes.insert(r.clone());
+            }
+        }
+        if xmin > xmax {
+            continue;
+        }
+        let mut recipes: Vec<String> = recipes.into_iter().collect();
+        recipes.sort();
+        bands.push(Rfc058Band {
+            x: xmin,
+            y: start as i32,
+            w: xmax - xmin + 1,
+            h: (end - start + 1) as i32,
+            recipes,
+        });
+    }
+    bands
+}
+
+fn rfc058_bbox(bands: &[Rfc058Band]) -> (i32, i32) {
+    let w = bands.iter().map(|b| b.x + b.w).max().unwrap_or(0)
+        - bands.iter().map(|b| b.x).min().unwrap_or(0);
+    let h = bands.iter().map(|b| b.y + b.h).max().unwrap_or(0)
+        - bands.iter().map(|b| b.y).min().unwrap_or(0);
+    (w, h)
+}
+
+fn rfc058_shelf_pack(
+    bands: &[Rfc058Band],
+    target_w: i32,
+    gap: i32,
+    sort_desc: bool,
+) -> Vec<Rfc058Band> {
+    let mut idx: Vec<usize> = (0..bands.len()).collect();
+    if sort_desc {
+        idx.sort_by_key(|&i| std::cmp::Reverse((bands[i].h, bands[i].w, i)));
+    }
+    let mut out = bands.to_vec();
+    let (mut x, mut y, mut shelf_h) = (0, 0, 0);
+    for &i in &idx {
+        let (w, h) = (bands[i].w, bands[i].h);
+        if x > 0 && x + w > target_w {
+            x = 0;
+            y += shelf_h + gap;
+            shelf_h = 0;
+        }
+        out[i].x = x;
+        out[i].y = y;
+        x += w + gap;
+        shelf_h = shelf_h.max(h);
+    }
+    out
+}
+
+/// Best aspect-capped shelf packing: target width swept from the widest band
+/// to twice the control width, both source and height-descending order, and
+/// the minimum bounding-box area under `max_aspect` wins. Returns
+/// `(area, w, h, packed)`, or None when no packing fits the cap — a
+/// width-dominant band. Selection is by area alone with strict `<`, so the
+/// first candidate at the minimum wins; iteration order is part of the
+/// contract (the probe's published numbers depend on it).
+fn rfc058_best_pack(
+    bands: &[Rfc058Band],
+    gap: i32,
+    max_aspect: f64,
+) -> Option<(i64, i32, i32, Vec<Rfc058Band>)> {
+    let (cw, _) = rfc058_bbox(bands);
+    let widest = bands.iter().map(|b| b.w).max().unwrap_or(1);
+    let mut best: Option<(i64, i32, i32, Vec<Rfc058Band>)> = None;
+    for sort_desc in [false, true] {
+        let mut t = widest;
+        while t <= cw.max(widest) * 2 {
+            let packed = rfc058_shelf_pack(bands, t, gap, sort_desc);
+            let (w, h) = rfc058_bbox(&packed);
+            let aspect = w.max(h) as f64 / w.min(h).max(1) as f64;
+            if aspect <= max_aspect {
+                let area = (w as i64) * (h as i64);
+                if best.as_ref().is_none_or(|(ba, _, _, _)| area < *ba) {
+                    best = Some((area, w, h, packed));
+                }
+            }
+            t += 2;
+        }
+    }
+    best
+}
+
 /// RFC-058 Phase 0 instrument: band census + packing headroom.
 ///
 /// This reproduces every number the RFC cites, so its premise is checkable by
@@ -4751,86 +4908,7 @@ fn rfc057_island_placement_keeps_terminals_disjoint() {
 #[test]
 #[ignore = "RFC-058 Phase 0 probe — run with --ignored --nocapture"]
 fn probe_band_packing_headroom() {
-    use spaghettio_core::common::{entity_size, is_machine_entity};
-    use spaghettio_core::models::{LayoutResult, SolverResult};
-
-    #[derive(Clone, Debug)]
-    struct Band {
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        recipes: Vec<String>,
-    }
-    impl Band {
-        fn cx(&self) -> f64 {
-            self.x as f64 + self.w as f64 / 2.0
-        }
-        fn cy(&self) -> f64 {
-            self.y as f64 + self.h as f64 / 2.0
-        }
-    }
-
-    // A band is a maximal run of rows containing machines or inserters. Trunk
-    // belts span all rows and are deliberately NOT band-forming — they are the
-    // transport being priced, not the structure being packed.
-    fn extract_bands(l: &LayoutResult) -> Vec<Band> {
-        let h = l.height.max(0) as usize;
-        let mut structural = vec![false; h];
-        for e in &l.entities {
-            if is_machine_entity(&e.name) || e.name.contains("inserter") {
-                let (_, eh) = entity_size(&e.name);
-                for dy in 0..eh as i32 {
-                    let y = e.y + dy;
-                    if y >= 0 && (y as usize) < h {
-                        structural[y as usize] = true;
-                    }
-                }
-            }
-        }
-        let mut bands = Vec::new();
-        let mut y = 0usize;
-        while y < h {
-            if !structural[y] {
-                y += 1;
-                continue;
-            }
-            let start = y;
-            while y < h && structural[y] {
-                y += 1;
-            }
-            let end = y - 1;
-            let (mut xmin, mut xmax) = (i32::MAX, i32::MIN);
-            let mut recipes: FxHashSet<String> = FxHashSet::default();
-            for e in &l.entities {
-                if !(is_machine_entity(&e.name) || e.name.contains("inserter")) {
-                    continue;
-                }
-                if e.y < start as i32 || e.y > end as i32 {
-                    continue;
-                }
-                let (ew, _) = entity_size(&e.name);
-                xmin = xmin.min(e.x);
-                xmax = xmax.max(e.x + ew as i32 - 1);
-                if let Some(r) = &e.recipe {
-                    recipes.insert(r.clone());
-                }
-            }
-            if xmin > xmax {
-                continue;
-            }
-            let mut recipes: Vec<String> = recipes.into_iter().collect();
-            recipes.sort();
-            bands.push(Band {
-                x: xmin,
-                y: start as i32,
-                w: xmax - xmin + 1,
-                h: (end - start + 1) as i32,
-                recipes,
-            });
-        }
-        bands
-    }
+    use spaghettio_core::models::SolverResult;
 
     // Rate-weighted transport: for every (band, consumed item) pair, Manhattan
     // distance to the nearest band producing it, times planned rate. External
@@ -4841,7 +4919,7 @@ fn probe_band_packing_headroom() {
     // close to Manhattan for the stacked control but not necessarily for a
     // packed layout whose bands are no longer in one column. It may therefore
     // flatter packing. The area result does not depend on it.
-    fn transport_cost(bands: &[Band], sr: &SolverResult) -> f64 {
+    fn transport_cost(bands: &[Rfc058Band], sr: &SolverResult) -> f64 {
         let mut produced_by: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
         for spec in &sr.machines {
             for out in &spec.outputs {
@@ -4882,36 +4960,6 @@ fn probe_band_packing_headroom() {
             }
         }
         total
-    }
-
-    fn bbox(bands: &[Band]) -> (i32, i32) {
-        let w = bands.iter().map(|b| b.x + b.w).max().unwrap_or(0)
-            - bands.iter().map(|b| b.x).min().unwrap_or(0);
-        let h = bands.iter().map(|b| b.y + b.h).max().unwrap_or(0)
-            - bands.iter().map(|b| b.y).min().unwrap_or(0);
-        (w, h)
-    }
-
-    fn shelf_pack(bands: &[Band], target_w: i32, gap: i32, sort_desc: bool) -> Vec<Band> {
-        let mut idx: Vec<usize> = (0..bands.len()).collect();
-        if sort_desc {
-            idx.sort_by_key(|&i| std::cmp::Reverse((bands[i].h, bands[i].w, i)));
-        }
-        let mut out = bands.to_vec();
-        let (mut x, mut y, mut shelf_h) = (0, 0, 0);
-        for &i in &idx {
-            let (w, h) = (bands[i].w, bands[i].h);
-            if x > 0 && x + w > target_w {
-                x = 0;
-                y += shelf_h + gap;
-                shelf_h = 0;
-            }
-            out[i].x = x;
-            out[i].y = y;
-            x += w + gap;
-            shelf_h = shelf_h.max(h);
-        }
-        out
     }
 
     // Minimising bbox AREA alone drives every packing to a one-shelf ribbon
@@ -4963,7 +5011,7 @@ fn probe_band_packing_headroom() {
             println!("{label:<13} layout refused");
             continue;
         };
-        let bands = extract_bands(&l);
+        let bands = rfc058_extract_bands(&l);
         let dims: Vec<(i32, i32)> = bands.iter().map(|b| (b.w, b.h)).collect();
         // Two gates, deliberately distinct.
         //
@@ -4982,27 +5030,12 @@ fn probe_band_packing_headroom() {
         }
         let kc2_candidate = bands.len() >= 3;
         multi_band += 1;
-        let (cw, ch) = bbox(&bands);
+        let (cw, ch) = rfc058_bbox(&bands);
         let ctrl_area = (cw as i64) * (ch as i64);
         let ctrl_tx = transport_cost(&bands, &sr);
 
-        let widest = bands.iter().map(|b| b.w).max().unwrap_or(1);
-        let mut best: Option<(i64, f64, i32, i32)> = None;
-        for sort_desc in [false, true] {
-            let mut t = widest;
-            while t <= cw.max(widest) * 2 {
-                let packed = shelf_pack(&bands, t, GAP, sort_desc);
-                let (w, h) = bbox(&packed);
-                let aspect = w.max(h) as f64 / w.min(h).max(1) as f64;
-                if aspect <= MAX_ASPECT {
-                    let area = (w as i64) * (h as i64);
-                    if best.as_ref().is_none_or(|(ba, _, _, _)| area < *ba) {
-                        best = Some((area, transport_cost(&packed, &sr), w, h));
-                    }
-                }
-                t += 2;
-            }
-        }
+        let best = rfc058_best_pack(&bands, GAP, MAX_ASPECT)
+            .map(|(area, w, h, packed)| (area, transport_cost(&packed, &sr), w, h));
 
         corpus_ctrl += ctrl_area;
         match best {
@@ -5214,4 +5247,181 @@ fn rfc058_band_packing_premise_holds() {
          different number makes the gate wrong — update the RFC before relying on it.",
         66.1,
     );
+}
+
+/// RFC-058 Phase 0: band census over the e2e corpus — the reach measurement
+/// kill criterion 2 turns on.
+///
+/// The corpus is every distinct production request (item, rate, machine,
+/// belt, inputs, exclusions) exercised by a non-ignored test in
+/// `crates/core/tests/e2e.rs`, transcribed 2026-07-31. Inclusion rule,
+/// recorded so the denominator is arguable rather than mysterious:
+/// strategy/row-layout variants are normalised to the default bus path,
+/// duplicate tuples are listed once (`source` names one owning test), and
+/// `#[ignore]`d tests are out — which excludes `measure_utility_10s_am3`,
+/// `fixture_source_ec_15s_am1_yellow_from_ore`, the ignored stress trio
+/// (`ac_partitioned_7s`, `ac_45s`, `pu_20s` — pu20 was an 85-band packable
+/// winner, so this rule costs the numerator too) and, notably,
+/// `pipe_belt_processing_unit_1s_routes` (pu1-plate): the KC1 gate fixture
+/// is NOT part of KC2's denominator. Two non-ignored requests are also out
+/// because this harness cannot express them —
+/// `fulgora_scrap_sorter_mechanism_present` needs the recycling-aware
+/// `solve_fulgora` path, and `cable13u_bridged_row_lane_throughput_clean`
+/// solves at `QualityTier::Uncommon` — so "every distinct request" is
+/// exact only over default-quality, non-recycling solves. (The Legendary
+/// leg of `quality_differential_ec_normal_vs_legendary` is excluded the
+/// same way; its Normal leg is the `ec4-plate-am3-red` row.)
+///
+/// KC2 asks what fraction of this corpus has >=3 bands and no
+/// width-dominant band. The aspect cap is consequential (it alone refuses
+/// insert3-ore at 3.16:1 in the probe corpus), so applicability is
+/// reported as a function of the cap instead of inheriting 3:1.
+///
+/// Band structure is host-geometry-relative (RFC-058 decision log,
+/// 2026-07-31: ec10-ore extracts 1 or 3 bands depending on the machine's
+/// SAT-cache state). Treat these numbers like stress goldens — comparable
+/// on one machine, not portable constants — and re-run on a second machine
+/// before calling KC2 if the result lands within a few points of the 30%
+/// bar.
+#[test]
+#[ignore = "RFC-058 Phase 0 census — run with --ignored --nocapture"]
+fn probe_band_census_e2e_corpus() {
+    struct Case {
+        label: &'static str,
+        source: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt: Option<&'static str>,
+        inputs: &'static [&'static str],
+        excluded: &'static [&'static str],
+    }
+    const A1: &str = "assembling-machine-1";
+    const A2: &str = "assembling-machine-2";
+    const A3: &str = "assembling-machine-3";
+    const CHEM: &str = "chemical-plant";
+    const REFINERY: &str = "oil-refinery";
+    const YELLOW: Option<&'static str> = Some("transport-belt");
+    const RED: Option<&'static str> = Some("fast-transport-belt");
+    const ORES: &[&str] = &["iron-ore", "copper-ore"];
+    const NAUVIS5: &[&str] = &["iron-plate", "copper-plate", "coal", "crude-oil", "water"];
+    const ORES5: &[&str] = &["iron-ore", "copper-ore", "coal", "water", "crude-oil"];
+    const PU9: &[&str] = &[
+        "iron-plate", "copper-plate", "steel-plate", "stone", "coal",
+        "water", "crude-oil", "iron-ore", "copper-ore",
+    ];
+
+    let cases: &[Case] = &[
+        Case { label: "gear10-plate", source: "tier1_iron_gear_wheel", item: "iron-gear-wheel", rate: 10.0, machine: A1, belt: None, inputs: &["iron-plate"], excluded: &[] },
+        Case { label: "gear10-ore", source: "tier1_iron_gear_wheel_from_ore", item: "iron-gear-wheel", rate: 10.0, machine: A2, belt: None, inputs: &["iron-ore"], excluded: &[] },
+        Case { label: "gear20-plate", source: "tier1_iron_gear_wheel_20s", item: "iron-gear-wheel", rate: 20.0, machine: A2, belt: None, inputs: &["iron-plate"], excluded: &[] },
+        Case { label: "ec10-plate", source: "tier2_electronic_circuit", item: "electronic-circuit", rate: 10.0, machine: A2, belt: None, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
+        Case { label: "ec10-plate-am1-red", source: "tier2_electronic_circuit_splitter_stamp_regression", item: "electronic-circuit", rate: 10.0, machine: A1, belt: RED, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
+        Case { label: "ec4-plate-am3-red", source: "quality_differential_ec_normal_vs_legendary (Normal leg)", item: "electronic-circuit", rate: 4.0, machine: A3, belt: RED, inputs: &["iron-plate", "copper-plate"], excluded: &[] },
+        Case { label: "ec10-ore-yellow", source: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 10.0, machine: A1, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec20-ore", source: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: A2, belt: None, inputs: ORES, excluded: &[] },
+        Case { label: "plastic10-gas", source: "tier3_plastic_bar", item: "plastic-bar", rate: 10.0, machine: CHEM, belt: None, inputs: &["petroleum-gas", "coal"], excluded: &[] },
+        Case { label: "plastic10-crude", source: "tier3_plastic_bar_from_crude", item: "plastic-bar", rate: 10.0, machine: CHEM, belt: None, inputs: &["crude-oil", "coal"], excluded: &[] },
+        Case { label: "sulfuric5", source: "tier3_sulfuric_acid", item: "sulfuric-acid", rate: 5.0, machine: CHEM, belt: None, inputs: &["iron-plate", "sulfur", "water"], excluded: &[] },
+        Case { label: "lightoil5-hoc", source: "tier3_heavy_oil_cracking", item: "light-oil", rate: 5.0, machine: CHEM, belt: None, inputs: &["water", "heavy-oil"], excluded: &["advanced-oil-processing", "coal-liquefaction"] },
+        Case { label: "gas12-aop", source: "tier3_advanced_oil_processing_multi_machine", item: "petroleum-gas", rate: 12.0, machine: REFINERY, belt: None, inputs: &["water", "crude-oil"], excluded: &[] },
+        Case { label: "gas24-aop", source: "tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation", item: "petroleum-gas", rate: 24.0, machine: REFINERY, belt: None, inputs: &["water", "crude-oil"], excluded: &["basic-oil-processing", "coal-liquefaction"] },
+        Case { label: "ac1-nauvis", source: "tier4_advanced_circuit_from_plates", item: "advanced-circuit", rate: 1.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
+        Case { label: "ac4-nauvis", source: "stress_advanced_circuit_partitioned_4s_from_plates", item: "advanced-circuit", rate: 4.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
+        Case { label: "ac5-nauvis", source: "stress_advanced_circuit_partitioned_5s_from_plates", item: "advanced-circuit", rate: 5.0, machine: A2, belt: None, inputs: NAUVIS5, excluded: &[] },
+        Case { label: "ac7-nauvis-yellow", source: "tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing", item: "advanced-circuit", rate: 7.0, machine: A2, belt: YELLOW, inputs: NAUVIS5, excluded: &[] },
+        Case { label: "ac5-ore-yellow", source: "tier4_advanced_circuit_from_ore_am2", item: "advanced-circuit", rate: 5.0, machine: A2, belt: YELLOW, inputs: ORES5, excluded: &[] },
+        Case { label: "pu2-ore-red", source: "tier5_processing_unit_from_ore_am3", item: "processing-unit", rate: 2.0, machine: A3, belt: RED, inputs: ORES5, excluded: &[] },
+        Case { label: "pu2-ore-hs", source: "tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass", item: "processing-unit", rate: 2.0, machine: A3, belt: None, inputs: &["iron-ore", "copper-ore", "stone", "coal", "water", "crude-oil"], excluded: &[] },
+        Case { label: "pu2.5-plates-hs", source: "tier5_processing_unit_25s_horizontal_stack_pole_coverage", item: "processing-unit", rate: 2.5, machine: A3, belt: None, inputs: PU9, excluded: &[] },
+        Case { label: "pu2-am2-red", source: "processing_unit_2s_am2_fast_belts_validation_baseline", item: "processing-unit", rate: 2.0, machine: A2, belt: RED, inputs: PU9, excluded: &[] },
+        Case { label: "u235-kovarex", source: "tier_kovarex_self_loop", item: "uranium-235", rate: 0.1, machine: A3, belt: None, inputs: &["uranium-238"], excluded: &["uranium-processing"] },
+        Case { label: "u235-up", source: "tier_uranium_processing_surplus_export", item: "uranium-235", rate: 0.05, machine: A3, belt: None, inputs: &["uranium-ore"], excluded: &["kovarex-enrichment-process"] },
+        Case { label: "pentapod0.2", source: "tier_pentapod_egg_self_loop", item: "pentapod-egg", rate: 0.2, machine: A3, belt: None, inputs: &["nutrients", "water"], excluded: &[] },
+        Case { label: "fish0.15", source: "tier_fish_breeding_self_loop", item: "raw-fish", rate: 0.15, machine: A3, belt: RED, inputs: &["nutrients", "water"], excluded: &[] },
+        Case { label: "bacteria1", source: "tier_bacteria_self_loop_regression", item: "iron-bacteria", rate: 1.0, machine: A3, belt: None, inputs: &["bioflux"], excluded: &["iron-bacteria"] },
+        Case { label: "superconductor1", source: "phase0e1_superconductor_electromagnetic_plant", item: "superconductor", rate: 1.0, machine: A3, belt: None, inputs: &["holmium-plate", "copper-plate", "plastic-bar", "light-oil"], excluded: &[] },
+        Case { label: "fusioncell1", source: "phase0e1_fusion_power_cell_cryogenic_plant", item: "fusion-power-cell", rate: 1.0, machine: A3, belt: None, inputs: &["lithium-plate", "holmium-plate", "ammonia"], excluded: &[] },
+        Case { label: "molteniron5", source: "phase0e1_molten_iron_foundry", item: "molten-iron", rate: 5.0, machine: A3, belt: None, inputs: &["iron-ore", "calcite"], excluded: &[] },
+        Case { label: "biolube5", source: "phase0e1_biolubricant_biochamber", item: "lubricant", rate: 5.0, machine: A3, belt: None, inputs: &["jelly"], excluded: &[] },
+        Case { label: "ec22-ore-yellow", source: "stress_electronic_circuit_22s_from_ore", item: "electronic-circuit", rate: 22.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec23-ore-yellow", source: "stress_electronic_circuit_23s_from_ore", item: "electronic-circuit", rate: 23.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec30-ore-yellow", source: "stress_electronic_circuit_30s_from_ore", item: "electronic-circuit", rate: 30.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec35-ore-yellow", source: "stress_electronic_circuit_35s_from_ore", item: "electronic-circuit", rate: 35.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec40-ore-yellow", source: "stress_electronic_circuit_40s_from_ore", item: "electronic-circuit", rate: 40.0, machine: A2, belt: YELLOW, inputs: ORES, excluded: &[] },
+        Case { label: "ec60-ore-red", source: "stress_electronic_circuit_60s_red_from_ore", item: "electronic-circuit", rate: 60.0, machine: A2, belt: RED, inputs: ORES, excluded: &[] },
+    ];
+
+    const GAP: i32 = 2;
+    let caps = [3.0f64, 3.5, 4.0];
+
+    let mut built = 0usize;
+    let mut ge3 = 0usize;
+    let mut packable = [0usize; 3];
+
+    for c in cases {
+        let inputs: FxHashSet<String> = c.inputs.iter().map(|s| s.to_string()).collect();
+        let excluded: FxHashSet<String> = c.excluded.iter().map(|s| s.to_string()).collect();
+        let sr = match solver::solve_with_exclusions(c.item, c.rate, &inputs, c.machine, &excluded) {
+            Ok(sr) => sr,
+            Err(e) => {
+                println!("{:<20} SOLVER REFUSED ({}) — counted in the denominator: {e}", c.label, c.source);
+                continue;
+            }
+        };
+        let l = match layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                max_belt_tier: c.belt.map(|s| s.to_string()),
+                ..Default::default()
+            },
+        ) {
+            Ok(l) => l,
+            Err(e) => {
+                println!("{:<20} LAYOUT REFUSED ({}) — counted in the denominator: {e}", c.label, c.source);
+                continue;
+            }
+        };
+        built += 1;
+        let bands = rfc058_extract_bands(&l);
+        let dims: Vec<(i32, i32)> = bands.iter().map(|b| (b.w, b.h)).collect();
+        let (cw, ch) = rfc058_bbox(&bands);
+        if bands.len() < 3 {
+            println!(
+                "{:<20} bands={:<2} ctrl {cw}x{ch} — below the 3-band floor  {dims:?}",
+                c.label,
+                bands.len(),
+            );
+            continue;
+        }
+        ge3 += 1;
+        let ctrl_area = (cw as i64) * (ch as i64);
+        let mut cells = String::new();
+        for (i, &cap) in caps.iter().enumerate() {
+            match rfc058_best_pack(&bands, GAP, cap) {
+                Some((area, w, h, _)) => {
+                    packable[i] += 1;
+                    cells.push_str(&format!(
+                        "  {cap}:1 {w}x{h} ({:+.0}%)",
+                        (area - ctrl_area) as f64 / ctrl_area as f64 * 100.0,
+                    ));
+                }
+                None => cells.push_str(&format!("  {cap}:1 —")),
+            }
+        }
+        println!("{:<20} bands={:<2} ctrl {cw}x{ch}{cells}  {dims:?}", c.label, bands.len());
+    }
+
+    let n = cases.len();
+    let pct = |k: usize| k as f64 / n as f64 * 100.0;
+    println!("\n=== RFC-058 KC2: reach over the e2e corpus ===");
+    println!("  corpus rows: {n} ({built} built; refusals stay in the denominator)");
+    println!("  >=3 bands: {ge3}/{n} ({:.0}%)", pct(ge3));
+    for (i, cap) in caps.iter().enumerate() {
+        println!(
+            "  >=3 bands AND packable at {cap}:1: {}/{n} ({:.1}%) — KC2 bar is 30%",
+            packable[i],
+            pct(packable[i]),
+        );
+    }
 }
