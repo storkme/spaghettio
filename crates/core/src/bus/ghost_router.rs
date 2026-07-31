@@ -1746,7 +1746,6 @@ pub fn route_bus_ghost(
                     .map(|min_x| min_x == lane.x)
                     .unwrap_or(false);
                 if is_first_lane_in_family {
-                    let templates = crate::bus::balancer_library::balancer_templates();
                     let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
 
                     // Collect all input tile absolute x-coords across the
@@ -1781,73 +1780,72 @@ pub fn route_bus_ghost(
                         for r in rel {
                             input_xs.push(origin_x + r);
                         }
-                    } else if crate::bus::balancer::family_uses_passthrough(fam) {
-                        // Passthrough: each producer feeds the matching
-                        // output column directly (issue #268). No template
-                        // origin offset — input_xs == lane_xs.
-                        //
-                        // RFC-061 Phase 1.5: this branch MIRRORS
-                        // `stamp_family_balancer`'s passthrough decision
-                        // and must carry the same `demand_skewed` gate —
-                        // Phase 1 gated only the stamper, so skewed
-                        // families got a REAL template but feeders still
-                        // targeted the passthrough columns, landing on
-                        // the template's flank (ac@7's UG sideload,
-                        // sim-adjudicated in tier4_7s at the time).
-                        input_xs = fam.lane_xs.clone();
-                    } else if let Some(template) = templates.get(&(n, m)) {
-                        let origin_x = if fam.lane_xs.is_empty() {
-                            x
-                        } else {
-                            balancer_origin_x(&fam.lane_xs, template.output_tiles)
-                        };
-                        let mut rel_inputs: Vec<i32> =
-                            template.input_tiles.iter().map(|t| t.0).collect();
-                        rel_inputs.sort();
-                        for r in rel_inputs {
-                            input_xs.push(origin_x + r);
-                        }
                     } else {
-                        // Decomposition fallback: must match
-                        // `stamp_family_balancer`'s search order
-                        // (largest g first) and skip-rule
-                        // (sub_template.width > sub_m).
-                        for g in (1..=n).rev() {
-                            if n % g != 0 || m % g != 0 {
-                                continue;
+                        // RFC-061 Phase 1.5 (#539 review): feeder targets
+                        // come from THE shared stamp plan, so this site can
+                        // never disagree with the stamper (it previously
+                        // lacked the generator fallback and dead-ended
+                        // producers on shapes only the generator serves).
+                        use crate::bus::balancer::FamilyStampPlan;
+                        match crate::bus::balancer::family_stamp_plan(fam) {
+                            FamilyStampPlan::Passthrough => {
+                                // Each producer feeds the matching output
+                                // column directly (issue #268). No template
+                                // origin offset — input_xs == lane_xs.
+                                input_xs = fam.lane_xs.clone();
                             }
-                            let sub_n = n / g;
-                            let sub_m = m / g;
-                            let Some(sub_template) = templates.get(&(sub_n, sub_m)) else {
-                                continue;
-                            };
-                            if sub_template.width > sub_m {
-                                continue;
-                            }
-                            let lanes_per_group = sub_m as usize;
-                            for gi in 0..(g as usize) {
-                                let lane_start = gi * lanes_per_group;
-                                let lane_end = (lane_start + lanes_per_group)
-                                    .min(fam.lane_xs.len());
-                                let lane_chunk = &fam.lane_xs[lane_start..lane_end];
-                                if lane_chunk.is_empty() {
-                                    continue;
-                                }
-                                let sub_origin_x = balancer_origin_x(
-                                    lane_chunk, sub_template.output_tiles,
-                                );
+                            FamilyStampPlan::Direct(template) => {
+                                let origin_x = if fam.lane_xs.is_empty() {
+                                    x
+                                } else {
+                                    balancer_origin_x(&fam.lane_xs, template.output_tiles)
+                                };
                                 let mut rel_inputs: Vec<i32> =
-                                    sub_template.input_tiles.iter().map(|t| t.0).collect();
+                                    template.input_tiles.iter().map(|t| t.0).collect();
                                 rel_inputs.sort();
                                 for r in rel_inputs {
-                                    input_xs.push(sub_origin_x + r);
+                                    input_xs.push(origin_x + r);
                                 }
                             }
-                            break;
+                            FamilyStampPlan::Decomposed { g, sub } => {
+                                let sub_m = m / g;
+                                let lanes_per_group = sub_m as usize;
+                                for gi in 0..(g as usize) {
+                                    let lane_start = gi * lanes_per_group;
+                                    let lane_end = (lane_start + lanes_per_group)
+                                        .min(fam.lane_xs.len());
+                                    let lane_chunk = &fam.lane_xs[lane_start..lane_end];
+                                    if lane_chunk.is_empty() {
+                                        continue;
+                                    }
+                                    let sub_origin_x = balancer_origin_x(
+                                        lane_chunk, sub.output_tiles,
+                                    );
+                                    let mut rel_inputs: Vec<i32> =
+                                        sub.input_tiles.iter().map(|t| t.0).collect();
+                                    rel_inputs.sort();
+                                    for r in rel_inputs {
+                                        input_xs.push(sub_origin_x + r);
+                                    }
+                                }
+                            }
+                            FamilyStampPlan::Generated(t) => {
+                                let origin_x = if fam.lane_xs.is_empty() {
+                                    x
+                                } else {
+                                    balancer_origin_x(&fam.lane_xs, &t.output_tiles)
+                                };
+                                let mut rel_inputs: Vec<i32> =
+                                    t.input_tiles.iter().map(|ti| ti.0).collect();
+                                rel_inputs.sort();
+                                for r in rel_inputs {
+                                    input_xs.push(origin_x + r);
+                                }
+                            }
                         }
                     }
 
-                    if input_xs.is_empty() {
+                                        if input_xs.is_empty() {
                         // No template, decomposition, or passthrough rule
                         // resolved this family's shape — mirrors (and is
                         // caused by) the same search coming up empty in

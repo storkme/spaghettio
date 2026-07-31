@@ -1037,7 +1037,12 @@ local function finalize(s, converged)
     bulk_inserter_capacity_bonus = game.forces.player.bulk_inserter_capacity_bonus,
     belt_stack_size_bonus = game.forces.player.belt_stack_size_bonus}, false)
   print("HARNESS_DONE")
-  script.on_nth_tick(60, nil)
+  -- Deliberately NOT deregistering the tick handler here: runtime
+  -- `script.on_nth_tick(60, nil)` makes the server's handler set differ
+  -- from what a freshly-loaded client registers, and Factorio refuses
+  -- the join ("mod event handlers are not identical ... level"). The
+  -- handler's own `storage.finalized` guard makes it a no-op after
+  -- this point, which is multiplayer-safe.
 end
 
 script.on_nth_tick(60, function(ev)

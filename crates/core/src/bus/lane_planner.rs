@@ -585,9 +585,8 @@ pub fn plan_bus_lanes(
 
     // Resolve balancer_y_end from actual template heights and propagate the
     // full balancer zone to each lane so trunks skip the entire zone.
-    let templates = crate::bus::balancer_library::balancer_templates();
     for (fam_idx, fam) in families.iter_mut().enumerate() {
-        let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
+        let n = fam.shape.0 as u32;
         // Find the effective template height: a merge-and-tap family occupies
         // its merge-tree's height (`2n-1`); passthrough (`(m, m)` — a single
         // south-facing belt per output column, see issue #268) takes priority
@@ -595,20 +594,18 @@ pub fn plan_bus_lanes(
         // template's 6+; otherwise direct match, then decomposition fallback.
         let tpl_height = if fam.merge_tap {
             Some(crate::bus::balancer_generate::merge_tree(n).height)
-        } else if crate::bus::balancer::family_uses_passthrough(fam) {
-            Some(1u32)
         } else {
-            templates.get(&(n, m)).map(|t| t.height)
-                .or_else(|| {
-                    // Decomposition: find divisor g where (n/g, m/g) has a template.
-                    (1..=n).rev().find_map(|g| {
-                        if n % g == 0 && m % g == 0 {
-                            templates.get(&(n / g, m / g)).map(|t| t.height)
-                        } else {
-                            None
-                        }
-                    })
-                })
+            // RFC-061 Phase 1.5 (#539 review): heights come from THE
+            // shared stamp plan, so this site can never disagree with
+            // what the stamper actually places (it previously accepted
+            // width-guard-rejected decompositions and reserved bogus
+            // zones).
+            Some(match crate::bus::balancer::family_stamp_plan(fam) {
+                crate::bus::balancer::FamilyStampPlan::Passthrough => 1u32,
+                crate::bus::balancer::FamilyStampPlan::Direct(t) => t.height,
+                crate::bus::balancer::FamilyStampPlan::Decomposed { sub, .. } => sub.height,
+                crate::bus::balancer::FamilyStampPlan::Generated(t) => t.height,
+            })
         };
         if let Some(h) = tpl_height {
             fam.balancer_y_end = fam.balancer_y_start + h as i32 - 1;

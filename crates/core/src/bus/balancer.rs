@@ -123,17 +123,67 @@ pub(crate) fn is_passthrough_shape(n: u32, m: u32) -> bool {
     n == m && n >= 2
 }
 
-/// THE single passthrough decision for a family (RFC-061 Phase 1.5).
-/// Three sites previously mirrored `is_passthrough_shape` independently
-/// — the stamper, the ghost router's feeder targeting, and the lane
-/// planner's height resolution — and Phase 1 gating only the stamper
-/// left the other two treating a skewed family as 1-tall
-/// passthrough columns: feeders aimed at `lane_xs` and trunks started
-/// 18 rows early, driving straight through the stamped template's body
-/// (ac@7's flank UG sideload). Every passthrough-vs-template decision
-/// must go through here.
-pub(crate) fn family_uses_passthrough(fam: &crate::bus::lane_planner::LaneFamily) -> bool {
-    is_passthrough_shape(fam.shape.0 as u32, fam.shape.1 as u32) && !fam.demand_skewed
+/// THE single stamp-shape decision for a family (RFC-061 Phase 1.5,
+/// hardened per the #539 review): three sites — the stamper, the ghost
+/// router's feeder targeting, and the lane planner's height resolution —
+/// must agree not only on the passthrough ENTRY (Phase 1 gated only the
+/// stamper; feeders then aimed at phantom columns and trunks drove
+/// through the stamped template's body — ac@7's flank UG sideload) but
+/// on the whole FALLBACK CHAIN: direct template → width-guarded
+/// decomposition → width-guarded runtime generator → passthrough.
+///
+/// Explicit contract for the tail: a demand-skewed square the library
+/// cannot serve (n = m ≥ 9; the generator emits passthrough for
+/// squares) falls back to PASSTHROUGH at every site — consistent
+/// geometry, and the #519-recalibrated walker reports any resulting
+/// starvation honestly instead of the sites disagreeing (bogus
+/// 10-row zones over 1-row stamps, dead-ended feeders).
+pub(crate) enum FamilyStampPlan {
+    /// 1-tall south belts at `lane_xs`.
+    Passthrough,
+    /// Direct library template for the family's exact shape.
+    Direct(&'static crate::bus::balancer_library::BalancerTemplate),
+    /// `g` side-by-side stamps of the `(n/g, m/g)` library template.
+    Decomposed {
+        g: u32,
+        sub: &'static crate::bus::balancer_library::BalancerTemplate,
+    },
+    /// Runtime-generated template (shapes the library lacks).
+    Generated(crate::bus::balancer_generate::OwnedTemplate),
+}
+
+pub(crate) fn family_stamp_plan(
+    fam: &crate::bus::lane_planner::LaneFamily,
+) -> FamilyStampPlan {
+    let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
+    if is_passthrough_shape(n, m) && !fam.demand_skewed {
+        return FamilyStampPlan::Passthrough;
+    }
+    let templates = crate::bus::balancer_library::balancer_templates();
+    if let Some(t) = templates.get(&(n, m)) {
+        return FamilyStampPlan::Direct(t);
+    }
+    for g in (1..=n).rev() {
+        if g == 0 || n % g != 0 || m % g != 0 {
+            continue;
+        }
+        let (sub_n, sub_m) = (n / g, m / g);
+        if let Some(sub) = templates.get(&(sub_n, sub_m)) {
+            if sub.width > sub_m {
+                continue; // neighbouring sub-stamps would overlap in x
+            }
+            return FamilyStampPlan::Decomposed { g, sub };
+        }
+    }
+    if let Some(generated) = crate::bus::balancer_generate::generate(n, m) {
+        if generated.width <= m {
+            return FamilyStampPlan::Generated(generated);
+        }
+    }
+    // Nothing resolves: consistent 1-tall passthrough everywhere (the
+    // pre-Phase-1.5 sites disagreed here). Honest by construction — the
+    // walker reports what the passthrough under-delivers.
+    FamilyStampPlan::Passthrough
 }
 
 /// Predicate: would `stamp_family_balancer((n, m), …)` find a template
@@ -200,12 +250,9 @@ pub(crate) fn stamp_family_balancer(
     max_belt_tier: Option<&str>,
     ctx: &StackingCtx,
 ) -> Result<Vec<PlacedEntity>, String> {
-    use crate::bus::balancer_library::balancer_templates;
     use crate::common::belt_entity_for_rate_stacked;
 
-    let templates = balancer_templates();
     let (n, m) = (family.shape.0 as u32, family.shape.1 as u32);
-    let template_key = (n, m);
 
     if family.lane_xs.is_empty() {
         return Err(format!("LaneFamily for item {} has no lane_xs assigned", family.item));
@@ -229,7 +276,8 @@ pub(crate) fn stamp_family_balancer(
     // some column (`LaneFamily::demand_skewed`; ac@5's cable columns
     // carried 8.82/s into 12.86/s blocks and sim-measured 75% of plan).
     // Skewed families fall into exactly the library net below.
-    if family_uses_passthrough(family) {
+    let plan = family_stamp_plan(family);
+    if matches!(plan, FamilyStampPlan::Passthrough) {
         let seg_id = Some(format_segment_id(&family.item, family.module_id, n, m, None));
         let entities: Vec<PlacedEntity> = family
             .lane_xs
@@ -247,7 +295,7 @@ pub(crate) fn stamp_family_balancer(
         return Ok(entities);
     }
 
-    if let Some(template) = templates.get(&template_key) {
+    if let FamilyStampPlan::Direct(template) = &plan {
         // Direct template match.
         let origin_x = balancer_origin_x(&family.lane_xs, template.output_tiles);
         let origin_y = family.balancer_y_start;
@@ -276,16 +324,11 @@ pub(crate) fn stamp_family_balancer(
     // overlapping entities. PU@2/s plates yellow tripped this with
     // (15, 3) → 3×(5, 1): width=5 > sub_m=1, three balancers stamped on
     // top of each other, ~37 entity-overlap errors.
-    for g in (1..=n).rev() {
-        if n % g != 0 || m % g != 0 {
-            continue;
-        }
+    if let FamilyStampPlan::Decomposed { g, sub: sub_template } = &plan {
+        let (g, sub_template) = (*g, *sub_template);
         let sub_n = n / g;
         let sub_m = m / g;
-        if let Some(sub_template) = templates.get(&(sub_n, sub_m)) {
-            if sub_template.width > sub_m {
-                continue; // would overlap with neighbouring stamps
-            }
+        {
             let mut all_entities = Vec::new();
             let lanes_per_group = sub_m as usize;
 
@@ -313,12 +356,10 @@ pub(crate) fn stamp_family_balancer(
         }
     }
 
-    // Final fallback: runtime template generator (phase 2.0). Produces
-    // verified MX2a/MX2b/MX3 layouts for shapes the library lacks
-    // (e.g. (m, m) for m > 8, (5, 10), (9, 9)) without relying on
-    // Factorio-SAT. Skipped if the generator can't handle the shape.
-    if let Some(generated) = crate::bus::balancer_generate::generate(n, m) {
-        if generated.width <= m {
+    // Runtime template generator (phase 2.0) — selected by
+    // `family_stamp_plan`, which owns the shape search and width guards.
+    if let FamilyStampPlan::Generated(generated) = &plan {
+        {
             let origin_x = balancer_origin_x(&family.lane_xs, &generated.output_tiles);
             let origin_y = family.balancer_y_start;
             let mut entities = generated.stamp(
@@ -430,8 +471,7 @@ mod tests {
     /// (splitters vs belts on the output row).
     #[test]
     fn test_template_outputs_align_with_lane_xs() {
-        use crate::bus::balancer_library::balancer_templates;
-
+    
         let templates = balancer_templates();
         for (&(n, m), template) in templates.iter() {
             let lane_xs: Vec<i32> = (100..100 + m as i32).collect();
