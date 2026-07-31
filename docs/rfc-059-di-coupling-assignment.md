@@ -430,7 +430,7 @@ able to distinguish "policy had no effect" from "policy was not applied."
 | rate sweep instead of a named rate | yes | 1/5/20 per second across every producible item and three machine tiers, plus `rail` at 1/5/10 from `iron-ore` |
 | tile-level assertion at a differing rate | **no** | see below |
 | sim the newly-built cell | yes — **and it changed the outcome** | `land-mine@1` is unmeasurable (fluid boundary, uncalibrated harness path); `display-panel@1` on am1 showed the searched policy shipping a validator-clean factory that produces 0/s |
-| suite, clippy, wasm | yes | 1045 pass; `cargo clippy --workspace -D warnings` clean; wasm-pack build clean |
+| suite, clippy, wasm | yes | 1047 pass / 0 fail (single invocation, post-rebase onto RFC-058 #516/#517/#518); `cargo clippy --workspace -D warnings` clean; wasm-pack build clean |
 
 **The tile-level assertion was not written, deliberately.** The plan asked for it
 "once a differing rate exists", expecting the difference to be a row cell whose
