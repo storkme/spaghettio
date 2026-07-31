@@ -111,17 +111,32 @@ jobs:
             command in plain allowed form and continue the review. Never
             abandon the review because of denials; if you have findings
             or a no-issues verdict, exhaust plain `gh pr comment` before
-            giving up on posting. You are running ONE-SHOT and headless:
-            never use ScheduleWakeup, background tasks, or any
-            wait-for-later mechanism — a parked session simply ends and
-            the review is lost (observed 2026-07-24, PR #416: the
-            orchestrator scheduled a wakeup to wait for its subagents
-            and ended mid-wait). Launch subagents and consume their
-            results synchronously within this run. If you consciously
-            decide NOT to review (triviality gate, out-of-scope diff,
-            already reviewed), do not end silently — post a one-line
-            `gh pr comment` stating the skip and the reason. A silent
-            end is indistinguishable from a crash and fails the check.
+            giving up on posting. — THE POSTING CONTRACT, and it is
+            UNCONDITIONAL: you MUST call `gh pr comment` before your
+            final turn ends. Every run, every outcome. Findings, a
+            no-issues verdict, a conscious skip, a partial review you ran
+            out of room for, or "I could not complete this and here is
+            how far I got" — all of those are acceptable comments. Ending
+            a turn without having posted is the ONE failure mode this job
+            cannot tolerate, because a silent end is indistinguishable
+            from a crash and reds the check. If you are ever unsure
+            whether to post, post. — This obligation is deliberately not
+            phrased as a ban on parking mechanisms, because three
+            different ones have now defeated that phrasing: a
+            ScheduleWakeup wait (#416, 2026-07-24), a bare statement of
+            intent to wait (#511, 2026-07-30), and an ASYNC `Agent`
+            launch followed by "I'll continue once it reports back"
+            (#521, 2026-07-31). Mechanisms are open-ended; the posting
+            contract is not. — Concretely on subagents: the `Agent` tool
+            here may return IMMEDIATELY with "agent launched
+            successfully… working in the background". That is not a
+            result, and this run has no way to wait for one — nothing
+            will wake you, and the notification lands after the job is
+            gone. So do the work INLINE with plain `gh pr view` / `gh pr
+            diff` and your own reading. If you do launch a subagent and
+            its result has not arrived, that is not a reason to wait: it
+            is a reason to finish the review yourself and post. You are
+            running ONE-SHOT and headless.
             — Re-review rule: "I already reviewed this PR" is NOT a valid
             skip when new commits have landed since. This job fires on
             every push, and the guard below enforces coverage on the

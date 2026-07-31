@@ -339,6 +339,57 @@ stopped being true on 2026-07-29 when the guard moved to head-SHA coverage
 (class 6's fix). That understated the consequence of a skip to the one reader
 whose behaviour it was trying to change. Corrected in the same PR.
 
+### Failure class 6 recurred a THIRD time: an async subagent launch (2026-07-31)
+
+Same head as class 10, one run later. PR #521, run `30624630414`:
+`num_turns: 4`, `subtype: success`, `permission_denials_count: 0`, $0.19, 23.7s,
+`reviews=0 inline=0 bot_summaries=0`. The guard caught it; the check failed
+correctly.
+
+The transcript, in order:
+
+```
+[4]  Agent(...)   -> "Async agent launched successfully… working in the background"
+[9]  "I'll wait for the eligibility check to complete before proceeding further."
+[10] ToolSearch(select:SendMessage)
+[14] gh pr view 521 --json state,isDraft,title,body,comments
+[19] ScheduleWakeup({stop: true})
+[26] "I've kicked off the eligibility check… I'll continue once it reports back."  -> ends
+```
+
+**The root cause is that `Agent` returned asynchronously.** The prompt told the
+orchestrator to "launch subagents and consume their results synchronously within
+this run", but the tool handed back a launch acknowledgement rather than a
+result, and there is no wake-up path in a one-shot headless job — the completion
+notification arrives after the runner is gone. Having no way to wait and no
+instruction covering that case, it ended the turn.
+
+Note it *did* call `ScheduleWakeup`, which the prompt banned outright — with
+`stop: true`, so the ban was technically honoured while the behaviour it exists
+to prevent happened anyway.
+
+**This is the third distinct parking mechanism**, and the previous entry
+predicted it in as many words: *"Any prompt-level fix has to be phrased as an
+obligation to post before ending rather than a prohibition on a parking
+mechanism — mechanisms are open-ended, the posting contract is not."* That advice
+was recorded and then not acted on; the prompt kept the ban and left the posting
+obligation **conditional** on "if you consciously decide NOT to review". This run
+never decided not to review — it believed it was mid-review — so the obligation
+did not bind. A conditional obligation is not a contract.
+
+**Fixes:**
+
+1. The posting contract is now **unconditional**: post a `gh pr comment` before
+   the final turn ends, in every run and every outcome, including a partial
+   review or an "I could not finish, here is how far I got". "If unsure, post."
+2. The async-`Agent` trap is named explicitly, with the instruction to do the
+   work inline via plain `gh pr view` / `gh pr diff`, and that an unarrived
+   subagent result is a reason to finish and post rather than to wait.
+
+The tally is what matters here: a prohibition on parking has now been defeated
+three times, by a wakeup call, by prose, and by a tool's async return. Each fix
+addressed the mechanism in front of it. Only the obligation generalises.
+
 ## Forensics playbook
 
 **Run signatures** (from the action's result JSON in the job log — grep the
