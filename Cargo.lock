@@ -662,6 +662,7 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_json",
  "spaghettio_core",
+ "tsify-next",
  "wasm-bindgen",
 ]
 

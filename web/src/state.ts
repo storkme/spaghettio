@@ -62,6 +62,27 @@ export interface FormState {
   modules: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];
+  /** RFC-062 Phase 3: N >= 1 simultaneous solve targets, minimal URL
+   * support only (`docs/rfc-062-multi-target-outputs.md` §Interface — a
+   * full multi-target sidebar UI is explicitly out of scope). `null`
+   * (absent from the URL) is the single-target case: `item`/`rate` are
+   * authoritative exactly as before. When present, `targets[0]` always
+   * mirrors `item`/`rate` (the writer keeps them in sync — see
+   * `formatHashState`), so a client that ignores this field entirely
+   * still gets a working single-target URL for the first requested item;
+   * a multi-target-aware caller reads the full array instead. The editing
+   * UI never *writes* this field — it only round-trips a URL that already
+   * carries it. */
+  targets: UrlTarget[] | null;
+}
+
+/** One `{item, rate}` pair as carried in the URL's multi-target extras
+ * (RFC-062 Phase 3). Deliberately NOT imported from the wasm bindings —
+ * `state.ts` has no wasm dependency today and this shape is small enough
+ * not to justify adding one. */
+export interface UrlTarget {
+  item: string;
+  rate: number;
 }
 
 /** Strategy values accepted on the URL and in `FormState.strategy`.
@@ -236,6 +257,44 @@ const INSERTER_CAPACITY_EXTRAS_KEY = "ir";
  * so existing bookmarked URLs keep their exact current layouts. */
 const DIRECT_INSERTION_EXTRAS_KEY = "di";
 
+// RFC-062 Phase 3 — minimal multi-target URL support. `;`-separated
+// `item:rate` pairs, e.g. `tg=electronic-circuit:10;advanced-circuit:3`.
+// No short-coding (unlike `ci`/inputs): item slugs are hyphen-only, so a
+// raw slug never collides with either separator, and the RFC's own scope
+// note calls this extension "minimal" — short-coding a field the editing
+// UI never writes isn't worth the added surface.
+const TARGETS_EXTRAS_KEY = "tg";
+const TARGETS_QUERY_KEY = "targets";
+const TARGET_PAIR_SEPARATOR = ";";
+const TARGET_ITEM_RATE_SEPARATOR = ":";
+
+/** Parse a `tg=`/`targets=` value into `{item, rate}` pairs. Returns null
+ * (not an empty array) on ANY malformed token — same "whole field is
+ * invalid, not partially decoded" posture as `readHashState`'s short-code
+ * parsing, so a corrupted multi-target URL falls back to whatever
+ * item/rate the primary slot decoded rather than silently solving a
+ * truncated target list. */
+function parseTargetsList(raw: string): UrlTarget[] | null {
+  const tokens = raw.split(TARGET_PAIR_SEPARATOR).filter((s) => s.length > 0);
+  if (tokens.length === 0) return null;
+  const out: UrlTarget[] = [];
+  for (const tok of tokens) {
+    const idx = tok.indexOf(TARGET_ITEM_RATE_SEPARATOR);
+    if (idx <= 0 || idx === tok.length - 1) return null;
+    const item = tok.slice(0, idx);
+    const rate = parseFloat(tok.slice(idx + 1));
+    if (!item || isNaN(rate) || rate <= 0) return null;
+    out.push({ item, rate });
+  }
+  return out;
+}
+
+function formatTargetsList(targets: UrlTarget[]): string {
+  return targets
+    .map((t) => `${t.item}${TARGET_ITEM_RATE_SEPARATOR}${t.rate}`)
+    .join(TARGET_PAIR_SEPARATOR);
+}
+
 function slugToCode(slug: string): string {
   // Fall back to the slug itself if it's not in the table — keeps
   // serialization total (e.g. an unknown / modded item still produces a
@@ -365,7 +424,10 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, modules, customInputs };
+  const tgRaw = extras.get(TARGETS_EXTRAS_KEY);
+  const targets = tgRaw ? parseTargetsList(tgRaw) : null;
+
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, modules, customInputs, targets };
 }
 
 function readQueryState(): FormState {
@@ -428,8 +490,10 @@ function readQueryState(): FormState {
   const modules = rawModules && MODULES_RE.test(rawModules) ? rawModules : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
+  const targetsRaw = params.get(TARGETS_QUERY_KEY);
+  const targets = targetsRaw ? parseTargetsList(targetsRaw) : null;
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, modules, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, modules, customInputs, targets };
 }
 
 export function readUrlState(): FormState {
@@ -527,6 +591,9 @@ function formatHashState(state: FormState): string {
       state.customInputs.map(slugToCode).join(INPUT_SEPARATOR),
     );
   }
+  if (state.targets && state.targets.length > 0) {
+    extras.set(TARGETS_EXTRAS_KEY, formatTargetsList(state.targets));
+  }
   // Per-category machines other than crafting — encode as
   // `<urlKey>=<short-code>` extras using the same `URL_KEY_BY_CATEGORY`
   // table the query-form writer uses, so a hand-edited hash URL reads
@@ -566,7 +633,8 @@ export function writeUrlState(state: FormState): void {
     !state.strategy &&
     !state.rowLayout &&
     !state.inserterTier &&
-    state.customInputs.length === 0;
+    state.customInputs.length === 0 &&
+    (!state.targets || state.targets.length === 0);
 
   // Drop any stale `?...` query string when transitioning to hash-form
   // URLs, otherwise legacy params would shadow the hash on next read.

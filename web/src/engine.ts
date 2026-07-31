@@ -4,6 +4,7 @@ import type {
   PlacedEntity,
   ValidationIssue,
   TraceEvent,
+  Target,
 } from "./wasm-pkg/spaghettio_wasm.js";
 
 export type {
@@ -20,6 +21,7 @@ export type {
   EntityDirection,
   ValidationIssue,
   TraceEvent,
+  Target,
 } from "./wasm-pkg/spaghettio_wasm.js";
 
 /**
@@ -258,6 +260,33 @@ async function solve(
     method: "solve",
     targetItem,
     targetRate,
+    availableInputs,
+    palette,
+    defaultMachine,
+    quality: quality ?? null,
+    modules: modules ?? null,
+  });
+}
+
+/**
+ * Multi-target solve (RFC-062 Phase 3) — the `solve` counterpart that
+ * accepts N >= 1 simultaneous `{item, rate}` targets. Boundary-validates
+ * `targets` on the Rust side (`wasm-bindings::validate_targets`): an empty
+ * list, a non-positive rate, or an unknown item rejects with a typed
+ * `[INVALID_TARGETS] ...` message before any solve is attempted.
+ */
+async function solveMulti(
+  targets: Target[],
+  availableInputs: string[],
+  palette: Record<string, string>,
+  defaultMachine: string,
+  quality?: string,
+  modules?: string,
+): Promise<SolverResult> {
+  if (activeStreamingId !== null) await supersedeWorker();
+  return call<SolverResult>({
+    method: "solveMulti",
+    targets,
     availableInputs,
     palette,
     defaultMachine,
@@ -635,6 +664,7 @@ function balancerShowcase(
 
 export type Engine = {
   solve: typeof solve;
+  solveMulti: typeof solveMulti;
   allProducibleItems: typeof allProducibleItems;
   allProducerMachines: typeof allProducerMachines;
   buildLayout: typeof buildLayout;
@@ -653,6 +683,7 @@ export type Engine = {
 export function getEngine(): Engine {
   return {
     solve,
+    solveMulti,
     allProducibleItems,
     allProducerMachines,
     buildLayout,

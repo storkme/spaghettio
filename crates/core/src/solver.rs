@@ -305,6 +305,54 @@ pub fn solve_with_palette_exclusions_quality_and_modules(
     )
 }
 
+/// RFC-062 Phase 3: the multi-target counterpart of
+/// [`solve_with_palette_exclusions_quality_and_modules`], for callers that
+/// need N >= 1 simultaneous targets at this richness (palette, exclusions,
+/// quality, modules) rather than the bare `targets: &[(String, f64)]`
+/// entry points in `netflow.rs`. Single choke point for both the wasm
+/// `solve_multi` boundary and `crates/core/examples/sim_export.rs`'s
+/// `--multi` mode, so both get the same recipe-selection/quality/module
+/// behavior the scalar wasm `solve` already has — and, by the same
+/// one-element-slice construction `netflow.rs`'s Phase 1 established, N=1
+/// here is bit-identical to [`solve_with_palette_exclusions_quality_and_modules`]
+/// (that function is now a thin `targets: &[(target_item.to_string(),
+/// target_rate)]` call into [`crate::netflow::solve_netflow_with_options`],
+/// which itself forwards to the same multi entry point this calls).
+///
+/// Deliberately does NOT validate `targets` (empty list, non-positive
+/// rates, unknown items) — same posture as every other entry point in this
+/// file. Callers that need typed, pre-flight validation for a
+/// user/API-facing boundary (e.g. the wasm `solve_multi` binding) do it at
+/// their own boundary, not here: this module's job is to solve a
+/// well-formed request, not to be every caller's input sanitizer, and an
+/// internal caller (an already-validated URL, an example script's CLI
+/// parse) shouldn't pay for a second validation pass it doesn't need.
+#[allow(clippy::too_many_arguments)]
+pub fn solve_multi_with_palette_exclusions_quality_and_modules(
+    targets: &[(String, f64)],
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+    quality: crate::common::QualityTier,
+    module_policy: crate::module_policy::ModulePolicy,
+) -> Result<SolverResult, SolverError> {
+    crate::netflow::solve_netflow_multi_with_options(
+        targets,
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+        crate::netflow::RecipeScope::Free,
+        &crate::netflow::CostTable::default(),
+        &crate::netflow::NetflowOptions {
+            quality,
+            module_policy,
+            ..Default::default()
+        },
+    )
+}
+
 /// The legacy recursive tree walk. Kept as the recipe-*selection* oracle
 /// for compatibility mode and as the parity-harness reference. Known-wrong
 /// flow accounting (no byproduct crediting, `resolving`-guard cycle punts,
