@@ -87,8 +87,11 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   reviews the diff, but it cannot run STRESSGOLD, decode snapshots, or do
   tile-level verification. Fork PRs and workflow-file PRs also need
   session-side review — the bot step-gates off forks (no secrets), and a
-  PR editing second-opinion.yml runs its own modified workflow, so review
-  those by hand.
+  PR editing second-opinion.yml runs its own modified workflow **with
+  access to `OPENROUTER_API_KEY`** — the concrete stake is secret
+  exfiltration (same class as the claude workflows' long-standing
+  `CLAUDE_CODE_OAUTH_TOKEN` exposure, not a new hole) — so eyeball such
+  diffs before they run, not after.
 - **Keep `origin/main` current** — push promptly after merging. Worktree
   agents branch from `origin/main`; a stale origin hands every spawned agent
   a stale base.

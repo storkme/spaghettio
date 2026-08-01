@@ -18,6 +18,19 @@
 > exits non-zero and reds the check (`fail-on-degraded`, see the action's
 > README) — the guard scripting below is claude-review-specific and does
 > not apply to it.
+>
+> Two decisions recorded here because no RFC owns this pipeline:
+> **(1)** Making `second-opinion` a *required* check deliberately overrides
+> the upstream README's own advice ("advisory, never a merge gate") —
+> continuing the claude-review precedent (required since 2026-07-29), with
+> eyes open that K=3 sequential OpenRouter passes widen the
+> single-point-of-failure surface of an admin-binding block; the escape
+> hatch is `scripts/review-gate.sh unrequire`.
+> **(2)** `claude-review-auto-retry.yml` is dormant, not removed: its
+> `workflow_run` condition can never fire while claude-code-review.yml is
+> dispatch-only, it fails its own `if` cleanly, and ci.yml's workflow-guard
+> asserts the file's existence — removing it means editing the guard in the
+> same PR that parks what it guards. Separable cleanup, do it later.
 
 Reference doc for the automated PR review pipeline. `CLAUDE.md` carries only
 the operating rules; this file is the canonical home for the failure-class
