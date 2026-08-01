@@ -1,6 +1,8 @@
 # RFC-064: The spaghetti objective — aspect ratio + belt-transit under sim-anchored never-worse gates
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Design (circulated for review)**.
+Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phase 0 complete
+(2026-08-01): calibration gate CLEARED at default weights, τ_b = 0.64 with
+exact #1 agreement; next is Phase 1's corpus-applicability spike.**
 Successor-in-reframing to
 [`rfc-063-compaction-primitives.md`](rfc-063-compaction-primitives.md), whose
 Phase A/B kills answered a different question honestly and stand. Evidence
@@ -841,3 +843,56 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   RFC-063). No competing claim found. Branch `rfc/spaghetti-objective` cut
   from `origin/main` at the same commit. Registry row added in this commit.
   Status: Design, no phases started.
+
+- **2026-08-01 — Phase 0 executed: gate CLEARED at default weights
+  (τ_b = 0.64, exact #1 agreement). No reweighting needed.** Method per
+  spec: a 10-layout blind calibration set (labels A–J, screenshots only —
+  four unblinding leaks found and scrubbed before presentation: sidebar,
+  rate labels, warning badge, hover tooltip), owner ranked with no scores
+  shown. Set: five native bus layouts spanning AM1–AM3 / 1–60 per s /
+  108–6392 entities (tier1 gear = A, tier2 EC-from-ore = G, tier4
+  AC-from-plates = J, stress EC@60s red = H, tier5 PU@2s AM3 = E), two
+  `compact_layout` variants (tier2 EC = D, stress EC = B), chain-mil5ore
+  folded ×1 = F and ×3 = C, and chain-mil5ore native as the bad control
+  = I. Owner ranking: **C #1** ("clear favourites... close-ish to square
+  and dense-ish"), F #2, {B, D, E, G, H, J} tied middle, I last ("too
+  wide and thin"), A abstained ("too small to have an opinion") —
+  excluded from the statistic, with a sensitivity check: forcing A into
+  the middle tie moves τ_b 0.642 → 0.634, verdict unchanged. Composite
+  ranking at w_AR = w_T = 0.5: C (+0.557) > F (+0.391) > D (+0.146) >
+  {A, E, G, H, I, J at 0} > B (−0.012). **Kendall τ_b = 15/√546 ≈ 0.642
+  ≥ 0.6, and the composite's #1 is the owner's #1 (C, the 3-fold).**
+  Both gate conditions clear on the first attempt; the reweighting
+  allowance goes unused; Phases 1+ may build on the composite as
+  specified. Findings recorded alongside the verdict: (1) *structural
+  caveat* — every native incumbent scores exactly 0 by construction
+  (relative-to-native), so the composite cannot rank incumbents across
+  fixtures and ties the AR-17.28 bad control with square natives; the
+  owner ranked I dead last, costing the single discordant pair (B–I).
+  This is expected behavior of an improvement metric, not a defect, but
+  it means Phase 0's τ is dominated by the candidate family — a future
+  recalibration wanting cross-fixture discrimination needs an absolute
+  variant. (2) The owner's unprompted criteria ("close-ish to square and
+  dense-ish", "too wide and thin") are the metric's own axes, stated
+  independently — qualitative support beyond the τ number. (3)
+  *chain-mil5ore 2-fold is inadmissible* — `search_snake_fold(..., 2)`
+  and an independent fixed-k reimplementation both find zero candidates
+  clearing validation (input-rate-delivery regressions on all 61 tried);
+  real finding, noted for Phase 1's applicability spike. (4) The RFC's
+  own calibration anchor (553×32, AR 17.3) is the *undergroundified*
+  chain-mil5ore geometry, not raw `compose_chain` output (720×34, AR
+  ≈21.2) — resolved by exact numeric match against PR #500's numbers;
+  the undergroundified geometry is the native incumbent for the fold
+  family throughout. (5) Transit measured as realized routed path
+  (Dijkstra over per-item belt/UG/pipe adjacency, producer port →
+  consumer port; Manhattan fallback only for direct-insertion edges;
+  zero unmeasured edges in every case); `fluid_weight = 0.5` chosen and
+  documented (no in-tree value existed); the secondary critical-path
+  metric was not computed this round — flagged, not faked. Measurement
+  implementation validated by reproducing PR #500's anchor numbers
+  (AR_score 0.995 vs the RFC's 0.9945, +26.0% entities vs +26%).
+  Artifacts (sealed scores, screenshots, .fls snapshots, measurement
+  script) were session-scratch; the numbers above and the per-label
+  table in this entry are the durable record. Status: Phase 0 complete,
+  gate cleared; next per the RFC is Phase 1's corpus-applicability
+  spike.
