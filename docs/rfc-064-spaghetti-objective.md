@@ -1,8 +1,9 @@
 # RFC-064: The spaghetti objective — aspect ratio + belt-transit under sim-anchored never-worse gates
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phase 0 complete
-(2026-08-01): calibration gate CLEARED at default weights, τ_b = 0.64 with
-exact #1 agreement; next is Phase 1's corpus-applicability spike.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phase 1 complete
+(2026-08-01): spike measured admissibility below the 25% bar; folding ships
+as an explicit user knob (this PR). Next: Phase 2 (undergroundify default-on
+sweep).**
 Successor-in-reframing to
 [`rfc-063-compaction-primitives.md`](rfc-063-compaction-primitives.md), whose
 Phase A/B kills answered a different question honestly and stand. Evidence
@@ -896,3 +897,61 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   table in this entry are the durable record. Status: Phase 0 complete,
   gate cleared; next per the RFC is Phase 1's corpus-applicability
   spike.
+
+- **2026-08-01 — Phase 1 spike executed and adjudicated: admissibility
+  BELOW the pre-registered 25% bar → folding ships as an explicit user
+  knob (this commit), not an auto-selected candidate. Kill criterion
+  assessed and NOT tripped.** Spike corpus: 14 fixtures — the 4
+  chain/mega-chain fixtures plus 10 row-bus representatives spanning
+  tier1–tier5 and the stress set (exclusions and full per-fixture data:
+  session artifacts, results.json; methodology reproduced from
+  `probe_fold_corpus` at cell_composition.rs:4206, which — correction to
+  Phase 0-era assumptions — is tracked code, not a gitignored example, and
+  reproduces snake-fold-followups item 2's post-#500 table with zero
+  drift). Admissibility (fold found + fresh validate() shows zero new
+  error categories + input-rate-delivery not increased, against the
+  compact_validated_geometry baseline per Phase 0 finding 4; no sim runs —
+  Gate step 4 reserves those for auto-selection, which was not reached):
+  3/14 = 21.4% literal; 2/14 = 14.3% excluding the admissible-but-
+  regressive case below. Both readings < 25%; the bar's outcome does not
+  depend on the reading. Adjudication of the kill criterion: knob wiring
+  is predominantly configuration (search_snake_fold/fold_snake are pub
+  and unconditionally compiled, pole repair bundled at mechanism level
+  since the snake-fold-followups item-3 fix; plumbing mirrors
+  compact_layout exactly); the single genuine engineering item —
+  combinatorial fold-search latency that would stall single-threaded WASM
+  multi-seconds on mega-chain-scale inputs — is bounded by an
+  entity-count guard in this commit, not an async rework. Findings, each
+  load-bearing for later phases: (1) **the "folding is chain-only"
+  premise is false** — 2 of the 3 admissible folds are ordinary row-bus
+  fixtures (stress-ac-partitioned POOLED: 2.48:1 → 1.22:1, AR_score
+  +0.855, +6.7% entities — the first admissible fold ever found outside
+  chain-mil5ore), and InputStranded, dominant on all three refusing
+  mega-chains (115/118/85 refusals, zero drift), never fired once on any
+  row-bus fixture: bus layouts feed inputs from the trunk edge,
+  structurally avoiding chain composition's scattered interior input
+  boundaries. (2) **"Fold found" is not "fold good"**: stress-ec-60s-red
+  (native AR 1.02) admits a validating 2-fold at AR_score −90.24, +119.7%
+  entities — search_snake_fold never scores against not folding.
+  Consequence wired into this commit's knob (fall back rather than fold
+  when no candidate; the knob is explicitly experimental) and binding on
+  any future auto-selection: candidates must be ranked against the
+  no-fold baseline under Composite(L), which handles this case by
+  construction (native scores 0; −90.24 loses). (3) Two structural-cannot
+  classes exist beyond the typed FoldRefusal reasons: zero legal fold
+  columns (tier3-heavy-oil-cracking, 0/8 — genuine floor on tiny
+  fixtures) and the hard-coded 24-tile minimum segment width foreclosing
+  every candidate on narrow row-bus fixtures before fold_snake is called
+  (tier3-plastic 1/64 legal columns, tier4-ac 3/90) — that constant was
+  calibrated for mega-chain widths; revisiting it is a named follow-up
+  and was deliberately NOT retuned this phase (the bar is not
+  renegotiated after seeing results). (4) Metric sanity check (Gate step
+  3) PASSES: chain-mil5ore AR_score 0.99477 ≥ 0.9 on current main,
+  Composite +0.557 (Phase 0's measurement, cited not re-derived) ranks
+  the 3-fold above native. (5) Spike probe source was lost to worktree
+  auto-cleanup post-report (results and methodology survive in session
+  artifacts + the tracked probe_fold_corpus); minor, noted for
+  reproducibility honesty. Status: Phase 1 complete at knob scope;
+  auto-selection wiring remains open to a future phase only via the
+  finding-2 baseline-comparison rule and per-fixture sim-anchoring (Gate
+  step 4).
