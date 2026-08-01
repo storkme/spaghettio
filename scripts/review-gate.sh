@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# review-gate.sh — wait for the claude-review check correctly, and (optionally)
+# review-gate.sh — wait for the CI review check correctly, and (optionally)
 # make it a required status check on main.
+#
+# The check is `second-opinion` since 2026-08-01 (DeepSeek via OpenRouter —
+# see .github/workflows/second-opinion.yml); it was `claude-review` before
+# that, and the incident below is from that era. Override with CHECK=.
 #
 # Why this exists: on 2026-07-29 a session polled a PR's merge readiness with a
 # hand-rolled loop testing `mergeStateStatus != "PENDING"`. GitHub reports a
@@ -15,15 +19,16 @@
 # for the absence of a value you guessed at.
 #
 # Usage:
-#   scripts/review-gate.sh wait <pr>       # block until claude-review completes
+#   scripts/review-gate.sh wait <pr>       # block until the review check completes
 #   scripts/review-gate.sh status          # report main's protection state
-#   scripts/review-gate.sh require         # make claude-review required on main
+#   scripts/review-gate.sh require         # make the review check required on main
 #   scripts/review-gate.sh unrequire       # remove that protection
 set -euo pipefail
 
 REPO="${REPO:-storkme/spaghettio}"
-CHECK="${CHECK:-claude-review}"
-TIMEOUT="${TIMEOUT:-1500}"   # 25 min; a full review runs 8-11.
+CHECK="${CHECK:-second-opinion}"
+TIMEOUT="${TIMEOUT:-1500}"   # 25 min; claude-review ran 8-11, second-opinion's
+                             # K=3 flash passes should land well inside this.
 
 usage() { sed -n '2,25p' "$0"; exit 2; }
 
