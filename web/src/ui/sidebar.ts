@@ -814,6 +814,30 @@ export function renderSidebar(
     "box and -45% entities.";
   targetBody.appendChild(makeField("Compact layout", compactCb));
 
+  // RFC-064 Phase 1 fold-and-square knob. Off by default: the corpus-
+  // applicability spike measured admissibility (fold found, validates no
+  // worse, never-worse input-rate-delivery) at 21.4% of a 14-fixture
+  // corpus, below the RFC's pre-registered 25% bar for auto-selecting
+  // folding as a scored candidate — so it stays an explicit opt-in, same
+  // shape as `compactLayout` above. Safe to enable in the sense that it
+  // never returns a broken factory (a fold is only used when it validates
+  // no worse than the compacted source, and the pass falls back to the
+  // compacted-but-unfolded layout when no admissible fold exists or the
+  // layout is too large to search) — but unlike compaction it can grow the
+  // layout a lot on the one fixture-class it's known to help, hence the
+  // "experimental" framing in the tooltip.
+  const foldCb = document.createElement("input");
+  foldCb.type = "checkbox";
+  foldCb.className = "sb-checkbox";
+  foldCb.title =
+    "Experimental: attempts to fold long layouts toward square (RFC-064 " +
+    "Phase 1), snake-folding the compacted layout at up to 4 columns. Only " +
+    "a validated fold is used — no worse than the compacted source, and " +
+    "the layout falls back to compacted-but-unfolded when no admissible " +
+    "fold exists or the layout is too large to search. May increase entity " +
+    "count substantially on the fixtures it does help.";
+  targetBody.appendChild(makeField("Fold layout (experimental)", foldCb));
+
   inner.appendChild(targetSection);
 
   // ==================== INPUTS ====================
@@ -1001,6 +1025,7 @@ export function renderSidebar(
   if (urlState.inserterCapacity) inserterCapacitySelect.value = urlState.inserterCapacity;
   directInsertionCb.checked = urlState.directInsertion === true;
   compactCb.checked = urlState.compactLayout === true;
+  foldCb.checked = urlState.foldLayout === true;
   updateAdvancedChangedCount();
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
@@ -1068,6 +1093,7 @@ export function renderSidebar(
       item: targetItem,
       rate: targetRate,
       compactLayout: compactCb.checked,
+      foldLayout: foldCb.checked,
       machines: palette,
       inputs: checkedDefaults,
       belt: beltSelect.value || null,
@@ -1161,8 +1187,9 @@ export function renderSidebar(
       const inserterCapacity = inserterCapacitySelect.value || undefined;
       const directInsertion = directInsertionCb.checked;
       const compactLayout = compactCb.checked;
+      const foldLayout = foldCb.checked;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, foldLayout, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -1256,8 +1283,9 @@ export function renderSidebar(
       const inserterCapacity = inserterCapacitySelect.value || undefined;
       const directInsertion = directInsertionCb.checked;
       const compactLayout = compactCb.checked;
+      const foldLayout = foldCb.checked;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, foldLayout, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -1293,6 +1321,7 @@ export function renderSidebar(
   qualitySelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
   directInsertionCb.addEventListener("change", scheduleAutoSolve);
   compactCb.addEventListener("change", scheduleAutoSolve);
+  foldCb.addEventListener("change", scheduleAutoSolve);
   modulesSelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
   moduleQualitySelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
   wireModeSelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
