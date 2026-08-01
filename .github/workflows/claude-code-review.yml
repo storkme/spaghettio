@@ -1,16 +1,35 @@
 name: Claude Code Review
 
+# PARKED 2026-08-01: pull_request triggers removed — CI review duty moved to
+# second-opinion.yml (DeepSeek V4 Flash via OpenRouter) because these runs
+# consume the Claude subscription's usage windows. This is the same
+# subscription-usage decision as the 2026-07-26 disable, made durable in the
+# file this time instead of via the workflows UI (that disable was invisible
+# in-tree and got re-enabled three days later).
+#
+# The job below is deliberately kept INTACT, and ci.yml's workflow-guard
+# still asserts its load-bearing pieces: the /install-github-app
+# stock-template overwrite trap (#367) applies to a parked file exactly as
+# it did to a live one, and re-enabling must restore the hardened job, not
+# the stock one. To re-enable: swap the trigger block back to the commented
+# `pull_request` form below and re-point branch protection at
+# `claude-review` (CHECK=claude-review scripts/review-gate.sh require).
+#
+# A manual dispatch run has no PR context: the review step's `if` fails
+# closed and the guard fails open, so it exits green as a no-op. That is
+# fine — dispatch exists only to keep the workflow listed and lintable.
+#
+# The original trigger, kept verbatim for restore. `edited` closes the
+# description-findings hole: the bot files real findings against the PR
+# *description*, and fixing those means editing the body — which pushes
+# nothing, so no `synchronize` fires and the finding is never confirmed
+# closed (observed 2026-07-29 on #493/#494). The review step's `if` keeps
+# this from turning every typo fix into an 11-minute review.
+# on:
+#   pull_request:
+#     types: [opened, synchronize, ready_for_review, reopened, edited]
 on:
-  pull_request:
-    # `edited` closes one specific hole: the bot files real findings against
-    # the PR *description* (missing template sections, body claims the diff
-    # contradicts), and fixing those means editing the body — which pushes
-    # nothing, so no `synchronize` fires and the finding is never confirmed
-    # closed. Observed 2026-07-29 on #493/#494: a template finding was fixed
-    # in the body, and the next round's summary still reported it "already on
-    # record and unchanged". The job's `if` below keeps this from turning
-    # every typo fix into an 11-minute review.
-    types: [opened, synchronize, ready_for_review, reopened, edited]
+  workflow_dispatch:
 
 # A review takes 8-11 minutes and fires per push, so a burst of pushes leaves
 # several runs racing over superseded heads. Cancelling is safe *because* the

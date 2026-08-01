@@ -1,5 +1,24 @@
 # CI review bot — how it works, how it fails, how to diagnose it
 
+> **Status (2026-08-01): claude-code-review.yml is PARKED** (trigger swapped
+> to `workflow_dispatch`-only; the hardened job is kept intact in the file).
+> CI review duty moved to
+> [`.github/workflows/second-opinion.yml`](../.github/workflows/second-opinion.yml)
+> — the [storkme/second-opinion](https://github.com/storkme/second-opinion)
+> action driving `deepseek/deepseek-v4-flash-0731` via OpenRouter, K=3
+> unioned agentic passes — because CI reviews shared the Claude
+> subscription's usage windows with interactive sessions. Branch
+> protection's required context moved `claude-review` → `second-opinion`
+> accordingly (`scripts/review-gate.sh`). Everything below is the
+> claude-review pipeline's history: still the playbook if it is ever
+> re-enabled, and ci.yml's workflow-guard still asserts the parked file's
+> load-bearing pieces (the stock-template overwrite trap, #367, does not
+> care whether the file it clobbers is live). The second-opinion runner has
+> its own silent-failure tripwire: a degraded pass that posts no review
+> exits non-zero and reds the check (`fail-on-degraded`, see the action's
+> README) — the guard scripting below is claude-review-specific and does
+> not apply to it.
+
 Reference doc for the automated PR review pipeline. `CLAUDE.md` carries only
 the operating rules; this file is the canonical home for the failure-class
 history and the forensics playbook. Keep it current when the workflow
