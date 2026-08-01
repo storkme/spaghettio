@@ -1205,7 +1205,13 @@ fn tier2_electronic_circuit_20s_from_ore() {
     // copper-cable/copper-plate land on fast (red) belts at 20/s scale;
     // Re-calibrated 2026-07-24 (#383/#431): full 2-lane nominal — the
     // three historical warnings are gone (see the 10/s fixture).
-    assert_warnings_exactly(&result, &[]);
+    //
+    // 2026-08-01 belt-detour survey finding (docs/status.md "Open tracking
+    // issues"): the new belt-detour check (crates/core/src/validate/
+    // belt_detour.rs) flags one genuine detour here, past both its ratio
+    // and excess floors — not yet root-caused, tolerated explicitly rather
+    // than silently allowed.
+    assert_warnings_exactly(&result, &[("belt-detour", 1)]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1824,7 +1830,13 @@ fn tier4_advanced_circuit_partitioned() {
     // disambiguates the siblings and re-pins this to its true count.
     // #519 re-bless: two tail-of-row deficits surfaced by the
     // consumption-decremented walker (the ac@5 sim-measured class).
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 2)]);
+    //
+    // 2026-08-01 belt-detour survey finding (docs/status.md "Open tracking
+    // issues"): this is one of the fixtures the survey caught — two belt
+    // runs at 3.17x/4.67x their endpoint separation (13/11 excess tiles),
+    // both well past the check's floors, not yet root-caused. Tolerated
+    // explicitly rather than silently allowed.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 2), ("belt-detour", 2)]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
@@ -2249,7 +2261,12 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // plates sim-measured at 75% of plan (E0/W0 at the time). This is the
     // check catching up with the measured flux gap, not a layout change;
     // status.md's tier-4 row already carries the not-sim-verified caveat.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 11)]);
+    //
+    // 2026-08-01 belt-detour survey finding (docs/status.md "Open tracking
+    // issues"): one belt run at 2.5x/9 tiles excess, past the check's
+    // floors, not yet root-caused. Tolerated explicitly rather than
+    // silently allowed.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 11), ("belt-detour", 1)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -7555,10 +7572,23 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
             issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(errors.is_empty(), "{label}: expected 0 errors, got {errors:?}");
     }
-    // Both tiers are fully clean (matches `tier_kovarex_self_loop`'s Normal
-    // pin) — the power arc introduces no warnings at either tier.
+    // Both tiers are fully clean of everything but belt-detour (matches
+    // `tier_kovarex_self_loop`'s Normal pin) — the power arc introduces no
+    // warnings at either tier.
     assert!(normal_issues.is_empty(), "normal: expected 0 issues, got {normal_issues:?}");
-    assert!(leg_issues.is_empty(), "legendary: expected 0 issues, got {leg_issues:?}");
+    // 2026-08-01 belt-detour survey finding (docs/status.md "Open tracking
+    // issues"): Legendary's quality-scaled machine footprint (fewer,
+    // bigger centrifuges than Normal) shifts the recirc layout enough to
+    // newly clear the belt-detour floors — one run at 2.5x/25 tiles
+    // excess. Normal stays clean (matches `tier_kovarex_self_loop`, whose
+    // worst run in the corpus survey was 1.96x — just under the ratio
+    // floor). Not yet root-caused; tolerated explicitly.
+    assert_eq!(
+        leg_issues.len(),
+        1,
+        "legendary: expected exactly one issue, got {leg_issues:?}"
+    );
+    assert_eq!(leg_issues[0].category, "belt-detour", "legendary: {:?}", leg_issues[0]);
 
     // Hand-derived machine counts: the quality multiplier is the ONLY
     // difference between the two runs. Normal = 6 (the hand-derived netting
@@ -9972,9 +10002,15 @@ fn di_jammed_cell_is_visible_and_therefore_refused() {
              no shift clears the cell's last drop within a single downstream \
              machine's column budget"
         );
+        // 2026-08-01 belt-detour survey finding (docs/status.md "Open
+        // tracking issues"): this native layout carries two genuine belt
+        // detours (5.3x/13 excess and 2.0x/15 excess tiles, both well past
+        // the check's floors) — not yet root-caused, tolerated explicitly
+        // rather than silently allowed. Every OTHER category must still be
+        // empty: that's what this gate exists to verify.
         assert!(
-            issues.is_empty(),
-            "the shipped layout must stay clean under {order:?}: {:?}",
+            issues.iter().all(|i| i.category == "belt-detour"),
+            "the shipped layout must stay clean (except belt-detour) under {order:?}: {:?}",
             issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }
@@ -9997,9 +10033,14 @@ fn di_jammed_cell_is_visible_and_therefore_refused() {
             "display-panel@1 am1 must ship the sim-verified 221-entity native \
              layout under {order:?}: no shift closes its 5-tile gap"
         );
+        // 2026-08-01 belt-detour survey finding (docs/status.md "Open
+        // tracking issues"), same shape as the small-electric-pole@5 case
+        // above: this native layout carries two genuine belt detours past
+        // the check's floors, not yet root-caused. Tolerated explicitly;
+        // every OTHER category must still be empty.
         assert!(
-            issues.is_empty(),
-            "the shipped layout must stay clean under {order:?}: {:?}",
+            issues.iter().all(|i| i.category == "belt-detour"),
+            "the shipped layout must stay clean (except belt-detour) under {order:?}: {:?}",
             issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }
@@ -10495,4 +10536,262 @@ fn rfc061_allocation_probe_ac5() {
             if supply + 0.01 < demand { "UNDER" } else { "ok" }
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// belt-detour survey driver (2026-08-01)
+// ---------------------------------------------------------------------------
+//
+// Not a regression test — a one-shot corpus driver for the `belt-detour`
+// check's threshold calibration (owner ask: "do we have belts doubled back
+// on themselves, way longer than they need to be — where and how bad?").
+// Drives `validate::belt_detour::measure_belt_runs` across a representative
+// slice of this file's own tier/stress fixtures (parameter tuples copied
+// from the `#[test]` bodies above, not re-derived) and writes per-fixture +
+// global-top-20 statistics to the scratchpad as JSON.
+//
+// Run with:
+//   cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+//       belt_detour_survey --exact --ignored --nocapture
+
+#[derive(Clone, Copy)]
+enum SurveyVariant {
+    Plain,
+    Strategy(spaghettio_core::bus::layout::LayoutStrategy),
+    Excluded,
+    ExcludedVoid,
+}
+
+struct SurveyFixture {
+    name: &'static str,
+    item: &'static str,
+    rate: f64,
+    machine: &'static str,
+    belt_tier: Option<&'static str>,
+    inputs: &'static [&'static str],
+    excluded: &'static [&'static str],
+    variant: SurveyVariant,
+}
+
+fn survey_fixtures() -> Vec<SurveyFixture> {
+    use spaghettio_core::bus::layout::LayoutStrategy;
+    use SurveyVariant::*;
+
+    vec![
+        SurveyFixture { name: "tier1_iron_gear_wheel", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-1", belt_tier: None, inputs: &["iron-plate"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier1_iron_gear_wheel_from_ore", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier1_iron_gear_wheel_20s", item: "iron-gear-wheel", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier2_electronic_circuit", item: "electronic-circuit", rate: 10.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 10.0, machine: "assembling-machine-1", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier3_plastic_bar", item: "plastic-bar", rate: 10.0, machine: "chemical-plant", belt_tier: None, inputs: &["petroleum-gas", "coal"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier3_plastic_bar_from_crude", item: "plastic-bar", rate: 10.0, machine: "chemical-plant", belt_tier: None, inputs: &["crude-oil", "coal"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier3_sulfuric_acid", item: "sulfuric-acid", rate: 5.0, machine: "chemical-plant", belt_tier: None, inputs: &["iron-plate", "sulfur", "water"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier3_heavy_oil_cracking", item: "light-oil", rate: 5.0, machine: "chemical-plant", belt_tier: None, inputs: &["water", "heavy-oil"], excluded: &["advanced-oil-processing", "coal-liquefaction"], variant: Excluded },
+        SurveyFixture { name: "tier3_advanced_oil_processing_multi_machine", item: "petroleum-gas", rate: 12.0, machine: "oil-refinery", belt_tier: None, inputs: &["water", "crude-oil"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation", item: "petroleum-gas", rate: 24.0, machine: "oil-refinery", belt_tier: None, inputs: &["water", "crude-oil"], excluded: &["basic-oil-processing", "coal-liquefaction"], variant: Excluded },
+        SurveyFixture { name: "tier4_advanced_circuit_from_plates", item: "advanced-circuit", rate: 1.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier4_advanced_circuit_partitioned", item: "advanced-circuit", rate: 1.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::PartitionedDecomposed) },
+        SurveyFixture { name: "tier4_advanced_circuit_from_ore_am2", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier5_processing_unit_from_ore_am3", item: "processing-unit", rate: 2.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier_kovarex_self_loop", item: "uranium-235", rate: 0.1, machine: "assembling-machine-3", belt_tier: None, inputs: &["uranium-238"], excluded: &["uranium-processing"], variant: Excluded },
+        SurveyFixture { name: "tier_uranium_processing_surplus_export", item: "uranium-235", rate: 0.05, machine: "assembling-machine-3", belt_tier: None, inputs: &["uranium-ore"], excluded: &["kovarex-enrichment-process"], variant: Excluded },
+        SurveyFixture { name: "tier_uranium_processing_voider", item: "uranium-235", rate: 0.05, machine: "assembling-machine-3", belt_tier: None, inputs: &["uranium-ore"], excluded: &["kovarex-enrichment-process"], variant: ExcludedVoid },
+        SurveyFixture { name: "tier_pentapod_egg_self_loop", item: "pentapod-egg", rate: 0.2, machine: "assembling-machine-3", belt_tier: None, inputs: &["nutrients", "water"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier_fish_breeding_self_loop", item: "raw-fish", rate: 0.15, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: &["nutrients", "water"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "tier_bacteria_self_loop_regression", item: "iron-bacteria", rate: 1.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["bioflux"], excluded: &["iron-bacteria"], variant: Excluded },
+        SurveyFixture { name: "stress_electronic_circuit_30s_from_ore", item: "electronic-circuit", rate: 30.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "stress_advanced_circuit_45s_from_plates", item: "advanced-circuit", rate: 45.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "plastic-bar"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "stress_advanced_circuit_partitioned_5s_from_plates_pooled", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::Pooled) },
+        SurveyFixture { name: "stress_advanced_circuit_partitioned_5s_from_plates_partitioned", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::PartitionedDecomposed) },
+        SurveyFixture { name: "stress_advanced_circuit_partitioned_4s_from_plates_pooled", item: "advanced-circuit", rate: 4.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::Pooled) },
+        SurveyFixture { name: "stress_advanced_circuit_partitioned_4s_from_plates_partitioned", item: "advanced-circuit", rate: 4.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::PartitionedDecomposed) },
+        SurveyFixture { name: "stress_electronic_circuit_30s_decomposed_pooled", item: "electronic-circuit", rate: 30.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Strategy(LayoutStrategy::Pooled) },
+        SurveyFixture { name: "stress_electronic_circuit_30s_decomposed_partitioned", item: "electronic-circuit", rate: 30.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Strategy(LayoutStrategy::PartitionedDecomposed) },
+        // stress_processing_unit_20s_from_plates deliberately excluded: its
+        // balancer-shape SAT search ran >20 min without finishing (survey
+        // driver run, 2026-08-01) — far outside a corpus-survey budget.
+        // Noted as a gap in the survey report rather than silently dropped.
+        SurveyFixture { name: "stress_electronic_circuit_60s_red_from_ore", item: "electronic-circuit", rate: 60.0, machine: "assembling-machine-2", belt_tier: Some("fast-transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "stress_electronic_circuit_22s_from_ore", item: "electronic-circuit", rate: 22.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "stress_electronic_circuit_23s_from_ore", item: "electronic-circuit", rate: 23.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "stress_electronic_circuit_35s_from_ore", item: "electronic-circuit", rate: 35.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
+        SurveyFixture { name: "stress_electronic_circuit_40s_from_ore", item: "electronic-circuit", rate: 40.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
+    ]
+}
+
+fn percentile(sorted_ascending: &[f64], p: f64) -> f64 {
+    if sorted_ascending.is_empty() {
+        return 0.0;
+    }
+    let idx = (p / 100.0) * (sorted_ascending.len() as f64 - 1.0);
+    let lo = idx.floor() as usize;
+    let hi = idx.ceil() as usize;
+    if lo == hi {
+        sorted_ascending[lo]
+    } else {
+        let frac = idx - lo as f64;
+        sorted_ascending[lo] * (1.0 - frac) + sorted_ascending[hi] * frac
+    }
+}
+
+#[test]
+#[ignore]
+fn belt_detour_survey() {
+    use spaghettio_core::validate::belt_detour::{measure_belt_runs, BeltRun};
+
+    #[derive(Clone)]
+    struct RunRecord {
+        fixture: String,
+        run: BeltRun,
+    }
+
+    let mut per_fixture_json: Vec<serde_json::Value> = Vec::new();
+    let mut all_runs: Vec<RunRecord> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+
+    for f in survey_fixtures() {
+        let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
+        let excluded: FxHashSet<String> = f.excluded.iter().map(|s| s.to_string()).collect();
+        let result = match f.variant {
+            SurveyVariant::Plain => {
+                run_e2e(f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs)
+            }
+            SurveyVariant::Strategy(strategy) => run_e2e_with_strategy(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, strategy,
+            ),
+            SurveyVariant::Excluded => run_e2e_with_exclusions(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, &excluded,
+            ),
+            SurveyVariant::ExcludedVoid => run_e2e_with_exclusions_and_surplus_policy(
+                f.name,
+                f.item,
+                f.rate,
+                f.machine,
+                f.belt_tier,
+                &inputs,
+                &excluded,
+                spaghettio_core::bus::layout::SurplusPolicy::Void,
+            ),
+        };
+        let result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIP {}: {e}", f.name);
+                skipped.push(f.name.to_string());
+                continue;
+            }
+        };
+
+        let runs = measure_belt_runs(&result.layout);
+        let efficiencies: Vec<f64> = runs.iter().map(|r| r.efficiency()).collect();
+        let worst = efficiencies.iter().cloned().fold(0.0_f64, f64::max);
+        let mean = if efficiencies.is_empty() {
+            0.0
+        } else {
+            efficiencies.iter().sum::<f64>() / efficiencies.len() as f64
+        };
+        let count_ge = |t: f64| runs.iter().filter(|r| r.efficiency() >= t).count();
+        let count_excess_ge_8 = runs.iter().filter(|r| r.excess() >= 8).count();
+
+        eprintln!(
+            "{:<70} runs={:<5} worst={:<6.2} mean={:<6.2} ge1.5={:<4} ge2.0={:<4} ge3.0={:<4} excess>=8={:<4}",
+            f.name,
+            runs.len(),
+            worst,
+            mean,
+            count_ge(1.5),
+            count_ge(2.0),
+            count_ge(3.0),
+            count_excess_ge_8,
+        );
+
+        per_fixture_json.push(serde_json::json!({
+            "fixture": f.name,
+            "runs_measured": runs.len(),
+            "worst_efficiency": worst,
+            "mean_efficiency": mean,
+            "count_efficiency_ge_1_5": count_ge(1.5),
+            "count_efficiency_ge_2_0": count_ge(2.0),
+            "count_efficiency_ge_3_0": count_ge(3.0),
+            "count_excess_ge_8": count_excess_ge_8,
+        }));
+
+        for r in runs {
+            all_runs.push(RunRecord { fixture: f.name.to_string(), run: r });
+        }
+    }
+
+    // Global top-20 worst offenders by ratio (tie-break: excess).
+    let mut ranked = all_runs.clone();
+    ranked.sort_by(|a, b| {
+        b.run
+            .efficiency()
+            .partial_cmp(&a.run.efficiency())
+            .unwrap()
+            .then(b.run.excess().cmp(&a.run.excess()))
+    });
+    let top_20: Vec<serde_json::Value> = ranked
+        .iter()
+        .take(20)
+        .map(|rec| {
+            serde_json::json!({
+                "fixture": rec.fixture,
+                "entry": [rec.run.entry.0, rec.run.entry.1],
+                "exit": [rec.run.exit.0, rec.run.exit.1],
+                "actual_length": rec.run.actual_length,
+                "direct_distance": rec.run.direct_distance,
+                "ratio": rec.run.efficiency(),
+                "excess": rec.run.excess(),
+            })
+        })
+        .collect();
+
+    let mut all_ratios: Vec<f64> = all_runs.iter().map(|r| r.run.efficiency()).collect();
+    all_ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mut all_excess: Vec<f64> = all_runs.iter().map(|r| r.run.excess() as f64).collect();
+    all_excess.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let global = serde_json::json!({
+        "total_runs": all_runs.len(),
+        "total_fixtures": per_fixture_json.len(),
+        "skipped_fixtures": skipped,
+        "ratio_p50": percentile(&all_ratios, 50.0),
+        "ratio_p90": percentile(&all_ratios, 90.0),
+        "ratio_p95": percentile(&all_ratios, 95.0),
+        "ratio_p99": percentile(&all_ratios, 99.0),
+        "ratio_max": all_ratios.last().copied().unwrap_or(0.0),
+        "excess_p50": percentile(&all_excess, 50.0),
+        "excess_p90": percentile(&all_excess, 90.0),
+        "excess_p95": percentile(&all_excess, 95.0),
+        "excess_p99": percentile(&all_excess, 99.0),
+        "excess_max": all_excess.last().copied().unwrap_or(0.0),
+        "count_ratio_ge_1_5": all_runs.iter().filter(|r| r.run.efficiency() >= 1.5).count(),
+        "count_ratio_ge_2_0": all_runs.iter().filter(|r| r.run.efficiency() >= 2.0).count(),
+        "count_ratio_ge_3_0": all_runs.iter().filter(|r| r.run.efficiency() >= 3.0).count(),
+        "count_excess_ge_8": all_runs.iter().filter(|r| r.run.excess() >= 8).count(),
+        "count_ratio_ge_2_0_and_excess_ge_8": all_runs.iter().filter(|r| r.run.efficiency() >= 2.0 && r.run.excess() >= 8).count(),
+    });
+
+    eprintln!("\n--- global ---\n{}", serde_json::to_string_pretty(&global).unwrap());
+    eprintln!("\n--- top 20 worst offenders ---");
+    for v in &top_20 {
+        eprintln!("{v}");
+    }
+
+    let survey = serde_json::json!({
+        "generated": "2026-08-01",
+        "fixtures": per_fixture_json,
+        "top_20_worst": top_20,
+        "global": global,
+    });
+
+    let out_dir = std::path::PathBuf::from(
+        "/tmp/claude-1000/-home-stork-code-fucktorio/8ea911b6-846b-4784-9892-58e324cf22c9/scratchpad/belt_detour",
+    );
+    std::fs::create_dir_all(&out_dir).expect("create scratchpad belt_detour dir");
+    let out_path = out_dir.join("survey.json");
+    std::fs::write(&out_path, serde_json::to_string_pretty(&survey).unwrap())
+        .expect("write survey.json");
+    eprintln!("\nwrote {}", out_path.display());
 }

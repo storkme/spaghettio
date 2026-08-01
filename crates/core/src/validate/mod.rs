@@ -2,6 +2,7 @@
 //!
 //! Port of `src/validate.py` — foundation types and top-level `validate()` dispatcher.
 
+pub mod belt_detour;
 pub mod belt_flow;
 pub mod inserters;
 mod fluids;
@@ -212,11 +213,28 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// reporting recalibration must not silently change which layout ships).
 /// Lift the exemption deliberately once the flux model is sim-anchored
 /// (#519 follow-up), with the fixture drift adjudicated case by case.
+///
+/// `belt-detour` (2026-08-01) is excluded for the identical reason on
+/// first principles, not just precedent: it is a brand-new category with
+/// no prior data point at zero, so including it by default would flip
+/// EVERY close candidate-selection decision across the corpus the moment
+/// it started firing — confirmed empirically when wiring it in: several
+/// e2e fixtures (`tier2_electronic_circuit_20s_from_ore`'s golden hash,
+/// `tier4_advanced_circuit_from_ore_am2`'s `input-rate-delivery` count)
+/// changed their SELECTED layout, not just their warning list, purely
+/// because `belt-detour`'s mere presence nudged `decomposition_search`'s
+/// ranking — with no sim evidence either candidate is actually worse. Its
+/// thresholds are corpus-survey-calibrated (see the check's own doc
+/// comment), not physically-grounded the way an error is, so it stays
+/// report-only until a similar sim-anchoring case is made for letting it
+/// steer selection.
 pub(crate) fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
     issues
         .iter()
         .filter(|i| {
-            i.severity == Severity::Warning && i.category != "input-rate-delivery"
+            i.severity == Severity::Warning
+                && i.category != "input-rate-delivery"
+                && i.category != "belt-detour"
         })
         .count()
 }
@@ -913,6 +931,7 @@ pub fn validate(
         Box::new(|| check_balancer_template_coverage(layout)),
         Box::new(|| modules::check_module_slots(layout)),
         Box::new(|| modules::check_module_eligibility(layout)),
+        Box::new(|| belt_detour::check_belt_detour(layout)),
     ];
 
     let issues: Vec<ValidationIssue> = checks.par_iter().flat_map(|f| f()).collect();

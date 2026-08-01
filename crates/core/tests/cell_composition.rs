@@ -2113,6 +2113,16 @@ fn mega_chain_ac_from_raw_zero_issues() {
 /// quantizes K=2 (cable 60/s), exercising per-copy mega replication.
 /// Tolerated warning categories only: the #383-class inserter
 /// attribution and the multi-block pole-network note.
+///
+/// **2026-08-01 belt-detour survey finding** (`docs/status.md` "Open
+/// tracking issues" — not yet root-caused): this mega-chain composition
+/// ships belt runs the new `belt-detour` check flags as genuine detours —
+/// 115/125-tile runs for 44/42-tile endpoint separations (2.6x/3.0x,
+/// well past both the check's ratio and excess floors, replicated at
+/// every mega-block copy). Tolerated here rather than silently allowed —
+/// see the check's PR for the full corpus survey this was found against —
+/// because fixing it is out of this check's scope; the gate's job is
+/// "compose at zero errors," and this is a reported warning, not one.
 #[test]
 fn mega_chain_chem5_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
@@ -2148,9 +2158,10 @@ fn mega_chain_chem5_resolves_bus_failure() {
         .collect();
     assert!(errors.is_empty(), "chem5 errors: {errors:?}");
     assert!(
-        issues
-            .iter()
-            .all(|i| matches!(i.category.as_str(), "inserter-item-throughput" | "power")),
+        issues.iter().all(|i| matches!(
+            i.category.as_str(),
+            "inserter-item-throughput" | "power" | "belt-detour"
+        )),
         "only adjudicated categories tolerated: {issues:?}"
     );
 }
@@ -2162,6 +2173,13 @@ fn mega_chain_chem5_resolves_bus_failure() {
 /// tolerating only the adjudicated categories. (@2 is both-paths-clean
 /// since #408's reach fix shifted junction geometry — the bus-refusal
 /// win for this class lives at 4/s.)
+///
+/// **2026-08-01 belt-detour survey finding** (`docs/status.md` "Open
+/// tracking issues" — not yet root-caused): same mega-chain-composition
+/// pathology as `mega_chain_chem5_resolves_bus_failure` — 224-tile belt
+/// runs for 87-tile endpoint separations (2.6x, well past both the new
+/// `belt-detour` check's floors, replicated per mega-block copy).
+/// Tolerated explicitly rather than silently allowed.
 #[test]
 fn mega_chain_pu4_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
@@ -2201,7 +2219,11 @@ fn mega_chain_pu4_resolves_bus_failure() {
     assert!(
         issues.iter().all(|i| matches!(
             i.category.as_str(),
-            "inserter-item-throughput" | "inserter-throughput" | "power" | "row-output-lane-budget"
+            "inserter-item-throughput"
+                | "inserter-throughput"
+                | "power"
+                | "row-output-lane-budget"
+                | "belt-detour"
         )),
         "only adjudicated categories tolerated: {issues:?}"
     );
