@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# review-gate.sh — wait for the claude-review check correctly, and (optionally)
+# review-gate.sh — wait for the CI review check correctly, and (optionally)
 # make it a required status check on main.
+#
+# The check is `second-opinion` since 2026-08-01 (DeepSeek via OpenRouter —
+# see .github/workflows/second-opinion.yml); it was `claude-review` before
+# that, and the incident below is from that era. Override with CHECK=.
 #
 # Why this exists: on 2026-07-29 a session polled a PR's merge readiness with a
 # hand-rolled loop testing `mergeStateStatus != "PENDING"`. GitHub reports a
@@ -15,15 +19,19 @@
 # for the absence of a value you guessed at.
 #
 # Usage:
-#   scripts/review-gate.sh wait <pr>       # block until claude-review completes
+#   scripts/review-gate.sh wait <pr>       # block until the review check completes
 #   scripts/review-gate.sh status          # report main's protection state
-#   scripts/review-gate.sh require         # make claude-review required on main
+#   scripts/review-gate.sh require         # make the review check required on main
 #   scripts/review-gate.sh unrequire       # remove that protection
 set -euo pipefail
 
 REPO="${REPO:-storkme/spaghettio}"
-CHECK="${CHECK:-claude-review}"
-TIMEOUT="${TIMEOUT:-1500}"   # 25 min; a full review runs 8-11.
+CHECK="${CHECK:-second-opinion}"
+TIMEOUT="${TIMEOUT:-3900}"   # 65 min: outlasts the second-opinion job's own
+                             # 60-min timeout-minutes, so `wait` reports the
+                             # check's real conclusion instead of a false
+                             # timeout (#561 review finding). Typical runs
+                             # are ~15-20 min; claude-review's were 8-11.
 
 usage() { sed -n '2,25p' "$0"; exit 2; }
 
@@ -74,7 +82,7 @@ cmd_status() {
 #     bypass the requirement, so `gh pr merge` still merges through a pending
 #     review. Blocks nobody here; effectively cosmetic for this repo.
 #   enforce_admins=true  — the requirement actually binds. It also blocks direct
-#     pushes to main for everyone, and if claude-review cannot run at all
+#     pushes to main for everyone, and if the review check cannot run at all
 #     (secret rotated, action outage) nothing merges until protection is
 #     loosened. That is the point, and it is a real operational cost.
 #

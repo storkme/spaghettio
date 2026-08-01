@@ -144,6 +144,31 @@ pub struct LayoutOptions {
     /// RFC-057 topology-preserving post-layout compaction. Experimental and
     /// default off, so the normal pipeline remains byte-identical.
     pub compact_layout: bool,
+    /// RFC-064 Phase 1: the fold-and-square post-layout transform
+    /// (`search_snake_fold`/`fold_snake`, RFC-057's mechanism). Experimental
+    /// and default off, mirroring `compact_layout` above — the pipeline is
+    /// byte-identical when this is `false` (a dedicated test enforces it).
+    ///
+    /// This ships as a plain user knob rather than an auto-selected
+    /// decomposition candidate because the Phase 1 corpus-applicability
+    /// spike (2026-08-01, session artifacts + this RFC's decision log)
+    /// measured admissibility — fold found, validates no worse, never-worse
+    /// input-rate-delivery — at 21.4% literal / 14.3% AR-improving of a
+    /// 14-fixture corpus, both below the RFC's pre-registered 25% bar for
+    /// auto-selection. A knob reaches the one user who wants a folded
+    /// layout without adding search cost to every other solve.
+    ///
+    /// When `true`, `build_bus_layout` always compacts first regardless of
+    /// this call's separate `compact_layout` value (see the comment at the
+    /// call site for why), then searches for a fold at `max_folds = 4`. If
+    /// the compacted geometry exceeds `FOLD_SEARCH_ENTITY_THRESHOLD` the
+    /// search is skipped — a `warnings` entry says so, so the user isn't
+    /// gaslit by a silent no-op — rather than stalling single-threaded WASM
+    /// for multi-seconds on a mega-chain-scale input. If no admissible fold
+    /// is found, the (compacted) unfolded layout ships. This option never
+    /// errors and never returns a layout worse than `compact_layout: true`
+    /// alone would have produced.
+    pub fold_layout: bool,
     /// RFC-060: run the horizontal-stack row layout as a scored
     /// decomposition candidate when `row_layout` is `VerticalSplit` and
     /// the solve has a `RowKind::DualInput` row. Default `true`; the
@@ -194,6 +219,7 @@ impl Default for LayoutOptions {
             direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
             di_claim_order: crate::bus::di_cell::DiClaimOrder::default(),
             compact_layout: false,
+            fold_layout: false,
             // Default ON 2026-07-30 (RFC-060): same never-worse shape as
             // `direct_insertion` above — the native pass stays vertical,
             // the horizontal variant competes only where a DualInput row
@@ -244,6 +270,7 @@ pub fn build_bus_layout(
         ));
     }
     let compact_layout = opts.compact_layout;
+    let fold_layout = opts.fold_layout;
     // RFC-058 (concluded): band_packing is a measurement instrument, not a
     // candidate — flag-on runs the native pass directly so the packed
     // takeover (or its typed refusal) is what ships, never outcompeted by
@@ -255,6 +282,60 @@ pub fn build_bus_layout(
     } else {
         crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)?
     };
+
+    if fold_layout {
+        // RFC-064 Phase 1: fold always compacts first, regardless of this
+        // call's separate `compact_layout` value — there is no "fold the
+        // raw layout" mode. Every established fold number in this repo,
+        // including PR #500's Factorio-verified chain-mil5ore result, was
+        // measured against `compact_validated_geometry`'s output, never raw
+        // decomposition-search geometry: Phase 0 finding 4 ("the
+        // undergroundified geometry is the native incumbent for the fold
+        // family throughout") and the Phase 1 spike's own native-baseline
+        // definition both confirm this.
+        let compacted =
+            crate::bus::compaction::compact_validated_geometry(&result, solver_result);
+
+        // Latency guard: `search_snake_fold` slides a comb of candidate
+        // fold columns across every legal seam for k = 1..=4, and each
+        // candidate pays a full `validate()` call whose cost scales with
+        // entity count — cheap on ordinary row-bus fixtures, but the
+        // Phase 1 spike measured minutes of its multi-minute budget going
+        // to the two largest mega-chain fixtures (mega-chain-pu4raw,
+        // 14,584 compacted entities; mega-chain-usp2raw, 19,534), neither
+        // of which ever produced an admissible fold. Left ungated, a
+        // fixture that size would stall single-threaded WASM for
+        // multi-seconds. 6,000 is chosen from the spike's own numbers: the
+        // largest fixture that ever produced an admissible fold was
+        // stress-ec-60s-red-from-ore at 4,593 compacted entities (chain-
+        // mil5ore's Factorio-verified fold sits at 2,831) — 6,000 leaves
+        // ~30% headroom above that high-water mark while sitting well
+        // below the two pathological mega-chains, so it comfortably covers
+        // every fixture folding is known to help without paying the search
+        // cost on inputs it never has helped. (Correction to an earlier
+        // verbal brief: the largest admissible fixture is stress-ec-60s-
+        // red-from-ore, not stress-ac-partitioned as first stated — see
+        // the spike's results.json.)
+        if compacted.entities.len() > FOLD_SEARCH_ENTITY_THRESHOLD {
+            let mut out = compacted;
+            out.warnings.push(format!(
+                "fold search skipped: layout too large ({} entities > {} \
+                 threshold) — showing the compacted, unfolded layout",
+                out.entities.len(),
+                FOLD_SEARCH_ENTITY_THRESHOLD,
+            ));
+            return Ok(out);
+        }
+
+        let search = crate::bus::compaction::search_snake_fold(&compacted, solver_result, 4);
+        return Ok(match search.best {
+            Some(found) => found.layout,
+            // No admissible fold — never an error, fall back to the
+            // (compacted) unfolded layout (spec item 2).
+            None => compacted,
+        });
+    }
+
     if compact_layout {
         Ok(crate::bus::compaction::compact_validated_geometry(
             &result,
@@ -264,6 +345,12 @@ pub fn build_bus_layout(
         Ok(result)
     }
 }
+
+/// RFC-064 Phase 1 latency guard for `fold_layout`: above this many
+/// compacted entities, `build_bus_layout` skips `search_snake_fold`
+/// entirely rather than running it. See the comment at the call site in
+/// [`build_bus_layout`] for the numbers behind this constant.
+const FOLD_SEARCH_ENTITY_THRESHOLD: usize = 6000;
 
 /// Today's `build_bus_layout` body — the retry orchestrator that
 /// invokes `layout_pass`, reads the junction-cap tiles it returns,

@@ -55,6 +55,11 @@ export interface FormState {
   /** RFC-057 post-layout compaction (`?compact=1`). Off by default: it
    * rewrites geometry, so a bookmarked URL must keep rendering what it did. */
   compactLayout: boolean;
+  /** RFC-064 Phase 1 fold-and-square knob (`?fold=1`). Off by default —
+   * the corpus-applicability spike measured admissibility below the RFC's
+   * pre-registered 25% auto-select bar, so this ships as an explicit user
+   * knob rather than a scored candidate, mirroring `compactLayout` above. */
+  foldLayout: boolean;
   /** Global module policy, compact form `<kind><tier><quality?>` —
    * `s`peed / `p`roductivity, tier 1–3, optional module-quality initial
    * (`u`/`r`/`e`/`l`), e.g. "s2", "p3l". null = no modules (today's
@@ -178,6 +183,9 @@ export const URL_KEY_BY_CATEGORY: Record<string, string> = {
  * configure the assembler tier. Read into `machines.crafting`. */
 const LEGACY_MACHINE_KEY = "machine";
 const COMPACT_EXTRAS_KEY = "compact";
+/** RFC-064 Phase 1 fold-and-square knob. Present-and-"1" means on;
+ * absent means off, same convention as `COMPACT_EXTRAS_KEY`. */
+const FOLD_EXTRAS_KEY = "fold";
 
 // Hash-form (Bucket B) URL scheme:
 //
@@ -399,6 +407,7 @@ function readHashState(): FormState | null {
     irShort && (KNOWN_INSERTER_CAPACITY as readonly string[]).includes(irShort) ? irShort : null;
   const directInsertion = extras.get(DIRECT_INSERTION_EXTRAS_KEY) === "1";
   const compactLayout = extras.get(COMPACT_EXTRAS_KEY) === "1";
+  const foldLayout = extras.get(FOLD_EXTRAS_KEY) === "1";
   const mShort = extras.get("m");
   const modules = mShort && MODULES_RE.test(mShort) ? mShort : null;
   const ciRaw = extras.get("ci");
@@ -427,7 +436,7 @@ function readHashState(): FormState | null {
   const tgRaw = extras.get(TARGETS_EXTRAS_KEY);
   const targets = tgRaw ? parseTargetsList(tgRaw) : null;
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, modules, customInputs, targets };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, foldLayout, modules, customInputs, targets };
 }
 
 function readQueryState(): FormState {
@@ -486,6 +495,7 @@ function readQueryState(): FormState {
       : null;
   const directInsertion = params.get("direct_insertion") === "1";
   const compactLayout = params.get("compact") === "1";
+  const foldLayout = params.get("fold") === "1";
   const rawModules = params.get("modules");
   const modules = rawModules && MODULES_RE.test(rawModules) ? rawModules : null;
   const ciParam = params.get("ci");
@@ -493,7 +503,7 @@ function readQueryState(): FormState {
   const targetsRaw = params.get(TARGETS_QUERY_KEY);
   const targets = targetsRaw ? parseTargetsList(targetsRaw) : null;
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, modules, customInputs, targets };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, foldLayout, modules, customInputs, targets };
 }
 
 export function readUrlState(): FormState {
@@ -578,6 +588,9 @@ function formatHashState(state: FormState): string {
   }
   if (state.compactLayout) {
     extras.set(COMPACT_EXTRAS_KEY, "1");
+  }
+  if (state.foldLayout) {
+    extras.set(FOLD_EXTRAS_KEY, "1");
   }
   if (state.directInsertion) {
     extras.set(DIRECT_INSERTION_EXTRAS_KEY, "1");
