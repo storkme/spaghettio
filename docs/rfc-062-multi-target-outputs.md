@@ -1132,3 +1132,167 @@ needed to look at the result, not a UI feature.
   the mechanism fixture's warning count is the only behavioral diff from
   this round (28 → 4) — no error-count change, no other fixture's
   pass/fail flipped.
+
+- *2026-08-01 — Phase 3 landed: wasm multi-target entry + boundary
+  validation, minimal URL extension, harness per-item checkpoint series.
+  No layout/solver changes (Phases 1/2 untouched).*
+
+  **Scope.** `crates/core/src/solver.rs`, `crates/wasm-bindings/`,
+  `web/src/{state,engine}.ts` + `web/src/ui/sidebar.ts` +
+  `web/src/workers/engine.worker.ts`, `crates/sim-harness/src/{scenario,
+  report}.rs`, `crates/core/examples/sim_export.rs`. Everything the RFC's
+  §Interface and §Export/sim-harness sections scoped as "small,
+  deliberately minimal."
+
+  **wasm entry (§Interface).** New `solver.rs` wrapper
+  `solve_multi_with_palette_exclusions_quality_and_modules(targets: &[(String,
+  f64)], ...)` — the multi-target counterpart of
+  `solve_with_palette_exclusions_quality_and_modules`, delegating to
+  `netflow::solve_netflow_multi_with_options` with the FULL targets slice
+  (not a one-element wrapper of the scalar path — this is a new, direct
+  caller of Phase 1's multi entry point at the palette/quality/modules
+  richness the wasm boundary needs). Pinned bit-identical to the scalar
+  function at N=1 by construction
+  (`n1_equivalence_holds_at_solver_rs_multi_wrapper`,
+  `solver_multi_target.rs`), same proof shape as Phase 1's own N=1
+  guarantee.
+
+  `wasm-bindings/src/lib.rs` gets `solve_multi(targets: Vec<Target>,
+  available_inputs, palette, default_machine, quality, modules) ->
+  Result<SolverResult, JsError>`, mirroring `solve_with_palette`'s
+  signature with `target_item`/`target_rate` replaced by `targets`.
+  `Target { item: String, rate: f64 }` derives `tsify_next::Tsify`
+  directly in the wasm-bindings crate (a new `tsify-next` dependency
+  there, same version/features as core's own wasm-gated models) — a plain
+  JS `{item, rate}` object array crosses the boundary natively
+  (`Vec<Target>` as a direct wasm-bindgen parameter, confirmed working via
+  a real `wasm-pack build`, not just the native sanity check Phase 1 used
+  — the wasm public surface DOES change this phase). Generated TS:
+  `solve_multi(targets: Target[], ...)`. `layout`/`layout_traced`/
+  `layout_streaming`/`export_blueprint` needed zero changes — verified,
+  not reworked, per the RFC's own claim that they're already
+  `SolverResult`-agnostic (confirmed by tracing every call site: none
+  branch on `external_outputs.len()`).
+
+  **Boundary validation (the deferred item).** `validate_targets(&[Target])`
+  in `wasm-bindings/src/lib.rs`, called at the top of `solve_multi` before
+  any solve work: rejects an empty target list, a non-positive/
+  non-finite rate, or an item absent from `recipe_db::all_producible_items()`,
+  each with a `[INVALID_TARGETS]`-prefixed `JsError` (same marker
+  convention as `solver::INCOMPATIBLE_MACHINE_PREFIX`). **The split is
+  deliberate and documented at both ends**: `solve_multi_with_palette_
+  exclusions_quality_and_modules`'s own doc comment states it does NOT
+  validate (matching every other `solver.rs` entry point's posture), and
+  `validate_targets`'s doc comment explains why the wasm boundary is the
+  right layer instead — an empty `targets` slice quietly solves to an
+  empty plan today (no LP constraints, no error); a non-positive rate
+  produces a degenerate-but-solvable row; and a genuinely unknown item is
+  eventually caught deep inside `solve_attempt` as a generic `LpFailed`
+  ("no producer, no external supply, no surplus sink") only after the
+  full candidate-recipe LP is built — correct, but late and non-specific
+  versus a fast, typed, pre-flight message the ONE caller that needs it
+  (a user-facing UI) can render immediately. Internal callers (this
+  crate's own `solve`/`solve_with_palette`, `sim_export.rs --multi`) are
+  trusted call sites and pay no extra validation cost.
+
+  **Minimal URL extension (§Interface, "no full sidebar UI").**
+  `web/src/state.ts`'s `FormState` gains `targets: {item, rate}[] | null`
+  — `null` (the overwhelming common case) is single-target, `item`/`rate`
+  authoritative exactly as before. Encoded as `;`-separated `item:rate`
+  pairs: `tg=` extras key in the hash form, `targets=` in the legacy
+  query form (no short-coding — item slugs are hyphen-only so never
+  collide with either separator, and short-coding a field the editing UI
+  never writes wasn't judged worth the added surface for a "minimal"
+  extension). The writer always keeps `item`/`rate` (the primary slot)
+  synced to `targets[0]`, so a multi-target URL degrades gracefully: a
+  client that ignores `tg=`/`targets=` entirely still renders a working
+  single-target layout for the first requested item, rather than falling
+  back to defaults. Round-trip tested
+  (`web/src/state.test.ts`, "multi-target extras" describe block):
+  encode → decode identity, malformed values (`bogus-no-rate`, negative
+  rate) reject to `null` rather than a partial list (same "whole field
+  invalid" posture as the existing short-code parser), single-target
+  state omits `tg=` entirely.
+
+  `web/src/ui/sidebar.ts` — the editing UI's ONE touch point:
+  `writeUrlState` always writes `targets: null` (the sidebar's controls
+  are single-target-only, per RFC scope), and a new `runSolveMulti`
+  function (parallel to `runSolve`, calling `engine.solveMulti` instead
+  of `engine.solve`) fires exactly once, at page load, only when
+  `urlState.targets.length > 1` — nothing else calls it, so every
+  subsequent edit through the form falls back to the normal single-target
+  path, which is the documented contract ("editing UI stays
+  single-target"). `engine.ts` + `workers/engine.worker.ts` get the
+  `solveMulti` RPC plumbing (`method: "solveMulti"` dispatching to the
+  new `solve_multi` wasm export), mirroring the existing `solve`/
+  `solve_with_palette` RPC shape exactly.
+
+  **Harness per-item checkpoint series (generalizing the 2026-07-24
+  first-target-only fix).** `scenario.rs::build_control_lua`: the single
+  `local TARGET = "..."` global becomes `local TARGETS = {...}` (every
+  requested target, in manifest order) plus `local TARGET = TARGETS[1] or
+  ""` — window-closing/convergence timing is UNCHANGED (still keyed off
+  the first target only, exactly as before this phase: a run's length
+  and stability gating are not something this phase touches). A new Lua
+  helper, `checkpoint_items()`, records `{item -> {produced, delivered}}`
+  for every target at each checkpoint-window close, additive alongside
+  the existing flat `produced`/`delivered` scalar fields (which stay
+  first-target-only, unchanged). `report.rs::compute` now reads each
+  target's OWN per-item series first (`checkpoint_item_series` +
+  `rate_over_checkpoints`), falling back to the old flat-scalar path only
+  for the first target on an older `raw_result` with no `items` key, and
+  to the pre-Phase-3 produced-only sample-series path for a non-first
+  target on such an old result — three-tier fallback chosen specifically
+  so every existing fixture/goldenwas unaffected: the full harness test
+  suite (65 tests) passes byte-for-byte unchanged, and a new test
+  (`second_target_gets_its_own_delivered_rate_verdict`) proves the fix
+  directly — a synthetic second target with a deliberate small
+  under-delivery (2.96/s measured vs 3.0/s planned) now gets
+  `measured_delivered_rate: Some(2.96)` and a verdict computed FROM that
+  delivered rate, where before this phase it would have been `None`
+  (produced-only fallback, the exact gap the Phase 2 review named). This
+  is the mechanism KC3 below depends on: without it, the second target
+  in the canonical fixture would only ever get a produced-rate verdict,
+  never delivered.
+
+  **`sim_export.rs --multi` mode (tracked example, allowed per task
+  brief).** `--multi <item>:<rate> [<item>:<rate> ...]` replaces the two
+  positionals with N >= 1 targets, consumed greedily until the next
+  `--flag`; every existing flag still applies after the target list. The
+  example now ALWAYS calls
+  `solve_multi_with_palette_exclusions_quality_and_modules` internally
+  (single target or not) rather than forking on N — bit-identical at N=1
+  by the same construction guarantee, so there is one solve code path in
+  the example, not two to keep in sync. Also now prints each
+  `external_outputs` entry (`target output <item> <rate>/s`), previously
+  only `external_inputs` were printed — a one-line addition that matters
+  once there's more than one target to see.
+
+  **Verification.** `cargo test --manifest-path crates/core/Cargo.toml`
+  — one clean invocation, 0 failures: lib 927 passed (926 Phase-2
+  baseline + 1 new `n1_equivalence_holds_at_solver_rs_multi_wrapper`),
+  `solver_multi_target` 8 passed (+1), every other suite unchanged
+  (e2e 70/34-ignored, `layout_multi_target` 3, `solver_netflow_parity`
+  11/3-ignored — all identical to the Phase 2 baseline). `cargo test -p
+  spaghettio_sim_harness` — 65 passed (64 Phase-2-era baseline + 1 new
+  `second_target_gets_its_own_delivered_rate_verdict`), 0 failed,
+  including 3 new `scenario.rs` tests pinning the `TARGETS`
+  array/`checkpoint_items()` Lua emission. `cargo clippy -p
+  spaghettio_core -- -D warnings` (exact hook invocation) and `cargo
+  clippy -p spaghettio_sim_harness -- -D warnings` both clean.
+  `wasm-pack build crates/wasm-bindings --target web --out-dir
+  .../web/src/wasm-pkg` — real build, clean, generated
+  `solve_multi(targets: Target[], ...): SolverResult` and `export
+  interface Target` in the `.d.ts` exactly as designed. `cd web && npx
+  tsc --noEmit` clean; `npx vitest run` — 41 passed (state.ts's new
+  "multi-target extras" describe block: 5 new tests, all passing).
+  **Browser eyeball**: `?item=electronic-circuit&rate=10&craft=
+  assembling-machine-2&targets=electronic-circuit:10;advanced-circuit:3`
+  on the dev server — one console error (`favicon.ico` 404, unrelated),
+  layout renders "159×96 2169 entities" in the console log and "139
+  MACHINES" in the sidebar, matching `sim_export --multi`'s own numbers
+  on the identical target/rate/tier combination exactly (see the final
+  gate below) — the wasm/URL path and the native `sim_export` path agree
+  bit-for-bit on machine count and entity count, independent
+  confirmation the wasm boundary is wired correctly, not just
+  unit-tested.

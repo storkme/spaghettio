@@ -148,6 +148,66 @@ pub fn export_with_manifest(
             "is_fluid": r.is_fluid, "entity": r.entity,
         })
     };
+
+    // RFC-062 Phase 3 (final-gate finding): `surplus_exits` was, until
+    // Phase 2, ALWAYS a genuine byproduct — voidable, never a requested
+    // target. Phase 2's solid dual-purpose lane made it possible for a
+    // solid TARGET's own physical export to route through this same
+    // ledger (`lane_planner.rs`'s `perimeter_exit_y`, generalized from
+    // fluid-only to solids). The sim harness's kit builder
+    // (`scenario.rs`) still treats every `surplus_exits` entry as
+    // voidable-fluid-byproduct-only (`add_fluid_void`, a Factorio
+    // infinity-pipe filter — meaningless for a solid item name) and
+    // silently drops any solid target routed this way: no drain rig
+    // gets built, so `storage.drained_total` never sees it and the
+    // target's delivered rate measures a flat, wrong 0.00 regardless of
+    // what the factory actually built (found running the RFC-062
+    // canonical EC+AC final-gate sim — electronic-circuit, routed via
+    // its dual-purpose lane's `surplus_exits` claim, measured
+    // delivered=0.00/-100% while its own trunk was visibly moving
+    // product).
+    //
+    // Fix here, not in the harness: reclassify a solid target's
+    // `surplus_exits` entry as a real `BoundaryRecord` (direction
+    // discovered from the actual belt entity at that tile — the same
+    // entity-cross-check standard `check_stranded_byproducts` and
+    // `check_shared_row_outflow_conservation` already hold surplus exits
+    // to) and fold it into `boundary_outputs` instead. The sim harness
+    // needs zero changes: `boundary_outputs` already gets a correct
+    // drain rig via `add_drain`/`drain_call`. Fluid targets are
+    // deliberately NOT reclassified here — they have never had a drain
+    // rig (`report.rs` verdicts them on produced rate only, by design,
+    // predating this phase), and `surplus_exits` remains their and every
+    // genuine byproduct's home, unchanged.
+    let target_items: rustc_hash::FxHashSet<&str> = solver
+        .external_outputs
+        .iter()
+        .filter(|o| !o.is_fluid)
+        .map(|o| o.item.as_str())
+        .collect();
+    let mut promoted_outputs: Vec<serde_json::Value> = Vec::new();
+    let mut surplus_exits_remaining: Vec<(String, i32, i32)> = Vec::new();
+    for (item, x, y) in &layout.surplus_exits {
+        let promoted = if target_items.contains(item.as_str()) {
+            layout.entities.iter().find(|e| {
+                e.x == *x
+                    && e.y == *y
+                    && e.carries.as_deref() == Some(item.as_str())
+                    && crate::common::is_belt_entity(&e.name)
+            })
+        } else {
+            None
+        };
+        match promoted {
+            Some(e) => promoted_outputs.push(serde_json::json!({
+                "item": item, "x": *x, "y": *y,
+                "direction": e.direction as u8,
+                "is_fluid": false, "entity": e.name,
+            })),
+            None => surplus_exits_remaining.push((item.clone(), *x, *y)),
+        }
+    }
+
     let manifest = serde_json::json!({
         "label": label,
         "targets": solver
@@ -162,8 +222,8 @@ pub fn export_with_manifest(
             .collect::<Vec<_>>(),
         "planned_rates": planned,
         "boundary_inputs": layout.boundary_inputs.iter().map(boundary).collect::<Vec<_>>(),
-        "boundary_outputs": layout.boundary_outputs.iter().map(boundary).collect::<Vec<_>>(),
-        "surplus_exits": layout.surplus_exits,
+        "boundary_outputs": layout.boundary_outputs.iter().map(boundary).chain(promoted_outputs).collect::<Vec<_>>(),
+        "surplus_exits": surplus_exits_remaining,
         "bbox_min": [bbox_min_x, bbox_min_y],
         "dims": [layout.width, layout.height],
         "entities": layout.entities.len(),
@@ -370,6 +430,104 @@ mod tests {
     use super::*;
     use crate::models::{EntityDirection, PlacedEntity};
     use std::io::Read;
+
+    /// RFC-062 Phase 3 final-gate finding: a solid TARGET routed through
+    /// the dual-purpose lane's `surplus_exits` claim (Phase 2's shape —
+    /// `electronic-circuit` on the canonical EC+AC fixture) must be
+    /// promoted into `boundary_outputs` with a real direction, not left
+    /// in `surplus_exits` where the sim harness's kit builder can only
+    /// void it (a Factorio fluid-only API, meaningless for a solid item
+    /// — the running sim measured `electronic-circuit` delivered=0.00
+    /// regardless of what the factory built, before this fix).
+    #[test]
+    fn solid_target_surplus_exit_is_promoted_to_boundary_output() {
+        use rustc_hash::FxHashSet;
+        let inputs: FxHashSet<String> =
+            ["iron-ore", "copper-ore", "coal", "water", "crude-oil"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        let targets = vec![
+            ("electronic-circuit".to_string(), 10.0),
+            ("advanced-circuit".to_string(), 3.0),
+        ];
+        let solved = crate::netflow::solve_netflow_multi(
+            &targets,
+            &inputs,
+            &crate::recipe_db::MachinePalette::default(),
+            "assembling-machine-2",
+            &FxHashSet::default(),
+            crate::netflow::RecipeScope::Free,
+            &crate::netflow::CostTable::default(),
+        )
+        .expect("EC+AC from ore should solve");
+        let layout = crate::bus::layout::build_bus_layout(
+            &solved,
+            crate::bus::layout::LayoutOptions {
+                cell_composition: crate::bus::cells::CellComposition::Off,
+                direct_insertion: crate::bus::di_cell::DirectInsertion::Off,
+                ..Default::default()
+            },
+        )
+        .expect("EC+AC native layout should build");
+
+        // Precondition this test is actually exercising the promotion
+        // path: electronic-circuit's physical claim is a surplus_exits
+        // entry pre-fix (RFC-062 Phase 2 decision log), not a
+        // boundary_outputs one.
+        assert!(
+            layout.surplus_exits.iter().any(|(item, ..)| item == "electronic-circuit"),
+            "fixture assumption stale: electronic-circuit no longer routes via surplus_exits — \
+             this test needs a different fixture to exercise the promotion fix"
+        );
+
+        let (_bp, manifest) = export_with_manifest(&layout, &solved, "ec-ac-promote");
+
+        let boundary_items: Vec<&str> = manifest["boundary_outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["item"].as_str().unwrap())
+            .collect();
+        assert!(
+            boundary_items.contains(&"electronic-circuit"),
+            "electronic-circuit must be promoted into boundary_outputs: {boundary_items:?}"
+        );
+        assert!(
+            boundary_items.contains(&"advanced-circuit"),
+            "advanced-circuit's own native boundary_outputs record must survive: {boundary_items:?}"
+        );
+
+        let ec_record = manifest["boundary_outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["item"] == "electronic-circuit")
+            .unwrap();
+        // A real direction (0/4/8/12), backed by the actual belt entity —
+        // not a placeholder. `is_fluid: false` since only solid targets
+        // are promoted.
+        assert!(
+            matches!(ec_record["direction"].as_u64(), Some(0 | 4 | 8 | 12)),
+            "promoted record must carry a real cardinal direction: {ec_record:?}"
+        );
+        assert_eq!(ec_record["is_fluid"], false);
+        assert!(crate::common::is_belt_entity(ec_record["entity"].as_str().unwrap()));
+
+        // The promoted item no longer sits in surplus_exits — one
+        // physical claim, one manifest bucket, never both (a caller that
+        // iterates both would double-count or double-void it).
+        let surplus_items: Vec<&str> = manifest["surplus_exits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r[0].as_str().unwrap())
+            .collect();
+        assert!(
+            !surplus_items.contains(&"electronic-circuit"),
+            "electronic-circuit must not remain in surplus_exits after promotion: {surplus_items:?}"
+        );
+    }
 
     #[test]
     fn manifest_boundaries_match_real_layout() {
