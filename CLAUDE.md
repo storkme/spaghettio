@@ -64,7 +64,9 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   action: DeepSeek V4 Flash via OpenRouter, K=3 unioned agentic passes —
   swapped in 2026-08-01 because the previous Claude-backed bot consumed the
   subscription's usage windows) reviews every non-draft PR and posts one
-  advisory comment per head SHA. Its silent-failure mode is loud: a
+  advisory comment per head SHA (known gap, accepted: a base-branch
+  retarget keeps the old SHA's green check — see the workflow's trigger
+  comment; re-review those session-side). Its silent-failure mode is loud: a
   degraded pass that posts no review FAILS the `second-opinion` check
   (`fail-on-degraded`), and that check is **required on main**
   (`enforce_admins=true`; escape hatch `scripts/review-gate.sh unrequire`).

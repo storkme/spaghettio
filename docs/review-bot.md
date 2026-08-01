@@ -40,7 +40,8 @@ changes.
 ## Moving parts
 
 - [`.github/workflows/claude-code-review.yml`](../.github/workflows/claude-code-review.yml)
-  — runs on every PR event (opened / synchronize / ready_for_review /
+  — parked 2026-08-01 (see the status banner above); when live, ran on every
+  PR event (opened / synchronize / ready_for_review /
   reopened / edited): checkout → `anthropics/claude-code-action@v1` running
   the `code-review` plugin → transcript artifact upload → silent-no-op guard.
   Runs are debounced per PR (`concurrency` + `cancel-in-progress`): a review
