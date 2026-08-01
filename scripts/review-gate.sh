@@ -27,8 +27,11 @@ set -euo pipefail
 
 REPO="${REPO:-storkme/spaghettio}"
 CHECK="${CHECK:-second-opinion}"
-TIMEOUT="${TIMEOUT:-1500}"   # 25 min; claude-review ran 8-11, second-opinion's
-                             # K=3 flash passes should land well inside this.
+TIMEOUT="${TIMEOUT:-3900}"   # 65 min: outlasts the second-opinion job's own
+                             # 60-min timeout-minutes, so `wait` reports the
+                             # check's real conclusion instead of a false
+                             # timeout (#561 review finding). Typical runs
+                             # are ~15-20 min; claude-review's were 8-11.
 
 usage() { sed -n '2,25p' "$0"; exit 2; }
 
@@ -79,7 +82,7 @@ cmd_status() {
 #     bypass the requirement, so `gh pr merge` still merges through a pending
 #     review. Blocks nobody here; effectively cosmetic for this repo.
 #   enforce_admins=true  — the requirement actually binds. It also blocks direct
-#     pushes to main for everyone, and if claude-review cannot run at all
+#     pushes to main for everyone, and if the review check cannot run at all
 #     (secret rotated, action outage) nothing merges until protection is
 #     loosened. That is the point, and it is a real operational cost.
 #

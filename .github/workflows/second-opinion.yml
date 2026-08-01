@@ -1,8 +1,9 @@
 # Independent PR reviewer: the storkme/second-opinion action driving DeepSeek
-# V4 Flash via OpenRouter. Replaced claude-code-review.yml as the CI reviewer
-# on 2026-08-01 — CI reviews were consuming the Claude subscription's usage
-# windows; this runs on metered OpenRouter credit (~cents/PR) instead.
-# claude-code-review.yml is parked, not deleted — see docs/review-bot.md.
+# V4 Flash via OpenRouter. Takes over from claude-code-review.yml as the CI
+# reviewer (2026-08-01) — CI reviews were consuming the Claude subscription's
+# usage windows; this runs on metered OpenRouter credit (~cents/PR) instead.
+# The claude workflow is parked (not deleted) in the phase-2 PR of the swap;
+# until that merges both reviewers run. See docs/review-bot.md.
 #
 # Needs one repo secret: OPENROUTER_API_KEY.
 name: Second Opinion
@@ -10,6 +11,13 @@ name: Second Opinion
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
+    # KNOWN GAP (from this workflow's own first review, #561): no `edited`
+    # type, so a base-branch retarget — which rewrites the effective diff
+    # without a new head SHA — keeps the old SHA's green check. Adding the
+    # trigger wouldn't help yet: the runner's per-SHA marker comment would
+    # suppress the re-review anyway, and the action exposes no force input.
+    # Until upstream grows one, re-review base-retargeted PRs session-side
+    # (the stacked-PR retarget-to-main case is the one that occurs here).
 
 # One run per PR; a new push supersedes the old run's SHA, so cancelling is
 # safe. No `edited` trigger (unlike the parked claude-review workflow): this
@@ -28,9 +36,12 @@ jobs:
     # The gates live lower instead: the runner itself skips drafts with a
     # real green conclusion (exit 0), and the fork gate is on the step.
     runs-on: ubuntu-latest
-    # Worst case is K=3 sequential passes at the 900s per-pass timeout,
-    # plus the union merge call.
-    timeout-minutes: 50
+    # Worst case is K=3 sequential passes at the 900s per-pass timeout
+    # (45 min), plus the union-merge call (its own 600s HTTP timeout) and
+    # the docker-action image build. 50 left ~5 min of headroom and could
+    # kill a legitimately slow run of a required check (#561 review
+    # finding); typical observed runtime is ~15-20 min.
+    timeout-minutes: 60
     permissions:
       contents: read
       pull-requests: write
