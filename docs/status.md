@@ -149,6 +149,50 @@ inert scaffolding, and the flag-gated builder as the reproducible
 falsification record. Full trail in the RFC's decision log (fifteen
 dated entries, two falsified hypotheses recorded en route).
 
+**`rfc-063-compaction-primitives.md` (2026-08-01, CONCLUDED — all three
+phases adjudicated)**: the funded follow-up to the 2026-07 compaction
+retrospective, three primitive-level attacks on the logistics floor.
+**Phase A** (regenerate/decompose the balancer library templates against
+#135) killed at the A0 feasibility probe, before SAT ran — the ≥25%
+bounding-box bar is unreachable against verified community-best balancer
+references (≈8.1% gate-fixture / ≈5.9% holdout measured ceiling);
+maintenance residue (the likely-stale `(4,5)` template, stale doc-comment
+baselines) spun off to #551, not funded as arc work. **Phase B** (two
+machine rows sharing one belt row) killed on paper analysis, before a
+prototype template existed — the "wasted lane" the design assumed does not
+exist (`can_lane_split` already claims it for free), and the one real
+mechanism left (deleting one duplicate belt-tile-row per merged pair) caps
+at 5.00–7.14% (row-kind-structural), under a third of the escalated ≥25%
+bar. **Phase C** (re-run RFC-058's own packing technique on DI-composed
+input) CLEARS its escalated −40.0% bar on the two DI-composed gate
+fixtures it could build — `sci1-ore` (−47.4%) and `sci2-ore` (−50.6%),
+aggregate −49.9% — reusing RFC-058's frozen `bus::bands` builder unmodified
+with `direct_insertion: Forced` in place of `Off`; `pu1-plate` still
+refuses, now for a different reason than RFC-058 recorded (the solver's
+`di_couplings` for this fixture, measured today, no longer proposes a
+`copper-cable → electronic-circuit` coupling at all — a corpus-drift
+finding, not something #526's geometry fix touches). No production wiring
+follows: Phase C is a one-day throwaway spike by design, the packed
+candidates carry substantial un-sim-anchored validation debt inherited from
+RFC-058's own frozen instrument (0→38, 13→131 issues), and RFC-058's own
+five-re-measure trajectory (−66.1% → −35.9% → −44.0% → −34.6% → −27.0%)
+shows every correctness-hardening pass pushed density DOWN, so −49.9% is
+very likely an upper bound. **Dual-recorded for RFC-064 Phase 3, regardless
+of the bbox verdict**: on the SAME packed candidates that clear the bbox
+bar, `AR_score` (RFC-064 §a) is strongly NEGATIVE (sci1-ore −13.4, sci2-ore
+−2.7) — the packer optimizes area under a 3:1 aspect CAP with no incentive
+to preserve squareness once under it, so a near-square native (AR 1.06,
+1.16) becomes materially LESS square when packed (AR 1.80, 1.61); the
+estimated `Transit_score` is positive (+0.32, +0.52, RFC-058's own
+band-centre Manhattan proxy — an estimate, not measured routing). **All
+three verdicts are bbox-area-objective numbers and do not transfer to
+[`RFC-064`](rfc-064-spaghetti-objective.md)'s aspect-ratio/transit
+framing** — Phase C's own AR_score result is direct evidence the two
+objectives can disagree on the identical candidate, not just an assertion
+that they might. Spike code was never merged, per the RFC's own
+throwaway-spike contract; the numbers above are the surviving record. Full
+trail in the RFC's decision log.
+
 **`rfc-059-di-coupling-assignment.md` (2026-07-31) — SUPERSEDED, see the RFC-059
 entry above.** Kept as the record of what was concluded before #520's fix, when
 the validator could not see a starved pickup. Its verdict — "the tie-break stays
@@ -866,7 +910,8 @@ golden re-blesses across the arc. Full trail:
 ## Open tracking issues (layout quality)
 
 - [#456 flow-preserving compaction / the spaghettifier](https://github.com/storkme/spaghettio/issues/456) — design split into competing [RFC-055 compact linear chains](rfc-055-compact-cell-chain.md) and [RFC-056 folded chains](rfc-056-folded-cell-chain.md); both make validated cell rotations first-class and share one measured decision gate
-- [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135) — main compaction lever
+- [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135) — **RFC-063 Phase A killed at A0, 2026-07-31**: the ≥25% bbox bar this issue was funded to reach is unreachable against verified community-best balancer references (≈8.1% gate-fixture / ≈5.9% holdout measured ceiling) — no longer "the main compaction lever". Low-risk maintenance residue (regenerate the likely-stale `(4,5)` template; correct stale doc-comment baselines) spun off to #551, not funded as arc work.
+- [#507 RFC-058 band-packing tracking](https://github.com/storkme/spaghettio/issues/507) — RFC-058 concluded 2026-07-31 (KC1 fired in phase 4, −27.0% vs a −33.0% bar); the flag-gated `bus::bands` builder stays in-tree, default off, as the falsification record. RFC-063 Phase C (concluded 2026-08-01) re-ran the same builder on DI-composed input and cleared an escalated −40.0% bar on 2/3 fixtures — see `rfc-063-compaction-primitives.md`'s decision log — without funding production wiring. RFC-064 Phase 3 is the next arranged consumer of this scaffolding, scored against aspect-ratio/transit instead of bbox-area.
 - [#527 parked: bus high-rate scaling cluster](https://github.com/storkme/spaghettio/issues/527) — #311 #312 #335 #336 #345, closed not-planned 2026-07-31; all real, none fixed; revisit at the cell-interface RFC. #311's merger wall still gates >45/s headline claims.
 - [#526 DI cell geometry: belt-to-belt lift picks upstream of its only feed](https://github.com/storkme/spaghettio/issues/526) — **geometry repaired 2026-07-31** (see the narrative entry above): `stamp_di_bridge` now refuses a bridge that can't clear a DI cell's LAST producer drop, rather than shipping a partial-throughput layout. Corpus-swept: changes zero shipped layouts (native already won everywhere via #524's gate). Still open: the policy question #520 raised, whether `di_choice` should require more than validator parity before displacing native
 - [#519 flux blind spot](https://github.com/storkme/spaghettio/issues/519) — **walker recalibrated 2026-07-31**: consumption decrement along rows (plus four model-artifact fixes found by fixture bisection) makes `input-rate-delivery` report tail starvation the sims measured (`ac@5` now E0/W7 at the exact machines its sim census showed empty; was E0/W0 at 75% of plan). Still open for: merge-aware demand attribution (the map over-attributes up every merge branch, so demand-weighted external seeding is consistency-gated), folding flux into candidate SELECTION (currently excluded — selections are bit-identical to pre-#519; giving the never-worse contracts flux teeth is the #520 ask), and re-simming a fixture to confirm a fix moves the measured number. Gauntlet/scoreboard warning totals recorded before 2026-07-31 pre-date the recalibration and undercount.
