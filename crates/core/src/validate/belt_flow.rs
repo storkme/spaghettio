@@ -27,7 +27,12 @@ use super::{LayoutStyle, Severity, ValidationIssue};
 // Belt direction map (including splitter expansion)
 // ---------------------------------------------------------------------------
 
-fn belt_dir_map_from(entities: &[PlacedEntity]) -> FxHashMap<(i32, i32), EntityDirection> {
+// `pub(crate)` on these three: `belt_detour` reuses them rather than
+// re-deriving belt adjacency / UG pairing / splitter geometry (the UG
+// pairing search in particular is subtle — reach limits, interception
+// checks — and this codebase's own `docs/validator-reporting.md` history is
+// full of checks that quietly drifted from the canonical adjacency rules).
+pub(crate) fn belt_dir_map_from(entities: &[PlacedEntity]) -> FxHashMap<(i32, i32), EntityDirection> {
     belt_dir_map_filtered(entities, false)
 }
 
@@ -78,7 +83,7 @@ fn build_belt_tile_set(entities: &[PlacedEntity]) -> FxHashSet<(i32, i32)> {
 // Underground belt pair map
 // ---------------------------------------------------------------------------
 
-fn build_ug_pairs(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
+pub(crate) fn build_ug_pairs(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
     let mut ug_inputs: Vec<&PlacedEntity> = Vec::new();
     let mut ug_outputs: Vec<&PlacedEntity> = Vec::new();
     for e in &layout.entities {
@@ -138,7 +143,7 @@ fn build_ug_pairs(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
 // Splitter sibling map
 // ---------------------------------------------------------------------------
 
-fn build_splitter_siblings(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
+pub(crate) fn build_splitter_siblings(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
     let mut siblings: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
     for e in &layout.entities {
         if !is_splitter(&e.name) {
