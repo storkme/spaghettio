@@ -505,6 +505,11 @@ impl DecompositionCandidate for ModuleSizeSplit {
             // reverted to P0 inside the partitioned path would report P0-vs-P0.
             di_claim_order: opts.di_claim_order.clone(),
             compact_layout: false,
+            // Same discipline as compact_layout: folding is a whole-layout
+            // post-pass applied once by `build_bus_layout` around the
+            // winning candidate, not re-run inside every partitioned
+            // candidate's inner call.
+            fold_layout: false,
             // Inert at this depth (run_layout_with_retry does not
             // re-enter the search); carried for faithfulness.
             horizontal_candidate: opts.horizontal_candidate,
