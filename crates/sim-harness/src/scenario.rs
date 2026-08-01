@@ -356,9 +356,27 @@ end
 -- picking FROM the belt (pickup = belt side, per the artifact-boundary
 -- inserter-direction lesson).
 local function add_drain(s, force, exit_x, exit_y, fx, fy, lx, ly, ext_len, item)
+  -- RFC-062 Phase 3 finding: `create_entity` can fail here (returns nil)
+  -- with NO exception and NO prior error handling on this loop -- unlike
+  -- `add_fluid_void`/`add_fluid_feed`, which both wrap their placement in
+  -- `pcall` and record a failure. A silent belt-placement failure here
+  -- previously showed up only as an unexplained flat 0.00 delivered rate
+  -- (the EC+AC final-gate run: the chest/inserter bank built exactly per
+  -- this formula while the entire belt extension silently failed to
+  -- place, with zero entries in `kit_errors`/`fluid_errors` to point at
+  -- it). This does not fix the underlying placement failure -- root
+  -- cause not yet identified, tracked as a followup -- it only makes a
+  -- future occurrence loud instead of silent, matching this project's
+  -- own rule that a check going quiet is not evidence of success
+  -- (docs/validator-reporting.md).
   for t = 1, ext_len do
-    s.create_entity{name = "express-transport-belt", position = {exit_x + fx * t, exit_y + fy * t},
+    local placed = s.create_entity{name = "express-transport-belt", position = {exit_x + fx * t, exit_y + fy * t},
                     direction = dir_from_vec(fx, fy), force = force}
+    if not placed then
+      table.insert(storage.kit_errors, "drain rig for '" .. item .. "' at (" .. exit_x .. "," .. exit_y
+        .. "): belt placement failed at extension tile " .. t .. "/" .. ext_len
+        .. " (" .. (exit_x + fx * t) .. "," .. (exit_y + fy * t) .. ")")
+    end
   end
   -- Rig capacity must comfortably exceed the drained rate: SIX
   -- pickup inserters at a low declared world pull ~13.8/s from the
@@ -1877,5 +1895,24 @@ mod tests {
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
         assert!(lua.contains("local TARGETS = {\"electronic-circuit\", \"advanced-circuit\"}"));
         assert!(lua.contains("local TARGET = TARGETS[1] or \"\""));
+    }
+
+    /// RFC-062 Phase 3 final-gate finding: `add_drain`'s belt-placement
+    /// loop must record a `kit_errors` entry when `create_entity` fails,
+    /// instead of continuing silently — the EC+AC final-gate run hit
+    /// exactly this (chest/inserter bank built per formula, entire belt
+    /// extension silently absent, zero error anywhere) and it cost real
+    /// debugging time to find via `sim_state` frame-reading alone. This
+    /// does not fix the underlying placement failure (root cause not yet
+    /// identified — tracked as a followup); it only makes a future
+    /// occurrence loud.
+    #[test]
+    fn drain_belt_placement_failure_is_recorded_not_silent() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "test-drain-err".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(lua.contains("local placed = s.create_entity{name = \"express-transport-belt\""));
+        assert!(lua.contains("if not placed then"));
+        assert!(lua.contains("table.insert(storage.kit_errors, \"drain rig for '\" .. item .. \"'"));
     }
 }
