@@ -59,28 +59,41 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   the multiple concurrent Claude sessions that share this repo.
 - **Adversarial review before anything is commit-ready** — code *and*
   documentation. Preferred: the CI review bot —
-  [`.github/workflows/claude-code-review.yml`](.github/workflows/claude-code-review.yml)
-  reviews every PR; expect inline comments on findings or a "no issues"
-  summary comment. Its historical silent-failure mode is now loud: the
-  `claude-review` check FAILS when a non-trivial PR ends with zero review
-  activity (benign skips: drafts, workflow-file PRs, small diffs, and
-  cheap runs bearing the plugin's conscious gate-skip signature).
-  Live trap: re-running `/install-github-app` overwrites the repaired
-  workflow files with the stock template — diff them against main before
-  merging its PR. Failure-class history and forensics playbook:
+  [`.github/workflows/second-opinion.yml`](.github/workflows/second-opinion.yml)
+  (the [storkme/second-opinion](https://github.com/storkme/second-opinion)
+  action: DeepSeek V4 Flash via OpenRouter, K=3 unioned agentic passes —
+  swapped in 2026-08-01 because the previous Claude-backed bot consumed the
+  subscription's usage windows) reviews every non-draft PR and posts one
+  advisory comment per head SHA (known gap, accepted: a base-branch
+  retarget keeps the old SHA's green check — see the workflow's trigger
+  comment; re-review those session-side). Its silent-failure mode is loud: a
+  degraded pass that posts no review FAILS the `second-opinion` check
+  (`fail-on-degraded`), and that check is **required on main**
+  (`enforce_admins=true`; escape hatch `scripts/review-gate.sh unrequire`).
+  Treat its silence as weak evidence, not clearance — the model tier is
+  chosen for cost, not maximum recall. The predecessor,
+  claude-code-review.yml, is PARKED (dispatch-only stub, hardened job kept
+  intact; ci.yml's workflow-guard still asserts its pieces because the
+  `/install-github-app` stock-template overwrite trap applies to parked
+  files too). Failure-class history and forensics playbook:
   [`docs/review-bot.md`](docs/review-bot.md).
-  **Nothing blocks a merge while the review is still running** — `main` is
-  unprotected, so waiting is the merger's job. Use
+  **Nothing blocks a merge while the review is still running** except the
+  required check itself — waiting is still the merger's job. Use
   `scripts/review-gate.sh wait <pr>`, never a hand-rolled poll: a running
   check reports `IN_PROGRESS` (and the PR `UNSTABLE`), so the obvious
   `!= "PENDING"` test passes instantly and merges mid-review.
-  Findings against the PR *description* are re-checked on body edits, so fix
-  them in the body and let the cheap `edited` run confirm them closed. Local adversarial review (an
+  Local adversarial review (an
   independent agent that re-runs gates and probes the claims) is the
   fallback when a PR isn't in play — and it remains **required in addition
   to the bot** for layout-engine or validator-semantics changes: the bot
   reviews the diff, but it cannot run STRESSGOLD, decode snapshots, or do
-  tile-level verification.
+  tile-level verification. Fork PRs and workflow-file PRs also need
+  session-side review — the bot step-gates off forks (no secrets), and a
+  PR editing second-opinion.yml runs its own modified workflow **with
+  access to `OPENROUTER_API_KEY`** — the concrete stake is secret
+  exfiltration (same class as the claude workflows' long-standing
+  `CLAUDE_CODE_OAUTH_TOKEN` exposure, not a new hole) — so eyeball such
+  diffs before they run, not after.
 - **Keep `origin/main` current** — push promptly after merging. Worktree
   agents branch from `origin/main`; a stale origin hands every spawned agent
   a stale base.

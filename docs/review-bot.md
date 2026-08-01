@@ -1,5 +1,37 @@
 # CI review bot — how it works, how it fails, how to diagnose it
 
+> **Status (2026-08-01): claude-code-review.yml is PARKED** (trigger swapped
+> to `workflow_dispatch`-only; the hardened job is kept intact in the file).
+> CI review duty moved to
+> [`.github/workflows/second-opinion.yml`](../.github/workflows/second-opinion.yml)
+> — the [storkme/second-opinion](https://github.com/storkme/second-opinion)
+> action driving `deepseek/deepseek-v4-flash-0731` via OpenRouter, K=3
+> unioned agentic passes — because CI reviews shared the Claude
+> subscription's usage windows with interactive sessions. Branch
+> protection's required context moved `claude-review` → `second-opinion`
+> accordingly (`scripts/review-gate.sh`). Everything below is the
+> claude-review pipeline's history: still the playbook if it is ever
+> re-enabled, and ci.yml's workflow-guard still asserts the parked file's
+> load-bearing pieces (the stock-template overwrite trap, #367, does not
+> care whether the file it clobbers is live). The second-opinion runner has
+> its own silent-failure tripwire: a degraded pass that posts no review
+> exits non-zero and reds the check (`fail-on-degraded`, see the action's
+> README) — the guard scripting below is claude-review-specific and does
+> not apply to it.
+>
+> Two decisions recorded here because no RFC owns this pipeline:
+> **(1)** Making `second-opinion` a *required* check deliberately overrides
+> the upstream README's own advice ("advisory, never a merge gate") —
+> continuing the claude-review precedent (required since 2026-07-29), with
+> eyes open that K=3 sequential OpenRouter passes widen the
+> single-point-of-failure surface of an admin-binding block; the escape
+> hatch is `scripts/review-gate.sh unrequire`.
+> **(2)** `claude-review-auto-retry.yml` is dormant, not removed: its
+> `workflow_run` condition can never fire while claude-code-review.yml is
+> dispatch-only, it fails its own `if` cleanly, and ci.yml's workflow-guard
+> asserts the file's existence — removing it means editing the guard in the
+> same PR that parks what it guards. Separable cleanup, do it later.
+
 Reference doc for the automated PR review pipeline. `CLAUDE.md` carries only
 the operating rules; this file is the canonical home for the failure-class
 history and the forensics playbook. Keep it current when the workflow
@@ -8,7 +40,8 @@ changes.
 ## Moving parts
 
 - [`.github/workflows/claude-code-review.yml`](../.github/workflows/claude-code-review.yml)
-  — runs on every PR event (opened / synchronize / ready_for_review /
+  — parked 2026-08-01 (see the status banner above); when live, ran on every
+  PR event (opened / synchronize / ready_for_review /
   reopened / edited): checkout → `anthropics/claude-code-action@v1` running
   the `code-review` plugin → transcript artifact upload → silent-no-op guard.
   Runs are debounced per PR (`concurrency` + `cancel-in-progress`): a review
