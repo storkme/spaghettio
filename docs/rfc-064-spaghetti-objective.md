@@ -1,9 +1,9 @@
 # RFC-064: The spaghetti objective — aspect ratio + belt-transit under sim-anchored never-worse gates
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phase 1 complete
-(2026-08-01): spike measured admissibility below the 25% bar; folding ships
-as an explicit user knob (this PR). Next: Phase 2 (undergroundify default-on
-sweep).**
+Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phases 0–1 complete;
+Phase 2 Stage A (dry sweep) complete 2026-08-01 with zero new errors
+corpus-wide, Stage B (68-run sim campaign) PARKED with pick-up notes in the
+decision log. Resume at "Stage B pick-up notes"; merge PR #565 first.**
 Successor-in-reframing to
 [`rfc-063-compaction-primitives.md`](rfc-063-compaction-primitives.md), whose
 Phase A/B kills answered a different question honestly and stand. Evidence
@@ -955,3 +955,56 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   auto-selection wiring remains open to a future phase only via the
   finding-2 baseline-comparison rule and per-fixture sim-anchoring (Gate
   step 4).
+
+- **2026-08-01 — Phase 2 Stage A (dry sweep) executed: gate-relevant
+  results in hand; Stage B (sim campaign) specified and PARKED for session
+  wrap — pick-up notes below.** Dry sweep: all 35 corpus fixtures (the
+  enumeration is `survey_fixtures()` in `crates/core/tests/e2e.rs`,
+  currently on PR #565's branch), native vs `compact_layout: true` from
+  identical solves, release build, no sims. Findings: (1) 34/35 change
+  geometry; the exception (`stress_advanced_circuit_45s_from_plates`,
+  11,863 entities, the corpus's largest) is byte-identical and drops out
+  of the sim bill. (2) **Zero new Error-severity categories corpus-wide**
+  — the dry half of the never-worse gate holds everywhere. (3) Two
+  fixtures that are belt-detour-clean at native each gain one
+  `belt-detour` warning when compacted (`tier2_electronic_circuit_from_ore`
+  0→1, `tier5_processing_unit_from_ore_am3` 0→1) — compaction *creates*
+  detours; new finding, neither fixture among the known detour pathologies.
+  (4) AR_score range −0.467 to +0.286, **9/35 fixtures regress on aspect
+  ratio** (worst: `tier3_advanced_oil_processing_multi_machine`, pure-pipe)
+  — undergroundify optimizes area, not shape; relevant to Phase 3+ tension,
+  not to this phase's throughput-only gate. (5) Transit proxy (run-level
+  total belt/UG length — explicitly NOT the gated rate-weighted per-edge
+  metric; basis flagged per-row in the results) never negative: 0 to
+  +0.119. (6) ΔEntities% 0 to −30.45%, median −9.13%, nothing near the
+  +52% WARN. (7) All 5 existing blessed sim baselines are stale against
+  today's geometry (gear10 ≈5% entity drift; ec10 ≈38% and likely a
+  different configuration per RFC-050's own text) → every fixture needs a
+  fresh native run. **Sim bill: 34 fixtures × 2 runs = 68.** Artifacts:
+  scratch (ephemeral); driver + full per-fixture JSON preserved host-local
+  at `crates/core/examples/rfc064_phase2_dry_sweep.rs` /
+  `..._results.json` (gitignored); this entry is the durable record and the
+  sweep re-runs in under a minute. **Stage B pick-up notes (next session
+  starts here):** batch alpha = first 10 of the cheapest-informative-first
+  order (`tier3_heavy_oil_cracking`, `tier3_advanced_oil_processing_multi_machine`,
+  `tier3_sulfuric_acid`, the three self-loop fixtures,
+  `tier1_iron_gear_wheel`, then `tier4_advanced_circuit_from_plates`
+  (best-AR), `tier1_iron_gear_wheel_from_ore` (worst-AR-with-belts), and
+  the two belt-detour-interaction fixtures pulled forward), native+compact
+  per fixture, warmup triaged (deep/from_ore/tier4+/stress = 288000;
+  genuinely shallow may use harness default, choice documented per
+  fixture), ≤3 concurrent runs, adjudication = compacted ≥ native's own
+  measured throughput within ±2% noise (both-miss-plan equally =
+  pre-existing issue, not a Phase 2 regression). Kill criterion unchanged:
+  any regression on a today-clean fixture → stays opt-in + tracked defect,
+  no gate-weakening. A batch-alpha agent was launched and aborted
+  pre-first-sim during session wrap (nothing measured, nothing spent).
+  Blocked-adjacent: PR #565 (belt-detour check + the corpus enumeration
+  this sweep reuses) is approved-by-checks but waiting on the new
+  `second-opinion` required context, which failed once on
+  infrastructure (K=3 passes ran; the merge step returned no usable
+  content → fail-on-degraded) with a re-run in flight at wrap time —
+  merge it before Stage B, and if the reviewer flakes again, that is a
+  reliability defect in the required check to raise with its owner, not a
+  reason to hand-poll or weaken gates ad hoc (escape hatch, owner-authorized
+  only: `scripts/review-gate.sh unrequire`).
