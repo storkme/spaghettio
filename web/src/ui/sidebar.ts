@@ -1200,6 +1200,7 @@ export function renderSidebar(
     const availableInputs = [...checkedDefaults, ...customInputs];
     const palette = buildPalette();
 
+    const gen = ++solveGeneration;
     resultContainer.innerHTML = "";
     setConfigError(null);
     currentLayout = null;
@@ -1216,6 +1217,7 @@ export function renderSidebar(
         modulesValue() ?? undefined,
       );
     } catch (err) {
+      if (gen !== solveGeneration) return;
       callbacks.renderGraph(null);
       if (solverCount) solverCount.textContent = "error";
       const msg = String(err instanceof Error ? err.message : err);
@@ -1225,6 +1227,7 @@ export function renderSidebar(
       resultContainer.appendChild(errDiv);
       return;
     }
+    if (gen !== solveGeneration) return;
 
     renderResult(resultContainer, result);
     callbacks.renderGraph(result);
@@ -1239,6 +1242,7 @@ export function renderSidebar(
     for (const e of result.external_inputs) carriesItems.add(e.item);
     for (const e of result.external_outputs) carriesItems.add(e.item);
     await preloadCarriesIcons(Array.from(carriesItems));
+    if (gen !== solveGeneration) return;
 
     let layout: LayoutResult;
     try {
@@ -1255,12 +1259,14 @@ export function renderSidebar(
       const onEvent = callbacks.startStreaming();
       layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, onEvent);
     } catch (err) {
+      if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
       errDiv.className = "sb-result-error";
       errDiv.textContent = `Layout error: ${err}`;
       resultContainer.appendChild(errDiv);
       return;
     }
+    if (gen !== solveGeneration) return;
 
     currentLayout = layout;
     setRecipeFlows(result.machines);
