@@ -1,5 +1,6 @@
 import type { Engine, SolverResult, LayoutResult, ItemFlow, ValidationIssue, TraceEvent } from "../engine.js";
 import { readUrlState, writeUrlState, DEFAULT_INPUTS, DEFAULT_MACHINES } from "../state.js";
+import type { UrlTarget } from "../state.js";
 import { beltTierForRate, hexToCss } from "../renderer/colors.js";
 import { niceName, setRecipeFlows, preloadCarriesIcons } from "../renderer/entities.js";
 import "./sidebar.css";
@@ -1080,6 +1081,12 @@ export function renderSidebar(
       directInsertion: directInsertionCb.checked,
       modules: modulesValue(),
       customInputs,
+      // RFC-062 Phase 3: the sidebar is single-target-only (multi-target
+      // editing is explicitly out of scope) — never emit `tg=` from here.
+      // A multi-target URL loaded on page entry keeps rendering (see
+      // main.ts) but any subsequent edit through this form collapses back
+      // to single-target, which is the documented UI contract.
+      targets: null,
     });
 
     const gen = ++solveGeneration;
@@ -1175,6 +1182,98 @@ export function renderSidebar(
     blueprintSection.style.display = layout.warnings?.length ? "none" : "flex";
   }
 
+  /**
+   * RFC-062 Phase 3: load-time multi-target render. Only reachable from
+   * the initial URL decode (`urlState.targets`, `tg=`/`targets=`) — the
+   * editing UI is single-target-only (`writeUrlState` always writes
+   * `targets: null`), so nothing else calls this and every subsequent
+   * edit falls back to `runSolve`'s single-target path. Mirrors
+   * `runSolve`'s solve -> layout -> render pipeline but calls
+   * `engine.solveMulti` with the full target list; every other axis
+   * (inputs, machine tier, belt tier, quality, ...) comes from the same
+   * already-restored form controls `runSolve` reads, so a multi-target
+   * URL renders under whatever strategy/quality/belt-tier its other
+   * extras selected.
+   */
+  async function runSolveMulti(targets: UrlTarget[]): Promise<void> {
+    const checkedDefaults = DEFAULT_INPUTS.filter((inp) => checkboxes.get(inp)?.checked);
+    const availableInputs = [...checkedDefaults, ...customInputs];
+    const palette = buildPalette();
+
+    const gen = ++solveGeneration;
+    resultContainer.innerHTML = "";
+    setConfigError(null);
+    currentLayout = null;
+    blueprintSection.style.display = "none";
+
+    let result: SolverResult;
+    try {
+      result = await engine.solveMulti(
+        targets,
+        availableInputs,
+        palette,
+        palette.crafting ?? DEFAULT_MACHINES.crafting,
+        qualitySelect.value || undefined,
+        modulesValue() ?? undefined,
+      );
+    } catch (err) {
+      if (gen !== solveGeneration) return;
+      callbacks.renderGraph(null);
+      if (solverCount) solverCount.textContent = "error";
+      const msg = String(err instanceof Error ? err.message : err);
+      const errDiv = document.createElement("div");
+      errDiv.className = "sb-result-error";
+      errDiv.textContent = msg;
+      resultContainer.appendChild(errDiv);
+      return;
+    }
+    if (gen !== solveGeneration) return;
+
+    renderResult(resultContainer, result);
+    callbacks.renderGraph(result);
+    const totalMachines = result.machines.reduce((sum, m) => sum + Math.ceil(m.count), 0);
+    if (solverCount) solverCount.textContent = `${totalMachines} machines`;
+
+    const carriesItems = new Set<string>();
+    for (const m of result.machines) {
+      for (const i of m.inputs) carriesItems.add(i.item);
+      for (const o of m.outputs) carriesItems.add(o.item);
+    }
+    for (const e of result.external_inputs) carriesItems.add(e.item);
+    for (const e of result.external_outputs) carriesItems.add(e.item);
+    await preloadCarriesIcons(Array.from(carriesItems));
+    if (gen !== solveGeneration) return;
+
+    let layout: LayoutResult;
+    try {
+      const maxTier = beltSelect.value || undefined;
+      const strategy = strategySelect.value || undefined;
+      const rowLayout = rowLayoutSelect.value || undefined;
+      const maxInserterTier = inserterTierSelect.value || undefined;
+      const quality = qualitySelect.value || undefined;
+      const wireMode = wireModeSelect.value || undefined;
+      const stacking = stackingSelect.value || undefined;
+      const inserterCapacity = inserterCapacitySelect.value || undefined;
+      const directInsertion = directInsertionCb.checked;
+      const compactLayout = compactCb.checked;
+      const onEvent = callbacks.startStreaming();
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, compactLayout, onEvent);
+    } catch (err) {
+      if (gen !== solveGeneration) return;
+      const errDiv = document.createElement("div");
+      errDiv.className = "sb-result-error";
+      errDiv.textContent = `Layout error: ${err}`;
+      resultContainer.appendChild(errDiv);
+      return;
+    }
+    if (gen !== solveGeneration) return;
+
+    currentLayout = layout;
+    setRecipeFlows(result.machines);
+    callbacks.renderLayout(layout, result);
+    blueprintSection.style.display = layout.warnings?.length ? "none" : "flex";
+  }
+
   copyBtn.addEventListener("click", async () => {
     if (!currentLayout) return;
     const bp = await engine.exportBlueprint(currentLayout, picker.getValue());
@@ -1201,7 +1300,15 @@ export function renderSidebar(
   inserterCapacitySelect.addEventListener("change", () => { updateAdvancedChangedCount(); scheduleAutoSolve(); });
   checkboxes.forEach((cb) => cb.addEventListener("change", scheduleAutoSolve));
 
-  runSolve().catch((err) => console.error("runSolve failed:", err));
+  // RFC-062 Phase 3: a URL carrying >= 2 encoded targets renders via the
+  // multi-target path on load; everything else (including a 1-element
+  // `targets`, which is redundant with item/rate) takes the normal
+  // single-target path.
+  if (urlState.targets && urlState.targets.length > 1) {
+    runSolveMulti(urlState.targets).catch((err) => console.error("runSolveMulti failed:", err));
+  } else {
+    runSolve().catch((err) => console.error("runSolve failed:", err));
+  }
 
   return {
     getParams() {

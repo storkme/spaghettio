@@ -8,7 +8,19 @@
 //!
 //! ```text
 //! cargo run --release --example sim_export -- <item> <rate> [flags]
+//! cargo run --release --example sim_export -- --multi <item1>:<rate1> <item2>:<rate2> ... [flags]
 //!
+//!   --multi item:rate [item:rate ...]   RFC-062 Phase 3: N >= 1 simultaneous
+//!                       targets instead of one, solved as a single combined
+//!                       plan (spaghettio_core::solver::
+//!                       solve_multi_with_palette_exclusions_quality_and_modules
+//!                       — the same entry point the wasm `solve_multi`
+//!                       boundary uses). Replaces the <item> <rate>
+//!                       positionals; every flag below still applies. N=1
+//!                       is bit-identical to the plain positional form by
+//!                       construction (RFC-062 kill criterion 5) — this
+//!                       example always calls the multi entry point
+//!                       internally, single-target or not.
 //!   --tier <entity>        crafting machine (default assembling-machine-3)
 //!   --di off|candidate|forced        direct insertion (default candidate)
 //!   --claim up|down|search           DI claim order (default: engine default)
@@ -52,23 +64,65 @@ const DEFAULT_INPUTS: &[&str] = &[
 fn usage(msg: &str) -> ! {
     eprintln!("error: {msg}\n");
     eprintln!("usage: cargo run --release --example sim_export -- <item> <rate> [flags]");
+    eprintln!("       cargo run --release --example sim_export -- --multi <item>:<rate> ... [flags]");
     eprintln!("       see the module doc comment for the flag list");
     std::process::exit(2);
 }
 
+/// Parse one `item:rate` token for `--multi` mode. `rsplit_once` (not
+/// `split_once`) so an item slug can never itself contain `:` without
+/// ambiguity — moot for real Factorio item names (hyphens only) but keeps
+/// the parse unambiguous either way.
+fn parse_target_token(tok: &str) -> (String, f64) {
+    let (item, rate_str) = tok
+        .rsplit_once(':')
+        .unwrap_or_else(|| usage(&format!("--multi target must be item:rate, got {tok:?}")));
+    let rate: f64 = rate_str
+        .parse()
+        .unwrap_or_else(|_| usage(&format!("bad rate in target {tok:?}")));
+    (item.to_string(), rate)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.len() < 2 {
-        usage("need at least <item> and <rate>");
+    if args.is_empty() {
+        usage("need at least <item> and <rate>, or --multi item:rate ...");
     }
-    let item = args[0].clone();
-    let rate: f64 = args[1]
-        .parse()
-        .unwrap_or_else(|_| usage("<rate> must be a number"));
 
-    // Flags after the two positionals. Unknown flags are an ERROR rather than
-    // ignored: a silently-dropped `--belt` would export a layout the caller did
-    // not ask for and then be simmed as though it had.
+    // RFC-062 Phase 3: `--multi item:rate [item:rate ...]` replaces the two
+    // positionals with N >= 1 targets, consumed greedily until the next
+    // `--flag` token. Every flag below still applies after the target list.
+    // The single-target positional form below is unchanged and still the
+    // common case — this example always calls the SAME multi-target solve
+    // entry point internally either way (N=1 is bit-identical by
+    // construction, RFC-062 kill criterion 5), so there is exactly one
+    // solve code path to maintain, not two.
+    let mut targets: Vec<(String, f64)> = Vec::new();
+    let mut i;
+    if args[0] == "--multi" {
+        i = 1;
+        while i < args.len() && !args[i].starts_with("--") {
+            targets.push(parse_target_token(&args[i]));
+            i += 1;
+        }
+        if targets.is_empty() {
+            usage("--multi needs at least one item:rate target");
+        }
+    } else {
+        if args.len() < 2 {
+            usage("need at least <item> and <rate>");
+        }
+        let rate: f64 = args[1]
+            .parse()
+            .unwrap_or_else(|_| usage("<rate> must be a number"));
+        targets.push((args[0].clone(), rate));
+        i = 2;
+    }
+
+    // Flags after the positionals/target list. Unknown flags are an ERROR
+    // rather than ignored: a silently-dropped `--belt` would export a
+    // layout the caller did not ask for and then be simmed as though it
+    // had.
     let mut tier = "assembling-machine-3".to_string();
     let mut di = DirectInsertion::Candidate;
     let mut claim: Option<DiClaimOrder> = None;
@@ -80,7 +134,6 @@ fn main() {
     let mut label: Option<String> = None;
     let mut out = std::env::var("SIM_PROBE_OUT").unwrap_or_else(|_| "/tmp".to_string());
 
-    let mut i = 2;
     while i < args.len() {
         let need = |i: usize| -> String {
             args.get(i + 1)
@@ -133,20 +186,42 @@ fn main() {
         i += 2;
     }
 
-    let label = label.unwrap_or_else(|| format!("{item}-{rate}").replace('.', "_"));
+    // Joins every target into one label/description — `{item}-{rate}` for
+    // N=1 (byte-identical to the pre-Phase-3 default label) and
+    // `{item1}-{rate1}_{item2}-{rate2}...` for N>1.
+    let targets_desc = || -> String {
+        targets
+            .iter()
+            .map(|(item, rate)| format!("{item}@{rate}"))
+            .collect::<Vec<_>>()
+            .join(" + ")
+    };
+    let label = label.unwrap_or_else(|| {
+        targets
+            .iter()
+            .map(|(item, rate)| format!("{item}-{rate}"))
+            .collect::<Vec<_>>()
+            .join("_")
+            .replace('.', "_")
+    });
     let input_set: FxHashSet<String> = inputs.iter().cloned().collect();
 
-    let solved = spaghettio_core::solver::solve_with_palette_exclusions_and_quality(
-        &item,
-        rate,
+    // RFC-062 Phase 3: always the multi-target entry point, even for N=1
+    // — bit-identical to the old scalar
+    // `solve_with_palette_exclusions_and_quality` call by construction
+    // (kill criterion 5), so there is one solve code path here, not a
+    // single/multi fork.
+    let solved = spaghettio_core::solver::solve_multi_with_palette_exclusions_quality_and_modules(
+        &targets,
         &input_set,
         &MachinePalette::default(),
         &tier,
         &FxHashSet::default(),
         quality,
+        spaghettio_core::module_policy::ModulePolicy::default(),
     )
     .unwrap_or_else(|e| {
-        eprintln!("solve failed for {item}@{rate} on {tier}: {e}");
+        eprintln!("solve failed for {} on {tier}: {e}", targets_desc());
         std::process::exit(1);
     });
 
@@ -165,7 +240,7 @@ fn main() {
     }
 
     let layout = build_bus_layout(&solved, opts).unwrap_or_else(|e| {
-        eprintln!("layout failed for {item}@{rate} on {tier}: {e}");
+        eprintln!("layout failed for {} on {tier}: {e}", targets_desc());
         std::process::exit(1);
     });
 
@@ -207,6 +282,12 @@ fn main() {
     for f in &solved.external_inputs {
         println!(
             "    boundary input  {:<22} {:>9.4}/s  fluid={}",
+            f.item, f.rate, f.is_fluid
+        );
+    }
+    for f in &solved.external_outputs {
+        println!(
+            "    target output   {:<22} {:>9.4}/s  fluid={}",
             f.item, f.rate, f.is_fluid
         );
     }

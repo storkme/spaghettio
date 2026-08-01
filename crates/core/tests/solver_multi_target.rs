@@ -321,6 +321,51 @@ fn n1_equivalence_holds_on_multi_hop_target() {
     assert_solver_results_bit_identical(&scalar, &multi);
 }
 
+/// RFC-062 Phase 3: the new `solver.rs`-level multi-target wrapper
+/// (`solve_multi_with_palette_exclusions_quality_and_modules`, the one the
+/// wasm `solve_multi` boundary and `sim_export.rs --multi` both call) is
+/// bit-identical at N=1 to its scalar counterpart
+/// (`solve_with_palette_exclusions_quality_and_modules`), by the same
+/// one-element-slice construction as the bare `netflow.rs` entry points
+/// above — this test pins it at the richer (palette/quality/modules)
+/// layer specifically, since that's the layer Phase 3's new callers use.
+#[test]
+fn n1_equivalence_holds_at_solver_rs_multi_wrapper() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::module_policy::ModulePolicy;
+    use spaghettio_core::solver::{
+        solve_multi_with_palette_exclusions_quality_and_modules,
+        solve_with_palette_exclusions_quality_and_modules,
+    };
+
+    let inputs = set(&["iron-ore", "copper-ore"]);
+    let scalar = solve_with_palette_exclusions_quality_and_modules(
+        "electronic-circuit",
+        10.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-2",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+        ModulePolicy::default(),
+    )
+    .expect("scalar solve");
+
+    let targets = vec![("electronic-circuit".to_string(), 10.0)];
+    let multi = solve_multi_with_palette_exclusions_quality_and_modules(
+        &targets,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-2",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+        ModulePolicy::default(),
+    )
+    .expect("one-element multi-target solve");
+
+    assert_solver_results_bit_identical(&scalar, &multi);
+}
+
 /// Duplicate-item targets (RFC-062 Phase 1 decision log): requesting the
 /// same item twice sums the rates into one demand row and one
 /// `external_outputs` entry, rather than erroring or emitting two entries.

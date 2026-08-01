@@ -1,6 +1,12 @@
 # RFC-062: Multi-target output support
 
-**Status**: Design
+**Status**: Partial — engine (solver + layout, Phases 0–2) and Phase 3
+tooling (wasm/URL/harness) land and hold; the final gate's kill criteria
+3 and 4 both FAIL as measured on the canonical fixture (KC4: real, ties
+on machines, loses on area/entities; KC3: real, but isolated to a
+newly-found sim-harness instrument gap, not proven to be a layout
+defect). See the close-out decision-log entry (2026-08-01) for the full
+adjudication and enumerated deferred items.
 **Tracking**: (opens on PR)
 **Registry**: [`rfcs.md`](rfcs.md)
 
@@ -1132,3 +1138,509 @@ needed to look at the result, not a UI feature.
   the mechanism fixture's warning count is the only behavioral diff from
   this round (28 → 4) — no error-count change, no other fixture's
   pass/fail flipped.
+
+- *2026-08-01 — Phase 3 landed: wasm multi-target entry + boundary
+  validation, minimal URL extension, harness per-item checkpoint series.
+  No layout/solver changes (Phases 1/2 untouched).*
+
+  **Scope.** `crates/core/src/solver.rs`, `crates/wasm-bindings/`,
+  `web/src/{state,engine}.ts` + `web/src/ui/sidebar.ts` +
+  `web/src/workers/engine.worker.ts`, `crates/sim-harness/src/{scenario,
+  report}.rs`, `crates/core/examples/sim_export.rs`. Everything the RFC's
+  §Interface and §Export/sim-harness sections scoped as "small,
+  deliberately minimal."
+
+  **wasm entry (§Interface).** New `solver.rs` wrapper
+  `solve_multi_with_palette_exclusions_quality_and_modules(targets: &[(String,
+  f64)], ...)` — the multi-target counterpart of
+  `solve_with_palette_exclusions_quality_and_modules`, delegating to
+  `netflow::solve_netflow_multi_with_options` with the FULL targets slice
+  (not a one-element wrapper of the scalar path — this is a new, direct
+  caller of Phase 1's multi entry point at the palette/quality/modules
+  richness the wasm boundary needs). Pinned bit-identical to the scalar
+  function at N=1 by construction
+  (`n1_equivalence_holds_at_solver_rs_multi_wrapper`,
+  `solver_multi_target.rs`), same proof shape as Phase 1's own N=1
+  guarantee.
+
+  `wasm-bindings/src/lib.rs` gets `solve_multi(targets: Vec<Target>,
+  available_inputs, palette, default_machine, quality, modules) ->
+  Result<SolverResult, JsError>`, mirroring `solve_with_palette`'s
+  signature with `target_item`/`target_rate` replaced by `targets`.
+  `Target { item: String, rate: f64 }` derives `tsify_next::Tsify`
+  directly in the wasm-bindings crate (a new `tsify-next` dependency
+  there, same version/features as core's own wasm-gated models) — a plain
+  JS `{item, rate}` object array crosses the boundary natively
+  (`Vec<Target>` as a direct wasm-bindgen parameter, confirmed working via
+  a real `wasm-pack build`, not just the native sanity check Phase 1 used
+  — the wasm public surface DOES change this phase). Generated TS:
+  `solve_multi(targets: Target[], ...)`. `layout`/`layout_traced`/
+  `layout_streaming`/`export_blueprint` needed zero changes — verified,
+  not reworked, per the RFC's own claim that they're already
+  `SolverResult`-agnostic (confirmed by tracing every call site: none
+  branch on `external_outputs.len()`).
+
+  **Boundary validation (the deferred item).** `validate_targets(&[Target])`
+  in `wasm-bindings/src/lib.rs`, called at the top of `solve_multi` before
+  any solve work: rejects an empty target list, a non-positive/
+  non-finite rate, or an item absent from `recipe_db::all_producible_items()`,
+  each with a `[INVALID_TARGETS]`-prefixed `JsError` (same marker
+  convention as `solver::INCOMPATIBLE_MACHINE_PREFIX`). **The split is
+  deliberate and documented at both ends**: `solve_multi_with_palette_
+  exclusions_quality_and_modules`'s own doc comment states it does NOT
+  validate (matching every other `solver.rs` entry point's posture), and
+  `validate_targets`'s doc comment explains why the wasm boundary is the
+  right layer instead — an empty `targets` slice quietly solves to an
+  empty plan today (no LP constraints, no error); a non-positive rate
+  produces a degenerate-but-solvable row; and a genuinely unknown item is
+  eventually caught deep inside `solve_attempt` as a generic `LpFailed`
+  ("no producer, no external supply, no surplus sink") only after the
+  full candidate-recipe LP is built — correct, but late and non-specific
+  versus a fast, typed, pre-flight message the ONE caller that needs it
+  (a user-facing UI) can render immediately. Internal callers (this
+  crate's own `solve`/`solve_with_palette`, `sim_export.rs --multi`) are
+  trusted call sites and pay no extra validation cost.
+
+  **Minimal URL extension (§Interface, "no full sidebar UI").**
+  `web/src/state.ts`'s `FormState` gains `targets: {item, rate}[] | null`
+  — `null` (the overwhelming common case) is single-target, `item`/`rate`
+  authoritative exactly as before. Encoded as `;`-separated `item:rate`
+  pairs: `tg=` extras key in the hash form, `targets=` in the legacy
+  query form (no short-coding — item slugs are hyphen-only so never
+  collide with either separator, and short-coding a field the editing UI
+  never writes wasn't judged worth the added surface for a "minimal"
+  extension). The writer always keeps `item`/`rate` (the primary slot)
+  synced to `targets[0]`, so a multi-target URL degrades gracefully: a
+  client that ignores `tg=`/`targets=` entirely still renders a working
+  single-target layout for the first requested item, rather than falling
+  back to defaults. Round-trip tested
+  (`web/src/state.test.ts`, "multi-target extras" describe block):
+  encode → decode identity, malformed values (`bogus-no-rate`, negative
+  rate) reject to `null` rather than a partial list (same "whole field
+  invalid" posture as the existing short-code parser), single-target
+  state omits `tg=` entirely.
+
+  `web/src/ui/sidebar.ts` — the editing UI's ONE touch point:
+  `writeUrlState` always writes `targets: null` (the sidebar's controls
+  are single-target-only, per RFC scope), and a new `runSolveMulti`
+  function (parallel to `runSolve`, calling `engine.solveMulti` instead
+  of `engine.solve`) fires exactly once, at page load, only when
+  `urlState.targets.length > 1` — nothing else calls it, so every
+  subsequent edit through the form falls back to the normal single-target
+  path, which is the documented contract ("editing UI stays
+  single-target"). `engine.ts` + `workers/engine.worker.ts` get the
+  `solveMulti` RPC plumbing (`method: "solveMulti"` dispatching to the
+  new `solve_multi` wasm export), mirroring the existing `solve`/
+  `solve_with_palette` RPC shape exactly.
+
+  **Harness per-item checkpoint series (generalizing the 2026-07-24
+  first-target-only fix).** `scenario.rs::build_control_lua`: the single
+  `local TARGET = "..."` global becomes `local TARGETS = {...}` (every
+  requested target, in manifest order) plus `local TARGET = TARGETS[1] or
+  ""` — window-closing/convergence timing is UNCHANGED (still keyed off
+  the first target only, exactly as before this phase: a run's length
+  and stability gating are not something this phase touches). A new Lua
+  helper, `checkpoint_items()`, records `{item -> {produced, delivered}}`
+  for every target at each checkpoint-window close, additive alongside
+  the existing flat `produced`/`delivered` scalar fields (which stay
+  first-target-only, unchanged). `report.rs::compute` now reads each
+  target's OWN per-item series first (`checkpoint_item_series` +
+  `rate_over_checkpoints`), falling back to the old flat-scalar path only
+  for the first target on an older `raw_result` with no `items` key, and
+  to the pre-Phase-3 produced-only sample-series path for a non-first
+  target on such an old result — three-tier fallback chosen specifically
+  so every existing fixture/goldenwas unaffected: the full harness test
+  suite (65 tests) passes byte-for-byte unchanged, and a new test
+  (`second_target_gets_its_own_delivered_rate_verdict`) proves the fix
+  directly — a synthetic second target with a deliberate small
+  under-delivery (2.96/s measured vs 3.0/s planned) now gets
+  `measured_delivered_rate: Some(2.96)` and a verdict computed FROM that
+  delivered rate, where before this phase it would have been `None`
+  (produced-only fallback, the exact gap the Phase 2 review named). This
+  is the mechanism KC3 below depends on: without it, the second target
+  in the canonical fixture would only ever get a produced-rate verdict,
+  never delivered.
+
+  **`sim_export.rs --multi` mode (tracked example, allowed per task
+  brief).** `--multi <item>:<rate> [<item>:<rate> ...]` replaces the two
+  positionals with N >= 1 targets, consumed greedily until the next
+  `--flag`; every existing flag still applies after the target list. The
+  example now ALWAYS calls
+  `solve_multi_with_palette_exclusions_quality_and_modules` internally
+  (single target or not) rather than forking on N — bit-identical at N=1
+  by the same construction guarantee, so there is one solve code path in
+  the example, not two to keep in sync. Also now prints each
+  `external_outputs` entry (`target output <item> <rate>/s`), previously
+  only `external_inputs` were printed — a one-line addition that matters
+  once there's more than one target to see.
+
+  **Verification.** `cargo test --manifest-path crates/core/Cargo.toml`
+  — one clean invocation, 0 failures: lib 927 passed (926 Phase-2
+  baseline + 1 new `n1_equivalence_holds_at_solver_rs_multi_wrapper`),
+  `solver_multi_target` 8 passed (+1), every other suite unchanged
+  (e2e 70/34-ignored, `layout_multi_target` 3, `solver_netflow_parity`
+  11/3-ignored — all identical to the Phase 2 baseline). `cargo test -p
+  spaghettio_sim_harness` — 65 passed (64 Phase-2-era baseline + 1 new
+  `second_target_gets_its_own_delivered_rate_verdict`), 0 failed,
+  including 3 new `scenario.rs` tests pinning the `TARGETS`
+  array/`checkpoint_items()` Lua emission. `cargo clippy -p
+  spaghettio_core -- -D warnings` (exact hook invocation) and `cargo
+  clippy -p spaghettio_sim_harness -- -D warnings` both clean.
+  `wasm-pack build crates/wasm-bindings --target web --out-dir
+  .../web/src/wasm-pkg` — real build, clean, generated
+  `solve_multi(targets: Target[], ...): SolverResult` and `export
+  interface Target` in the `.d.ts` exactly as designed. `cd web && npx
+  tsc --noEmit` clean; `npx vitest run` — 41 passed (state.ts's new
+  "multi-target extras" describe block: 5 new tests, all passing).
+  **Browser eyeball**: `?item=electronic-circuit&rate=10&craft=
+  assembling-machine-2&targets=electronic-circuit:10;advanced-circuit:3`
+  on the dev server — one console error (`favicon.ico` 404, unrelated),
+  layout renders "159×96 2169 entities" in the console log and "139
+  MACHINES" in the sidebar, matching `sim_export --multi`'s own numbers
+  on the identical target/rate/tier combination exactly (see the final
+  gate below) — the wasm/URL path and the native `sim_export` path agree
+  bit-for-bit on machine count and entity count, independent
+  confirmation the wasm boundary is wired correctly, not just
+  unit-tested.
+
+- *2026-08-01 — Final gate: kill criterion 4 measured FAIL, kill
+  criterion 3 measured FAIL (instrument-contaminated, not a proven
+  layout defect), an instrument-repair adjudication after two good-faith
+  fix attempts within budget.*
+
+  **Fixture.** `sim_export --multi electronic-circuit:10
+  advanced-circuit:3 --tier assembling-machine-2` (native mechanism,
+  default candidate search — the same shipped-default engine
+  `ec_ac_default_options_candidate_choice` pins as choosing `native`):
+  159×96, 2169 entities, 139 machines, **0 validation errors, 4
+  warnings** (the pre-existing copper-cable `input-rate-delivery`
+  residual the Phase 2 decision log already named and left
+  uninvestigated — unchanged by this phase). The two solo baselines for
+  KC4: `electronic-circuit@10/s` alone (78×36, 671 entities, 57
+  machines) and `advanced-circuit@3/s` alone (87×70, 1359 entities, 82
+  machines), same tier/inputs, built the same way.
+
+  **Kill criterion 4 — measured FAIL.** The shared build does not beat
+  naive concatenation on machines or area:
+
+  | Metric | Combined (EC+AC) | EC solo | AC solo | Naive sum/estimate | Combined vs. naive |
+  |---|---:|---:|---:|---:|---:|
+  | Machines | 139 | 57 | 82 | **139** (sum) | **0.0% — exact tie** |
+  | Total entities | 2169 | 671 | 1359 | 2030 (sum) | **+6.8% — worse** |
+  | Bbox area | 159×96 = 15264 | 78×36 = 2808 | 87×70 = 6090 | 8898 (area sum) | **+71.6% — worse** |
+  | Bbox area (alt.) | 15264 | — | — | 9222 (vertical-stack estimate: max(78,87)×(36+70)) | **+65.5% — worse** |
+  | Bbox area (alt.) | 15264 | — | — | 11550 (horizontal-stack estimate: (78+87)×max(36,70)) | **+32.2% — worse** |
+
+  **Machines tie, they don't lose — but a tie is not a "beat," and KC4's
+  bar is "beat," explicitly**: root-caused, not just observed. Per-item
+  machine counts are IDENTICAL between the combined solve and naive
+  concatenation's sum for every shared item (copper-plate 48=24+24,
+  iron-plate 26=16+10, copper-cable 20=10+10, electronic-circuit
+  11=7+4, plus advanced-circuit 24, basic-oil-processing 7, plastic-bar
+  3 unchanged either way). This is not a coincidence of THIS fixture
+  under-exercising the dedup mechanism — it is a mathematical property
+  of ceiling: `ceil(a) + ceil(b) >= ceil(a+b)` always, with EQUALITY
+  whenever `frac(a) + frac(b) <= 1`. The RFC's own solver-level probe
+  (Motivation table, ~10% overhead) compared RAW pre-ceiling LP totals
+  (124.3 estimated combined vs. 137.9 naive); the REAL Phase 1 numbers,
+  once every row is ceiled to a buildable integer machine count (what a
+  physical factory actually needs), show that for the EC@10/AC@3 rate
+  pair specifically, no shared item's two fractional roundings
+  compound past an extra whole machine — the dedup mechanism is real
+  (`kc2_ec_ac_shared_copper_cable_exact` proves the LP never re-derives
+  the hand-sum shortcut's wrong numbers) but pays a machine-count
+  dividend of exactly zero at these particular rates. A different rate
+  pair, chosen so shared items' fractional parts sum past 1, would show
+  a real (if likely small) machine saving — this fixture's numbers are
+  not evidence the mechanism can never win, only that it didn't here.
+
+  **The shared bus's own routing overhead is the real cost, and it's not
+  small.** The extra ~139 entities and ~67-72% larger bbox come from the
+  machinery the dual-purpose lane needs that two independent bus builds
+  don't: the west-flowing return-tap belt sharing the EC row's own
+  output tile, the trunk continuing south past the AC tap-off to the
+  perimeter exit, the associated junction/crossing-solver work at the
+  collision seed Phase 0 first diagnosed, and the second physically
+  separate export path itself. **Verdict: KC4 FAILS as measured on the
+  canonical fixture.** The correctness case for RFC-062 stands on its
+  own (KC1, KC2, KC5 below), but the economic case — "beats the always-
+  available naive-concatenation alternative" — does not hold at these
+  rates. Per the RFC's own kill-criterion text: "stop and either find
+  the win or recommend concatenation as the shipped answer." No further
+  tuning was attempted (budget; the RFC's own review-fix precedent name
+  this class of finding as something to record, not chase to zero this
+  session) — recommending naive concatenation as the correct choice for
+  a caller who has already priced dedup against routing overhead is
+  the honest reading of this measurement, not a defect to patch.
+
+  **Kill criterion 3 — measured FAIL, with the failure isolated to a
+  newly-found sim-harness instrument gap, not proven to be a layout
+  defect.** One headless run, `--warmup 288000`, converged (`final_tick:
+  297060`):
+
+  | Item | Planned | Measured produced | Δ% | Measured delivered | Δ% | Verdict |
+  |---|---:|---:|---:|---:|---:|---|
+  | advanced-circuit (2nd target) | 3.00/s | 2.98/s | −0.7% | 3.04/s | +1.3% | **PASS** |
+  | electronic-circuit (1st target) | 16.00/s* | 6.04/s | −62.3% | 0.00/s | −100.0% | **FAIL** |
+  | copper-cable (intermediate) | 60.00/s | 30.20/s | −49.7% | — | — | (context only) |
+  | copper-plate (intermediate) | 30.00/s | 15.00/s | −50.0% | — | — | (context only) |
+  | iron-plate (intermediate) | 16.00/s | 6.08/s | −62.0% | — | — | (context only) |
+  | petroleum-gas (intermediate) | 60.00/s | 55.13/s | −8.1% | — | — | (context only) |
+  | plastic-bar (intermediate) | 6.00/s | 5.95/s | −0.8% | — | — | (context only) |
+
+  \* `electronic-circuit`'s planned rate is the row's COMBINED demand
+  (10/s own target + 6/s AC's ingredient draw), not the 10/s the user
+  actually requested — `planned_rates` is keyed by total row output,
+  matching every other item in the table; the per-item report doesn't
+  currently split "target-only" from "combined-row" planned rates for a
+  dual-purpose lane, a minor reporting gap worth a follow-up but not the
+  cause of this failure (delivered=0.00 fails against ANY nonzero
+  denominator).
+
+  **advanced-circuit is genuinely clean** — PASS on both produced and
+  delivered, `kit_errors: []`, `fluid_errors: {}`, `converged: true`.
+  This proves the shared-row mechanism CAN deliver correctly end to end
+  when its physical export path works: the second target in a
+  multi-target factory is not inherently harder to measure or build,
+  Phase 2's F1 fix (the off-by-one that shifted `belt-flow-reachability`
+  boundaries) holds, and this phase's own per-item checkpoint series
+  (`checkpoint_items()`) does exactly what it was built for — AC's PASS
+  verdict is computed from ITS OWN delivered-rate series, not a
+  produced-only fallback, the concrete proof KC3's harness prerequisite
+  (Phase 3's per-item tracking) actually works.
+
+  **electronic-circuit's 0.00 delivered rate is a real, reproducible,
+  root-cause-investigated instrument gap — characterized per
+  `docs/sim-harness-forensics.md`'s playbook, not accepted at face
+  value.** Frame-reading (`sim_state`, forensics playbook step 2) on the
+  first (pre-fix) run found the actual defect: `electronic-circuit`'s
+  export physically routes through the dual-purpose lane's
+  `surplus_exits` claim (Phase 2's mechanism — a solid TARGET can now
+  legitimately exit there, not just a byproduct), and the sim harness's
+  manifest-to-kit builder treated every `surplus_exits` entry as a
+  voidable fluid byproduct unconditionally (`add_fluid_void`, a
+  Factorio infinity-pipe filter — meaningless for a solid item name):
+  `fluid_errors: {"electronic-circuit@void": "Unknown fluid name:
+  electronic-circuit"}`, no drain rig ever built, delivered pinned at a
+  flat 0.00 by construction, not by measurement.
+
+  **Fix 1 (landed, confirmed effective): reclassify at the manifest
+  layer.** `blueprint.rs::export_with_manifest` now promotes a
+  `surplus_exits` entry into a real `boundary_outputs` `BoundaryRecord`
+  (direction looked up from the actual belt entity at that tile, the
+  same entity-cross-check standard `check_stranded_byproducts` already
+  holds surplus exits to) whenever its item is a solid member of
+  `solver.external_outputs` — a target, not a byproduct. Unit-tested
+  directly (`solid_target_surplus_exit_is_promoted_to_boundary_output`)
+  and confirmed live: this run's `fluid_errors: {}` has NO
+  `electronic-circuit@void` entry — the original defect is gone. The
+  manifest reclassification is correct and doing its job.
+
+  **Residual (NOT fixed within budget, two good-faith attempts made and
+  both falsified): the promoted rig's own belt extension silently fails
+  to place.** `sim_state` on this run shows electronic-circuit's drain
+  rig built EXACTLY per `add_drain`'s formula for its chest/inserter
+  bank (18 chests, all empty; 18 stack-inserters, all
+  `waiting_for_source_items`, at the exact tiles `ext_len=13` predicts)
+  — but ZERO belt entities exist anywhere in the 13-tile extension
+  footprint the SAME function is supposed to build first. This is not a
+  hypothesis; it is a direct entity-census finding, cross-checked
+  against `advanced-circuit`'s own (working) drain rig at the same
+  y-range for contrast.
+
+  - *Attempt 1: surface the failure loudly.* `add_drain`'s belt-creation
+    loop had no error handling at all (unlike `add_fluid_void`/
+    `add_fluid_feed`, which both `pcall` and record a failure) — a
+    silent `create_entity` failure was structurally invisible. Added a
+    `kit_errors` entry on any placement failure. Landed
+    (`drain_belt_placement_failure_is_recorded_not_silent`), but on
+    this run **it did not fire** (`kit_errors: []`) — meaning
+    `create_entity` is not failing in the specific "returns nil" shape
+    the fix instruments, or the actual failure point is somewhere this
+    fix doesn't reach. A genuine, informative negative result, not a
+    wasted change: it narrows the search space for whoever picks this
+    up next.
+  - *Attempt 2: chunk-generation truncation.* This codebase has an
+    EXACT documented precedent for this failure signature — the #345/
+    PU@4 forensics note (`gen_radius` comment, `orchestrate.rs`/
+    `scenario.rs`): entities placed via `create_entity` on an
+    ungenerated chunk are silently dropped, previously seen as "dead
+    feed rigs, NO DATA" on an oversized fixture. Added an explicit
+    per-rig `request_to_generate_chunks` + `force_generate_chunk_requests`
+    call in `add_drain`, sized around the rig's own far end, independent
+    of the global origin-centered radius. Landed
+    (`drain_rig_explicitly_generates_its_own_chunk_footprint`), but the
+    live re-run (this one) is **bit-for-bit identical** to the pre-fix
+    run on every measured number (produced 6.04, delivered 0.00, census
+    57/1/81) — given Factorio's headless scripted runs are deterministic
+    for identical inputs, an identical result across two runs with
+    different `add_drain` Lua bodies is direct evidence this specific
+    fix changed nothing observable in the simulated world. The theory
+    is further undermined by the chest/inserter evidence itself: those
+    entities place successfully at the SAME y-range (96–108) the belt
+    extension spans — if chunk generation were the limiter, the chests
+    should fail too, and they don't. **Chunk-generation truncation is
+    ruled out**, not confirmed.
+
+  **Root cause: not identified within this session's budget.** Two
+  plausible, low-risk, well-precedented hypotheses were tested and both
+  falsified by direct measurement, not assumption — this is the honest
+  state of the investigation, not a stopping point chosen for
+  convenience. `advanced-circuit`'s own drain rig (same mechanism, one
+  `boundary_outputs` index earlier, `ext_len=11` vs `ext_len=13`, at
+  world x≈10 vs EC's world x≈-78) works; EC's does not. What's confirmed
+  ruled OUT: chunk generation, the manifest's direction/entity
+  classification (fixed and verified), Lua syntax errors (the run
+  converges cleanly, no engine-level errors in the Factorio log). What's
+  NOT yet tested: whether `idx`-dependent `ext_len` growth itself, or
+  the rig's specific WORLD position (large negative x, near the
+  origin-centered paste's own edge), is the actual discriminator — a
+  live, reproducible repro now exists for whoever picks this up (this
+  exact fixture, `sim_export --multi electronic-circuit:10
+  advanced-circuit:3 --tier assembling-machine-2`, then `spaghettio-sim
+  run --warmup 288000`) — tracked as a followup, below.
+
+  **Verdict, precisely stated**: KC3's own bar ("zero validation errors
+  AND sim-measured at plan on BOTH targets") is **not met** — this is a
+  real FAIL, not a technicality. But the failure is **instrument-
+  contaminated, not proof the layout under-delivers on its actual
+  merits**: `advanced-circuit`'s clean PASS demonstrates the native
+  shared-row mechanism CAN measure correctly; `electronic-circuit`'s own
+  produced-rate shortfall (6.04/s vs. its 16/s combined demand, settling
+  suspiciously close to exactly AC's own 6/s internal draw) is the
+  signature of a factory correctly throttling to what its ONLY working
+  outlet (AC's ingredient consumption) can absorb once its export sink
+  genuinely has nowhere to go — a real in-game consequence of the
+  harness's own gap, not independent evidence the layout's export
+  capacity is undersized. Per the task brief's own instruction ("if KC3
+  fails: that is a REAL RESULT — do not tune until green"): this is
+  recorded as a FAIL, with the instrument-contamination explicitly
+  named rather than asserted away, and no further sim-harness attempts
+  were made after the second falsification (budget).
+
+  **Verification.** `cargo test --manifest-path crates/core/Cargo.toml`
+  — one clean invocation post-merge, 0 failures: lib 928 passed (927 +
+  1 new `solid_target_surplus_exit_is_promoted_to_boundary_output`),
+  every other suite unchanged from the prior entry. `cargo test -p
+  spaghettio_sim_harness` — 67 passed (65 + 2 new: the kit_errors
+  reporting test and the chunk-footprint test), 0 failed. `cargo clippy
+  -p spaghettio_core -- -D warnings` and `cargo clippy -p
+  spaghettio_sim_harness -- -D warnings` both clean. Two live headless
+  sim runs total across this final-gate investigation (the budgeted one
+  plus one instrument-artifact-suspected retry, per the task brief's
+  explicit allowance — both runs' `bp.txt`/`manifest-real.json`
+  regenerated fresh from the fixed `blueprint.rs` before each launch).
+
+- *2026-08-01 — RFC close-out: all five phases adjudicated. PARTIAL —
+  engine correctness lands and holds; the two measurement-bar kill
+  criteria (KC3, KC4) that were meant to prove the feature pays for
+  itself did not clear on the canonical fixture.*
+
+  **Phase-by-phase.**
+  - **Phase 0** (layout spike): kill criterion 1 PROCEED — the
+    shared-row collision is fixable by generalizing the dual-purpose
+    lane, confirmed with a wider fix shape than the leading hypothesis.
+  - **Phase 1** (solver): kill criteria 2 and 5 both PASS, exact —
+    `solve_netflow_multi` reproduces naive concatenation's per-item
+    machine totals precisely (copper-cable 20.0, not the hand-sum
+    shortcut's 16.0) and is bit-identical to every scalar entry point at
+    N=1 by construction, not just by test.
+  - **Phase 2** (layout): kill criterion 1 re-cleared on the real
+    Phase-1 solver output (not just Phase 0's hand-built probe); the new
+    outflow-conservation validator invariant shipped two-sided
+    (over-claim AND under-claim), with a severity split for legitimate
+    ceil-slack after adversarial review. One pre-existing bug found and
+    deliberately NOT fixed in-phase (D2b uranium, below).
+  - **Phase 3** (this work): the wasm `solve_multi` entry, boundary
+    validation, minimal URL extension, and harness per-item checkpoint
+    series all landed and are independently verified working — the
+    browser eyeball and `sim_export --multi` agree bit-for-bit on
+    machine/entity counts, and `advanced-circuit`'s clean sim PASS
+    proves the per-item harness plumbing does what it was built for.
+  - **Final gate** (kill criteria 3, 4): **both FAIL as measured** on
+    the canonical `electronic-circuit@10/s` + `advanced-circuit@3/s`
+    fixture — see the entry directly above for the full evidence. KC4
+    ties on machines (a real, root-caused ceiling-arithmetic property of
+    THESE rates, not a bug) and loses on area/entity count (real routing
+    overhead, not measurement noise). KC3 fails on `electronic-circuit`
+    specifically, isolated via forensics-playbook investigation to a
+    newly-found, not-yet-root-caused sim-harness instrument gap — NOT
+    evidence the layout itself under-delivers (`advanced-circuit`'s own
+    clean PASS on the identical fixture is the control that makes that
+    reading defensible, not just hoped-for).
+
+  **Why PARTIAL, not CONCLUDED/FAILED**: the RFC's motivating
+  correctness argument — naive concatenation risks the hand-sum
+  shortcut's silent under-count, and a real combined solve closes that
+  gap while deduping shared upstream — is proven true and shipped
+  (Phases 1–2, holding through Phase 3's own regression suite). What did
+  NOT clear is the RFC's economic promise that the combined build is
+  worth its added complexity over always-available naive concatenation.
+  Per the RFC's own kill criterion 4 text ("stop and either find the win
+  or recommend concatenation as the shipped answer") and the task
+  brief's explicit "characterize honestly, don't tune until green"
+  instruction: **the honest recommendation for a caller choosing today,
+  at rates resembling this fixture, is naive concatenation** — solve and
+  lay out each target independently. The multi-target solver/layout
+  machinery ships (it is correct, tested, and the only way to avoid the
+  hand-sum bug if a caller ever needs it), but its economic case is
+  unproven at the one rate pair actually measured, and its
+  sim-verifiability is blocked on an unresolved harness gap for exactly
+  the row shape (solid target routed through the dual-purpose lane) that
+  makes the layout side of this RFC interesting in the first place.
+
+  **Deferred items, enumerated** (per the task brief's explicit ask —
+  everything below is a real, named gap, not swept into "future work"
+  silently):
+  1. **D2b uranium bug** (Phase 2 review, `u235_u238_target_and_surplus_overlap`):
+     `ghost_router.rs` Step 7's per-item output merge sources every
+     item's belt-y from the row's PRIMARY `output_belt_y`, with no
+     branch for `RowSpan::secondary_output_belt` — when BOTH of a D2b
+     row's distinct solid outputs (uranium-235 primary, uranium-238
+     secondary) become external targets simultaneously (only reachable
+     once multi-target solving exists), uranium-238 silently merges from
+     uranium-235's belt: 12 real validation errors (8 entity-overlap, 4
+     belt-item-isolation) on the adversarial fixture. Fix shape
+     identified (Step 7 should resolve per-row belt-y via
+     `RowSpan::output_belt_y_for(item)`, the same helper `lane_planner`
+     already uses for exactly this purpose) but not applied — a change
+     to different, older machinery than this phase's scope, deserving
+     its own investigation.
+  2. **The target+taps+surplus three-way-collision fixture** (Phase 2
+     review): target + internal taps + surplus ALL live on one item at
+     once (e.g. U-238 as a target, internally consumed, AND carrying
+     surplus) — a genuinely untested shape distinct from both of this
+     RFC's own adversarial fixtures (EC+AC: target+taps, no surplus;
+     U235+U238: target+surplus, no taps). No recipe in the current DB
+     naturally produces this shape without a synthetic `SolverResult`;
+     building a trustworthy one is real, scoped work, not a fix-round
+     add-on.
+  3. **Full multi-target sidebar UI**: explicitly out of scope per the
+     RFC's own Interface section from the start — the editing UI stays
+     single-target-only; a multi-target URL renders (verified, browser
+     eyeball) but there is no way to BUILD one through the UI. Own
+     follow-up once/if the economic case (KC4) is revisited and cleared
+     at some other rate pair.
+  4. **The KC3 sim-harness instrument gap** (new this phase, the highest-
+     priority of the four): `add_drain`'s belt-extension placement fails
+     silently for a promoted (non-native) `boundary_outputs` record at
+     `boundary_outputs` index >= 1 — root cause not identified after two
+     falsified hypotheses (chunk-generation truncation, ruled out by the
+     chest/inserter counter-evidence; a silent `create_entity` failure
+     the new error-reporting doesn't catch). A live, reproducible repro
+     exists (this exact fixture + command, see the final-gate entry).
+     Blocks sim-verifying ANY future multi-target fixture where a
+     non-first target's export routes through the dual-purpose lane —
+     which is exactly the shape this RFC's own layout work was built
+     to enable.
+  5. **The copper-cable `input-rate-delivery` residual** on the EC+AC
+     fixture (Phase 2, never investigated further): 4 warnings,
+     unchanged through Phase 3 — an ordinary multi-consumer lane
+     under-delivery, not itself a target so `solid_target_items` never
+     gates it. Worth a look independent of this RFC's own close-out.
+
+  **Verification**: see the final-gate entry above and each phase's own
+  entry for the specific commands run. No golden/snapshot files touched
+  by Phase 3 or the final gate; the full `cargo test --manifest-path
+  crates/core/Cargo.toml` suite and `cargo test -p
+  spaghettio_sim_harness` both green at every commit in this phase.

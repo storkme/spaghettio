@@ -39,6 +39,7 @@ function makeState(overrides: Partial<FormState>): FormState {
     directInsertion: false,
     modules: null,
     customInputs: [],
+    targets: null,
     ...overrides,
   };
 }
@@ -62,6 +63,7 @@ describe("readUrlState — defaults", () => {
       directInsertion: false,
       modules: null,
       customInputs: [],
+      targets: null,
     });
   });
 });
@@ -137,6 +139,7 @@ describe("readUrlState — hash form", () => {
       directInsertion: false,
       modules: null,
       customInputs: [],
+      targets: null,
     });
   });
 });
@@ -338,6 +341,64 @@ describe("modules param (RFC-044 Phase 3)", () => {
   it("reads the query form", () => {
     setUrl("?item=iron-gear-wheel&modules=s2");
     expect(readUrlState().modules).toBe("s2");
+  });
+});
+
+describe("multi-target extras (RFC-062 Phase 3)", () => {
+  it("round-trips N targets through the hash form's tg= extras", () => {
+    const state = makeState({
+      item: "electronic-circuit",
+      rate: 10,
+      machines: { crafting: "assembling-machine-2" },
+      targets: [
+        { item: "electronic-circuit", rate: 10 },
+        { item: "advanced-circuit", rate: 3 },
+      ],
+    });
+    writeUrlState(state);
+    expect(window.location.hash).toContain("tg=");
+    const back = readUrlState();
+    expect(back.targets).toEqual(state.targets);
+    // The primary item/rate slot mirrors targets[0] — a client that
+    // ignores `tg=` entirely still renders a working single-target URL.
+    expect(back.item).toBe("electronic-circuit");
+    expect(back.rate).toBe(10);
+  });
+
+  it("decodes the hash form's tg= extras directly", () => {
+    setUrl("#/l/_/10?tg=electronic-circuit:10;advanced-circuit:3");
+    const s = readUrlState();
+    expect(s.targets).toEqual([
+      { item: "electronic-circuit", rate: 10 },
+      { item: "advanced-circuit", rate: 3 },
+    ]);
+  });
+
+  it("decodes the legacy query form's targets= extras", () => {
+    setUrl("?item=electronic-circuit&rate=10&targets=electronic-circuit:10;advanced-circuit:3");
+    const s = readUrlState();
+    expect(s.targets).toEqual([
+      { item: "electronic-circuit", rate: 10 },
+      { item: "advanced-circuit", rate: 3 },
+    ]);
+  });
+
+  it("a single-target state omits tg= and decodes targets as null", () => {
+    const state = makeState({ item: "iron-gear-wheel", rate: 7 });
+    writeUrlState(state);
+    expect(window.location.hash).not.toContain("tg=");
+    expect(readUrlState().targets).toBeNull();
+  });
+
+  it("rejects a malformed tg= value (falls back to null, not a partial list)", () => {
+    setUrl("#/l/igw/7?tg=not-a-valid-pair");
+    expect(readUrlState().targets).toBeNull();
+
+    setUrl("#/l/igw/7?tg=electronic-circuit:10;bogus-no-rate");
+    expect(readUrlState().targets).toBeNull();
+
+    setUrl("#/l/igw/7?tg=electronic-circuit:-5");
+    expect(readUrlState().targets).toBeNull();
   });
 });
 

@@ -1,6 +1,7 @@
 import wasmInit, {
   init,
   solve_with_palette,
+  solve_multi,
   solve_fixture,
   all_producible_items,
   all_producer_machines,
@@ -19,6 +20,7 @@ import wasmInit, {
 import type {
   SolverResult,
   LayoutResult,
+  Target,
 } from "../wasm-pkg/spaghettio_wasm.js";
 
 type Request =
@@ -32,6 +34,16 @@ type Request =
       method: "solve";
       targetItem: string;
       targetRate: number;
+      availableInputs: string[];
+      palette: Record<string, string>;
+      defaultMachine: string;
+      quality: string | null;
+      modules: string | null;
+    }
+  | {
+      id: number;
+      method: "solveMulti";
+      targets: Target[];
       availableInputs: string[];
       palette: Record<string, string>;
       defaultMachine: string;
@@ -116,6 +128,16 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         result = solve_with_palette(
           req.targetItem,
           req.targetRate,
+          req.availableInputs,
+          { by_category: req.palette },
+          req.defaultMachine,
+          req.quality ?? undefined,
+          req.modules ?? undefined,
+        );
+        break;
+      case "solveMulti":
+        result = solve_multi(
+          req.targets,
           req.availableInputs,
           { by_category: req.palette },
           req.defaultMachine,

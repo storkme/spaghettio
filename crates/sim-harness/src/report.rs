@@ -279,6 +279,50 @@ fn parse_timeseries(result: &serde_json::Value) -> Vec<TimeseriesPoint> {
         .collect()
 }
 
+/// RFC-062 Phase 3: `(tick, produced, delivered)` triples for ONE target
+/// item, read from each checkpoint's per-item `items[item]` sub-object
+/// (`scenario.rs`'s `checkpoint_items()`). Generalizes the old
+/// single-scalar `checkpoint.produced`/`.delivered`, which only ever
+/// tracked the FIRST target — see the comment this replaces below.
+///
+/// Tolerant of older `raw_result`s that predate this field: a checkpoint
+/// with no `items` key, or no entry for this specific item, is simply
+/// skipped rather than erroring, so an old report (or a checkpoint from
+/// before the run's first window closed) contributes fewer points rather
+/// than none at all. Callers needing the OLD behavior on old data use the
+/// flat `checkpoint_series` fallback below (`compute`'s first-target
+/// branch), which this function does not replace.
+fn checkpoint_item_series(checkpoints: &[serde_json::Value], item: &str) -> Vec<(f64, f64, f64)> {
+    checkpoints
+        .iter()
+        .filter_map(|c| {
+            let tick = c.get("tick")?.as_f64()?;
+            let entry = c.get("items")?.get(item)?;
+            let produced = entry.get("produced")?.as_f64()?;
+            let delivered = entry.get("delivered")?.as_f64()?;
+            Some((tick, produced, delivered))
+        })
+        .collect()
+}
+
+/// Rate over the trailing two points of a per-item checkpoint series —
+/// same delta-over-window math as the primary-target computation this
+/// generalizes (`(t1,p1,d1)` vs `(t0,p0,d0)`, dt in seconds). `(None,
+/// None)` when fewer than 2 points exist for this item.
+fn rate_over_checkpoints(series: &[(f64, f64, f64)]) -> (Option<f64>, Option<f64>) {
+    if series.len() < 2 {
+        return (None, None);
+    }
+    let (t0, p0, d0) = series[series.len() - 2];
+    let (t1, p1, d1) = series[series.len() - 1];
+    let dt = (t1 - t0) / 60.0;
+    if dt > 0.0 {
+        (Some((p1 - p0) / dt), Some((d1 - d0) / dt))
+    } else {
+        (None, None)
+    }
+}
+
 fn delta_pct(measured: Option<f64>, planned: f64) -> Option<f64> {
     if planned <= 0.0 {
         return None;
@@ -375,38 +419,55 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
     let mut items = Vec::new();
     for (item, planned_rate) in &manifest.planned_rates {
         let is_target = target_items.contains(&item.as_str());
-        // The scenario's checkpoint tracks ONE scalar — the FIRST
-        // target's counters. Applying it to every target collapsed a
-        // 5/9/11 advanced-oil triple to a uniform first-target rate
-        // (Phase C identity probes, 2026-07-24); non-first targets
-        // measure from their own sample series over the same window.
         let is_first_target = target_items.first() == Some(&item.as_str());
-        let measured_produced_rate = if is_first_target && target_produced_rate.is_some() {
-            target_produced_rate
-        } else {
-            rate_over_window(&sample_series(result, item), window_start)
-        };
         let is_fluid_target = manifest
             .targets
             .iter()
             .any(|t| t.item == *item && t.is_fluid);
-        let measured_delivered_rate = if is_first_target && !is_fluid_target {
-            target_delivered_rate
+
+        // RFC-062 Phase 3: every target reads its OWN per-item checkpoint
+        // series first (`scenario.rs`'s `checkpoint_items()`, additive
+        // next to the old flat `produced`/`delivered` fields) — this is
+        // what gives a second/third target an honest DELIVERED-rate
+        // verdict instead of the produced-only fallback every non-first
+        // target used to be stuck with. `own_produced.is_some()` iff both
+        // per-item points existed (see `checkpoint_item_series`), so
+        // `own_delivered` is never a false `None` when `own_produced`
+        // isn't.
+        let (measured_produced_rate, measured_delivered_rate) = if is_target {
+            let own_series = checkpoint_item_series(&checkpoints, item);
+            let (own_produced, own_delivered) = rate_over_checkpoints(&own_series);
+            if own_produced.is_some() {
+                (own_produced, if is_fluid_target { None } else { own_delivered })
+            } else if is_first_target {
+                // Older raw_result (pre-RFC-062: no `items` key on any
+                // checkpoint) — fall back to the flat scalar fields,
+                // which only ever tracked the first target. Keeps old
+                // fixtures/goldens byte-identical.
+                (
+                    target_produced_rate,
+                    if is_fluid_target { None } else { target_delivered_rate },
+                )
+            } else {
+                // Non-first target on an old raw_result with no per-item
+                // series at all — the pre-Phase-3 fallback: produced only
+                // (from the shared sample series), no delivered
+                // attribution. Matches what every non-first target got
+                // before this phase.
+                (rate_over_window(&sample_series(result, item), window_start), None)
+            }
         } else {
-            None
+            (rate_over_window(&sample_series(result, item), window_start), None)
         };
+
         let verdict = if is_target {
             if is_fluid_target {
                 // Fluid targets have no drain rig (voids are
                 // uncounted): verdict on PRODUCED rate, honestly
                 // labeled by the missing delivered column.
                 Some(verdict_for_ratio(measured_produced_rate.map(|m| m / planned_rate)))
-            } else if is_first_target {
-                Some(verdict_for_ratio(measured_delivered_rate.map(|m| m / planned_rate)))
             } else {
-                // Non-first SOLID targets have no per-item drain
-                // attribution either; verdict on produced.
-                Some(verdict_for_ratio(measured_produced_rate.map(|m| m / planned_rate)))
+                Some(verdict_for_ratio(measured_delivered_rate.map(|m| m / planned_rate)))
             }
         } else {
             None
@@ -707,6 +768,72 @@ mod tests {
         // (1276-980)/30 = 9.866...
         assert!((target.measured_delivered_rate.unwrap() - 9.8666666667).abs() < 1e-6);
         assert_eq!(target.verdict, Some(Verdict::Pass));
+        assert_eq!(report.overall_verdict, Verdict::Pass);
+    }
+
+    /// RFC-062 Phase 3: a SECOND (non-first) target must get a real
+    /// delivered-rate verdict from its own `items[item]` checkpoint
+    /// series, not the produced-only fallback every non-first target was
+    /// stuck with before this phase (the gap `docs/rfc-062-multi-target-
+    /// outputs.md`'s Phase 2 decision log named — "non-first SOLID
+    /// targets have no per-item drain attribution"). Numbers mirror the
+    /// canonical EC@10/s + AC@3/s fixture's shape: EC is first
+    /// (10.0 produced / 9.8667 delivered, matching
+    /// `compute_reads_checkpoints_for_target_rate` above exactly), AC is
+    /// second (3.0 produced / 2.96 delivered — a deliberate, small
+    /// under-delivery so the verdict math is exercised, not just the
+    /// "measured at all" question).
+    #[test]
+    fn second_target_gets_its_own_delivered_rate_verdict() {
+        use crate::manifest::ItemRate;
+        let mut m = fixture_manifest();
+        m.targets = vec![
+            ItemRate { item: "electronic-circuit".to_string(), rate: 10.0, is_fluid: false },
+            ItemRate { item: "advanced-circuit".to_string(), rate: 3.0, is_fluid: false },
+        ];
+        m.planned_rates = BTreeMap::from([
+            ("electronic-circuit".to_string(), 10.0),
+            ("advanced-circuit".to_string(), 3.0),
+        ]);
+        let result = serde_json::json!({
+            "converged": true, "final_tick": 12600,
+            "checkpoints": [
+                {"tick": 9000, "produced": 1000.0, "delivered": 980.0,
+                 "items": {
+                    "electronic-circuit": {"produced": 1000.0, "delivered": 980.0},
+                    "advanced-circuit": {"produced": 300.0, "delivered": 294.0}
+                 }},
+                {"tick": 10800, "produced": 1300.0, "delivered": 1276.0,
+                 "items": {
+                    "electronic-circuit": {"produced": 1300.0, "delivered": 1276.0},
+                    "advanced-circuit": {"produced": 390.0, "delivered": 382.8}
+                 }}
+            ],
+            "samples": []
+        });
+        let report = compute(&m, &result);
+
+        let ec = report.items.iter().find(|i| i.item == "electronic-circuit").unwrap();
+        assert!((ec.measured_produced_rate.unwrap() - 10.0).abs() < 1e-9);
+        assert!((ec.measured_delivered_rate.unwrap() - 9.866_666_666_7).abs() < 1e-6);
+        assert_eq!(ec.verdict, Some(Verdict::Pass));
+
+        let ac = report.items.iter().find(|i| i.item == "advanced-circuit").unwrap();
+        assert!(ac.is_target);
+        assert!((ac.measured_produced_rate.unwrap() - 3.0).abs() < 1e-9);
+        // (382.8-294)/30 = 2.96 -- was `None` before this phase for any
+        // non-first target; this is the fix.
+        assert!(
+            ac.measured_delivered_rate.is_some(),
+            "second target must get a delivered-rate measurement, not None"
+        );
+        assert!((ac.measured_delivered_rate.unwrap() - 2.96).abs() < 1e-6);
+        // 2.96/3.0 = 0.98667 -> at/above the 0.98 PASS boundary, and the
+        // verdict must be computed on the DELIVERED rate, not produced
+        // (produced alone would also pass here by coincidence, so the
+        // real proof is `measured_delivered_rate.is_some()` above).
+        assert_eq!(ac.verdict, Some(Verdict::Pass));
+
         assert_eq!(report.overall_verdict, Verdict::Pass);
     }
 

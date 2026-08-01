@@ -5,8 +5,9 @@
 //!
 //! Build: `wasm-pack build crates/wasm-bindings --target web --out-dir ../../web/src/wasm-pkg`
 //!
-//! Exposed functions: `init`, `solve`, `layout`, `export_blueprint`, `validate`,
-//! `get_all_items`, `get_recipes_for_item`, `parse_blueprint`.
+//! Exposed functions: `init`, `solve`, `solve_multi`, `layout`,
+//! `export_blueprint`, `validate`, `get_all_items`, `get_recipes_for_item`,
+//! `parse_blueprint`.
 
 use spaghettio_core::bus::inserter_ladder::InserterTier;
 use spaghettio_core::models::{LayoutResult, PlacedEntity, SolverResult};
@@ -288,6 +289,102 @@ pub fn solve_with_palette(
     solver::solve_with_palette_exclusions_quality_and_modules(
         target_item,
         target_rate,
+        &inputs,
+        &palette,
+        default_machine,
+        &FxHashSet::default(),
+        quality_tier(quality),
+        module_policy(modules),
+    )
+    .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// One `(item, rate)` target for [`solve_multi`] — the JS-facing shape of
+/// RFC-062's `targets: &[(String, f64)]` core entry points
+/// (`docs/rfc-062-multi-target-outputs.md` §Interface). A plain `{item,
+/// rate}` object array on the JS side (tsify `into_wasm_abi`/
+/// `from_wasm_abi`, same convention as every other model type in this
+/// crate — see `models.rs`), so a caller builds
+/// `[{item: "electronic-circuit", rate: 10}, {item: "advanced-circuit",
+/// rate: 3}]` directly rather than JSON-encoding or threading parallel
+/// arrays.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, tsify_next::Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub struct Target {
+    pub item: String,
+    pub rate: f64,
+}
+
+/// Marker prefix for boundary-validation failures in [`solve_multi`] —
+/// same convention as `solver::INCOMPATIBLE_MACHINE_PREFIX`, so a future
+/// web caller can route these to a dedicated banner the same way the
+/// sidebar already does for machine-incompatibility errors.
+pub const INVALID_TARGETS_PREFIX: &str = "[INVALID_TARGETS] ";
+
+/// Pre-flight validation for [`solve_multi`]'s `targets` argument: empty
+/// list, non-positive/non-finite rates, and items the recipe DB has never
+/// heard of (RFC-062 Phase 3, the Phase-1 reviewer's deferred item).
+///
+/// **Why here and not in `solver.rs`/`netflow.rs`**: the internal solver
+/// deliberately does NOT pre-validate (see the doc comment on
+/// `solver::solve_multi_with_palette_exclusions_quality_and_modules`) — an
+/// empty `targets` slice quietly solves to an empty plan (no constraints,
+/// no error), a non-positive rate produces a degenerate-but-LP-feasible
+/// row, and a genuinely unknown item is eventually caught deep inside
+/// `solve_attempt` as a generic `LpFailed { detail: "target has no
+/// producer, no external supply, and no surplus sink" }` — correct, but
+/// late (after building the full candidate-recipe LP) and non-specific
+/// (indistinguishable from "known item, no producer in this scope" without
+/// re-deriving which case it was). The wasm boundary is the only caller
+/// that needs a fast, typed, user-facing message before spending that
+/// compute — internal callers (an already-validated URL, this crate's own
+/// `solve`/`solve_with_palette` after their own single-target checks) are
+/// trusted call sites and pay no extra validation cost.
+fn validate_targets(targets: &[Target]) -> Result<(), JsError> {
+    if targets.is_empty() {
+        return Err(JsError::new(&format!(
+            "{INVALID_TARGETS_PREFIX}no targets provided — at least one {{item, rate}} pair is required"
+        )));
+    }
+    let known: FxHashSet<String> = recipe_db::all_producible_items().into_iter().collect();
+    for t in targets {
+        if !(t.rate.is_finite() && t.rate > 0.0) {
+            return Err(JsError::new(&format!(
+                "{INVALID_TARGETS_PREFIX}target rate must be positive: {}@{}",
+                t.item, t.rate
+            )));
+        }
+        if !known.contains(&t.item) {
+            return Err(JsError::new(&format!(
+                "{INVALID_TARGETS_PREFIX}unknown item requested as target: {}",
+                t.item
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Multi-target solve (RFC-062 Phase 3): the `solve_with_palette`
+/// counterpart that accepts N >= 1 simultaneous `{item, rate}` targets
+/// instead of one scalar pair. Boundary-validates `targets` (see
+/// [`validate_targets`]) before calling into the core solver — the one
+/// caller-facing difference from every other `solve*` export in this
+/// file, all of which trust their scalar `target_item`/`target_rate`
+/// as-is.
+#[wasm_bindgen]
+pub fn solve_multi(
+    targets: Vec<Target>,
+    available_inputs: Vec<String>,
+    palette: MachinePalette,
+    default_machine: &str,
+    quality: Option<String>,
+    modules: Option<String>,
+) -> Result<SolverResult, JsError> {
+    validate_targets(&targets)?;
+    let targets: Vec<(String, f64)> = targets.into_iter().map(|t| (t.item, t.rate)).collect();
+    let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
+    solver::solve_multi_with_palette_exclusions_quality_and_modules(
+        &targets,
         &inputs,
         &palette,
         default_machine,
