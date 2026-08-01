@@ -1,0 +1,76 @@
+# Independent PR reviewer: the storkme/second-opinion action driving DeepSeek
+# V4 Flash via OpenRouter. Takes over from claude-code-review.yml as the CI
+# reviewer (2026-08-01) — CI reviews were consuming the Claude subscription's
+# usage windows; this runs on metered OpenRouter credit (~cents/PR) instead.
+# The claude workflow is parked (not deleted) in the phase-2 PR of the swap;
+# until that merges both reviewers run. See docs/review-bot.md.
+#
+# Needs one repo secret: OPENROUTER_API_KEY.
+name: Second Opinion
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    # KNOWN GAP (from this workflow's own first review, #561): no `edited`
+    # type, so a base-branch retarget — which rewrites the effective diff
+    # without a new head SHA — keeps the old SHA's green check. Adding the
+    # trigger wouldn't help yet: the runner's per-SHA marker comment would
+    # suppress the re-review anyway, and the action exposes no force input.
+    # Until upstream grows one, re-review base-retargeted PRs session-side
+    # (the stacked-PR retarget-to-main case is the one that occurs here).
+
+# One run per PR; a new push supersedes the old run's SHA, so cancelling is
+# safe. No `edited` trigger (unlike the parked claude-review workflow): this
+# reviewer files no description-scoped findings, so the event-class keying
+# saga (#521) does not apply here — a plain per-PR group is correct.
+concurrency:
+  group: second-opinion-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  second-opinion:
+    # NO job-level `if` — same reasoning as the parked claude-review job
+    # (#497): this check is REQUIRED on main, and a job skipped by a
+    # job-level `if` publishes a check run with conclusion `skipped`, whose
+    # required-check semantics are not something to bet a merge queue on.
+    # The gates live lower instead: the runner itself skips drafts with a
+    # real green conclusion (exit 0), and the fork gate is on the step.
+    runs-on: ubuntu-latest
+    # Worst case is K=3 sequential passes at the 900s per-pass timeout
+    # (45 min), plus the union-merge call (its own 600s HTTP timeout) and
+    # the docker-action image build. 50 left ~5 min of headroom and could
+    # kill a legitimately slow run of a required check (#561 review
+    # finding); typical observed runtime is ~15-20 min.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Second opinion review
+        # Fork PRs get no secrets on `pull_request` (by design, not a leak),
+        # so the action would fail on an empty key and red an unclearable
+        # required check for an outside contributor. Such PRs need
+        # session-side review — same rule as workflow-file PRs (CLAUDE.md
+        # "Workflow"). The skipped step still yields a real job conclusion.
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: storkme/second-opinion@v1
+        with:
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          # DeepSeek V4 Flash (2026-07-31 release): 1M context, priced at
+          # ~$0.14/M input. Pinned rather than left to the action's default
+          # for the same reason claude-review pinned its model: review
+          # quality and cost both depend on it.
+          model: deepseek/deepseek-v4-flash-0731
+          # Flash-tier model, so union 3 independent agentic passes — the
+          # recall lever the second-opinion README prescribes for weaker
+          # models. Passes are sampled; the union keeps a finding if ANY
+          # pass raises it. Still ~cents per PR at this pricing.
+          k: "3"
+          # The 60k default was sized for 128k-context models. This model
+          # has 1M context, and layout-engine PRs here routinely exceed
+          # 60k chars of diff.
+          max-diff-chars: "200000"
+          # guidance-file: .github/review-guidance.md
+          # ^ enable once the checklist is bootstrapped from review history
+          #   (second-opinion-bootstrap) and committed.
