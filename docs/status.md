@@ -129,6 +129,52 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
+**`rfc-062-multi-target-outputs.md` (2026-08-01, PARTIAL — engine
+correctness lands, the final gate's two measurement kill criteria both
+FAIL as measured)**: N ≥ 1 simultaneous solve targets in one factory
+(e.g. `electronic-circuit@10/s` + `advanced-circuit@3/s` sharing ore →
+plate → cable, one blueprint, two export belts). Phases 0–2 (solver
+multi-seed net-flow generalization, layout dual-purpose-lane
+generalization from fluid-only to solids) landed 2026-07-31 and hold:
+KC2 exact (copper-cable 20.0 machines, not the hand-sum shortcut's wrong
+16.0), KC5 (N=1 bit-identical) by construction. Phase 3 (wasm
+`solve_multi` + typed boundary validation, minimal URL extension, sim-
+harness per-item checkpoint series) landed 2026-08-01 and is
+independently verified — the browser eyeball and native `sim_export
+--multi` agree bit-for-bit on machine/entity counts on the canonical
+fixture. **The final gate does not clear.** KC4 (must beat naive
+concatenation on machines/area): machines TIE at 139 — a root-caused
+property of `ceil(a)+ceil(b) >= ceil(a+b)` for these SPECIFIC rates
+(the dedup mechanism is real and proven at Phase 1, it just pays a
+machine dividend of exactly zero here), while total entities (+6.8%) and
+bbox area (+33% to +72% depending on naive-composition method) are
+WORSE — the shared bus's own routing overhead (dual-purpose-lane
+machinery, second export path, extra junction solving) costs more than
+the correctness/dedup mechanism saves at this rate pair. KC3 (sim-
+measured at plan on both targets): `advanced-circuit` sim-PASSes clean
+(2.98 produced/3.04 delivered vs. 3.00 planned) — proof the shared-row
+mechanism CAN measure correctly — but `electronic-circuit`'s delivered
+rate is structurally 0.00/s, isolated via `docs/sim-harness-forensics.md`
+frame-reading to a real, newly-found sim-harness gap (a promoted
+`boundary_outputs` drain rig's belt extension silently fails to place;
+two well-precedented fix hypotheses — chunk-generation truncation,
+silent `create_entity` failure — were tested live and both falsified,
+not just asserted innocent), not proof the layout under-delivers on its
+own merits. Honest reading per the RFC's own KC4 text ("find the win or
+recommend concatenation"): **naive concatenation is the correct answer
+for a caller today, at rates resembling this fixture.** The
+solver/layout machinery ships (correct, tested, closes the hand-sum
+bug for any future caller that needs it), but its economic case is
+unproven and its sim-verifiability is blocked on an unresolved harness
+gap for exactly the row shape that makes the layout half interesting.
+Four deferred items enumerated in the RFC's close-out decision log: the
+D2b uranium Step-7 belt-y bug (Phase 2 review, fix shape identified, not
+applied), the target+taps+surplus three-way-collision fixture (no
+natural recipe shape exists yet), the full multi-target sidebar UI
+(always out of scope), and the KC3 sim-harness instrument gap (new,
+highest priority — live repro exists). Full trail, exact numbers, and
+the fix-attempt post-mortems in the RFC's decision log.
+
 **`rfc-058-band-packing.md` (2026-07-31, CONCLUDED — kill criterion 1
 fired in phase 4)**: 2D placement at row-band granularity, run
 evidence-first end to end in two days. Phases 0–3 cleared their gates
