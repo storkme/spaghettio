@@ -356,19 +356,35 @@ end
 -- picking FROM the belt (pickup = belt side, per the artifact-boundary
 -- inserter-direction lesson).
 local function add_drain(s, force, exit_x, exit_y, fx, fy, lx, ly, ext_len, item)
-  -- RFC-062 Phase 3 finding: `create_entity` can fail here (returns nil)
-  -- with NO exception and NO prior error handling on this loop -- unlike
-  -- `add_fluid_void`/`add_fluid_feed`, which both wrap their placement in
-  -- `pcall` and record a failure. A silent belt-placement failure here
-  -- previously showed up only as an unexplained flat 0.00 delivered rate
-  -- (the EC+AC final-gate run: the chest/inserter bank built exactly per
-  -- this formula while the entire belt extension silently failed to
-  -- place, with zero entries in `kit_errors`/`fluid_errors` to point at
-  -- it). This does not fix the underlying placement failure -- root
-  -- cause not yet identified, tracked as a followup -- it only makes a
-  -- future occurrence loud instead of silent, matching this project's
-  -- own rule that a check going quiet is not evidence of success
-  -- (docs/validator-reporting.md).
+  -- RFC-062 Phase 3 finding: on the EC+AC final-gate fixture, this rig's
+  -- entire belt extension silently failed to place (create_entity
+  -- returned nil for every one of 13 tiles) while its chest/inserter
+  -- bank built exactly per formula -- the EXACT signature of the #345/
+  -- PU@4 chunk-truncation class this codebase already has a documented
+  -- precedent for ("the old fixed radius... silently truncated any
+  -- fixture wider than ~768 tiles: build_blueprint creates no ghosts on
+  -- ungenerated chunks... dead feed rigs, NO DATA", see the `gen_radius`
+  -- comment above). The global `request_to_generate_chunks({0,0},
+  -- gen_radius)` call at setup sizes its radius from the LAYOUT's own
+  -- half-span, assuming every rig sits within that -- but RFC-062 lets a
+  -- SECOND target's drain rig land at whichever edge that target's own
+  -- physical exit happens to be on, which the single global radius may
+  -- not reliably reach for every possible exit position and rig index
+  -- (ext_len grows with boundary_outputs index, extending further out
+  -- each time). Explicitly chunk-generate this specific rig's own
+  -- footprint before placing anything in it -- redundant (cheap,
+  -- idempotent) when the global call already covers it, a guarantee
+  -- when it doesn't.
+  s.request_to_generate_chunks({exit_x + fx * ext_len, exit_y + fy * ext_len}, 3)
+  s.force_generate_chunk_requests()
+
+  -- `create_entity` can still fail here (returns nil) for reasons beyond
+  -- chunk generation, with NO exception and NO prior error handling on
+  -- this loop -- unlike `add_fluid_void`/`add_fluid_feed`, which both
+  -- wrap their placement in `pcall` and record a failure. Report any
+  -- remaining failure loudly instead of silently, matching this
+  -- project's own rule that a check going quiet is not evidence of
+  -- success (docs/validator-reporting.md).
   for t = 1, ext_len do
     local placed = s.create_entity{name = "express-transport-belt", position = {exit_x + fx * t, exit_y + fy * t},
                     direction = dir_from_vec(fx, fy), force = force}
@@ -1914,5 +1930,24 @@ mod tests {
         assert!(lua.contains("local placed = s.create_entity{name = \"express-transport-belt\""));
         assert!(lua.contains("if not placed then"));
         assert!(lua.contains("table.insert(storage.kit_errors, \"drain rig for '\" .. item .. \"'"));
+    }
+
+    /// RFC-062 Phase 3 final-gate finding: `add_drain` must explicitly
+    /// chunk-generate its own rig footprint before placing anything in
+    /// it, not rely solely on the global origin-centered
+    /// `request_to_generate_chunks` call — the #345/PU@4 chunk-
+    /// truncation class (see the `gen_radius` comment) silently drops
+    /// entities placed on an ungenerated chunk, and a second/later-
+    /// indexed drain rig can land at an edge the global radius doesn't
+    /// reliably reach for every possible exit position.
+    #[test]
+    fn drain_rig_explicitly_generates_its_own_chunk_footprint() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "test-drain-chunks".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(
+            lua.contains("s.request_to_generate_chunks({exit_x + fx * ext_len, exit_y + fy * ext_len}, 3)"),
+            "add_drain must generate its own footprint before placing entities in it"
+        );
     }
 }
