@@ -33,4 +33,5 @@ pub mod snapshot;
 pub mod solver;
 pub mod trace;
 pub mod validate;
+pub mod verdict;
 pub mod zone_cache;
