@@ -8,10 +8,10 @@
 
 use rustc_hash::FxHashSet;
 
-use crate::models::{EntityDirection, PlacedEntity};
 use crate::bus::balancer::splitter_for_belt;
 use crate::bus::placer::RowSpan;
 use crate::bus::stacking_ctx::StackingCtx;
+use crate::models::{EntityDirection, PlacedEntity};
 
 pub(crate) fn merge_output_rows(
     output_rows: &[usize],
@@ -25,9 +25,9 @@ pub(crate) fn merge_output_rows(
     ctx: &StackingCtx,
     existing_tiles: &FxHashSet<(i32, i32)>,
     row_tile_overrides: &mut FxHashSet<(i32, i32)>,
-) -> (Vec<PlacedEntity>, i32, i32) {
+) -> (Vec<PlacedEntity>, Vec<PlacedEntity>, i32, i32) {
     use crate::bus::balancer::underground_for_belt;
-    use crate::common::{belt_entity_for_rate_stacked, ug_max_reach};
+    use crate::common::{belt_entity_for_rate_stacked, belt_throughput_stacked, ug_max_reach};
 
     debug_assert_eq!(
         output_rows.len(),
@@ -39,23 +39,39 @@ pub(crate) fn merge_output_rows(
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let n = output_rows.len();
     if n == 0 {
-        return (entities, merge_start_y, 0);
+        return (entities, Vec::new(), merge_start_y, 0);
     }
     let merger_seg_id = Some(format!("merger:{}", item));
 
-    let total_rate = output_rows.iter()
+    let total_rate = output_rows
+        .iter()
         .map(|&ri| {
             if ri >= row_spans.len() {
                 0.0
             } else {
-                row_spans[ri].spec.outputs.iter()
+                row_spans[ri]
+                    .spec
+                    .outputs
+                    .iter()
                     .filter(|o| o.item == item)
                     .map(|o| o.rate * row_spans[ri].machine_count as f64)
                     .sum::<f64>()
             }
         })
         .sum::<f64>();
-    let belt_name = belt_entity_for_rate_stacked(total_rate * 2.0, max_belt_tier, ctx.for_item(item));
+    let belt_name =
+        belt_entity_for_rate_stacked(total_rate * 2.0, max_belt_tier, ctx.for_item(item));
+    // #567: how many PARALLEL output belts the merged stream needs. The
+    // cascade divides the N row-columns into `n_output` contiguous groups,
+    // each folded to ONE output belt (a per-group N/M->1 merge). n_output == 1
+    // for every under-cap fixture -> byte-identical to the pre-#567 path.
+    // Stack-aware via the same per-item stack `ctx.for_item` the pick uses.
+    let single_cap = belt_throughput_stacked(belt_name, ctx.for_item(item));
+    let n_output = if single_cap >= total_rate {
+        1
+    } else {
+        (total_rate / single_cap).ceil().max(1.0) as usize
+    };
     // Hops may need more reach than the rate-picked tier offers
     // (alternating blocked columns with 1-tile gaps are unhoppable
     // at yellow reach and split into exit-abuts-next-entrance
@@ -74,7 +90,11 @@ pub(crate) fn merge_output_rows(
     // through a yellow hop — silently, since the throughput check
     // only flags overlapping routes); ceiling = the user's cap.
     let hop_tier_for_gap = |gap: i32| -> &'static str {
-        for t in ["transport-belt", "fast-transport-belt", "express-transport-belt"] {
+        for t in [
+            "transport-belt",
+            "fast-transport-belt",
+            "express-transport-belt",
+        ] {
             if ug_max_reach(t) as i32 >= gap && ug_max_reach(t) >= ug_max_reach(belt_name) {
                 if ug_max_reach(t) <= ug_max_reach(hop_cap) {
                     return underground_for_belt(t);
@@ -91,11 +111,19 @@ pub(crate) fn merge_output_rows(
     // successive per-item merges so two output items' splitter cascades and
     // south columns tile left-to-right instead of stamping the same tiles
     // (multi-item solid output support, Phase 2 of rfc-solver-net-flow).
-    let mut merge_x = (output_rows.iter()
-        .map(|&ri| if ri < row_spans.len() { row_spans[ri].row_width } else { 0 })
+    let mut merge_x = (output_rows
+        .iter()
+        .map(|&ri| {
+            if ri < row_spans.len() {
+                row_spans[ri].row_width
+            } else {
+                0
+            }
+        })
         .max()
-        .unwrap_or(0) + 1)
-        .max(min_merge_x);
+        .unwrap_or(0)
+        + 1)
+    .max(min_merge_x);
 
     // #309 review finding: a row whose east extension starts blocked (its
     // own `row_width` tile occupied by Step 4-6 residue — a dual-fate
@@ -248,7 +276,9 @@ pub(crate) fn merge_output_rows(
                     let converted = entities
                         .iter_mut()
                         .rev()
-                        .find(|e| e.x == x - 1 && e.y == out_y && e.name.ends_with("transport-belt"))
+                        .find(|e| {
+                            e.x == x - 1 && e.y == out_y && e.name.ends_with("transport-belt")
+                        })
                         .map(|prev| {
                             prev.name = hop_ug.to_string();
                             prev.io_type = Some("input".to_string());
@@ -318,14 +348,47 @@ pub(crate) fn merge_output_rows(
     // so they stay connected through to the next splitter.
     let mut y_cursor = merge_start_y;
     // Active columns, sorted left-to-right.
-    let mut active: Vec<i32> = (0..n as i32).map(|i| merge_x + i).collect();
+    let all_x: Vec<i32> = (0..n as i32).map(|i| merge_x + i).collect();
 
-    while active.len() > 1 {
-        let right_x = active.pop().unwrap();
-        let left_x = *active.last().unwrap();
+    // #567: N-to-M output. Partition the columns into `n_output` contiguous
+    // groups, each folded to ONE balancer-merged output belt (e.g. 10 rows ->
+    // two 5->1 groups = two 15/s belts). A single GLOBAL fold-to-M is wrong:
+    // it dumps the whole tail onto the leftmost survivors (one gets ~all the
+    // columns and saturates, the rest idle) — the measured half-empty belts.
+    // Per-group folds keep each output belt fed by exactly its own columns.
+    let m = n_output.max(1);
+    let base = n / m;
+    let extra = n % m;
+    let mut group_of: Vec<usize> = Vec::with_capacity(n);
+    for g in 0..m {
+        let count = base + if g < extra { 1 } else { 0 };
+        for _ in 0..count {
+            group_of.push(g);
+        }
+    }
+    let mut surviving: Vec<i32> = all_x.clone(); // columns not yet merged away
 
-        // Splitter merging left_x and left_x+1 (right_x should equal left_x+1)
-        // If not adjacent, route right column west first.
+    // Fold right-to-left WITHIN each group. At every step merge the rightmost
+    // surviving column that still has a same-group left neighbour.
+    loop {
+        // Pick the rightmost surviving column whose left neighbour survives
+        // AND is in the same group (i.e. not a group boundary).
+        let mut merge_idx: Option<usize> = None;
+        for i in (1..surviving.len()).rev() {
+            let ri = surviving[i];
+            let li = surviving[i - 1];
+            let rg = group_of[(ri - merge_x) as usize];
+            let lg = group_of[(li - merge_x) as usize];
+            if rg == lg {
+                merge_idx = Some(i);
+                break;
+            }
+        }
+        let Some(idx) = merge_idx else { break };
+        let right_x = surviving.remove(idx);
+        let left_x = surviving[idx - 1];
+
+        // Splitter merging left_x and left_x+1 (adjacent; same-group pair).
         if right_x != left_x + 1 {
             for x in ((left_x + 2)..=right_x).rev() {
                 entities.push(PlacedEntity {
@@ -340,9 +403,9 @@ pub(crate) fn merge_output_rows(
                 });
             }
         }
-        // Pass-through belts at the splitter row for uninvolved columns.
-        // The splitter occupies (left_x, y_cursor) and (left_x+1, y_cursor).
-        for &ax in &active {
+        // Pass-through belts at the splitter row for every uninvolved
+        // surviving column (all groups).
+        for &ax in &surviving {
             if ax != left_x && ax != left_x + 1 {
                 entities.push(PlacedEntity {
                     name: belt_name.to_string(),
@@ -369,7 +432,7 @@ pub(crate) fn merge_output_rows(
         y_cursor += 1;
 
         // Continuation belts below the splitter for all surviving columns.
-        for &ax in &active {
+        for &ax in &surviving {
             entities.push(PlacedEntity {
                 name: belt_name.to_string(),
                 x: ax,
@@ -384,7 +447,24 @@ pub(crate) fn merge_output_rows(
         y_cursor += 1;
     }
 
-    (entities, y_cursor, merge_x + n as i32)
+    // Survivor columns (one per group = one per output belt), each with a tail
+    // at `y_cursor - 1`. n_output == 1 -> single tail, byte-identical to the
+    // pre-#567 behavior. n_output > 1 -> n_output parallel exit belts.
+    let mut tails: Vec<PlacedEntity> = Vec::with_capacity(n_output);
+    for &ax in &surviving {
+        tails.push(PlacedEntity {
+            name: belt_name.to_string(),
+            x: ax,
+            y: y_cursor - 1,
+            direction: EntityDirection::South,
+            carries: Some(item.to_string()),
+            segment_id: merger_seg_id.clone(),
+            rate: Some(total_rate),
+            ..Default::default()
+        });
+    }
+
+    (entities, tails, y_cursor, merge_x + n as i32)
 }
 
 #[cfg(test)]
@@ -406,7 +486,9 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: recipe.to_string(),
-                self_loop: vec![], voider: false, game_modules: Vec::new(),
+                self_loop: vec![],
+                voider: false,
+                game_modules: Vec::new(),
                 count: machine_count as f64,
                 inputs,
                 outputs,
@@ -430,7 +512,6 @@ mod tests {
         }
     }
 
-
     /// Phase 2 (rfc-solver-net-flow): two output items' merge blocks must
     /// tile east via the threaded cursor instead of stamping the same
     /// tiles. Regression for the review finding that per-item merge_x was
@@ -442,7 +523,12 @@ mod tests {
             "iron-gear-wheel",
             0,
             vec![],
-            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow {
+                item: "iron-gear-wheel".to_string(),
+                rate: 2.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
             2,
             vec![0],
         );
@@ -450,15 +536,44 @@ mod tests {
             "iron-stick",
             5,
             vec![],
-            vec![ItemFlow { item: "iron-stick".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow {
+                item: "iron-stick".to_string(),
+                rate: 2.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
             2,
             vec![5],
         );
         let rows = [row0, row1];
-        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], &[rows[0].output_belt_y], "iron-gear-wheel", &rows, 15, None, 11, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
+        let (a_ents, _tails, a_end_y, a_max_x) = merge_output_rows(
+            &[0],
+            &[rows[0].output_belt_y],
+            "iron-gear-wheel",
+            &rows,
+            15,
+            None,
+            11,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+        );
         // Caller threads: next min_merge_x = returned max_x + 1, start_y = max_y.
         let blocked: Vec<i32> = ((a_max_x - 1)..a_max_x).collect();
-        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked, &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
+        let (b_ents, _tails, _b_end_y, b_max_x) = merge_output_rows(
+            &[1],
+            &[rows[1].output_belt_y],
+            "iron-stick",
+            &rows,
+            a_end_y.max(15),
+            None,
+            a_max_x + 1,
+            &blocked,
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+        );
         assert!(b_max_x > a_max_x);
         let a_tiles: FxHashSet<(i32, i32)> = a_ents.iter().map(|e| (e.x, e.y)).collect();
         let overlap: Vec<(i32, i32)> = b_ents
@@ -468,9 +583,27 @@ mod tests {
             .collect();
         assert!(overlap.is_empty(), "merge blocks overlap at {overlap:?}");
         // And without the cursor they WOULD overlap (guard the guard):
-        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, 15, None, 0, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
-        let c_overlap = c_ents.iter().map(|e| (e.x, e.y)).any(|t| a_tiles.contains(&t));
-        assert!(c_overlap, "expected uncursored merges to collide — geometry changed?");
+        let (c_ents, _tails, _c_end_y, _c) = merge_output_rows(
+            &[1],
+            &[rows[1].output_belt_y],
+            "iron-stick",
+            &rows,
+            15,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+        );
+        let c_overlap = c_ents
+            .iter()
+            .map(|e| (e.x, e.y))
+            .any(|t| a_tiles.contains(&t));
+        assert!(
+            c_overlap,
+            "expected uncursored merges to collide — geometry changed?"
+        );
     }
 
     #[test]
@@ -479,18 +612,37 @@ mod tests {
             "iron-plate",
             0,
             vec![],
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 10.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow {
+                item: "iron-plate".to_string(),
+                rate: 10.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
             1,
             vec![],
         );
 
         let output_rows = vec![0];
         let output_ys = vec![row_span.output_belt_y];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span], 20, None, 0, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
+        let (entities, _tails, _end_y, _merge_max_x) = merge_output_rows(
+            &output_rows,
+            &output_ys,
+            "iron-plate",
+            &[row_span],
+            20,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+        );
 
         // Single row should extend EAST and SOUTH without splitters
         assert!(!entities.is_empty());
-        assert!(entities.iter().all(|e| e.carries.as_deref() == Some("iron-plate")));
+        assert!(entities
+            .iter()
+            .all(|e| e.carries.as_deref() == Some("iron-plate")));
     }
 
     #[test]
@@ -499,7 +651,12 @@ mod tests {
             "iron-plate",
             0,
             vec![],
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 10.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow {
+                item: "iron-plate".to_string(),
+                rate: 10.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
             1,
             vec![],
         );
@@ -507,17 +664,37 @@ mod tests {
             "iron-plate",
             0,
             vec![],
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 10.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow {
+                item: "iron-plate".to_string(),
+                rate: 10.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
             1,
             vec![],
         );
 
         let output_rows = vec![0, 1];
         let output_ys = vec![row_span1.output_belt_y, row_span2.output_belt_y];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
+        let (entities, _tails, _end_y, _merge_max_x) = merge_output_rows(
+            &output_rows,
+            &output_ys,
+            "iron-plate",
+            &[row_span1, row_span2],
+            20,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+        );
 
         // Multiple rows should include splitters
-        let splitters = entities.iter().filter(|e| e.name.contains("splitter")).count();
+        let splitters = entities
+            .iter()
+            .filter(|e| e.name.contains("splitter"))
+            .count();
         assert!(splitters > 0, "Expected splitters for multiple rows");
     }
 
@@ -530,7 +707,12 @@ mod tests {
                 "iron-gear-wheel",
                 0,
                 vec![],
-                vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
+                vec![ItemFlow {
+                    item: "iron-gear-wheel".to_string(),
+                    rate: 5.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
                 2,
                 vec![],
             );
@@ -543,7 +725,12 @@ mod tests {
                 "iron-gear-wheel",
                 5,
                 vec![],
-                vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
+                vec![ItemFlow {
+                    item: "iron-gear-wheel".to_string(),
+                    rate: 5.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
                 2,
                 vec![],
             );
@@ -553,7 +740,7 @@ mod tests {
         };
 
         let output_ys = vec![row0.output_belt_y, row1.output_belt_y];
-        let (entities, end_y, merge_max_x) = merge_output_rows(
+        let (entities, _tails, end_y, merge_max_x) = merge_output_rows(
             &[0, 1],
             &output_ys,
             "iron-gear-wheel",
@@ -568,10 +755,14 @@ mod tests {
         );
 
         // Splitters must be present
-        let splitters: Vec<_> = entities.iter()
+        let splitters: Vec<_> = entities
+            .iter()
             .filter(|e| e.name.contains("splitter"))
             .collect();
-        assert!(!splitters.is_empty(), "Expected splitter(s) in merger for 2 rows");
+        assert!(
+            !splitters.is_empty(),
+            "Expected splitter(s) in merger for 2 rows"
+        );
 
         // Every entity must carry the correct item
         for e in &entities {
@@ -596,7 +787,12 @@ mod tests {
             "electronic-circuit",
             0,
             vec![],
-            vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow {
+                item: "electronic-circuit".to_string(),
+                rate: 5.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
             1,
             vec![],
         );
@@ -604,13 +800,18 @@ mod tests {
             "electronic-circuit",
             5,
             vec![],
-            vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow {
+                item: "electronic-circuit".to_string(),
+                rate: 5.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
             1,
             vec![],
         );
 
         let output_ys = vec![row0.output_belt_y, row1.output_belt_y];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(
+        let (entities, _tails, _end_y, _merge_max_x) = merge_output_rows(
             &[0, 1],
             &output_ys,
             "electronic-circuit",
@@ -624,9 +825,16 @@ mod tests {
             &mut FxHashSet::default(),
         );
 
-        let splitters: Vec<_> = entities.iter().filter(|e| e.name.contains("splitter")).collect();
+        let splitters: Vec<_> = entities
+            .iter()
+            .filter(|e| e.name.contains("splitter"))
+            .collect();
         for s in &splitters {
-            assert_eq!(s.direction, EntityDirection::South, "Merger splitters should face SOUTH");
+            assert_eq!(
+                s.direction,
+                EntityDirection::South,
+                "Merger splitters should face SOUTH"
+            );
         }
     }
 
@@ -647,7 +855,12 @@ mod tests {
             "iron-plate",
             0,
             vec![],
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow {
+                item: "iron-plate".to_string(),
+                rate: 1.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
             1,
             vec![],
         );
@@ -659,7 +872,7 @@ mod tests {
         existing_tiles.insert((row_width, out_y));
         let mut row_tile_overrides: FxHashSet<(i32, i32)> = FxHashSet::default();
 
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(
+        let (entities, _tails, _end_y, _merge_max_x) = merge_output_rows(
             &[0],
             &[out_y],
             "iron-plate",
@@ -690,7 +903,10 @@ mod tests {
             .map(|e| (e.x, e.y))
             .filter(|&tile| !seen.insert(tile))
             .collect();
-        assert!(dups.is_empty(), "duplicate tile(s) among emitted entities {dups:?}: {entities:#?}");
+        assert!(
+            dups.is_empty(),
+            "duplicate tile(s) among emitted entities {dups:?}: {entities:#?}"
+        );
         assert!(
             row_tile_overrides.contains(&(row_width - 1, out_y)),
             "the row's own last belt tile must be reported for eviction: {row_tile_overrides:?}"
