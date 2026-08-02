@@ -9,9 +9,10 @@
 //! documented on synthetic transforms that a real pipeline would never
 //! produce.
 
+use spaghettio_core::bus::bands::PackObjective;
 use spaghettio_core::bus::candidate_runner::{
-    produce_plan, run_candidate_field, CandidateOutcome, CandidatePlan, CompactTransform,
-    FoldTransform, FullSelectionCandidate, LayoutTransform, TransformOutcome,
+    pack_candidate_plan, produce_plan, run_candidate_field, CandidateOutcome, CandidatePlan,
+    CompactTransform, FoldTransform, FullSelectionCandidate, LayoutTransform, TransformOutcome,
 };
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy};
 use spaghettio_core::models::{LayoutResult, SolverResult};
@@ -415,4 +416,139 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
         result.winner_name, "incumbent",
         "a verdict-failing candidate must be excluded from ranking regardless of composite"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 6. RFC-064 Phase 3: PackCandidate
+// ---------------------------------------------------------------------------
+
+/// electronic-circuit@1/s from ore, AM2, yellow belt tier, Pooled — small
+/// (126 entities) and, unlike `stress_ac_partitioned`/`tier1_gear_from_ore`,
+/// actually clears `bands::packing_refusal` (single-lane items throughout,
+/// >= 3 bands: iron-plate, copper-plate, copper-cable, electronic-circuit).
+fn ec_1_am2_yellow() -> SolverResult {
+    solve(
+        "electronic-circuit",
+        1.0,
+        &["iron-ore", "copper-ore"],
+        "assembling-machine-2",
+    )
+}
+
+/// Smoke test: `run_candidate_field` with a native incumbent and a
+/// `pack_candidate_plan` field entry, on a fixture the packer builds
+/// successfully. Asserts the pack candidate reaches evaluation (produces,
+/// validates, measures, verdicts) and carries a genuine `Provenance`-tier
+/// verdict from its paired `PackCorrespondenceTransform` — NOT who wins,
+/// which is fixture-dependent and Unit B's adjudication to make.
+#[test]
+fn runner_pack_candidate_produces_measures_and_verdicts() {
+    let sr = ec_1_am2_yellow();
+    let opts = base_opts(Some("yellow"), LayoutStrategy::Pooled);
+
+    let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
+    let pack_plan = pack_candidate_plan("pack", PackObjective::MinAspectRatio);
+
+    let result = run_candidate_field(
+        &sr,
+        &opts,
+        &incumbent,
+        std::slice::from_ref(&pack_plan),
+        &Policy::fold(),
+    )
+    .expect("run_candidate_field must succeed");
+
+    let evaluated = result
+        .entries
+        .iter()
+        .find_map(|e| match e {
+            CandidateOutcome::Evaluated(ec) if ec.name == "pack" => Some(ec),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "pack candidate must produce and evaluate on this fixture — entries: {:?}",
+                result.entries.iter().map(CandidateOutcome::name).collect::<Vec<_>>()
+            )
+        });
+
+    assert!(
+        evaluated.scores.composite.is_finite(),
+        "ObjectiveScores must be a real measurement, not NaN/inf"
+    );
+    assert_eq!(
+        evaluated.verdict.tier,
+        MatchTier::Provenance,
+        "PackCorrespondenceTransform must supply a genuine Provenance-tier map on a fixture that packs with pure per-band translation"
+    );
+}
+
+/// `PackCandidate` alone (no paired transform) must verdict at
+/// `MatchTier::Count` — `compose_chain`'s own "empty chain" rule — proving
+/// the `Provenance` tier above comes from the paired transform, not from
+/// `PackCandidate` itself claiming precision it cannot support standalone.
+#[test]
+fn runner_pack_candidate_without_its_transform_is_count_tier() {
+    use spaghettio_core::bus::candidate_runner::PackCandidate;
+
+    let sr = ec_1_am2_yellow();
+    let opts = base_opts(Some("yellow"), LayoutStrategy::Pooled);
+
+    let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
+    let bare_plan = CandidatePlan::new("pack-bare", PackCandidate::new(PackObjective::MinAspectRatio));
+
+    let result = run_candidate_field(
+        &sr,
+        &opts,
+        &incumbent,
+        std::slice::from_ref(&bare_plan),
+        &Policy::fold(),
+    )
+    .expect("run_candidate_field must succeed");
+
+    let evaluated = result
+        .entries
+        .iter()
+        .find_map(|e| match e {
+            CandidateOutcome::Evaluated(ec) if ec.name == "pack-bare" => Some(ec),
+            _ => None,
+        })
+        .expect("pack-bare must have produced and evaluated");
+    assert_eq!(evaluated.verdict.tier, MatchTier::Count);
+}
+
+/// Refusals surface as a clean `CandidateOutcome::Refused` carrying the
+/// packer's own reason — `stress_ac_partitioned` refuses on a multi-lane
+/// copper-cable item (`PackRefusal::MultiLaneItem`), a DIFFERENT typed
+/// refusal than the entity-count budget guard.
+#[test]
+fn runner_pack_candidate_refusal_surfaces_the_packers_own_reason() {
+    let sr = stress_ac_partitioned();
+    let opts = base_opts(None, LayoutStrategy::Pooled);
+
+    let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
+    let pack_plan = pack_candidate_plan("pack", PackObjective::MinAspectRatio);
+
+    let result = run_candidate_field(
+        &sr,
+        &opts,
+        &incumbent,
+        std::slice::from_ref(&pack_plan),
+        &Policy::fold(),
+    )
+    .expect("run_candidate_field must succeed — a refused field candidate must not fail the whole call");
+
+    let reason = result
+        .entries
+        .iter()
+        .find_map(|e| match e {
+            CandidateOutcome::Refused { name, reason } if name == "pack" => Some(reason.clone()),
+            _ => None,
+        })
+        .expect("pack must be Refused, not Evaluated, on this fixture");
+    assert!(
+        reason.contains("exceeds one") && reason.contains("lane"),
+        "the refusal reason must be the packer's own MultiLaneItem message, got: {reason}"
+    );
+    assert_eq!(result.winner_name, "incumbent");
 }

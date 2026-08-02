@@ -38,12 +38,16 @@
 //! WHICH `DecompositionCandidate`/`LayoutTransform`s a [`CandidatePlan`]
 //! names — never by mutating the options struct.
 
-use crate::models::{LayoutResult, SolverResult};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use crate::models::{LayoutResult, PlacedEntity, SolverResult};
 use crate::objective::{self, ObjectiveScores};
 use crate::trace::TraceEvent;
 use crate::validate::{self, LayoutStyle};
 use crate::verdict::{self, CorrespondenceMap, MatchTier, Policy, Verdict};
 
+use super::bands::{self, PackObjective};
 use super::compaction;
 use super::decomposition_search::{self, DecompositionCandidate};
 use super::layout::{LayoutOptions, FOLD_SEARCH_ENTITY_THRESHOLD};
@@ -257,6 +261,191 @@ impl DecompositionCandidate for FullSelectionCandidate {
     ) -> Result<LayoutResult, String> {
         decomposition_search::select_best_decomposition(solver_result, opts.clone())
     }
+}
+
+// ---------------------------------------------------------------------------
+// RFC-064 Phase 3: the RFC-058 packed builder as a candidate
+// ---------------------------------------------------------------------------
+
+/// `bands::build_packed_layout_with_objective` needs `RowSpan`s the placer
+/// produces mid-`layout_pass`, plus the native (pre-pack) entities — data
+/// no `LayoutResult` carries and no [`LayoutTransform::apply`] can obtain
+/// from its `&LayoutResult` argument alone (unlike `CompactTransform`/
+/// `FoldTransform`, which genuinely rearrange an already-produced layout in
+/// place). `layout::run_layout_with_retry_and_rows` is the only entry point
+/// that surfaces `RowSpan`s at all, so [`PackCandidate`] calls it directly
+/// and does its own band extraction — it is a base PRODUCER, not a
+/// transform of some other candidate's output. See the PR report / RFC
+/// decision log for the fuller "which shape" reasoning; this doc comment
+/// records the conclusion, not the exploration.
+///
+/// Conservative size guard for the packing SEARCH (not the native pass,
+/// which every candidate already pays for): RFC-058's own largest
+/// real-planner gate fixture, `pu1-plate`, has 5,635 native entities
+/// (`docs/rfc-058-band-packing.md`'s results table). `FoldTransform`'s own
+/// guard picked ~30% headroom above its own largest-ever-admissible
+/// fixture; mirroring that proportion here (leaving `pu1-plate` itself
+/// comfortably admissible — its refusal, RFC-063's solver-coupling gap, is
+/// a DIFFERENT, typed refusal this guard must not preempt) while staying
+/// well below mega-chain scale (tens of thousands of entities) gives
+/// 7,500. Unlike `LayoutTransform::admissible_input`, `DecompositionCandidate`
+/// has no separate pre-check hook — the guard runs as an early `Err` inside
+/// `produce` itself, which is `run_candidate_field`'s only "skip this
+/// candidate, don't crash the run" channel for a base producer.
+const PACK_SEARCH_ENTITY_THRESHOLD: usize = 7_500;
+
+/// Data [`PackCandidate::produce`] captures for its paired
+/// [`PackCorrespondenceTransform`] to build a [`CorrespondenceMap`] from —
+/// `DecompositionCandidate::produce` can only return a bare `LayoutResult`
+/// (unlike `LayoutTransform::apply`'s `TransformOutcome`), so a base
+/// producer that wants to hand a later chain step positional provenance has
+/// no channel for it in this framework except a side one it shares with
+/// that step. `CandidatePlan`'s own transform-chain shape doesn't provide
+/// one, so this is deliberately local to this pairing, not a general
+/// mechanism.
+#[derive(Default)]
+struct PackCapture {
+    contents: Vec<bands::BandContent>,
+    origins: Vec<(i32, i32)>,
+    native_entities: Vec<PlacedEntity>,
+}
+
+/// Produces the RFC-058 packed layout (`bands::build_packed_layout_with_objective`)
+/// under a caller-chosen [`PackObjective`] — RFC-064 Phase 3's AR-optimizing
+/// mode is reachable ONLY through this candidate, never through the
+/// `LayoutOptions::band_packing` user flag (which is hardwired to
+/// `PackObjective::MinAreaUnderCap` and stays byte-identical — see
+/// `bands::build_packed_layout`'s own docs). Refusals (the packer's typed
+/// `PackRefusal`s, a routing failure, or the size guard above) surface as a
+/// plain `Err` with the packer's own reason string, exactly like every
+/// other `DecompositionCandidate` — `run_candidate_field` records it as
+/// `CandidateOutcome::Refused` and moves on.
+///
+/// Build with [`pack_candidate_plan`], which pairs this with
+/// [`PackCorrespondenceTransform`] so the resulting [`CandidatePlan`] also
+/// carries a [`MatchTier::Provenance`] correspondence map — using this
+/// struct directly (no transform) gives a plan that verdicts at
+/// [`MatchTier::Count`] instead, per [`compose_chain`]'s "empty chain"
+/// rule.
+pub struct PackCandidate {
+    objective: PackObjective,
+    capture: Rc<RefCell<Option<PackCapture>>>,
+}
+
+impl PackCandidate {
+    /// Standalone constructor — no paired transform, so a plan built from
+    /// this alone verdicts at `MatchTier::Count` (`compose_chain`'s "empty
+    /// chain" rule). Prefer [`pack_candidate_plan`] unless you specifically
+    /// want that degraded tier (e.g. to test it, as this crate's own tests
+    /// do).
+    pub fn new(objective: PackObjective) -> Self {
+        Self { objective, capture: Rc::new(RefCell::new(None)) }
+    }
+}
+
+impl DecompositionCandidate for PackCandidate {
+    fn name(&self) -> &str {
+        "pack"
+    }
+
+    fn produce(
+        &self,
+        solver_result: &SolverResult,
+        opts: &LayoutOptions,
+    ) -> Result<LayoutResult, String> {
+        // band_packing doesn't affect anything before `layout_pass`'s own
+        // swap-check (see `run_layout_with_retry_and_rows`'s docs) — off
+        // here just means "don't let the flag path's swap run twice".
+        let mut native_opts = opts.clone();
+        native_opts.band_packing = false;
+        let (native, row_spans) =
+            super::layout::run_layout_with_retry_and_rows(solver_result, &native_opts)
+                .map_err(|e| format!("native pipeline: {e}"))?;
+
+        if native.entities.len() > PACK_SEARCH_ENTITY_THRESHOLD {
+            return Err(format!(
+                "packing skipped: native layout too large ({} entities > {} threshold)",
+                native.entities.len(),
+                PACK_SEARCH_ENTITY_THRESHOLD,
+            ));
+        }
+
+        let outcome = bands::build_packed_layout_with_objective(
+            &row_spans,
+            &native.entities,
+            solver_result,
+            opts.max_belt_tier.as_deref(),
+            self.objective,
+        )
+        .map_err(|reason| format!("packed-refusal: {reason}"))?;
+
+        *self.capture.borrow_mut() = Some(PackCapture {
+            contents: outcome.contents,
+            origins: outcome.origins,
+            native_entities: native.entities,
+        });
+        Ok(outcome.layout)
+    }
+}
+
+/// Supplies [`PackCandidate`]'s [`MatchTier::Provenance`] correspondence
+/// map. A true identity transform on the layout itself (`apply` returns
+/// `layout.clone()` unchanged) — its only job is attaching the map
+/// [`PackCandidate::produce`] already computed via the shared
+/// [`PackCapture`]. `admissible_input` is unconditional `Ok`, mirroring
+/// `CompactTransform`'s: there is no separate applicability question for a
+/// transform that doesn't touch geometry.
+pub struct PackCorrespondenceTransform {
+    capture: Rc<RefCell<Option<PackCapture>>>,
+}
+
+impl LayoutTransform for PackCorrespondenceTransform {
+    fn name(&self) -> &str {
+        "pack-correspondence"
+    }
+
+    fn admissible_input(&self, _layout: &LayoutResult) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn apply(
+        &self,
+        layout: &LayoutResult,
+        _solver: &SolverResult,
+        _opts: &LayoutOptions,
+    ) -> Result<TransformOutcome, String> {
+        let Some(capture) = self.capture.borrow_mut().take() else {
+            // Caller bug: this transform must only ever run immediately
+            // after ITS OWN paired `PackCandidate` in the same plan (see
+            // `pack_candidate_plan`) — a missing capture means it was used
+            // standalone or after a plan whose base production failed
+            // (which `run_plan` already short-circuits before any
+            // transform runs, so this should be unreachable in practice).
+            return Err(
+                "pack-correspondence: no capture from a paired PackCandidate::produce".to_string(),
+            );
+        };
+        let map = bands::pack_point_correspondence(
+            &capture.contents,
+            &capture.origins,
+            &capture.native_entities,
+        );
+        Ok(TransformOutcome {
+            layout: layout.clone(),
+            correspondence: Some(map),
+            tier: MatchTier::Provenance,
+        })
+    }
+}
+
+/// Builds a [`CandidatePlan`] running the RFC-058 packed builder under
+/// `objective` (RFC-064 Phase 3), paired with the transform that supplies
+/// its [`MatchTier::Provenance`] correspondence map — the combination
+/// `PackCandidate` alone cannot produce (see its own docs).
+pub fn pack_candidate_plan(name: impl Into<String>, objective: PackObjective) -> CandidatePlan {
+    let capture = Rc::new(RefCell::new(None));
+    CandidatePlan::new(name, PackCandidate { objective, capture: Rc::clone(&capture) })
+        .with_transform(PackCorrespondenceTransform { capture })
 }
 
 // ---------------------------------------------------------------------------

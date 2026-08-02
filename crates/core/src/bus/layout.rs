@@ -395,6 +395,27 @@ pub(crate) fn run_layout_with_retry(
     solver_result: &SolverResult,
     opts: &LayoutOptions,
 ) -> Result<LayoutResult, String> {
+    run_layout_with_retry_inner(solver_result, opts, None).map(|(r, _)| r)
+}
+
+/// RFC-064 Phase 3: like [`run_layout_with_retry`], but also returns the
+/// row spans of whichever pass finally shipped. `bus::candidate_runner::
+/// PackCandidate` needs them to call `bands::build_packed_layout_with_objective`
+/// directly (rather than through this module's own `opts.band_packing`
+/// swap, which is hardwired to `bands::PackObjective::MinAreaUnderCap` and
+/// has no way to surface the band-translation geometry a correspondence
+/// map needs — see that call site's own comment).
+///
+/// `band_packing` doesn't affect anything `layout_pass` does BEFORE its own
+/// swap-check at the very end (placement, lane planning, ghost routing,
+/// pole placement are all unconditional) — so calling this with
+/// `opts.band_packing: false` yields EXACTLY the `(entities, row_spans)`
+/// pair the `band_packing: true` flag path would have built its packed
+/// layout from internally, whether or not a retry pass fired.
+pub(crate) fn run_layout_with_retry_and_rows(
+    solver_result: &SolverResult,
+    opts: &LayoutOptions,
+) -> Result<(LayoutResult, Vec<RowSpan>), String> {
     run_layout_with_retry_inner(solver_result, opts, None)
 }
 
@@ -410,14 +431,14 @@ pub(crate) fn run_layout_with_explicit_plan(
     opts: &LayoutOptions,
     plan: &crate::bus::partitioner::PartitionPlan,
 ) -> Result<LayoutResult, String> {
-    run_layout_with_retry_inner(solver_result, opts, Some(plan))
+    run_layout_with_retry_inner(solver_result, opts, Some(plan)).map(|(r, _)| r)
 }
 
 fn run_layout_with_retry_inner(
     solver_result: &SolverResult,
     opts: &LayoutOptions,
     explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
-) -> Result<LayoutResult, String> {
+) -> Result<(LayoutResult, Vec<RowSpan>), String> {
     // Snapshot the trace collector length before the first pass. This is
     // now used ONLY to present a clean event stream to a streaming consumer
     // (replay pass-1 events if we don't retry, truncate them if we do) —
@@ -465,7 +486,7 @@ fn run_layout_with_retry_inner(
             }
             crate::trace::swap_sink(Some(sink));
         }
-        return Ok(result_1);
+        return Ok((result_1, row_spans_1));
     }
 
     // Discard pass-1 events from the collector so `result.trace`
@@ -516,7 +537,7 @@ fn run_layout_with_retry_inner(
     });
 
     let subs = (!substation_bands.is_empty()).then_some(substation_bands.as_slice());
-    let (result_2, _, _, uncovered_2) =
+    let (result_2, row_spans_2, _, uncovered_2) =
         layout_pass(solver_result, opts, Some(&merged_gaps), subs, top_widen, explicit_plan)?;
 
     // Convergence guard (RFC `docs/rfc-power-reservation.md` Phase 3a-ii review
@@ -551,7 +572,7 @@ fn run_layout_with_retry_inner(
             );
         }
     }
-    Ok(result_2)
+    Ok((result_2, row_spans_2))
 }
 
 /// Map `JunctionGrowthCapped` (x, y) coordinates to the row indices

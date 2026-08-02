@@ -198,25 +198,92 @@ pub struct PackedPlan {
     pub positions: Vec<(i32, i32)>,
 }
 
-/// Best aspect-capped shelf packing: minimum bounding-box area under
-/// `max_aspect`, target width swept from the widest band to twice the
-/// control width, both orders, strict `<` so the first minimum wins
-/// (iteration order is part of the published-numbers contract). `None`
-/// when nothing fits the cap — a width-dominant band.
+/// What the packing search at a fixed gap optimizes, RFC-064 Phase 3.
+///
+/// [`best_pack`] (unchanged, every existing caller) always runs
+/// [`PackObjective::MinAreaUnderCap`] — RFC-058's own scoring, kept
+/// byte-identical since it is the falsification record for that RFC's kill
+/// (#507) and RFC-063 Phase C's numbers. [`PackObjective::MinAspectRatio`]
+/// is new, reachable only through [`best_pack_with_objective`] and, above
+/// it, `bus::candidate_runner::PackCandidate` — never through the
+/// `band_packing` user flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PackObjective {
+    /// RFC-058's original rule: minimum bounding-box area among packings
+    /// whose aspect ratio is `<= max_aspect`; `None` if nothing qualifies
+    /// (a width-dominant band). Strict `<` so the first minimum found in
+    /// iteration order wins — iteration order is part of the published-
+    /// numbers contract.
+    #[default]
+    MinAreaUnderCap,
+    /// RFC-064 Phase 3: minimum aspect ratio, full stop. `max_aspect` is
+    /// NOT applied as a filter here — that cap was an RFC-058 area-search
+    /// constraint with no bearing on an objective that already minimizes
+    /// aspect ratio directly — so every swept width/sort-order candidate is
+    /// admissible and this objective never returns `None` (bands.len() >= 3
+    /// is guaranteed by every caller before reaching here, so the sweep
+    /// always produces at least one candidate). Ties broken by lower area,
+    /// then by the same iteration order [`PackObjective::MinAreaUnderCap`]
+    /// uses (first found wins) — see [`best_pack_with_objective`]'s tests
+    /// for both tie-break axes pinned independently.
+    MinAspectRatio,
+}
+
+/// Best aspect-capped shelf packing under [`PackObjective::MinAreaUnderCap`]
+/// — target width swept from the widest band to twice the control width,
+/// both orders, strict `<` so the first minimum wins (iteration order is
+/// part of the published-numbers contract). `None` when nothing fits the
+/// cap — a width-dominant band. Every existing caller uses this; see
+/// [`best_pack_with_objective`] for the RFC-064 Phase 3 sibling.
 pub fn best_pack(bands: &[Band], gap: i32, max_aspect: f64) -> Option<PackedPlan> {
+    best_pack_with_objective(bands, gap, max_aspect, PackObjective::MinAreaUnderCap)
+}
+
+/// [`best_pack`] generalized over [`PackObjective`]. Byte-identical to
+/// [`best_pack`] at `PackObjective::MinAreaUnderCap` (same sweep, same
+/// iteration order, same tie-break) — the objective only changes which
+/// candidate `(aspect, area)` pair counts as "admissible" and "better",
+/// never the search itself.
+pub fn best_pack_with_objective(
+    bands: &[Band],
+    gap: i32,
+    max_aspect: f64,
+    objective: PackObjective,
+) -> Option<PackedPlan> {
     let (cw, _) = bbox(bands);
     let widest = bands.iter().map(|b| b.w).max().unwrap_or(1);
-    let mut best: Option<(i64, PackedPlan)> = None;
+    // `best_aspect`/`best_area` drive the comparison; which one is primary
+    // depends on `objective` (see the per-candidate `better` check below).
+    let mut best: Option<(f64, i64, PackedPlan)> = None;
     for sort_desc in [false, true] {
         let mut t = widest;
         while t <= cw.max(widest) * 2 {
             let packed = shelf_pack(bands, t, gap, sort_desc);
             let (w, h) = bbox(&packed);
             let aspect = w.max(h) as f64 / w.min(h).max(1) as f64;
-            if aspect <= max_aspect {
-                let area = (w as i64) * (h as i64);
-                if best.as_ref().is_none_or(|(ba, _)| area < *ba) {
+            let area = (w as i64) * (h as i64);
+            let admitted = match objective {
+                PackObjective::MinAreaUnderCap => aspect <= max_aspect,
+                PackObjective::MinAspectRatio => true,
+            };
+            if admitted {
+                let better = match &best {
+                    None => true,
+                    Some((ba, bar, _)) => match objective {
+                        // Area is the sole ranking key once admitted —
+                        // identical to the pre-Phase-3 comparison.
+                        PackObjective::MinAreaUnderCap => area < *bar,
+                        // Aspect primary, area tie-break, then iteration
+                        // order (neither `<` fires on an exact tie, so the
+                        // first candidate found keeps its place).
+                        PackObjective::MinAspectRatio => {
+                            aspect < *ba || (aspect == *ba && area < *bar)
+                        }
+                    },
+                };
+                if better {
                     best = Some((
+                        aspect,
                         area,
                         PackedPlan {
                             w,
@@ -229,7 +296,7 @@ pub fn best_pack(bands: &[Band], gap: i32, max_aspect: f64) -> Option<PackedPlan
             t += 2;
         }
     }
-    best.map(|(_, plan)| plan)
+    best.map(|(_, _, plan)| plan)
 }
 
 /// RFC-058 phase 2 entry point, called from `layout_pass` when
@@ -1259,12 +1326,61 @@ pub fn route_packed_nets(
 /// NOT yet called from layout_pass — the call-site flip is the next
 /// increment, together with the phase-2 inertness test's update to the
 /// phase-4 contract (flag on = packed layout or typed refusal).
+///
+/// Byte-identical wrapper around [`build_packed_layout_with_objective`] at
+/// [`PackObjective::MinAreaUnderCap`] — RFC-058's original scoring, the only
+/// objective the `band_packing` user flag (`bus::layout`'s call site) ever
+/// reaches. Discards the band-translation geometry
+/// [`build_packed_layout_with_objective`] additionally returns; every
+/// existing caller of this function only ever needed the `LayoutResult`.
 pub fn build_packed_layout(
     rows: &[RowSpan],
     row_entities: &[PlacedEntity],
     solver_result: &crate::models::SolverResult,
     max_belt_tier: Option<&str>,
 ) -> Result<crate::models::LayoutResult, String> {
+    build_packed_layout_with_objective(
+        rows,
+        row_entities,
+        solver_result,
+        max_belt_tier,
+        PackObjective::MinAreaUnderCap,
+    )
+    .map(|outcome| outcome.layout)
+}
+
+/// One [`build_packed_layout_with_objective`] call's full result: the
+/// packed [`crate::models::LayoutResult`] plus the band-translation
+/// geometry that produced it. `contents`/`origins` are index-aligned (one
+/// entry per band, same order [`extract_bands`]/[`band_contents`] produced)
+/// and already reflect the FINAL coordinate shift the builder applies at
+/// the end (`min_x`/`min_y` normalization) — so `origins[i]` is the actual
+/// on-`layout` position of band `i`'s content-rect origin, not the
+/// pre-shift value the packing loop computed internally.
+/// `bus::candidate_runner::PackCandidate`/`pack_point_correspondence` use
+/// this to build a [`crate::verdict::CorrespondenceMap`] without
+/// re-deriving the packer's own internal state.
+#[derive(Debug, Clone)]
+pub struct PackedLayoutOutcome {
+    pub layout: crate::models::LayoutResult,
+    pub contents: Vec<BandContent>,
+    pub origins: Vec<(i32, i32)>,
+}
+
+/// [`build_packed_layout`] generalized over [`PackObjective`]. Identical
+/// orchestration (refuse → extract → pack/translate/route with gap
+/// widening → pole grid → normalize) with the packing search's objective
+/// threaded through every [`best_pack`] call site in the gap-widening loop,
+/// and the winning gap's `contents`/`origins` (post-normalization) surfaced
+/// alongside the layout instead of being dropped — see
+/// [`PackedLayoutOutcome`].
+pub fn build_packed_layout_with_objective(
+    rows: &[RowSpan],
+    row_entities: &[PlacedEntity],
+    solver_result: &crate::models::SolverResult,
+    max_belt_tier: Option<&str>,
+    objective: PackObjective,
+) -> Result<PackedLayoutOutcome, String> {
     if let Some(r) = packing_refusal(rows, solver_result, max_belt_tier) {
         return Err(format!("packed-refusal: {r}"));
     }
@@ -1313,7 +1429,7 @@ pub fn build_packed_layout(
     let mut last_err = String::new();
     let mut used_origins: Vec<(i32, i32)> = Vec::new();
     for gap in GAP..=8 {
-        let Some(plan) = best_pack(&pseudo, gap, MAX_ASPECT) else {
+        let Some(plan) = best_pack_with_objective(&pseudo, gap, MAX_ASPECT, objective) else {
             last_err = format!("no packing within the aspect cap at gap {gap}");
             continue;
         };
@@ -1463,12 +1579,307 @@ pub fn build_packed_layout(
         }
     }
 
-    Ok(crate::models::LayoutResult {
-        entities,
-        width,
-        height,
-        boundary_inputs,
-        boundary_outputs,
-        ..Default::default()
+    // Origins in the SAME post-normalization frame `entities` now sits in
+    // (matches the `origins[bi].0/.1 - min_x/min_y` arithmetic the boundary
+    // records above already do per-use) — `pack_point_correspondence` needs
+    // this frame, not the pre-shift one the packing loop worked in.
+    let shifted_origins: Vec<(i32, i32)> =
+        origins.iter().map(|&(x, y)| (x - min_x, y - min_y)).collect();
+
+    Ok(PackedLayoutOutcome {
+        layout: crate::models::LayoutResult {
+            entities,
+            width,
+            height,
+            boundary_inputs,
+            boundary_outputs,
+            ..Default::default()
+        },
+        contents,
+        origins: shifted_origins,
     })
+}
+
+/// Per-tile correspondence for the pure per-band translation
+/// [`translate_band_contents`] performs — RFC-064 Phase 3's honest
+/// [`crate::verdict::MatchTier::Provenance`] map for `PackCandidate`.
+///
+/// Mirrors [`translate_band_contents`]'s own selection rule EXACTLY (same
+/// `is_transport`/pole exclusion, same content-row ownership via
+/// `content_ys`, same per-band `(dx, dy)` derived from `contents[bi].rect`
+/// vs `origins[bi]`) so the map is provably consistent with what the
+/// builder actually moved — verified pure (no mirroring/reordering within a
+/// band, just translation) by reading [`translate_band_contents`]'s body:
+/// every survivor's new position is `(e.x - rx + ox, e.y - ry + oy)`, a
+/// single per-band affine offset applied uniformly to every tile of every
+/// surviving entity's footprint.
+///
+/// `entities` must be the SAME slice `translate_band_contents` translated
+/// (the native, pre-pack entities — belts/poles included, since this
+/// function does its own exclusion) and `origins` must be in the same
+/// coordinate frame as the packed layout's own entities (i.e.
+/// [`PackedLayoutOutcome::origins`], already post-normalization — passing
+/// the pre-shift origins the packing loop used internally would silently
+/// produce a map that's off by the builder's own `(min_x, min_y)` shift).
+///
+/// Tiles NOT covered — every transport/pole tile (rebuilt fabric: old
+/// belts/poles are torn down and re-routed/re-placed, never translated)
+/// and every tile whose row isn't in ANY band's `content_ys` — are left
+/// UNMAPPED, never guessed at. `verdict::never_worse`'s whole-category
+/// fallback handles an unmapped native issue honestly (see its own docs);
+/// fabricating an entry here would silently mismatch two unrelated issues.
+pub fn pack_point_correspondence(
+    contents: &[BandContent],
+    origins: &[(i32, i32)],
+    entities: &[PlacedEntity],
+) -> crate::verdict::CorrespondenceMap {
+    let mut y_to_band: FxHashMap<i32, usize> = FxHashMap::default();
+    for (bi, c) in contents.iter().enumerate() {
+        for &y in &c.content_ys {
+            y_to_band.insert(y, bi);
+        }
+    }
+    let mut pairs: Vec<((i32, i32), (i32, i32))> = Vec::new();
+    for e in entities {
+        if is_transport(&e.name) || e.name.contains("electric-pole") {
+            continue;
+        }
+        let Some(&bi) = y_to_band.get(&e.y) else { continue };
+        let (rx, ry, _, _) = contents[bi].rect;
+        let (ox, oy) = origins[bi];
+        let (dx, dy) = (ox - rx, oy - ry);
+        let (w, h) = entity_size(&e.name);
+        for ddx in 0..w as i32 {
+            for ddy in 0..h as i32 {
+                pairs.push(((e.x + ddx, e.y + ddy), (e.x + ddx + dx, e.y + ddy + dy)));
+            }
+        }
+    }
+    crate::verdict::CorrespondenceMap::from_pairs(pairs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn band(x: i32, y: i32, w: i32, h: i32) -> Band {
+        Band { x, y, w, h, row_indices: Vec::new(), recipes: Vec::new() }
+    }
+
+    // -----------------------------------------------------------------
+    // PackObjective::MinAreaUnderCap — byte-identity pin (deliverable 1).
+    // `best_pack` (the flag path's only caller) must keep routing through
+    // this objective, and this objective's own selection on a fixture
+    // small enough to trace by hand must match that hand computation.
+    // -----------------------------------------------------------------
+
+    /// Four identical 4x4 bands spread far enough apart (x = 0/20/40/60,
+    /// `shelf_pack` ignores a band's incoming x/y entirely — only
+    /// `bbox(bands)`'s pre-pack `cw` reads them, and `cw` must be wide
+    /// enough here to let the sweep actually reach a 2x2 grid) that the
+    /// sweep bound `t <= cw.max(widest) * 2` reaches every interesting
+    /// shape. Traced by hand and confirmed against the real function's
+    /// output across the whole sweep (`t` = widest..=2*cw, both sort
+    /// orders):
+    /// - `t` in 4..=8: all four stack in one column — 4x22, aspect 5.5.
+    /// - `t` in 10..=14: a 2x2 grid — 10x10, aspect 1.0, area 100.
+    /// - `t` in 16..=20: three-then-one — 16x10, aspect 1.6, area 160.
+    /// - `t` >= 22: all four in one row — 22x4, aspect 5.5 (same as the
+    ///   column case, transposed).
+    /// Under the project's own `MAX_ASPECT` (3.0), only the 2x2 grid
+    /// (area 100) and the 16x10 arrangement (area 160) are admissible;
+    /// `MinAreaUnderCap` must pick the smaller of the two.
+    fn four_identical_squares() -> Vec<Band> {
+        vec![band(0, 0, 4, 4), band(20, 0, 4, 4), band(40, 0, 4, 4), band(60, 0, 4, 4)]
+    }
+
+    #[test]
+    fn best_pack_min_area_under_cap_picks_the_hand_computed_minimum() {
+        let bands = four_identical_squares();
+        let plan = best_pack(&bands, GAP, MAX_ASPECT).expect("the 2x2 grid must be admissible");
+        assert_eq!((plan.w, plan.h), (10, 10), "MinAreaUnderCap must pick the 10x10 grid (area 100), not the 16x10 arrangement (area 160)");
+        // First-found-wins determinism: this is `sort_desc=false, t=10`,
+        // producing a plain 2x2 grid in original index order.
+        assert_eq!(plan.positions, vec![(0, 0), (6, 0), (0, 6), (6, 6)]);
+    }
+
+    /// `best_pack_with_objective` at `MinAreaUnderCap` must be the exact
+    /// same function `best_pack` delegates to — same result on the same
+    /// fixture, not merely "an equivalent one".
+    #[test]
+    fn best_pack_with_objective_min_area_under_cap_matches_best_pack() {
+        let bands = four_identical_squares();
+        let a = best_pack(&bands, GAP, MAX_ASPECT).unwrap();
+        let b = best_pack_with_objective(&bands, GAP, MAX_ASPECT, PackObjective::MinAreaUnderCap).unwrap();
+        assert_eq!((a.w, a.h), (b.w, b.h));
+        assert_eq!(a.positions, b.positions);
+    }
+
+    // -----------------------------------------------------------------
+    // PackObjective::MinAspectRatio — RFC-064 Phase 3 (deliverable 2).
+    // -----------------------------------------------------------------
+
+    /// One wide-flat band plus three small square bands, spread out (same
+    /// reason as `four_identical_squares`) so the sweep reaches every
+    /// shape. Traced by hand and confirmed against the real function's
+    /// output — candidates across the sweep, all admissible at
+    /// `MAX_ASPECT = 3.0`: `(w=16,h=8, area 128, aspect 2.0)`,
+    /// `(w=12,h=14, area 168, aspect 1.1667)`, `(w=18,h=10, area 180,
+    /// aspect 1.8)`, `(w=24,h=10, area 240, aspect 2.4)`. The two
+    /// objectives must diverge: `MinAreaUnderCap` prefers the
+    /// smallest-area one (128, aspect 2.0), `MinAspectRatio` prefers the
+    /// squarest one regardless of size (168, aspect 1.1667) — each is
+    /// optimal on its OWN axis, worse on the other's.
+    fn area_vs_aspect_tradeoff_bands() -> Vec<Band> {
+        vec![band(0, 0, 12, 2), band(20, 0, 4, 4), band(40, 0, 4, 4), band(60, 0, 4, 4)]
+    }
+
+    #[test]
+    fn min_area_under_cap_and_min_aspect_ratio_pick_different_optima() {
+        let bands = area_vs_aspect_tradeoff_bands();
+        let area_plan = best_pack_with_objective(&bands, GAP, MAX_ASPECT, PackObjective::MinAreaUnderCap)
+            .expect("some packing must be admissible under the 3:1 cap");
+        let ar_plan = best_pack_with_objective(&bands, GAP, MAX_ASPECT, PackObjective::MinAspectRatio)
+            .expect("MinAspectRatio never refuses once bands.len() >= 3");
+
+        let aspect = |w: i32, h: i32| w.max(h) as f64 / w.min(h).max(1) as f64;
+        let area = |w: i32, h: i32| (w as i64) * (h as i64);
+
+        assert_eq!((area_plan.w, area_plan.h), (16, 8), "MinAreaUnderCap must pick the 128-area arrangement");
+        assert_eq!((ar_plan.w, ar_plan.h), (12, 14), "MinAspectRatio must pick the 1.1667-aspect arrangement");
+
+        assert!(
+            aspect(ar_plan.w, ar_plan.h) < aspect(area_plan.w, area_plan.h),
+            "MinAspectRatio's own pick must be squarer than MinAreaUnderCap's pick — otherwise they aren't genuinely diverging"
+        );
+        assert!(
+            area(area_plan.w, area_plan.h) < area(ar_plan.w, ar_plan.h),
+            "MinAreaUnderCap's own pick must be smaller than MinAspectRatio's pick — otherwise they aren't genuinely diverging"
+        );
+    }
+
+    /// `MinAspectRatio` never applies `max_aspect` as a filter: an absurdly
+    /// small cap (which would make `MinAreaUnderCap` refuse outright) must
+    /// not change `MinAspectRatio`'s answer at all.
+    #[test]
+    fn min_aspect_ratio_ignores_the_area_cap() {
+        let bands = area_vs_aspect_tradeoff_bands();
+        assert!(
+            best_pack_with_objective(&bands, GAP, 0.01, PackObjective::MinAreaUnderCap).is_none(),
+            "sanity: MinAreaUnderCap must refuse under a cap nothing can meet"
+        );
+        let capped = best_pack_with_objective(&bands, GAP, 0.01, PackObjective::MinAspectRatio)
+            .expect("MinAspectRatio ignores max_aspect entirely");
+        let uncapped = best_pack_with_objective(&bands, GAP, MAX_ASPECT, PackObjective::MinAspectRatio).unwrap();
+        assert_eq!((capped.w, capped.h), (uncapped.w, uncapped.h));
+    }
+
+    /// Tie-break determinism: when several `(t, sort_desc)` combinations
+    /// produce the exact same `(aspect, area)` — the 4x4x4-band fixture's
+    /// 2x2 grid recurs at `t=10..=14ish` with identical shape every time —
+    /// the FIRST one found in iteration order wins, not merely "some" tied
+    /// candidate. Same fixture as the `MinAreaUnderCap` hand-trace above,
+    /// where the 10x10 grid IS the global aspect minimum too (aspect 1.0
+    /// can't be beaten), so `MinAspectRatio` must land on the identical
+    /// first-found positions.
+    #[test]
+    fn min_aspect_ratio_tie_break_is_deterministic_first_found() {
+        let bands = four_identical_squares();
+        let plan = best_pack_with_objective(&bands, GAP, MAX_ASPECT, PackObjective::MinAspectRatio).unwrap();
+        assert_eq!((plan.w, plan.h), (10, 10));
+        assert_eq!(plan.positions, vec![(0, 0), (6, 0), (0, 6), (6, 6)]);
+    }
+
+    // -----------------------------------------------------------------
+    // pack_point_correspondence (deliverable 3)
+    // -----------------------------------------------------------------
+
+    /// Two bands' content translates by their own `(dx, dy)`; a
+    /// transport-belt and a pole tile sitting at content-row Ys stay
+    /// unmapped regardless (rebuilt fabric, excluded before the `content_ys`
+    /// lookup even runs — mirrors `translate_band_contents`'s own order of
+    /// checks); a tile outside every band's `content_ys` also stays
+    /// unmapped.
+    #[test]
+    fn pack_point_correspondence_maps_only_translated_content_tiles() {
+        let contents = vec![
+            BandContent { content_ys: vec![0, 1], rect: (0, 0, 4, 2), row_indices: vec![0] },
+            BandContent { content_ys: vec![10, 11], rect: (0, 10, 4, 2), row_indices: vec![1] },
+        ];
+        let origins = vec![(20, 0), (20, 8)];
+
+        let entities = vec![
+            PlacedEntity { name: "stub-machine".into(), x: 0, y: 0, ..Default::default() },
+            PlacedEntity { name: "stub-machine".into(), x: 2, y: 11, ..Default::default() },
+            PlacedEntity { name: "transport-belt".into(), x: 1, y: 0, ..Default::default() },
+            PlacedEntity { name: "medium-electric-pole".into(), x: 3, y: 1, ..Default::default() },
+            PlacedEntity { name: "stub-machine".into(), x: 0, y: 5, ..Default::default() },
+        ];
+
+        let map = pack_point_correspondence(&contents, &origins, &entities);
+
+        assert_eq!(map.get((0, 0)), Some((20, 0)), "band-0 content tile must translate by band 0's (dx,dy)");
+        assert_eq!(map.get((2, 11)), Some((22, 9)), "band-1 content tile must translate by band 1's (dx,dy)");
+        assert_eq!(map.get((1, 0)), None, "a transport-belt tile must stay unmapped even at a content-row Y");
+        assert_eq!(map.get((3, 1)), None, "a pole tile must stay unmapped even at a content-row Y");
+        assert_eq!(map.get((0, 5)), None, "a tile outside every band's content_ys must stay unmapped");
+    }
+
+    /// Property test (pattern: `fold_point_correspondence_matches_fold_snake_tile_sets`
+    /// in `bus::compaction`): every TRANSLATED entity's full oriented
+    /// footprint must map tile-for-tile onto its actual post-translation
+    /// footprint — not just its anchor tile.
+    #[test]
+    fn pack_point_correspondence_tile_sets_match_translate_band_contents() {
+        // Hand-built BandContent (band_contents() needs real RowSpans this
+        // unit test has no reason to construct) — content_ys spans each
+        // band's y-range, rect is the entities' own bbox. Distinct entity
+        // names so each survivor is unambiguous to find post-translation.
+        let contents = vec![
+            BandContent { content_ys: vec![0, 1, 2], rect: (0, 0, 4, 3), row_indices: vec![0] },
+            BandContent { content_ys: vec![8, 9, 10], rect: (0, 8, 4, 3), row_indices: vec![1] },
+        ];
+        let origins = vec![(30, 0), (30, 20)];
+
+        let entities = vec![
+            PlacedEntity { name: "assembling-machine-1".into(), x: 0, y: 0, ..Default::default() },
+            PlacedEntity { name: "stub-machine".into(), x: 2, y: 9, ..Default::default() },
+        ];
+
+        let translated = translate_band_contents(&contents, &origins, &entities);
+        let correspondence = pack_point_correspondence(&contents, &origins, &entities);
+
+        for e in &entities {
+            let (w, h) = entity_size(&e.name);
+            let pre_tiles: FxHashSet<(i32, i32)> = (0..w as i32)
+                .flat_map(|dx| (0..h as i32).map(move |dy| (dx, dy)))
+                .map(|(dx, dy)| (e.x + dx, e.y + dy))
+                .collect();
+            let mapped_tiles: FxHashSet<(i32, i32)> = pre_tiles
+                .iter()
+                .map(|&t| {
+                    correspondence
+                        .get(t)
+                        .unwrap_or_else(|| panic!("correspondence map must cover every pre-pack tile of a translated entity, missing {t:?}"))
+                })
+                .collect();
+
+            let post = translated
+                .iter()
+                .find(|pe| pe.name == e.name)
+                .unwrap_or_else(|| panic!("entity {} must survive translation", e.name));
+            let (pw, ph) = entity_size(&post.name);
+            let post_tiles: FxHashSet<(i32, i32)> = (0..pw as i32)
+                .flat_map(|dx| (0..ph as i32).map(move |dy| (dx, dy)))
+                .map(|(dx, dy)| (post.x + dx, post.y + dy))
+                .collect();
+
+            assert_eq!(
+                mapped_tiles, post_tiles,
+                "entity {}: tile set mapped through pack_point_correspondence must equal \
+                 the corresponding entity's actual post-translation tile set",
+                e.name,
+            );
+        }
+    }
 }
