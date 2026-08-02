@@ -73,7 +73,7 @@ pub enum SurplusPolicy {
 /// Per-call options for `build_bus_layout`. New struct; absorbs the
 /// previous `max_belt_tier` parameter so future per-call options
 /// (strategy, escargio fold parameters, …) attach as additional fields.
-#[derive(Clone, Debug)]
+///
 /// ## Pinned vs. searchable fields (RFC-064 P2b, `bus::candidate_runner`)
 ///
 /// `candidate_runner::run_candidate_field` takes one `LayoutOptions` per
@@ -100,6 +100,7 @@ pub enum SurplusPolicy {
 /// - **Diagnostic / measurement-only** (bypasses candidate selection
 ///   entirely when set — not a search axis in either sense):
 ///   `band_packing`.
+#[derive(Clone, Debug)]
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,
     /// Insert a spacer column east of multi-tap solid lanes whose east
