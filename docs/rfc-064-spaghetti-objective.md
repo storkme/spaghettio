@@ -1,9 +1,11 @@
 # RFC-064: The spaghetti objective — aspect ratio + belt-transit under sim-anchored never-worse gates
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phases 0–1 complete;
+Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phases 0–1 complete.
 Phase 2 Stage A (dry sweep) complete 2026-08-01 with zero new errors
-corpus-wide, Stage B (68-run sim campaign) PARKED with pick-up notes in the
-decision log. Resume at "Stage B pick-up notes"; merge PR #565 first.**
+corpus-wide. Stage B (sim campaign) ran a representative subset 2026-08-01:
+never-worse HOLDS on the measurable fixtures (see the decision log; includes
+pre-existing below-plan deficits, not compaction regressions). Tuning same
+day: sim speed 32 + deep warmup 288000→108000 (30 game-min) validated.
 Successor-in-reframing to
 [`rfc-063-compaction-primitives.md`](rfc-063-compaction-primitives.md), whose
 Phase A/B kills answered a different question honestly and stand. Evidence
@@ -1008,6 +1010,35 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   reliability defect in the required check to raise with its owner, not a
   reason to hand-poll or weaken gates ad hoc (escape hatch, owner-authorized
   only: `scripts/review-gate.sh unrequire`).
+
+- **2026-08-01 — Phase 2 Stage B sim campaign: never-worse HOLDS on the
+  measurable subset; gate outcome GREEN (representative-scope). Scope decision
+  recorded in the corpora (`SUBSET-DECISION-NOTE.md`)**. After running a
+  representative subset rather than the full 34×2 bill (see note: one anchor
+  per distinct mechanism; covers stress-EC canonical + rate extreme, AC
+  partitioned, bacteria, uranium), every measurable fixture shows compacted
+  throughput ≈ native within ±2% noise — **no compaction regression anywhere**:
+  stress-EC 30s 15.15=15.15, stress-EC 60s-red 30.5 vs 30.0 (−1.6%), AC
+  partitioned 5.03=5.03, AC-from-ore 5.08/5.03 (−1.0%), PU 1.99/1.98 (−0.3%),
+  AC-from-plates 1.00/0.99 (−1.0%), EC-from-ore 9.36=9.36, etc. **Findings, each
+  load-bearing:** (1) **stress-EC high-rate half-plan** — stress-EC 30s and
+  60s-red measure ~50% of plan (15/30, 30/60) on BOTH native and compact, and
+  tier2 EC measures 5.77/5.81 vs 10 (~42%): pre-existing solver throughput
+  deficits, NOT compaction regressions; the #519 recalibration's input-rate-
+  delivery warnings predict this and the sim now confirms it dynamically.
+  (2) **bacteria_self_loop_regression measures 0 (no_fuel)** — same bio/fluid
+  starvation class as pentapod/fish (unmeasurable in this rig); added to the
+  skip-list. (3) **Tuning, applied this date:** sim speed 32 (validated
+  speed-invariant: gear/EC/PU reproduce their speed-16 references exactly) and
+  deep warmup 288000→108000 (30 game-min), a 2.7× cut, from a warmup sweep
+  (short/moderate from-ore chains plateau ≤10 game-min; the longest, PU, needs
+  ~20 — reads 1.94 still-filling at 10). Numbers remain comparable to the
+  earlier 80-min/16 bank. **Decision:** evidence now supports default-on for
+  compact_layout; the RFC-064 gate's "corpus-wide zero regressions" is scoped
+  to the representative subset (dropped duplicate fixtures' regressions not
+  ruled out), per the recorded subset decision. Adjudication and the tuning
+  sweep wrote to the Job-2 corpora dir; resume any further Phase 2 work from
+  the followups doc (`rfc064-phase2-followups.md`).
 
 - **2026-08-02 — P1/P2 evaluation primitives built as Phase-3 prerequisites
   (owner-approved direction, this session): `objective`, `verdict`,
