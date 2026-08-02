@@ -1082,3 +1082,66 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   fold-accept semantics (validator-adjacent), so per repo rules it owes
   both the PR bot pass AND session-side review before merging to main.
   Stage B is unaffected (no shipping-path change).
+
+- **2026-08-02 — Phase 3 executed and KILLED per its own criterion — with
+  the falsification re-scoped by instrument forensics: what is falsified
+  is the RFC-058 scaffold as a Phase 3 vehicle, not row-rigid packing
+  under this objective, which remains UNANSWERED.** Branch `rfc064-phase3`
+  (stacked on `eval-primitives`): Unit A (b7db3631) added
+  `PackObjective::{MinAreaUnderCap, MinAspectRatio}` to the band packer —
+  flag path stays hardwired to `MinAreaUnderCap` and byte-identical (the
+  #507 falsification record is untouched; pinned by test) — plus runner
+  integration (`PackCandidate` + `PackCorrespondenceTransform` supplying a
+  Provenance-tier per-band translation map + `pack_candidate_plan`). Unit B
+  (efee3227) is the pre-registered adjudication driver
+  (`tests/rfc064_phase3_gate.rs`, `#[ignore]`), fixtures recovered verbatim
+  from RFC-058's own harness (cell_composition.rs:5216: gate = sci1-ore,
+  sci2-ore, pu1-plate; holdout = belt5-ore, insert3-ore, gear15-ore,
+  lds2-plate). **Results:** 3/7 fixtures (incl. gate fixture pu1-plate)
+  refuse on `PackRefusal::MultiLaneItem` (objective-independent, matches
+  RFC-063's record) → gate INCOMPLETE on its own named set. All 4
+  evaluable fixtures MISS Bar 1 with negative AR_score (−13.40 sci1,
+  −0.09 sci2, −0.21 belt5, −6.98 insert3); Bar 2 (net Transit) is
+  UNEVALUABLE — Transit(packed)=0 on all four from 100% edge unattribution;
+  validation verdict FAILS everywhere (8–10 regressed categories incl.
+  belt-flow-reachability, orphan-belt-segment, belt-dead-end). **Instrument
+  probe** (`tests/rfc064_phase3_probe.rs`, per the attack-the-probe
+  discipline, before accepting gate-crossing numbers): (a) Unit A
+  integration FAITHFUL — PackCandidate(MinAreaUnderCap) byte-identical to
+  the `band_packing` flag path on all 4; (b) the breakage is PRE-EXISTING
+  SCAFFOLD DEBT — the untouched flag path itself fails validation 37–212
+  issues/fixture (belt-flow-reachability 6–86, power 11–77); the full
+  36-validator suite had never been pointed at packed output (RFC-058's
+  "physically-legal routing" meant its trunk router found paths, not that
+  the fabric validates; RFC-063's "inherited RFC-058 correctness debt" is
+  this, quantified); (c) MinAspectRatio NOT specially broken — identical
+  plan to area on sci1/insert3, FEWER issues than area on sci2 (171 vs
+  212, 60×53 vs 75×40), slightly worse on belt5 (61 vs 37). **Adjudication:**
+  kill criterion fires in a stronger form than the RFC anticipated — no
+  amount of unconstrained entity spend can rescue a scaffold whose
+  packed-net re-routing produces non-functional fabric; the "routing-
+  legality cost" hypothesized by the kill text is not a tax on squareness,
+  it is total. Two subsidiary findings, both binding on any revival:
+  (1) **Gate-design flaw, recorded not renegotiated**: RFC-058's fixtures
+  have near-square natives (AR 1.06–1.41) — the AR_score denominator
+  (AR_native − 1 as low as 0.06) makes Bar 1 unreachable short of
+  perfection REGARDLESS of packer quality; the ribbon problem this phase
+  exists for lives at mega-chain scale (17.3:1), where MultiLaneItem
+  refusals block the packer entirely. Reusing RFC-058's fixture set bought
+  comparability with its kill at the cost of discriminating power on the
+  new objective. (2) The `MinAspectRatio` objective itself behaved
+  correctly where band geometry gave it freedom (sci2) — the objective
+  survives; the vehicle does not. **Preconditions for any Phase 3 revival,
+  in order:** a packed-net router that produces validator-clean fabric
+  (this is the owner's named router-robustness risk, now with positioned
+  evidence — mitigation trajectory per the cell-interface direction:
+  chunkier pieces, fewer external connections), THEN a fixture set whose
+  natives actually exhibit elongation, THEN re-run this same driver
+  unchanged. Sim anchoring (Bar 3) never reached — nothing ships.
+  Verification: full suite 1141 passed / 0 failed on every commit; probe
+  and driver each single clean runs. Units by Sonnet agents; P3-A died
+  pre-commit and pre-report (work salvaged, reviewed, committed by session
+  lead — targeted tests + clippy + full suite verified independently);
+  P3-B reported via file handoff (P3B_REPORT.md, absorbed here, deleted).
+  Review debt: same as the eval-primitives entry above — this branch has
+  had NO adversarial review and owes it before merge.
