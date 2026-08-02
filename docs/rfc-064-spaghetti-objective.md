@@ -1008,3 +1008,77 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   reliability defect in the required check to raise with its owner, not a
   reason to hand-poll or weaken gates ad hoc (escape hatch, owner-authorized
   only: `scripts/review-gate.sh unrequire`).
+
+- **2026-08-02 — P1/P2 evaluation primitives built as Phase-3 prerequisites
+  (owner-approved direction, this session): `objective`, `verdict`,
+  `candidate_runner` — on local branch `eval-primitives`, adversarial review
+  DEFERRED.** Rationale: every phase to date re-derived its instrument
+  (metrics in a gitignored dry-sweep example, three incompatible in-tree
+  never-worse tests, per-phase evaluation loops); Phase 3's packer needs the
+  loop to be a primitive, not a rebuild. Three units, Sonnet agents under
+  session-lead review, all additive — **zero shipping-behavior change**
+  (`build_bus_layout` and `select_best_decomposition` byte-identical; the
+  runner is test-only until a future, separately-gated call-site swap).
+  (1) **P1, `crates/core/src/objective.rs`** (97a63dbc): §(a)–(d) exactly;
+  Transit is REALIZED per-edge routed path length (Dijkstra over
+  `belt_flow`'s adjacency helpers), replacing Stage A's flagged
+  total-belt-length proxy. Unspecified-by-RFC decisions: `fluid_weight
+  = 0.5` (Phase 0's own log: no in-tree canonical value; RFC-055's 0.25 is
+  an unrelated test parameter); `Transit_score` zero-native degenerate
+  defined analogously to `AR_score`'s square-native rule (0.0 if candidate
+  also zero, else −1.0 sentinel); splitter crossover modeled as
+  both-outputs-reachable weight-2 (documented over-connection, not
+  per-lane-accurate); shortest path as representative length across
+  balancers; multi-instance producer/consumer averaged. Honest gap:
+  fluid edges routed entirely underground report `path_length: None`,
+  excluded from Transit, counted in `unattributed_edge_count` — never
+  silently proxied. (2) **P2a, `crates/core/src/verdict.rs`** (0f309a36,
+  a50a0454): tiered never-worse (Provenance/Positional/Count, tier recorded
+  on every verdict — the realism-ladder discipline applied to the gate
+  itself); per-category `GatePolicy` with presets codifying the prior fold
+  (all-categories count) and decomposition (one-category) gates exactly.
+  Design decisions: explicit `tier` parameter (absence of a map is
+  ambiguous between "Positional is safe" and "only Count is safe" — only
+  the caller knows its transform); unresolvable native-issue positions
+  degrade the WHOLE category to count comparison (instance-level degrade
+  produced false "new" regressions); exact integer-tile matching, multiset
+  one-for-one. `search_snake_fold` refit to Provenance tier via
+  `fold_point_correspondence` — a closed-form per-tile map (even segments
+  translate, odd segments point-reflect; entity width cancels), pinned by a
+  tile-set property test against `fold_snake`'s actual movements. **The
+  `fold=1` knob is now STRICTER**: intra-category churn (N resolved here,
+  N introduced there) previously netted zero and passed; it now rejects.
+  Owner pre-approved; no existing fixture flipped accept→reject
+  (fold-knob + mil5 multifold suites both still green). (3) **P2b,
+  `crates/core/src/bus/candidate_runner.rs`** (c800de40, a35227b9,
+  58401f90, 22843a83): `LayoutTransform` (declared `admissible_input`
+  budget + `TransformOutcome{layout, correspondence, tier}`),
+  `CandidatePlan` (reuses `DecompositionCandidate` for the base slot),
+  `run_candidate_field` (produce → transform → validate → measure →
+  verdict-vs-incumbent → `rank_admissible`; incumbent always in field,
+  scores 0 by construction — Phase 1's finding-2 "fold found ≠ fold good"
+  rule is now structural). Chain tier rule: any Count step degrades the
+  whole chain to Count; all-Positional stays Positional; all-Provenance
+  composes maps by lookup chaining. `FoldTransform` = Provenance
+  (Positional on the no-fold no-op path); `CompactTransform` = Count —
+  threading a correspondence map out of `strip_empty_columns/rows`' known
+  column/row shifts is a NAMED FOLLOW-UP, deliberately deferred. Fold's
+  call-site latency guard moved into `FoldTransform::admissible_input`
+  (`FOLD_SEARCH_ENTITY_THRESHOLD` now `pub(crate)`, value unchanged).
+  `LayoutOptions` doc-classified pinned-vs-searchable (belt tier, stacking,
+  inserter tier, quality, wire mode are NEVER search axes; the runner takes
+  opts once, unmodified — variation lives in transforms). Parity gates:
+  runner plans reproduce `build_bus_layout(compact_layout: true)` and
+  `(compact+fold)` as full-JSON byte-equality on the Phase 1 spike's own
+  admissible-fold fixture; incumbent-only field byte-identical to plain
+  `build_bus_layout`. Process notes, recorded for review honesty: P1's
+  agent committed once with `--no-verify` (hook's exact clippy invocation
+  verified clean manually before commit; nothing bypassed in substance);
+  P2b's completion report was lost to an agent-messaging failure — the
+  session lead reconstructed verification independently (code review of
+  tiers/parity assertions + full release-suite run + wasm `cargo check`)
+  and committed the agent's cosmetic tail (22843a83). **Review debt:**
+  this branch has had NO adversarial review (token budget); it touches
+  fold-accept semantics (validator-adjacent), so per repo rules it owes
+  both the PR bot pass AND session-side review before merging to main.
+  Stage B is unaffected (no shipping-path change).
