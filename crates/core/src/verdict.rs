@@ -165,6 +165,16 @@ impl CorrespondenceMap {
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
+
+    /// Every `from` key this map has an entry for. Purely additive (P2b,
+    /// RFC-064): `never_worse` itself only ever calls `get`, so no existing
+    /// caller depends on iteration existing at all, let alone its order.
+    /// Added so `bus::candidate_runner::compose_chain` can walk one
+    /// transform's whole domain through the next map in a chain without
+    /// the caller having to track that domain separately.
+    pub fn keys(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.map.keys().copied()
+    }
 }
 
 /// Which strategy [`never_worse`] used to decide whether a positioned native

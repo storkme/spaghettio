@@ -74,6 +74,32 @@ pub enum SurplusPolicy {
 /// previous `max_belt_tier` parameter so future per-call options
 /// (strategy, escargio fold parameters, …) attach as additional fields.
 #[derive(Clone, Debug)]
+/// ## Pinned vs. searchable fields (RFC-064 P2b, `bus::candidate_runner`)
+///
+/// `candidate_runner::run_candidate_field` takes one `LayoutOptions` per
+/// call and passes it through to every base producer and transform
+/// UNCHANGED — the runner never varies a field itself; only
+/// `LayoutTransform`/`DecompositionCandidate` implementations express
+/// variation (`bus::candidate_runner`'s own module docs, "Searchable vs.
+/// pinned knobs"). This is a doc-only classification of what each field
+/// IS, not a restructuring — every field below is unchanged, this is a
+/// legend for callers deciding whether a field belongs on a searched axis:
+///
+/// - **User-pinned** (never a search/transform axis, by long-standing
+///   project rule — belt tier, in particular, is never auto-escalated):
+///   `max_belt_tier`, `max_inserter_tier`, `quality`, `stacking`,
+///   `inserter_capacity`, `wire_mode` (cosmetic-only), `surplus_policy`.
+/// - **Base-production axis** (today's decomposition-search competes these
+///   via `DecompositionCandidate`, the runner's own "base production"
+///   slot — see `bus::decomposition_search`): `strategy`, `row_layout`,
+///   `merge_tap`, `cell_composition`, `direct_insertion`, `di_claim_order`,
+///   `horizontal_candidate`, `splitter_tap_spacers`.
+/// - **Post-layout transform axis** (exactly what `bus::candidate_runner`'s
+///   `LayoutTransform`s wrap): `compact_layout` (`CompactTransform`),
+///   `fold_layout` (`FoldTransform`).
+/// - **Diagnostic / measurement-only** (bypasses candidate selection
+///   entirely when set — not a search axis in either sense):
+///   `band_packing`.
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,
     /// Insert a spacer column east of multi-tap solid lanes whose east
@@ -350,7 +376,13 @@ pub fn build_bus_layout(
 /// compacted entities, `build_bus_layout` skips `search_snake_fold`
 /// entirely rather than running it. See the comment at the call site in
 /// [`build_bus_layout`] for the numbers behind this constant.
-const FOLD_SEARCH_ENTITY_THRESHOLD: usize = 6000;
+///
+/// `pub(crate)` (not private) so `bus::candidate_runner::FoldTransform`
+/// (P2b, RFC-064) can port this exact guard into its `admissible_input`
+/// instead of re-deriving the number — the guard is meant to live with the
+/// transform, not the call site, but the NUMBER itself has exactly one
+/// source of truth.
+pub(crate) const FOLD_SEARCH_ENTITY_THRESHOLD: usize = 6000;
 
 /// Today's `build_bus_layout` body — the retry orchestrator that
 /// invokes `layout_pass`, reads the junction-cap tiles it returns,
