@@ -4055,6 +4055,88 @@ mod tests {
             (25, 14),
         );
     }
+
+    // -----------------------------------------------------------------
+    // fold_point_correspondence vs fold_snake (RFC-064 P2b — owed from
+    // the P2a review: bind the map to fold_snake's ACTUAL behavior, not
+    // just its own documented derivation)
+    // -----------------------------------------------------------------
+
+    /// For every entity in a small, hand-built, trivially-foldable layout
+    /// (no belts to reconnect, so nothing about the reconnection/junction
+    /// machinery can interfere), the set of tiles it occupies pre-fold,
+    /// mapped tile-by-tile through [`fold_point_correspondence`], must
+    /// equal the set of tiles the CORRESPONDING entity occupies post-fold
+    /// — anchor-convention-independent, since this compares TILE SETS, not
+    /// anchor coordinates (an odd-segment entity's anchor is its top-left
+    /// pre-fold but its new anchor is a DIFFERENT corner post-fold, exactly
+    /// the asymmetry `fold_point_correspondence`'s own doc comment works
+    /// through algebraically — this test is the executable check on that
+    /// derivation against `fold_snake`'s real output, not a re-derivation).
+    #[test]
+    fn fold_point_correspondence_matches_fold_snake_tile_sets() {
+        // Two 1x1 stand-in entities (unknown names -> entity_size falls
+        // back to (1,1)) either side of a legal fold column, no belts at
+        // all — fold_snake's reconnection pass has nothing to do, so this
+        // isolates the point-transform this test exists to check.
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity {
+                    name: "stub-a".into(),
+                    x: 0,
+                    y: 0,
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "stub-b".into(),
+                    x: 5,
+                    y: 1,
+                    ..Default::default()
+                },
+            ],
+            width: 8,
+            height: 3,
+            ..Default::default()
+        };
+        let folds = vec![3];
+
+        let folded = fold_snake(&layout, &folds).expect("fold must succeed on this trivial fixture");
+        let correspondence = fold_point_correspondence(&layout, &folds);
+
+        for e in &layout.entities {
+            let (w, h) = entity_dims(&e.name, e.direction);
+            let pre_tiles: FxHashSet<(i32, i32)> = (0..w)
+                .flat_map(|dx| (0..h).map(move |dy| (dx, dy)))
+                .map(|(dx, dy)| (e.x + dx, e.y + dy))
+                .collect();
+            let mapped_tiles: FxHashSet<(i32, i32)> = pre_tiles
+                .iter()
+                .map(|&t| {
+                    correspondence
+                        .get(t)
+                        .unwrap_or_else(|| panic!("correspondence map must cover every pre-fold tile, missing {t:?}"))
+                })
+                .collect();
+
+            let post = folded
+                .entities
+                .iter()
+                .find(|pe| pe.name == e.name)
+                .unwrap_or_else(|| panic!("entity {} must survive this trivial fold", e.name));
+            let (pw, ph) = entity_dims(&post.name, post.direction);
+            let post_tiles: FxHashSet<(i32, i32)> = (0..pw)
+                .flat_map(|dx| (0..ph).map(move |dy| (dx, dy)))
+                .map(|(dx, dy)| (post.x + dx, post.y + dy))
+                .collect();
+
+            assert_eq!(
+                mapped_tiles, post_tiles,
+                "entity {}: tile set mapped through fold_point_correspondence must equal \
+                 the corresponding entity's actual post-fold tile set",
+                e.name,
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

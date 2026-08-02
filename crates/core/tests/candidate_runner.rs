@@ -10,8 +10,8 @@
 //! produce.
 
 use spaghettio_core::bus::candidate_runner::{
-    CandidateOutcome, CandidatePlan, CompactTransform, FoldTransform, FullSelectionCandidate,
-    LayoutTransform, TransformOutcome, produce_plan, run_candidate_field,
+    produce_plan, run_candidate_field, CandidateOutcome, CandidatePlan, CompactTransform,
+    FoldTransform, FullSelectionCandidate, LayoutTransform, TransformOutcome,
 };
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy};
 use spaghettio_core::models::{LayoutResult, SolverResult};
@@ -301,7 +301,12 @@ impl LayoutTransform for ShrinkOntoOverlapTransform {
 }
 
 fn tier1_gear_from_ore() -> SolverResult {
-    solve("iron-gear-wheel", 10.0, &["iron-ore"], "assembling-machine-2")
+    solve(
+        "iron-gear-wheel",
+        10.0,
+        &["iron-ore"],
+        "assembling-machine-2",
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -353,7 +353,10 @@ fn compose_chain(
                     return (MatchTier::Count, None);
                 };
                 pairs = Some(match pairs.take() {
-                    None => map.keys().filter_map(|k| map.get(k).map(|v| (k, v))).collect(),
+                    None => map
+                        .keys()
+                        .filter_map(|k| map.get(k).map(|v| (k, v)))
+                        .collect(),
                     Some(prev) => prev
                         .into_iter()
                         .filter_map(|(from, mid)| map.get(mid).map(|to| (from, to)))
@@ -363,7 +366,10 @@ fn compose_chain(
             MatchTier::Count => unreachable!("filtered out by the guard above"),
         }
     }
-    (MatchTier::Provenance, pairs.map(CorrespondenceMap::from_pairs))
+    (
+        MatchTier::Provenance,
+        pairs.map(CorrespondenceMap::from_pairs),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -461,7 +467,10 @@ pub struct EvaluatedCandidate {
 pub enum CandidateOutcome {
     /// Base production failed, or a transform's `apply` failed. Never
     /// entered validation/measurement/ranking at all.
-    Refused { name: String, reason: String },
+    Refused {
+        name: String,
+        reason: String,
+    },
     Evaluated(Box<EvaluatedCandidate>),
 }
 
@@ -544,22 +553,29 @@ pub fn run_candidate_field(
     let mut captured: Vec<Captured> = Vec::with_capacity(field.len());
     for plan in field {
         let start = crate::trace::peek_events_len();
-        let evaluated: Result<(LayoutResult, ObjectiveScores, Verdict, Vec<(String, String)>), String> =
-            (|| {
-                let run = run_plan(plan, solver, opts)?;
-                let issues = issues_of(&run.layout, solver);
-                let measure = objective::measure(&run.layout, solver)
-                    .map_err(|e| format!("measure failed: {e}"))?;
-                let scores = objective::score_vs_native(&measure, &incumbent_measure);
-                let v = verdict::never_worse(
-                    &incumbent_issues,
-                    &issues,
-                    policy,
-                    run.tier,
-                    run.correspondence.as_ref(),
-                );
-                Ok((run.layout, scores, v, run.skipped_transforms))
-            })();
+        let evaluated: Result<
+            (
+                LayoutResult,
+                ObjectiveScores,
+                Verdict,
+                Vec<(String, String)>,
+            ),
+            String,
+        > = (|| {
+            let run = run_plan(plan, solver, opts)?;
+            let issues = issues_of(&run.layout, solver);
+            let measure = objective::measure(&run.layout, solver)
+                .map_err(|e| format!("measure failed: {e}"))?;
+            let scores = objective::score_vs_native(&measure, &incumbent_measure);
+            let v = verdict::never_worse(
+                &incumbent_issues,
+                &issues,
+                policy,
+                run.tier,
+                run.correspondence.as_ref(),
+            );
+            Ok((run.layout, scores, v, run.skipped_transforms))
+        })();
         let events = crate::trace::peek_events_since(start);
         crate::trace::truncate_events(start);
         let outcome = match evaluated {
