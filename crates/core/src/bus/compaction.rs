@@ -15,7 +15,7 @@ use crate::common::{
 };
 use crate::models::{EntityDirection, LayoutResult, ModuleItem, PlacedEntity, SolverResult};
 
-const RATE_SCALE: f64 = 1_000_000_000.0;
+pub const RATE_SCALE: f64 = 1_000_000_000.0;
 
 fn fixed_rate(rate: f64) -> i64 {
     (rate * RATE_SCALE).round() as i64
@@ -3169,7 +3169,7 @@ fn hub_is_free(
             .all(|plan| !blocks_overlap(&expanded, &plan.hub))
 }
 
-fn entity_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
+pub fn entity_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
     let (mut width, mut height) =
         oriented_splitter_dims(name, direction).unwrap_or_else(|| entity_size(name));
     if matches!(direction, EntityDirection::East | EntityDirection::West)

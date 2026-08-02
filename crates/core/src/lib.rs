@@ -24,6 +24,7 @@ pub mod fluid_ports;
 pub mod models;
 pub mod module_policy;
 pub mod netflow;
+pub mod objective;
 pub mod power_wires;
 pub mod recipe_db;
 pub mod sat;
