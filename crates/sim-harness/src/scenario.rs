@@ -123,7 +123,8 @@ const STABILITY_TOLERANCE: f64 = 0.02;
 /// own cadence — a non-multiple-of-60 ceiling could never be hit exactly
 /// by an `on_nth_tick(60, ...)` check).
 pub fn default_warmup_ticks(width: i32, height: i32) -> u32 {
-    let raw = BASE_WARMUP_TICKS + 2 * (width.max(0) as u32 + height.max(0) as u32) * DIM_WARMUP_FACTOR;
+    let raw =
+        BASE_WARMUP_TICKS + 2 * (width.max(0) as u32 + height.max(0) as u32) * DIM_WARMUP_FACTOR;
     round_up_60(raw)
 }
 
@@ -210,13 +211,26 @@ pub struct RunParams {
     /// Never set for measurement runs — it changes force bonuses, and a
     /// measurement must run in the world the fixture declares.
     pub operator_qol: bool,
+    /// `run --timeseries`: stream the per-window machine/item time-series to
+    /// `script-output/timeseries.csv` LIVE during a measurement run, not just
+    /// into the JSON report at finalize. Same format as `serve`'s streaming
+    /// CSV (RFC-050 Phase 3 #537). Unlike `operator_qol` this does NOT change
+    /// force bonuses or reveal the map — it is measurement-safe, so a
+    /// long/grinding run can be watched and scored live (is it ramping toward
+    /// plan, or flat-zero and dead?) without waiting for finalize.
+    pub write_timeseries: bool,
 }
 
 impl RunParams {
     /// Build defaults from the manifest's own dims + target rate, leaving
     /// `end_tick`/`speed`/`scenario_name` for the caller (CLI flags or
     /// generated identity) to fill in.
-    pub fn defaults_for(manifest: &Manifest, scenario_name: String, speed: u32, end_tick: Option<u32>) -> RunParams {
+    pub fn defaults_for(
+        manifest: &Manifest,
+        scenario_name: String,
+        speed: u32,
+        end_tick: Option<u32>,
+    ) -> RunParams {
         let warmup = default_warmup_ticks(manifest.dims[0], manifest.dims[1]);
         let target_rate = manifest.targets.first().map(|t| t.rate).unwrap_or(1.0);
         let window = default_window_ticks(target_rate);
@@ -229,18 +243,28 @@ impl RunParams {
         // `MIN_CHECKPOINTS` reports non-convergence by construction.
         let default_ceiling = round_up_60(warmup + window_tick_cap(window) * MIN_CHECKPOINTS * 2);
         RunParams {
-            end_tick: end_tick.unwrap_or(default_ceiling).max(viable_end_tick(warmup, window)),
+            end_tick: end_tick
+                .unwrap_or(default_ceiling)
+                .max(viable_end_tick(warmup, window)),
             speed,
             warmup_ticks: warmup,
             window_ticks: window,
             scenario_name,
             operator_qol: false,
+            write_timeseries: false,
         }
     }
 
     /// Enable the human-inspection conveniences (`serve`).
     pub fn with_operator_qol(mut self) -> RunParams {
         self.operator_qol = true;
+        self
+    }
+
+    /// Enable LIVE per-window CSV streaming on a measurement run
+    /// (`run --timeseries`). Independent of `operator_qol`.
+    pub fn with_timeseries(mut self) -> RunParams {
+        self.write_timeseries = true;
         self
     }
 
@@ -272,7 +296,6 @@ type Vec2 = (i32, i32);
 fn neg((x, y): Vec2) -> Vec2 {
     (-x, -y)
 }
-
 
 /// Emit the shared `add_feed`/`add_drain` Lua functions plus the module-
 /// proxy fulfillment helper. Shared (not unrolled per-boundary) so the
@@ -523,7 +546,10 @@ fn feed_slots(records: &[BoundaryRecord]) -> Vec<i32> {
         let mut idxs = idxs;
         // Fluids-first, then lateral position within each class.
         idxs.sort_by_key(|&i| {
-            (!records[i].is_fluid, records[i].x * lateral.0 + records[i].y * lateral.1)
+            (
+                !records[i].is_fluid,
+                records[i].x * lateral.0 + records[i].y * lateral.1,
+            )
         });
         for (slot, i) in idxs.into_iter().enumerate() {
             slots[i] = slot as i32;
@@ -607,7 +633,11 @@ fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
             belt = belt,
         );
     }
-    let _ = writeln!(out, "  end -- feed[{idx}] {} at ({},{})", rec.item, rec.x, rec.y);
+    let _ = writeln!(
+        out,
+        "  end -- feed[{idx}] {} at ({},{})",
+        rec.item, rec.x, rec.y
+    );
 }
 
 fn drain_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
@@ -632,7 +662,11 @@ fn drain_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
         ext = ext_len,
         item = rec.item,
     );
-    let _ = writeln!(out, "  end -- drain[{idx}] {} at ({},{})", rec.item, rec.x, rec.y);
+    let _ = writeln!(
+        out,
+        "  end -- drain[{idx}] {} at ({},{})",
+        rec.item, rec.x, rec.y
+    );
 }
 
 /// Build the full `control.lua` for one measurement run.
@@ -646,7 +680,10 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     // generalized the single-scalar TARGET before it.
     let target_items: Vec<&str> = manifest.targets.iter().map(|t| t.item.as_str()).collect();
 
-    let _ = writeln!(out, "-- Generated by spaghettio-sim (RFC-050). DO NOT EDIT.");
+    let _ = writeln!(
+        out,
+        "-- Generated by spaghettio-sim (RFC-050). DO NOT EDIT."
+    );
     let _ = writeln!(out, "-- label: {}", manifest.label);
     let _ = writeln!(out, "local BP = \"{bp}\"");
     {
@@ -672,12 +709,28 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     );
     let _ = writeln!(out, "local STABILITY_TOL = {STABILITY_TOLERANCE}");
     let _ = writeln!(out, "local STABILITY_WINDOWS = {STABILITY_WINDOWS}");
-    let _ = writeln!(out, "local LX0, LY0 = {}, {}", manifest.bbox_min[0], manifest.bbox_min[1]);
-    let _ = writeln!(out, "local DIMS_X, DIMS_Y = {}, {}", manifest.dims[0], manifest.dims[1]);
-    let _ = writeln!(out, "local INSERTER_CAPACITY = {}", manifest.inserter_capacity);
+    let _ = writeln!(
+        out,
+        "local LX0, LY0 = {}, {}",
+        manifest.bbox_min[0], manifest.bbox_min[1]
+    );
+    let _ = writeln!(
+        out,
+        "local DIMS_X, DIMS_Y = {}, {}",
+        manifest.dims[0], manifest.dims[1]
+    );
+    let _ = writeln!(
+        out,
+        "local INSERTER_CAPACITY = {}",
+        manifest.inserter_capacity
+    );
     let _ = writeln!(out, "local STACKING = {}", manifest.stacking);
     {
-        let items: Vec<String> = manifest.planned_rates.keys().map(|k| format!("\"{k}\"")).collect();
+        let items: Vec<String> = manifest
+            .planned_rates
+            .keys()
+            .map(|k| format!("\"{k}\""))
+            .collect();
         let _ = writeln!(out, "local PLANNED_ITEMS = {{{}}}", items.join(", "));
     }
     // Per-machine/per-item time-series (#537 motivation): a rate-vs-time
@@ -688,7 +741,11 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     // regardless of mode; CSV appending to script-output is `serve`-only
     // (`operator_qol`), so a human watching live gets a machine-readable
     // record on disk without a measurement run paying the extra file I/O.
-    let _ = writeln!(out, "local WRITE_TIMESERIES_CSV = {}", params.operator_qol);
+    let _ = writeln!(
+        out,
+        "local WRITE_TIMESERIES_CSV = {}",
+        params.operator_qol || params.write_timeseries
+    );
     let _ = writeln!(out, "local TIMESERIES_CSV_FILE = \"timeseries.csv\"");
 
     out.push_str(
@@ -1201,6 +1258,19 @@ script.on_nth_tick(60, function(ev)
       table.insert(storage.checkpoints, {tick = ev.tick, produced = produced,
         delivered = delivered, window_ticks = 0, window_items = 0, short_sampled = false,
         items = checkpoint_items()})
+      -- Seed the per-window delta baselines AT the warmup boundary, not at
+      -- tick 0. Without this, the FIRST closed window's machine/item delta
+      -- is cumulative-since-tick-0 (all of warmup's production folded into
+      -- one entry) — a warmup-contaminated first sample that miscredits a
+      -- fast warmup as a huge window rate. Seeding here makes every
+      -- subsequent closed-window delta (JSON timeseries AND --timeseries CSV)
+      -- a true per-window value.
+      for _, m in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
+        storage.machine_last_crafts[m.unit_number] = m.products_finished or 0
+      end
+      for _, item in ipairs(PLANNED_ITEMS) do
+        storage.item_last_produced[item] = produced_count(item)
+      end
     else
       local prev = storage.checkpoints[n]
       local d_items = produced - prev.produced
@@ -1317,7 +1387,10 @@ mod tests {
     fn warmup_scales_with_dims() {
         assert_eq!(default_warmup_ticks(0, 0), round_up_60(BASE_WARMUP_TICKS));
         // gear10: 53x34 -> base + 2*(87)*32 = 3600 + 5568 = 9168 -> round to 9180
-        assert_eq!(default_warmup_ticks(53, 34), round_up_60(3600 + 2 * 87 * 32));
+        assert_eq!(
+            default_warmup_ticks(53, 34),
+            round_up_60(3600 + 2 * 87 * 32)
+        );
     }
 
     #[test]
@@ -1334,7 +1407,10 @@ mod tests {
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
         assert!(lua.contains("local NB_BONUS = {0, 0, 1, 1, 1, 1, 1, 3}"));
         assert!(lua.contains("local BULK_BONUS = {1, 2, 3, 4, 5, 7, 9, 11}"));
-        assert!(lua.contains(&format!("local INSERTER_CAPACITY = {}", m.inserter_capacity)));
+        assert!(lua.contains(&format!(
+            "local INSERTER_CAPACITY = {}",
+            m.inserter_capacity
+        )));
         // The self-audit must reference kit_errors so a failed
         // assignment invalidates the run rather than passing silently.
         assert!(lua.contains("tech-state parity assignment did not take"));
@@ -1354,6 +1430,7 @@ mod tests {
             window_ticks: 1800,
             scenario_name: "t".into(),
             operator_qol: false,
+            write_timeseries: false,
         }
         .with_warmup(216_001);
         assert_eq!(p.warmup_ticks, 216_060);
@@ -1406,8 +1483,9 @@ mod tests {
         // never shorter than MIN_WINDOW_TICKS, or a fast target would
         // reach 300 items inside its own burst cycle and alias.
         assert!(lua.contains(&format!("local WINDOW_MIN_TICKS = {MIN_WINDOW_TICKS}")));
-        assert!(lua
-            .contains("local by_items = d_items >= WINDOW_ITEM_FLOOR and d_ticks >= WINDOW_MIN_TICKS"));
+        assert!(lua.contains(
+            "local by_items = d_items >= WINDOW_ITEM_FLOOR and d_ticks >= WINDOW_MIN_TICKS"
+        ));
         assert!(lua.contains("if by_items or d_ticks >= WINDOW_TICK_CAP then"));
         // Measurement opens exactly at warmup, not at whatever absolute
         // multiple of the window length happens to fall after it.
@@ -1469,13 +1547,21 @@ mod tests {
 
         // south-facing feed: outward=(0,-1), lateral=(1,0) -- matches the
         // literal gen_harness_scenario.py call shape (o=north, l=east).
-        assert!(lua.contains("add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 4, \"iron-ore\", \"transport-belt\")"));
+        assert!(lua.contains(
+            "add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 4, \"iron-ore\", \"transport-belt\")"
+        ));
         // Second rig at depth 10 (6-per-idx stagger, > the bank's ±2
         // chest offset — see feed_call's collision comment / #357).
-        assert!(lua.contains("add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 10, \"iron-ore\", \"transport-belt\")"));
+        assert!(lua.contains(
+            "add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 10, \"iron-ore\", \"transport-belt\")"
+        ));
         // head world-position translation, anchored to the manifest bbox_min
-        assert!(lua.contains("local head_x, head_y = 1 - LX0 + storage.offx, 0 - LY0 + storage.offy"));
-        assert!(lua.contains("local head_x, head_y = 2 - LX0 + storage.offx, 0 - LY0 + storage.offy"));
+        assert!(
+            lua.contains("local head_x, head_y = 1 - LX0 + storage.offx, 0 - LY0 + storage.offy")
+        );
+        assert!(
+            lua.contains("local head_x, head_y = 2 - LX0 + storage.offx, 0 - LY0 + storage.offy")
+        );
     }
 
     /// #363 regression: manifest_gear10.json's two south-facing iron-ore
@@ -1493,19 +1579,30 @@ mod tests {
     fn feed_depth_follows_lateral_position_not_manifest_order() {
         let mut m = fixture();
         m.boundary_inputs.reverse();
-        assert_eq!(m.boundary_inputs[0].x, 2, "sanity: manifest now lists east before west");
+        assert_eq!(
+            m.boundary_inputs[0].x, 2,
+            "sanity: manifest now lists east before west"
+        );
         assert_eq!(m.boundary_inputs[1].x, 1);
 
         let params = RunParams::defaults_for(&m, "test-gear-rev".into(), 16, Some(18000));
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
 
-        let west_block = "    local head_x, head_y = 1 - LX0 + storage.offx, 0 - LY0 + storage.offy\n    \
+        let west_block =
+            "    local head_x, head_y = 1 - LX0 + storage.offx, 0 - LY0 + storage.offy\n    \
             add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 4, \"iron-ore\", \"transport-belt\")";
-        assert!(lua.contains(west_block), "west head (x=1) must keep the smaller depth after reordering:\n{lua}");
+        assert!(
+            lua.contains(west_block),
+            "west head (x=1) must keep the smaller depth after reordering:\n{lua}"
+        );
 
-        let east_block = "    local head_x, head_y = 2 - LX0 + storage.offx, 0 - LY0 + storage.offy\n    \
+        let east_block =
+            "    local head_x, head_y = 2 - LX0 + storage.offx, 0 - LY0 + storage.offy\n    \
             add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 10, \"iron-ore\", \"transport-belt\")";
-        assert!(lua.contains(east_block), "east head (x=2) must keep the bigger depth after reordering:\n{lua}");
+        assert!(
+            lua.contains(east_block),
+            "east head (x=2) must keep the bigger depth after reordering:\n{lua}"
+        );
     }
 
     /// Mirrors `add_feed`'s Lua tile placement (see the module docs above)
@@ -1516,7 +1613,11 @@ mod tests {
     /// silently"). The substation/EEI power island (further out along the
     /// jog than the chest bank) isn't included — it's never the colliding
     /// entity class in the issue's datum.
-    fn feed_footprint(head: (i32, i32), into: (i32, i32), depth: i32) -> std::collections::HashSet<(i32, i32)> {
+    fn feed_footprint(
+        head: (i32, i32),
+        into: (i32, i32),
+        depth: i32,
+    ) -> std::collections::HashSet<(i32, i32)> {
         let outward = neg(into);
         let lateral = rot90(into);
         let neg_lateral = neg(lateral);
@@ -1650,8 +1751,16 @@ mod tests {
         let slots = feed_slots(&records);
         let fluid_slots: std::collections::BTreeSet<i32> = [slots[1], slots[3]].into();
         let item_slots: std::collections::BTreeSet<i32> = [slots[0], slots[2], slots[4]].into();
-        assert_eq!(fluid_slots, [0, 1].into(), "fluids must hold the ladder front");
-        assert_eq!(item_slots, [2, 3, 4].into(), "items must shift above the fluids");
+        assert_eq!(
+            fluid_slots,
+            [0, 1].into(),
+            "fluids must hold the ladder front"
+        );
+        assert_eq!(
+            item_slots,
+            [2, 3, 4].into(),
+            "items must shift above the fluids"
+        );
     }
 
     /// A sixth same-side fluid would need a ug span beyond the game's
@@ -1685,8 +1794,11 @@ mod tests {
         // is 11 + 2*idx (idx=0 here): widened 2026-07-24 from 5 so the
         // bank spans 9 positions (`t = ext_len - 8, ext_len`) / 18
         // inserters, keeping every chest outside the layout.
-        assert!(lua.contains("add_drain(s, force, exit_x, exit_y, 0, 1, 1, 0, 11, \"iron-gear-wheel\")"));
-        assert!(lua.contains("local exit_x, exit_y = 13 - LX0 + storage.offx, 33 - LY0 + storage.offy"));
+        assert!(lua
+            .contains("add_drain(s, force, exit_x, exit_y, 0, 1, 1, 0, 11, \"iron-gear-wheel\")"));
+        assert!(
+            lua.contains("local exit_x, exit_y = 13 - LX0 + storage.offx, 33 - LY0 + storage.offy")
+        );
     }
 
     #[test]
@@ -1700,8 +1812,16 @@ mod tests {
         let m = fixture();
         let params = RunParams::defaults_for(&m, "test-gear".into(), 16, Some(18000));
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
-        assert_eq!(lua.matches("add_fluid_feed(s, force").count(), 1, "only the definition, no calls");
-        assert_eq!(lua.matches("add_fluid_void(s, force").count(), 1, "only the definition, no calls");
+        assert_eq!(
+            lua.matches("add_fluid_feed(s, force").count(),
+            1,
+            "only the definition, no calls"
+        );
+        assert_eq!(
+            lua.matches("add_fluid_void(s, force").count(),
+            1,
+            "only the definition, no calls"
+        );
     }
 
     #[test]
@@ -1738,10 +1858,13 @@ mod tests {
         }
         let params = RunParams::defaults_for(&m, "test-fluid2".into(), 16, Some(18000));
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
-        let crude = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"crude-oil\")");
+        let crude =
+            lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"crude-oil\")");
         let water = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 4, \"water\")");
-        let crude_swap = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 4, \"crude-oil\")");
-        let water_swap = lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"water\")");
+        let crude_swap =
+            lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 4, \"crude-oil\")");
+        let water_swap =
+            lua.contains("add_fluid_feed(s, force, head_x, head_y, 0, -1, 2, \"water\")");
         assert!(
             (crude && water) || (crude_swap && water_swap),
             "adjacent fluid feeds must get dist 2 and 4 (either order)"
@@ -1776,18 +1899,27 @@ mod tests {
     fn operator_qol_is_serve_only_and_keeps_the_teleport() {
         let m = fixture();
         let plain = RunParams::defaults_for(&m, "t".into(), 16, Some(18000));
-        assert!(!plain.operator_qol, "measurement runs must default to no QoL");
+        assert!(
+            !plain.operator_qol,
+            "measurement runs must default to no QoL"
+        );
         let plain_lua = build_control_lua(&m, "0eNBPFAKE", &plain);
         assert!(
             !plain_lua.contains("character_running_speed_modifier"),
             "a measurement scenario must not touch force bonuses"
         );
-        assert!(!plain_lua.contains("chart("), "a measurement must not chart the map");
+        assert!(
+            !plain_lua.contains("chart("),
+            "a measurement must not chart the map"
+        );
 
         let served = RunParams::defaults_for(&m, "t".into(), 1, Some(18000)).with_operator_qol();
         let served_lua = build_control_lua(&m, "0eNBPFAKE", &served);
         assert!(served_lua.contains("character_running_speed_modifier"));
-        assert!(served_lua.contains("chart("), "serve must chart the paste area");
+        assert!(
+            served_lua.contains("chart("),
+            "serve must chart the paste area"
+        );
 
         // Exactly one handler, in both modes, and the teleport intact.
         for (label, lua) in [("measure", &plain_lua), ("serve", &served_lua)] {
@@ -1849,7 +1981,9 @@ mod tests {
         assert!(plain_lua.contains("local TIMESERIES_CSV_FILE = \"timeseries.csv\""));
 
         // The CSV header names the schema columns, written once at init.
-        assert!(served_lua.contains("tick,kind,unit,name,x,y,crafts_delta,status,item,produced_delta"));
+        assert!(
+            served_lua.contains("tick,kind,unit,name,x,y,crafts_delta,status,item,produced_delta")
+        );
     }
 
     #[test]
@@ -1890,9 +2024,7 @@ mod tests {
         assert!(lua.contains(
             "delivered = delivered, window_ticks = 0, window_items = 0, short_sampled = false,\n        items = checkpoint_items()"
         ));
-        assert!(lua.contains(
-            "short_sampled = not by_items, items = checkpoint_items()"
-        ));
+        assert!(lua.contains("short_sampled = not by_items, items = checkpoint_items()"));
     }
 
     /// N >= 2 targets: `TARGETS` carries every one of them (in manifest
@@ -1904,8 +2036,16 @@ mod tests {
         use crate::manifest::ItemRate;
         let mut m = fixture();
         m.targets = vec![
-            ItemRate { item: "electronic-circuit".to_string(), rate: 10.0, is_fluid: false },
-            ItemRate { item: "advanced-circuit".to_string(), rate: 3.0, is_fluid: false },
+            ItemRate {
+                item: "electronic-circuit".to_string(),
+                rate: 10.0,
+                is_fluid: false,
+            },
+            ItemRate {
+                item: "advanced-circuit".to_string(),
+                rate: 3.0,
+                is_fluid: false,
+            },
         ];
         let params = RunParams::defaults_for(&m, "test-ec-ac".into(), 16, Some(18000));
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
@@ -1946,8 +2086,38 @@ mod tests {
         let params = RunParams::defaults_for(&m, "test-drain-chunks".into(), 16, Some(18000));
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
         assert!(
-            lua.contains("s.request_to_generate_chunks({exit_x + fx * ext_len, exit_y + fy * ext_len}, 3)"),
+            lua.contains(
+                "s.request_to_generate_chunks({exit_x + fx * ext_len, exit_y + fy * ext_len}, 3)"
+            ),
             "add_drain must generate its own footprint before placing entities in it"
         );
+    }
+
+    /// `run --timeseries` must stream the per-window CSV without enabling any
+    /// `serve`-only operator QoL (which changes force bonuses + reveals the
+    /// map) — the whole point is a measurement-safe LIVE progress signal for
+    /// long/grinding runs.
+    #[test]
+    fn run_timeseries_streams_csv_without_operator_qol() {
+        let m = fixture();
+        let run = RunParams::defaults_for(&m, "t".into(), 16, Some(18000)).with_timeseries();
+        let lua = build_control_lua(&m, "0eNBPFAKE", &run);
+        // CSV streaming turned on...
+        assert!(
+            lua.contains("local WRITE_TIMESERIES_CSV = true"),
+            "run --timeseries must emit the live CSV"
+        );
+        // ...but NO operator QoL: no map reveal, no reach/speed bonus.
+        assert!(
+            !lua.contains("character_reach_distance_bonus"),
+            "--timeseries must not enable operator QoL"
+        );
+        assert!(!lua.contains("character_running_speed_modifier"));
+
+        // And `run` default stays measurement-quiet (CSV off), distinct from
+        // `serve`.
+        let plain = RunParams::defaults_for(&m, "t".into(), 16, Some(18000));
+        assert!(build_control_lua(&m, "0eNBPFAKE", &plain)
+            .contains("local WRITE_TIMESERIES_CSV = false"));
     }
 }

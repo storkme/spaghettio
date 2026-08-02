@@ -23,18 +23,21 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::astar::ghost_astar;
-use crate::bus::balancer::{balancer_origin_x, splitter_for_belt, stamp_family_balancer, stamp_merge_tap_family, underground_for_belt};
-use crate::bus::lane_planner::{BusLane, LaneFamily};
-use crate::bus::output_merger::merge_output_rows;
-use crate::bus::trunk_renderer::{is_intermediate, render_path, trunk_segments};
-use crate::bus::junction::{BeltTier, Rect};
+use crate::bus::balancer::{
+    balancer_origin_x, splitter_for_belt, stamp_family_balancer, stamp_merge_tap_family,
+    underground_for_belt,
+};
 use crate::bus::eviction::EvictionStrategy;
+use crate::bus::junction::{BeltTier, Rect};
 use crate::bus::junction_sat_strategy::SatStrategy;
 use crate::bus::junction_solver::{
     self, JunctionSolution, JunctionStrategy, JunctionStrategyContext,
 };
+use crate::bus::lane_planner::{BusLane, LaneFamily};
+use crate::bus::output_merger::merge_output_rows;
 use crate::bus::placer::RowSpan;
 use crate::bus::stacking_ctx::StackingCtx;
+use crate::bus::trunk_renderer::{is_intermediate, render_path, trunk_segments};
 use crate::common::{
     belt_entity_for_rate, belt_entity_for_rate_stacked, is_machine_entity, lane_capacity_stacked,
     machine_dims, machine_tiles, ug_max_reach, LANE_LEFT, MERGE_TAP_SEGMENT_TAG,
@@ -164,7 +167,10 @@ fn merge_tap_consumer_demands(lane: &BusLane, row_spans: &[RowSpan]) -> FxHashMa
                 // First matching slot only (first-match == sum): assumes one
                 // input slot per item per recipe. Revisit if the fallback ever
                 // covers multi-item-per-recipe families — then sum all matches.
-                demands.insert(rs.input_belt_y[input_idx], inp.rate * rs.machine_count as f64);
+                demands.insert(
+                    rs.input_belt_y[input_idx],
+                    inp.rate * rs.machine_count as f64,
+                );
                 break;
             }
         }
@@ -184,7 +190,10 @@ enum FeederBridge {
     /// instead of rendering a severed half-bridge that contaminates the
     /// foreign lane. `span` is the offending crossing width, `reach` the tier's
     /// max UG gap.
-    Unbridgeable { span: i32, reach: i32 },
+    Unbridgeable {
+        span: i32,
+        reach: i32,
+    },
 }
 
 /// Reroute a FEEDER path to pass UNDER any foreign trunk column it crosses,
@@ -314,7 +323,10 @@ fn bridge_feeder_under_foreign_trunks(
         let d1 = (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs();
         let d2 = (w[2].0 - w[1].0).abs() + (w[2].1 - w[1].1).abs();
         if d1 > 1 && d2 > 1 {
-            return FeederBridge::Unbridgeable { span: d1.max(d2), reach };
+            return FeederBridge::Unbridgeable {
+                span: d1.max(d2),
+                reach,
+            };
         }
     }
     FeederBridge::Routed(out)
@@ -373,7 +385,12 @@ pub fn route_bus_ghost(
     let mut fluid_reservations: FxHashSet<(i32, i32)> = FxHashSet::default();
     for lane in lanes {
         if lane.is_fluid {
-            let end_y = lane.tap_off_ys.iter().copied().max().unwrap_or(lane.source_y);
+            let end_y = lane
+                .tap_off_ys
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(lane.source_y);
             for y in lane.source_y..=end_y {
                 hard.insert((lane.x, y));
                 fluid_reservations.insert((lane.x, y));
@@ -483,8 +500,12 @@ pub fn route_bus_ghost(
             // of an (N, M) balancer (RFC docs/rfc-merge-tap-trunks.md D2).
             stamp_merge_tap_family(fam, max_belt_tier, ctx)
         } else {
-            stamp_family_balancer(fam, max_belt_tier, ctx)
-                .map_err(|e| format!("ghost router: balancer stamp failed for {:?}: {}", fam.shape, e))?
+            stamp_family_balancer(fam, max_belt_tier, ctx).map_err(|e| {
+                format!(
+                    "ghost router: balancer stamp failed for {:?}: {}",
+                    fam.shape, e
+                )
+            })?
         };
         crate::trace::emit(crate::trace::TraceEvent::BalancerStamped {
             item: fam.item.clone(),
@@ -798,7 +819,10 @@ pub fn route_bus_ghost(
         anchors.dedup();
 
         let reservations = &fluid_reservations;
-        let is_blocked = |y: i32, existing_belts: &FxHashSet<(i32, i32)>, hard: &FxHashSet<(i32, i32)>| -> bool {
+        let is_blocked = |y: i32,
+                          existing_belts: &FxHashSet<(i32, i32)>,
+                          hard: &FxHashSet<(i32, i32)>|
+         -> bool {
             let tile = (x, y);
             existing_belts.contains(&tile)
                 || (hard.contains(&tile) && !reservations.contains(&tile))
@@ -814,9 +838,8 @@ pub fn route_bus_ghost(
         // perpendicular east face. The gap-fill chain then emits a UG-S
         // input one tile south automatically.
         let tap_set: FxHashSet<i32> = tap_ys.iter().copied().collect();
-        let entry_is_ug = anchors.len() >= 2
-            && anchors[1] - anchors[0] >= 2
-            && !tap_set.contains(&anchors[0]);
+        let entry_is_ug =
+            anchors.len() >= 2 && anchors[1] - anchors[0] >= 2 && !tap_set.contains(&anchors[0]);
 
         for (idx, &sp) in anchors.iter().enumerate() {
             if is_blocked(sp, &existing_belts, &hard) {
@@ -853,12 +876,11 @@ pub fn route_bus_ghost(
         // F5) and y+1 for UG-N output (mouth SOUTH). If no such y exists
         // in the candidate range, fall back to the first unblocked y —
         // the validator will surface any resulting cross-fluid merge.
-        let pick_endpoint_y = |
-            range: &[i32],
-            mouth_offset: i32,
-            existing_belts: &FxHashSet<(i32, i32)>,
-            hard: &FxHashSet<(i32, i32)>,
-        | -> Option<i32> {
+        let pick_endpoint_y = |range: &[i32],
+                               mouth_offset: i32,
+                               existing_belts: &FxHashSet<(i32, i32)>,
+                               hard: &FxHashSet<(i32, i32)>|
+         -> Option<i32> {
             let mut fallback: Option<i32> = None;
             for &cand in range {
                 if is_blocked(cand, existing_belts, hard) {
@@ -922,9 +944,7 @@ pub fn route_bus_ghost(
                             trunk_x: x,
                             y_start: y0,
                             y_end: y1,
-                            reason: format!(
-                                "gap=2 entry UG-out tile ({x},{ug_out_y}) blocked"
-                            ),
+                            reason: format!("gap=2 entry UG-out tile ({x},{ug_out_y}) blocked"),
                         });
                     }
                 } else {
@@ -946,9 +966,7 @@ pub fn route_bus_ghost(
                             trunk_x: x,
                             y_start: y0,
                             y_end: y1,
-                            reason: format!(
-                                "gap=2 surface tile ({x},{mid}) blocked"
-                            ),
+                            reason: format!("gap=2 surface tile ({x},{mid}) blocked"),
                         });
                     }
                 }
@@ -1094,9 +1112,7 @@ pub fn route_bus_ghost(
                                     trunk_x: x,
                                     y_start: y0,
                                     y_end: y1,
-                                    reason: format!(
-                                        "chain UG-in tile ({x},{next_in}) blocked"
-                                    ),
+                                    reason: format!("chain UG-in tile ({x},{next_in}) blocked"),
                                 });
                                 head_in_y = None;
                             } else {
@@ -1189,7 +1205,14 @@ pub fn route_bus_ghost(
         }
         let mut by_py: FxHashMap<i32, i32> = FxHashMap::default();
         for (px, py) in branch_targets {
-            by_py.entry(py).and_modify(|min_px| { if px < *min_px { *min_px = px; } }).or_insert(px);
+            by_py
+                .entry(py)
+                .and_modify(|min_px| {
+                    if px < *min_px {
+                        *min_px = px;
+                    }
+                })
+                .or_insert(px);
         }
         for (py, min_px) in by_py {
             // Check if the template placed a UG partner at (min_px - 1, py).
@@ -1239,12 +1262,13 @@ pub fn route_bus_ghost(
                 // the branch into disconnected fragments — latent until
                 // surplus lanes (westmost columns) started branching all
                 // the way across the bus band.
-                let is_blocked_tile = |tile: (i32, i32),
-                                       existing: &FxHashSet<(i32, i32)>,
-                                       hard: &FxHashSet<(i32, i32)>| {
-                    existing.contains(&tile)
-                        || (hard.contains(&tile) && !fluid_reservations.contains(&tile))
-                };
+                let is_blocked_tile =
+                    |tile: (i32, i32),
+                     existing: &FxHashSet<(i32, i32)>,
+                     hard: &FxHashSet<(i32, i32)>| {
+                        existing.contains(&tile)
+                            || (hard.contains(&tile) && !fluid_reservations.contains(&tile))
+                    };
                 // When the template's West-facing flank PTG exists at
                 // (min_px-1, py) but the trunk is too far for the single-
                 // hop fast path above, the branch must END with an East-
@@ -1497,11 +1521,8 @@ pub fn route_bus_ghost(
         .filter(|t| !fluid_reservations.contains(t) || occupied_for_occ.contains(t))
         .copied()
         .collect();
-    let mut occupancy = crate::bus::ghost_occupancy::Occupancy::new(
-        occupancy_hard,
-        row_belts,
-        permanent_inits,
-    );
+    let mut occupancy =
+        crate::bus::ghost_occupancy::Occupancy::new(occupancy_hard, row_belts, permanent_inits);
 
     #[cfg(debug_assertions)]
     {
@@ -1834,15 +1855,14 @@ pub fn route_bus_ghost(
                                 let lanes_per_group = sub_m as usize;
                                 for gi in 0..(g as usize) {
                                     let lane_start = gi * lanes_per_group;
-                                    let lane_end = (lane_start + lanes_per_group)
-                                        .min(fam.lane_xs.len());
+                                    let lane_end =
+                                        (lane_start + lanes_per_group).min(fam.lane_xs.len());
                                     let lane_chunk = &fam.lane_xs[lane_start..lane_end];
                                     if lane_chunk.is_empty() {
                                         continue;
                                     }
-                                    let sub_origin_x = balancer_origin_x(
-                                        lane_chunk, sub.output_tiles,
-                                    );
+                                    let sub_origin_x =
+                                        balancer_origin_x(lane_chunk, sub.output_tiles);
                                     let mut rel_inputs: Vec<i32> =
                                         sub.input_tiles.iter().map(|t| t.0).collect();
                                     rel_inputs.sort();
@@ -1872,7 +1892,7 @@ pub fn route_bus_ghost(
                         }
                     }
 
-                                        if input_xs.is_empty() {
+                    if input_xs.is_empty() {
                         // No template, decomposition, or passthrough rule
                         // resolved this family's shape — mirrors (and is
                         // caused by) the same search coming up empty in
@@ -1897,8 +1917,11 @@ pub fn route_bus_ghost(
                         // across the union of sub-stamp inputs.
                         input_xs.sort();
                         let origin_y = fam.balancer_y_start;
-                        let feeder_belt =
-                            belt_entity_for_rate_stacked(fam.total_rate, max_belt_tier, ctx.for_item(&fam.item));
+                        let feeder_belt = belt_entity_for_rate_stacked(
+                            fam.total_rate,
+                            max_belt_tier,
+                            ctx.for_item(&fam.item),
+                        );
 
                         for (i, &pri) in fam.producer_rows.iter().enumerate() {
                             if pri >= row_spans.len() {
@@ -2049,8 +2072,7 @@ pub fn route_bus_ghost(
         let mut iter_unroutable: Vec<String> = Vec::new();
         // Per-iteration cost grid = history (carried across iters) + present
         // (rebuilt each iter, bumped after each spec routes).
-        let mut iter_cost_grid: FxHashMap<(i32, i32), (u32, u32)> =
-            history_cost_grid.clone();
+        let mut iter_cost_grid: FxHashMap<(i32, i32), (u32, u32)> = history_cost_grid.clone();
 
         for spec in ordered_specs.iter().copied() {
             // Augment hard-obstacles with the spec's own trunk column
@@ -2627,8 +2649,7 @@ pub fn route_bus_ghost(
         if spec_kinds.contains_key(key) {
             continue;
         }
-        let all_pipe = !path.is_empty()
-            && path.iter().all(|t| pipe_tile_set.contains(t));
+        let all_pipe = !path.is_empty() && path.iter().all(|t| pipe_tile_set.contains(t));
         if !all_pipe {
             continue;
         }
@@ -2910,16 +2931,25 @@ pub fn route_bus_ghost(
         // letting pipe×belt (and any future single-spec bypass case)
         // reach the solver.
         let any_undecidable = cluster.iter().any(|&t| {
-            if classify_crossing(t, &routed_paths, &specs, &spec_items, &spec_belt_tiers, &spec_kinds).is_some() {
+            if classify_crossing(
+                t,
+                &routed_paths,
+                &specs,
+                &spec_items,
+                &spec_belt_tiers,
+                &spec_kinds,
+            )
+            .is_some()
+            {
                 return false;
             }
             let spec_count_at_tile = routed_paths
                 .values()
                 .filter(|path| path.contains(&t))
                 .count();
-            let tile_is_forbidden = entities.iter().any(|e| {
-                (e.x, e.y) == t && crate::common::tile_is_forbidden_kind(&e.name)
-            });
+            let tile_is_forbidden = entities
+                .iter()
+                .any(|e| (e.x, e.y) == t && crate::common::tile_is_forbidden_kind(&e.name));
             !(spec_count_at_tile >= 1 && tile_is_forbidden)
         });
         if any_undecidable {
@@ -3191,11 +3221,8 @@ pub fn route_bus_ghost(
         // Non-participating "encountered" specs are handled via the SAT
         // boundary mechanism — `topology_boundaries` emits port boundaries
         // for them so the SAT solution covers their flow through the zone.
-        let participating_keys: rustc_hash::FxHashSet<&str> = sol
-            .participating
-            .iter()
-            .map(String::as_str)
-            .collect();
+        let participating_keys: rustc_hash::FxHashSet<&str> =
+            sol.participating.iter().map(String::as_str).collect();
         // Narrow preserve set to balancer-segment Permanent claims only.
         // Trunks and tapoffs in `forced_empty` are still released — SAT may
         // route around them via UG arcs and Step 6 will drop the orphan
@@ -3236,36 +3263,32 @@ pub fn route_bus_ghost(
                     .collect()
             })
             .unwrap_or_default();
-        let preserve_fixed_tiles: rustc_hash::FxHashSet<(i32, i32)> =
-            forced_empty_set
-                .iter()
-                .filter(|tile| {
-                    matches!(
-                        occupancy.claim_at(**tile),
-                        Some(crate::bus::ghost_occupancy::Claim::Permanent { entity_idx })
-                            if occupancy
-                                .entity_at(**tile)
-                                .and_then(|e| e.segment_id.as_deref())
-                                .is_some_and(|seg| {
-                                    seg.starts_with("balancer:")
-                                        || (seg.starts_with("tapoff:")
-                                            && interior_tiles.contains(*tile))
-                                })
-                                && { let _ = entity_idx; true }
-                    )
-                })
-                .copied()
-                .collect();
+        let preserve_fixed_tiles: rustc_hash::FxHashSet<(i32, i32)> = forced_empty_set
+            .iter()
+            .filter(|tile| {
+                matches!(
+                    occupancy.claim_at(**tile),
+                    Some(crate::bus::ghost_occupancy::Claim::Permanent { entity_idx })
+                        if occupancy
+                            .entity_at(**tile)
+                            .and_then(|e| e.segment_id.as_deref())
+                            .is_some_and(|seg| {
+                                seg.starts_with("balancer:")
+                                    || (seg.starts_with("tapoff:")
+                                        && interior_tiles.contains(*tile))
+                            })
+                            && { let _ = entity_idx; true }
+                )
+            })
+            .copied()
+            .collect();
         let preserve_ref = if preserve_fixed_tiles.is_empty() {
             None
         } else {
             Some(&preserve_fixed_tiles)
         };
-        let released_count = occupancy.release_for_pertile_template(
-            &release_rect,
-            None,
-            preserve_ref,
-        );
+        let released_count =
+            occupancy.release_for_pertile_template(&release_rect, None, preserve_ref);
         trace::emit(trace::TraceEvent::GhostResidueCleared {
             zone_x: release_rect.x,
             zone_y: release_rect.y,
@@ -3330,10 +3353,18 @@ pub fn route_bus_ghost(
         let leaked_tiles: Vec<(i32, i32)> = entities
             .iter()
             .filter(|e| {
-                let Some(seg) = e.segment_id.as_deref() else { return false; };
-                let Some(spec_key) = seg.strip_prefix("ghost:") else { return false; };
-                if !release_rect.contains(e.x, e.y) { return false; }
-                if !participating_keys.contains(spec_key) { return false; }
+                let Some(seg) = e.segment_id.as_deref() else {
+                    return false;
+                };
+                let Some(spec_key) = seg.strip_prefix("ghost:") else {
+                    return false;
+                };
+                if !release_rect.contains(e.x, e.y) {
+                    return false;
+                }
+                if !participating_keys.contains(spec_key) {
+                    return false;
+                }
                 matches!(
                     occupancy.claim_at((e.x, e.y)),
                     Some(crate::bus::ghost_occupancy::Claim::GhostSurface { .. })
@@ -3525,13 +3556,21 @@ pub fn route_bus_ghost(
         let output_rows: Vec<usize> = row_spans
             .iter()
             .enumerate()
-            .filter(|(_, rs)| rs.spec.outputs.iter().any(|o| &o.item == item && !o.is_fluid))
+            .filter(|(_, rs)| {
+                rs.spec
+                    .outputs
+                    .iter()
+                    .any(|o| &o.item == item && !o.is_fluid)
+            })
             .map(|(i, _)| i)
             .collect();
 
         if !output_rows.is_empty() {
-            let output_ys: Vec<i32> = output_rows.iter().map(|&ri| row_spans[ri].output_belt_y).collect();
-            let (merge_ents, merge_end_y, item_merge_x) = merge_output_rows(
+            let output_ys: Vec<i32> = output_rows
+                .iter()
+                .map(|&ri| row_spans[ri].output_belt_y)
+                .collect();
+            let (merge_ents, merge_tails_r, merge_end_y, item_merge_x) = merge_output_rows(
                 &output_rows,
                 &output_ys,
                 item,
@@ -3559,9 +3598,7 @@ pub fn route_bus_ghost(
                     entities: merge_ents.clone(),
                 });
             }
-            if let Some(last) = merge_ents.last() {
-                merge_tails.push(last.clone());
-            }
+            merge_tails.extend(merge_tails_r);
             entities.extend(merge_ents);
             max_y = max_y.max(merge_end_y);
             merge_max_x = merge_max_x.max(item_merge_x);
@@ -3627,7 +3664,7 @@ pub fn route_bus_ghost(
         if output_rows.is_empty() {
             continue;
         }
-        let (merge_ents, merge_end_y, item_merge_x) = merge_output_rows(
+        let (merge_ents, merge_tails_r, merge_end_y, item_merge_x) = merge_output_rows(
             &output_rows,
             &output_ys,
             item,
@@ -3654,8 +3691,8 @@ pub fn route_bus_ghost(
         // south-column tail (n==1) or the final splitter's continuation
         // belt (n>1). Flushed south (below) and recorded into
         // `surplus_exits` once every item's final depth is known.
-        if let Some(last) = merge_ents.last() {
-            surplus_tails.push((item.clone(), last.clone()));
+        for t in merge_tails_r {
+            surplus_tails.push((item.clone(), t));
         }
         entities.extend(merge_ents);
         max_y = max_y.max(merge_end_y);
@@ -3717,7 +3754,7 @@ pub fn route_bus_ghost(
             // downstream will flag the unfed recycler bank honestly.
             continue;
         }
-        let (merge_ents, merge_end_y, item_merge_x) = merge_output_rows(
+        let (merge_ents, merge_tails_r, merge_end_y, item_merge_x) = merge_output_rows(
             &output_rows,
             &output_ys,
             &item,
@@ -3738,8 +3775,12 @@ pub fn route_bus_ghost(
                 entities: merge_ents.clone(),
             });
         }
-        if let Some(last) = merge_ents.last() {
-            voider_tails.push((item.clone(), last.clone(), voider_ri));
+        if let Some(last) = merge_tails_r
+            .into_iter()
+            .next()
+            .or_else(|| merge_ents.last().cloned())
+        {
+            voider_tails.push((item.clone(), last, voider_ri));
         }
         entities.extend(merge_ents);
         max_y = max_y.max(merge_end_y);
@@ -3773,7 +3814,11 @@ pub fn route_bus_ghost(
     // when there's at least one corridor.
     let n_voided = voider_tails.len() as i32;
     let corridor_base_y = max_y;
-    let final_max_y = if n_voided > 0 { max_y + n_voided + 1 } else { max_y };
+    let final_max_y = if n_voided > 0 {
+        max_y + n_voided + 1
+    } else {
+        max_y
+    };
 
     // -------------------------------------------------------------------------
     // South-flush: extend every merge cascade's tail belt down to the
@@ -3841,8 +3886,12 @@ pub fn route_bus_ghost(
     // south-flush above has run).
     // -------------------------------------------------------------------------
     for (idx, (_item, tail, voider_ri)) in voider_tails.iter().enumerate() {
-        let Some(voider_rs) = row_spans.get(*voider_ri) else { continue };
-        let Some(&near_y) = voider_rs.input_belt_y.first() else { continue };
+        let Some(voider_rs) = row_spans.get(*voider_ri) else {
+            continue;
+        };
+        let Some(&near_y) = voider_rs.input_belt_y.first() else {
+            continue;
+        };
         let supply_x = bw;
         let supply_y = near_y + 1; // the template's pre-placed north-facing supply tile
         let corridor_y = (corridor_base_y + idx as i32).max(supply_y + 2);
@@ -4024,8 +4073,11 @@ pub fn route_bus_ghost(
             continue;
         }
         let Some(fid) = lane.family_id else { continue };
-        let Some(fam) = families.get(fid) else { continue };
-        let tier = belt_entity_for_rate_stacked(fam.total_rate, max_belt_tier, ctx.for_item(&fam.item));
+        let Some(fam) = families.get(fid) else {
+            continue;
+        };
+        let tier =
+            belt_entity_for_rate_stacked(fam.total_rate, max_belt_tier, ctx.for_item(&fam.item));
         let lane_tier =
             belt_entity_for_rate_stacked(lane.rate * 2.0, max_belt_tier, ctx.for_item(&lane.item));
         if tier == lane_tier {
@@ -4079,8 +4131,7 @@ pub fn route_bus_ghost(
         //
         // Collect upgraded crossing/junction UG inputs: (seg, item, dir_u8) → new_ug_name
         // EntityDirection is repr(u8) but doesn't impl Hash, so cast to u8 for the key.
-        let mut upgraded_ug_inputs: FxHashMap<(String, String, u8), String> =
-            FxHashMap::default();
+        let mut upgraded_ug_inputs: FxHashMap<(String, String, u8), String> = FxHashMap::default();
         for ent in entities.iter() {
             if !crate::common::is_ug_belt(&ent.name) {
                 continue;
@@ -4213,8 +4264,13 @@ struct CrossingInfo {
 fn is_perpendicular(a: EntityDirection, b: EntityDirection) -> bool {
     matches!(
         (a, b),
-        (EntityDirection::East | EntityDirection::West, EntityDirection::North | EntityDirection::South)
-        | (EntityDirection::North | EntityDirection::South, EntityDirection::East | EntityDirection::West)
+        (
+            EntityDirection::East | EntityDirection::West,
+            EntityDirection::North | EntityDirection::South
+        ) | (
+            EntityDirection::North | EntityDirection::South,
+            EntityDirection::East | EntityDirection::West
+        )
     )
 }
 
@@ -4258,11 +4314,8 @@ fn cluster_adjacent_crossings(
         v.sort_unstable_by_key(|&(x, y)| (y, x));
         v
     };
-    let index_of: FxHashMap<(i32, i32), usize> = tiles
-        .iter()
-        .enumerate()
-        .map(|(i, &t)| (t, i))
-        .collect();
+    let index_of: FxHashMap<(i32, i32), usize> =
+        tiles.iter().enumerate().map(|(i, &t)| (t, i)).collect();
 
     // Tiles that sit on a pipe-kind spec's path. These are belt×pipe
     // crossings and MUST stay as singleton clusters — the perpendicular
@@ -4287,8 +4340,7 @@ fn cluster_adjacent_crossings(
     // stationary carriers, not flows that need joint routing across
     // crossings. Including them would merge every belt×pipe crossing
     // sharing a pipe column into one giant multi-spec cluster.
-    let mut tile_specs: Vec<FxHashSet<&str>> =
-        vec![FxHashSet::default(); tiles.len()];
+    let mut tile_specs: Vec<FxHashSet<&str>> = vec![FxHashSet::default(); tiles.len()];
     for (key, path) in routed_paths {
         if matches!(spec_kinds.get(key.as_str()), Some(SpecKind::Pipe)) {
             continue;
@@ -4323,9 +4375,12 @@ fn cluster_adjacent_crossings(
     // captures these near-misses while the shared-spec gate (below) keeps
     // unrelated crossings apart.
     const OFFSETS: &[(i32, i32)] = &[
-        (1, 0), (0, 1),       // Manhattan 1 orthogonal
-        (2, 0), (0, 2),       // Manhattan 2 orthogonal
-        (1, 1), (1, -1),      // Manhattan 2 diagonals
+        (1, 0),
+        (0, 1), // Manhattan 1 orthogonal
+        (2, 0),
+        (0, 2), // Manhattan 2 orthogonal
+        (1, 1),
+        (1, -1), // Manhattan 2 diagonals
     ];
     for (i, &(x, y)) in tiles.iter().enumerate() {
         // Belt×pipe crossings stay singleton — don't consider them as
@@ -4433,8 +4488,7 @@ fn cluster_adjacent_crossings(
                     max_y = max_y.max(ty);
                 }
             }
-            let hull = ((max_x - min_x + 1) as usize)
-                * ((max_y - min_y + 1) as usize);
+            let hull = ((max_x - min_x + 1) as usize) * ((max_y - min_y + 1) as usize);
             if hull > HULL_BUDGET {
                 continue;
             }
@@ -4569,7 +4623,10 @@ fn classify_crossing(
         } else {
             continue;
         };
-        let kind = spec_kinds.get(key.as_str()).copied().unwrap_or(SpecKind::Belt);
+        let kind = spec_kinds
+            .get(key.as_str())
+            .copied()
+            .unwrap_or(SpecKind::Belt);
 
         for (i, &(px, py)) in path.iter().enumerate() {
             if px == cx && py == cy {
@@ -4637,27 +4694,47 @@ fn emit_unresolved_junctions(
     tiles.sort();
 
     for (tx, ty) in tiles {
-        let bbox = Rect { x: tx, y: ty, w: 1, h: 1 };
-        let junction_specs: Vec<SpecCrossing> =
-            classify_crossing((tx, ty), routed_paths, specs, spec_items, spec_belt_tiers, spec_kinds)
-            .map(|info| {
-                // 1×1 bbox: entry and exit sit on the same tile; direction
-                // encodes the flow. The lowering in `Junction::to_layout_region`
-                // picks the correct edges from `(io, direction)`.
-                let make = |item: String, dir: EntityDirection, belt: &str, kind: SpecKind| SpecCrossing {
+        let bbox = Rect {
+            x: tx,
+            y: ty,
+            w: 1,
+            h: 1,
+        };
+        let junction_specs: Vec<SpecCrossing> = classify_crossing(
+            (tx, ty),
+            routed_paths,
+            specs,
+            spec_items,
+            spec_belt_tiers,
+            spec_kinds,
+        )
+        .map(|info| {
+            // 1×1 bbox: entry and exit sit on the same tile; direction
+            // encodes the flow. The lowering in `Junction::to_layout_region`
+            // picks the correct edges from `(io, direction)`.
+            let make =
+                |item: String, dir: EntityDirection, belt: &str, kind: SpecKind| SpecCrossing {
                     item,
                     belt_tier: BeltTier::from_name(belt).unwrap_or(BeltTier::Yellow),
-                    entry: PortPoint { x: tx, y: ty, direction: dir },
-                    exit: PortPoint { x: tx, y: ty, direction: dir },
+                    entry: PortPoint {
+                        x: tx,
+                        y: ty,
+                        direction: dir,
+                    },
+                    exit: PortPoint {
+                        x: tx,
+                        y: ty,
+                        direction: dir,
+                    },
                     origin: SpecOrigin::Participating,
                     kind,
                 };
-                vec![
-                    make(info.spec_a.0, info.spec_a.1, info.belt_a, info.kind_a),
-                    make(info.spec_b.0, info.spec_b.1, info.belt_b, info.kind_b),
-                ]
-            })
-            .unwrap_or_default();
+            vec![
+                make(info.spec_a.0, info.spec_a.1, info.belt_a, info.kind_a),
+                make(info.spec_b.0, info.spec_b.1, info.belt_b, info.kind_b),
+            ]
+        })
+        .unwrap_or_default();
 
         let junction = Junction {
             bbox,
@@ -4684,10 +4761,7 @@ fn ug_for_belt(belt: &str) -> &'static str {
 /// because the turning spec would sideload onto the UG and items would be
 /// dropped (UG belts only accept items entering from behind in their
 /// facing direction, not from a sideload).
-fn any_spec_turns_at(
-    tile: (i32, i32),
-    routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
-) -> bool {
+fn any_spec_turns_at(tile: (i32, i32), routed_paths: &FxHashMap<String, Vec<(i32, i32)>>) -> bool {
     for path in routed_paths.values() {
         for (i, &t) in path.iter().enumerate() {
             if t != tile {
@@ -4768,11 +4842,17 @@ fn ug_endpoint_conflicts(
     let side_offsets: &[(i32, i32, EntityDirection)] = if bridge_axis_vert {
         // Vertical bridge: sides are east/west; a sideload comes from
         // (x-1, y) facing East, or (x+1, y) facing West.
-        &[(-1, 0, EntityDirection::East), (1, 0, EntityDirection::West)]
+        &[
+            (-1, 0, EntityDirection::East),
+            (1, 0, EntityDirection::West),
+        ]
     } else {
         // Horizontal bridge: sides are north/south; a sideload comes from
         // (x, y-1) facing South, or (x, y+1) facing North.
-        &[(0, -1, EntityDirection::South), (0, 1, EntityDirection::North)]
+        &[
+            (0, -1, EntityDirection::South),
+            (0, 1, EntityDirection::North),
+        ]
     };
     for &(dx, dy, expected_dir) in side_offsets {
         let side = (tile.0 + dx, tile.1 + dy);
@@ -4896,8 +4976,24 @@ fn solve_perpendicular_template(
 
     let bridge_vertical_first = try_bridge(
         info.tile,
-        (&h_spec.0, h_spec.1, if std::ptr::eq(h_spec, &info.spec_a) { info.belt_a } else { info.belt_b }),
-        (&v_spec.0, v_spec.1, if std::ptr::eq(v_spec, &info.spec_a) { info.belt_a } else { info.belt_b }),
+        (
+            &h_spec.0,
+            h_spec.1,
+            if std::ptr::eq(h_spec, &info.spec_a) {
+                info.belt_a
+            } else {
+                info.belt_b
+            },
+        ),
+        (
+            &v_spec.0,
+            v_spec.1,
+            if std::ptr::eq(v_spec, &info.spec_a) {
+                info.belt_a
+            } else {
+                info.belt_b
+            },
+        ),
         hard_obstacles,
         unreleasable_obstacles,
         routed_paths,
@@ -4910,8 +5006,24 @@ fn solve_perpendicular_template(
     // Fall back to bridging the horizontal (vertical stays on surface).
     try_bridge(
         info.tile,
-        (&v_spec.0, v_spec.1, if std::ptr::eq(v_spec, &info.spec_a) { info.belt_a } else { info.belt_b }),
-        (&h_spec.0, h_spec.1, if std::ptr::eq(h_spec, &info.spec_a) { info.belt_a } else { info.belt_b }),
+        (
+            &v_spec.0,
+            v_spec.1,
+            if std::ptr::eq(v_spec, &info.spec_a) {
+                info.belt_a
+            } else {
+                info.belt_b
+            },
+        ),
+        (
+            &h_spec.0,
+            h_spec.1,
+            if std::ptr::eq(h_spec, &info.spec_a) {
+                info.belt_a
+            } else {
+                info.belt_b
+            },
+        ),
         hard_obstacles,
         unreleasable_obstacles,
         routed_paths,
@@ -4998,14 +5110,22 @@ fn try_bridge(
         .find(|(_, path)| path.contains(&crossing))
         .map(|(k, _)| k.as_str())
         .unwrap_or("");
-    if let Some(sub) = ug_endpoint_conflicts(ug_in, bridge_dir, bridge_key, routed_paths, placed_entities) {
+    if let Some(sub) =
+        ug_endpoint_conflicts(ug_in, bridge_dir, bridge_key, routed_paths, placed_entities)
+    {
         return reject(match sub {
             "axis_conflict" => "ug_in_axis_conflict",
             "sideload" => "ug_in_sideload",
             _ => "ug_in_conflict",
         });
     }
-    if let Some(sub) = ug_endpoint_conflicts(ug_out, bridge_dir, bridge_key, routed_paths, placed_entities) {
+    if let Some(sub) = ug_endpoint_conflicts(
+        ug_out,
+        bridge_dir,
+        bridge_key,
+        routed_paths,
+        placed_entities,
+    ) {
         return reject(match sub {
             "axis_conflict" => "ug_out_axis_conflict",
             "sideload" => "ug_out_sideload",
@@ -5263,14 +5383,18 @@ fn bridge_belt_over_pipe(
         .find(|(k, path)| path.contains(&info.tile) && k.contains(belt_item_str))
         .map(|(k, _)| k.as_str())
         .unwrap_or("");
-    if let Some(sub) = ug_endpoint_conflicts(ug_in, belt_dir, bridge_key, routed_paths, placed_entities) {
+    if let Some(sub) =
+        ug_endpoint_conflicts(ug_in, belt_dir, bridge_key, routed_paths, placed_entities)
+    {
         return reject(match sub {
             "axis_conflict" => "ug_in_axis_conflict",
             "sideload" => "ug_in_sideload",
             _ => "ug_in_conflict",
         });
     }
-    if let Some(sub) = ug_endpoint_conflicts(ug_out, belt_dir, bridge_key, routed_paths, placed_entities) {
+    if let Some(sub) =
+        ug_endpoint_conflicts(ug_out, belt_dir, bridge_key, routed_paths, placed_entities)
+    {
         return reject(match sub {
             "axis_conflict" => "ug_out_axis_conflict",
             "sideload" => "ug_out_sideload",
@@ -5283,10 +5407,7 @@ fn bridge_belt_over_pipe(
 
     // Sanity: at least one pipe must actually exist at the seed tile,
     // otherwise we have no business bridging here.
-    if !placed_entities
-        .iter()
-        .any(|e| (e.x, e.y) == (cx, cy))
-    {
+    if !placed_entities.iter().any(|e| (e.x, e.y) == (cx, cy)) {
         return reject("pipe_tile_missing");
     }
 
@@ -5463,8 +5584,12 @@ fn dump_region_fixture(
             );
             return;
         }
-        let Ok(sx) = parts[0].trim().parse::<i32>() else { return; };
-        let Ok(sy) = parts[1].trim().parse::<i32>() else { return; };
+        let Ok(sx) = parts[0].trim().parse::<i32>() else {
+            return;
+        };
+        let Ok(sy) = parts[1].trim().parse::<i32>() else {
+            return;
+        };
         if !seeds.contains(&(sx, sy)) {
             return;
         }
@@ -5484,13 +5609,9 @@ fn dump_region_fixture(
         (i32::MAX, i32::MAX, i32::MIN, i32::MIN),
         |(lx, ly, hx, hy), &(x, y)| (lx.min(x), ly.min(y), hx.max(x), hy.max(y)),
     );
-    let in_radius =
-        |x: i32, y: i32| -> bool {
-            x >= min_sx - RADIUS
-                && x <= max_sx + RADIUS
-                && y >= min_sy - RADIUS
-                && y <= max_sy + RADIUS
-        };
+    let in_radius = |x: i32, y: i32| -> bool {
+        x >= min_sx - RADIUS && x <= max_sx + RADIUS && y >= min_sy - RADIUS && y <= max_sy + RADIUS
+    };
 
     // Keep routed_paths whose tile sequence touches the radius window —
     // those are the specs the region solver might interact with. Keeping
@@ -5637,9 +5758,10 @@ mod cluster_adjacent_crossings_tests {
         // (iron-plate row 90) plus individual trunk columns.
         let cs = crossings(&[(13, 90), (14, 90), (15, 90), (16, 90), (17, 90)]);
         let rp = paths(&[
-            ("tap:iron-plate", &[
-                (13, 90), (14, 90), (15, 90), (16, 90), (17, 90),
-            ]),
+            (
+                "tap:iron-plate",
+                &[(13, 90), (14, 90), (15, 90), (16, 90), (17, 90)],
+            ),
             ("trunk:copper-cable:13", &[(13, 89), (13, 90), (13, 91)]),
             ("trunk:copper-cable:14", &[(14, 89), (14, 90), (14, 91)]),
             ("trunk:copper-cable:15", &[(15, 89), (15, 90), (15, 91)]),
@@ -5831,12 +5953,24 @@ mod feeder_specs_skipped_tests {
             merge_tap: false,
             demand_skewed: false,
         };
-        let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
+        let lanes = vec![leftmost_lane(
+            "test-item",
+            *lane_xs.iter().min().unwrap(),
+            0,
+        )];
         let solver_result = empty_solver_result();
 
         let _trace_guard = crate::trace::start_trace();
         let result = route_bus_ghost(
-            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &StackingCtx::unstacked(),
+            &lanes,
+            &[],
+            50,
+            200,
+            None,
+            &solver_result,
+            &[family],
+            &[],
+            &StackingCtx::unstacked(),
         );
         let events = crate::trace::drain_events();
 
@@ -5856,9 +5990,12 @@ mod feeder_specs_skipped_tests {
         );
 
         let skipped = events.iter().find_map(|e| match e {
-            TraceEvent::FeederSpecsSkipped { item, module_id, producer_rows, shape } => {
-                Some((item.clone(), *module_id, *producer_rows, *shape))
-            }
+            TraceEvent::FeederSpecsSkipped {
+                item,
+                module_id,
+                producer_rows,
+                shape,
+            } => Some((item.clone(), *module_id, *producer_rows, *shape)),
             _ => None,
         });
         assert_eq!(
@@ -5887,18 +6024,32 @@ mod feeder_specs_skipped_tests {
             merge_tap: false,
             demand_skewed: false,
         };
-        let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
+        let lanes = vec![leftmost_lane(
+            "test-item",
+            *lane_xs.iter().min().unwrap(),
+            0,
+        )];
         let solver_result = empty_solver_result();
 
         let _trace_guard = crate::trace::start_trace();
         let result = route_bus_ghost(
-            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &StackingCtx::unstacked(),
+            &lanes,
+            &[],
+            50,
+            200,
+            None,
+            &solver_result,
+            &[family],
+            &[],
+            &StackingCtx::unstacked(),
         );
         let events = crate::trace::drain_events();
 
         assert!(result.is_ok(), "route_bus_ghost failed: {:?}", result.err());
         assert!(
-            !events.iter().any(|e| matches!(e, TraceEvent::FeederSpecsSkipped { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, TraceEvent::FeederSpecsSkipped { .. })),
             "FeederSpecsSkipped must not fire for a family with no producer rows; got {:#?}",
             events
         );
@@ -5929,12 +6080,24 @@ mod feeder_specs_skipped_tests {
             merge_tap: false,
             demand_skewed: false,
         };
-        let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
+        let lanes = vec![leftmost_lane(
+            "test-item",
+            *lane_xs.iter().min().unwrap(),
+            0,
+        )];
         let solver_result = empty_solver_result();
 
         let _trace_guard = crate::trace::start_trace();
         let result = route_bus_ghost(
-            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &StackingCtx::unstacked(),
+            &lanes,
+            &[],
+            50,
+            200,
+            None,
+            &solver_result,
+            &[family],
+            &[],
+            &StackingCtx::unstacked(),
         );
         let events = crate::trace::drain_events();
 
@@ -5948,7 +6111,9 @@ mod feeder_specs_skipped_tests {
             events
         );
         assert!(
-            !events.iter().any(|e| matches!(e, TraceEvent::FeederSpecsSkipped { .. })),
+            !events
+                .iter()
+                .any(|e| matches!(e, TraceEvent::FeederSpecsSkipped { .. })),
             "FeederSpecsSkipped must not fire when the shape is stampable; got {:#?}",
             events
         );

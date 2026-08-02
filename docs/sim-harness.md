@@ -349,6 +349,40 @@ stable-below-plan series, see
 ["Reading time-series decay shapes"](sim-harness-forensics.md#reading-time-series-decay-shapes)
 in the forensics doc.
 
+## Live progress telemetry (`run --timeseries` + `scripts/sim-watch.py`)
+
+`run` normally writes its per-window time-series only at finalize, into the
+report JSON. For a long or grinding run you don't want to wait until minute
+150 to learn it was flat-zero from minute 10. `run --timeseries` streams the
+*same* per-window machine/item rows to the scratch dir's
+`script-output/timeseries.csv` **live**, the way `serve` already does — the
+only difference from a normal `run` is the extra file I/O. It is
+measurement-safe: unlike `serve`'s operator QoL it changes no force bonuses
+and reveals no map, so a measurement run can stream it without altering the
+world the fixture declares. `run` prints the CSV path and the watch command on
+launch.
+
+```bash
+cargo run --release -p spaghettio_sim_harness -- run \
+    --bp bp.txt --manifest manifest.json --timeseries --out report.json
+
+# in another terminal, score it live against the planned rates:
+python3 scripts/sim-watch.py <scenario-substring> --plan "item=rate,item=rate" [--follow]
+```
+
+`sim-watch.py` renders, from the streaming CSV: each planned item's trailing
+per-window rate against its asymptotic ideal (PASS/WARN/FAIL/DEAD), a rollup
+of every machine's status at the latest window, and a starvation signal that
+only recommends killing when a `fluid_ingredient_shortage` / `no_fuel` /
+`no_power` / `item_ingredient_shortage` state *persists* across ≥2 of the
+last 3 windows **and** output is flat-zero (a transient shortage while a
+factory is still filling its belts — a normal startup state — is reported as
+"watching", not "kill"). So a genuinely 0-output fixture is identifiable in
+minutes, not hours, without ever false-firing on a healthy ramp. The first
+window reads "warming" until two windows close and a run-rate exists. The
+scratch dir is removed on a successful finalize; after the run completes, read
+the `timeseries` key of the `--out` JSON instead.
+
 ## Baselines (`bless` / `check`)
 
 ```bash
