@@ -1132,3 +1132,35 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   stdin after its own two review rounds rejected the @file approach for
   silently changing prompt shape), v1 retagged, check re-runs against this
   branch's post-review head.
+
+- **2026-08-02 (bot round) — the fixed action's first large-diff review
+  (dc359874) found three more majors; all confirmed and fixed.**
+  (1) `run_candidate_field` leaked a disabled trace sink on its two
+  incumbent-path early returns (`?` between `swap_sink(None)` and the
+  restore) — a thread would silently lose live trace streaming after one
+  incumbent failure once the runner reaches the shipping path. Fixed:
+  explicit restore-before-return on both.
+  (2) `fold_point_correspondence` omitted `fold_snake`'s final
+  normalization shift (`x_shift`, applied whenever a junction U-turn lands
+  at negative x — every multi-fold with a left-side junction), mapping
+  native issue positions `x_shift` tiles left of the candidate's frame, so
+  Provenance-tier verdicts would falsely reject good multi-folds. Latent,
+  not live: the knob fixture is a single fold (shift 0), the mil5
+  multifold test calls `fold_snake` directly, and a belt-less multi-fold
+  places no junctions — which is also why BOTH property-test upgrades to
+  date missed it. Fixed: new `fold_snake_with_shift` returns the shift
+  (it is not derivable from `(layout, folds)` — it depends on junction
+  placement outcomes), `FoldOutcome.x_shift` carries it, the map takes it
+  as a parameter, and a new multi-fold severed-belt property test asserts
+  `x_shift > 0` (fixture honesty) plus shifted tile-set equality.
+  (3) A chain's Provenance map is keyed in the candidate's base frame;
+  the runner applied it to the incumbent's issues even when bases
+  differed. Fixed: base-name mismatch degrades the verdict to Count —
+  the same guard `compose_chain`'s empty-chain branch already argued for.
+  Bot minors: Verdict.tier records the REQUESTED tier even when a
+  whole-category fallback ran (real; deferred — no caller gates on tier;
+  added to the follow-ups above); position-only issue matching (documented
+  design intent, no action); fold-seam masking (already the recorded
+  watch-item). The bot's line-level citations were verifiably real
+  (`x_shift` exists at its cited normalization step) — the finding-2
+  mechanism was confirmed in source before any fix was written.

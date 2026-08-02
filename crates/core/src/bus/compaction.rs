@@ -4103,8 +4103,10 @@ mod tests {
         };
         let folds = vec![3];
 
-        let folded = fold_snake(&layout, &folds).expect("fold must succeed on this trivial fixture");
-        let correspondence = fold_point_correspondence(&layout, &folds);
+        let (folded, x_shift) =
+            fold_snake_with_shift(&layout, &folds).expect("fold must succeed on this trivial fixture");
+        assert_eq!(x_shift, 0, "a single fold has no left-side junction, so no shift");
+        let correspondence = fold_point_correspondence(&layout, &folds, x_shift);
 
         for e in &layout.entities {
             let (w, h) = entity_dims(&e.name, e.direction);
@@ -4138,6 +4140,88 @@ mod tests {
                  the corresponding entity's actual post-fold tile set",
                 e.name,
             );
+        }
+    }
+
+    /// Multi-fold with a SEVERED BELT: forces a left-side junction U-turn at
+    /// negative x, so `fold_snake`'s final normalization applies a nonzero
+    /// `x_shift` — the case the PR #569 bot review caught the map missing
+    /// (a belt-less multi-fold places no junctions, so it cannot exercise
+    /// this; the assert on `x_shift > 0` keeps the fixture honest). Every
+    /// pre-fold entity's tile set, mapped through the SHIFTED map, must
+    /// equal some same-named post-fold entity's tile set (multiset match —
+    /// belt tiles share a name; U-turn/lane entities the fold ADDS have no
+    /// pre-image and are permitted leftovers).
+    #[test]
+    fn fold_point_correspondence_applies_junction_x_shift_on_multi_fold() {
+        let mut entities = vec![PlacedEntity {
+            name: "stub-a".into(),
+            x: 0,
+            y: 0,
+            ..Default::default()
+        }];
+        for x in 1..=7 {
+            entities.push(PlacedEntity {
+                name: "transport-belt".into(),
+                x,
+                y: 1,
+                direction: EntityDirection::East,
+                ..Default::default()
+            });
+        }
+        let layout = LayoutResult {
+            entities,
+            width: 9,
+            height: 3,
+            ..Default::default()
+        };
+        let folds = vec![3, 6];
+
+        let (folded, x_shift) =
+            fold_snake_with_shift(&layout, &folds).expect("2-fold must succeed on this fixture");
+        assert!(
+            x_shift > 0,
+            "fixture must force a left-side junction (negative-x U-turn) or it \
+             no longer tests the shift at all; got x_shift = {x_shift}",
+        );
+        let correspondence = fold_point_correspondence(&layout, &folds, x_shift);
+
+        // Multiset of post-fold (name, tile-set) pairs; matched entries are
+        // consumed so two identical belt tiles can't satisfy one pre-image.
+        let mut post_pool: Vec<(String, FxHashSet<(i32, i32)>)> = folded
+            .entities
+            .iter()
+            .map(|pe| {
+                let (pw, ph) = entity_dims(&pe.name, pe.direction);
+                let tiles = (0..pw)
+                    .flat_map(|dx| (0..ph).map(move |dy| (dx, dy)))
+                    .map(|(dx, dy)| (pe.x + dx, pe.y + dy))
+                    .collect();
+                (pe.name.clone(), tiles)
+            })
+            .collect();
+
+        for e in &layout.entities {
+            let (w, h) = entity_dims(&e.name, e.direction);
+            let mapped: FxHashSet<(i32, i32)> = (0..w)
+                .flat_map(|dx| (0..h).map(move |dy| (dx, dy)))
+                .map(|(dx, dy)| {
+                    correspondence
+                        .get((e.x + dx, e.y + dy))
+                        .unwrap_or_else(|| panic!("map must cover ({}, {})", e.x + dx, e.y + dy))
+                })
+                .collect();
+            let hit = post_pool
+                .iter()
+                .position(|(name, tiles)| *name == e.name && *tiles == mapped)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} at ({}, {}): shifted map sends it to {:?}, but no unmatched \
+                         post-fold entity of that name occupies those tiles",
+                        e.name, e.x, e.y, mapped,
+                    )
+                });
+            post_pool.swap_remove(hit);
         }
     }
 }
@@ -4503,6 +4587,12 @@ fn place_uturn(
 pub struct FoldOutcome {
     pub folds: Vec<i32>,
     pub layout: LayoutResult,
+    /// The final rightward normalization `fold_snake` applied (0 unless a
+    /// junction U-turn landed at negative x — every multi-fold with a
+    /// left-side junction). [`fold_point_correspondence`] needs it; it is
+    /// NOT derivable from `(layout, folds)` alone because it depends on
+    /// where the junction placement search actually put the U-turns.
+    pub x_shift: i32,
 }
 
 /// Outcome of a fold search, including why candidates were turned away.
@@ -4589,7 +4679,7 @@ pub fn search_snake_fold(
     // corpus.
     let policy = Policy::new(GatePolicy::GateInstances);
 
-    let mut best: Option<(i64, Vec<i32>, LayoutResult)> = None;
+    let mut best: Option<(i64, Vec<i32>, LayoutResult, i32)> = None;
 
     for k in 1..=max_folds {
         // Slide the whole comb of fold lines, snapping each tooth to the
@@ -4613,7 +4703,7 @@ pub fn search_snake_fold(
                 continue;
             }
 
-            let folded = match fold_snake(layout, &folds) {
+            let (folded, x_shift) = match fold_snake_with_shift(layout, &folds) {
                 Ok(f) => f,
                 Err(reason) => {
                     out.refusals.push((folds.clone(), reason));
@@ -4623,7 +4713,7 @@ pub fn search_snake_fold(
             let Some(candidate_issues) = validate_issues(&folded) else {
                 continue;
             };
-            let correspondence = fold_point_correspondence(layout, &folds);
+            let correspondence = fold_point_correspondence(layout, &folds, x_shift);
             let verdict = verdict::never_worse(
                 &native_issues,
                 &candidate_issues,
@@ -4644,13 +4734,13 @@ pub fn search_snake_fold(
             let (w, h) = (folded.width.max(1) as i64, folded.height.max(1) as i64);
             let aspect10 = (w.max(h) * 10) / w.min(h);
             let score = aspect10 * 1_000_000 + w * h;
-            if best.as_ref().is_none_or(|(bs, _, _)| score < *bs) {
-                best = Some((score, folds, folded));
+            if best.as_ref().is_none_or(|(bs, _, _, _)| score < *bs) {
+                best = Some((score, folds, folded, x_shift));
             }
         }
     }
 
-    out.best = best.map(|(_, folds, layout)| FoldOutcome { folds, layout });
+    out.best = best.map(|(_, folds, layout, x_shift)| FoldOutcome { folds, layout, x_shift });
     out
 }
 
@@ -4926,10 +5016,24 @@ fn fold_bounds_and_gap(layout: &LayoutResult, folds: &[i32]) -> (Vec<i32>, i32) 
 /// happen at layout edges) degrades `never_worse`'s Provenance tier to a
 /// count comparison for that issue's category — see that function's docs.
 ///
+/// `x_shift` is the final rightward normalization the corresponding
+/// `fold_snake` run applied (see [`fold_snake_with_shift`]) — nonzero
+/// whenever a junction U-turn landed at negative x, which is every
+/// multi-fold with a left-side junction. It CANNOT be derived here from
+/// `(layout, folds)`: it depends on where the junction placement search
+/// actually put the U-turns. Omitting it mapped native issue positions
+/// `x_shift` tiles left of the candidate's real frame on every such fold,
+/// so `never_worse` misread carried-over issues as resolved+new pairs and
+/// rejected good multi-folds (PR #569 bot review, finding 2).
+///
 /// Does not itself validate `folds` — call only after a successful
 /// `fold_snake(layout, folds)`, whose own checks (`BadFoldColumns`,
 /// `CutsEntity`) this deliberately does not repeat.
-pub fn fold_point_correspondence(layout: &LayoutResult, folds: &[i32]) -> CorrespondenceMap {
+pub fn fold_point_correspondence(
+    layout: &LayoutResult,
+    folds: &[i32],
+    x_shift: i32,
+) -> CorrespondenceMap {
     let (bounds, gap) = fold_bounds_and_gap(layout, folds);
     let h = layout.height;
     let n_segs = bounds.len() - 1;
@@ -4941,9 +5045,12 @@ pub fn fold_point_correspondence(layout: &LayoutResult, folds: &[i32]) -> Corres
         };
         for y in 0..h {
             let mapped = if seg % 2 == 0 {
-                (x - bounds[seg], y + seg as i32 * (h + gap))
+                (x - bounds[seg] + x_shift, y + seg as i32 * (h + gap))
             } else {
-                (bounds[seg + 1] - 1 - x, (h - 1 - y) + seg as i32 * (h + gap))
+                (
+                    bounds[seg + 1] - 1 - x + x_shift,
+                    (h - 1 - y) + seg as i32 * (h + gap),
+                )
             };
             pairs.push(((x, y), mapped));
         }
@@ -4964,8 +5071,19 @@ pub fn fold_snake(
     layout: &LayoutResult,
     folds: &[i32],
 ) -> Result<LayoutResult, FoldRefusal> {
+    fold_snake_with_shift(layout, folds).map(|(result, _)| result)
+}
+
+/// [`fold_snake`], also returning the final rightward `x_shift` its
+/// normalization applied (0 when no junction U-turn landed at negative x).
+/// Callers that build a [`fold_point_correspondence`] map for the fold MUST
+/// use this variant and pass the shift through — see that function's docs.
+pub fn fold_snake_with_shift(
+    layout: &LayoutResult,
+    folds: &[i32],
+) -> Result<(LayoutResult, i32), FoldRefusal> {
     if folds.is_empty() {
-        return Ok(layout.clone());
+        return Ok((layout.clone(), 0));
     }
     for w in folds.windows(2) {
         if w[0] >= w[1] {
@@ -6024,5 +6142,5 @@ pub fn fold_snake(
     dedupe(&mut result.boundary_inputs);
     dedupe(&mut result.boundary_outputs);
 
-    Ok(result)
+    Ok((result, x_shift))
 }

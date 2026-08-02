@@ -208,7 +208,8 @@ impl LayoutTransform for FoldTransform {
         let search = compaction::search_snake_fold(layout, solver, self.max_folds);
         match search.best {
             Some(found) => {
-                let correspondence = compaction::fold_point_correspondence(layout, &found.folds);
+                let correspondence =
+                    compaction::fold_point_correspondence(layout, &found.folds, found.x_shift);
                 Ok(TransformOutcome {
                     layout: found.layout,
                     correspondence: Some(correspondence),
@@ -533,16 +534,36 @@ pub fn run_candidate_field(
     policy: &Policy,
 ) -> Result<FieldResult, String> {
     let original_sink = crate::trace::swap_sink(None);
+    // The two incumbent-path failures below MUST restore the sink before
+    // returning — a bare `?` here permanently disabled the thread's trace
+    // streaming on the error path (PR #569 bot review, finding 1; compare
+    // `select_best_decomposition`, which has no early exit between its swap
+    // and restore).
+    let restore_sink = |sink: Option<Box<dyn FnMut(&TraceEvent)>>| {
+        if let Some(s) = sink {
+            crate::trace::swap_sink(Some(s));
+        }
+    };
 
     let inc_start = crate::trace::peek_events_len();
-    let inc_run = run_plan(incumbent, solver, opts)
-        .map_err(|e| format!("incumbent '{}' failed to produce: {e}", incumbent.name))?;
+    let inc_run = match run_plan(incumbent, solver, opts) {
+        Ok(r) => r,
+        Err(e) => {
+            restore_sink(original_sink);
+            return Err(format!("incumbent '{}' failed to produce: {e}", incumbent.name));
+        }
+    };
     let inc_events = crate::trace::peek_events_since(inc_start);
     crate::trace::truncate_events(inc_start);
 
     let incumbent_issues = issues_of(&inc_run.layout, solver);
-    let incumbent_measure = objective::measure(&inc_run.layout, solver)
-        .map_err(|e| format!("incumbent '{}' failed to measure: {e}", incumbent.name))?;
+    let incumbent_measure = match objective::measure(&inc_run.layout, solver) {
+        Ok(m) => m,
+        Err(e) => {
+            restore_sink(original_sink);
+            return Err(format!("incumbent '{}' failed to measure: {e}", incumbent.name));
+        }
+    };
     let incumbent_scores = objective::score_vs_native(&incumbent_measure, &incumbent_measure);
 
     struct Captured {
@@ -567,13 +588,18 @@ pub fn run_candidate_field(
             let measure = objective::measure(&run.layout, solver)
                 .map_err(|e| format!("measure failed: {e}"))?;
             let scores = objective::score_vs_native(&measure, &incumbent_measure);
-            let v = verdict::never_worse(
-                &incumbent_issues,
-                &issues,
-                policy,
-                run.tier,
-                run.correspondence.as_ref(),
-            );
+            // A chain's correspondence map is keyed in the CANDIDATE's own
+            // base frame. Mapping the INCUMBENT's issue positions through it
+            // is only sound when the two plans share a base producer — the
+            // same reasoning `compose_chain`'s empty-chain branch already
+            // applies (PR #569 bot review, finding 3). Different base →
+            // degrade to Count, exactly as an unmapped transform would.
+            let (tier, correspondence) = if plan.base.name() == incumbent.base.name() {
+                (run.tier, run.correspondence.as_ref())
+            } else {
+                (MatchTier::Count, None)
+            };
+            let v = verdict::never_worse(&incumbent_issues, &issues, policy, tier, correspondence);
             Ok((run.layout, scores, v, run.skipped_transforms))
         })();
         let events = crate::trace::peek_events_since(start);
