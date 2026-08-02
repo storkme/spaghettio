@@ -417,6 +417,28 @@ fn run_plan(
     })
 }
 
+/// Produces `plan`'s layout directly — base production followed by its own
+/// transform chain — without competing it against anything.
+///
+/// This makes NO claim about whether `plan` is any good: unlike
+/// [`run_candidate_field`], there is no incumbent, no validation, no
+/// measurement, no verdict, no ranking. It exists because `compact_layout`/
+/// `fold_layout` (the flags [`CompactTransform`]/[`FoldTransform`] wrap)
+/// apply UNCONDITIONALLY in `build_bus_layout` — there is no "does this
+/// beat native" gate at that call site at all, so a parity test comparing
+/// this runner's transform chain against `build_bus_layout`'s output is a
+/// claim about what the CHAIN PRODUCES, not about whether
+/// `run_candidate_field`'s own (fixture-dependent) objective score would
+/// have ranked it above the incumbent — those are different questions, and
+/// only the first one is what "parity" means here.
+pub fn produce_plan(
+    plan: &CandidatePlan,
+    solver: &SolverResult,
+    opts: &LayoutOptions,
+) -> Result<LayoutResult, String> {
+    run_plan(plan, solver, opts).map(|r| r.layout)
+}
+
 // ---------------------------------------------------------------------------
 // Field result
 // ---------------------------------------------------------------------------
