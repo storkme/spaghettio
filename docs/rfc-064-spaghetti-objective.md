@@ -1164,3 +1164,32 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   watch-item). The bot's line-level citations were verifiably real
   (`x_shift` exists at its cited normalization step) — the finding-2
   mechanism was confirmed in source before any fix was written.
+
+- **2026-08-02 (bot round 2, on 491efba6) — three further majors, all
+  confirmed and fixed; convergence rule adopted.** (A) Transit compared
+  each side's sum over its OWN attributed subset, biasing against
+  candidates that attribute MORE edges (extra measured terms inflate their
+  sum) and flattering ones that attribute fewer. Fixed: edges pair by
+  index (both sides derive from the same `ProductionSignature` order), and
+  `transit_score` is computed over the COMMONLY-attributed subset only,
+  with `common_attributed_edges` now carried on `ObjectiveScores` so a
+  1-of-10-edges transit claim is visibly weaker than 10-of-10. (B) A
+  zero-edge candidate against a nonzero-edge native bypassed the
+  evidence-free guard and scored transit +1.0 — mismatched edge-list
+  lengths (impossible same-solve) are now evidence-free outright.
+  (C) `fold_snake` ends in `replace_poles` — pole positions are
+  resynthesized, not geometric images — so Provenance instance-matching
+  falsely rejected folds carrying any pole-positioned issue. Fixed: the
+  fold gate's policy overrides the pole category to GateCount (the honest
+  gate for a resynthesized category). Minors fixed in the same pass:
+  duplicate plan names refused by the runner (winner replay is
+  name-keyed); DI Manhattan samples gated on inserter `carries` when
+  stamped (stray same-machine-pair items no longer contaminate an edge's
+  transit); the compact-parity test's "never increases any category"
+  wording scoped to its fixture (it is not an engine invariant); the
+  unreachable zero-extent-bbox branch no longer scores AR 1.0
+  (debug_assert + INFINITY). **Convergence rule, adopted now:** the
+  required check is green and findings are advisory; from this round on,
+  a re-review that surfaces only minors/nits ships with them recorded as
+  follow-ups — majors still block. Without a stop rule, every push buys
+  another review round indefinitely.

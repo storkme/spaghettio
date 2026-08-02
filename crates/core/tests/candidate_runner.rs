@@ -164,9 +164,11 @@ fn runner_compact_plan_matches_build_bus_layout_compact_layout_true() {
 
     // Exercise the full run_candidate_field pipeline too (validate/measure/
     // verdict), without asserting on who wins: the candidate must at least
-    // evaluate cleanly and pass the fold-style verdict (compaction never
-    // increases the raw issue count in any category, by
-    // `compact_validated_geometry`'s own accept-if-no-worse discipline).
+    // evaluate cleanly and pass the fold-style verdict ON THIS FIXTURE.
+    // (Not an engine guarantee: `compact_validated_geometry` accepts on
+    // error-count-only, so a per-category warning increase is legal in
+    // general — this fixture just doesn't produce one. Scoped per the
+    // round-3 bot review, minor 4.)
     let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
     let result = run_candidate_field(
         &sr,
@@ -186,7 +188,8 @@ fn runner_compact_plan_matches_build_bus_layout_compact_layout_true() {
         .expect("compact-only must have produced and evaluated");
     assert!(
         evaluated.verdict.pass,
-        "compaction must never regress any issue category's raw count"
+        "compaction must not regress any issue category's raw count ON THIS FIXTURE \
+         (fixture-scoped observation, not an engine invariant — see comment above)"
     );
 }
 
@@ -415,4 +418,29 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
         result.winner_name, "incumbent",
         "a verdict-failing candidate must be excluded from ranking regardless of composite"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 6. Duplicate plan names are refused (round-3 bot review, minor 5)
+// ---------------------------------------------------------------------------
+
+/// Winner resolution and event replay look candidates up by name; two
+/// same-named plans would tie in ranking and replay the wrong plan's
+/// events/layout. The runner must refuse the field up front.
+#[test]
+fn duplicate_plan_names_are_refused() {
+    let sr = solve("iron-gear-wheel", 1.0, &["iron-plate"], "assembling-machine-2");
+    let opts = base_opts(None, LayoutStrategy::Pooled);
+    let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
+    let field = vec![
+        CandidatePlan::new("dup", FullSelectionCandidate),
+        CandidatePlan::new("dup", FullSelectionCandidate),
+    ];
+    match run_candidate_field(&sr, &opts, &incumbent, &field, &Policy::fold()) {
+        Err(err) => assert!(
+            err.contains("duplicate candidate plan name 'dup'"),
+            "got: {err}"
+        ),
+        Ok(_) => panic!("same-named plans must be refused"),
+    }
 }

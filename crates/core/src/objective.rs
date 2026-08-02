@@ -144,7 +144,14 @@ pub fn measure(layout: &LayoutResult, solver: &SolverResult) -> Result<LayoutMea
     let bbox_height = max_y - min_y;
     let long = bbox_width.max(bbox_height);
     let short = bbox_width.min(bbox_height);
-    let aspect_ratio = if short <= 0 { 1.0 } else { long as f64 / short as f64 };
+    // `short <= 0` is unreachable for any layout this function accepts:
+    // `measure()` errors on an empty non-pole entity set, and any real
+    // entity's oriented footprint is >= 1x1, so both bbox dims are >= 1.
+    // The guard exists only so a hypothetical future caller can't divide
+    // by zero — and it must NOT silently score such a degenerate as a
+    // perfect square (round-3 bot review, minor 4).
+    debug_assert!(short > 0, "non-pole bbox must have positive extent");
+    let aspect_ratio = if short <= 0 { f64::INFINITY } else { long as f64 / short as f64 };
 
     let sig = ProductionSignature::from_solver(solver)?;
     let graph = SolidGraph::build(layout);
@@ -257,6 +264,12 @@ pub struct ObjectiveScores {
     /// Attributed / total production edges on the native side.
     pub native_attributed_edges: usize,
     pub native_total_edges: usize,
+    /// Edges attributed on BOTH sides — the only subset `transit_score` is
+    /// computed over (each side's own sum would bias the comparison, see
+    /// `score_vs_native_weighted`). Callers reporting a transit claim
+    /// should report this alongside it: `Some(score)` over 1 common edge
+    /// of 10 is much weaker evidence than over 10 of 10.
+    pub common_attributed_edges: usize,
     /// `(entities(L) - entities(native)) / entities(native)`, RFC-064 §(c).
     pub delta_entities_pct: f64,
     /// Non-gating report-only flag, RFC-064 §(c): fires when
@@ -287,15 +300,45 @@ pub fn score_vs_native_weighted(
     let cand_attr = cand_total - candidate.unattributed_edge_count;
     let native_total = native.edges.len();
     let native_attr = native_total - native.unattributed_edge_count;
-    // A side with edges but zero attribution has measured NOTHING about
-    // transit — its 0.0 is absence of data, not shortness. Scoring it would
-    // manufacture transit_score = +1.0 (see the field's doc).
-    let evidence_free =
-        (cand_total > 0 && cand_attr == 0) || (native_total > 0 && native_attr == 0);
-    let ts = if evidence_free {
+    // Transit is only comparable over edges BOTH sides attributed. Summing
+    // each side over its own attributed subset biases the comparison in
+    // both directions: a candidate that attributes MORE edges (e.g. a
+    // fluid run the native routed underground) is penalized for the extra
+    // terms, and one that attributes fewer gets an artificially short sum
+    // (round-3 bot review, finding A). Both measures derive their edge
+    // list from the same `ProductionSignature` order, so edges pair by
+    // index; mismatched lengths mean the two measures are not from the
+    // same solve and no transit comparison is valid at all — which also
+    // closes the zero-edge-candidate hole (finding B: `cand_total == 0`
+    // vs a nonzero native previously scored a "perfect" +1.0).
+    let mut common_attributed = 0usize;
+    let ts = if cand_total != native_total {
         None
-    } else {
+    } else if candidate.unattributed_edge_count == 0 && native.unattributed_edge_count == 0 {
+        // Fully attributed on both sides: the pre-summed totals ARE the
+        // common-subset sums.
+        common_attributed = cand_total;
         Some(transit_score(candidate.transit, native.transit))
+    } else {
+        let (mut cand_common, mut native_common) = (0.0f64, 0.0f64);
+        for (ce, ne) in candidate.edges.iter().zip(&native.edges) {
+            debug_assert!(
+                ce.item == ne.item && ce.consumer_recipe == ne.consumer_recipe,
+                "paired edges must describe the same production edge",
+            );
+            if let (Some(cl), Some(nl)) = (ce.path_length, ne.path_length) {
+                let cw = if ce.is_fluid { FLUID_WEIGHT } else { 1.0 };
+                let nw = if ne.is_fluid { FLUID_WEIGHT } else { 1.0 };
+                cand_common += ce.rate * cw * cl;
+                native_common += ne.rate * nw * nl;
+                common_attributed += 1;
+            }
+        }
+        if common_attributed == 0 {
+            None
+        } else {
+            Some(transit_score(cand_common, native_common))
+        }
     };
     let delta_entities_pct = if native.entity_count == 0 {
         0.0
@@ -309,6 +352,7 @@ pub fn score_vs_native_weighted(
         candidate_total_edges: cand_total,
         native_attributed_edges: native_attr,
         native_total_edges: native_total,
+        common_attributed_edges: common_attributed,
         delta_entities_pct,
         entity_growth_warn: delta_entities_pct > ENTITY_GROWTH_WARN_PCT,
         composite: weights.w_ar * ars + weights.w_transit * ts.unwrap_or(0.0),
@@ -568,6 +612,19 @@ impl SolidGraph {
         for e in &layout.entities {
             if !is_inserter(&e.name) {
                 continue;
+            }
+            // A multi-output producer / multi-input consumer pair can have
+            // inserters moving a DIFFERENT item between the same two boxes;
+            // counting those would inject stray samples into THIS edge's
+            // measurement (round-3 bot review, minor 3). When the engine
+            // stamped what the inserter carries, require it to match;
+            // `carries: None` stays permissive (documented assumption:
+            // un-stamped inserters between the pair are assumed to serve
+            // the edge under measurement).
+            if let Some(c) = &e.carries {
+                if c != item {
+                    continue;
+                }
             }
             let (dx, dy) = dir_to_vec(e.direction);
             let reach = inserter_reach(&e.name);
@@ -847,6 +904,7 @@ mod tests {
             candidate_total_edges: 1,
             native_attributed_edges: 1,
             native_total_edges: 1,
+            common_attributed_edges: 1,
             delta_entities_pct,
             entity_growth_warn: false,
             composite,
@@ -922,7 +980,59 @@ mod tests {
         let scores = score_vs_native(&ghost, &native);
         assert_eq!(scores.transit_score, None, "zero attribution is no evidence, not a win");
         assert_eq!(scores.candidate_attributed_edges, 0);
+        assert_eq!(scores.common_attributed_edges, 0);
         assert_eq!(scores.composite, 0.0, "composite must treat missing transit evidence as neutral");
+    }
+
+    /// Round-3 bot review, finding A: transit must compare over the
+    /// COMMONLY-attributed edge subset, not each side's own attributed sum.
+    /// A candidate that attributes MORE edges than native (here: it routed
+    /// on the surface an edge native left unmeasurable) must not be
+    /// penalized for the extra measured term.
+    #[test]
+    fn partial_attribution_compares_common_subset_only() {
+        let edge = |len: Option<f64>| EdgeMeasurement {
+            producer_recipes: vec!["iron-gear-wheel".to_string()],
+            item: "iron-gear-wheel".to_string(),
+            consumer_recipe: "automation-science-pack".to_string(),
+            rate: 1.0,
+            is_fluid: false,
+            path_length: len,
+        };
+        let mut native = measure_with(1.5, 100.0, 500);
+        native.edges = vec![edge(Some(100.0)), edge(None)];
+        native.unattributed_edge_count = 1;
+        let mut cand = measure_with(1.5, 550.0, 500);
+        cand.edges = vec![edge(Some(50.0)), edge(Some(500.0))];
+        cand.unattributed_edge_count = 0;
+
+        let scores = score_vs_native(&cand, &native);
+        // Common subset = edge 0 only: 50 vs 100 → halved → score +0.5.
+        // The old own-subset comparison computed 550 vs 100 → −4.5, ranking
+        // the MORE-measurable candidate as a transit disaster.
+        assert_eq!(scores.common_attributed_edges, 1);
+        assert_eq!(scores.transit_score, Some(0.5));
+    }
+
+    /// Round-3 bot review, finding B: mismatched edge-list lengths mean the
+    /// two measures are not from the same solve — no transit comparison is
+    /// valid (previously a zero-edge candidate against a nonzero native
+    /// scored a "perfect" +1.0 through the old guard's gap).
+    #[test]
+    fn mismatched_edge_sets_are_evidence_free() {
+        let mut native = measure_with(1.5, 100.0, 500);
+        native.edges = vec![EdgeMeasurement {
+            producer_recipes: vec!["iron-gear-wheel".to_string()],
+            item: "iron-gear-wheel".to_string(),
+            consumer_recipe: "automation-science-pack".to_string(),
+            rate: 1.0,
+            is_fluid: false,
+            path_length: Some(100.0),
+        }];
+        let zero_edge_cand = measure_with(1.5, 0.0, 500);
+        let scores = score_vs_native(&zero_edge_cand, &native);
+        assert_eq!(scores.transit_score, None, "cross-solve/zero-edge comparison is no evidence");
+        assert_eq!(scores.common_attributed_edges, 0);
     }
 
     // -----------------------------------------------------------------

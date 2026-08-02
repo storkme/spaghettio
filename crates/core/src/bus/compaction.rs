@@ -4677,7 +4677,15 @@ pub fn search_snake_fold(
     // against new ones introduced on another, now rejects instead of
     // passing. See P2a's PR report for what that flips on the existing
     // corpus.
-    let policy = Policy::new(GatePolicy::GateInstances);
+    // GateInstances everywhere EXCEPT the pole category: `fold_snake` ends
+    // with `replace_poles`, which tears out and re-places every pole — pole
+    // positions in the candidate are NOT geometric images of native pole
+    // positions, so instance-matching them through the fold map misreads a
+    // carried-over pole issue as a resolved+new pair and falsely rejects
+    // the fold (round-3 bot review, finding C). Count comparison is the
+    // honest gate for a resynthesized category — same rationale as the
+    // verdict's own whole-category degrade for unresolvable positions.
+    let policy = Policy::new(GatePolicy::GateInstances).with_override("power", GatePolicy::GateCount);
 
     let mut best: Option<(i64, Vec<i32>, LayoutResult, i32)> = None;
 

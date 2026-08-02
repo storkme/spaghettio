@@ -533,6 +533,21 @@ pub fn run_candidate_field(
     field: &[CandidatePlan],
     policy: &Policy,
 ) -> Result<FieldResult, String> {
+    // Winner resolution and event replay look candidates up BY NAME — two
+    // same-named plans would tie in ranking and replay the wrong plan's
+    // events/layout (round-3 bot review, minor 5). Refuse up front, before
+    // the sink swap, so this early return needs no restore.
+    {
+        let mut seen = std::collections::BTreeSet::new();
+        for name in std::iter::once(incumbent.name.as_str())
+            .chain(field.iter().map(|p| p.name.as_str()))
+        {
+            if !seen.insert(name) {
+                return Err(format!("duplicate candidate plan name '{name}'"));
+            }
+        }
+    }
+
     let original_sink = crate::trace::swap_sink(None);
     // The two incumbent-path failures below MUST restore the sink before
     // returning — a bare `?` here permanently disabled the thread's trace
