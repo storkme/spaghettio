@@ -229,20 +229,19 @@ impl Policy {
         self.overrides.get(category).copied().unwrap_or(self.default)
     }
 
-    /// `search_snake_fold`'s accept test as it exists today
-    /// (`bus::compaction::search_snake_fold`'s `profile` closure and its
-    /// `regressed` filter): every category gated, compared by raw count,
-    /// no positional information consulted. Pairing this with
-    /// [`MatchTier::Count`] reproduces that function's decision
-    /// byte-for-byte. Pairing it with a positional tier instead changes
-    /// NOTHING relative to `MatchTier::Count`, by construction —
-    /// `GateCount` never consults the positioned breakdown regardless of
-    /// which tier computed it (see module docs). A caller that wants the
-    /// stricter, churn-sensitive fold behavior must build its own
-    /// `Policy::new(GatePolicy::GateInstances)` and pair it with
-    /// `MatchTier::Provenance` — that combination is deliberately NOT this
-    /// preset, so that `Policy::fold()` keeps meaning exactly what it says:
-    /// today's behavior, unchanged.
+    /// `search_snake_fold`'s HISTORICAL (pre-refit) accept test: every
+    /// category gated, compared by raw count, no positional information
+    /// consulted. This preserved the semantics of the per-category count
+    /// profile that function used before it was refit onto this module —
+    /// in the same change that introduced this preset, so the old code no
+    /// longer exists; this preset is its record and its Count-tier
+    /// equivalent. `search_snake_fold` itself now gates STRICTER, at
+    /// `Policy::new(GatePolicy::GateInstances)` + [`MatchTier::Provenance`]
+    /// (see its call site in `bus::compaction`). Pairing THIS preset with a
+    /// positional tier changes NOTHING relative to [`MatchTier::Count`], by
+    /// construction — `GateCount` never consults the positioned breakdown
+    /// regardless of which tier computed it (see module docs) — which is
+    /// why the fold refit does not use it.
     pub fn fold() -> Self {
         Self::new(GatePolicy::GateCount)
     }

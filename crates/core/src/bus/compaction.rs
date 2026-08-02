@@ -4075,10 +4075,13 @@ mod tests {
     /// derivation against `fold_snake`'s real output, not a re-derivation).
     #[test]
     fn fold_point_correspondence_matches_fold_snake_tile_sets() {
-        // Two 1x1 stand-in entities (unknown names -> entity_size falls
-        // back to (1,1)) either side of a legal fold column, no belts at
-        // all — fold_snake's reconnection pass has nothing to do, so this
-        // isolates the point-transform this test exists to check.
+        // A 1x1 stand-in in the even segment and a REAL 3x3 assembler in
+        // the odd (mirrored) segment — multi-tile-in-odd-segment is the
+        // case where the point-reflection's width/height cancellation
+        // actually has something to cancel (PR #569 review: with only 1x1
+        // entities this test could not distinguish a size-generic formula
+        // from a broken one). No belts at all — fold_snake's reconnection
+        // pass has nothing to do, so this isolates the point transform.
         let layout = LayoutResult {
             entities: vec![
                 PlacedEntity {
@@ -4088,9 +4091,9 @@ mod tests {
                     ..Default::default()
                 },
                 PlacedEntity {
-                    name: "stub-b".into(),
-                    x: 5,
-                    y: 1,
+                    name: "assembling-machine-2".into(),
+                    x: 4,
+                    y: 0,
                     ..Default::default()
                 },
             ],

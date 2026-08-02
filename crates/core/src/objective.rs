@@ -241,7 +241,22 @@ impl Default for CompositeWeights {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ObjectiveScores {
     pub ar_score: f64,
-    pub transit_score: f64,
+    /// `None` = **no transit evidence**: one side of the comparison has
+    /// production edges but attributed NONE of them. A `Transit` of `0.0`
+    /// from total unattribution would otherwise masquerade as
+    /// `transit_score = +1.0` ("100% shorter") — indistinguishable from a
+    /// genuinely perfect candidate (PR #569 adversarial review, finding 2;
+    /// the RFC-064 Phase 3 gate driver hit exactly this artifact). The
+    /// composite treats `None` as `0.0` — neutral: no claimed win, no
+    /// claimed loss — and the four `*_edges` counts below let callers
+    /// report the evidence gap instead of silently ranking through it.
+    pub transit_score: Option<f64>,
+    /// Attributed / total production edges on the candidate side.
+    pub candidate_attributed_edges: usize,
+    pub candidate_total_edges: usize,
+    /// Attributed / total production edges on the native side.
+    pub native_attributed_edges: usize,
+    pub native_total_edges: usize,
     /// `(entities(L) - entities(native)) / entities(native)`, RFC-064 §(c).
     pub delta_entities_pct: f64,
     /// Non-gating report-only flag, RFC-064 §(c): fires when
@@ -268,7 +283,20 @@ pub fn score_vs_native_weighted(
     weights: CompositeWeights,
 ) -> ObjectiveScores {
     let ars = ar_score(candidate.aspect_ratio, native.aspect_ratio);
-    let ts = transit_score(candidate.transit, native.transit);
+    let cand_total = candidate.edges.len();
+    let cand_attr = cand_total - candidate.unattributed_edge_count;
+    let native_total = native.edges.len();
+    let native_attr = native_total - native.unattributed_edge_count;
+    // A side with edges but zero attribution has measured NOTHING about
+    // transit — its 0.0 is absence of data, not shortness. Scoring it would
+    // manufacture transit_score = +1.0 (see the field's doc).
+    let evidence_free =
+        (cand_total > 0 && cand_attr == 0) || (native_total > 0 && native_attr == 0);
+    let ts = if evidence_free {
+        None
+    } else {
+        Some(transit_score(candidate.transit, native.transit))
+    };
     let delta_entities_pct = if native.entity_count == 0 {
         0.0
     } else {
@@ -277,9 +305,13 @@ pub fn score_vs_native_weighted(
     ObjectiveScores {
         ar_score: ars,
         transit_score: ts,
+        candidate_attributed_edges: cand_attr,
+        candidate_total_edges: cand_total,
+        native_attributed_edges: native_attr,
+        native_total_edges: native_total,
         delta_entities_pct,
         entity_growth_warn: delta_entities_pct > ENTITY_GROWTH_WARN_PCT,
-        composite: weights.w_ar * ars + weights.w_transit * ts,
+        composite: weights.w_ar * ars + weights.w_transit * ts.unwrap_or(0.0),
     }
 }
 
@@ -289,14 +321,19 @@ pub fn score_vs_native_weighted(
 /// by `K`'s own `Ord` (the RFC's "deterministic candidate-id order").
 /// Callers must pre-filter to admissible candidates themselves — step 1 of
 /// the RFC's rule is a sim-anchored fact this module cannot compute.
+///
+/// **ε-banding is anchored at each band's leader, not pairwise.** Pairwise
+/// "within ε of my neighbor" is non-transitive (A~B, B~C can hold while A~C
+/// does not), and a sort comparator built on it produced input-order-
+/// dependent winners (PR #569 adversarial review, finding 1) — directly
+/// violating §(d) step 4's own reproducibility clause. Here a band is
+/// closed over "within ε of the band's BEST composite": deterministic under
+/// any input permutation. This is a formalization decision the RFC's text
+/// leaves open; recorded in the RFC-064 decision log.
 pub fn rank_admissible<K: Clone + Ord>(candidates: &[(K, ObjectiveScores, usize)]) -> Vec<K> {
-    let mut order: Vec<usize> = (0..candidates.len()).collect();
-    order.sort_by(|&a, &b| {
+    let tie_break = |a: usize, b: usize| {
         let (ka, sa, ea) = &candidates[a];
         let (kb, sb, eb) = &candidates[b];
-        if (sa.composite - sb.composite).abs() > COMPOSITE_TIE_EPSILON {
-            return sb.composite.partial_cmp(&sa.composite).unwrap_or(std::cmp::Ordering::Equal);
-        }
         if (sa.delta_entities_pct - sb.delta_entities_pct).abs() > DEGENERATE_EPS {
             return sa
                 .delta_entities_pct
@@ -307,8 +344,38 @@ pub fn rank_admissible<K: Clone + Ord>(candidates: &[(K, ObjectiveScores, usize)
             return ea.cmp(eb);
         }
         ka.cmp(kb)
+    };
+
+    // Pass 1: strict total order — composite descending, full tie-break
+    // chain as secondary so the pre-sort itself is already deterministic.
+    let mut order: Vec<usize> = (0..candidates.len()).collect();
+    order.sort_by(|&a, &b| {
+        candidates[b]
+            .1
+            .composite
+            .partial_cmp(&candidates[a].1.composite)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| tie_break(a, b))
     });
-    order.into_iter().map(|i| candidates[i].0.clone()).collect()
+
+    // Pass 2: walk the descending list, close each band over "within ε of
+    // the band leader", and re-rank each band by the tie-break chain alone
+    // (§(d) step 3: within a tie band, composite differences are noise).
+    let mut ranked: Vec<usize> = Vec::with_capacity(order.len());
+    let mut i = 0;
+    while i < order.len() {
+        let leader = candidates[order[i]].1.composite;
+        let mut j = i + 1;
+        while j < order.len() && leader - candidates[order[j]].1.composite <= COMPOSITE_TIE_EPSILON
+        {
+            j += 1;
+        }
+        let band = &mut order[i..j];
+        band.sort_by(|&a, &b| tie_break(a, b));
+        ranked.extend_from_slice(band);
+        i = j;
+    }
+    ranked.into_iter().map(|i| candidates[i].0.clone()).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -734,7 +801,7 @@ mod tests {
         let native = measure_with(5.0, 100.0, 500);
         let scores = score_vs_native(&native, &native);
         assert_eq!(scores.ar_score, 0.0);
-        assert_eq!(scores.transit_score, 0.0);
+        assert_eq!(scores.transit_score, Some(0.0));
         assert_eq!(scores.delta_entities_pct, 0.0);
         assert_eq!(scores.composite, 0.0);
         assert!(!scores.entity_growth_warn);
@@ -770,22 +837,26 @@ mod tests {
         assert_eq!(ranked[0], "native", "native (composite 0.0) must outrank the negative-AR_score candidate");
     }
 
+    /// Test-literal helper: an [`ObjectiveScores`] with the given composite
+    /// and ΔEntities%, full transit evidence, no warn.
+    fn scores_of(composite: f64, delta_entities_pct: f64) -> ObjectiveScores {
+        ObjectiveScores {
+            ar_score: composite,
+            transit_score: Some(composite),
+            candidate_attributed_edges: 1,
+            candidate_total_edges: 1,
+            native_attributed_edges: 1,
+            native_total_edges: 1,
+            delta_entities_pct,
+            entity_growth_warn: false,
+            composite,
+        }
+    }
+
     #[test]
     fn rank_admissible_orders_by_composite_then_tie_break() {
-        let a = ObjectiveScores {
-            ar_score: 0.9,
-            transit_score: 0.9,
-            delta_entities_pct: 0.5,
-            entity_growth_warn: false,
-            composite: 0.9,
-        };
-        let b = ObjectiveScores {
-            ar_score: 0.4,
-            transit_score: 0.4,
-            delta_entities_pct: 0.1,
-            entity_growth_warn: false,
-            composite: 0.4,
-        };
+        let a = scores_of(0.9, 0.5);
+        let b = scores_of(0.4, 0.1);
         let ranked = rank_admissible(&[("b".to_string(), b, 10), ("a".to_string(), a, 10)]);
         assert_eq!(ranked, vec!["a".to_string(), "b".to_string()]);
     }
@@ -793,22 +864,65 @@ mod tests {
     #[test]
     fn rank_admissible_tie_break_prefers_lower_delta_entities() {
         // Composites within COMPOSITE_TIE_EPSILON of each other.
-        let a = ObjectiveScores {
-            ar_score: 0.5,
-            transit_score: 0.5,
-            delta_entities_pct: 0.30,
-            entity_growth_warn: false,
-            composite: 0.500,
-        };
-        let b = ObjectiveScores {
-            ar_score: 0.5,
-            transit_score: 0.5,
-            delta_entities_pct: 0.05,
-            entity_growth_warn: false,
-            composite: 0.505,
-        };
+        let a = scores_of(0.500, 0.30);
+        let b = scores_of(0.505, 0.05);
         let ranked = rank_admissible(&[("a".to_string(), a, 100), ("b".to_string(), b, 100)]);
         assert_eq!(ranked, vec!["b".to_string(), "a".to_string()], "lower ΔEntities% must win a composite tie");
+    }
+
+    /// PR #569 adversarial review, finding 1 — the reviewer's own
+    /// counterexample shape: three candidates where a~b and b~c are each
+    /// inside the ε=0.02 window but a~c is not (chained, non-transitive
+    /// ties). Under the old pairwise comparator the winner depended on
+    /// input order (three different winners across orderings). Leader-
+    /// anchored banding must produce ONE ranking under every permutation.
+    #[test]
+    fn rank_admissible_is_input_order_independent_under_chained_ties() {
+        let a = ("a".to_string(), scores_of(0.100, 0.30), 100);
+        let b = ("b".to_string(), scores_of(0.085, 0.10), 100);
+        let c = ("c".to_string(), scores_of(0.070, 0.01), 100);
+        let perms: [[&(String, ObjectiveScores, usize); 3]; 6] = [
+            [&a, &b, &c], [&a, &c, &b], [&b, &a, &c],
+            [&b, &c, &a], [&c, &a, &b], [&c, &b, &a],
+        ];
+        let mut rankings = Vec::new();
+        for p in &perms {
+            let field: Vec<_> = p.iter().map(|t| (*t).clone()).collect();
+            rankings.push(rank_admissible(&field));
+        }
+        for r in &rankings[1..] {
+            assert_eq!(r, &rankings[0], "ranking must not depend on input order");
+        }
+        // Band semantics: leader a's band is {a, b} (c is 0.030 > ε from a),
+        // so b wins the band on lower ΔEntities%; c ranks after the band.
+        assert_eq!(rankings[0], vec!["b".to_string(), "a".to_string(), "c".to_string()]);
+    }
+
+    /// PR #569 adversarial review, finding 2: a candidate whose every
+    /// production edge is unattributed measures transit 0.0 — which the old
+    /// scorer turned into transit_score = +1.0, indistinguishable from a
+    /// genuinely perfect layout. It must now score `None` (no evidence),
+    /// contribute 0.0 to the composite, and expose the counts.
+    #[test]
+    fn fully_unattributed_transit_scores_none_not_perfect() {
+        let edge = EdgeMeasurement {
+            producer_recipes: vec!["iron-gear-wheel".to_string()],
+            item: "iron-gear-wheel".to_string(),
+            consumer_recipe: "automation-science-pack".to_string(),
+            rate: 1.0,
+            is_fluid: false,
+            path_length: Some(100.0),
+        };
+        let mut native = measure_with(1.5, 100.0, 500);
+        native.edges = vec![edge.clone()];
+        let mut ghost = measure_with(1.5, 0.0, 500);
+        // Same edge, but nothing attributed on the candidate side.
+        ghost.edges = vec![EdgeMeasurement { path_length: None, ..edge }];
+        ghost.unattributed_edge_count = 1;
+        let scores = score_vs_native(&ghost, &native);
+        assert_eq!(scores.transit_score, None, "zero attribution is no evidence, not a win");
+        assert_eq!(scores.candidate_attributed_edges, 0);
+        assert_eq!(scores.composite, 0.0, "composite must treat missing transit evidence as neutral");
     }
 
     // -----------------------------------------------------------------

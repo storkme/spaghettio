@@ -1016,9 +1016,13 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   (metrics in a gitignored dry-sweep example, three incompatible in-tree
   never-worse tests, per-phase evaluation loops); Phase 3's packer needs the
   loop to be a primitive, not a rebuild. Three units, Sonnet agents under
-  session-lead review, all additive — **zero shipping-behavior change**
-  (`build_bus_layout` and `select_best_decomposition` byte-identical; the
-  runner is test-only until a future, separately-gated call-site swap).
+  session-lead review, all additive — **no shipping-behavior change except
+  the `fold=1` knob's accept test** (stricter, see item 2; "no tested
+  fixture flips" is the established claim — the original "zero change"
+  wording here overclaimed it, corrected per the session review entry
+  below). `build_bus_layout` at default options and
+  `select_best_decomposition` are byte-identical; the runner is test-only
+  until a future, separately-gated call-site swap.
   (1) **P1, `crates/core/src/objective.rs`** (97a63dbc): §(a)–(d) exactly;
   Transit is REALIZED per-edge routed path length (Dijkstra over
   `belt_flow`'s adjacency helpers), replacing Stage A's flagged
@@ -1082,3 +1086,49 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   fold-accept semantics (validator-adjacent), so per repo rules it owes
   both the PR bot pass AND session-side review before merging to main.
   Stage B is unaffected (no shipping-path change).
+
+- **2026-08-02 (later) — eval-primitives review debt paid: PR #569 +
+  session-side adversarial review; three blocking findings, all fixed on
+  the branch.** Session review independently reproduced every verification
+  claim (suite 1131/0, clippy, wasm, fold/mil5 fixtures) and found:
+  (1) **`rank_admissible` winner was input-order-dependent** for 3+
+  candidates in chained near-ties — the pairwise ε comparator is
+  non-transitive, so `sort_by` output depended on list order (3 different
+  winners across 4 orderings on the reviewer's counterexample), violating
+  §(d) step 4's own reproducibility clause. FIXED: ε-banding is now
+  **anchored at each band's leader** (band = within ε of the band's best
+  composite; tie-break chain re-ranks within the band) — a formalization
+  the RFC text left open, chosen because chained pairwise ties have no
+  order-independent semantics; pinned by a 6-permutation test.
+  (2) **Total transit unattribution manufactured `transit_score = +1.0`**
+  (Transit 0.0 from zero attributed edges reads as "100% shorter") with no
+  way for callers to detect it — the measurement layer's "never silently
+  proxy" discipline was violated one layer up at scoring. FIXED:
+  `ObjectiveScores.transit_score` is now `Option<f64>` — `None` when either
+  side has production edges but zero attributed — contributing 0.0
+  (neutral) to the composite, with attributed/total edge counts for both
+  sides now carried on the scores struct. This retroactively explains the
+  Phase 3 driver's +1.0000 artifact rows (that driver, on the stacked
+  branch, predates the fix and must adapt when rebased.)
+  (3) **`Policy::fold()`'s doc described code this same diff deleted**
+  (present-tense reference to the pre-refit `profile`/`regressed` logic).
+  FIXED: doc now states it is the historical pre-refit semantics preserved
+  as the Count-tier record. Also fixed from the same review: the entry
+  above's "zero shipping-behavior change" overclaim (softened to the
+  established claim), and the correspondence property test upgraded from
+  1×1-only stand-ins to a real 3×3 assembler in the mirrored segment (the
+  reviewer hand-verified the formula is size-generic; now the test proves
+  it executably). **Recorded follow-ups (non-blocking, from the same
+  review):** (a) warnings-field parity between `build_bus_layout` and
+  `produce_plan` on >6000-entity layouts is untested; (b) byte-identity
+  parity tests cover the incumbent-only field, not the
+  competitive-field-incumbent-wins path (code-read as shared, unproven by
+  test); (c) residual risk that Provenance-tier matching could mask a new
+  issue as "resolved" near fold-seam reconnection geometry — no concrete
+  case constructed, flagged as a watch-item for Phase-4-style transforms.
+  Process: PR #569's required `second-opinion` check crashed on a
+  deterministic action bug for >128 KiB diffs (`[Errno 7]` — argv cap);
+  fixed upstream in storkme/second-opinion#18 (oversized prompts piped via
+  stdin after its own two review rounds rejected the @file approach for
+  silently changing prompt shape), v1 retagged, check re-runs against this
+  branch's post-review head.
