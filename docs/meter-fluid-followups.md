@@ -104,14 +104,16 @@ merge-priority model change, unverifiable on this noisy fixture and risky for th
 `rfc064-phase2-followups.md`), not this meter-fluid thread. Full evidence:
 [`meter-divergence.md`](meter-divergence.md).
 
-### Orientation-keyed port binding — FIXED (this thread)
-`mirrored` is now keyed on the machine being one of the mirrored set AND placed
-in the mirrored (South-exporter) orientation. A North-facing (unmirrored)
-refinery/foundry/cryo binds its multi-fluid face x-ascending. Corpus-neutral
-(engine always exports those machines as South). Known limit (reviewer note):
-the meter parses no `mirror` flag, so a genuinely-unmirrored machine exported at
-South is indistinguishable — only reachable from non-engine blueprints, not the
-corpus.
+### Orientation-keyed port binding — PROPOSED then REVERTED (this thread)
+An attempt to key `mirrored` on orientation (`mirror_entity && direction == South`)
+was proposed and then **reverted on review**: community blueprints re-freeze these
+machines as `North + mirror:true` (and the engine's own import parser treats both
+South and West wire forms as the mirrored collision), so a South-only key mis-binds
+them — a regression vs the unconditional `mirrored = mirror_entity`. The correct
+fix is to **parse the real `mirror` flag** in the blueprint decoder (the meter
+reads no such field today), not to guess from direction. Left as a documented
+future change; the unconditional binding (merged baseline) is kept, with a comment
+recording the limitation.
 
 ### Two proposed fixes — REVERTED after review (record the call)
 - **Census precedence** (report `FluidIngredientShortage` whenever a fluid is

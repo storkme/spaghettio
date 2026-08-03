@@ -311,8 +311,7 @@ impl Machine {
         if self.progress <= 0.0 {
             if !self.has_ingredients() {
                 // Distinguish a missing fluid from a missing solid so the
-                // census is comparable to the sim's (which labels a machine by
-                // whichever ingredient actually blocks next, solids-ordered).
+                // census is comparable to the sim's.
                 self.state = if self
                     .missing()
                     .map(|(_, is_fluid)| is_fluid)

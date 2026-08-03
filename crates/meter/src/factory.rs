@@ -181,20 +181,21 @@ impl Factory {
                     // Collect this machine's fluid ports, bound to the recipe's
                     // fluid items (RFC-054 Phase B). Port fluid binding is
                     // x-ascending over each IO face EXCEPT on the machines the
-                    // engine mirrors, whose exported orientation binds recipe
-                    // fluids x-descending (the measured rule in
-                    // `spaghettio_core::fluid_ports`; the exporter encodes the
-                    // mirrored machine as direction+8 / South). `mirrored` is
-                    // therefore keyed on the machine being one of the mirrored
-                    // set AND actually placed in the mirrored (South)
-                    // orientation — a North-facing instance is unmirrored and
-                    // binds x-ascending. For a single-fluid face n-1-k == k, so
-                    // the distinction only matters for multi-fluid faces.
-                    let mirror_entity = matches!(
+                    // engine mirrors (oil-refinery, foundry, cryogenic-plant),
+                    // whose exported orientation binds recipe fluids
+                    // x-descending (the measured rule in `spaghettio_core::
+                    // fluid_ports`). The meter's blueprint decoder does not yet
+                    // parse the `mirror` flag, so it keys the reversal on the
+                    // mirrored-machine set unconditionally — a known
+                    // simplification (a genuinely-unmirrored single instance of
+                    // those three at some orientations would mis-bind), which a
+                    // future change should fix by parsing `mirror` rather than
+                    // guessing from direction. For a single-fluid face
+                    // n-1-k == k, so this only matters for multi-fluid faces.
+                    let mirrored = matches!(
                         e.name.as_str(),
                         "oil-refinery" | "foundry" | "cryogenic-plant"
                     );
-                    let mirrored = mirror_entity && e.direction == Dir::South;
                     let mi = machines.len();
                     if let Some(rdb) = db.recipes.get(recipe) {
                         let mut in_fluids: Vec<String> = Vec::new();
