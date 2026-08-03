@@ -175,16 +175,17 @@ pub fn build_networks(
         // underground pairing handled by F4 below.
         let dir = n.dir.unwrap();
         let surf = (x + dir.delta().0, y + dir.delta().1);
-        if is_pipe(surf) {
-            union(&mut parent, &mut rank, (x, y), surf);
-        }
-        // F5b: two PTGs whose surface mouths face each other across a shared
-        // edge merge (no `pipe` entity needed).
-        let mouth = (x + dir.delta().0, y + dir.delta().1);
-        if let Some(m) = pipe.get(&mouth) {
-            if m.ptg && m.dir.map(|md| md == Dir::opp_dir(dir)).unwrap_or(false) {
-                union(&mut parent, &mut rank, (x, y), mouth);
+        match pipe.get(&surf) {
+            // A regular pipe opens on every side, so it joins the mouth.
+            Some(p) if !p.ptg => union(&mut parent, &mut rank, (x, y), surf),
+            // F5b: a PTG whose surface mouth faces back toward this PTG merges
+            // across their shared edge.
+            Some(p) if p.ptg && p.dir == Some(Dir::opp_dir(dir)) => {
+                union(&mut parent, &mut rank, (x, y), surf)
             }
+            // A PTG that does NOT open back (e.g. a same-facing stacked PTG)
+            // does not connect to this mouth (F5a): the lines stay isolated.
+            _ => {}
         }
     }
 
@@ -390,6 +391,35 @@ mod tests {
         assert_ne!(
             ids[0], ids[1],
             "perpendicular-adjacent PTGs must not merge (F5a)"
+        );
+    }
+
+    /// F5a/F5b: a PTG whose surface mouth rests against ANOTHER PTG that does
+    /// not open back must not merge — the mouth only joins a regular pipe or a
+    /// back-facing PTG (F5b). Pins the stacked-trunk isolation that a plain
+    /// "union whatever is on the mouth tile" would break. (No underground
+    /// partner is present, so F4 pairing stays out of the way.)
+    #[test]
+    fn stacked_same_facing_ptgs_stay_isolated() {
+        // B at (0,0) faces North (mouth (0,-1), port there). A at (0,1) also
+        // faces North, so A's mouth (0,0) rests on B's back — B does not open
+        // toward A. If A's mouth wrongly joined B, they would be ONE network.
+        let pipes = vec![
+            (0i32, 0i32, "pipe-to-ground", Dir::North),
+            (0i32, 1i32, "pipe-to-ground", Dir::North),
+        ];
+        let ports = vec![MachPort {
+            machine: 0,
+            x: 0,
+            y: -1,
+            item: 1,
+            is_input: true,
+        }];
+        let sys = build_networks(&pipes, &ports, &[]);
+        assert_eq!(
+            sys.networks.len(),
+            2,
+            "B's pipe and A's pipe must remain separate components"
         );
     }
 }

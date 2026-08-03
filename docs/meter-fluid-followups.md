@@ -1,9 +1,10 @@
 # Meter fluid modelling — follow-ups (#570)
 
-**Status (2026-08-03): Phase A landed (machine fluid + port-adjacency);
-Phase B LANDED — pipe networks + pipe-fast/balanced delivery. Calibration now
-within ±10pp on the whole compared corpus EXCEPT `tier5_processing_unit_from_ore_am3`
-(−13%, a solid belt-delivery residual, not fluid).** #570.
+**Status (2026-08-03, follow-up `f5a-ptg-edge`): Phase A + B LANDED and merged
+(#571). Calibration within ±10pp on the whole compared corpus EXCEPT
+`tier5_processing_unit_from_ore_am3` (−13%, a solid belt-delivery residual, not
+fluid). CI second-opinion findings triaged: F5a stacked-PTG edge FIXED;
+byproduct backpressure consciously rejected (see below).** #570.
 
 Phase B replaced Phase A's port-adjacency `tick_fluids` (which delivered fluid
 one unit a tick and throttled petroleum→plastic→AC→PU to ~20%) with a real pipe
@@ -63,23 +64,43 @@ closed — keeps crossing/stacked fluid lines isolated).
   belt cycle — see [`meter-divergence.md`](meter-divergence.md)).
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).
 
-## Next steps (uncommitted for this thread)
+## Next steps / open items (2026-08-03)
 
-1. **Confirm/close the PU-from-ore −13%.** Its census shows 30 `item_ingredient_shortage`
-   and only 1 fluid-short machine — petroleum/fluid are not the limit. Investigate
-   as a belt-model divergence (the fixture notes "26 tiles in a belt cycle").
-2. **Fluid byproduct backpressure (open gap, flagged by CI second-opinion).**
-   `tick_fluids` drains every unconsumed producer fluid unit as `delivered`, so a
-   machine whose fluid byproduct has no consumer (or more byproduct than consumer
-   capacity) never backs up: the excess drains and the producer keeps crafting at
-   full speed. In-game, excess heavy/light oil would fill the pipe and stall the
-   refinery, capping the target petroleum output too. This is entangled with the
-   sweep's `delivered_per_s` metric for fluid targets (AOP relies on the drain),
-   so it needs a deliberate design (e.g. only count drained surplus as delivered
-   when the item is a declared boundary-output/target, plus a fluid-output
-   full-output stall on the producer) — a follow-up, not a rushed change. The
-   current corpus has no over-capacity byproduct, so ±10pp stands.
-3. Re-bless any golden/snapshot baselines the corpus ingest tests depend on.
+### F5a stacked-PTG edge — FIXED
+A pipe-to-ground's surface mouth now only joins a regular pipe or a **back-facing**
+pipe-to-ground (F5b); a same-facing stacked PTG no longer merges the two lines.
+Previously the mouth unioned *any* pipe on its tile, breaking stacked-trunk
+isolation. New regression test (`stacked_same_facing_ptgs_stay_isolated`). Corpus
+sweep unchanged (zero regression).
+
+### Fluid byproduct backpressure — consciously REJECTED (kept drain philosophy)
+CI second-opinion flags that `tick_fluids` drains every unconsumed producer fluid
+unit as `delivered`, so a machine whose fluid byproduct has no consumer never
+backs up (in-game it would stall the producer). **Decision (2026-08-03): keep the
+documented max-throughput philosophy** — `factory.rs`'s header states outputs drain
+at the layout edge so "backpressure cannot falsify the measurement", matching the
+sim harness's remove-mode-chest methodology the meter calibrates against. Adding
+backpressure would make the meter *diverge* from its own reference instrumentation,
+and no compared fixture exercises a byproduct loop (all 8 fluid-target fixtures
+are NaN — no sim baseline), so it is unverifiable. The in-game viewpoint is valid
+Factorio physics but a different measurement philosophy; recorded here so the call
+is explicit, not accidental. Revisit only if a sim-baselined byproduct-loop fixture
+ever enters the corpus.
+
+### Confirm/close the PU-from-ore −13%
+Its census shows 30 `item_ingredient_shortage` and only 1 fluid-short machine —
+petroleum/fluid are not the limit. Investigate as a belt-model divergence (the
+fixture notes "26 tiles in a belt cycle"). See [`meter-divergence.md`](meter-divergence.md).
+
+### Remaining latent minors (recorded, not chased)
+- Fluid port *binding* keyed on machine name (always mirrored for refinery/foundry/
+  cryo) rather than actual orientation; a direction-0 instance would swap multi-fluid
+  faces. Not in the corpus (engine always mirrors those machines).
+- A machine short of both a solid and a fluid is classified `ItemIngredientShortage`
+  (solids checked first), under-counting `fluid_ingredient_shortage` in the census.
+- A chem-plant's two input ports feed one internal fluid box in-game; a single-fluid
+  pipe to the *other* port tile would silently starve it here.
+- Re-bless any golden/snapshot baselines the corpus ingest tests depend on.
 
 ## Constraints / gates
 
