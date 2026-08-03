@@ -113,6 +113,9 @@ pub struct Factory {
     /// `(tick, total delivered)` sampled every [`CHECKPOINT_TICKS`] since
     /// the last counter reset. Feeds the convergence test in [`Self::report`].
     checkpoints: Vec<(u64, u64)>,
+    /// Boundary fluid inputs (crude-oil, water, …) as standing sources:
+    /// `fluid id -> feed positions`. (#570 Phase A port-adjacency delivery.)
+    fluid_feeds: FxHashMap<u16, Vec<(i32, i32)>>,
 }
 
 /// Convergence sampling cadence, matching `spaghettio-sim`'s 3600-tick
@@ -233,9 +236,16 @@ impl Factory {
 
         // --- boundary ---------------------------------------------------
         let mut feeds = Vec::new();
+        let mut fluid_feeds: FxHashMap<u16, Vec<(i32, i32)>> = FxHashMap::default();
         for b in &manifest.boundary_inputs {
             if b.is_fluid {
-                notes.push(format!("fluid boundary input {} not modelled", b.item));
+                // #570 Phase A: keep the fluid boundary as a standing source
+                // (feed positions) rather than dropping it. Delivery to
+                // machines happens in `tick_fluids` via port-adjacency.
+                fluid_feeds
+                    .entry(items.intern(&b.item).0)
+                    .or_default()
+                    .push((b.x, b.y));
                 continue;
             }
             match net.tile_at((b.x, b.y)) {
@@ -278,6 +288,7 @@ impl Factory {
             crafted: FxHashMap::default(),
             delivered: FxHashMap::default(),
             notes,
+            fluid_feeds,
         })
     }
 
@@ -292,9 +303,77 @@ impl Factory {
         self.tick_feeds();
         self.tick_inserters();
         self.tick_machines();
+        self.tick_fluids();
         self.net.tick();
         self.drain_sinks();
         self.ticks += 1;
+    }
+
+    /// #570 Phase A: fluid delivery via port-adjacency (no pipe network
+    /// routing yet). Each machine that needs a fluid ingredient it doesn't
+    /// have pulls it from the nearest source: a boundary fluid feed of that
+    /// fluid, else an adjacent producer's `fluid_output`. Unconsumed fluid
+    /// output is drained as delivered (the target-fluid boundary exit).
+    fn tick_fluids(&mut self) {
+        let needs: Vec<(usize, u16, u32)> = (0..self.machines.len())
+            .filter_map(|i| {
+                let m = &self.machines[i];
+                m.fluid_needs
+                    .iter()
+                    .find(|(id, amt)| m.fluid_input.get(id).copied().unwrap_or(0) < *amt)
+                    .map(|(id, amt)| (i, *id, *amt))
+            })
+            .collect();
+        for (ci, fid, amt) in needs {
+            let have = self.machines[ci]
+                .fluid_input
+                .get(&fid)
+                .copied()
+                .unwrap_or(0);
+            let missing = amt.saturating_sub(have);
+            if missing == 0 {
+                continue;
+            }
+            let mut gained = 0u32;
+            // 1) boundary fluid feed of this fluid (unlimited standing source).
+            if let Some(feeds) = self.fluid_feeds.get(&fid) {
+                if !feeds.is_empty() {
+                    let take = missing - gained;
+                    gained += self.machines[ci].insert_fluid(ItemId(fid), take);
+                }
+            }
+            // 2) adjacent producer machines holding this fluid in `fluid_output`.
+            if gained < missing {
+                for pi in 0..self.machines.len() {
+                    if pi == ci || gained >= missing {
+                        continue;
+                    }
+                    let held = self.machines[pi]
+                        .fluid_output
+                        .get(&fid)
+                        .copied()
+                        .unwrap_or(0);
+                    if held == 0 {
+                        continue;
+                    }
+                    let take = held.min(missing - gained);
+                    self.machines[pi]
+                        .fluid_output
+                        .entry(fid)
+                        .and_modify(|v| *v -= take);
+                    gained += self.machines[ci].insert_fluid(ItemId(fid), take);
+                }
+            }
+        }
+        // Drain any unconsumed fluid output as delivered (target fluid exit).
+        for m in self.machines.iter_mut() {
+            for (&fid, &amt) in m.fluid_output.iter() {
+                if amt > 0 {
+                    *self.delivered.entry(fid).or_insert(0) += amt as u64;
+                }
+            }
+            m.fluid_output.clear();
+        }
     }
 
     pub fn run_for(&mut self, ticks: u64) {
@@ -460,6 +539,7 @@ impl Factory {
             MachineState::Working,
             MachineState::FullOutput,
             MachineState::ItemIngredientShortage,
+            MachineState::FluidIngredientShortage,
         ] {
             let n = self.machines.iter().filter(|m| m.state == state).count();
             if n > 0 {
@@ -585,8 +665,8 @@ mod convergence_tests {
     #[test]
     fn the_shipped_measurement_window_can_converge() {
         const WINDOW: u64 = 60 * 60 * 3; // corpus_replay.rs / measure.rs
-        // Replay exactly what reset_counters + run_for record for a
-        // perfectly steady factory.
+                                         // Replay exactly what reset_counters + run_for record for a
+                                         // perfectly steady factory.
         let mut cps = vec![(0u64, 0u64)];
         let mut delivered = 0u64;
         for t in 1..=WINDOW {
@@ -644,8 +724,11 @@ mod note_tests {
             ent("long-handed-inserter", 6, 0),
         ];
         let f = Factory::from_entities(&ents, Manifest::default()).expect("builds");
-        let spurious: Vec<&String> =
-            f.notes.iter().filter(|n| n.contains("not modelled")).collect();
+        let spurious: Vec<&String> = f
+            .notes
+            .iter()
+            .filter(|n| n.contains("not modelled"))
+            .collect();
         assert!(
             spurious.is_empty(),
             "no ordinary entity may be reported as an unmodelled inserter, got {spurious:?}"
@@ -661,7 +744,9 @@ mod note_tests {
         let ents = vec![ent("burner-inserter", 0, 0)];
         let f = Factory::from_entities(&ents, Manifest::default()).expect("builds");
         assert!(
-            f.notes.iter().any(|n| n.contains("burner-inserter") && n.contains("not modelled")),
+            f.notes
+                .iter()
+                .any(|n| n.contains("burner-inserter") && n.contains("not modelled")),
             "an inserter variant the meter cannot model must be noted, got {:?}",
             f.notes
         );
