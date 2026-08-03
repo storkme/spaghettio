@@ -1,18 +1,16 @@
 # Meter fluid modelling — follow-ups (#570)
 
-**Status (2026-08-02): Phase A Machine + Factory fluid delivery LANDED; non-zero
-achieved; Phase B/C open.** Enhancement #570: the fast meter (RFC-054)
-previously returned a hard 0 on any chain needing a fluid. Implemented: fluids
-as machine ingredients/products (`MachineState::FluidIngredientShortage`),
-fluid ingredient buffers + `insert_fluid`, `has_ingredients` includes fluids,
-fluid products accumulate to `fluid_output`, and a crude `tick_fluids`
-port-adjacency delivery step (boundary fluid feed + producer->consumer;
-unconsumed fluid output drained as delivered). Result over the corpus:
-**AC/PU/AC-from-ore/plastic go non-zero** (AC_from_plates 0->0.2, PU 0->0.4,
-AC_from_ore 0->1.0, plastic 0->10); solid chains stay byte-identical (gear
-exact). Open: **magnitudes under for AC/PU (~20%) and the multi-output
-refinery still 0** — the port-adjacency delivery + missing multi-output
-byproduct balance are Phase B; ±10pp calibration is Phase C. Owning RFC:
+**Status (2026-08-02): Phase A LANDED (machine fluid + port-adjacency delivery);
+calibration corrected — meter within ±10pp on everything EXCEPT AC/PU (~80%
+under from throttled fluid delivery). Phase B targets that residual.** #570.
+Result over the corpus (after fixing the sweep metric to compare fluid targets
+via `delivered_per_s`): gear exact; EC + all stress-EC ±0–2% (models the
+bottleneck); **AOP/refinery 18 = 18 exact**; sulfur/heavy-oil etc covered. The
+lone real residual is **AC/PU/AC-partitioned ~−80%** (AC_from_plates 0.2 vs 1.0,
+PU 0.4 vs 2.0, AC_from_ore 1.0 vs 5.0) — the port-adjacency `tick_fluids`
+delivers fluid one unit per tick, throttling petroleum→plastic→AC→PU. Phase B:
+make fluid delivery pipe-fast / balanced (and handle multi-output byproducts)
+so those chains reach plan; Phase C: ±10pp across the whole corpus. Owning RFC:
 [`rfc-054-fast-meter.md`](rfc-054-fast-meter.md).
 
 ## Goal / success criteria
