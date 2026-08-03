@@ -67,7 +67,10 @@ pub fn footprint_checked(name: &str) -> Option<(u32, u32)> {
         n if n.ends_with("splitter") => (2, 1),
         // Crafting machines.
         "assembling-machine-1" | "assembling-machine-2" | "assembling-machine-3" => (3, 3),
-        "electric-furnace" | "chemical-plant" | "centrifuge" | "electromagnetic-plant"
+        "electric-furnace"
+        | "chemical-plant"
+        | "centrifuge"
+        | "electromagnetic-plant"
         | "biochamber" => (3, 3),
         "stone-furnace" | "steel-furnace" => (2, 2),
         "oil-refinery" | "foundry" | "cryogenic-plant" => (5, 5),
@@ -163,6 +166,89 @@ impl BeltTier {
     pub fn slots_per_tick(self) -> f64 {
         self.tiles_per_second() / TICKS_PER_SECOND / ITEM_SPACING_TILES
     }
+}
+
+/// The direction a fluid moves through a port (relative to the emitting
+/// recipe): a machine's `Input` ports feed its fluid ingredients; `Output`
+/// ports carry its fluid products.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PortIO {
+    Input,
+    Output,
+}
+
+/// A fluid port: `(dx, dy, io)` relative to the machine's top-left footprint
+/// tile, for a North-facing (direction 0, unmirrored) machine.
+pub type BaseFluidPort = (i32, i32, PortIO);
+
+/// Base (North-facing) fluid-port geometry, a **game constant** (the Factorio
+/// prototype `fluid_boxes`), replicated here under the same provenance
+/// discipline as the footprints and belt tiers so the meter never inherits the
+/// engine's derived fluid model (KC4). Orientation transforms (rotation by
+/// `direction`) are applied by the caller.
+///
+/// Canonical tables are the draftsman-verified ones from
+/// `spaghettio_core::fluid_ports` (same base values; the port *fluid* binding
+/// is recipe-dependent and applied in `factory`), kept here so the meter has
+/// one self-contained game-constants module. Only direction 0 (North) and 8
+/// (South) occur in the corpus; the full cardinal rotation is provided anyway.
+pub fn base_fluid_ports(name: &str) -> &'static [BaseFluidPort] {
+    match name {
+        "assembling-machine-2" | "assembling-machine-3" => {
+            &[(1, -1, PortIO::Input), (1, 3, PortIO::Output)]
+        }
+        "chemical-plant" | "biochamber" => &[
+            (0, -1, PortIO::Input),
+            (2, -1, PortIO::Input),
+            (0, 3, PortIO::Output),
+            (2, 3, PortIO::Output),
+        ],
+        "oil-refinery" => &[
+            (1, 5, PortIO::Input),
+            (3, 5, PortIO::Input),
+            (0, -1, PortIO::Output),
+            (2, -1, PortIO::Output),
+            (4, -1, PortIO::Output),
+        ],
+        "foundry" => &[
+            (1, 5, PortIO::Input),
+            (3, 5, PortIO::Input),
+            (1, -1, PortIO::Output),
+            (3, -1, PortIO::Output),
+        ],
+        "cryogenic-plant" => &[
+            (0, 5, PortIO::Input),
+            (2, 5, PortIO::Input),
+            (4, 5, PortIO::Input),
+            (0, -1, PortIO::Output),
+            (2, -1, PortIO::Output),
+            (4, -1, PortIO::Output),
+        ],
+        "electromagnetic-plant" => &[
+            (-1, 2, PortIO::Input),
+            (4, 1, PortIO::Input),
+            (2, 4, PortIO::Output),
+            (1, -1, PortIO::Output),
+        ],
+        _ => &[],
+    }
+}
+
+/// Rotate a North-facing base port offset for a `w`×`w` footprint placed at
+/// `dir`. Port offsets may lie one tile outside the footprint (dy == -1 or
+/// dy == h), so we rotate the offset-vector about the footprint centre.
+pub fn rotate_port(dir: crate::blueprint_in::Dir, dx: i32, dy: i32, w: i32) -> (i32, i32) {
+    let c = (w - 1) / 2;
+    let (vx, vy) = (dx - c, dy - c);
+    // Each step rotates the offset-vector +90°, up->right (North->East), via
+    // (vx, vy) -> (-vy, vx). North=0, East=1, South=2, West=3 steps.
+    let (nvx, nvy) = match dir {
+        crate::blueprint_in::Dir::North => (vx, vy),
+        crate::blueprint_in::Dir::East => (-vy, vx),
+        crate::blueprint_in::Dir::South => (-vx, -vy),
+        crate::blueprint_in::Dir::West => (vy, -vx),
+    };
+    (c + nvx, c + nvy)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -287,9 +373,7 @@ mod tests {
     /// wrong or the slot model is.
     #[test]
     fn belt_throughput_derives_from_speed_and_spacing() {
-        let both_lanes = |t: BeltTier| {
-            t.tiles_per_second() / ITEM_SPACING_TILES * 2.0
-        };
+        let both_lanes = |t: BeltTier| t.tiles_per_second() / ITEM_SPACING_TILES * 2.0;
         assert_eq!(both_lanes(BeltTier::Yellow), 15.0);
         assert_eq!(both_lanes(BeltTier::Red), 30.0);
         assert_eq!(both_lanes(BeltTier::Blue), 45.0);
