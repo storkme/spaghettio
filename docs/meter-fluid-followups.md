@@ -3,11 +3,11 @@
 **Status (2026-08-03, follow-up `f5a-ptg-edge` + `fluid-followups`): Phase A + B
 LANDED and merged (#571). Calibration within ±10pp on the whole compared corpus
 EXCEPT `tier5_processing_unit_from_ore_am3` (−13%, a SOLID belt-delivery
-residual — see the characterised, deferred entry below). CI second-opinion
-findings triaged: F5a stacked-PTG edge FIXED; orientation-keyed port binding
-FIXED; a census-precedence change and a chem-plant "shared fluid box" change
-were PROPOSED then REVERTED after review (wrong premise / sim-divergence — see
-below); byproduct backpressure consciously rejected (kept drain philosophy).** #570.
+residual — characterised, deliberately deferred; see below). CI second-opinion
+findings triaged: F5a stacked-PTG edge FIXED (#572); three latent code fixes
+(census precedence, chem-plant "shared box", orientation-keyed binding) were
+PROPOSED then all REVERTED on review — see the sections below; byproduct
+backpressure consciously rejected (kept drain philosophy).** #570.
 
 Phase B replaced Phase A's port-adjacency `tick_fluids` (which delivered fluid
 one unit a tick and throttled petroleum→plastic→AC→PU to ~20%) with a real pipe
@@ -22,7 +22,8 @@ x-descending fluid binding for oil-refinery/foundry/cryogenic-plant.
 Result over the corpus (meter `delivered_per_s`/`produced_per_s` vs sim):
 gear exact; EC + stress-EC ±0–2%; AOP/refinery exact; **all AC variants now
 ±0–2% (were −80%)**; PU from ore −80% → −13%. The lone residual is PU-from-ore,
-whose census shows 30 `item_ingredient_shortage` machines and a 26-tile belt
+whose census is dominated by `full_output`/`working` with ~9 machines left short
+on a solid and a 26-tile belt
 cycle — a solid-side belt-model gap (open RFC-064 Phase 2 item), not a fluid
 gap. Full divergence log:
 [`meter-divergence.md`](meter-divergence.md).
@@ -63,7 +64,7 @@ closed — keeps crossing/stacked fluid lines isolated).
 **Phase C — calibration (close to done; one open residual).**
 - Re-run the meter corpus sweep (`examples/sweep_corpus.rs`); all compared
   fixtures within ±10pp EXCEPT `tier5_processing_unit_from_ore_am3` at −13%
-  (a solid belt-delivery gap: 30 `item_ingredient_shortage` machines, 26-tile
+  (a solid belt-delivery gap: ~9 machines short on a solid, 26-tile
   belt cycle — see [`meter-divergence.md`](meter-divergence.md)).
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).
 
@@ -93,15 +94,15 @@ ever enters the corpus.
 ### Confirm/close the PU-from-ore −13% — CHARACTERISED, deferred
 Deep-dive (2026-08-03): the sim itself under-produces almost everything on this
 fixture (intermediates ≈ −10%, petroleum −17%; only target PU hits 99%). The
-meter matches the sim within ±4% on the entire direct chain (and is *better* than
-sim on copper-plate), so the extra ~10% the meter loses is solely downstream belt
-delivery of electronic-circuit to the PU machine — which sits short on EC despite
-adequate EC production. The fixture carries the corpus's only topology note
-("26 tiles in a belt cycle; update order arbitrary"), the likely culprit.
-**Deferred deliberately**: a fix needs a speculative belt-cycle-update-order /
-merge-priority model change, unverifiable on this noisy fixture and risky for the
-~40 agreeing fixtures. Track under RFC-064 "input-delivery" (see
-`rfc064-phase2-followups.md`), not this meter-fluid thread. Full evidence:
+meter matches the sim within ±4% on the entire direct chain (~the same, slightly
+larger, absolute shortfall from plan as the sim), so the extra ~10% the meter
+loses on PU is solely downstream belt delivery of electronic-circuit to the PU
+machine — which sits short on EC despite adequate EC production. The fixture
+carries the corpus's only topology note ("26 tiles in a belt cycle; update order
+arbitrary"), the likely culprit. **Deferred deliberately**: a fix needs a
+speculative belt-cycle-update-order / merge-priority model change, unverifiable
+on this noisy fixture and risky for the ~40 agreeing fixtures. Tracked as item 7
+in [`rfc064-phase2-followups.md`](rfc064-phase2-followups.md); full evidence in
 [`meter-divergence.md`](meter-divergence.md).
 
 ### Orientation-keyed port binding — PROPOSED then REVERTED (this thread)
