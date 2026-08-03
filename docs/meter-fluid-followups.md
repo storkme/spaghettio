@@ -1,10 +1,13 @@
 # Meter fluid modelling — follow-ups (#570)
 
-**Status (2026-08-03, follow-up `f5a-ptg-edge`): Phase A + B LANDED and merged
-(#571). Calibration within ±10pp on the whole compared corpus EXCEPT
-`tier5_processing_unit_from_ore_am3` (−13%, a solid belt-delivery residual, not
-fluid). CI second-opinion findings triaged: F5a stacked-PTG edge FIXED;
-byproduct backpressure consciously rejected (see below).** #570.
+**Status (2026-08-03, follow-up `f5a-ptg-edge` + `fluid-followups`): Phase A + B
+LANDED and merged (#571). Calibration within ±10pp on the whole compared corpus
+EXCEPT `tier5_processing_unit_from_ore_am3` (−13%, a SOLID belt-delivery
+residual — see the characterised, deferred entry below). CI second-opinion
+findings triaged: F5a stacked-PTG edge FIXED; three latent meter issues FIXED
+(census fluid-shortage precedence, orientation-keyed port binding, chem-plant
+shared fluid box); byproduct backpressure consciously rejected (kept drain
+philosophy).** #570.
 
 Phase B replaced Phase A's port-adjacency `tick_fluids` (which delivered fluid
 one unit a tick and throttled petroleum→plastic→AC→PU to ~20%) with a real pipe
@@ -87,10 +90,19 @@ Factorio physics but a different measurement philosophy; recorded here so the ca
 is explicit, not accidental. Revisit only if a sim-baselined byproduct-loop fixture
 ever enters the corpus.
 
-### Confirm/close the PU-from-ore −13%
-Its census shows 30 `item_ingredient_shortage` and only 1 fluid-short machine —
-petroleum/fluid are not the limit. Investigate as a belt-model divergence (the
-fixture notes "26 tiles in a belt cycle"). See [`meter-divergence.md`](meter-divergence.md).
+### Confirm/close the PU-from-ore −13% — CHARACTERISED, deferred
+Deep-dive (2026-08-03): the sim itself under-produces almost everything on this
+fixture (intermediates ≈ −10%, petroleum −17%; only target PU hits 99%). The
+meter matches the sim within ±4% on the entire direct chain (and is *better* than
+sim on copper-plate), so the extra ~10% the meter loses is solely downstream belt
+delivery of electronic-circuit to the PU machine — which sits short on EC despite
+adequate EC production. The fixture carries the corpus's only topology note
+("26 tiles in a belt cycle; update order arbitrary"), the likely culprit.
+**Deferred deliberately**: a fix needs a speculative belt-cycle-update-order /
+merge-priority model change, unverifiable on this noisy fixture and risky for the
+~40 agreeing fixtures. Track under RFC-064 "input-delivery" (see
+`rfc064-phase2-followups.md`), not this meter-fluid thread. Full evidence:
+[`meter-divergence.md`](meter-divergence.md).
 
 ### Remaining latent minors (recorded, not chased)
 - Fluid port *binding* keyed on machine name (always mirrored for refinery/foundry/
