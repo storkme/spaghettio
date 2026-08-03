@@ -285,22 +285,6 @@ impl Machine {
                 .all(|(id, amount)| self.fluid_input.get(id).copied().unwrap_or(0) >= *amount)
     }
 
-    /// The first unmet ingredient: an item id if a SOLID is short,
-    /// `None` if the machine has everything it needs.
-    fn missing(&self) -> Option<(u16, bool)> {
-        for (id, amount) in &self.ingredients {
-            if self.input.get(&id.0).copied().unwrap_or(0) < *amount {
-                return Some((id.0, false));
-            }
-        }
-        for (id, amount) in &self.fluid_needs {
-            if self.fluid_input.get(id).copied().unwrap_or(0) < *amount {
-                return Some((*id, true));
-            }
-        }
-        None
-    }
-
     /// Advance one tick.
     pub fn tick(&mut self) {
         self.emitted_this_tick.clear();
@@ -310,13 +294,17 @@ impl Machine {
         }
         if self.progress <= 0.0 {
             if !self.has_ingredients() {
-                // Distinguish a missing fluid from a missing solid so the
-                // census is comparable to the sim's.
-                self.state = if self
-                    .missing()
-                    .map(|(_, is_fluid)| is_fluid)
-                    .unwrap_or(false)
-                {
+                // Which shortage to report. The meter's purpose is surfacing
+                // fluid-starved machines, so a machine short on a fluid reads
+                // `FluidIngredientShortage` even when it is short on a solid
+                // too — the machine is blocked either way, and the fluid bind
+                // is the more actionable signal. (Census labels only; the
+                // rate measurement is unaffected.)
+                let fluid_short = self
+                    .fluid_needs
+                    .iter()
+                    .any(|(id, amt)| self.fluid_input.get(id).copied().unwrap_or(0) < *amt);
+                self.state = if fluid_short {
                     MachineState::FluidIngredientShortage
                 } else {
                     MachineState::ItemIngredientShortage
@@ -558,6 +546,30 @@ mod tests {
                 m.crafts > 0,
                 "fluid-fed sulfuric-acid must craft once water is delivered"
             );
+        }
+    }
+
+    /// When a machine is short on BOTH a solid and a fluid, the census must
+    /// report `FluidIngredientShortage` (the fluid bind is the actionable
+    /// signal) rather than letting the solid shortage mask it.
+    #[test]
+    fn both_fluids_and_solids_short_reports_fluid_shortage() {
+        let mut items = ItemInterner::default();
+        let m = Machine::new(
+            "chemical-plant",
+            "sulfuric-acid",
+            (0, 0),
+            (3, 3),
+            &mut items,
+            DEFAULT_BUFFER_CRAFTS,
+        );
+        if let Some(mut m) = m {
+            // Deliver nothing: every solid and the water are missing.
+            for _ in 0..600 {
+                m.tick();
+            }
+            assert_eq!(m.crafts, 0);
+            assert_eq!(m.state, MachineState::FluidIngredientShortage);
         }
     }
 
