@@ -49,3 +49,17 @@ Phase A are now within ±2% (AC) / −13% (PU-from-ore).
   cracking chemical-plants run slightly starved (hold ~75% of a per-craft
   need). Worth a calibration fixture one day; not a regression vs Phase A
   (which could not route fluids at all).
+
+## Deliberately-not-modelled (decision log)
+
+- **Byproduct backpressure.** The meter drains every unconsumed producer fluid
+  unit as `delivered` and never stalls a producer on a full fluid output, so a
+  multi-output recipe (AOP heavy/light/petroleum) with an unhandled byproduct
+  reads its *maximum* throughput rather than stalling as real Factorio would.
+  This is a **conscious choice, not a bug**: the meter's stated philosophy
+  (see `factory.rs` header) is to drain outputs so measurement is not falsified
+  by backpressure, matching the sim harness's remove-mode-chest methodology that
+  the meter calibrates against. Consistent with that, all 8 fluid-target corpus
+  fixtures are uncompared (no sim baseline), so this divergence is unverifiable
+  and would only matter if a sim-baselined byproduct-loop fixture joined the
+  corpus. Revisit then; recorded so the call is explicit. (2026-08-03)
