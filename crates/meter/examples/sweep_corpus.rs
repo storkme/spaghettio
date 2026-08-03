@@ -21,7 +21,7 @@ fn main() {
     let corpus = &args[1];
     let out = &args[2];
 
-    let mut csv = String::from("fixture,variant,item,planned,meter_produced,meter_delivered,sim_produced,sim_delivered,meter_vs_sim_pp\n");
+    let mut csv = String::from("fixture,variant,item,planned,meter_produced,meter_delivered,sim_produced,sim_delivered,meter_vs_sim_pp,metric\n");
     let mut rows = 0usize;
     let mut compared = 0usize;
 
@@ -70,16 +70,26 @@ fn main() {
             let planned = rep.planned_per_s.get(&target).copied().unwrap_or(0.0);
             let m_prod = rep.produced_per_s.get(&target).copied().unwrap_or(0.0);
             let m_del = rep.delivered_per_s.get(&target).copied().unwrap_or(0.0);
-            let delta = if sim_prod.is_some() && sim_prod.unwrap() > 0.0 {
-                compared += 1;
-                (m_prod - sim_prod.unwrap()) / sim_prod.unwrap() * 100.0
+            // Compare the metric that matches how the target is measured:
+            // solid targets report produced_per_s; fluid targets report
+            // delivered_per_s (fluids never enter the produced map).
+            let is_fluid = manifest.targets.first().map(|t| t.is_fluid).unwrap_or(false);
+            let metric = if is_fluid { "delivered" } else { "produced" };
+            let delta = if metric == "produced" {
+                match sim_prod {
+                    Some(sp) if sp > 0.0 => { compared += 1; (m_prod - sp) / sp * 100.0 }
+                    _ => f64::NAN,
+                }
             } else {
-                f64::NAN
+                match sim_del {
+                    Some(sd) if sd > 0.0 => { compared += 1; (m_del - sd) / sd * 100.0 }
+                    _ => f64::NAN,
+                }
             };
             let sp = sim_prod.map(|v| format!("{v:.3}")).unwrap_or_else(|| "NA".into());
             let sd = sim_del.map(|v| format!("{v:.3}")).unwrap_or_else(|| "NA".into());
             csv.push_str(&format!(
-                "{fixture},{variant},{target},{planned:.3},{m_prod:.3},{m_del:.3},{sp},{sd},{delta:.1}\n"
+                "{fixture},{variant},{target},{planned:.3},{m_prod:.3},{m_del:.3},{sp},{sd},{delta:.1},{metric}\n"
             ));
         }
     }
