@@ -184,10 +184,17 @@ impl Factory {
                     // engine mirrors (oil-refinery, foundry, cryogenic-plant),
                     // whose exported orientation binds recipe fluids
                     // x-descending (the measured rule in `spaghettio_core::
-                    // fluid_ports`; the exporter encodes the mirrored machine
-                    // as direction+8 with no mirror flag). For a single-fluid
-                    // face (basic-oil, plastic) n-1-k == k, so this only
-                    // matters for the multi-fluid faces those machines run.
+                    // fluid_ports`). The meter's blueprint decoder does not yet
+                    // parse the `mirror` flag, so it keys the reversal on the
+                    // mirrored-machine name unconditionally — a known
+                    // simplification (a genuinely-unmirrored single instance of
+                    // those three at some orientations would mis-bind). A
+                    // complete fix must key on BOTH a parsed mirror flag AND
+                    // the engine's direction+8 wire form (the engine exporter
+                    // omits the mirror key entirely for these rotation-mirrored
+                    // machines and encodes the mirror as the +8 rotation; the
+                    // meter reads neither today). For a single-fluid face
+                    // n-1-k == k, so this only matters for multi-fluid faces.
                     let mirrored = matches!(
                         e.name.as_str(),
                         "oil-refinery" | "foundry" | "cryogenic-plant"

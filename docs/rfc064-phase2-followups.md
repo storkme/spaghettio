@@ -71,6 +71,23 @@ uranium voider). With the tuning now making sim ~2.7× cheaper, closing the
 if the coordinator wants the stronger gate. Otherwise the subset verdict stands
 as recorded.
 
+### 7. Meter belt-delivery residual: PU-from-ore −13% (from meter-fluid, #570)
+Pick-up entry so the deferral is actually tracked here (the meter
+`meter-divergence.md` records the full evidence). The fast meter is −13% on
+`tier5_processing_unit_from_ore_am3` vs the sim — a **downstream solid belt
+delivery** divergence, not a fluid one: the meter matches the sim within ±4% on
+the whole direct chain but loses ~10% delivering electronic-circuit to the PU
+machine (the served PU machine, `m#310`, sits short on EC despite adequate EC
+production). The fixture's only topology note is a 26-tile belt cycle; the
+meter steps cyclic belts in an arbitrary-but-deterministic order, the likely
+cause. Deferred deliberately: a fix needs a speculative belt-cycle-update-order
+/ merge-priority model change, unverifiable on this noisy fixture (the sim is
+~−10% on every intermediate). Note the blast radius is narrow — this fixture has
+the corpus's only cycle note, so a `CycleInUpdateOrder`-gated change would touch
+~nothing else; the binding reasons to defer are the noisy sim baseline and the
+unverifiability, not a broad corpus risk. Investigate
+as a belt-model divergence, re-measuring after any belt-network change.
+
 ## Decided / closed (from Stage B)
 - **Never-worse holds** on the measurable subset → evidence supports
   `compact_layout` default-on (representative-scope).
