@@ -67,11 +67,8 @@ pub fn footprint_checked(name: &str) -> Option<(u32, u32)> {
         n if n.ends_with("splitter") => (2, 1),
         // Crafting machines.
         "assembling-machine-1" | "assembling-machine-2" | "assembling-machine-3" => (3, 3),
-        "electric-furnace"
-        | "chemical-plant"
-        | "centrifuge"
-        | "electromagnetic-plant"
-        | "biochamber" => (3, 3),
+        "electric-furnace" | "chemical-plant" | "centrifuge" | "biochamber" => (3, 3),
+        "electromagnetic-plant" => (4, 4), // mirrored from common.rs:163 (was 3x3)
         "stone-furnace" | "steel-furnace" => (2, 2),
         "oil-refinery" | "foundry" | "cryogenic-plant" => (5, 5),
         "recycler" => (2, 3),
@@ -236,10 +233,13 @@ pub fn base_fluid_ports(name: &str) -> &'static [BaseFluidPort] {
 
 /// Rotate a North-facing base port offset for a `w`×`w` footprint placed at
 /// `dir`. Port offsets may lie one tile outside the footprint (dy == -1 or
-/// dy == h), so we rotate the offset-vector about the footprint centre.
+/// dy == h), so we rotate the offset-vector about the footprint centre —
+/// using a **fractional** centre `(w-1)/2` so even widths (electromagnetic-
+/// plant, 4×4) rotate correctly rather than snapping to the wrong tile the
+/// way an integer pivot would.
 pub fn rotate_port(dir: crate::blueprint_in::Dir, dx: i32, dy: i32, w: i32) -> (i32, i32) {
-    let c = (w - 1) / 2;
-    let (vx, vy) = (dx - c, dy - c);
+    let c = (w - 1) as f64 / 2.0;
+    let (vx, vy) = (dx as f64 - c, dy as f64 - c);
     // Each step rotates the offset-vector +90°, up->right (North->East), via
     // (vx, vy) -> (-vy, vx). North=0, East=1, South=2, West=3 steps.
     let (nvx, nvy) = match dir {
@@ -248,7 +248,7 @@ pub fn rotate_port(dir: crate::blueprint_in::Dir, dx: i32, dy: i32, w: i32) -> (
         crate::blueprint_in::Dir::South => (-vx, -vy),
         crate::blueprint_in::Dir::West => (vy, -vx),
     };
-    (c + nvx, c + nvy)
+    ((c + nvx).round() as i32, (c + nvy).round() as i32)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -367,6 +367,26 @@ const NON_BULK_HAND_BY_LEVEL: [u32; 8] = [1, 1, 2, 2, 2, 2, 2, 3];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// electromagnetic-plant is 4×4 in the game (common.rs:163), and its base
+    /// ports rotate with a half-integer pivot. Ensure the footprint is right
+    /// and the East rotation reproduces the engine's verified EMAG_EAST table —
+    /// the integer-pivot version landed these a tile off and starved the machine.
+    #[test]
+    fn emag_is_four_wide_and_east_rotation_matches_engine() {
+        assert_eq!(footprint("electromagnetic-plant"), (4, 4));
+        let e = crate::blueprint_in::Dir::East;
+        let got = base_fluid_ports("electromagnetic-plant")
+            .iter()
+            .map(|&(dx, dy, _)| rotate_port(e, dx, dy, 4))
+            .collect::<Vec<_>>();
+        // engine EMAG_EAST (order preserved from base):
+        // base (-1,2),(4,1),(2,4),(1,-1) -> east (1,-1),(2,4),(-1,2),(4,1)
+        assert_eq!(got[0], (1, -1));
+        assert_eq!(got[1], (2, 4));
+        assert_eq!(got[2], (-1, 2));
+        assert_eq!(got[3], (4, 1));
+    }
 
     /// The meter must *derive* the belt throughputs the mechanics doc
     /// states, not be told them. If this drifts, either a constant is

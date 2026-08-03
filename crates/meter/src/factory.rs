@@ -218,8 +218,13 @@ impl Factory {
                             }
                         }
                         in_ports.sort_by_key(|p| p.0);
+                        // Mirror the engine's `port_fluid_assignment` exactly:
+                        // only the first n = fluids.len() ports are used, and a
+                        // mirrored machine binds fluid fluids[n-1-k] to port k
+                        // (i.e. fluid at recipe-index k -> port index n-1-k).
+                        let n = in_fluids.len();
                         for (k, name) in in_fluids.iter().enumerate() {
-                            let pk = if mirrored { in_ports.len() - 1 - k } else { k };
+                            let pk = if mirrored { n - 1 - k } else { k };
                             if let Some(&(px, py)) = in_ports.get(pk) {
                                 machine_ports.push(MachPort {
                                     machine: mi,
@@ -238,8 +243,9 @@ impl Factory {
                             }
                         }
                         out_ports.sort_by_key(|p| p.0);
+                        let n = out_fluids.len();
                         for (k, name) in out_fluids.iter().enumerate() {
-                            let pk = if mirrored { out_ports.len() - 1 - k } else { k };
+                            let pk = if mirrored { n - 1 - k } else { k };
                             if let Some(&(px, py)) = out_ports.get(pk) {
                                 machine_ports.push(MachPort {
                                     machine: mi,
@@ -359,6 +365,14 @@ impl Factory {
         }
         let fluids_system =
             fluid::build_networks(&pipe_entities, &machine_ports, &fluid_feed_tiles);
+        for (item, (x, y)) in &fluids_system.unconnected_feeds {
+            notes.push(format!(
+                "fluid boundary input for {} at ({},{}) touches no pipe network",
+                items.name(ItemId(*item)),
+                x,
+                y
+            ));
+        }
 
         Ok(Factory {
             checkpoints: vec![(0, 0)],
@@ -452,7 +466,9 @@ impl Factory {
                         for (i, &(c, room)) in rooms.iter().enumerate() {
                             pool_alloc[i] = (c, room);
                         }
-                        total_held = 0;
+                        // fill every room; the excess the consumers cannot take
+                        // is genuine surplus and drains as delivered below.
+                        total_held -= total_room;
                     } else {
                         // deficient supply: proportional share, floor, then
                         // hand leftover to the largest fractional remainders.

@@ -65,6 +65,9 @@ pub struct FluidNetwork {
 #[derive(Debug, Default)]
 pub struct FluidSystem {
     pub networks: Vec<FluidNetwork>,
+    /// Declared fluid boundary inputs whose tile touched no pipe (would
+    /// otherwise be silently dropped).
+    pub unconnected_feeds: Vec<(u16, (i32, i32))>,
 }
 
 /// A tile-level "node" of the fluid graph before network assignment.
@@ -211,8 +214,11 @@ pub fn build_networks(
 
     // Machine ports + boundary feeds connect to a pipe on their own tile or
     // any orthogonally adjacent pipe tile. A PTG neighbour only joins when its
-    // surface mouth is this tile (F5a).
-    let mut connect_to_pipe = |t: (i32, i32)| -> Option<(i32, i32)> {
+    // surface mouth is this tile (F5a). Join EVERY eligible neighbour — a port
+    // that touches two components must not be arbitrarily pegged to just one
+    // (that would isolate it from the other and mis-route its fluid).
+    let mut connect_to_pipe = |t: (i32, i32)| -> bool {
+        let mut connected = false;
         for c in std::iter::once(t).chain(
             [Dir::North, Dir::East, Dir::South, Dir::West]
                 .into_iter()
@@ -225,9 +231,9 @@ pub fn build_networks(
                 continue;
             }
             union(&mut parent, &mut rank, t, c);
-            return Some(c);
+            connected = true;
         }
-        None
+        connected
     };
     for p in ports {
         connect_to_pipe((p.x, p.y));
@@ -263,12 +269,20 @@ pub fn build_networks(
             networks[nid].ports.push(*p);
         }
     }
+    let mut unconnected_feeds: Vec<(u16, (i32, i32))> = Vec::new();
     for &(item, t) in feeds {
         if let Some(&nid) = net_ids.get(&t) {
             networks[nid].boundary.insert(item);
+        } else {
+            // A declared fluid boundary input that touches no pipe is a silent
+            // data-loss: report it so the caller can surface a note.
+            unconnected_feeds.push((item, t));
         }
     }
-    FluidSystem { networks }
+    FluidSystem {
+        networks,
+        unconnected_feeds,
+    }
 }
 
 impl Dir {
