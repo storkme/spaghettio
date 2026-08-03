@@ -4,10 +4,10 @@
 LANDED and merged (#571). Calibration within ±10pp on the whole compared corpus
 EXCEPT `tier5_processing_unit_from_ore_am3` (−13%, a SOLID belt-delivery
 residual — see the characterised, deferred entry below). CI second-opinion
-findings triaged: F5a stacked-PTG edge FIXED; three latent meter issues FIXED
-(census fluid-shortage precedence, orientation-keyed port binding, chem-plant
-shared fluid box); byproduct backpressure consciously rejected (kept drain
-philosophy).** #570.
+findings triaged: F5a stacked-PTG edge FIXED; orientation-keyed port binding
+FIXED; a census-precedence change and a chem-plant "shared fluid box" change
+were PROPOSED then REVERTED after review (wrong premise / sim-divergence — see
+below); byproduct backpressure consciously rejected (kept drain philosophy).** #570.
 
 Phase B replaced Phase A's port-adjacency `tick_fluids` (which delivered fluid
 one unit a tick and throttled petroleum→plastic→AC→PU to ~20%) with a real pipe
@@ -104,14 +104,31 @@ merge-priority model change, unverifiable on this noisy fixture and risky for th
 `rfc064-phase2-followups.md`), not this meter-fluid thread. Full evidence:
 [`meter-divergence.md`](meter-divergence.md).
 
+### Orientation-keyed port binding — FIXED (this thread)
+`mirrored` is now keyed on the machine being one of the mirrored set AND placed
+in the mirrored (South-exporter) orientation. A North-facing (unmirrored)
+refinery/foundry/cryo binds its multi-fluid face x-ascending. Corpus-neutral
+(engine always exports those machines as South). Known limit (reviewer note):
+the meter parses no `mirror` flag, so a genuinely-unmirrored machine exported at
+South is indistinguishable — only reachable from non-engine blueprints, not the
+corpus.
+
+### Two proposed fixes — REVERTED after review (record the call)
+- **Census precedence** (report `FluidIngredientShortage` whenever a fluid is
+  short): proposed then reverted. Reviewer: the sim labels a machine by whichever
+  ingredient blocks next, so an unconditional fluid-priority would *diverge* from
+  the module's "census lines up with the sim" contract, and neither precedence is
+  verifiable here. Kept the original solids-first order.
+- **Chem-plant "shared fluid box"** (bind a single fluid to both ports of a face):
+  proposed then reverted. Reviewer: `recipes.json` shows chem-plant/biochamber have
+  **four separate** fluid boxes (2 in + 2 out), so the shared-box premise is wrong;
+  and binding both ports + per-network pooling introduced real over-credit and
+  cross-network starvation paths. Reverted to single-port x-ordered binding.
+
 ### Remaining latent minors (recorded, not chased)
-- Fluid port *binding* keyed on machine name (always mirrored for refinery/foundry/
-  cryo) rather than actual orientation; a direction-0 instance would swap multi-fluid
-  faces. Not in the corpus (engine always mirrors those machines).
 - A machine short of both a solid and a fluid is classified `ItemIngredientShortage`
-  (solids checked first), under-counting `fluid_ingredient_shortage` in the census.
-- A chem-plant's two input ports feed one internal fluid box in-game; a single-fluid
-  pipe to the *other* port tile would silently starve it here.
+  (solids first); a chem-plant single-fluid pipe on the non-x-ordered port tile
+  starves (the two above — both intentionally left as-is after review).
 - Re-bless any golden/snapshot baselines the corpus ingest tests depend on.
 
 ## Constraints / gates

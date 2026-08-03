@@ -195,12 +195,6 @@ impl Factory {
                         "oil-refinery" | "foundry" | "cryogenic-plant"
                     );
                     let mirrored = mirror_entity && e.direction == Dir::South;
-                    // chemical-plant / biochamber have TWO fluid ports per box
-                    // that share ONE internal fluid box in-game, so a
-                    // single-fluid recipe may feed (or draw) through EITHER
-                    // port tile — bind the one fluid to all of them, not just
-                    // its x-ordered tile.
-                    let shared_box = matches!(e.name.as_str(), "chemical-plant" | "biochamber");
                     let mi = machines.len();
                     if let Some(rdb) = db.recipes.get(recipe) {
                         let mut in_fluids: Vec<String> = Vec::new();
@@ -231,28 +225,15 @@ impl Factory {
                         // (i.e. fluid at recipe-index k -> port index n-1-k).
                         let n = in_fluids.len();
                         for (k, name) in in_fluids.iter().enumerate() {
-                            let item = items.intern(name).0;
-                            if shared_box && n == 1 {
-                                for &(px, py) in in_ports.iter() {
-                                    machine_ports.push(MachPort {
-                                        machine: mi,
-                                        x: e.x + px,
-                                        y: e.y + py,
-                                        item,
-                                        is_input: true,
-                                    });
-                                }
-                            } else {
-                                let pk = if mirrored { n - 1 - k } else { k };
-                                if let Some(&(px, py)) = in_ports.get(pk) {
-                                    machine_ports.push(MachPort {
-                                        machine: mi,
-                                        x: e.x + px,
-                                        y: e.y + py,
-                                        item,
-                                        is_input: true,
-                                    });
-                                }
+                            let pk = if mirrored { n - 1 - k } else { k };
+                            if let Some(&(px, py)) = in_ports.get(pk) {
+                                machine_ports.push(MachPort {
+                                    machine: mi,
+                                    x: e.x + px,
+                                    y: e.y + py,
+                                    item: items.intern(name).0,
+                                    is_input: true,
+                                });
                             }
                         }
                         // outputs
@@ -265,28 +246,15 @@ impl Factory {
                         out_ports.sort_by_key(|p| p.0);
                         let n = out_fluids.len();
                         for (k, name) in out_fluids.iter().enumerate() {
-                            let item = items.intern(name).0;
-                            if shared_box && n == 1 {
-                                for &(px, py) in out_ports.iter() {
-                                    machine_ports.push(MachPort {
-                                        machine: mi,
-                                        x: e.x + px,
-                                        y: e.y + py,
-                                        item,
-                                        is_input: false,
-                                    });
-                                }
-                            } else {
-                                let pk = if mirrored { n - 1 - k } else { k };
-                                if let Some(&(px, py)) = out_ports.get(pk) {
-                                    machine_ports.push(MachPort {
-                                        machine: mi,
-                                        x: e.x + px,
-                                        y: e.y + py,
-                                        item,
-                                        is_input: false,
-                                    });
-                                }
+                            let pk = if mirrored { n - 1 - k } else { k };
+                            if let Some(&(px, py)) = out_ports.get(pk) {
+                                machine_ports.push(MachPort {
+                                    machine: mi,
+                                    x: e.x + px,
+                                    y: e.y + py,
+                                    item: items.intern(name).0,
+                                    is_input: false,
+                                });
                             }
                         }
                     }
@@ -452,15 +420,14 @@ impl Factory {
     fn tick_fluids(&mut self) {
         let mut drained: FxHashMap<u16, u64> = FxHashMap::default();
         for net in &self.fluids.networks {
-            // Group ports by item. A shared-box machine (chem-plant/biochamber)
-            // contributes multiple ports for the same fluid in the same network
-            // — dedupe so it is not credited twice as a consumer/producer.
+            // Group ports by item.
             let mut by_item: FxHashMap<u16, (Vec<usize>, Vec<usize>)> = FxHashMap::default();
             for p in &net.ports {
                 let e = by_item.entry(p.item).or_default();
-                let bucket = if p.is_input { &mut e.1 } else { &mut e.0 };
-                if !bucket.contains(&p.machine) {
-                    bucket.push(p.machine);
+                if p.is_input {
+                    e.1.push(p.machine);
+                } else {
+                    e.0.push(p.machine);
                 }
             }
             for (item, (producers, consumers)) in by_item {

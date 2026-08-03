@@ -30,8 +30,9 @@ Phase A are now within ±2% (AC) / −13% (PU-from-ore).
   - The entire extra loss is in delivering EC to the PU machine: producer `m#310`
     sits short on EC (12 of a 20/craft need) despite EC production (41.5/s)
     meeting total demand (AC ~6.9 + PU ~34 = ~41/s). The sim feeds PU fully.
-  - The machine census is `full_output 31`, `item_ingredient_shortage 9`,
-    `working 271`, `fluid_ingredient_shortage 1`.
+  - The machine census is dominated by `full_output` + `working`; only ~9 are
+    left short on a solid and one on a fluid, all downstream of the EC belt
+    (a precedence-sensitive number, so not a stable discriminator on its own).
   - The fixture's wiring produces the **only** topology note in the corpus:
     *"26 tiles in a belt cycle; update order arbitrary"* — a cyclic belt (the
     many-EC-producers merge trunk into the few PU/AC consumers), which the meter
