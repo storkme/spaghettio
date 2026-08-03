@@ -186,11 +186,11 @@ impl Factory {
                     // x-descending (the measured rule in `spaghettio_core::
                     // fluid_ports`). The meter's blueprint decoder does not yet
                     // parse the `mirror` flag, so it keys the reversal on the
-                    // mirrored-machine set unconditionally — a known
+                    // mirrored-machine name unconditionally — a known
                     // simplification (a genuinely-unmirrored single instance of
                     // those three at some orientations would mis-bind), which a
                     // future change should fix by parsing `mirror` rather than
-                    // guessing from direction. For a single-fluid face
+                    // matching on the machine name. For a single-fluid face
                     // n-1-k == k, so this only matters for multi-fluid faces.
                     let mirrored = matches!(
                         e.name.as_str(),

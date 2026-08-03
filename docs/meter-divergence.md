@@ -32,8 +32,10 @@ Phase A are now within ±2% (AC) / −13% (PU-from-ore).
     sits short on EC (12 of a 20/craft need) despite EC production (41.5/s)
     meeting total demand (AC ~6.9 + PU ~34 = ~41/s). The sim feeds PU fully.
   - The machine census is dominated by `full_output` + `working`; only ~9 are
-    left short on a solid and one on a fluid, all downstream of the EC belt
-    (a precedence-sensitive number, so not a stable discriminator on its own).
+    left short on a solid and one on a fluid, all downstream of the EC belt.
+    Caveat: this "~9/1" split was captured on code that had the (later-reverted)
+    census-precedence change active, so it is precedence-sensitive and not
+    re-verified on the merged solids-first code — it is diagnostic, not load-bearing.
   - The fixture's wiring produces the **only** topology note in the corpus:
     *"26 tiles in a belt cycle; update order arbitrary"* — a cyclic belt (the
     many-EC-producers merge trunk into the few PU/AC consumers), which the meter
@@ -42,8 +44,11 @@ Phase A are now within ±2% (AC) / −13% (PU-from-ore).
 - **Verdict**: a genuine belt-model divergence, on a single fixture whose sim
   baseline is itself noisy (≈ −10% on everything). **Deferred, deliberately**:
   fixing it needs a speculative belt-cycle-update-order / merge-priority model
-  change that cannot be validated against a clean reference on this fixture and
-  would risk the ~40 fixtures that do agree. Tracked as item 7 in
+  change that cannot be validated against a clean reference on this fixture.
+  (Blast radius is lower than "the whole corpus": this fixture carries the only
+  cycle note, so a change gated on `CycleInUpdateOrder` would touch ~nothing
+  else — but it is still an unverifiable change on a fixture whose own sim is
+  noisy, which are the binding reasons to defer.) Tracked as item 7 in
   `rfc064-phase2-followups.md`; do not chase it inside this meter-fluid thread.
 - **Next**: investigate as a belt-throughput/cycle divergence, not a fluid one.
   Re-measure after any belt-network changes.

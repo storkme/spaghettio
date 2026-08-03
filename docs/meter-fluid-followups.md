@@ -36,14 +36,17 @@ gap. Full divergence log:
   re-running the corpus meter sweep (`crates/meter/examples/sweep_corpus.rs`).
 - Solid chains do **not regress** (the ~25/70 that already agree must stay put).
 
-## Where it stands in the code
+## Where it stands in the code (current, post Phase A + B)
 
-- `machine.rs`: takes **solids only** — *"fluids are PR-3 out of scope."* Machine has
-  recipe data from `recipe_db::db()` (full ingredients incl. fluids), but ignores
-  fluid ingredients in the craft check and never emits fluid products.
-- `network.rs`: "Deliberately not modelled yet" — no fluid pipe/port flow.
-- `factory.rs:237`: fluid boundary inputs get the note *"fluid boundary input X not
-  modelled"* and are skipped — so any chain fed crude-oil/water produces nothing.
+- `machine.rs`: fluid-aware — fluid ingredient buffers (`fluid_input`/`fluid_needs`),
+  fluid products→`fluid_output`, `MachineState::FluidIngredientShortage`, and a
+  craft gate that consumes solids and fluids together.
+- `fluid.rs`: the pipe network — connected components of `pipe`/`pipe-to-ground`/
+  `pump` + machine fluid ports + boundary feeds, honoring F4/F5/F5a topology.
+- `factory.rs: tick_fluids`: per-component, per-fluid pipe-fast routing from
+  boundary + producer outputs to consumer buffers, shared fairly. Element-boundary
+  fluid feeds that touch no pipe are reported ("touches no pipe network"), not
+  silently skipped.
 
 ## Scope (bounded, spike-first per RFC-063/064 discipline)
 
@@ -101,7 +104,7 @@ machine — which sits short on EC despite adequate EC production. The fixture
 carries the corpus's only topology note ("26 tiles in a belt cycle; update order
 arbitrary"), the likely culprit. **Deferred deliberately**: a fix needs a
 speculative belt-cycle-update-order / merge-priority model change, unverifiable
-on this noisy fixture and risky for the ~40 agreeing fixtures. Tracked as item 7
+on this noisy fixture; tracked as item 7
 in [`rfc064-phase2-followups.md`](rfc064-phase2-followups.md); full evidence in
 [`meter-divergence.md`](meter-divergence.md).
 
@@ -123,10 +126,16 @@ recording the limitation.
   the module's "census lines up with the sim" contract, and neither precedence is
   verifiable here. Kept the original solids-first order.
 - **Chem-plant "shared fluid box"** (bind a single fluid to both ports of a face):
-  proposed then reverted. Reviewer: `recipes.json` shows chem-plant/biochamber have
-  **four separate** fluid boxes (2 in + 2 out), so the shared-box premise is wrong;
-  and binding both ports + per-network pooling introduced real over-credit and
-  cross-network starvation paths. Reverted to single-port x-ordered binding.
+  proposed then reverted. Independent reviews **disagreed** on the underlying
+  box topology (`recipes.json` lists 4 `pipe_connection` entries on
+  chemical-plant/biochamber — read by one review as 4 separate boxes, by another
+  as 2 boxes × 2 connections). Rather than rely on an unverified topology claim,
+  the change was reverted because the *implementation* was unsafe regardless:
+  binding both ports + per-network pooling introduced real over-credit and
+  cross-network starvation paths that the existing single-port routing cannot
+  reproduce. Reverted to the single-port x-ordered binding; the "other-port
+  starves" behaviour stays open and needs a correct (network-partition-safe)
+  fix plus a verified fluid-box topology before it is worth re-attempting.
 
 ### Remaining latent minors (recorded, not chased)
 - A machine short of both a solid and a fluid is classified `ItemIngredientShortage`
