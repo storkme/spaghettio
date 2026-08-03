@@ -517,6 +517,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             // plan is emitted by the native pass, not re-emitted by every
             // candidate variant's inner run.
             band_packing: false,
+            band_pack_selection: None,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }

@@ -1,11 +1,29 @@
 # RFC-064: The spaghetti objective — aspect ratio + belt-transit under sim-anchored never-worse gates
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phases 0–1 complete.
+Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phases 0–2 complete.
 Phase 2 Stage A (dry sweep) complete 2026-08-01 with zero new errors
 corpus-wide. Stage B (sim campaign) ran a representative subset 2026-08-01:
 never-worse HOLDS on the measurable fixtures (see the decision log; includes
 pre-existing below-plan deficits, not compaction regressions). Tuning same
 day: sim speed 32 + deep warmup 288000→108000 (30 game-min) validated.
+Phase 3 completed 2026-08-03 and its gate **FAILS** on the unchanged RFC-058
+shelf-search/router family. After repairing four real router defect classes,
+the selected `sci1-ore` and `belt5-ore` layouts validate at zero errors and
+their realized transit is measurable. The exhaustive 897-plan routed search
+nevertheless finds admissible shape-clearing plans on only 2/4 frozen
+fixtures: 6 for `sci1-ore`, 19 for `belt5-ore`, none for `sci2-ore`, and none
+for `pu1-plate`. The best admissible plans make transit sharply worse
+(`Transit_score -0.975` and `-3.062` respectively); refusals remain misses, so
+aggregate transit and sim never-worse are not adjudicated. No Phase-3
+candidate or auto-selection ships. A rotation-aware rigid-row follow-up was
+also retracted on 2026-08-03. Its preliminary `75×74` Science-2 export had zero
+Errors but 49 Warnings and produced `0.00/s` in Factorio; subsequent review
+found that the experimental builder had dropped the default inserter-capacity
+metadata from 2 to 0. With planning metadata preserved, that same selection
+still refuses at zero Errors / 18 Warnings. The exhaustive replay covers 99
+structural plans and 1,089 route orders: 46 route, and all 46 are rejected for
+validator issues. No zero-Error/zero-Warning candidate exists in this bounded
+search.
 Successor-in-reframing to
 [`rfc-063-compaction-primitives.md`](rfc-063-compaction-primitives.md), whose
 Phase A/B kills answered a different question honestly and stand. Evidence
@@ -287,6 +305,23 @@ length** of the routed belt/underground/pipe path connecting that edge's
 producer output port to its consumer input port in the final validated
 `LayoutResult` — not the pre-route estimate.
 
+**Port multiplicity, fixed before Phase 3 measurement.** A canonical
+`ProductionEdge` may represent several placed machines and, for co-products,
+several possible producer recipes. For that edge, run a directed multi-source
+shortest-path search from every matching producer-output transport terminal;
+measure the distance to every distinct matching consumer-input terminal; and
+define `path_length(e)` as the arithmetic mean of those consumer-terminal
+distances. The edge's `planned_rate` is already the aggregate demand of the
+consumer recipe, so this is equivalent to apportioning that rate evenly over
+its identical placed consumer terminals. Surface cardinal steps cost 1;
+underground-belt and pipe-to-ground jumps cost their physical tile span, not
+one entity. A solver-declared direct-insertion edge with no transport network
+uses the Phase-0 precedent of port-to-port Manhattan distance. Any other
+unreachable terminal makes the metric unmeasurable and the candidate
+inadmissible — never silently fall back to Manhattan for a broken routed
+edge. Fluid edges use the same construction at `fluid_weight = 0.5`, the
+value Phase 0 chose and recorded below.
+
 ```text
 Transit_score(L) = 1 - Transit(L) / Transit(native)
 ```
@@ -544,18 +579,33 @@ since Phase C's input distribution (DI-composed rows) differs from this
 phase's general row corpus, but they are free evidence this phase doesn't
 have to spend its own session budget generating from scratch.
 
+**Frozen fixture contract (clarified before Phase 3 scoring code).** The
+three gate fixtures are RFC-058 KC1's exact set: `sci1-ore`, `sci2-ore`, and
+`pu1-plate`. The holdout is `belt5-ore`: RFC-058's fourth original packed
+winner, deliberately excluded from KC1 because it was the weakest area
+packer. "Gate and holdout fixtures" below means those four layouts, not a
+post-result subset. A typed packed-builder refusal is a Phase-3 miss on that
+fixture, not permission to remove it from the denominator; in particular,
+the currently known `pu1-plate` multi-lane refusal must either be supported by
+the flexible connection fabric or cause the phase to miss. This strict reading
+does not weaken the pre-registered bar and prevents RFC-058's buildable-only
+scope gap from silently transferring into the new objective.
+
 **Gate.** Pre-registered bar, derived from RFC-058's own real numbers rather
-than invented: **`AR_score ≥ 0.5`** (closes at least half the distance from
-native's aspect ratio to square) on RFC-058's own gate and holdout fixtures,
+than invented: **`AR_score ≥ 0.5` on each of the four frozen fixtures**
+(closes at least half the distance from native's aspect ratio to square),
 measured on the same faithful real-planner instrument RFC-058's own Phase 4
 (its internal phase numbering, not this RFC's) finally converged on after
 two rounds of adversarial review (non-pole
 extents, honest footprints, candidate scoring not bypassed) — reusing that
-instrument directly rather than re-deriving it. **AND** `Transit_score` does
-not go negative net across those fixtures — packing may spend entities
-freely, but it may not make the *average* delivery run longer while doing
-it. **AND** sim-anchored never-worse (#520) on every fixture the rescored
-candidate ships on.
+instrument directly rather than re-deriving it. **AND** aggregate transit,
+computed as `1 - Σ Transit(candidate) / Σ Transit(native)` over those same
+four fixtures, does not go negative — packing may spend entities freely, but
+it may not make the rate-weighted delivery run longer in aggregate. Per-
+fixture transit remains reported so one large fixture cannot hide the sign of
+another. **AND** sim-anchored never-worse (#520) on all four fixtures. A
+refusal therefore cannot pass the shape or sim clauses by claiming that the
+candidate would not ship there.
 
 **Kill criterion.** If the real-planner result under this objective — with
 entity growth fully unconstrained — still comes in below `AR_score ≥ 0.5`,
@@ -1039,3 +1089,207 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   ruled out), per the recorded subset decision. Adjudication and the tuning
   sweep wrote to the Job-2 corpora dir; resume any further Phase 2 work from
   the followups doc (`rfc064-phase2-followups.md`).
+
+- **2026-08-03 — Phase 3 first inert slice: objective ceiling CLEARS its
+  continuation question; the Phase 3 gate is NOT adjudicated.** Before code,
+  three ambiguities were frozen in the design above: the fixture set is
+  `sci1-ore` / `sci2-ore` / `pu1-plate` plus `belt5-ore` as holdout; a refusal
+  is a miss rather than a denominator change; and multi-terminal realized
+  transit now has an exact aggregation rule. The engine change is inert:
+  `bus::bands::enumerate_pack_plans` exposes every target-width/order member
+  of RFC-058's existing shelf search at a caller-supplied gap, while legacy
+  `best_pack` remains the minimum-area strict-first selector over that same
+  enumeration. A focused unit test pins iteration order and the legacy
+  winner; RFC-058's independent placer/probe parity remains the external
+  oracle. No option default, entity, trace, or decomposition decision changes.
+
+  Reporting probe `probe_rfc064_phase3_objective_ceiling` then swept the
+  packed builder's already-existing gap range 2..=8 and ranked every plan at
+  Phase 0's default `0.5 × AR_score + 0.5 × Transit_score`. This is explicitly
+  an **unrouted structural-band ceiling**: aspect compares band bbox to band
+  bbox and transit is RFC-058's known-risk band-centre Manhattan estimate, so
+  none of the numbers below claim validation, physical routing, or sim parity.
+
+  | role | fixture | plans (shape-clearing) | composite-best | AR_score | Transit_score (est) | Composite |
+  |---|---|---:|---|---:|---:|---:|
+  | gate | `sci1-ore` | 188 (14) | 30×29, gap 7, source order | +0.655 | +0.170 | +0.413 |
+  | gate | `sci2-ore` | 230 (28) | 55×55, gap 7, height-desc | +1.000 | +0.113 | +0.556 |
+  | gate | `pu1-plate` | 333 (237) | 49×47, gap 2, source order | +0.968 | +0.449 | +0.709 |
+  | holdout | `belt5-ore` | 146 (13) | 36×33, gap 8, height-desc | +0.764 | +0.000 | +0.382 |
+
+  Every composite winner independently clears the structural `AR_score ≥
+  0.5` bar; aggregate estimated transit is **+0.367** (9070.1 → 5744.6).
+  Therefore the old placement search itself is not the immediate ceiling, and
+  the result funds the next bounded slice: materialize explicitly selected
+  plans and implement the faithful post-route metric. It does **not** fund
+  auto-selection or broad router hardening yet. `pu1-plate`'s current
+  multi-lane builder refusal remains a binding gate debt even though its
+  unrouted placement has ample shape headroom.
+
+- **2026-08-03 — Phase 3 second inert slice: explicit materialization and
+  faithful transit measurement land; selected candidates expose four binding
+  debts, so the gate remains UNADJUDICATED.** `LayoutOptions::
+  band_pack_selection` now names one search member by `(gap, target_width,
+  order)`. The builder reconstructs that member from its own full-footprint
+  pseudo-bands rather than trusting caller-provided positions, does not widen
+  or substitute another placement after failure, and returns a refusal instead
+  of silently scoring the native fallback. `None` retains RFC-058's legacy
+  minimum-area/gap-widening path; no default or decomposition candidate sets
+  the new field.
+
+  `bus::transit::measure_realized_transit` implements the metric frozen above
+  over the final artifact. Solid paths are directed and splitter-aware; belt
+  and pipe tunnel jumps cost their physical span; machine/inserter and shared
+  fluid-port geometry define terminals; exact item labels win over unlabelled
+  fallback tiles; and only a solver-declared DI edge with no transport
+  terminals may use its actual machine-to-machine inserter span. Every missing
+  or unreachable non-DI terminal is an error. Focused unit fixtures pin surface
+  length, underground span length, fluid weighting, and DI fallback. The same
+  instrument measured every native control successfully:
+
+  | role | fixture | native non-pole bbox | native Transit | selected result |
+  |---|---|---:|---:|---|
+  | gate | `sci1-ore` | 38×36 | 80.00 | 36×37, `AR_score +0.500`; invalid: 4 belt dead ends + 1 item-isolation error |
+  | gate | `sci2-ore` | 68×79 | 1164.50 | refused: selected geometry cannot route the `inserter` net |
+  | gate | `pu1-plate` | 68×120 | 6544.53 | refused: 81.00/s copper cable exceeds one 22.5/s lane |
+  | holdout | `belt5-ore` | 41×29 | 141.25 | 42×41, `AR_score +0.941`; invalid: 4 belt dead ends + 2 belt-junction errors |
+
+  Native aggregate Transit is 7930.28. Candidate aggregate Transit and the
+  Phase-3 gate are deliberately **not computed**: 2/4 selected plans
+  materialize, 0/4 validate, and 0/4 are therefore eligible for post-route
+  measurement. This does not yet kill the placement search — only one
+  proxy-ranked member per fixture was routed — but it falsifies the idea that
+  the ceiling winners can go straight into objective scoring. The next bounded
+  work, if Phase 3 continues, is candidate-wide admissibility search plus the
+  smallest connection-fabric repairs needed to make at least one plan per
+  fixture valid; `pu1-plate` separately requires a multi-lane model rather than
+  a geometry retune.
+
+- **2026-08-03 — Phase 3 third slice: router correctness closes; exhaustive
+  routed search makes the gate FAIL.** The selected-plan errors were not
+  validator false positives. Tile-level diagnosis found four shared defects:
+  consumer goals ignored both item identity and required attachment direction;
+  an underground exit could turn immediately; and a splitter branch could
+  reverse through its own footprint. Repairs now use item-specific immediate
+  consumer ports, signed branch departure, complete splitter footprints, and
+  straight-through underground exits. Edge nets retain first routing priority
+  so a later corridor cannot steal their only continuation. Permanent
+  `rfc064_packed_router` gates require both zero validation Errors and successful
+  realized-transit measurement for the exact `sci1-ore` and `belt5-ore`
+  selections.
+
+  That second condition caught one validator-clean false pass during hardening:
+  a net's second destination reused the already-stamped producer stub as a
+  perpendicular seed. Boundary-run materialization skipped the occupied start,
+  leaving a locally well-formed but graph-disconnected consumer. Producer stubs
+  are now one-shot; subsequent destinations must leave through a real splitter
+  branch, and materialization defensively refuses any route starting on occupied
+  transport. The two selected artifacts now both clear validation and transit
+  reachability:
+
+  | role | fixture | native | repaired selected | result |
+  |---|---|---|---|---|
+  | gate | `sci1-ore` | 38×36, Transit 80.00 | 36×36, Transit 158.00 | `AR_score +1.000`, `Transit_score -0.975`, zero Errors |
+  | holdout | `belt5-ore` | 41×29, Transit 141.25 | 44×43, Transit 591.25 | `AR_score +0.944`, `Transit_score -3.186`, zero Errors |
+
+  `probe_rfc064_phase3_candidate_wide_admissibility` then materialized every
+  member of the frozen gap 2..=8 / target-width / order search and computed
+  shape only from the final non-pole artifact. Outcomes partition all 897
+  plans: 771 typed refusals; 96 materialized below the real `AR_score ≥ 0.5`
+  bar; and 30 real shape-clearing artifacts. Five of those 30 carry
+  `entity-overlap` Errors and are rejected before transit scoring. The remaining
+  25 are zero-Error and transit-measurable:
+
+  | role | fixture | plans | materialized | real shape-clearing | zero-Error + measurable | best admissible (`AR`, `Transit`, composite) |
+  |---|---|---:|---:|---:|---:|---|
+  | gate | `sci1-ore` | 188 | 20 | 6 | 6 | `+1.000`, `-0.975`, `+0.012` (36×36, gap 7, target 30, source) |
+  | gate | `sci2-ore` | 230 | 0 | 0 | 0 | none — every plan refuses |
+  | gate | `pu1-plate` | 333 | 0 | 0 | 0 | none — every plan refuses on multi-lane scope |
+  | holdout | `belt5-ore` | 146 | 106 | 24 | 19 | `+0.823`, `-3.062`, `-1.119` (44×41, gap 7, target 36, height-desc) |
+
+  The packed instrument's forced DI-off `pu1-plate` native control itself has
+  54 validation Errors (3 dead ends, 6 item-isolation, 24 overlaps, 21 lane-
+  throughput). That debt is not caused by packing—the packed builder refuses
+  before producing an artifact—but it also means this probe configuration has
+  no sim-eligible `pu1-plate` baseline. The all-plan packed refusal already
+  makes the frozen fixture a gate miss, so no metric is rescued by that fact.
+
+  **Decision:** the Phase-3 conjunction fails before simulation: two frozen
+  fixtures have no admissible candidate at all, and both fixtures that do have
+  one regress routed transit severely. Refusal is a miss by the pre-registered
+  fixture contract, so there is no four-fixture candidate aggregate to compute
+  and no sim candidate to adjudicate. This is a clean negative result for
+  reusing RFC-058's shelf placement plus single-lane connection model under the
+  spaghetti objective; it does not authorize weakening validation, dropping a
+  fixture, or substituting native. The experimental builder and probes remain
+  inert/default-off as the reproducible record; Phase 3 ships no selector.
+
+- **2026-08-03 — Rotation-aware rigid-row follow-up: RETRACTED after the
+  zero-Error candidate carried Warnings; the first simulation artifact also
+  exposed a metadata-provenance defect.** Review of the final Science-2
+  control exposed a scope mismatch between the RFC's Tetris framing and the
+  reused RFC-058 implementation: Phase 3 translated axis-locked horizontal
+  bands, while the framing allowed a rigid row to change its facing. This
+  follow-up does not retcon the completed Phase-3 result. It tests a materially
+  broader mechanism through a separate, inert entry point.
+
+  The new row macro fixes machine, inserter, pipe, and inserter-facing local
+  belt **positions** relative to one another. Placement may rotate that macro;
+  each straight local belt run may accept or discharge from either endpoint,
+  with its directions regenerated consistently after the endpoint is chosen.
+  External connection fabric is ripped up and rerouted. The first slice is
+  deliberately solid-only and frozen to `sci2-ore`: fluid rows, DI compounds,
+  local splitters/undergrounds, multiple producers, and external fanout refuse
+  rather than receiving guessed transforms. Fanout uses the existing real
+  1→N balancer templates; point-to-point edges use directed A* plus legal
+  underground crossings. The initial candidate gate required zero validator
+  Errors and measurable directed realized transit. That gate was insufficient:
+  Warnings contained direct evidence of undelivered inputs. The corrected gate
+  requires zero Errors **and zero Warnings** before transit scoring.
+
+  The bounded search combined a transit-estimate frontier with a shape
+  frontier (99 deduplicated structural plans), then tried the default route
+  order plus every deterministic single-commodity promotion on **every**
+  placement. This is 1,089 route orders; a default-order refusal or Warning no
+  longer suppresses the other orderings for that placement. The now-retracted
+  selection used
+  rotation mask `0x94` (iron-plate, transport-belt, and
+  logistic-science-pack rows rotated 90°), gap 6, target width 67,
+  height-descending order, with `iron-gear-wheel` promoted during routing:
+
+  | fixture | native | retracted rotation-aware result | verdict |
+  |---|---|---|---|
+  | `sci2-ore` | 68×79, Transit 1164.50 | 75×74, Transit 2121.50; corrected metadata: 0 Errors / 18 Warnings | **RETRACTED**; not eligible for Factorio |
+
+  The first exported artifact's 49 Warnings were 14 `inserter-throughput`, 17
+  `inserter-item-throughput`, 7 `underground-belt`, and 11
+  `input-rate-delivery`; several delivery warnings reported exactly `0.0/s` at
+  machine inputs. A 108,000-tick warmup / 301,200-tick headless Factorio run
+  then measured logistic science and every intermediate at `0.00/s`. The feed
+  rigs did work (5,040 iron ore and 3,810 copper ore fed), all 1,276 ghosts
+  revived, power was connected, and the kit reported no errors. Instead, 23
+  furnaces backed up at full output while 25 assemblers remained
+  ingredient-starved.
+
+  Adversarial review later found that both experimental builders constructed
+  their result metadata from `Default::default()`. The geometry came from the
+  intended default-capacity-2 planning pass, but the export/simulation manifest
+  incorrectly recorded inserter capacity 0 (and initially `stacking: 0`, which
+  the harness boundary normalized to the equivalent unstacked value 1). That
+  makes the `0.00/s` run valid evidence for the exact preserved artifact, but
+  **not** a default-context simulation adjudication. After propagating the
+  source planning metadata, the same geometry still fails the stricter gate at
+  18 Warnings (first: `underground-belt`), so it is not re-simulated. The
+  complete historical machine census, checkpoints, and belt-state dump are
+  preserved in
+  [`rfc064-rotation-aware-sci2-sim-report.json`](../artifacts/rfc064-rotation-aware-sci2-sim-report.json).
+
+  **Retraction:** zero Errors did not mean functional material flow. The
+  selected entry point now rejects this plan with all 18 corrected-context
+  issues. The release replay exhausts 99 structural plans / 1,089 route orders:
+  46 route, all 46 are validation-rejected, and none reaches transit scoring.
+  Thus rotation has not yet removed Science 2's admissibility refusal. The
+  focused regression pins the selected-plan refusal and planning metadata; the
+  ignored full-search probe reproduces the all-order refusal (328.49 seconds in
+  release on the recorded run). No candidate proceeds to a valid simulation
+  adjudication and no selector ships.

@@ -5,7 +5,7 @@
 pub mod belt_detour;
 pub mod belt_flow;
 pub mod inserters;
-mod fluids;
+pub(crate) mod fluids;
 pub mod modules;
 pub mod power;
 pub mod sushi;

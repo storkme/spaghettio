@@ -60,7 +60,7 @@ fn opposite_direction(dir: EntityDirection) -> EntityDirection {
 /// connection on the side **opposite** its facing direction, regardless of the
 /// blueprint `type` (input/output) field — the type field does not affect
 /// surface placement in Factorio's actual fluid simulation.
-fn ptg_surface_neighbour(x: i32, y: i32, direction: EntityDirection) -> (i32, i32) {
+pub(crate) fn ptg_surface_neighbour(x: i32, y: i32, direction: EntityDirection) -> (i32, i32) {
     let (dx, dy) = match direction {
         EntityDirection::North => (0i32, 1i32),  // surface SOUTH
         EntityDirection::East => (-1, 0),         // surface WEST
@@ -166,7 +166,7 @@ pub fn check_pipe_isolation(layout_result: &LayoutResult) -> Vec<ValidationIssue
 /// nothing — #407). Iteration-order matching would cascade incorrect pairs
 /// when entities are emitted out of y-order (e.g. junction-solver pipes
 /// added after the main trunk emission).
-fn find_ptg_pairs(layout_result: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
+pub(crate) fn find_ptg_pairs(layout_result: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
     // Game-measured (#407): entities at most 10 apart connect; 11 does
     // not. Mirrors belt max_distance semantics (yellow UG belt
     // max_distance=5 = gap 4 = our ug_max_reach).

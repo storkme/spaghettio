@@ -189,7 +189,7 @@ fn shelf_pack(bands: &[Band], target_w: i32, gap: i32, sort_desc: bool) -> Vec<B
 }
 
 /// A packing the aspect cap admits.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackedPlan {
     pub w: i32,
     pub h: i32,
@@ -198,35 +198,96 @@ pub struct PackedPlan {
     pub positions: Vec<(i32, i32)>,
 }
 
+/// One member of RFC-058's existing shelf-search space.
+///
+/// RFC-064 Phase 3 needs to score every placement the old packer already
+/// considered rather than accepting the single minimum-area winner. Keeping
+/// the search metadata beside the plan makes that enumeration deterministic
+/// and diagnosable without changing the placement mechanism itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackOrder {
+    Source,
+    HeightDescending,
+}
+
+/// Stable coordinates for selecting one member of the shelf-search space.
+///
+/// The positions themselves are deliberately not caller-supplied. The packed
+/// builder reconstructs the candidate from these three search coordinates and
+/// refuses if it is not present for the layout being built. This lets RFC-064
+/// materialize and measure an explicitly scored plan without creating an
+/// arbitrary-placement back door into the frozen RFC-058 builder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackSelection {
+    pub gap: i32,
+    pub target_width: i32,
+    pub order: PackOrder,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackedPlanCandidate {
+    pub gap: i32,
+    pub target_width: i32,
+    pub order: PackOrder,
+    pub plan: PackedPlan,
+}
+
+impl PackedPlanCandidate {
+    pub fn selection(&self) -> PackSelection {
+        PackSelection {
+            gap: self.gap,
+            target_width: self.target_width,
+            order: self.order,
+        }
+    }
+}
+
+/// Enumerate, in the legacy packer's exact iteration order, every
+/// aspect-admitted placement at one inter-band gap.
+///
+/// This is an inert RFC-064 Phase 3 seam: callers can rescore the already
+/// existing search space, while [`best_pack`] remains the RFC-058
+/// minimum-area selector and therefore preserves the falsification record.
+pub fn enumerate_pack_plans(bands: &[Band], gap: i32, max_aspect: f64) -> Vec<PackedPlanCandidate> {
+    let (cw, _) = bbox(bands);
+    let widest = bands.iter().map(|b| b.w).max().unwrap_or(1);
+    let mut candidates = Vec::new();
+    for order in [PackOrder::Source, PackOrder::HeightDescending] {
+        let sort_desc = order == PackOrder::HeightDescending;
+        let mut target_width = widest;
+        while target_width <= cw.max(widest) * 2 {
+            let packed = shelf_pack(bands, target_width, gap, sort_desc);
+            let (w, h) = bbox(&packed);
+            let aspect = w.max(h) as f64 / w.min(h).max(1) as f64;
+            if aspect <= max_aspect {
+                candidates.push(PackedPlanCandidate {
+                    gap,
+                    target_width,
+                    order,
+                    plan: PackedPlan {
+                        w,
+                        h,
+                        positions: packed.iter().map(|b| (b.x, b.y)).collect(),
+                    },
+                });
+            }
+            target_width += 2;
+        }
+    }
+    candidates
+}
+
 /// Best aspect-capped shelf packing: minimum bounding-box area under
 /// `max_aspect`, target width swept from the widest band to twice the
 /// control width, both orders, strict `<` so the first minimum wins
 /// (iteration order is part of the published-numbers contract). `None`
 /// when nothing fits the cap — a width-dominant band.
 pub fn best_pack(bands: &[Band], gap: i32, max_aspect: f64) -> Option<PackedPlan> {
-    let (cw, _) = bbox(bands);
-    let widest = bands.iter().map(|b| b.w).max().unwrap_or(1);
     let mut best: Option<(i64, PackedPlan)> = None;
-    for sort_desc in [false, true] {
-        let mut t = widest;
-        while t <= cw.max(widest) * 2 {
-            let packed = shelf_pack(bands, t, gap, sort_desc);
-            let (w, h) = bbox(&packed);
-            let aspect = w.max(h) as f64 / w.min(h).max(1) as f64;
-            if aspect <= max_aspect {
-                let area = (w as i64) * (h as i64);
-                if best.as_ref().is_none_or(|(ba, _)| area < *ba) {
-                    best = Some((
-                        area,
-                        PackedPlan {
-                            w,
-                            h,
-                            positions: packed.iter().map(|b| (b.x, b.y)).collect(),
-                        },
-                    ));
-                }
-            }
-            t += 2;
+    for candidate in enumerate_pack_plans(bands, gap, max_aspect) {
+        let area = (candidate.plan.w as i64) * (candidate.plan.h as i64);
+        if best.as_ref().is_none_or(|(ba, _)| area < *ba) {
+            best = Some((area, candidate.plan));
         }
     }
     best.map(|(_, plan)| plan)
@@ -609,6 +670,16 @@ pub fn stamp_band_belt_rows(
     origins: &[(i32, i32)],
     belt_name: &str,
 ) -> Vec<PlacedEntity> {
+    stamp_band_belt_rows_impl(rows, contents, origins, belt_name, false)
+}
+
+fn stamp_band_belt_rows_impl(
+    rows: &[RowSpan],
+    contents: &[BandContent],
+    origins: &[(i32, i32)],
+    belt_name: &str,
+    tag_items: bool,
+) -> Vec<PlacedEntity> {
     use crate::models::EntityDirection;
     let mut out = Vec::new();
     for (bi, c) in contents.iter().enumerate() {
@@ -619,16 +690,33 @@ pub fn stamp_band_belt_rows(
         // once per y, output taking precedence — inserters pick from the
         // row regardless of its flow direction, and the west flow is what
         // the corridor pickup needs.
-        let mut row_dirs: std::collections::BTreeMap<i32, EntityDirection> =
+        let mut row_specs: std::collections::BTreeMap<i32, (EntityDirection, Option<String>)> =
             std::collections::BTreeMap::new();
         for &si in &c.row_indices {
             let rs = &rows[si];
             for &iy in &rs.input_belt_y {
-                row_dirs.entry(iy).or_insert(EntityDirection::East);
+                row_specs.entry(iy).or_insert((EntityDirection::East, None));
             }
-            row_dirs.insert(rs.output_belt_y, EntityDirection::West);
+            for (flow, &iy) in rs
+                .spec
+                .inputs
+                .iter()
+                .filter(|flow| !flow.is_fluid)
+                .zip(&rs.input_belt_y)
+            {
+                if let Some((_, item)) = row_specs.get_mut(&iy) {
+                    *item = Some(flow.item.clone());
+                }
+            }
+            let output_item = rs
+                .spec
+                .outputs
+                .iter()
+                .find(|flow| !flow.is_fluid)
+                .map(|flow| flow.item.clone());
+            row_specs.insert(rs.output_belt_y, (EntityDirection::West, output_item));
         }
-        for (src_y, dir) in row_dirs {
+        for (src_y, (dir, item)) in row_specs {
             if std::env::var("SPAGHETTIO_BANDS_DEBUG").is_ok() {
                 eprintln!(
                     "band {bi}: src_y {src_y} -> y {} dir {dir:?} x {}..{}",
@@ -643,6 +731,7 @@ pub fn stamp_band_belt_rows(
                     x: ox + dx,
                     y: src_y - ry + oy,
                     direction: dir,
+                    carries: tag_items.then(|| item.clone()).flatten(),
                     ..Default::default()
                 });
             }
@@ -687,11 +776,25 @@ pub fn route_packed_nets(
     let (mut lo, mut hi) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
     for e in existing {
         if is_transport(&e.name) {
-            let axis = match e.direction {
-                D::East | D::West => H,
-                _ => V,
-            };
-            *occ.entry((e.x, e.y)).or_insert(0) |= axis;
+            // Splitters are two-tile, non-crossable bodies.  Keep their
+            // complete oriented footprint in every occupancy book rather
+            // than treating the anchor as a 1x1 belt.
+            let (w, h) =
+                crate::common::oriented_splitter_dims(&e.name, e.direction).unwrap_or((1, 1));
+            for dx in 0..w as i32 {
+                for dy in 0..h as i32 {
+                    let tile = (e.x + dx, e.y + dy);
+                    if crate::common::is_splitter(&e.name) {
+                        *occ.entry(tile).or_insert(0) |= BAND;
+                    } else {
+                        let axis = match e.direction {
+                            D::East | D::West => H,
+                            _ => V,
+                        };
+                        *occ.entry(tile).or_insert(0) |= axis;
+                    }
+                }
+            }
         } else {
             let (w, h) = entity_size(&e.name);
             for dx in 0..w as i32 {
@@ -741,11 +844,15 @@ pub fn route_packed_nets(
     // a tile a FOREIGN-carrying belt points into is not routable — placing
     // a belt there chains two items head-to-tail (the diagnosed
     // item-isolation class: an ore corridor feeding a plate UG entrance).
-    let mut belt_dirs: FxHashMap<(i32, i32), (D, Option<String>)> = existing
-        .iter()
-        .filter(|e| is_transport(&e.name))
-        .map(|e| ((e.x, e.y), (e.direction, e.carries.clone())))
-        .collect();
+    let mut belt_dirs: FxHashMap<(i32, i32), (D, Option<String>)> = FxHashMap::default();
+    for e in existing.iter().filter(|e| is_transport(&e.name)) {
+        let (w, h) = crate::common::oriented_splitter_dims(&e.name, e.direction).unwrap_or((1, 1));
+        for dx in 0..w as i32 {
+            for dy in 0..h as i32 {
+                belt_dirs.insert((e.x + dx, e.y + dy), (e.direction, e.carries.clone()));
+            }
+        }
+    }
 
     let mut ordered: Vec<&PackedNet> = nets.iter().collect();
     ordered.sort_by(|a, b| b.rate.total_cmp(&a.rate).then_with(|| a.item.cmp(&b.item)));
@@ -758,6 +865,13 @@ pub fn route_packed_nets(
             ordered.insert(0, n);
         }
     }
+    // Edge nets own a producer's only west-going continuation.  Route them
+    // before interior corridors even after a negotiated retry promotes a
+    // different item: otherwise a perpendicular route can occupy the
+    // continuation tile and turn a still-legal exterior drain into a
+    // spurious "no corridor" refusal.  This is ordering only; it neither
+    // relaxes occupancy nor bypasses any of the router's validation rules.
+    ordered.sort_by_key(|net| !net.dst_bands.is_empty());
 
     let mut out: Vec<PlacedEntity> = Vec::new();
     for net in ordered {
@@ -801,6 +915,12 @@ pub fn route_packed_nets(
         };
         for dst_opt in dsts {
             let mut targets: FxHashSet<(i32, i32)> = FxHashSet::default();
+            // A consumer target is not merely an empty tile near a row: it
+            // is the one-tile continuation immediately WEST of an
+            // east-flowing, item-specific feed belt.  Landing elsewhere in
+            // the old four-tile approach strip could leave the final belt
+            // pointing into an unstamped gap.
+            let mut consumer_ports: FxHashSet<(i32, i32)> = FxHashSet::default();
             let dst = match dst_opt {
                 None => {
                     for y in min.1..=max.1 {
@@ -812,20 +932,25 @@ pub fn route_packed_nets(
             };
             if dst != usize::MAX {
             for &si in &contents[dst].row_indices {
-                for &iy in &rows[si].input_belt_y {
+                    // `input_belt_y` is deliberately paired only with solid
+                    // inputs, exactly as stamp_band_belt_rows_impl does.
+                    // A net must never use another ingredient's row as a
+                    // legal termination target.
+                    for (flow, &iy) in rows[si]
+                        .spec
+                        .inputs
+                        .iter()
+                        .filter(|flow| !flow.is_fluid)
+                        .zip(&rows[si].input_belt_y)
+                    {
+                        if flow.item != net.item {
+                            continue;
+                        }
                     let ty = row_y(dst, iy);
                     let (ox, _) = origins[dst];
-                    for x in ox..ox + contents[dst].rect.2 {
-                        targets.insert((x, ty));
-                    }
-                    // West CONTINUATION of the east-flowing feed row —
-                    // how a real bus feeds a row: the belt starts west of
-                    // it. Fresh approach tiles outside the crowded gap
-                    // interior; sci2's copper-cable net walled out of
-                    // band 5's feed row at every gap without these.
-                    for x in ox - 4..ox {
-                        targets.insert((x, ty));
-                    }
+                        let port = (ox - 1, ty);
+                        targets.insert(port);
+                        consumer_ports.insert(port);
                 }
             }
             }
@@ -849,7 +974,17 @@ pub fn route_packed_nets(
             // splitter into the trunk at j covering (j, j+p).
             let mut branch_from: FxHashMap<(i32, i32), ((i32, i32), (i32, i32), D)> =
                 FxHashMap::default();
-            let mut starts = starts.clone();
+            // The producer stub is a one-shot source.  Once a first
+            // destination has claimed it, another destination must leave
+            // through a newly carved splitter branch, never by treating the
+            // occupied stub as a perpendicular crossing.  The latter looks
+            // validator-clean after boundary-run elision, but leaves the
+            // second consumer graph-disconnected from its producer.
+            let mut starts = if net_belts.is_empty() {
+                starts.clone()
+            } else {
+                Vec::new()
+            };
             for &(j, d) in &net_belts {
                 let dv = match d {
                     D::East => (1, 0),
@@ -891,12 +1026,41 @@ pub fn route_packed_nets(
                     })
                 })
             };
+            // A free corridor tile may not be placed directly in front of
+            // ANY existing belt.  The old foreign-only guard let a same-item
+            // route turn back into a consumer row, which creates a physical
+            // belt loop rather than a legal merge.  Occupied tiles remain
+            // eligible as underground crossings; those are not stamped as
+            // ordinary corridor belts.
+            let fed_by_existing = |t: (i32, i32)| -> bool {
+                [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {
+                    let n = (t.0 + dx, t.1 + dy);
+                    belt_dirs.get(&n).is_some_and(|(dir, _)| {
+                        let v = match dir {
+                            D::East => (1, 0),
+                            D::West => (-1, 0),
+                            D::South => (0, 1),
+                            D::North => (0, -1),
+                        };
+                        (n.0 + v.0, n.1 + v.1) == t
+                    })
+                })
+            };
             let mut open: BinaryHeap<Reverse<(i32, i32, (i32, i32), bool)>> = BinaryHeap::new();
             let mut best: FxHashMap<((i32, i32), bool), i32> = FxHashMap::default();
             let mut parent: FxHashMap<((i32, i32), bool), ((i32, i32), bool)> =
                 FxHashMap::default();
             for &s in &starts {
-                for horiz in [true, false] {
+                // A branch begins on the output side of its splitter.  Its
+                // first segment must carry the trunk's flow direction away
+                // from that splitter; seeding both axes let it reverse
+                // through the splitter and tunnel over its own footprint.
+                let axes: &[bool] = match branch_from.get(&s) {
+                    Some((_, _, D::East | D::West)) => &[true],
+                    Some((_, _, D::North | D::South)) => &[false],
+                    None => &[true, false],
+                };
+                for &horiz in axes {
                     if passable(&occ, s, horiz, primary) && !fed_by_foreign(s) {
                         best.insert((s, horiz), 0);
                         open.push(Reverse((hfn(s), 0, s, horiz)));
@@ -918,7 +1082,14 @@ pub fn route_packed_nets(
                         .get(&t)
                         .is_none_or(|(_, c)| c.as_deref() == Some(net.item.as_str()) || c.is_none())
                 };
-                if targets.contains(&tile) && goal_ok(tile) {
+                let arrives_east = parent
+                    .get(&(tile, horiz))
+                    .is_some_and(|p| horiz && p.0 == (tile.0 - 1, tile.1));
+                if targets.contains(&tile)
+                    && goal_ok(tile)
+                    && !branch_from.contains_key(&tile)
+                    && (!consumer_ports.contains(&tile) || arrives_east)
+                {
                     let mut path = vec![tile];
                     let mut cur = (tile, horiz);
                     while let Some(&p) = parent.get(&cur) {
@@ -930,9 +1101,35 @@ pub fn route_packed_nets(
                     break;
                 }
                 for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    if let Some((_, _, d)) = branch_from.get(&tile) {
+                        let required = match d {
+                            D::East => (1, 0),
+                            D::West => (-1, 0),
+                            D::South => (0, 1),
+                            D::North => (0, -1),
+                        };
+                        if (dx, dy) != required {
+                            continue;
+                        }
+                    }
+                    // When leaving an occupied crossing run, the first
+                    // free tile is the underground OUTPUT.  It must carry
+                    // straight on; a turn here leaves the output facing an
+                    // empty tile even though the geometric path continues.
+                    if let Some(prev) = parent.get(&(tile, horiz)).map(|p| p.0) {
+                        if belt_dirs.contains_key(&prev)
+                            && !belt_dirs.contains_key(&tile)
+                            && (dx, dy) != (tile.0 - prev.0, tile.1 - prev.1)
+                        {
+                            continue;
+                        }
+                    }
                     let nxt = (tile.0 + dx, tile.1 + dy);
                     let nh = dy == 0;
-                    if !passable(&occ, nxt, nh, primary) || fed_by_foreign(nxt) {
+                    if !passable(&occ, nxt, nh, primary)
+                        || fed_by_foreign(nxt)
+                        || (!belt_dirs.contains_key(&nxt) && fed_by_existing(nxt))
+                    {
                         continue;
                     }
                     if nh != horiz && !passable(&occ, tile, nh, primary) {
@@ -1001,13 +1198,18 @@ pub fn route_packed_nets(
                     belt_dirs.insert(t, (d, Some(net.item.clone())));
                 }
             }
-            let mut belt_tiles: FxHashSet<(i32, i32)> = existing
-                .iter()
-                .chain(out.iter())
-                .filter(|e| is_transport(&e.name))
-                .map(|e| (e.x, e.y))
-                .collect();
+            // `belt_dirs` records every live transport footprint, including
+            // both tiles of a splitter.  Entity anchors are insufficient:
+            // a later path could otherwise believe a splitter's sibling is
+            // free and create a physically overlapping crossing.
+            let mut belt_tiles: FxHashSet<(i32, i32)> = belt_dirs.keys().copied().collect();
             let occupied: Vec<bool> = path.iter().map(|t| belt_tiles.contains(t)).collect();
+            if occupied.first().copied().unwrap_or(false) {
+                return Err(format!(
+                    "net {}: route starts on occupied transport tile {:?}",
+                    net.item, path[0]
+                ));
+            }
             let ug_name = match belt_name {
                 "express-transport-belt" => "express-underground-belt",
                 "fast-transport-belt" => "fast-underground-belt",
@@ -1077,6 +1279,26 @@ pub fn route_packed_nets(
                             (0, 1) => D::South,
                             _ => D::North,
                         };
+                        if let Some(&next) = path.get(j + 1) {
+                            let next_delta = (next.0 - t2.0, next.1 - t2.1);
+                            let exit_delta = (t2.0 - p.0, t2.1 - p.1);
+                            if next_delta != exit_delta {
+                                return Err(format!(
+                                    "net {}: underground output at {:?} turns immediately",
+                                    net.item, t2
+                                ));
+                            }
+                        } else if consumer_ports.contains(&t2) && dir != D::East {
+                            return Err(format!(
+                                "net {}: underground output at {:?} does not feed its consumer",
+                                net.item, t2
+                            ));
+                        }
+                        let axis = match dir {
+                            D::East | D::West => H,
+                            D::North | D::South => V,
+                        };
+                        *occ.entry(t2).or_insert(0) |= axis;
                         belt_tiles.insert(t2);
                         belt_dirs.insert(t2, (dir, Some(net.item.clone())));
                         out.push(PlacedEntity {
@@ -1265,6 +1487,40 @@ pub fn build_packed_layout(
     solver_result: &crate::models::SolverResult,
     max_belt_tier: Option<&str>,
 ) -> Result<crate::models::LayoutResult, String> {
+    build_packed_layout_impl(rows, row_entities, solver_result, max_belt_tier, None)
+}
+
+/// Materialize one explicitly selected member of the RFC-058 shelf search.
+///
+/// Unlike [`build_packed_layout`], this never substitutes the minimum-area
+/// winner for another gap and never widens to a different placement after a
+/// routing failure. Negotiated net ordering still retries within the selected
+/// geometry because that does not move a band. This is the inert construction
+/// seam RFC-064 Phase 3 uses to measure candidates before any auto-selection
+/// policy exists.
+pub fn build_packed_layout_selected(
+    rows: &[RowSpan],
+    row_entities: &[PlacedEntity],
+    solver_result: &crate::models::SolverResult,
+    max_belt_tier: Option<&str>,
+    selection: PackSelection,
+) -> Result<crate::models::LayoutResult, String> {
+    build_packed_layout_impl(
+        rows,
+        row_entities,
+        solver_result,
+        max_belt_tier,
+        Some(selection),
+    )
+}
+
+fn build_packed_layout_impl(
+    rows: &[RowSpan],
+    row_entities: &[PlacedEntity],
+    solver_result: &crate::models::SolverResult,
+    max_belt_tier: Option<&str>,
+    explicit_selection: Option<PackSelection>,
+) -> Result<crate::models::LayoutResult, String> {
     if let Some(r) = packing_refusal(rows, solver_result, max_belt_tier) {
         return Err(format!("packed-refusal: {r}"));
     }
@@ -1312,11 +1568,25 @@ pub fn build_packed_layout(
     let mut built: Option<Vec<PlacedEntity>> = None;
     let mut last_err = String::new();
     let mut used_origins: Vec<(i32, i32)> = Vec::new();
-    for gap in GAP..=8 {
-        let Some(plan) = best_pack(&pseudo, gap, MAX_ASPECT) else {
-            last_err = format!("no packing within the aspect cap at gap {gap}");
-            continue;
-        };
+    let selected_plans: Vec<(i32, PackedPlan)> = match explicit_selection {
+        Some(selection) => {
+            let candidate = enumerate_pack_plans(&pseudo, selection.gap, MAX_ASPECT)
+                .into_iter()
+                .find(|candidate| candidate.selection() == selection)
+                .ok_or_else(|| {
+                    format!(
+                        "packed-refusal: selected plan gap={} target={} order={:?} \
+                         is not in this layout's RFC-058 search space",
+                        selection.gap, selection.target_width, selection.order,
+                    )
+                })?;
+            vec![(selection.gap, candidate.plan)]
+        }
+        None => (GAP..=8)
+            .filter_map(|gap| best_pack(&pseudo, gap, MAX_ASPECT).map(|plan| (gap, plan)))
+            .collect(),
+    };
+    for (gap, plan) in selected_plans {
         // Origins place the CONTENT rect: shift each band down by its own
         // top overhang (the packed slot already reserves it), plus a
         // global margin so the top shelf's rows stay in-bounds.
@@ -1328,7 +1598,13 @@ pub fn build_packed_layout(
             .collect();
         let base_entities = translate_band_contents(&contents, &origins, row_entities);
         let mut base = base_entities.clone();
-        base.extend(stamp_band_belt_rows(rows, &contents, &origins, belt));
+        base.extend(stamp_band_belt_rows_impl(
+            rows,
+            &contents,
+            &origins,
+            belt,
+            explicit_selection.is_some(),
+        ));
         // Negotiation: on failure, promote the failing net and retry this
         // gap — up to one promotion per net — before widening.
         let mut priority: Vec<String> = Vec::new();
@@ -1361,7 +1637,18 @@ pub fn build_packed_layout(
         }
     }
     let Some(mut entities) = built else {
-        return Err(format!("packed-refusal: no gap in 2..=8 routes all nets — {last_err}"));
+        let scope = explicit_selection.map_or_else(
+            || "no gap in 2..=8".to_string(),
+            |selection| {
+                format!(
+                    "selected plan gap={} target={} order={:?}",
+                    selection.gap, selection.target_width, selection.order,
+                )
+            },
+        );
+        return Err(format!(
+            "packed-refusal: {scope} routes all nets — {last_err}"
+        ));
     };
     let origins = used_origins;
     let _ = &mut entities;
@@ -1471,4 +1758,55 @@ pub fn build_packed_layout(
         boundary_outputs,
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn band(x: i32, y: i32, w: i32, h: i32) -> Band {
+        Band {
+            x,
+            y,
+            w,
+            h,
+            row_indices: Vec::new(),
+            recipes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn pack_enumeration_is_deterministic_and_preserves_legacy_best() {
+        let bands = vec![band(0, 0, 4, 2), band(0, 4, 2, 2), band(0, 8, 2, 2)];
+        let candidates = enumerate_pack_plans(&bands, 2, 10.0);
+
+        assert_eq!(candidates.len(), 6); // three target widths, two orders
+        assert_eq!(candidates[0].gap, 2);
+        assert_eq!(candidates[0].target_width, 4);
+        assert_eq!(candidates[0].order, PackOrder::Source);
+        assert_eq!((candidates[0].plan.w, candidates[0].plan.h), (4, 10));
+        assert_eq!(candidates[0].plan.positions, vec![(0, 0), (0, 4), (0, 8)]);
+
+        assert_eq!(candidates[3].order, PackOrder::HeightDescending);
+        assert_eq!(candidates[3].plan.positions, vec![(0, 0), (0, 8), (0, 4)]);
+
+        // Minimum area is the first 6x6 candidate. The legacy selector's
+        // strict-`<` tie-break must continue to choose that exact plan.
+        assert_eq!(
+            best_pack(&bands, 2, 10.0),
+            Some(PackedPlan {
+                w: 6,
+                h: 6,
+                positions: vec![(0, 0), (0, 4), (4, 4)],
+            })
+        );
+        assert_eq!(
+            best_pack(&[], 2, 10.0),
+            Some(PackedPlan {
+                w: 0,
+                h: 0,
+                positions: Vec::new()
+            })
+        );
+    }
 }

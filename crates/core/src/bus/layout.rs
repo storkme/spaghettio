@@ -183,6 +183,11 @@ pub struct LayoutOptions {
     /// off (a focused test pins this). Default off; stays off until kill
     /// criterion 1 clears again on the real phase-4 lane planner.
     pub band_packing: bool,
+    /// RFC-064 Phase 3 measurement seam: when band packing is enabled,
+    /// materialize this exact shelf-search member instead of RFC-058's legacy
+    /// minimum-area/gap-widening choice. `None` preserves the frozen builder
+    /// byte-for-byte; no default or decomposition candidate sets this field.
+    pub band_pack_selection: Option<crate::bus::bands::PackSelection>,
 }
 
 impl Default for LayoutOptions {
@@ -226,6 +231,7 @@ impl Default for LayoutOptions {
             // exists and wins only on strict improvement.
             horizontal_candidate: true,
             band_packing: false,
+            band_pack_selection: None,
         }
     }
 }
@@ -258,6 +264,9 @@ pub fn build_bus_layout(
     solver_result: &SolverResult,
     opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
+    if opts.band_pack_selection.is_some() && !opts.band_packing {
+        return Err("band_pack_selection requires band_packing = true".to_string());
+    }
     // RFC-046: belts cannot stack without stack inserters (BS2), so a
     // stacked layout under a lower inserter cap is an incoherent config —
     // refuse by name, never degrade silently (the recorded
@@ -344,6 +353,69 @@ pub fn build_bus_layout(
     } else {
         Ok(result)
     }
+}
+
+/// RFC-064 follow-up: build the inert Science-2 rotation-aware row-macro
+/// experiment from the native placer's rows.
+///
+/// This is intentionally a separate entry point rather than a `LayoutOptions`
+/// flag or decomposition candidate.  It cannot affect defaults, and the
+/// completed horizontal Phase-3 result remains reproducible through
+/// `band_packing`.  The row-rotation builder itself fails closed unless the
+/// final artifact has zero validator issues and measurable realized transit.
+pub fn build_rotation_aware_row_layout(
+    solver_result: &SolverResult,
+    mut opts: LayoutOptions,
+) -> Result<LayoutResult, String> {
+    if opts.band_packing || opts.band_pack_selection.is_some() {
+        return Err("rotation-aware row packing cannot be combined with band packing".into());
+    }
+    if opts.compact_layout || opts.fold_layout {
+        return Err("rotation-aware row packing requires uncompacted, unfolded source rows".into());
+    }
+    opts.band_packing = false;
+    opts.band_pack_selection = None;
+    let (native, rows, caps, uncovered) = layout_pass(solver_result, &opts, None, None, 0, None)?;
+    if !caps.is_empty() || !uncovered.is_empty() {
+        return Err(format!(
+            "rotation-aware source pass is not stable: {} capped junctions, {} uncovered power subjects",
+            caps.len(),
+            uncovered.len()
+        ));
+    }
+    crate::bus::row_rotation::build_rotation_aware_layout(&rows, &native, solver_result)
+}
+
+/// Explicit-selection companion to [`build_rotation_aware_row_layout`].
+/// Used by the focused regression so the normal suite does not pay for the
+/// entire bounded search on every run.
+pub fn build_rotation_aware_row_layout_selected(
+    solver_result: &SolverResult,
+    mut opts: LayoutOptions,
+    selection: &crate::bus::row_rotation::RotationSelection,
+) -> Result<LayoutResult, String> {
+    if opts.band_packing || opts.band_pack_selection.is_some() {
+        return Err("rotation-aware row packing cannot be combined with band packing".into());
+    }
+    if opts.compact_layout || opts.fold_layout {
+        return Err("rotation-aware row packing requires uncompacted, unfolded source rows".into());
+    }
+    opts.band_packing = false;
+    opts.band_pack_selection = None;
+    let (native, rows, caps, uncovered) = layout_pass(solver_result, &opts, None, None, 0, None)?;
+    if !caps.is_empty() || !uncovered.is_empty() {
+        return Err(format!(
+            "rotation-aware source pass is not stable: {} capped junctions, {} uncovered power subjects",
+            caps.len(),
+            uncovered.len()
+        ));
+    }
+    crate::bus::row_rotation::build_rotation_aware_layout_selected(
+        &rows,
+        &native,
+        solver_result,
+        selection,
+    )
 }
 
 /// RFC-064 Phase 1 latency guard for `fold_layout`: above this many
@@ -1472,14 +1544,46 @@ fn layout_pass(
     // reason and the native result below ships untouched.
     if opts.band_packing {
         crate::bus::bands::plan_band_packing(&row_spans, &all_entities);
-        match crate::bus::bands::build_packed_layout(
-            &row_spans,
-            &all_entities,
-            solver_result,
-            opts.max_belt_tier.as_deref(),
-        ) {
-            Ok(packed) => return Ok((packed, row_spans, Vec::new(), Vec::new())),
+        let packed = match opts.band_pack_selection {
+            Some(selection) => crate::bus::bands::build_packed_layout_selected(
+                &row_spans,
+                &all_entities,
+                solver_result,
+                opts.max_belt_tier.as_deref(),
+                selection,
+            ),
+            None => crate::bus::bands::build_packed_layout(
+                &row_spans,
+                &all_entities,
+                solver_result,
+                opts.max_belt_tier.as_deref(),
+            ),
+        };
+        match packed {
+            Ok(mut packed) => {
+                // Packed materialization replaces geometry only.  It must
+                // retain the caller's declared planning world, just as the
+                // native return below does: downstream validation, export,
+                // and simulation interpret stacking/capacity from these
+                // fields, while wire mode determines the stored graph.
+                packed.wire_mode = opts.wire_mode;
+                packed.stacking = opts.stacking;
+                packed.inserter_capacity = opts.inserter_capacity;
+                packed.power_wires = Some(crate::power_wires::compute_pole_wires(
+                    &packed.entities,
+                    packed.wire_mode,
+                ));
+                return Ok((packed, row_spans, Vec::new(), Vec::new()));
+            }
             Err(reason) => {
+                // An explicit RFC-064 measurement request is asking for one
+                // particular artifact. Returning the native layout here would
+                // silently score a refusal as if the selected candidate had
+                // materialized, so fail closed. The legacy `None` path keeps
+                // RFC-058's native fallback exactly as before.
+                if opts.band_pack_selection.is_some() {
+                    return Err(reason);
+                }
                 let bands = crate::bus::bands::extract_bands(&row_spans, &all_entities);
                 crate::trace::emit(crate::trace::TraceEvent::BandPackingRefused {
                     bands: bands.len(),
