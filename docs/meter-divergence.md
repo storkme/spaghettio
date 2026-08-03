@@ -22,7 +22,11 @@ Phase A are now within ±2% (AC) / −13% (PU-from-ore).
   - The **sim itself** under-produces almost everything on this fixture
     (copper-plate 71.98/80, copper-cable 143.9/160, EC 43.2/48, plastic 7.2/8 —
     all ≈ −10%; petroleum-gas −17%); only the PU target reaches 99%. So plan is
-    not the reference; the sim is.
+    not the reference; the sim is. (Intermediates here are *measured production*
+    and do not reconcile arithmetically with the consumers — e.g. copper-cable
+    needs ~140 copper-plate/s but only ~72/s is produced, so copper-plate is
+    partly a boundary feed; treat the intermediate figures as indicative, not
+    load-bearing for the deferral's rationale.)
   - The meter matches sim within ±4% on the whole direct chain: copper-plate
     69.5 vs sim 71.98 (−3.4% — the meter is slightly *further* below plan),
     copper-cable 139 vs 143.9, iron-plate 41.9 vs 43.4, EC 41.5 vs 43.2,

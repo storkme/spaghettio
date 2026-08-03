@@ -23,7 +23,7 @@ Result over the corpus (meter `delivered_per_s`/`produced_per_s` vs sim):
 gear exact; EC + stress-EC ±0–2%; AOP/refinery exact; **all AC variants now
 ±0–2% (were −80%)**; PU from ore −80% → −13%. The lone residual is PU-from-ore,
 whose census is dominated by `full_output`/`working` with ~9 machines left short
-on a solid and a 26-tile belt
+on a solid (diagnostic, pre-revert census code — see the PU entry) plus a 26-tile belt
 cycle — a solid-side belt-model gap (open RFC-064 Phase 2 item), not a fluid
 gap. Full divergence log:
 [`meter-divergence.md`](meter-divergence.md).
@@ -67,7 +67,8 @@ closed — keeps crossing/stacked fluid lines isolated).
 **Phase C — calibration (close to done; one open residual).**
 - Re-run the meter corpus sweep (`examples/sweep_corpus.rs`); all compared
   fixtures within ±10pp EXCEPT `tier5_processing_unit_from_ore_am3` at −13%
-  (a solid belt-delivery gap: ~9 machines short on a solid, 26-tile
+  (a solid belt-delivery gap: ~9 machines short on a solid (diagnostic, not
+  re-verified post-revert), 26-tile
   belt cycle — see [`meter-divergence.md`](meter-divergence.md)).
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).
 
@@ -113,11 +114,13 @@ An attempt to key `mirrored` on orientation (`mirror_entity && direction == Sout
 was proposed and then **reverted on review**: community blueprints re-freeze these
 machines as `North + mirror:true` (and the engine's own import parser treats both
 South and West wire forms as the mirrored collision), so a South-only key mis-binds
-them — a regression vs the unconditional `mirrored = mirror_entity`. The correct
-fix is to **parse the real `mirror` flag** in the blueprint decoder (the meter
-reads no such field today), not to guess from direction. Left as a documented
-future change; the unconditional binding (merged baseline) is kept, with a comment
-recording the limitation.
+them — a regression vs the unconditional `mirrored = mirror_entity`. A complete
+fix must key on **both** signals: a parsed `mirror` flag (for community
+`North+mirror:true`) AND the engine's `direction+8` South wire form (which the
+exporter uses in place of a mirror flag for these machines) — the direction
+heuristic alone is insufficient, but so is parsing `mirror` alone. Left as a
+documented future change; the unconditional binding (merged baseline) is kept,
+with a comment recording the limitation.
 
 ### Two proposed fixes — REVERTED after review (record the call)
 - **Census precedence** (report `FluidIngredientShortage` whenever a fluid is

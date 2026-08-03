@@ -188,9 +188,11 @@ impl Factory {
                     // parse the `mirror` flag, so it keys the reversal on the
                     // mirrored-machine name unconditionally — a known
                     // simplification (a genuinely-unmirrored single instance of
-                    // those three at some orientations would mis-bind), which a
-                    // future change should fix by parsing `mirror` rather than
-                    // matching on the machine name. For a single-fluid face
+                    // those three at some orientations would mis-bind). A
+                    // complete fix must key on BOTH a parsed mirror flag AND
+                    // the engine's direction+8 wire form (which the exporter
+                    // uses in place of mirror for these machines); the meter
+                    // currently reads neither. For a single-fluid face
                     // n-1-k == k, so this only matters for multi-fluid faces.
                     let mirrored = matches!(
                         e.name.as_str(),
