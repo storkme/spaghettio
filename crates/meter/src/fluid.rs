@@ -348,44 +348,48 @@ mod tests {
         );
     }
 
-    /// F5a: two parallel pipe-to-ground lines, both facing North (perpendicular
-    /// adjacency between them), must stay isolated even though the tiles touch.
+    /// F5a: two pipe-to-grounds placed side by side — adjacent on their
+    /// PERPENDICULAR axis (both facing North, touching East–West) — must NOT
+    /// merge, even though the tiles touch. This is non-vacuous: it would fail
+    /// if the builder joined orthogonally-adjacent PTGs regardless of facing.
     #[test]
     fn perpendicular_ptg_neighbours_stay_isolated() {
-        // two ptgs side by side facing North, plus their partner ptgs to the
-        // north. Each line is its own network.
+        // Two PTGs at (0,1) and (1,1), both facing North: their surface mouths
+        // are at (0,0) and (1,0), each feeding one machine port. The tiles
+        // (0,1)-(1,1) are perpendicular (East-West) to their N-S facing.
         let pipes = vec![
-            (0i32, 2i32, "pipe-to-ground", Dir::North),
-            (1i32, 2i32, "pipe-to-ground", Dir::North),
-            (0i32, 0i32, "pipe-to-ground", Dir::South),
-            (1i32, 0i32, "pipe-to-ground", Dir::South),
+            (0i32, 1i32, "pipe-to-ground", Dir::North),
+            (1i32, 1i32, "pipe-to-ground", Dir::North),
         ];
         let ports = vec![
             MachPort {
                 machine: 0,
                 x: 0,
-                y: -1,
+                y: 0,
                 item: 1,
                 is_input: true,
             },
             MachPort {
                 machine: 1,
                 x: 1,
-                y: -1,
+                y: 0,
                 item: 2,
                 is_input: true,
             },
         ];
         let sys = build_networks(&pipes, &ports, &[]);
-        let port_nets: Vec<usize> = sys
+        // each PTG+port is its own component; they must not have merged.
+        let mut ids: Vec<usize> = sys
             .networks
             .iter()
-            .flat_map(|n| n.ports.iter().map(|_| n.id))
+            .filter(|n| !n.ports.is_empty())
+            .map(|n| n.id)
             .collect();
-        // the two perpendicular-adjacent lines are separate networks
+        assert_eq!(ids.len(), 2, "saw {:?}", ids);
+        ids.sort_unstable();
         assert_ne!(
-            sys.networks[port_nets[0]].id, sys.networks[port_nets[1]].id,
-            "side-by-side perpendicular PTGs must not merge (F5a)"
+            ids[0], ids[1],
+            "perpendicular-adjacent PTGs must not merge (F5a)"
         );
     }
 }

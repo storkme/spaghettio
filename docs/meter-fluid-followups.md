@@ -68,7 +68,18 @@ closed — keeps crossing/stacked fluid lines isolated).
 1. **Confirm/close the PU-from-ore −13%.** Its census shows 30 `item_ingredient_shortage`
    and only 1 fluid-short machine — petroleum/fluid are not the limit. Investigate
    as a belt-model divergence (the fixture notes "26 tiles in a belt cycle").
-2. Re-bless any golden/snapshot baselines the corpus ingest tests depend on.
+2. **Fluid byproduct backpressure (open gap, flagged by CI second-opinion).**
+   `tick_fluids` drains every unconsumed producer fluid unit as `delivered`, so a
+   machine whose fluid byproduct has no consumer (or more byproduct than consumer
+   capacity) never backs up: the excess drains and the producer keeps crafting at
+   full speed. In-game, excess heavy/light oil would fill the pipe and stall the
+   refinery, capping the target petroleum output too. This is entangled with the
+   sweep's `delivered_per_s` metric for fluid targets (AOP relies on the drain),
+   so it needs a deliberate design (e.g. only count drained surplus as delivered
+   when the item is a declared boundary-output/target, plus a fluid-output
+   full-output stall on the producer) — a follow-up, not a rushed change. The
+   current corpus has no over-capacity byproduct, so ±10pp stands.
+3. Re-bless any golden/snapshot baselines the corpus ingest tests depend on.
 
 ## Constraints / gates
 

@@ -185,11 +185,9 @@ impl Factory {
                     // whose exported orientation binds recipe fluids
                     // x-descending (the measured rule in `spaghettio_core::
                     // fluid_ports`; the exporter encodes the mirrored machine
-                    // as direction+8 with no mirror flag). Single-input/output
-                    // recipes (basic-oil, plastic) are unambiguous either way.
-                    // A machine belongs to that mirrored set iff its recipe has
-                    // more than one fluid on an IO face and it is one of those
-                    // three entities.
+                    // as direction+8 with no mirror flag). For a single-fluid
+                    // face (basic-oil, plastic) n-1-k == k, so this only
+                    // matters for the multi-fluid faces those machines run.
                     let mirrored = matches!(
                         e.name.as_str(),
                         "oil-refinery" | "foundry" | "cryogenic-plant"
