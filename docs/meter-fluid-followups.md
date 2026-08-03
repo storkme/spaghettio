@@ -20,8 +20,9 @@ side) and F5a (PTG perpendicular sides closed), and the measured mirrored-port
 x-descending fluid binding for oil-refinery/foundry/cryogenic-plant.
 
 Result over the corpus (meter `delivered_per_s`/`produced_per_s` vs sim):
-gear exact; EC + stress-EC ±0–2%; AOP/refinery exact; **all AC variants now
-±0–2% (were −80%)**; PU from ore −80% → −13%. The lone residual is PU-from-ore,
+gear exact; EC + stress-EC ±0–2%; AOP/refinery exact; **the dedicated AC
+variants now ±0–2% (were −80%; the PU-from-ore exception fixture's own AC is
+−3.9%)**; PU from ore −80% → −13%. The lone residual is PU-from-ore,
 whose census is dominated by `full_output`/`working` with ~9 machines left short
 on a solid (diagnostic, pre-revert census code — see the PU entry) plus a 26-tile belt
 cycle — a solid-side belt-model gap (open RFC-064 Phase 2 item), not a fluid

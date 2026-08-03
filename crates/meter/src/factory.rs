@@ -190,9 +190,10 @@ impl Factory {
                     // simplification (a genuinely-unmirrored single instance of
                     // those three at some orientations would mis-bind). A
                     // complete fix must key on BOTH a parsed mirror flag AND
-                    // the engine's direction+8 wire form (which the exporter
-                    // uses in place of mirror for these machines); the meter
-                    // currently reads neither. For a single-fluid face
+                    // the engine's direction+8 wire form (the engine exporter
+                    // omits the mirror key entirely for these rotation-mirrored
+                    // machines and encodes the mirror as the +8 rotation; the
+                    // meter reads neither today). For a single-fluid face
                     // n-1-k == k, so this only matters for multi-fluid faces.
                     let mirrored = matches!(
                         e.name.as_str(),

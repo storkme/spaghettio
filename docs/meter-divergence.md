@@ -10,7 +10,8 @@ or reveals a new one. Currently **one** residual.
 
 `meter sweep: 70 layouts measured, 41 compared`. Every compared fixture is
 within ±10pp of sim except the one below. AC/PU families that were −80% in
-Phase A are now within ±2% (AC) / −13% (PU-from-ore).
+Phase A are now within ±2% (the dedicated AC fixtures) / −13% (PU-from-ore; its
+in-fixture AC reads −3.9%).
 
 ## Open residual
 
@@ -23,10 +24,10 @@ Phase A are now within ±2% (AC) / −13% (PU-from-ore).
     (copper-plate 71.98/80, copper-cable 143.9/160, EC 43.2/48, plastic 7.2/8 —
     all ≈ −10%; petroleum-gas −17%); only the PU target reaches 99%. So plan is
     not the reference; the sim is. (Intermediates here are *measured production*
-    and do not reconcile arithmetically with the consumers — e.g. copper-cable
-    needs ~140 copper-plate/s but only ~72/s is produced, so copper-plate is
-    partly a boundary feed; treat the intermediate figures as indicative, not
-    load-bearing for the deferral's rationale.)
+    and do not always reconcile arithmetically with consumers — e.g. EC demand
+    from PU+AC ≈ 47/s vs ~43/s reported produced; the copper-plate→cable pair does
+    reconcile (1 plate → 2 cable). Treat the intermediate figures as indicative,
+    not load-bearing for the deferral's rationale.)
   - The meter matches sim within ±4% on the whole direct chain: copper-plate
     69.5 vs sim 71.98 (−3.4% — the meter is slightly *further* below plan),
     copper-cable 139 vs 143.9, iron-plate 41.9 vs 43.4, EC 41.5 vs 43.2,
@@ -60,7 +61,8 @@ Phase A are now within ±2% (AC) / −13% (PU-from-ore).
 ## Closed / moved entries
 
 - **AC / PU / AC-partitioned (~−80%)**: closed by Phase B pipe-fast, fair,
-  buffer-absorbing fluid routing. AC variants are now ±0–2%.
+  buffer-absorbing fluid routing. AC variants are now ±0–2% (the PU-from-ore
+  exception fixture's own AC is −3.9% by the same meter).
 - **`tier3_plastic_bar_from_crude` (~−80%)**: closed (now 10 = plan).
 - **AOP / refinery / sulfur / heavy-oil cracking (delivered)**: no divergence;
   the fluid networks (incl. the forced-pipe-isolation AOP) route correctly.
