@@ -435,6 +435,16 @@ pub fn strip_empty_rows(layout: &LayoutResult) -> LayoutResult {
     for (_, _, y) in &mut compacted.surplus_exits {
         *y = remap_y(*y);
     }
+    // `effective_rows` bands are y-coordinates like the boundary records
+    // above; leaving them unmapped hands `resolve_row_spec_banded` a stale
+    // ledger it fails OPEN against — every rate-shaped verdict on the
+    // compacted layout then mis-attributes silently (RFC-065 § Motivation;
+    // this was live in every `?compact=1` layout). `remap_y` is monotone,
+    // so an exclusive `y_end` maps to the correct exclusive end.
+    for row in &mut compacted.effective_rows {
+        row.y_start = remap_y(row.y_start);
+        row.y_end = remap_y(row.y_end);
+    }
     normalize_adjacent_undergrounds(&mut compacted);
     compacted.height -= removed_before[layout.height as usize];
     compacted.regions.clear();
@@ -720,6 +730,17 @@ fn collapse_horizontal_cut(layout: &LayoutResult, cut: i32) -> Option<LayoutResu
     for (_, _, y) in &mut candidate.surplus_exits {
         if *y >= cut {
             *y -= 1;
+        }
+    }
+    // Same ledger discipline as strip_empty_rows: `effective_rows` bands
+    // shift with the tiles they describe. `y_end` is exclusive, so it moves
+    // when the last covered tile (`y_end - 1`) is at or past the cut.
+    for row in &mut candidate.effective_rows {
+        if row.y_start >= cut {
+            row.y_start -= 1;
+        }
+        if row.y_end > cut {
+            row.y_end -= 1;
         }
     }
 
@@ -3561,6 +3582,39 @@ mod tests {
     use super::*;
     use crate::models::{ItemFlow, MachineSpec};
 
+    /// RFC-065: a fold cannot express `effective_rows` (it relocates
+    /// x-ranges of one y-band independently), so `fold_snake` must ship an
+    /// EMPTY ledger — fail-open attribution — never the source layout's
+    /// stale bands. Minimal foldable geometry: two disconnected south
+    /// belt stubs either side of the fold column, nothing crossing it.
+    #[test]
+    fn fold_snake_clears_effective_rows() {
+        use crate::models::{EffectiveRow, EntityDirection, PlacedEntity};
+        let belt = |x: i32, y: i32| PlacedEntity {
+            name: "transport-belt".to_string(),
+            x,
+            y,
+            direction: EntityDirection::South,
+            ..Default::default()
+        };
+        let mut layout = LayoutResult {
+            entities: vec![belt(2, 0), belt(2, 1), belt(10, 0), belt(10, 1)],
+            width: 13,
+            height: 3,
+            ..Default::default()
+        };
+        layout.effective_rows = vec![EffectiveRow {
+            y_start: 0,
+            y_end: 3,
+            spec: MachineSpec::default(),
+        }];
+        let folded = fold_snake(&layout, &[6]).expect("trivial fold must succeed");
+        assert!(
+            folded.effective_rows.is_empty(),
+            "fold must clear the effective_rows ledger it cannot remap"
+        );
+    }
+
     #[test]
     fn production_signature_is_order_independent() {
         let plate = MachineSpec {
@@ -5751,6 +5805,12 @@ pub fn fold_snake(
     };
     result.regions.clear();
     result.trace = None;
+    // A fold cuts at x-columns and relocates different x-ranges of the SAME
+    // y-band to different places, so the per-row y-band encoding of
+    // `effective_rows` cannot represent the result. An honest empty ledger
+    // (uniform fail-open attribution) beats a stale one — same precedent as
+    // clearing `regions`/`trace` above (RFC-065 decision log, 2026-08-04).
+    result.effective_rows.clear();
     // Poles must be re-placed, not carried: see `replace_poles`.
     result = replace_poles(&result);
     // Boundary records and surplus exits are coordinates into the layout and
