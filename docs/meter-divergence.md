@@ -54,7 +54,9 @@ in-fixture AC reads −3.9%).
   **Deferred, deliberately**: closing it means changing how the meter distributes
   a supply-limited item between machines (a merge-priority / head-hog fairness
   model), which **cannot be validated here** — the sim's per-machine EC
-  distribution is not in `report.json`, its aggregate is −10% below plan on this
+  distribution is not in this run's stored `report.json` (its `timeseries`
+  field is absent, so no per-machine craft/status checkpoints were captured),
+  its aggregate is −10% below plan on this
   very fixture, and the meter's EC production already matches the sim within ±4%.
   Whether the meter (starving the tail) or the sim (feeding the target) is
   "right" is not decidable against a clean reference; the meter may be *correctly*

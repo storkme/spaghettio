@@ -91,7 +91,9 @@ the −13% sim-relative residual. The sim
 happens to feed the target to 99%. Deferred deliberately: closing it needs a
 speculative distribution / merge-priority / head-hog-fairness model change that
 **cannot be validated against a clean reference** — the sim's per-machine EC
-distribution is not in `report.json`, its aggregate is −10% below plan on this
+distribution is not in this run's stored `report.json` (its `timeseries`
+field is absent, so no per-machine craft/status checkpoints were captured),
+its aggregate is −10% below plan on this
 very fixture, and the meter's EC production already matches the sim within ±4%.
 It is genuinely undecidable here whether the meter (starving the tail) or the
 sim (feeding the target) is "right"; the meter may correctly expose that the
