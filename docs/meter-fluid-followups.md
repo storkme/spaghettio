@@ -22,11 +22,12 @@ x-descending fluid binding for oil-refinery/foundry/cryogenic-plant.
 Result over the corpus (meter `delivered_per_s`/`produced_per_s` vs sim):
 gear exact; EC + stress-EC ±0–2%; AOP/refinery exact; **the dedicated AC
 variants now ±0–2% (were −80%; the PU-from-ore exception fixture's own AC is
-−3.9%)**; PU from ore −80% → −13%. The lone residual is PU-from-ore,
-whose census is dominated by `full_output`/`working` with ~9 machines left short
-on a solid (diagnostic, pre-revert census code — see the PU entry) plus a 26-tile belt
-cycle — a solid-side belt-model gap (open RFC-064 Phase 2 item), not a fluid
-gap. Full divergence log:
+−3.9%)**; PU from ore −80% → −13%. The lone residual is PU-from-ore, a
+solid-side belt **distribution** gap (not a fluid gap): supply-marginal tail
+starvation on the EC trunk, where the meter concentrates scarce EC on the head
+of the PU row and starves the four deepest machines — see the PU entry. (The
+belt cycle note on this fixture is real but only a ~+2.2% contributor, not the
+cause; open RFC-064 Phase 2 item 7.) Full divergence log:
 [`meter-divergence.md`](meter-divergence.md).
 
 ## Goal / success criteria

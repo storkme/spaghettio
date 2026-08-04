@@ -25,7 +25,7 @@ in-fixture AC reads −3.9%).
     all ≈ −10%; petroleum-gas −17%); only the PU target reaches 99%. So plan is
     not the reference; the sim is. (Intermediates here are *measured production*
     and do not always reconcile arithmetically with consumers — e.g. EC demand
-    from PU+AC ≈ 47/s vs ~43/s reported produced; the copper-plate→cable pair does
+    from PU+AC ≈ 48/s vs ~43/s reported produced; the copper-plate→cable pair does
     reconcile (1 plate → 2 cable). Treat the intermediate figures as indicative,
     not load-bearing for the deferral's rationale.)
   - The meter matches sim within ±4% on the whole direct chain: copper-plate
@@ -37,14 +37,18 @@ in-fixture AC reads −3.9%).
     EC trunk, NOT a belt-cycle update-order bug.** A direct experiment
     (permuting the cyclic update order of the 26-tile belt loop) moves PU only
     1.716→1.754/s (+2.2%); reordering between the two loops does nothing. The
-    dominant driver is distribution of a genuinely scarce item: PU demand alone
-    needs ~40 EC/s and after AC it is ~48/s, but both meter (41.5/s) and sim
-    (43.2/s) underproduce EC. At steady state the meter runs **15/16 PU machines
-    at full rate (0.125/s)** while the four deepest (x=55/58: `m301/m302/m309/
-    m310`) sit starved on EC buffers of 1–12/280 and craft at 0.023–0.088/s,
-    `m310` fully blocked — a head-buffers-starve-tail gradient losing ~0.29/s of
-    the 2.0/s ideal. The sim distributes the scarce EC more evenly (feeds PU to
-    99%), which is exactly the unverifiable difference described below.
+    dominant driver is distribution of a genuinely scarce item: PU alone needs
+    ~40 EC/s and after AC the demand is ~48/s (the EC plan rate), but the
+    fixture underproduces it — meter 41.5/s (−13.5% vs plan), sim 43.2/s (−10%).
+    At steady state the meter runs **12/16 PU machines at full rate (0.125/s)**
+    while the four deepest (x=55/58: `m301/m302/m309/m310`) are EC-constrained,
+    with buffers of 1–12/280 and craft rates of 0.023–0.088/s — a
+    head-buffers-starve-tail gradient. Note only `m310` labels
+    `ItemIngredientShortage`; the other three read `Working` but run below rate
+    (the census label and the full-rate count are different things). The total
+    is ~1.715/s, losing ~0.29/s of the 2.0/s ideal (≈ the −13% sim-relative
+    residual). The sim distributes the scarce EC more evenly (feeds PU to 99%),
+    which is exactly the unverifiable difference described below.
 - **Verdict**: a genuine belt-model **delivery/distribution** divergence on a
   single fixture whose sim baseline is itself noisy (≈ −10% on everything).
   **Deferred, deliberately**: closing it means changing how the meter distributes
@@ -57,7 +61,7 @@ in-fixture AC reads −3.9%).
   exposing that the factory genuinely cannot deliver 2/s PU. Tracked as item 7 in
   `rfc064-phase2-followups.md`; do not chase it inside this meter-fluid thread.
 - **Next**: investigate as a belt **distribution/throughput** divergence, not a
-  fluid one and not a cycle-order one (the cycle order is a ≤~2% contributor).
+  fluid one and not a cycle-order one (the cycle order is a ~+2.2% contributor).
   Any change needs a non-noisy, sim-baselined solid fixture to be verifiable.
   Re-measure after any belt-network (notably merger/priority) changes.
 

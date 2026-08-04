@@ -81,11 +81,13 @@ PU machines. **2026-08-04 revision of the root cause:** it is **supply-marginal
 tail starvation on the EC trunk (head-hog), NOT the belt-cycle update order.**
 An experiment permuting the 26-tile cyclic-update order moves PU only
 1.716→1.754/s (+2.2%) — real but minor. The dominant driver: PU/AC demand EC to
-~48/s but the fixture underproduces it (meter 41.5/s, sim 43.2/s — both −10%),
-and the meter concentrates that scarce EC on the head of the PU row: at steady
-state 15/16 PU machines run at full 0.125/s while the four deepest (`m301/m302/
-m309/m310` at x=55/58) are starved (EC buffers 1–12/280, craft 0.023–0.088/s,
-`m310` fully blocked) — losing ~0.29/s of the 2.0/s ideal = the −13%. The sim
+~48/s but the fixture underproduces it (meter 41.5/s = −13.5% vs plan; sim
+43.2/s = −10%), and the meter concentrates that scarce EC on the head of the PU
+row: at steady state **12/16 PU machines run at full 0.125/s** while the four
+deepest (`m301/m302/m309/m310` at x=55/58) are EC-constrained (buffers 1–12/280,
+craft 0.023–0.088/s; only `m310` labels `ItemIngredientShortage` — the other
+three read `Working` but run below rate) — losing ~0.29/s of the 2.0/s ideal ≈
+the −13% sim-relative residual. The sim
 happens to feed the target to 99%. Deferred deliberately: closing it needs a
 speculative distribution / merge-priority / head-hog-fairness model change that
 **cannot be validated against a clean reference** — the sim's per-machine EC
@@ -94,7 +96,7 @@ very fixture, and the meter's EC production already matches the sim within ±4%.
 It is genuinely undecidable here whether the meter (starving the tail) or the
 sim (feeding the target) is "right"; the meter may correctly expose that the
 factory cannot deliver 2/s PU. The cycle note is narrow blast-radius but is not
-the cause (≤~2%). Any future change needs a non-noisy, sim-baselined solid
+the cause (≈ +2.2%). Any future change needs a non-noisy, sim-baselined solid
 fixture to be verifiable; re-measure after any belt merger/priority change.
 
 ## Decided / closed (from Stage B)
