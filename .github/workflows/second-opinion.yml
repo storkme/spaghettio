@@ -45,6 +45,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      # actions: write is needed by the upload-artifact step below.
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - name: Second opinion review
@@ -71,6 +73,25 @@ jobs:
           # has 1M context, and layout-engine PRs here routinely exceed
           # 60k chars of diff.
           max-diff-chars: "200000"
+          # 65536 = deepseek-v4-flash-0731's cap. A reasoning model can exhaust a
+          # smaller max_tokens in its reasoning channel and return an empty 200
+          # (the #565/#566/#574 empty-review failure class), so give it headroom.
+          max-tokens: "65536"
+          # Persist per-pass pi session transcripts under the runner workspace so
+          # the step below can upload them as an artifact. Lets us replay a
+          # blocked/empty review pass (and read real token/cost usage) instead of
+          # relying on OpenRouter's opt-in logging. Takes effect once @v1 tracks a
+          # second-opinion release that supports this input.
+          session-dir: /github/workspace/.second-opinion
           # guidance-file: .github/review-guidance.md
           # ^ enable once the checklist is bootstrapped from review history
           #   (second-opinion-bootstrap) and committed.
+      - name: Upload review session transcripts
+        # `always()` so a failing (e.g. empty-review) run still keeps its transcripts;
+        # with if-no-files-found:ignore this is a no-op until @v1 supports session-dir.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: second-opinion-sessions-${{ github.event.pull_request.number }}
+          path: ${{ github.workspace }}/.second-opinion
+          if-no-files-found: ignore
