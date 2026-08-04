@@ -76,17 +76,26 @@ Pick-up entry so the deferral is actually tracked here (the meter
 `meter-divergence.md` records the full evidence). The fast meter is −13% on
 `tier5_processing_unit_from_ore_am3` vs the sim — a **downstream solid belt
 delivery** divergence, not a fluid one: the meter matches the sim within ±4% on
-the whole direct chain but loses ~10% delivering electronic-circuit to the PU
-machine (the served PU machine, `m#310`, sits short on EC despite adequate EC
-production). The fixture's only topology note is a 26-tile belt cycle; the
-meter steps cyclic belts in an arbitrary-but-deterministic order, the likely
-cause. Deferred deliberately: a fix needs a speculative belt-cycle-update-order
-/ merge-priority model change, unverifiable on this noisy fixture (the sim is
-~−10% on every intermediate). Note the blast radius is narrow — this fixture has
-the corpus's only cycle note, so a `CycleInUpdateOrder`-gated change would touch
-~nothing else; the binding reasons to defer are the noisy sim baseline and the
-unverifiability, not a broad corpus risk. Investigate
-as a belt-model divergence, re-measuring after any belt-network change.
+the whole direct chain but loses the rest delivering electronic-circuit to the
+PU machines. **2026-08-04 revision of the root cause:** it is **supply-marginal
+tail starvation on the EC trunk (head-hog), NOT the belt-cycle update order.**
+An experiment permuting the 26-tile cyclic-update order moves PU only
+1.716→1.754/s (+2.2%) — real but minor. The dominant driver: PU/AC demand EC to
+~48/s but the fixture underproduces it (meter 41.5/s, sim 43.2/s — both −10%),
+and the meter concentrates that scarce EC on the head of the PU row: at steady
+state 15/16 PU machines run at full 0.125/s while the four deepest (`m301/m302/
+m309/m310` at x=55/58) are starved (EC buffers 1–12/280, craft 0.023–0.088/s,
+`m310` fully blocked) — losing ~0.29/s of the 2.0/s ideal = the −13%. The sim
+happens to feed the target to 99%. Deferred deliberately: closing it needs a
+speculative distribution / merge-priority / head-hog-fairness model change that
+**cannot be validated against a clean reference** — the sim's per-machine EC
+distribution is not in `report.json`, its aggregate is −10% below plan on this
+very fixture, and the meter's EC production already matches the sim within ±4%.
+It is genuinely undecidable here whether the meter (starving the tail) or the
+sim (feeding the target) is "right"; the meter may correctly expose that the
+factory cannot deliver 2/s PU. The cycle note is narrow blast-radius but is not
+the cause (≤~2%). Any future change needs a non-noisy, sim-baselined solid
+fixture to be verifiable; re-measure after any belt merger/priority change.
 
 ## Decided / closed (from Stage B)
 - **Never-worse holds** on the measurable subset → evidence supports

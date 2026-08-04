@@ -96,17 +96,25 @@ Factorio physics but a different measurement philosophy; recorded here so the ca
 is explicit, not accidental. Revisit only if a sim-baselined byproduct-loop fixture
 ever enters the corpus.
 
-### Confirm/close the PU-from-ore −13% — CHARACTERISED, deferred
-Deep-dive (2026-08-03): the sim itself under-produces almost everything on this
-fixture (intermediates ≈ −10%, petroleum −17%; only target PU hits 99%). The
-meter matches the sim within ±4% on the entire direct chain (~the same, slightly
-larger, absolute shortfall from plan as the sim), so the extra ~10% the meter
-loses on PU is solely downstream belt delivery of electronic-circuit to the PU
-machine — which sits short on EC despite adequate EC production. The fixture
-carries the corpus's only topology note ("26 tiles in a belt cycle; update order
-arbitrary"), the likely culprit. **Deferred deliberately**: a fix needs a
-speculative belt-cycle-update-order / merge-priority model change, unverifiable
-on this noisy fixture; tracked as item 7
+### Confirm/close the PU-from-ore −13% — CHARACTERISED (root cause revised), deferred
+Deep-dive (2026-08-03 + 08-04): the sim itself under-produces almost everything
+on this fixture (intermediates ≈ −10%, petroleum −17%; only target PU hits 99%).
+The meter matches the sim within ±4% on the entire direct chain; the ~10%
+extra it loses on PU is solely downstream belt delivery of electronic-circuit to
+the PU machines. **2026-08-04: the root cause is revised — it is supply-marginal
+tail starvation on the EC trunk, not the belt-cycle update order.** Experiment:
+permuting the 26-tile cyclic order moves PU only 1.716→1.754/s (+2.2%); inter-loop
+reorder has no effect. Instead, EC is genuinely scarce (PU+AC need ~48/s but the
+fixture underproduces it — meter 41.5/s, sim 43.2/s), and the meter concentrates
+it on the head of the PU row: at steady state 15/16 PU machines craft at full
+0.125/s while the four deepest (`m301/m302/m309/m310`, x=55/58) are starved on
+EC buffers 1–12/280 (craft 0.023–0.088/s, `m310` fully blocked), losing ~0.29/s
+of the 2.0/s ideal. The sim feeds the target to 99%. **Deferred deliberately**:
+a fix needs a speculative distribution / merge-priority / head-hog-fairness
+model change, unverifiable on this noisy fixture (the sim's per-machine EC
+distribution is not in `report.json` and is −10% below plan everywhere; the
+meter's EC already matches sim within ±4% — whether the meter starving the tail
+or the sim feeding the target is "right" is undecidable here). Tracked as item 7
 in [`rfc064-phase2-followups.md`](rfc064-phase2-followups.md); full evidence in
 [`meter-divergence.md`](meter-divergence.md).
 

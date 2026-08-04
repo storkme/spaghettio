@@ -33,30 +33,33 @@ in-fixture AC reads −3.9%).
     copper-cable 139 vs 143.9, iron-plate 41.9 vs 43.4, EC 41.5 vs 43.2,
     plastic 7.2 vs 7.2 (=), AC 3.45 vs 3.59. So the direct-production chain
     tracks the sim closely; the order-of-magnitude-larger shortfall is PU alone.
-  - The extra loss is in delivering EC to the PU machine: producer `m#310`
-    sits short on EC (12 of a 20/craft need) despite EC production (41.5/s)
-    meeting total demand (AC ~6.9 + PU ~34 = ~41/s). The sim feeds PU fully.
-  - The machine census is dominated by `full_output` + `working`; only ~9 are
-    left short on a solid and one on a fluid, all downstream of the EC belt.
-    Caveat: this "~9/1" split was captured on code that had the (later-reverted)
-    census-precedence change active, so it is precedence-sensitive and not
-    re-verified on the merged solids-first code — it is diagnostic, not load-bearing.
-  - The fixture's wiring produces the **only** topology note in the corpus:
-    *"26 tiles in a belt cycle; update order arbitrary"* — a cyclic belt (the
-    many-EC-producers merge trunk into the few PU/AC consumers), which the meter
-    steps in an arbitrary-but-deterministic order and which is the strong
-    candidate for the delivery shortfall.
-- **Verdict**: a genuine belt-model divergence, on a single fixture whose sim
-  baseline is itself noisy (≈ −10% on everything). **Deferred, deliberately**:
-  fixing it needs a speculative belt-cycle-update-order / merge-priority model
-  change that cannot be validated against a clean reference on this fixture.
-  (Blast radius is lower than "the whole corpus": this fixture carries the only
-  cycle note, so a change gated on `CycleInUpdateOrder` would touch ~nothing
-  else — but it is still an unverifiable change on a fixture whose own sim is
-  noisy, which are the binding reasons to defer.) Tracked as item 7 in
+  - **2026-08-04 revision: the residual is supply-marginal tail starvation on the
+    EC trunk, NOT a belt-cycle update-order bug.** A direct experiment
+    (permuting the cyclic update order of the 26-tile belt loop) moves PU only
+    1.716→1.754/s (+2.2%); reordering between the two loops does nothing. The
+    dominant driver is distribution of a genuinely scarce item: PU demand alone
+    needs ~40 EC/s and after AC it is ~48/s, but both meter (41.5/s) and sim
+    (43.2/s) underproduce EC. At steady state the meter runs **15/16 PU machines
+    at full rate (0.125/s)** while the four deepest (x=55/58: `m301/m302/m309/
+    m310`) sit starved on EC buffers of 1–12/280 and craft at 0.023–0.088/s,
+    `m310` fully blocked — a head-buffers-starve-tail gradient losing ~0.29/s of
+    the 2.0/s ideal. The sim distributes the scarce EC more evenly (feeds PU to
+    99%), which is exactly the unverifiable difference described below.
+- **Verdict**: a genuine belt-model **delivery/distribution** divergence on a
+  single fixture whose sim baseline is itself noisy (≈ −10% on everything).
+  **Deferred, deliberately**: closing it means changing how the meter distributes
+  a supply-limited item between machines (a merge-priority / head-hog fairness
+  model), which **cannot be validated here** — the sim's per-machine EC
+  distribution is not in `report.json`, its aggregate is −10% below plan on this
+  very fixture, and the meter's EC production already matches the sim within ±4%.
+  Whether the meter (starving the tail) or the sim (feeding the target) is
+  "right" is not decidable against a clean reference; the meter may be *correctly*
+  exposing that the factory genuinely cannot deliver 2/s PU. Tracked as item 7 in
   `rfc064-phase2-followups.md`; do not chase it inside this meter-fluid thread.
-- **Next**: investigate as a belt-throughput/cycle divergence, not a fluid one.
-  Re-measure after any belt-network changes.
+- **Next**: investigate as a belt **distribution/throughput** divergence, not a
+  fluid one and not a cycle-order one (the cycle order is a ≤~2% contributor).
+  Any change needs a non-noisy, sim-baselined solid fixture to be verifiable.
+  Re-measure after any belt-network (notably merger/priority) changes.
 
 ## Closed / moved entries
 
