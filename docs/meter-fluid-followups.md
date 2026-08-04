@@ -69,9 +69,10 @@ closed — keeps crossing/stacked fluid lines isolated).
 **Phase C — calibration (close to done; one open residual).**
 - Re-run the meter corpus sweep (`examples/sweep_corpus.rs`); all compared
   fixtures within ±10pp EXCEPT `tier5_processing_unit_from_ore_am3` at −13%
-  (a solid belt-delivery gap: ~9 machines short on a solid (diagnostic, not
-  re-verified post-revert), 26-tile
-  belt cycle — see [`meter-divergence.md`](meter-divergence.md)).
+  (a solid **distribution** gap: supply-marginal tail starvation on the EC trunk,
+  12/16 PU machines at full rate, the four deepest EC-constrained — see
+  [`meter-divergence.md`](meter-divergence.md); the 26-tile belt cycle is a
+  ~+2.2% contributor, not the cause).
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).
 
 ## Next steps / open items (2026-08-03)
@@ -106,10 +107,12 @@ the PU machines. **2026-08-04: the root cause is revised — it is supply-margin
 tail starvation on the EC trunk, not the belt-cycle update order.** Experiment:
 permuting the 26-tile cyclic order moves PU only 1.716→1.754/s (+2.2%); inter-loop
 reorder has no effect. Instead, EC is genuinely scarce (PU+AC need ~48/s but the
-fixture underproduces it — meter 41.5/s, sim 43.2/s), and the meter concentrates
-it on the head of the PU row: at steady state 15/16 PU machines craft at full
-0.125/s while the four deepest (`m301/m302/m309/m310`, x=55/58) are starved on
-EC buffers 1–12/280 (craft 0.023–0.088/s, `m310` fully blocked), losing ~0.29/s
+fixture underproduces it — meter 41.5/s = −13.5% vs plan, sim 43.2/s = −10%), and the meter concentrates
+it on the head of the PU row: at steady state 12/16 PU machines craft at full
+0.125/s while the four deepest (`m301/m302/m309/m310`, x=55/58) are EC-constrained on
+EC buffers 1–12/280 (craft 0.023–0.088/s, `m310` fully starved — the only one
+that labels `ItemIngredientShortage`; the other three read `Working` but run
+below rate), losing ~0.29/s
 of the 2.0/s ideal. The sim feeds the target to 99%. **Deferred deliberately**:
 a fix needs a speculative distribution / merge-priority / head-hog-fairness
 model change, unverifiable on this noisy fixture (the sim's per-machine EC
