@@ -4538,7 +4538,7 @@ fn probe_fold_error_breakdown_mil5() {
 ///   PRE-EXISTING   — a lane run hit real machine/belt geometry.
 ///
 /// Scoped to mil5 and 2 folds deliberately: the whole corpus at 4 folds takes
-/// \>10 minutes with debug on, and this is meant to be a fast feedback loop.
+/// >10 minutes with debug on, and this is meant to be a fast feedback loop.
 /// Counts are of FIRST clashes — a candidate dies at its first one, so this
 /// does not measure latent conflicts hiding behind the one that fired.
 #[test]

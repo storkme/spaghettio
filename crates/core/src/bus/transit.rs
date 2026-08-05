@@ -114,31 +114,35 @@ struct PipeTile {
     is_ptg: bool,
 }
 
+/// Terminal discovery, item-exact.
+///
+/// This previously kept an `unlabelled` bucket and fell back to it when no
+/// exactly-labelled terminal was found. That fallback is gone, for
+/// consistency rather than taste: [`compatible`] is now strict, so an
+/// unlabelled tile is not traversable by any net — a terminal recovered from
+/// the fallback could never be routed to, and the edge surfaced as
+/// `Unreachable*` anyway. Keeping the bucket meant the metric was strict for
+/// traversal and permissive for terminals, which is the asymmetry the
+/// reviewer flagged alongside the `compatible` wildcard (PR #575).
+///
+/// The RFC's frozen metric text ("exact item labels win over unlabelled
+/// fallback tiles") was written against the old behaviour and is amended in
+/// the same commit: the metric is strict throughout, and an unmeasurable edge
+/// refuses rather than reaching for a weaker match.
 #[derive(Default)]
 struct TerminalBuckets {
     exact: FxHashSet<Tile>,
-    unlabelled: FxHashSet<Tile>,
 }
 
 impl TerminalBuckets {
     fn insert(&mut self, tile: Tile, carries: Option<&str>, item: &str) {
-        match carries {
-            Some(carried) if carried == item => {
-                self.exact.insert(tile);
-            }
-            None => {
-                self.unlabelled.insert(tile);
-            }
-            Some(_) => {}
+        if carries.is_some_and(|carried| carried == item) {
+            self.exact.insert(tile);
         }
     }
 
     fn finish(self) -> FxHashSet<Tile> {
-        if self.exact.is_empty() {
-            self.unlabelled
-        } else {
-            self.exact
-        }
+        self.exact
     }
 }
 

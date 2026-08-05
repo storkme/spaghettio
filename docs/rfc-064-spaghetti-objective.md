@@ -1440,8 +1440,12 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   `bus::transit::measure_realized_transit` implements the metric frozen above
   over the final artifact. Solid paths are directed and splitter-aware; belt
   and pipe tunnel jumps cost their physical span; machine/inserter and shared
-  fluid-port geometry define terminals; exact item labels win over unlabelled
-  fallback tiles; and only a solver-declared DI edge with no transport
+  fluid-port geometry define terminals; item labels must match **exactly**,
+  with no unlabelled fallback (amended 2026-08-05 — the freeze originally read
+  "exact item labels win over unlabelled fallback tiles", which stopped being
+  true when `compatible` was made strict; the metric is now strict for both
+  traversal and terminal discovery, and an unmeasurable edge refuses rather
+  than reaching for a weaker match); and only a solver-declared DI edge with no transport
   terminals may use its actual machine-to-machine inserter span. Every missing
   or unreachable non-DI terminal is an error. Focused unit fixtures pin surface
   length, underground span length, fluid weighting, and DI fallback. The same
@@ -1709,3 +1713,31 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   implementations making the same mistake is evidence RFC-064 under-specifies
   the DI/belt duality rather than either being careless. It belongs in the
   transit-unification PR, where one answer can be given once.
+
+- **2026-08-05 (bot round 4 on fe3872f6) — terminal discovery made strict too;
+  the metric freeze amended to match. No majors this round.** The strict
+  `compatible()` fix left the metric half-strict: traversal required an exact
+  item label, but `TerminalBuckets` still fell back to unlabelled tiles when no
+  exact terminal existed. That fallback could only ever produce terminals the
+  strict graph cannot route between, so the edge surfaced as `Unreachable*`
+  regardless — dead in effect, and exactly the traversal-vs-terminal asymmetry
+  the reviewer had flagged next to the wildcard itself. Removed, and §"metric
+  freeze" amended in the same commit: it promised "exact item labels win over
+  unlabelled fallback tiles", which stopped being true the moment `compatible`
+  went strict — a live self-contradiction between frozen text and code, caught
+  at 2/3. Suite 1190 passed / 0 failed / 100 ignored.
+  Remaining findings are all minors and stay as follow-ups: (a) mixed belt+DI
+  edges over-charge transit and drop DI consumers while `planned_rate` keeps
+  full demand — goes to the transit-unification PR with its `objective.rs`
+  twin; (b) `fluid_graph` treats PTG pairs as input→output only while Factorio
+  fluid networks are bidirectional, so a valid output→input traversal is
+  falsely refused; (c) three independent `non_pole_bbox`/entity-dims copies
+  disagree (oriented vs axis-locked, `substation` vs `electric-pole`
+  exclusion), dormant only because no probe currently measures the other's
+  population; (d) the legacy `None` packed path has no enabled functional gate
+  — `band_packing_option_is_inert_and_traced` checks machine census only, never
+  `validate` or `measure_realized_transit`, so the router hardening's effect on
+  that path is unmeasured; (e) `blueprint.rs`'s `stacking.clamp(1, 4)` silently
+  rewrites >4 rather than failing loudly, which is against this project's
+  never-degrade-silently convention; (f) the regression pins exact validator
+  strings and hardcoded row indices. (a), (b) and (d) can move a gate verdict.
