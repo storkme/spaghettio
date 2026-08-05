@@ -43,7 +43,8 @@ in-fixture AC reads −3.9%).
     ceiling, so distribution cannot be the dominant driver.** Each PU consumes
     **24 EC** (20 direct + 2 AC × 2 EC each), so the meter's 41.5 EC/s supports
     at most 41.5/24 = **1.729 PU/s**; it measures 1.716/s, i.e. **99.2%** of
-    that ceiling. At the operating point EC production and consumption balance
+    that ceiling — *at that supply level*; the next bullet shows the ceiling
+    itself moves. At the operating point EC production and consumption balance
     — 1.716×20 + 3.45×2 = **41.2/s consumed vs 41.5/s produced**, a ~0.3/s
     surplus — so EC is scarce only *relative to the 48/s plan rate*, not in
     absolute terms at the rate this fixture actually runs. (An earlier revision
@@ -71,6 +72,13 @@ in-fixture AC reads −3.9%).
     with buffers of 1–12/280 and craft rates of 0.023–0.088/s. Note only `m310`
     labels `ItemIngredientShortage`; the other three read `Working` but run
     below rate (the census label and the full-rate count are different things).
+    **Provenance unverified**: `main`'s earlier version of this entry carried
+    a caveat that its per-machine split was captured with the later-reverted
+    census-precedence change active, hence precedence-sensitive and not
+    re-verified on merged solids-first code. That caveat was attached to the
+    figure this census replaced; whether the 12/16 numbers share the same
+    provenance has not been checked. Treat them as diagnostic, not
+    load-bearing, until re-measured.
     But redistributing the available EC *perfectly* across all 16 machines
     yields only 1.729/s — **+0.013/s, ≈5% of the 0.271/s sim-relative gap**
     (at fixed EC supply; see the ceiling caveat above). A distribution /
@@ -83,13 +91,23 @@ in-fixture AC reads −3.9%).
     revisions quoted cycle order as "+2.2%" (of throughput) against
     distribution's "≈5%" (of the gap), two different denominators that made
     the smaller term look bigger. Neither is the cause: together they account
-    for under a fifth of the gap.
+    for under a fifth of the gap — and that 19% is an **upper bound, not a
+    sum of independent terms**: if the cycle-order gain arrived through EC
+    supply (see the ⚠ block above), it partly overlaps the dominant stage
+    rather than adding to it.
   - **The dominant term is EC underproduction itself** — 41.5/s against the
-    **≈47.7/s the real factory moved** (see below), i.e. **−13.0%**
-    sim-relative. (It is −13.5% against the 48/s plan; those are close but
-    distinct numbers against distinct bases, and the sim-relative one is the
-    reference.) That tracks the plate shortfall upstream — iron-plate 41.9/s
-    caps EC at 41.9/s, at 1 plate per EC.
+    **≈47.7/s the real factory moved** (see below), i.e. **−13.0%
+    real-factory-relative**. Name the base carefully: 47.7 is *imputed* from
+    the sim's PU target, not the sim's reported EC. Against the sim's own
+    reported 43.2/s the meter is only −3.9%, and against the 48/s plan
+    −13.5%. Three bases, three numbers; the imputed one is the reference here
+    because it is the only one tied to output the sim actually delivered.
+    That tracks the plate shortfall upstream — iron-plate 41.9/s puts an
+    **upper bound** of 41.9 EC/s on the EC stage, at 1 plate per EC. Note it
+    is not a *binding* cap: the meter makes 41.5/s, **0.4/s (≈1%) below its
+    own plate supply**, so a small EC-stage delivery loss is unaccounted for.
+    Quantified rather than waved past, since it is the one part of the
+    residual that could still be belt-delivery in nature.
   - **The gap against each base, kept separate.** Meter 1.716/s is **0.271/s**
     below the sim's 1.987/s (the −13.6% sim-relative residual) and **0.284/s**
     below the 2.0/s ideal. Different denominators; earlier revisions of this
@@ -106,8 +124,13 @@ in-fixture AC reads −3.9%).
     Read the other way round, the sim is informative: real Factorio delivered
     1.987 PU/s, so it physically moved **≈47.7 EC/s** (1.987 × 24). Its
     reported 43.2/s undercounts that by ~9% — an artifact of intermediate
-    reporting, consistent with the caveat. Measured against the real 47.7/s,
-    the meter's 41.5 EC/s is **≈13% short**.
+    reporting, consistent with the caveat. Against that imputed 47.7/s, the
+    meter's 41.5 EC/s is **≈13% short**. **This is an inference, not a
+    measurement**: 47.7 is a single-point estimate (1.987 × 24) from the same
+    run whose intermediates are ≈−10% throughout, and whose only *directly
+    measured* EC figure is the 43.2/s being set aside. The direction is solid
+    — the sim's factory delivered PU the meter's cannot — but the magnitude
+    inherits that run's noise and should not be quoted as a measured 13%.
 - **Verdict**: a real, meter-side divergence, **relocated upstream** — from
   distribution at the PU machines to **EC/plate production**. The chain reads
   cleanly: the meter's EC output is ~13% below what the real factory achieved,
@@ -128,7 +151,8 @@ in-fixture AC reads −3.9%).
 - **Next**: if this is ever reopened, the question to ask is why the meter's
   **plate/EC stages** produce ~13% less than the real factory did (41.5 vs the
   ≈47.7 EC/s implied by the sim's 1.987 PU/s) — not how EC is distributed
-  among the PU machines (≈5% of the gap) and not the cycle order (≈14% of
+  among the PU machines (≈5% of the gap at fixed supply) and not the cycle
+  order (≈14% of
   the gap — the larger of the two minor terms, though still not the cause). It needs a sim run whose `timeseries` is captured, so per-machine
   detail exists on the reference side. Any change needs a non-noisy,
   sim-baselined solid fixture to be verifiable.

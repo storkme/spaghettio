@@ -6,7 +6,7 @@ EXCEPT `tier5_processing_unit_from_ore_am3` (−13%, an upstream **EC supply**
 residual — characterised, deliberately deferred; see below. Earlier status
 lines called this a SOLID belt-delivery residual and then a distribution one;
 both were retired on 2026-08-05 — the meter runs at 99.2% of its own EC-supply
-ceiling). CI second-opinion
+ceiling, at fixed supply). CI second-opinion
 findings triaged: F5a stacked-PTG edge FIXED (#572); three latent code fixes
 (census precedence, chem-plant "shared box", orientation-keyed binding) were
 PROPOSED then all REVERTED on review — see the sections below; byproduct
@@ -29,7 +29,7 @@ variants now ±0–2% (were −80%; the PU-from-ore exception fixture's own AC i
 **upstream EC supply shortfall** (not a fluid gap, and — per the 2026-08-05
 revision — not a distribution gap either): the meter's PU output sits at 99.2%
 of what its own EC production can support, so redistributing that EC perfectly
-would gain ≈5% of the gap. See the PU entry. (Two earlier characterisations
+would gain ≈5% of the gap *at fixed EC supply*. See the PU entry. (Two earlier characterisations
 were retired, both quoted against the 0.271/s gap: the 26-tile belt cycle
 ≈14% and head-hog distribution ≈5%; neither is the cause, and note the cycle
 order is the larger of the two. Open RFC-064 Phase 2
@@ -77,7 +77,8 @@ closed — keeps crossing/stacked fluid lines isolated).
   fixtures within ±10pp EXCEPT `tier5_processing_unit_from_ore_am3` at −13%
   (an **upstream EC supply shortfall**: the meter runs at 99.2% of its own
   EC-supply ceiling, so the head-hog gradient — 12/16 PU machines at full rate,
-  the four deepest EC-constrained — accounts for only ≈5% of the gap. See
+  the four deepest EC-constrained — accounts for only ≈5% of the gap at fixed
+  EC supply. See
   [`meter-divergence.md`](meter-divergence.md); on that same gap base the
   26-tile belt cycle is ≈14%, so neither it nor distribution is the cause).
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).

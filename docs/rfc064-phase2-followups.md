@@ -78,7 +78,7 @@ Pick-up entry so the deferral is actually tracked here (the meter
 divergence, not a fluid one and (per the 08-05 revision below) not a downstream
 belt-delivery one either: the meter matches the sim within ±4% on the whole
 direct chain, and its PU output sits at 99.2% of what its own EC production can
-support. Stated against both bases: 1.716/s is **0.271/s below the
+support (at that supply level — see the ceiling caveat below). Stated against both bases: 1.716/s is **0.271/s below the
 sim's 1.987/s** (the −13.6% sim-relative residual) and 0.284/s below the 2.0/s
 ideal — earlier revisions quoted a single "~0.29/s ≈ −13%" that conflated the
 two. **2026-08-04 revision of the root cause:** it is an **EC supply shortfall,
@@ -87,7 +87,7 @@ cyclic-update order moves PU only 1.716→1.754/s (+2.2%) — real but minor.
 **2026-08-05 second revision: distribution is not the dominant driver either.**
 Each PU consumes 24 EC (20 direct + 2 AC × 2), so the meter's 41.5 EC/s caps PU
 at 41.5/24 = **1.729/s** and it measures 1.716/s — **99.2% of its own supply
-ceiling**. EC is scarce only *relative to the 48/s plan rate*; at the operating
+ceiling** (an operating point, not an invariant; see below). EC is scarce only *relative to the 48/s plan rate*; at the operating
 point production and consumption balance (41.2/s consumed vs 41.5/s produced).
 The head-hog gradient is real — **12/16 PU machines run at full 0.125/s** while
 the four deepest (`m301/m302/m309/m310` at x=55/58) are EC-constrained (buffers
