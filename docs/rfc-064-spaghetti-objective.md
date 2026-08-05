@@ -1340,3 +1340,41 @@ nothing else cross-depends). A phase's kill does not cancel the others.
     still takes the legacy minimum-area/gap-widening member) and to say so
     explicitly. No shipping-path effect: `band_packing` is default-off and
     nothing consumes its positions yet.
+
+- **2026-08-05 (bot round 2 on 9f524fae, first run under the fixed reviewer
+  config) — bound tightened 20 → 12; remaining findings are follow-ups.**
+  This was also the first review of this PR with `artifacts/**` excluded and
+  the 300k cap (#578). The difference is the point of that change: the
+  previous run carried "diff truncated — coverage is partial" and spent 5.8M
+  tokens, its only `[major]` being a truncation artifact (the phantom
+  undefined `DATA`); this one has no truncation notice, spent 8.0M tokens, and
+  filed findings against `transit.rs`, `row_rotation.rs`, `layout.rs` and the
+  test file — the Rust sources that were previously starved behind the
+  generated HTML. **No `[major]` at all this round.**
+  - **Taken: `MAX_ROTATION_ROWS` 20 → 12.** The first cut of this bound called
+    20 a tractability limit. It is not: the mask loop is multiplied by the gap
+    (7), target-width (~48) and shelf-order (3) loops with an O(n²)
+    `estimate_transit` per plan, so 20 rows is ~1.06 **billion** plans. 12
+    keeps it in the millions (~4.1M) with ~1.5× headroom over the 8-row frozen
+    fixture; suite unchanged at 1094 passed / 0 failed / 98 ignored, so the
+    fixture is confirmed ≤12 rows.
+  - **Follow-ups, recorded not fixed** (convergence rule; all minors, the
+    required check green): (a) `compatible()`'s `None`-carry universal match —
+    now 3/3 passes, but measured inert on this PR's numbers (0 of 1889
+    belt/UG/splitter/pipe entities across the six recorded layouts are
+    unlabelled); note that count covers the *recorded* layouts, not every
+    candidate the search measured, so the follow-up should re-count across the
+    search. (b) `find_ptg_pairs` maps input→output only while Factorio fluid
+    networks are bidirectional — a valid output→input traversal would be
+    falsely refused. (c) The DI fallback needs `sources.is_empty() &&
+    consumers.is_empty()`, so a mixed belt/DI edge errors instead of measuring
+    its belt portion — the same defect class the P1/P2 branch's reviewer found
+    in `objective.rs::measure_edge`, which is further evidence RFC-064
+    under-specifies the DI/belt duality rather than either implementation
+    being careless. (d) `dedup_by` on identical `(rotations, origins, gap)` can
+    drop a structurally valid selected plan. (e) The ceiling probe scores AR on
+    the structural-band bbox while the candidate-wide probe uses the finalized
+    non-pole bbox — an unbounded gap, so a shape-clearing ceiling result does
+    not imply a real admissible candidate. (f) `rfc064_packed_router.rs` pins
+    exact metric strings and hardcoded row indices. (b), (c) and (e) are the
+    ones that can move a gate verdict and should be taken first.

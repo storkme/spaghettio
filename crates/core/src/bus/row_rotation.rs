@@ -561,14 +561,27 @@ fn estimate_transit(
 ///     panic in debug, a silent wrap to `1usize << 0 == 1` in release, which
 ///     would quietly search exactly one mask and report a "complete" search.
 ///  2. **Tractability.** 64 does not bound anything useful; `2^64` masks are
-///     unreachable by many orders of magnitude. Even 2^20 masks times the
-///     inner loops is already far past practical. The bound below is a
-///     tractability limit that happens to also make (1) unreachable.
+///     unreachable by many orders of magnitude. The real limit is far lower,
+///     because the mask loop is multiplied by the gap (7), target-width (~48)
+///     and shelf-order (3) loops, and each resulting plan pays an O(n²)
+///     `estimate_transit`:
 ///
-/// The frozen Science-2 fixture this search is currently gated to runs well
-/// under this; the bound exists so an unfrozen future caller fails loudly
-/// instead of hanging or silently truncating its own search.
-const MAX_ROTATION_ROWS: usize = 20;
+///     | rows | masks     | plans         |
+///     |------|-----------|---------------|
+///     | 8    | 256       | ~258 thousand |
+///     | 12   | 4,096     | ~4.1 million  |
+///     | 16   | 65,536    | ~66 million   |
+///     | 20   | 1,048,576 | ~1.06 billion |
+///
+///     A first cut of this bound used 20 and called it a tractability limit;
+///     it is not one — that column is a billion plans (PR #575 bot review).
+///     12 is the largest value that stays in the millions, with ~1.5x headroom
+///     over the 8-row frozen fixture.
+///
+/// The frozen Science-2 fixture this search is currently gated to runs under
+/// this; the bound exists so an unfrozen future caller fails loudly instead of
+/// hanging or silently truncating its own search.
+const MAX_ROTATION_ROWS: usize = 12;
 
 /// Shared refusal for both [`build_rotation_aware_layout`] and
 /// [`build_rotation_aware_layout_selected`]. Previously only the `_selected`
