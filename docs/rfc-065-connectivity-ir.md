@@ -804,3 +804,30 @@ Per `CLAUDE.md` § verification protocol:
   re-bless is needed. Lesson recorded: on this repo, a full-suite run
   without the zone-cache pin is NOT a valid oracle for the
   ceiling-gated pinned tests; the ci.yml comment said so all along.
+- **2026-08-05 — Bot review round 11 triaged: the guard saga ENDS in a
+  falsification of rounds 7–10 (mine included), and the corpus-coverage
+  major is answered with CI's own green run.** (minor 3/3, "the stated
+  failure mode is physically impossible") CORRECT, verified by fresh
+  derivation: `remap_y` is a pure below-count applied to entities and
+  band bounds alike, and any kept row `r` in a band forces
+  `remap(y_end) ≥ remap(r)+1` — containment is exact for leading,
+  interior, and trailing padding without any occupancy assumption. The
+  entire guard apparatus (round 7 comment → round 8 debug_assert →
+  round 9 release warning → round 10 boundary-arm fix) defended a
+  phantom, and worse, its assert would have PANICKED on a legitimate
+  padded band the remap handles correctly. All of it removed; the
+  proof sketch now lives at the remap site. Process lesson recorded:
+  I accepted round 7's over-shrink premise without re-deriving it and
+  then hardened the guard three times — reviewer claims about MY code
+  get the same adversarial probe as my claims get from them. (major
+  3/3, "K65-1 asserted green, needs a toolchain run over the full
+  corpus") ANSWERED with evidence: the CI `rust` job runs the ENTIRE
+  core suite under the ci nextest profile with check #40 dispatched,
+  and it is GREEN on this head — that is precisely the independent
+  full-corpus verification requested, performed by CI on every push.
+  (minor 2/3, fold attribution change belongs in the PR body) taken —
+  body updated to state the `?fold=1` output-quality change explicitly.
+  (minor 1/3, graph not dispatched) standing Phase-1-remainder
+  disposition. (nits) name-filter warning-sets closed round 10 (B12);
+  detection-test ordering fragility noted, deterministic on the pinned
+  fixtures.

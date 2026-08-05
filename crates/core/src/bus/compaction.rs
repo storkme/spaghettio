@@ -431,45 +431,20 @@ pub fn strip_empty_rows(layout: &LayoutResult) -> LayoutResult {
     // above; leaving them unmapped hands `resolve_row_spec_banded` a stale
     // ledger it fails OPEN against — every rate-shaped verdict on the
     // compacted layout then mis-attributes silently (RFC-065 § Motivation;
-    // this was live in every `?compact=1` layout). `remap_y` is monotone,
-    // so an exclusive `y_end` maps to the correct exclusive end — EXACTLY
-    // when the band's last covered row (`y_end - 1`) is occupied, which
-    // engine bands guarantee (a row band ends at its content: `placer.rs`
-    // sets `y_end = y_cursor + row_h` with occupied geometry through the
-    // final row). A band with trailing unoccupied padding would over-
-    // shrink here and the dispatched RI-1 would then reject the candidate,
-    // stalling row stripping rather than mis-attributing — loud-ish, but
-    // if row stripping ever stops firing, check this assumption first
-    // (PR #574 bot round 7).
+    // this was live in every `?compact=1` layout).
+    //
+    // The remap is EXACT for every band, unconditionally — no occupancy
+    // assumption needed (PR #574 bot round 11, falsifying the guard
+    // machinery rounds 7–10 accreted here; the arc is in the RFC decision
+    // log). Proof sketch: strip removes exactly the unoccupied rows, and
+    // `remap_y(y) = y − #removed-below-y` is applied to entities and band
+    // bounds alike. Any kept row `r ∈ [y_start, y_end)` is itself
+    // occupied, so `remap_y(y_end) ≥ remap_y(r) + 1` — every surviving
+    // occupant stays strictly inside the remapped half-open band,
+    // whether the band carries leading, interior, or trailing padding
+    // (padding rows simply compress away). The clamp arms of `remap_y`
+    // only widen this inequality.
     for row in &mut compacted.effective_rows {
-        // The exactness tripwire for the assumption above (bot round 8):
-        // a band whose last covered row is unoccupied would over-shrink.
-        // Round 9: debug_assert alone is compiled out of release/WASM, so
-        // the violation ALSO pushes an artifact-carried warning — the
-        // release-surviving signal this repo's validator culture demands
-        // (same rationale as `ReactivePassNotConverged`).
-        // Out-of-range ends are SUSPICIOUS, not blessed (bot round 10
-        // caught the first version short-circuiting `> height` to
-        // "occupied" — inverting the guard for exactly the band shape
-        // whose remap falls into the off-band fallback arm).
-        let final_row_occupied = row.y_end > 0
-            && row.y_end <= layout.height
-            && occupied[(row.y_end - 1) as usize];
-        debug_assert!(
-            final_row_occupied,
-            "effective_rows band [{},{}) has an unoccupied final row — the y_end remap \
-             would over-shrink it (see the occupancy comment above)",
-            row.y_start,
-            row.y_end,
-        );
-        if !final_row_occupied {
-            compacted.warnings.push(format!(
-                "strip_empty_rows: effective_rows band [{},{}) ends on an unoccupied row — \
-                 remap may over-shrink it and RI-1 will reject compact candidates \
-                 (RFC-065 occupancy assumption violated)",
-                row.y_start, row.y_end,
-            ));
-        }
         row.y_start = remap_y(row.y_start);
         row.y_end = remap_y(row.y_end);
     }
