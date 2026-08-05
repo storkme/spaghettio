@@ -42,11 +42,14 @@ jobs:
     # The merge is 1200s not 600s because second-opinion retries it once on a
     # flake (its #21), each attempt with its own 600s HTTP timeout — raising the
     # pass timeout without re-doing this arithmetic is how the cap gets eaten.
-    # 90 min leaves ~35 min of margin and also survives the SEQUENTIAL reading
-    # (3 x 1800 + 1200 = 100 min) degrading to a pass timeout rather than a
-    # job-cap kill for all but the pathological case. A job cap firing mid-pass
-    # skips the degraded report entirely — no annotation, no failure notice —
-    # which is strictly worse than the timeout it replaces.
+    # 90 min leaves ~35 min of margin on that path. It does NOT cover a
+    # sequential fallback: 3 x 1800 + 1200 = 110 min, over the cap. The
+    # protection here rests entirely on passes being parallel, which is verified
+    # against the pinned action rather than assumed — if a future version ever
+    # serialised them, the job cap would fire mid-pass and skip the degraded
+    # report (no annotation, no failure notice), which is strictly worse than
+    # the pass timeout it replaces. Re-check parallelism before trusting this
+    # budget across an action upgrade.
     # Typical observed runtime is ~15-20 min.
     timeout-minutes: 90
     permissions:
@@ -94,6 +97,8 @@ jobs:
           # NOTE: this input REPLACES the action's default list rather than
           # extending it, so the defaults are re-listed here verbatim. Adding a
           # glob without them would silently re-admit lockfiles and images.
+          # `>-` folds newlines to spaces; the action strips each glob so that is
+          # harmless, but writing it unfolded means nobody has to know that.
           exclude-globs: >-
             **/*.lock,**/package-lock.json,**/yarn.lock,**/pnpm-lock.yaml,
             **/Cargo.lock,**/go.sum,**/*.min.js,**/*.map,
