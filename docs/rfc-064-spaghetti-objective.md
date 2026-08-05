@@ -1261,6 +1261,26 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   self-inflation, and a test asserting the two degenerate rules agree so they
   cannot drift apart silently again.
 
+- **2026-08-05 (bot round 3, finding 2) — the correspondence-map frame guard
+  now states its own soundness condition instead of relying on a coincidence.**
+  `run_candidate_field` maps the incumbent's issue positions through the
+  candidate chain's composed correspondence map, guarded only by base-*name*
+  equality. `compose_chain` keys that composed map in the frame the first
+  transform consumed — the candidate's base-output frame — so the mapping is
+  sound only if the incumbent's issues are also in a base-output frame. That
+  needs the incumbent to apply no transforms of its own, which was never
+  checked. It held only because `CompactTransform` declares Count, degrading
+  the canonical compact+fold chain to Count so the map went unused — a
+  property of today's tier assignments, not of the call site, and one this
+  PR's own named follow-up (giving compact a real correspondence map) was
+  going to remove. Now checked explicitly: `incumbent.transforms.is_empty()`
+  alongside the base-name test, either failing degrading to Count. No
+  behaviour change today — every current incumbent is a transform-free
+  `FullSelectionCandidate` — and the suite is unchanged at 1175 passed /
+  0 failed / 96 ignored. Filed as a fix rather than a follow-up because the
+  guard's inline comment asserted a soundness condition it did not enforce,
+  which is the failure mode this module exists to prevent.
+
 - **2026-08-05 — merge of `origin/main` (38 commits): `entity_dims`
   ownership resolved toward main's RFC-065 dedupe.** `compaction::entity_dims`
   conflicted — this branch had made it `pub` for `objective.rs`'s three call

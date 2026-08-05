@@ -603,13 +603,29 @@ pub fn run_candidate_field(
             let measure = objective::measure(&run.layout, solver)
                 .map_err(|e| format!("measure failed: {e}"))?;
             let scores = objective::score_vs_native(&measure, &incumbent_measure);
-            // A chain's correspondence map is keyed in the CANDIDATE's own
-            // base frame. Mapping the INCUMBENT's issue positions through it
-            // is only sound when the two plans share a base producer — the
-            // same reasoning `compose_chain`'s empty-chain branch already
-            // applies (PR #569 bot review, finding 3). Different base →
-            // degrade to Count, exactly as an unmapped transform would.
-            let (tier, correspondence) = if plan.base.name() == incumbent.base.name() {
+            // `compose_chain` keys the composed map in the frame the FIRST
+            // transform consumed — i.e. the candidate's BASE-OUTPUT frame.
+            // Mapping the INCUMBENT's issue positions through it is therefore
+            // sound only when the incumbent's issues are themselves in a
+            // base-output frame, which needs BOTH:
+            //
+            //   1. the two plans share a base producer (same base frame), and
+            //   2. the incumbent applies no transforms of its own — otherwise
+            //      its issues sit in a post-transform frame the map's keys
+            //      know nothing about.
+            //
+            // (2) was previously unchecked (PR #569 bot review round 3,
+            // finding 2). It held only by coincidence: `CompactTransform`
+            // declares Count, so `compose_chain` degrades the canonical
+            // compact+fold chain to Count and the map goes unused. That is a
+            // property of today's tier assignments, not of this call — and
+            // making that slot non-Count is a named follow-up of this very PR,
+            // so the coincidence was scheduled to expire. Checked explicitly
+            // now. Either condition failing → degrade to Count, exactly as an
+            // unmapped transform would.
+            let same_base = plan.base.name() == incumbent.base.name();
+            let incumbent_is_base_framed = incumbent.transforms.is_empty();
+            let (tier, correspondence) = if same_base && incumbent_is_base_framed {
                 (run.tier, run.correspondence.as_ref())
             } else {
                 (MatchTier::Count, None)
