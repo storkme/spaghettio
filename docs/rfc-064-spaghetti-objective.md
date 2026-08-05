@@ -1293,3 +1293,50 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   private and main's dedupe intact. The two functions are semantically
   identical (both special-case oriented splitters, then swap w/h for
   East/West), so this is a call-site retarget, not a behaviour change.
+
+- **2026-08-05 (bot round 4) — partial edge attribution was silent, and it is
+  NOT inert: 2 of 5 edges on the calibration fixture.** `measure_edge` averages
+  over the producer ports that reached a consumer and drops the rest. The
+  module's "never substitute a proxy for unmeasured flow" discipline only ever
+  covered the all-or-nothing case — zero samples give `path_length: None` and
+  land in `unattributed_edge_count`, but *some* samples silently produced a
+  mean over the reachable subset. Because unreachable producers are dropped
+  rather than penalised, that bias runs **short** — i.e. in the layout's
+  favour, which is the dangerous direction for a metric used to admit
+  candidates. The reviewer raised it at 1/3-pass confidence; instrumenting it
+  rather than reasoning about it gave `edges=5 unattributed=1
+  **partially_attributed=2**` on `stress-ac-partitioned-5s-pooled`, the
+  fixture this suite calibrates against. **Every RFC-064 transit figure
+  recorded so far was computed by this function**, so Phase 0/1/2's transit
+  numbers rest on partly-subset means to an extent not previously visible.
+  Fixed here to the extent that does not move numbers: `EdgeMeasurement` now
+  carries `ports_total`/`ports_sampled` and `LayoutMeasure` carries
+  `partially_attributed_edge_count`, so partial attribution is *visible*
+  instead of silent, mirroring what `unattributed_edge_count` already does for
+  the total case. **Deliberately NOT fixed here:** whether a partially
+  attributed edge should be demoted to unattributed outright (the reviewer's
+  suggestion) is a metric-policy question for §(b) — it would move every
+  recorded transit number and re-open the phase gates, so it is a follow-up
+  with a decision owed, not a silent change. Nor is the *cause* established:
+  the unreachable ports may be genuinely unrouted, or the item-filtered belt
+  graph may be failing to trace a route across a merge. That diagnosis is the
+  first task of the follow-up. Suite 1176 passed / 0 failed / 96 ignored.
+
+- **2026-08-05 (bot round 4) — remaining minors recorded as follow-ups under
+  the convergence rule.** The required check is green and these are advisory:
+  (a) incumbent validation/measure trace events are not truncated, so they
+  precede the winner's replayed stream; (b) the field loop has no
+  `catch_unwind`/RAII sink guard, so a panicking candidate leaves the trace
+  sink disabled for the thread; (c) `transit_score: None` is not neutral in
+  ranking — a candidate with zero attributable edges and a positive `ar_score`
+  can still outrank the incumbent; (d) the index-paired-edge contract in
+  `score_vs_native_weighted` is `debug_assert`-only, so release builds can
+  pair mismatched edges; (e) `search_snake_fold`'s refit gate can
+  false-reject a fold that relocates a native issue onto a seam tile with no
+  pre-image. (c) and (d) are the two that could affect a selection decision
+  and should be taken first. (f) Also recorded per the reviewer: with the
+  amended square-native rule, a `-1.0` sentinel plus 0.5/0.5 weights means a
+  genuine transit win can only *tie* a square-native incumbent, with
+  `ΔEntities%` breaking the tie — latent (no fixture has a square native) but
+  it does blunt §(d)'s delta-vs-incumbent intent, so the weights or the
+  sentinel may need revisiting when one appears.

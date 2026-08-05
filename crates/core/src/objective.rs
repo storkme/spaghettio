@@ -108,7 +108,23 @@ pub struct EdgeMeasurement {
     pub is_fluid: bool,
     /// Realized physical tile length of the routed path, or `None` if
     /// unattributed. See module docs for the attribution method and gaps.
+    ///
+    /// **Read this together with [`Self::ports_sampled`]**: `path_length` is a
+    /// mean over the ports that reached a consumer, so a value here does not
+    /// by itself mean the edge was fully attributed.
     pub path_length: Option<f64>,
+    /// Producer ports considered for this edge (direct-insertion samples plus
+    /// belt/pipe port starts).
+    pub ports_total: usize,
+    /// How many of [`Self::ports_total`] actually reached a consumer and so
+    /// contributed a sample to `path_length`.
+    ///
+    /// `ports_sampled < ports_total` means the mean was taken over a subset:
+    /// the unreachable producers were dropped, which biases `path_length`
+    /// *short* — i.e. flatters the layout. Surfaced rather than silently
+    /// averaged away (PR #569 bot review round 4). See
+    /// [`LayoutMeasure::partially_attributed_edge_count`].
+    pub ports_sampled: usize,
 }
 
 /// Raw per-layout numbers RFC-064's Metrics section defines, computed on a
@@ -132,6 +148,25 @@ pub struct LayoutMeasure {
     pub edges: Vec<EdgeMeasurement>,
     /// Count of edges with `path_length: None` — see module docs.
     pub unattributed_edge_count: usize,
+    /// Count of edges that *do* have a `path_length` but whose mean was taken
+    /// over only some of their producer ports (`ports_sampled <
+    /// ports_total`).
+    ///
+    /// These are the edges where the number is real but partial. The module's
+    /// stated discipline — never substitute a proxy for unmeasured flow —
+    /// previously only covered the all-or-nothing case: zero samples gave
+    /// `None`, while *some* samples silently produced a mean over the
+    /// reachable subset. Since unreachable producers are dropped rather than
+    /// penalised, that bias runs short, in the layout's favour. Counted here
+    /// so a partially-attributed `transit` is visibly weaker evidence than a
+    /// fully-attributed one, exactly as `unattributed_edge_count` already
+    /// does for the all-or-nothing case.
+    ///
+    /// **Not currently used for scoring.** Whether a partially-attributed
+    /// edge should be demoted to unattributed outright is a metric-policy
+    /// question for RFC-064 §(b), recorded as a follow-up rather than decided
+    /// here — changing it would move measured numbers.
+    pub partially_attributed_edge_count: usize,
 }
 
 /// Compute [`LayoutMeasure`] for `layout`, the routed output of the solve
@@ -159,9 +194,10 @@ pub fn measure(layout: &LayoutResult, solver: &SolverResult) -> Result<LayoutMea
     let mut edges = Vec::with_capacity(sig.edges.len());
     let mut transit = 0.0;
     let mut unattributed_edge_count = 0usize;
+    let mut partially_attributed_edge_count = 0usize;
     for pe in &sig.edges {
         let rate = pe.rate as f64 / compaction::RATE_SCALE;
-        let path_length = if pe.is_fluid {
+        let (path_length, ports_sampled, ports_total) = if pe.is_fluid {
             measure_fluid_edge(layout, &pe.producer_recipes, &pe.consumer_recipe, &pe.item)
         } else {
             graph.measure_edge(layout, &pe.producer_recipes, &pe.consumer_recipe, &pe.item)
@@ -170,6 +206,13 @@ pub fn measure(layout: &LayoutResult, solver: &SolverResult) -> Result<LayoutMea
             Some(pl) => {
                 let weight = if pe.is_fluid { FLUID_WEIGHT } else { 1.0 };
                 transit += rate * weight * pl;
+                // Attributed, but possibly only in part: unreachable producer
+                // ports were dropped from the mean rather than penalised, so
+                // this edge's length is biased short. Count it so the caller
+                // can see that `transit` rests on partial evidence.
+                if ports_sampled < ports_total {
+                    partially_attributed_edge_count += 1;
+                }
             }
             None => unattributed_edge_count += 1,
         }
@@ -180,6 +223,8 @@ pub fn measure(layout: &LayoutResult, solver: &SolverResult) -> Result<LayoutMea
             rate,
             is_fluid: pe.is_fluid,
             path_length,
+            ports_total,
+            ports_sampled,
         });
     }
 
@@ -191,6 +236,7 @@ pub fn measure(layout: &LayoutResult, solver: &SolverResult) -> Result<LayoutMea
         transit,
         edges,
         unattributed_edge_count,
+        partially_attributed_edge_count,
     })
 }
 
@@ -671,24 +717,35 @@ impl SolidGraph {
         (producer_starts, consumer_targets, di_distances)
     }
 
+    /// Returns `(path_length, ports_sampled, ports_total)`. `ports_total`
+    /// counts every producer port considered; `ports_sampled` counts those
+    /// that reached a consumer. They differ when some producers are
+    /// unreachable — the mean is then over a subset and biased short, so the
+    /// caller records it rather than presenting a partial number as whole.
     fn measure_edge(
         &self,
         layout: &LayoutResult,
         producer_recipes: &[String],
         consumer_recipe: &str,
         item: &str,
-    ) -> Option<f64> {
+    ) -> (Option<f64>, usize, usize) {
         let (starts, targets, di_distances) = self.edge_ports(layout, producer_recipes, consumer_recipe, item);
+        let ports_total = di_distances.len() + starts.len();
         let mut samples = di_distances;
         for start in starts {
             if let Some(d) = self.shortest_to_any(start, &targets, item) {
                 samples.push(d as f64);
             }
         }
+        let sampled = samples.len();
         if samples.is_empty() {
-            None
+            (None, 0, ports_total)
         } else {
-            Some(samples.iter().sum::<f64>() / samples.len() as f64)
+            (
+                Some(samples.iter().sum::<f64>() / samples.len() as f64),
+                sampled,
+                ports_total,
+            )
         }
     }
 }
@@ -699,12 +756,15 @@ impl SolidGraph {
 
 /// Fluid counterpart of [`SolidGraph::measure_edge`]. See module docs for
 /// the pipe-to-ground gap this does NOT model.
+/// Returns `(path_length, ports_sampled, ports_total)` — see
+/// [`SolidGraph::measure_edge`] for why the coverage counts travel with the
+/// mean rather than being discarded.
 fn measure_fluid_edge(
     layout: &LayoutResult,
     producer_recipes: &[String],
     consumer_recipe: &str,
     item: &str,
-) -> Option<f64> {
+) -> (Option<f64>, usize, usize) {
     let producer_set: FxHashSet<&str> = producer_recipes.iter().map(String::as_str).collect();
 
     let mut pipe_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
@@ -737,8 +797,9 @@ fn measure_fluid_edge(
         }
     }
 
+    let ports_total = producer_ports.len();
     if producer_ports.is_empty() || consumer_targets.is_empty() {
-        return None;
+        return (None, 0, ports_total);
     }
     let mut samples = Vec::new();
     for p in producer_ports {
@@ -746,10 +807,15 @@ fn measure_fluid_edge(
             samples.push(d as f64);
         }
     }
+    let sampled = samples.len();
     if samples.is_empty() {
-        None
+        (None, 0, ports_total)
     } else {
-        Some(samples.iter().sum::<f64>() / samples.len() as f64)
+        (
+            Some(samples.iter().sum::<f64>() / samples.len() as f64),
+            sampled,
+            ports_total,
+        )
     }
 }
 
@@ -894,6 +960,7 @@ mod tests {
             entity_count: entities,
             transit,
             edges: vec![],
+            partially_attributed_edge_count: 0,
             unattributed_edge_count: 0,
         }
     }
@@ -1015,6 +1082,8 @@ mod tests {
             rate: 1.0,
             is_fluid: false,
             path_length: Some(100.0),
+            ports_total: 1,
+            ports_sampled: 1,
         };
         let mut native = measure_with(1.5, 100.0, 500);
         native.edges = vec![edge.clone()];
@@ -1043,6 +1112,8 @@ mod tests {
             rate: 1.0,
             is_fluid: false,
             path_length: len,
+            ports_total: 1,
+            ports_sampled: usize::from(len.is_some()),
         };
         let mut native = measure_with(1.5, 100.0, 500);
         native.edges = vec![edge(Some(100.0)), edge(None)];
@@ -1073,6 +1144,8 @@ mod tests {
             rate: 1.0,
             is_fluid: false,
             path_length: Some(100.0),
+            ports_total: 1,
+            ports_sampled: 1,
         }];
         let zero_edge_cand = measure_with(1.5, 0.0, 500);
         let scores = score_vs_native(&zero_edge_cand, &native);

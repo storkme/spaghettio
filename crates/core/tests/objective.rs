@@ -112,3 +112,78 @@ fn fold_ranks_above_native_on_stress_ac_partitioned() {
     ]);
     assert_eq!(ranked[0], "folded", "rank_admissible must place the fold first: {ranked:?}");
 }
+
+/// Instrument the partial-attribution counter on a real fixture, rather than
+/// assuming it is inert.
+///
+/// `measure_edge` averages over the producer ports that reached a consumer and
+/// drops the ones that did not. Until PR #569's round-4 review, that drop was
+/// silent: an edge with 4 unreachable producers and 1 reachable reported the
+/// reachable one's (short, flattering) length as if it were the whole edge.
+/// The module's "never substitute a proxy for unmeasured flow" discipline only
+/// covered the all-or-nothing case.
+///
+/// **The bug is not inert.** On this fixture the measured figure is
+/// `edges=5 unattributed=1 partially_attributed=2` — two of five edges have
+/// their transit averaged over only some of their producer ports. Whatever
+/// the cause (genuinely unreachable producers, or the item-filtered graph
+/// failing to trace a route across a merge), the metric was reporting those
+/// as whole numbers.
+///
+/// This deliberately does *not* assert zero, and does not assert 2 either:
+/// the first would be false today and the second would freeze a number this
+/// PR does not yet explain. It asserts the counter is *consistent* with the
+/// per-edge coverage fields so the two cannot drift, and prints the figure so
+/// a change in it is visible rather than silently averaged in.
+#[test]
+fn partial_attribution_counter_agrees_with_per_edge_coverage() {
+    let sr = solver::solve_with_exclusions(
+        "advanced-circuit",
+        5.0,
+        &set(&["iron-plate", "copper-plate", "coal", "crude-oil", "water"]),
+        "assembling-machine-2",
+        &FxHashSet::default(),
+    )
+    .expect("solve should succeed");
+    let layout = build_bus_layout(
+        &sr,
+        LayoutOptions { compact_layout: true, ..base_opts(None, LayoutStrategy::Pooled) },
+    )
+    .expect("layout should build");
+    let m = measure(&layout, &sr).expect("measure should succeed");
+
+    for e in &m.edges {
+        assert!(
+            e.ports_sampled <= e.ports_total,
+            "{} -> {}: sampled {} exceeds total {}",
+            e.item,
+            e.consumer_recipe,
+            e.ports_sampled,
+            e.ports_total
+        );
+        assert_eq!(
+            e.path_length.is_none(),
+            e.ports_sampled == 0,
+            "{} -> {}: path_length and ports_sampled disagree on attribution",
+            e.item,
+            e.consumer_recipe
+        );
+    }
+
+    let recomputed = m
+        .edges
+        .iter()
+        .filter(|e| e.path_length.is_some() && e.ports_sampled < e.ports_total)
+        .count();
+    assert_eq!(
+        recomputed, m.partially_attributed_edge_count,
+        "partially_attributed_edge_count disagrees with the per-edge fields"
+    );
+
+    println!(
+        "edges={} unattributed={} partially_attributed={}",
+        m.edges.len(),
+        m.unattributed_edge_count,
+        m.partially_attributed_edge_count
+    );
+}
