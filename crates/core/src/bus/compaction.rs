@@ -432,7 +432,15 @@ pub fn strip_empty_rows(layout: &LayoutResult) -> LayoutResult {
     // ledger it fails OPEN against — every rate-shaped verdict on the
     // compacted layout then mis-attributes silently (RFC-065 § Motivation;
     // this was live in every `?compact=1` layout). `remap_y` is monotone,
-    // so an exclusive `y_end` maps to the correct exclusive end.
+    // so an exclusive `y_end` maps to the correct exclusive end — EXACTLY
+    // when the band's last covered row (`y_end - 1`) is occupied, which
+    // engine bands guarantee (a row band ends at its content: `placer.rs`
+    // sets `y_end = y_cursor + row_h` with occupied geometry through the
+    // final row). A band with trailing unoccupied padding would over-
+    // shrink here and the dispatched RI-1 would then reject the candidate,
+    // stalling row stripping rather than mis-attributing — loud-ish, but
+    // if row stripping ever stops firing, check this assumption first
+    // (PR #574 bot round 7).
     for row in &mut compacted.effective_rows {
         row.y_start = remap_y(row.y_start);
         row.y_end = remap_y(row.y_end);

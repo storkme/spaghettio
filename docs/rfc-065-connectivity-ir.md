@@ -681,3 +681,27 @@ Per `CLAUDE.md` § verification protocol:
   (nit, RI-3 duplicate issues on degenerate self-loop wires) fixed —
   one issue per bad endpoint reference. (nit, reviewer lacks a Rust
   toolchain) environmental; local + CI runs are the gate.
+- **2026-08-05 — Bot review round 7: convergence.** "No blocker or
+  major correctness bug after extensive scrutiny," with an explicit
+  verified-correct list (pairing equivalence re-derived, both remaps,
+  admission loops, RI-1 calibration, anomaly rules, wire recomputes).
+  Residual minors: (a) name-filter warning-set changes on already-RED
+  layouts have no consumer pin — DECLINED with rationale: warning sets
+  on error-bearing layouts are not a stable contract anywhere in this
+  codebase (the admission gates count Errors; `validator-reporting.md`'s
+  discriminating-power doctrine is about green layouts and error
+  classes), and the loud backstop at check #19 covers the load-bearing
+  path. (b) the `remap_y(y_end)` exactness assumption (band's last row
+  occupied — guaranteed by `placer.rs` band construction) is now stated
+  at the remap site with its failure signature (row stripping stalls
+  loudly rather than mis-attributing). (c) the "straddling band merges
+  two machine groups" scenario is REFUTED by entry-wise reasoning: the
+  remap maps each ledger entry independently and monotonically — a cut
+  through an in-band empty row shrinks that one band; a cut through the
+  gap between two same-recipe bands makes them ADJACENT ([0,5)+[6,11) →
+  [0,5)+[5,10)), never merged, and `resolve_row_spec_banded`'s
+  half-open windows keep adjacent bands distinct. No ledger entries are
+  ever merged on the remap path. (d) future-transform-defeats-compaction
+  flagged "for completeness" — the documented registry-free-enforcement
+  trade; a rejection-cause trace event for admission loops goes on the
+  Phase 1 backlog.
