@@ -785,3 +785,22 @@ Per `CLAUDE.md` § verification protocol:
   false-positive on legitimate geometry. Cross-tier arrangements that
   do NOT self-pair within reach already hard-error at check #19. The
   "Phase 1 backlog" guard item is retired in favor of this record.
+- **2026-08-05 — CORRECTION: the "two pre-existing failures on main"
+  were never a real red — they were this session's LOCAL zone-cache
+  divergence.** The CI `rust` job passed on `b1cda3b` (full suite, ci
+  nextest profile — no test skipped), which prompted re-examination:
+  CI pins `SPAGHETTIO_ZONE_CACHE_PATH` to the committed
+  `sat-zones-ci.bin` snapshot precisely so results equal a warm local
+  run "by construction"; this session's container ran the suite with
+  its own divergent cache, so SAT junction zones solved differently,
+  layout geometry shifted, and the calibrated warning pins of
+  `tier4_advanced_circuit_from_ore_am2` / `partition_strategy_
+  scoreboard` mis-compared. Verified: both tests PASS locally with the
+  pin applied (90 s). What survives from the earlier entries: the
+  stash A/B remains valid evidence this RFC's diff did not cause the
+  local failures (identical either way); what is retracted: "almost
+  certainly fallout of the #573-adjacent reverts", "main is red",
+  "left for the owning session" — main was green throughout, and no
+  re-bless is needed. Lesson recorded: on this repo, a full-suite run
+  without the zone-cache pin is NOT a valid oracle for the
+  ceiling-gated pinned tests; the ci.yml comment said so all along.
