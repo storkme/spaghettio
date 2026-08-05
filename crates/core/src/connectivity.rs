@@ -32,16 +32,19 @@
 //!   contacts). On a validator-green layout this must be empty; that parity
 //!   is kill criterion K65-1.
 //!
-//! Semantics are **reused, not re-invented**: underground pairing is
-//! `validate::belt_flow::build_ug_pairs` **verbatim** — nearest ahead,
-//! same-direction, distance > 1, with NO same-name filter; that is weaker
-//! than `check_underground_belt_pairs` (which also requires name equality,
-//! per game rule U5) and diverges from the game on exotic interleaved
-//! mixed-tier runs — corpus-clean today, unification is Phase 1. Geometry
-//! vocabulary (`dir_to_vec`, `inserter_reach`, `splitter_second_tile`,
-//! footprints) comes from `common`. Inserter convention matches
-//! `belt_structural`/`belt_detour`: pickup = `pos − dir·reach`,
-//! drop = `pos + dir·reach`.
+//! Since Phase 1 this module is the **home** of the shared derivation
+//! primitives, not a consumer of them: [`build_ug_pairs`] and
+//! [`build_splitter_siblings`] are canonical here and `validate::belt_flow`
+//! delegates back (its previous copy, a private duplicate in
+//! `belt_structural`, and `check_underground_belt_pairs`'s inline loop all
+//! collapsed onto these). UG pairing is name-filtered — nearest ahead,
+//! same-direction, SAME-NAME, distance > 1 — matching
+//! `check_underground_belt_pairs` and game rule U5; Phase 0's canonical
+//! primitive lacked the name filter (a review-recorded fidelity gap, now
+//! closed). Geometry vocabulary (`dir_to_vec`, `inserter_reach`,
+//! `splitter_second_tile`, footprints) comes from `common`. Inserter
+//! convention matches `belt_structural`/`belt_detour`: pickup =
+//! `pos − dir·reach`, drop = `pos + dir·reach`.
 //!
 //! Known fidelity gaps, recorded for Phase 1 (all empirically inert on the
 //! green corpus): head-on conflicts are carries-blind where the validator's
@@ -61,8 +64,83 @@ use crate::common::{
     is_surface_belt, is_ug_belt, oriented_splitter_dims, splitter_second_tile,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity};
-use crate::validate::belt_flow::build_ug_pairs;
 use crate::validate::{Severity, ValidationIssue};
+
+/// Canonical underground-belt pairing (Phase 1 home; the validators
+/// delegate here). An entrance pairs with the NEAREST unused exit strictly
+/// ahead of it that shares its direction AND its name (game rule U5 — a
+/// yellow entrance never pairs a red exit), at distance > 1; greedy in
+/// entity order. Returns a bidirectional tile map (entrance ↔ exit).
+pub fn build_ug_pairs(entities: &[PlacedEntity]) -> FxHashMap<(i32, i32), (i32, i32)> {
+    let mut ug_inputs: Vec<&PlacedEntity> = Vec::new();
+    let mut ug_outputs: Vec<&PlacedEntity> = Vec::new();
+    for e in entities {
+        if is_ug_belt(&e.name) {
+            match e.io_type.as_deref() {
+                Some("input") => ug_inputs.push(e),
+                Some("output") => ug_outputs.push(e),
+                _ => {}
+            }
+        }
+    }
+
+    let mut pairs: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
+    let mut used_outputs: rustc_hash::FxHashSet<(i32, i32)> = rustc_hash::FxHashSet::default();
+
+    for inp in &ug_inputs {
+        let (dx, dy) = dir_to_vec(inp.direction);
+        let mut best_out: Option<&PlacedEntity> = None;
+        let mut best_dist = i32::MAX;
+
+        for out in &ug_outputs {
+            if used_outputs.contains(&(out.x, out.y)) {
+                continue;
+            }
+            if out.direction != inp.direction || out.name != inp.name {
+                continue;
+            }
+            let rx = out.x - inp.x;
+            let ry = out.y - inp.y;
+            let dist = if dx != 0 {
+                if ry != 0 || (rx > 0) != (dx > 0) {
+                    continue;
+                }
+                rx.abs()
+            } else {
+                if rx != 0 || (ry > 0) != (dy > 0) {
+                    continue;
+                }
+                ry.abs()
+            };
+            if dist > 1 && dist < best_dist {
+                best_dist = dist;
+                best_out = Some(out);
+            }
+        }
+
+        if let Some(out) = best_out {
+            pairs.insert((inp.x, inp.y), (out.x, out.y));
+            pairs.insert((out.x, out.y), (inp.x, inp.y));
+            used_outputs.insert((out.x, out.y));
+        }
+    }
+    pairs
+}
+
+/// Canonical splitter footprint-sibling map (Phase 1 home): each of a
+/// splitter's two tiles maps to the other.
+pub fn build_splitter_siblings(entities: &[PlacedEntity]) -> FxHashMap<(i32, i32), (i32, i32)> {
+    let mut siblings: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
+    for e in entities {
+        if !is_splitter(&e.name) {
+            continue;
+        }
+        let second = splitter_second_tile(e);
+        siblings.insert((e.x, e.y), second);
+        siblings.insert(second, (e.x, e.y));
+    }
+    siblings
+}
 
 /// Coarse per-entity role in the flow graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -215,7 +293,7 @@ pub fn derive_connectivity(layout: &LayoutResult) -> ConnectivityGraph {
         }
     }
 
-    let ug_pairs = build_ug_pairs(layout);
+    let ug_pairs = build_ug_pairs(&layout.entities);
 
     let mut edges: Vec<Edge> = Vec::new();
     let mut conflicts: Vec<Conflict> = Vec::new();
@@ -534,54 +612,69 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
             .or_default()
             .push((row.y_start, row.y_end));
     }
-    for e in &layout.entities {
-        if !is_machine_entity(&e.name) {
-            continue;
+    // Machines collected ONCE (entity index per recipe): both RI-1
+    // directions read from this instead of rescanning the full entity list
+    // per band — the naive form cost ~11 ms/call at 20k entities × 50
+    // bands, a real tax on the fold search's per-candidate validate().
+    let mut machines_by_recipe: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+    for (i, e) in layout.entities.iter().enumerate() {
+        if is_machine_entity(&e.name) {
+            if let Some(recipe) = e.recipe.as_deref() {
+                machines_by_recipe.entry(recipe).or_default().push(i);
+            }
         }
-        let Some(recipe) = e.recipe.as_deref() else {
-            continue;
-        };
+    }
+    for (&recipe, machine_indices) in {
+        let mut keys: Vec<_> = machines_by_recipe.iter().collect();
+        keys.sort_by_key(|(r, _)| **r);
+        keys
+    } {
         let Some(bands) = bands_by_recipe.get(recipe) else {
             // No ledger entry for this recipe: attribution falls back to the
             // recipe-global spec by design — not an integrity violation.
             continue;
         };
-        let (_, mh) = oriented_dims(&e.name, e.direction);
-        if bands.iter().any(|&(y0, y1)| e.y >= y0 && e.y + mh <= y1) {
-            continue;
+        for &i in machine_indices {
+            let e = &layout.entities[i];
+            let (_, mh) = oriented_dims(&e.name, e.direction);
+            if bands.iter().any(|&(y0, y1)| e.y >= y0 && e.y + mh <= y1) {
+                continue;
+            }
+            let foreign = layout.effective_rows.iter().find(|row| {
+                row.spec.recipe != recipe && e.y >= row.y_start && e.y < row.y_end
+            });
+            let shape = if let Some(f) = foreign {
+                format!(
+                    "resolves into the {} band [{},{}) instead",
+                    f.spec.recipe, f.y_start, f.y_end
+                )
+            } else if bands.iter().any(|&(y0, y1)| e.y >= y0 && e.y < y1) {
+                "straddles its band's edge".to_string()
+            } else {
+                "sits outside every band for that recipe".to_string()
+            };
+            issues.push(ValidationIssue::with_pos(
+                Severity::Error,
+                "record-effective-rows",
+                format!(
+                    "machine {} for {} at ({},{}) {} — banded spec attribution no longer \
+                     matches the geometry that placed it",
+                    e.name, recipe, e.x, e.y, shape
+                ),
+                e.x,
+                e.y,
+            ));
         }
-        let foreign = layout.effective_rows.iter().find(|row| {
-            row.spec.recipe != recipe && e.y >= row.y_start && e.y < row.y_end
-        });
-        let shape = if let Some(f) = foreign {
-            format!(
-                "resolves into the {} band [{},{}) instead",
-                f.spec.recipe, f.y_start, f.y_end
-            )
-        } else if bands.iter().any(|&(y0, y1)| e.y >= y0 && e.y < y1) {
-            "straddles its band's edge".to_string()
-        } else {
-            "sits outside every band for that recipe".to_string()
-        };
-        issues.push(ValidationIssue::with_pos(
-            Severity::Error,
-            "record-effective-rows",
-            format!(
-                "machine {} for {} at ({},{}) {} — banded spec attribution no longer matches \
-                 the geometry that placed it",
-                e.name, recipe, e.x, e.y, shape
-            ),
-            e.x,
-            e.y,
-        ));
     }
     for row in &layout.effective_rows {
-        let populated = layout.entities.iter().any(|e| {
-            is_machine_entity(&e.name)
-                && e.recipe.as_deref() == Some(row.spec.recipe.as_str())
-                && e.y >= row.y_start
-                && e.y < row.y_end
-        });
+        let populated = machines_by_recipe
+            .get(row.spec.recipe.as_str())
+            .is_some_and(|idxs| {
+                idxs.iter().any(|&i| {
+                    let y = layout.entities[i].y;
+                    y >= row.y_start && y < row.y_end
+                })
+            });
         if !populated {
             issues.push(ValidationIssue::with_pos(
                 Severity::Error,
@@ -724,6 +817,31 @@ mod tests {
         assert!(edge(&g, 1, 2, EdgeKind::UgSpan));
         assert!(edge(&g, 2, 3, EdgeKind::BeltFlow));
         assert!(scan_graph_anomalies(&g, &lr).is_empty());
+    }
+
+    /// U5 pin (Phase 1 unification): a yellow entrance never pairs a red
+    /// exit, even perfectly aligned — the canonical pairing is
+    /// name-filtered, matching `check_underground_belt_pairs` and the
+    /// game. Same-tier control pairs fine.
+    #[test]
+    fn ug_pairing_is_name_filtered() {
+        use EntityDirection::East;
+        let mixed = layout(vec![ug(0, 0, East, "input"), {
+            let mut e = ug(4, 0, East, "output");
+            e.name = "fast-underground-belt".to_string();
+            e
+        }]);
+        let g = derive_connectivity(&mixed);
+        assert!(
+            !g.edges.iter().any(|e| e.kind == EdgeKind::UgSpan),
+            "cross-tier pair must not form: {:?}",
+            g.edges
+        );
+        assert_eq!(scan_graph_anomalies(&g, &mixed).len(), 2, "both halves orphaned");
+
+        let same = layout(vec![ug(0, 0, East, "input"), ug(4, 0, East, "output")]);
+        let g2 = derive_connectivity(&same);
+        assert!(edge(&g2, 0, 1, EdgeKind::UgSpan), "{:?}", g2.edges);
     }
 
     #[test]

@@ -312,11 +312,19 @@ Per `CLAUDE.md` § verification protocol:
 
 - **Phase 0 (this RFC's implementation scope):** module + diff +
   integrity pass + `effective_rows` fix + gates above.
-- **Phase 1 — single source of truth.** Move the belt_flow primitives
-  into `connectivity` (validators import back); migrate record
-  attribution (`resolve_row_spec_banded`) and the integrity pass into the
-  `validate()` dispatch. One check per PR, verdict-identical on the
-  corpus, per `docs/validator-reporting.md`.
+- **Phase 1 — single source of truth.** *Slice 1 landed 2026-08-04*:
+  `build_ug_pairs` (now name-filtered, U5-true) and
+  `build_splitter_siblings` are canonical in `connectivity`; `belt_flow`
+  delegates, `belt_structural`'s private duplicate is deleted, and
+  `check_underground_belt_pairs` consumes the canonical pairs (its inline
+  loop — the fourth copy — is gone). `check_record_integrity` joined the
+  `validate()` dispatch (check #40), so compaction/fold admission loops
+  guard the records automatically. *Remaining*: `belt_dir_map_from`
+  (deliberately not moved — its `skip_balancers` variant embeds
+  sushi/balancer lane-walker policy, not geometry), migrating
+  `resolve_row_spec_banded` to graph-derived identity, and per-check IR
+  consumption (belt_detour first candidate) — one check per PR,
+  verdict-identical on the corpus, per `docs/validator-reporting.md`.
 - **Phase 2 — transform admissibility.** Fold/compaction inner loops
   assert topology preservation via `diff` before full validation;
   measure the latency win against the RFC-064 threshold guard
@@ -445,3 +453,51 @@ Per `CLAUDE.md` § verification protocol:
   (re-measured 3.00/5.70 ms), and K65-4. The earlier "Phase 0 gates
   run" entry stands as the pre-review record; this entry supersedes its
   K65-1 line.
+- **2026-08-04 — Phase 1 slice 1: one pairing derivation, dispatched
+  integrity.** Before: FOUR underground-pairing implementations
+  (`belt_flow::build_ug_pairs` direction-only; `belt_structural`'s
+  private name-filtered copy; `check_underground_belt_pairs`'s inline
+  name-filtered loop; connectivity's Phase 0 reuse of the first). After:
+  ONE, canonical in `connectivity`, name-filtered — adopting the
+  stricter U5-true semantics the check and `belt_structural` already
+  used, which closes the review's recorded fidelity gap. The semantic
+  delta (direction-only → name-filtered) reaches `belt_flow`'s six lane-
+  walker call sites and `belt_detour`; it can differ only on interleaved
+  mixed-tier undergrounds on one axis, which the engine never emits —
+  gate is the full suite, verdict-identical. `check_underground_belt_
+  pairs` now consumes the canonical pairs and keeps only its reporting
+  (reach, interception, orphans); the refactor is order-preserving so
+  issue lists are byte-identical. `check_record_integrity` joined the
+  `validate()` dispatch — notable side effect: every `validate()` caller
+  (including `accept_if_no_worse` and the cut loops) now rejects
+  record-stale candidates by construction. CLAUDE.md's "36 functional
+  checks" was stale at 39 before this; corrected to 40.
+  `belt_dir_map_from` stays in `belt_flow` on purpose: its
+  `skip_balancers` variant filters by sushi/balancer segment policy —
+  validator policy, not geometry — and moving half a function invites
+  drift. New pins: cross-tier non-pairing (U5) unit test; dispatched
+  stale-ledger detection through the public `validate()`.
+- **2026-08-04 — Phase 1 verification: independent-agent review DIED on
+  the account's weekly usage limit mid-run; the equivalence probes were
+  executed inline instead** (a process deviation, recorded per house
+  rule; the PR-side second-opinion bot still reviews the pushed SHA).
+  Probe results, all from a seeded-random UG-soup harness (temporary
+  test, deleted after use) that reconstructed the pre-refactor pairing
+  and check logic verbatim from git HEAD:
+  (A) `check_underground_belt_pairs` old-vs-new across 400 soups (200
+  same-tier, 200 mixed-tier), 3,863 issues compared field-by-field —
+  **byte-identical, including order**. (B) the primitive's name-filter
+  tightening is same-tier-inert (0/200 divergences) and bit on 32/200
+  mixed-tier soups — the probe has discriminating power, and the corpus
+  never builds mixed-tier interleavings. (C) the orphan-output
+  `pairs.contains_key` form diverges from the old `used_outputs` form
+  ONLY when an unpaired output physically overlaps a paired tile —
+  reachable solely through entity overlap, itself a hard Error from
+  `check_entity_overlaps`; accepted and documented rather than coded
+  around. (D) dispatched-integrity cost: the naive band-populated scan
+  measured **11.01 ms/call** at 20k entities × 50 bands — a real tax on
+  fold-search candidate validation — and was restructured to collect
+  machines once per call (index-per-recipe map serving both RI-1
+  directions): **0.27 ms/call**, 40× better, negligible in any loop.
+  Full suite with the slice applied: green except exactly the two
+  pre-existing tier4/scoreboard failures (unchanged profiles).

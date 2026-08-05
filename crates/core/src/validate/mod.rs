@@ -914,6 +914,12 @@ pub fn validate(
         }),
         Box::new(|| check_unresolved_junctions(layout)),
         Box::new(|| check_boundary_record_integrity(layout)),
+        // RFC-065 Phase 1: record-vs-geometry integrity (effective_rows
+        // bands, power_wires indices) joins the dispatch so every
+        // validate() caller — including the compaction/fold admission
+        // loops — guards the records automatically. Zero findings on the
+        // green corpus by the Phase 0 parity gate.
+        Box::new(|| crate::connectivity::check_record_integrity(layout)),
         Box::new(|| {
             solver
                 .map(|s| check_stranded_byproducts(layout, s))

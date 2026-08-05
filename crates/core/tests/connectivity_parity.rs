@@ -241,6 +241,31 @@ fn detection_stale_power_wires_fire() {
     );
 }
 
+/// Phase 1 dispatch pin: record integrity now runs inside `validate()`
+/// itself, so a stale-ledger artifact fails validation with no special
+/// tooling — the property that makes every future transform's admission
+/// loop guard the records automatically.
+#[test]
+fn dispatched_validate_catches_stale_ledger() {
+    let (sr, layout) = build(
+        "iron-gear-wheel",
+        1.0,
+        "assembling-machine-2",
+        &["iron-plate"],
+        LayoutOptions::from_belt_tier(None),
+    );
+    let mut stale = layout.clone();
+    for e in &mut stale.entities {
+        e.y += 50;
+    }
+    let issues = issues_of(&stale, &sr);
+    assert!(
+        issues.iter().any(|i| i.category == "record-effective-rows"),
+        "validate() must now carry record-integrity findings for a stale ledger: {:#?}",
+        issues.iter().map(|i| &i.category).collect::<Vec<_>>()
+    );
+}
+
 /// Regression pin for the RFC-065 compaction fix: after
 /// `compact_validated_geometry`, the `effective_rows` ledger must describe
 /// the compacted geometry (RI-1 clean). The second half reconstructs the
