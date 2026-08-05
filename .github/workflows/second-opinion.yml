@@ -36,15 +36,19 @@ jobs:
     # The gates live lower instead: the runner itself skips drafts with a
     # real green conclusion (exit 0), and the fork gate is on the step.
     runs-on: ubuntu-latest
-    # Passes run in PARALLEL (second-opinion v1.3.0+ uses a ThreadPoolExecutor
-    # for OpenRouter), so K=3 costs about one pass of wall-clock, not three.
-    # Worst case is therefore ~1800s for the slowest pass + the union-merge
-    # call (its own 600s HTTP timeout) + the docker-action image build (~30s
-    # measured) = ~40 min, leaving ~20 min of headroom in 60. Do not read this
-    # as sequential: 3 x 1800s would blow the cap mid-pass and skip the
-    # degraded report entirely, which is strictly worse than a pass timeout.
+    # Budget, worst case, PARALLEL passes (verified: @v1 == v1.5.0 uses a
+    # ThreadPoolExecutor for OpenRouter, so K=3 costs ~one pass of wall-clock):
+    #   1800s slowest pass + 1200s merge + ~300s cold image build = ~55 min.
+    # The merge is 1200s not 600s because second-opinion retries it once on a
+    # flake (its #21), each attempt with its own 600s HTTP timeout — raising the
+    # pass timeout without re-doing this arithmetic is how the cap gets eaten.
+    # 90 min leaves ~35 min of margin and also survives the SEQUENTIAL reading
+    # (3 x 1800 + 1200 = 100 min) degrading to a pass timeout rather than a
+    # job-cap kill for all but the pathological case. A job cap firing mid-pass
+    # skips the degraded report entirely — no annotation, no failure notice —
+    # which is strictly worse than the timeout it replaces.
     # Typical observed runtime is ~15-20 min.
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       pull-requests: write
@@ -81,6 +85,12 @@ jobs:
           # Dropping artifacts/** takes that PR to 13 of 16 — every source file —
           # at the 300k cap set below. (12 of 16 at the previous 200k cap; the
           # earlier "12" figure predates the cap bump.)
+          # `**/*.fls` covers the repo's OTHER committed generated blobs: 10 snapshot
+          # dumps, ~144KB, regenerated and committed by the very layout PRs this
+          # reviews — the same starvation vector under a different name. (The 645
+          # PNGs under web/public/icons are already covered by the default **/*.png.)
+          # `artifacts/**` has no files on main yet — it arrives with #575, whose diff
+          # is where the starvation was measured (3 files, 84% of that diff).
           # NOTE: this input REPLACES the action's default list rather than
           # extending it, so the defaults are re-listed here verbatim. Adding a
           # glob without them would silently re-admit lockfiles and images.
@@ -90,7 +100,7 @@ jobs:
             **/build/**,**/dist/**,**/node_modules/**,**/vendor/**,
             **/*.png,**/*.jpg,**/*.jpeg,**/*.webp,**/*.gif,**/*.svg,
             **/*.pdf,**/*.ico,
-            artifacts/**
+            artifacts/**,**/*.fls
           # The 60k default was sized for 128k-context models. This model
           # has 1M context, and layout-engine PRs here routinely exceed
           # 60k chars of diff. 300k because 200k still truncated #575 once
@@ -108,9 +118,8 @@ jobs:
           # ONE pass fails, but a systematic cause takes all three together.
           # Redundant with the action's own default since v1.5.0, kept as an
           # explicit guard so a future default change cannot silently shorten it.
-          # Budget check: 1800s pass + up to 600s merge + ~30s build = ~40 min of
-          # the 60 min job cap. A job cap firing mid-pass would skip the degraded
-          # report entirely, so the remaining ~20 min is the margin that matters.
+          # See the job-budget comment above: the merge can retry once, so the
+          # worst case is 1800 + 1200 + build, not 1800 + 600.
           pass-timeout-seconds: "1800"
           # Persist per-pass pi session transcripts under the runner workspace so
           # the step below can upload them as an artifact. Lets us replay a
