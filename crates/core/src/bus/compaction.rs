@@ -549,12 +549,18 @@ fn accept_if_no_worse(
 pub struct CutAdmissionStats {
     pub validates_run: usize,
     pub prefilter_rejects: usize,
+    /// Of `validates_run`, how many the validator rejected on Error
+    /// severity — the only subset a topology pre-filter could ever have
+    /// reject-fasted. The honest coverage denominator: with the filter off
+    /// this is total Error volume; with it on, the misses.
+    pub error_discards: usize,
 }
 
 impl CutAdmissionStats {
     fn absorb(&mut self, other: CutAdmissionStats) {
         self.validates_run += other.validates_run;
         self.prefilter_rejects += other.prefilter_rejects;
+        self.error_discards += other.error_discards;
     }
 }
 
@@ -595,6 +601,9 @@ fn cut_admission(
         Err(error) => error.issues,
     };
     let admitted = !issues.iter().any(|issue| issue.severity == Severity::Error);
+    if !admitted {
+        stats.error_discards += 1;
+    }
     (admitted, candidate_graph)
 }
 
@@ -4608,7 +4617,29 @@ pub fn search_snake_fold(
     solver: &SolverResult,
     max_folds: usize,
 ) -> FoldSearch {
+    search_snake_fold_with_stats(layout, solver, max_folds).0
+}
+
+/// The fold search with admission telemetry returned (RFC-065 Phase 2b).
+///
+/// There is deliberately NO topology pre-filter on this path. Phase 2b
+/// built and measured one (anomaly-scan reject before `profile()`) and
+/// killed it on the RFC's pre-registered criterion: across the fold
+/// corpus the Error-discard volume a sound filter could reject-fast is
+/// ZERO — `fold_snake`'s own refusal machinery (`FoldRefusal`)
+/// structurally refuses Error-certain geometry before a candidate ever
+/// exists, and every candidate that reaches `validate()` either passes
+/// or regresses on warnings, which no Error-certain filter may touch.
+/// These counters keep that negative result checkable
+/// (`phase2b_fold_prefilter_measurement` in `connectivity_parity.rs`).
+pub fn search_snake_fold_with_stats(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    max_folds: usize,
+) -> (FoldSearch, CutAdmissionStats) {
     use crate::validate::{self, LayoutStyle};
+
+    let mut stats = CutAdmissionStats::default();
 
     let profile = |l: &LayoutResult| -> Option<BTreeMap<String, usize>> {
         let issues = validate::validate(l, Some(solver), LayoutStyle::Bus).ok()?;
@@ -4626,13 +4657,13 @@ pub fn search_snake_fold(
         validation_regressions: BTreeMap::new(),
     };
     let Some(baseline) = profile(layout) else {
-        return out;
+        return (out, stats);
     };
 
     let legal = legal_fold_columns(layout);
     out.legal_columns = legal.len();
     if legal.is_empty() {
-        return out;
+        return (out, stats);
     }
     let snap = |target: i32| -> Option<i32> {
         legal.iter().copied().min_by_key(|&f| (f - target).abs())
@@ -4669,7 +4700,9 @@ pub fn search_snake_fold(
                     continue;
                 }
             };
+            stats.validates_run += 1;
             let Some(got) = profile(&folded) else {
+                stats.error_discards += 1;
                 continue;
             };
             // No new category, and no category worse than the source.
@@ -4698,7 +4731,7 @@ pub fn search_snake_fold(
     }
 
     out.best = best.map(|(_, folds, layout)| FoldOutcome { folds, layout });
-    out
+    (out, stats)
 }
 
 /// Columns a fold may legally cut, i.e. those that pass between entities

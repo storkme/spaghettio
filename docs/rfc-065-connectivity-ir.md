@@ -1,6 +1,9 @@
 # RFC-065: Connectivity IR — a derived topology lens for `LayoutResult`
 
-Status: Active — Phase 0 landed; Phase 1 slice 1 landed (2026-08-05).
+Status: Active — Phase 0 landed; Phase 1 slice 1 landed; Phase 2 closed
+by measurement (2026-08-05): cut-side primitive + telemetry landed,
+fold-side pre-filter killed on the pre-registered ≥30% criterion
+(Error-catchable share of rejected fold candidates measured at ≤0.8%).
 Registry: `docs/rfcs.md` RFC-065.
 
 ## Summary
@@ -881,3 +884,43 @@ Per `CLAUDE.md` § verification protocol:
   candidates that validation rejects on the fold corpus (chain-mil5ore
   + the two admissible row-bus fixtures), the mapping machinery is not
   worth its complexity — measure on the spike before wiring.
+- **2026-08-05 — Phase 2 slice 2b: fold-side pre-filter KILLED on the
+  pre-registered criterion; the measurement instrumentation is the
+  slice's deliverable.** Design first: the identity map slice 2a scoped
+  turned out to be unnecessary — the fold search's `profile()` returns
+  `None` (silent discard) for any Error-carrying candidate, so a
+  candidate-only anomaly scan (`scan_graph_anomalies`: unpaired UG
+  halves, unbound hands, same-carries head-ons — all Error-certain)
+  is sound with no base comparison and no index mapping at all. That
+  version was built, wired toggleably, and held the K65-5 byte-identity
+  pin on the admissible fold fixture (AC@5-from-plates). MEASUREMENT
+  (via the new `CutAdmissionStats::error_discards` counter — of the
+  validates run, how many the validator Error-rejected, i.e. the only
+  volume any sound Error-certain filter could ever reject-fast):
+  gear15-ore 0 discards / 0 validates (130 structural refusals),
+  ec10-ore 0/0 (30 refusals), ac5-plates 0/62 (all 62 pass or
+  warning-regress), chain-mil5ore 1/151 (119 warning-regression
+  rejects). Of the corpus's 120 validation-rejected candidates, ≤1
+  (0.8%) was Error-class — the ≥30% criterion is tripped by a factor
+  of ~40. WHY: `fold_snake`'s `FoldRefusal` machinery structurally
+  refuses Error-certain geometry before a candidate exists (that was
+  RFC-057's design), so validation volume is spent on candidates that
+  pass or regress on warnings — untouchable by a sound Error-certain
+  filter. DISPOSITION per the stop rule: the fold-side filter is
+  REMOVED, not shipped default-off (62–151 dead graph derivations per
+  search for zero savings); what ships is the admission telemetry
+  (`search_snake_fold_with_stats`, `error_discards` on both paths) and
+  the two `#[ignore]` measurement probes
+  (`phase2b_fold_prefilter_measurement` in `connectivity_parity.rs`,
+  `phase2b_fold_admission_volume_chain_mil5ore` in
+  `cell_composition.rs`) that keep the negative result checkable. The
+  cut-side filter (slice 2a) stays as committed: byte-identity pinned
+  (now also counter-form: rejects must map 1:1 onto baseline Error
+  discards), negligible volume (6 validates on its pin fixture), and
+  it is the `error_certain_regression` primitive's only production
+  call site — the primitive's real customers are Phase 3 transforms,
+  which will NOT have per-transform refusal machinery. CONSEQUENCE for
+  the backlog: "fold identity map" is moot (dropped); the fold-search
+  cost lever is not Error rejection but the 119-strong
+  warning-regression volume — any future slice there must predict
+  *warning* profiles from the graph, a different (unscoped) premise.

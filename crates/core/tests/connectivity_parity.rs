@@ -385,10 +385,68 @@ fn phase2_prefilter_is_outcome_identical() {
         stats_off.validates_run,
         "every candidate must be either validated or reject-fasted: {stats_on:?} vs {stats_off:?}"
     );
-    eprintln!(
-        "phase2a cut-path prefilter: {} rejects / {} baseline validates",
-        stats_on.prefilter_rejects, stats_off.validates_run,
+    // Soundness in counter form: every reject-fast must correspond to a
+    // candidate the baseline run Error-discarded — the filter may convert
+    // Error discards into cheap rejects, never touch anything else.
+    assert_eq!(
+        stats_on.error_discards + stats_on.prefilter_rejects,
+        stats_off.error_discards,
+        "reject-fasts must map 1:1 onto baseline Error discards: {stats_on:?} vs {stats_off:?}"
     );
+    eprintln!(
+        "phase2a cut-path prefilter: {} rejects / {} Error discards / {} baseline validates",
+        stats_on.prefilter_rejects, stats_off.error_discards, stats_off.validates_run,
+    );
+}
+
+/// RFC-065 Phase 2b measurement (not a gate): fold-search admission volume
+/// across the pre-registered row-bus corpus, against the ≥30% reject-fast
+/// kill criterion. Run with `--ignored --nocapture`. The cell fixture
+/// (chain-mil5ore) lives with `SimFixture` in `cell_composition.rs` and is
+/// measured by the probe there.
+///
+/// RESULT (2026-08-05, the measurement that killed the fold-side
+/// pre-filter): `error_discards` is ZERO on every fixture — gear15-ore
+/// 0/0 validates (130 structural refusals), ec10-ore 0/0 (30 refusals),
+/// ac5-plates 0/62 (62 validates, all pass or warning-regress). A sound
+/// Error-certain filter had nothing to reject-fast, so it was removed
+/// rather than shipped as dead per-candidate derivation cost.
+#[test]
+#[ignore = "measurement probe — prints fold-admission volume per fixture"]
+fn phase2b_fold_prefilter_measurement() {
+    use spaghettio_core::bus::compaction::search_snake_fold_with_stats;
+
+    struct Fx {
+        label: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        inputs: &'static [&'static str],
+    }
+    let fixtures = [
+        Fx { label: "gear15-ore", item: "iron-gear-wheel", rate: 15.0,
+             machine: "assembling-machine-2", inputs: &["iron-ore"] },
+        Fx { label: "ec10-ore", item: "electronic-circuit", rate: 10.0,
+             machine: "assembling-machine-1", inputs: &["iron-ore", "copper-ore"] },
+        Fx { label: "ac5-plates", item: "advanced-circuit", rate: 5.0,
+             machine: "assembling-machine-2",
+             inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"] },
+    ];
+    for fx in fixtures {
+        let (sr, layout) = build(
+            fx.item, fx.rate, fx.machine, fx.inputs,
+            LayoutOptions::from_belt_tier(None),
+        );
+        let compact = compact_validated_geometry(&layout, &sr);
+        let (search, stats) = search_snake_fold_with_stats(&compact, &sr, 4);
+        eprintln!(
+            "{}: validates={} error_discards={} regression_rejects={} \
+             refusals={} legal_columns={} best={:?}",
+            fx.label, stats.validates_run, stats.error_discards,
+            search.rejected_by_validation, search.refusals.len(),
+            search.legal_columns, search.best.as_ref().map(|b| &b.folds),
+        );
+    }
 }
 
 /// Regression pin for the RFC-065 compaction fix: after
