@@ -644,10 +644,15 @@ pub fn error_certain_regression(
 
     // New same-carries head-on: conflicts are sorted+deduped, so a merge
     // walk finds additions; only same-carries ones are Error-certain.
+    // The kind guard is future-proofing (bot round 1 on PR #579): HeadOn
+    // is the only variant the derive emits today, but this class must not
+    // silently broaden the day a validator-tolerated conflict kind is
+    // added.
     let before_set: std::collections::BTreeSet<Conflict> =
         before.conflicts.iter().copied().collect();
     for c in &after.conflicts {
-        if !before_set.contains(c)
+        if matches!(c.kind, ConflictKind::HeadOn)
+            && !before_set.contains(c)
             && layout_after.entities[c.a].carries == layout_after.entities[c.b].carries
         {
             let e = &layout_after.entities[c.a];
@@ -1132,17 +1137,93 @@ mod tests {
             "same-carries head-on must be error-certain"
         );
 
-        // RETARGET: slide the drop belt one tile so the hand re-binds to a
-        // different (still valid) target — must NOT be flagged.
+        // RETARGET: replace the drop belt with a 3x3 machine whose footprint
+        // covers the drop tile (4,4) — the hand re-binds from belt to
+        // machine. Must NOT be flagged (and would fall through even as a
+        // pure loss, per the removed hand class). The edge assertion pins
+        // that this fixture really is a retarget, not an unbound hand
+        // (bot round 1 on PR #579 claimed the drop tile goes empty).
         let mut retarget = base.clone();
-        retarget.entities[6].name = "transport-belt".to_string();
-        // Replace the drop belt with a machine occupying the drop tile:
-        // hand now drops into a machine — a binding, not a loss.
         retarget.entities[6] = machine(4, 3, "iron-gear-wheel");
         let g4 = derive_connectivity(&retarget);
         assert!(
+            edge(&g4, 5, 6, EdgeKind::InserterDrop),
+            "fixture must re-bind the drop to the machine: {:?}",
+            g4.edges
+        );
+        assert!(
             error_certain_regression(&g0, &g4, &retarget).is_none(),
             "a retargeted hand must fall through to full validation"
+        );
+    }
+
+    /// The Error-CERTAIN half of the detector contract, checked against
+    /// `validate()` itself rather than asserted in prose (bot round 1 on
+    /// PR #579): for each class the detector fires on, the after-layout
+    /// must carry an Error in the corresponding validator category that
+    /// the base layout does not. A class that fires without its validator
+    /// Error is exactly the unsoundness the adversarial review
+    /// demonstrated — this pin makes that a one-line failure.
+    #[test]
+    fn error_certain_classes_are_validator_errors() {
+        use crate::validate::{self, LayoutStyle, Severity};
+        use EntityDirection::East;
+
+        let error_categories = |l: &LayoutResult| -> std::collections::BTreeSet<String> {
+            let issues = match validate::validate(l, None, LayoutStyle::Bus) {
+                Ok(issues) => issues,
+                Err(error) => error.issues,
+            };
+            issues
+                .into_iter()
+                .filter(|i| i.severity == Severity::Error)
+                .map(|i| i.category)
+                .collect()
+        };
+
+        let base = layout(vec![
+            belt(0, 0, East),
+            ug(1, 0, East, "input"),
+            ug(4, 0, East, "output"),
+            belt(5, 0, East),
+        ]);
+        let g0 = derive_connectivity(&base);
+        let base_errors = error_categories(&base);
+
+        // Span loss (still an entrance): check #19's category must appear.
+        let mut severed = base.clone();
+        severed.entities[2].y = 9;
+        let g1 = derive_connectivity(&severed);
+        assert!(
+            error_certain_regression(&g0, &g1, &severed).is_some(),
+            "detector must fire on the severed span"
+        );
+        assert!(
+            !base_errors.contains("underground-belt"),
+            "base fixture must not already carry the category: {base_errors:?}"
+        );
+        assert!(
+            error_categories(&severed).contains("underground-belt"),
+            "span loss fired but validate() has no underground-belt Error — \
+             the class is not Error-certain"
+        );
+
+        // New same-carries head-on: check_belt_junctions' category.
+        let mut headon = base.clone();
+        headon.entities[3].direction = EntityDirection::West;
+        let g2 = derive_connectivity(&headon);
+        assert!(
+            error_certain_regression(&g0, &g2, &headon).is_some(),
+            "detector must fire on the same-carries head-on"
+        );
+        assert!(
+            !base_errors.contains("belt-junction"),
+            "base fixture must not already carry the category: {base_errors:?}"
+        );
+        assert!(
+            error_categories(&headon).contains("belt-junction"),
+            "head-on fired but validate() has no belt-junction Error — \
+             the class is not Error-certain"
         );
     }
 

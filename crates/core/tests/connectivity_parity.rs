@@ -462,11 +462,19 @@ fn phase2_prefilter_identity_on_ug_normalizing_cut() {
         stats_off.error_discards,
         "reject-fasts must map 1:1 onto baseline Error discards: {stats_on:?} vs {stats_off:?}"
     );
-    // Guard the fixture itself: the cut loop must actually be doing the
-    // collapsing here, or this pin has gone vacuous too.
+    // Guard the fixture itself, both ways it could go vacuous: the cut
+    // loop must be doing the collapsing, and the pre-filter must actually
+    // have evaluated index-stable candidates (a fixture that stops
+    // producing the in-place-normalize shape would otherwise silence this
+    // pin without failing anything — bot round 1 on PR #579).
     assert!(
         off.width < before.width,
         "fixture regressed — the validated cut loop no longer collapses the gap"
+    );
+    assert!(
+        stats_on.prefilter_evals > 0,
+        "fixture regressed — the pre-filter never engaged (no index-stable \
+         candidates reached the diff): {stats_on:?}"
     );
 }
 

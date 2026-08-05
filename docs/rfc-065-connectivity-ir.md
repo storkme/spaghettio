@@ -972,3 +972,33 @@ Per `CLAUDE.md` § verification protocol:
   pass" (regression_rejects=0); the 2a entry's "EC@20: one validate"
   stands as a session observation but has no committed instrument —
   treat the four probe-backed numbers as the reproducible record.
+- **2026-08-05 — PR #579 bot round 1 (second-opinion, union ×2): three
+  fixes pushed, one refuted with a committed assertion, one answered
+  in-thread.** (1) Major, and the round's real catch: the
+  "error-certain" contract rested on prose — the unit pins proved the
+  detector FIRES but never ran `validate()` to prove the classes are
+  Error-certain. Fixed with
+  `error_certain_classes_are_validator_errors`: each class's
+  after-layout must carry the specific validator Error category
+  (`underground-belt` for span loss, `belt-junction` for head-ons)
+  that the base lacks — an unsound class is now a one-line failure,
+  not a prose dispute. (2) Minor, accepted: the head-on class lacked a
+  `ConflictKind::HeadOn` guard (correct today only because HeadOn is
+  the sole variant; would silently broaden with a new kind) — guard
+  added. (3) Minor, accepted: pin-vacuousness had a second face — the
+  UG pin's `off.width` guard proved compaction happened, not that the
+  filter ENGAGED. Added `CutAdmissionStats::prefilter_evals`
+  (count-equality branch taken) and the UG pin now asserts it nonzero.
+  (4) Minor, REFUTED: the claim that the retarget sub-case's drop tile
+  goes empty is wrong on geometry — `machine(4,3)` is a 3×3
+  assembling-machine-2 covering the (4,4) drop tile; settled by
+  asserting the `InserterDrop 5→6` edge exists in the retarget
+  fixture (the dead `name` assignment the bot also flagged was real
+  and removed). (5) The "no fixture drives `prefilter_rejects > 0`"
+  gap is answered in-thread, not fixed: through the production cut
+  loop no such fixture is REACHABLE — cuts only shorten spans, occupied
+  columns aren't cuttable, and adjacent pairs normalize in place;
+  that unreachability is the Phase 2 measurement (zero catchable
+  volume), i.e. the reason the filter is off. Primitive-level
+  soundness is now held by the direct contract pin instead, which is
+  strictly stronger than a wired-path reject would be.

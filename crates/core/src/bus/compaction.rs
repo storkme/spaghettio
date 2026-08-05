@@ -554,6 +554,12 @@ pub struct CutAdmissionStats {
     /// reject-fasted. The honest coverage denominator: with the filter off
     /// this is total Error volume; with it on, the misses.
     pub error_discards: usize,
+    /// How many candidates the pre-filter actually EVALUATED (the
+    /// count-equality guard admitted them to the diff). Identity pins
+    /// assert this is nonzero so a fixture that quietly stops producing
+    /// index-stable candidates fails loudly instead of going vacuous
+    /// (bot round 1 on PR #579).
+    pub prefilter_evals: usize,
 }
 
 impl CutAdmissionStats {
@@ -561,6 +567,7 @@ impl CutAdmissionStats {
         self.validates_run += other.validates_run;
         self.prefilter_rejects += other.prefilter_rejects;
         self.error_discards += other.error_discards;
+        self.prefilter_evals += other.prefilter_evals;
     }
 }
 
@@ -586,6 +593,7 @@ fn cut_admission(
 
     let mut candidate_graph = None;
     if prefilter && candidate.entities.len() == current.entities.len() {
+        stats.prefilter_evals += 1;
         let base = current_graph
             .get_or_insert_with(|| crate::connectivity::derive_connectivity(current));
         let cand = crate::connectivity::derive_connectivity(candidate);
