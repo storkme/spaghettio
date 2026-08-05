@@ -71,12 +71,14 @@ uranium voider). With the tuning now making sim ~2.7× cheaper, closing the
 if the coordinator wants the stronger gate. Otherwise the subset verdict stands
 as recorded.
 
-### 7. Meter EC-supply residual: PU-from-ore −13% (from meter-fluid, #570)
+### 7. Meter productivity-parity residual: PU-from-ore −13% (from meter-fluid, #570)
 Pick-up entry so the deferral is actually tracked here (the meter
 `meter-divergence.md` records the full evidence). The fast meter is −13% on
-`tier5_processing_unit_from_ore_am3` vs the sim — an **upstream EC supply**
-divergence, not a fluid one and (per the 08-05 revision below) not a downstream
-belt-delivery one either: the meter matches the sim within ±4% on the whole
+`tier5_processing_unit_from_ore_am3` vs the sim. Most likely **not a layout,
+belt or fluid divergence at all** — the leading hypothesis is a productivity
+tech-state gap between the sim and the meter (below). Three earlier causes were
+proposed and retired in turn: belt-cycle order, head-hog distribution, and
+upstream EC/plate production. The meter matches the sim within ±4% on the whole
 direct chain, and its PU output sits at 99.2% of what its own EC production can
 support (at that supply level — see the ceiling caveat below). Stated against both bases: 1.716/s is **0.271/s below the
 sim's 1.987/s** (the −13.6% sim-relative residual) and 0.284/s below the 2.0/s
@@ -99,22 +101,34 @@ reached 1.754/s, which needs 42.1 EC/s, above the 41.5/s the baseline made — s
 EC production itself responds to belt-model changes. See `meter-divergence.md`.)
 The dominant term is EC underproduction itself, tracking the ~13% plate
 shortfall upstream.
-Deferred deliberately. The defect is **relocated, not retired** — that is the
-whole content of the 08-05 revision. The previously nominated distribution /
-merge-priority / head-hog-fairness change is bounded at ≈5% by the ceiling
-arithmetic, but real Factorio delivered 1.987 PU/s on this fixture, so it moved
-≈47.7 EC/s (1.987 × 24) and the meter's 41.5 EC/s is ~13% short of that. The
-meter's PU stage is behaving (99.2% of what its own EC allows); the divergence
-lives in **EC/plate production**. Do *not* run the ceiling argument on the sim
-to conclude it contradicts itself — its intermediates are indicative, its
-target figure is the reference this calibration is defined against, and an
-earlier revision of this entry inverted that hierarchy to claim the meter was
-right and the sim anomalous. Factorio built the factory and it delivered ~1.99
-PU/s; the meter cannot, and that is the open question. If reopened: why does
-the meter's plate/EC chain produce ~13% less than the real one — not EC
-distribution (≈5% of the gap), not the cycle order (≈14% of the gap — larger,
-but still not the cause). Needs a sim run with
-`timeseries` captured so per-machine detail exists on the reference side.
+**2026-08-05, third revision — the "upstream EC/plate production" reading is
+retracted.** It rested on imputing 47.7 EC/s from the sim's PU output
+(1.987 × 24). The sim's own copper-cable measurement refutes that: EC takes 3
+cable and AC takes 4, so its reported figures imply 3×43.2 + 4×3.59 =
+**143.96/s** against **143.9/s** measured — a 0.04% match — while the imputed
+47.7 would need 157.5/s, 9.4% high. The sim's reported EC is corroborated by an
+independent measurement in the same run; the imputation is not. Taken at face
+value the meter's EC is only −3.9%, inside its own band.
+**Leading hypothesis: a productivity tech-state parity gap.**
+`crates/sim-harness/src/scenario.rs` calls `force.research_all_technologies()`,
+and the tech-state parity block directly below it corrects only inserter
+capacity (#370) and belt stacking (#385) — nothing corrects productivity
+research. `crates/meter/src/machine.rs` documents that it deliberately takes
+nothing from `module_policy` and not `effective_crafting_speed`, so the meter
+models no productivity at all. The sim's effective **21.74 EC/PU** against the
+recipe's 24 implies ≈10%, matching Space Age's +10%/level to 0.4%; compounded
+with the meter's −3.9% EC deficit that is −12.7% of the −13.6% observed,
+leaving ~0.9pp inside the fixture's noise. Same failure class as #370/#385, and
+the fix would be the same shape — align the sim's productivity with the
+fixture's declared level, or teach the meter it — **not** a distribution,
+merge-priority or belt-model change.
+**Deferred, and deliberately not fixed on arithmetic.** This item has now
+proposed and retired three root causes, so the bar for the fourth is a
+measurement: dump the force's realized `processing-unit` productivity bonus in
+a sim run — the self-audit pattern the inserter and belt-stacking parity blocks
+already use — and compare against the meter's implicit zero. Only if that
+disconfirms does the upstream-supply question reopen, and then with
+`timeseries` captured.
 
 ## Decided / closed (from Stage B)
 - **Never-worse holds** on the measurable subset → evidence supports

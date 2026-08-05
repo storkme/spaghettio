@@ -18,10 +18,12 @@ in-fixture AC reads −3.9%).
 ### `tier5_processing_unit_from_ore_am3` — meter ≈ −13% (`produced`)
 
 - **meter**: processing-unit 1.716/s vs sim produced 1.987/s / delivered 1.961/s.
-- **Direction**: underproduction in the **upstream EC supply**, not a fluid gap
-  — and, per the 2026-08-05 revision below, not downstream belt *delivery*
-  either. That was the 2026-08-03 reading; the ceiling arithmetic retired it.
-  Deep-dive (2026-08-03) established the surrounding figures precisely:
+- **Direction**: most likely **not a layout/belt divergence at all** — the
+  leading hypothesis is a productivity tech-state gap between the sim and the
+  meter (see the ⇒ bullet below). Three earlier readings have been retired in
+  turn: belt-cycle update order (08-04), head-hog distribution (08-05), and
+  upstream EC/plate production (08-05, third revision). Deep-dive (2026-08-03)
+  established the surrounding figures precisely, and those still stand:
   - The **sim itself** under-produces almost everything on this fixture
     (copper-plate 71.98/80, copper-cable 143.9/160, EC 43.2/48, plastic 7.2/8 —
     all ≈ −10%; petroleum-gas −17%); only the PU target reaches 99%. So plan is
@@ -95,68 +97,71 @@ in-fixture AC reads −3.9%).
     sum of independent terms**: if the cycle-order gain arrived through EC
     supply (see the ⚠ block above), it partly overlaps the dominant stage
     rather than adding to it.
-  - **The dominant term is EC underproduction itself** — 41.5/s against the
-    **≈47.7/s the real factory moved** (see below), i.e. **−13.0%
-    real-factory-relative**. Name the base carefully: 47.7 is *imputed* from
-    the sim's PU target, not the sim's reported EC. Against the sim's own
-    reported 43.2/s the meter is only −3.9%, and against the 48/s plan
-    −13.5%. Three bases, three numbers; the imputed one is the reference here
-    because it is the only one tied to output the sim actually delivered.
-    That tracks the plate shortfall upstream — iron-plate 41.9/s puts an
-    **upper bound** of 41.9 EC/s on the EC stage, at 1 plate per EC. Note it
-    is not a *binding* cap: the meter makes 41.5/s, **0.4/s (≈1%) below its
-    own plate supply**, so a small EC-stage delivery loss is unaccounted for.
-    Quantified rather than waved past, since it is the one part of the
-    residual that could still be belt-delivery in nature.
   - **The gap against each base, kept separate.** Meter 1.716/s is **0.271/s**
     below the sim's 1.987/s (the −13.6% sim-relative residual) and **0.284/s**
     below the 2.0/s ideal. Different denominators; earlier revisions of this
     entry quoted a single "~0.29/s ≈ −13%" that welded the ideal-relative
     magnitude to the sim-relative percentage.
-  - **What the sim's numbers actually license — and a trap to avoid.** It is
-    tempting to run the ceiling arithmetic on the sim too (43.2 EC/s caps PU
-    at 1.80/s, yet it reports 1.987/s) and conclude the sim contradicts
-    itself. **That inference is wrong, and a previous revision of this entry
-    made it.** The sim's intermediates are flagged *indicative* two bullets
-    above precisely because they are not a closed mass balance; its **target**
-    figure is the reference this whole calibration is defined against. Using
-    the unreliable number to impeach the reliable one inverts the hierarchy.
-    Read the other way round, the sim is informative: real Factorio delivered
-    1.987 PU/s, so it physically moved **≈47.7 EC/s** (1.987 × 24). Its
-    reported 43.2/s undercounts that by ~9% — an artifact of intermediate
-    reporting, consistent with the caveat. Against that imputed 47.7/s, the
-    meter's 41.5 EC/s is **≈13% short**. **This is an inference, not a
-    measurement**: 47.7 is a single-point estimate (1.987 × 24) from the same
-    run whose intermediates are ≈−10% throughout, and whose only *directly
-    measured* EC figure is the 43.2/s being set aside. The direction is solid
-    — the sim's factory delivered PU the meter's cannot — but the magnitude
-    inherits that run's noise and should not be quoted as a measured 13%.
-- **Verdict**: a real, meter-side divergence, **relocated upstream** — from
-  distribution at the PU machines to **EC/plate production**. The chain reads
-  cleanly: the meter's EC output is ~13% below what the real factory achieved,
-  and its PU output is 99.2% of what that reduced EC supply allows. So the PU
-  stage is behaving; the stage that is not is the one feeding it.
-  **Deferred, deliberately** — but note the defect is *relocated, not
-  retired.* An earlier revision of this entry concluded "no identified meter
-  defect left to fix" and that the meter was correctly exposing a factory that
-  cannot deliver 2/s PU. Both are overreach: Factorio delivered ~1.99/s on
-  this very fixture, so the factory demonstrably can. What the ceiling
-  arithmetic retires is the *distribution* hypothesis (≈5%), not meter fault
-  as such. Closing the item needs a reference with per-machine detail, which
-  this run cannot supply — the sim's per-machine EC distribution is not in its
-  stored `report.json` (its `timeseries` field is absent, so no per-machine
-  craft/status checkpoints were captured). Tracked as item 7 in
-  `rfc064-phase2-followups.md`; do not chase it inside this meter-fluid
-  thread.
-- **Next**: if this is ever reopened, the question to ask is why the meter's
-  **plate/EC stages** produce ~13% less than the real factory did (41.5 vs the
-  ≈47.7 EC/s implied by the sim's 1.987 PU/s) — not how EC is distributed
-  among the PU machines (≈5% of the gap at fixed supply) and not the cycle
-  order (≈14% of
-  the gap — the larger of the two minor terms, though still not the cause). It needs a sim run whose `timeseries` is captured, so per-machine
-  detail exists on the reference side. Any change needs a non-noisy,
-  sim-baselined solid fixture to be verifiable.
-  Re-measure after any belt-network (notably merger/priority) changes.
+  - **RETRACTED (2026-08-05, third revision) — the "imputed 47.7 EC/s"
+    argument.** An earlier revision reasoned: the sim delivered 1.987 PU/s, a
+    PU takes 24 EC, therefore the sim moved ≈47.7 EC/s and its *reported*
+    43.2/s must undercount by ~9%. That is falsified by the sim's own
+    copper-cable measurement, which nobody had cross-checked. EC takes 3
+    cable and AC takes 4, so the sim's reported numbers imply a cable demand
+    of 3×43.2 + 4×3.59 = **143.96/s** against a measured **143.9/s** — a
+    0.04% match. The imputed 47.7 would need 157.5/s, 9.4% above what was
+    measured. **The sim's EC figure is corroborated by an independent
+    measurement in the same run; the imputation is not.** Taking 43.2 at face
+    value, the meter's EC is only **−3.9%** — inside its own ±4% band — and
+    the "EC/plate production is the divergence" story evaporates with it.
+  - **⇒ Leading hypothesis (2026-08-05): a tech-state parity gap, not a
+    layout or belt defect at all.** If the sim really made 1.987 PU/s from
+    43.2 EC/s, its effective cost is **21.74 EC per PU** against the recipe's
+    24 — i.e. it is running with **≈10% productivity**. Two facts make that
+    concrete rather than speculative:
+    1. `crates/sim-harness/src/scenario.rs` calls
+       **`force.research_all_technologies()`**, so the sim world has every
+       productivity technology researched. The tech-state parity block
+       directly below that call corrects **only** inserter capacity (#370)
+       and belt stacking (#385), each with an explicit assignment and a
+       self-audit. **Nothing corrects productivity research.**
+    2. `crates/meter/src/machine.rs` documents that it deliberately takes
+       *nothing* from `module_policy` and not `effective_crafting_speed`, so
+       the meter models **no productivity at all**, from modules or research.
+    Space Age's processing-unit productivity is +10%/level, which predicts
+    24/1.1 = **21.82 EC/PU** against the **21.74** measured — 0.4% apart. The
+    residual decomposes as the meter's −3.9% EC deficit compounded with the
+    ≈−9.1% productivity it does not model = **−12.7%**, against −13.6%
+    observed, leaving ~0.9pp inside this fixture's noise.
+  - **⚠ NOT YET VERIFIED, and this entry has been wrong twice already.** The
+    check that would settle it is direct: dump the force's realized
+    productivity bonus for `processing-unit` in a sim run (the same pattern
+    the inserter/belt-stacking parity blocks already use to self-audit) and
+    compare against the meter's implicit 1.0. Until that is run this is a
+    hypothesis with strong arithmetic support, not a measured result. Note it
+    is the first of the three root causes proposed here to carry an
+    *independent* corroboration (the cable reconciliation) rather than resting
+    only on the quantity in dispute.
+- **Verdict**: **most likely not a meter modelling defect in the layout sense
+  at all — an instrument/reference parity gap.** The sim researches everything
+  and the meter models no productivity, so on a productivity-eligible recipe
+  the two are measuring different worlds. That is the same failure class as
+  the inserter-capacity (#370) and belt-stacking (#385) parity fixes already
+  in the scenario, and the fix would be the same shape: either set the sim's
+  productivity to the fixture's declared level, or teach the meter the
+  fixture's productivity — *not* a distribution, merge-priority or belt-model
+  change. **Deferred**, and deliberately not "fixed" on the strength of
+  arithmetic alone: this entry has now proposed three root causes
+  (belt-cycle order, head-hog distribution, upstream EC/plate production) and
+  retired all three, so the bar for the fourth is a measurement, not another
+  derivation. Tracked as item 7 in `rfc064-phase2-followups.md`.
+- **Next**: run the fixture with the force's `processing-unit` productivity
+  bonus dumped into the report, and compare against the meter's implicit zero.
+  If it confirms ≈10%, the item closes as a parity gap and the remaining
+  ≈0.9pp goes back into the noise budget. Only if it *disconfirms* does the
+  upstream-supply question reopen — and then with `timeseries` captured, so
+  per-machine detail exists on the reference side. Do **not** re-derive a
+  fourth cause from the same three numbers.
 
 ## Closed / moved entries
 

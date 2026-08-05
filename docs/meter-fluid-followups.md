@@ -2,11 +2,12 @@
 
 **Status (2026-08-05, follow-up `f5a-ptg-edge` + `fluid-followups`): Phase A + B
 LANDED and merged (#571). Calibration within ±10pp on the whole compared corpus
-EXCEPT `tier5_processing_unit_from_ore_am3` (−13%, an upstream **EC supply**
-residual — characterised, deliberately deferred; see below. Earlier status
-lines called this a SOLID belt-delivery residual and then a distribution one;
-both were retired on 2026-08-05 — the meter runs at 99.2% of its own EC-supply
-ceiling, at fixed supply). CI second-opinion
+EXCEPT `tier5_processing_unit_from_ore_am3` (−13%, most likely a **productivity
+tech-state parity gap** between the sim and the meter rather than a layout or
+belt defect — deliberately deferred pending one measurement; see below. Three
+earlier causes were proposed and retired in turn: belt-cycle order (08-04),
+head-hog distribution (08-05) and upstream EC/plate production (08-05, third
+revision)). CI second-opinion
 findings triaged: F5a stacked-PTG edge FIXED (#572); three latent code fixes
 (census precedence, chem-plant "shared box", orientation-keyed binding) were
 PROPOSED then all REVERTED on review — see the sections below; byproduct
@@ -26,14 +27,13 @@ Result over the corpus (meter `delivered_per_s`/`produced_per_s` vs sim):
 gear exact; EC + stress-EC ±0–2%; AOP/refinery exact; **the dedicated AC
 variants now ±0–2% (were −80%; the PU-from-ore exception fixture's own AC is
 −3.9%)**; PU from ore −80% → −13%. The lone residual is PU-from-ore, an
-**upstream EC supply shortfall** (not a fluid gap, and — per the 2026-08-05
-revision — not a distribution gap either): the meter's PU output sits at 99.2%
-of what its own EC production can support, so redistributing that EC perfectly
-would gain ≈5% of the gap *at fixed EC supply*. See the PU entry. (Two earlier characterisations
-were retired, both quoted against the 0.271/s gap: the 26-tile belt cycle
-≈14% and head-hog distribution ≈5%; neither is the cause, and note the cycle
-order is the larger of the two. Open RFC-064 Phase 2
-item 7.) Full divergence log:
+**instrument-parity gap, not a fluid or belt one**: the sim calls
+`research_all_technologies()` and so runs with productivity researched, while
+the meter models no productivity at all. Its effective 21.74 EC/PU against the
+recipe's 24 implies ≈10%, which with the meter's −3.9% EC deficit accounts for
+−12.7% of the −13.6% observed. See the PU entry — and note this is a
+hypothesis awaiting one measurement, after three retired predecessors. Open
+RFC-064 Phase 2 item 7. Full divergence log:
 [`meter-divergence.md`](meter-divergence.md).
 
 ## Goal / success criteria
@@ -75,12 +75,11 @@ closed — keeps crossing/stacked fluid lines isolated).
 **Phase C — calibration (close to done; one open residual).**
 - Re-run the meter corpus sweep (`examples/sweep_corpus.rs`); all compared
   fixtures within ±10pp EXCEPT `tier5_processing_unit_from_ore_am3` at −13%
-  (an **upstream EC supply shortfall**: the meter runs at 99.2% of its own
-  EC-supply ceiling, so the head-hog gradient — 12/16 PU machines at full rate,
-  the four deepest EC-constrained — accounts for only ≈5% of the gap at fixed
-  EC supply. See
-  [`meter-divergence.md`](meter-divergence.md); on that same gap base the
-  26-tile belt cycle is ≈14%, so neither it nor distribution is the cause).
+  (most likely a **productivity tech-state parity gap**: the sim researches
+  everything, the meter models no productivity. The layout-side hypotheses are
+  bounded small — head-hog distribution ≈5% of the gap at fixed EC supply,
+  belt-cycle order ≈14% — so neither is the cause. See
+  [`meter-divergence.md`](meter-divergence.md)).
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).
 
 ## Next steps / open items (2026-08-05)
@@ -127,21 +126,25 @@ four deepest (`m301/m302/m309/m310`, x=55/58) sit on EC buffers 1–12/280 (craf
 `Working` but run below rate) — but perfect redistribution would gain just
 **+0.013/s, ≈5% of the gap** — *at fixed EC supply* (the 08-04 permuted run hit
 1.754/s, needing 42.1 EC/s against the baseline's 41.5/s, so the ceiling is an
-operating point rather than an invariant; see `meter-divergence.md`). The dominant term is EC underproduction itself,
-tracking the ~13% plate shortfall upstream. **Deferred deliberately.** The
-previously nominated distribution / merge-priority / head-hog-fairness change
-is bounded at ≈5% by that arithmetic, so it is not the fix — but the defect is
-**relocated, not retired**: real Factorio
-delivered 1.987 PU/s on this fixture, so it moved ≈47.7 EC/s (1.987 × 24), and
-the meter's 41.5 EC/s is ~13% short of that. The meter's PU stage is fine —
-99.2% of what its own EC allows — so the divergence lives in **EC/plate
-production**. (Do not run the ceiling argument on the sim to conclude it
-contradicts itself: its intermediates are indicative by this doc's own caveat,
-its target figure is the reference, and an earlier revision inverted that
-hierarchy.) Closing it needs per-machine detail on the reference side, which
-this run lacks — the sim's per-machine EC distribution is not in its stored
-`report.json` (its `timeseries` field is absent, so no per-machine craft/status
-checkpoints were captured). Tracked as item 7 in
+operating point rather than an invariant; see `meter-divergence.md`).
+**2026-08-05, third revision: the "upstream EC/plate production" reading is
+retracted too.** It rested on imputing 47.7 EC/s from the sim's PU output, and
+the sim's own copper-cable measurement refutes that: 3×43.2 + 4×3.59 =
+143.96/s against 143.9/s measured, a 0.04% match, while 47.7 would need
+157.5/s. The sim's reported EC is corroborated; the imputation is not. At face
+value the meter's EC is only −3.9%, inside its band.
+**Leading hypothesis instead: a productivity tech-state parity gap.** The sim
+calls `research_all_technologies()` (`crates/sim-harness/src/scenario.rs`) and
+its parity block corrects only inserter capacity and belt stacking, not
+productivity; the meter documents that it takes nothing from `module_policy`
+and models no productivity at all. The sim's effective 21.74 EC/PU vs the
+recipe's 24 implies ≈10%, matching Space Age's +10%/level to 0.4%, and
+compounds with the −3.9% EC deficit to −12.7% of the −13.6% observed.
+**Deferred deliberately, and not fixed on arithmetic**: three causes have now
+been proposed and retired here, so the fourth needs a measurement — dump the
+force's realized `processing-unit` productivity bonus in a sim run, the same
+self-audit pattern the inserter and belt-stacking parity blocks already use.
+Tracked as item 7 in
 [`rfc064-phase2-followups.md`](rfc064-phase2-followups.md); full evidence in
 [`meter-divergence.md`](meter-divergence.md).
 
