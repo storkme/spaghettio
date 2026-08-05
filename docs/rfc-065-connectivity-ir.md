@@ -1100,3 +1100,20 @@ Per `CLAUDE.md` § verification protocol:
   fluctuating with the action's pass-degradation behavior; a
   posted-but-thin round is weaker evidence, consistent with how
   CLAUDE.md says to treat this bot's silence.
+- **2026-08-05 — merge of post-#569 main (RFC-064 eval primitives):
+  concurrent-session collision on `search_snake_fold`, resolved by
+  composition.** PR #569 refit fold admission onto
+  `verdict::never_worse` (instance-level gating through
+  `fold_point_correspondence`, owner-pre-approved as stricter than the
+  count-diff gate) while this branch was threading telemetry through
+  the same function. Resolution keeps #569's admission semantics
+  wholesale and re-threads the RFC-065 counters around it:
+  `validates_run` before the candidate validate, `error_discards` on
+  its Error-discard arm, tuple returns. Record-keeping consequence:
+  the Phase 2b corpus figures above (62/151 validates, 119 regression
+  rejects) were measured under the count-diff gate at base 32861da;
+  the stricter instance gate can only move regression-reject counts,
+  and `error_discards` — the kill criterion's numerator — counts
+  validator Errors and is gate-independent, so the 0.83% kill basis
+  stands. Probe re-runs under the new gate supersede the
+  regression-reject figures only.
