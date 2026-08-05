@@ -811,6 +811,16 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
     // RI-3: power_wires index sanity. Pole-ness comes from the canonical
     // `power_wires::is_pole` — duplicating the name list here would be the
     // exact parallel-derivation smell this RFC campaigns against.
+    //
+    // Deliberate contract split (bot round 5): `power_wires`' CONSUMERS
+    // (`wires_for`, `count_disconnected_poles`) stay tolerant of junk
+    // endpoints — defensive, must-not-panic/miscount, pinned by
+    // `count_disconnected_ignores_out_of_range_and_non_pole_endpoints` —
+    // while THIS check makes the same junk loud. Tolerance in consumers
+    // plus loudness in integrity is defense in depth, not contradiction:
+    // a stored graph indexing a reordered entity list is artifact
+    // corruption whether or not every reader survives it. `None` (never
+    // computed) is skipped — only a computed-then-invalidated graph fires.
     if let Some(wires) = &layout.power_wires {
         for &(a, b) in wires {
             for idx in [a, b] {

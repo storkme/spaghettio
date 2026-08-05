@@ -90,6 +90,26 @@ fn assert_green_and_ir_parity(name: &str, layout: &LayoutResult, solver_result: 
             "{name}: derived graph has zero {kind:?} edges — derivation went quiet"
         );
     }
+    // Exact count invariant (bot round 5: presence alone tolerates
+    // over-emission): on a validator-green layout every inserter has
+    // exactly one pickup and one drop binding, so each hand-edge kind
+    // counts exactly the inserter population — over- or under-emission
+    // of either kind fails here.
+    let inserter_count = layout
+        .entities
+        .iter()
+        .filter(|e| spaghettio_core::common::is_inserter(&e.name))
+        .count();
+    for kind in [
+        spaghettio_core::connectivity::EdgeKind::InserterPickup,
+        spaghettio_core::connectivity::EdgeKind::InserterDrop,
+    ] {
+        let n = graph.edges.iter().filter(|e| e.kind == kind).count();
+        assert_eq!(
+            n, inserter_count,
+            "{name}: {kind:?} edge count must equal the inserter population"
+        );
+    }
 }
 
 #[test]

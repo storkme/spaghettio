@@ -915,10 +915,14 @@ pub fn validate(
         Box::new(|| check_unresolved_junctions(layout)),
         Box::new(|| check_boundary_record_integrity(layout)),
         // RFC-065 Phase 1: record-vs-geometry integrity (effective_rows
-        // bands, power_wires indices) joins the dispatch so every
-        // validate() caller — including the compaction/fold admission
-        // loops — guards the records automatically. Zero findings on the
-        // green corpus by the Phase 0 parity gate.
+        // bands, power_wires indices) joins the dispatch. Scope honesty
+        // (bot round 5): this guards REMAP-path transforms (the strip/cut
+        // compaction passes) and any future transform that forgets the
+        // ledger — cleared-ledger paths (fold_snake, island placement)
+        // pass vacuously by design until graph-derived attribution lands;
+        // artifacts with no records (parsed blueprints, hand-built
+        // layouts) are structurally out of scope. Zero findings on the
+        // committed parity corpus (K65-1).
         Box::new(|| crate::connectivity::check_record_integrity(layout)),
         Box::new(|| {
             solver

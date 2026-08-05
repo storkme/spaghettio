@@ -622,3 +622,37 @@ Per `CLAUDE.md` § verification protocol:
   attribution subsumes this properly. (minor, orphan-output overlap
   delta + deliberately fragile fixtures) already recorded 2026-08-04/05.
   (nit, status header) fixed.
+- **2026-08-05 — Bot review round 5 triaged: two structural immunity
+  facts recorded, scope phrasing fixed, one count invariant added; the
+  recurring majors are converged positions.** (major, name filter
+  reaches parsed blueprints) defused by verification: neither
+  `analysis.rs` nor the mining CLI dispatches `validate()` on imported
+  blueprints, and the standing game-truth disposition applies wherever
+  the walkers do run — the old direction-only pairing modeled flow the
+  game does not perform, so any verdict it produced on mixed-tier runs
+  was the wrong verdict. (major, RI-3 "contradicts a pinned tolerant
+  contract") defused by reading the pin: `count_disconnected_ignores_
+  out_of_range_and_non_pole_endpoints` pins that the CONSUMER neither
+  panics nor mis-counts on junk endpoints — a defensive unit contract,
+  not a claim that full validation stays silent on a corrupt stored
+  graph. Tolerant consumers + loud integrity is defense in depth;
+  cross-referenced in the RI-3 comment. (major, dispatched RI-1 thin
+  coverage) the recurring top concern, now with the strongest
+  structural answer on record: RI-1 can only fire where
+  `effective_rows` exists, and ONLY the engine's bus pipeline writes
+  it — parsed blueprints, hand-built layouts, and Spaghetti-style
+  artifacts carry no ledger and are immune by construction. The
+  check's exposure is exactly the engine's own output, which is what
+  the 14-fixture corpus samples. (minor, "guards automatically"
+  overstatement) fixed — dispatch comment and module doc now scope the
+  claim: remap-path transforms guarded; cleared-ledger paths vacuous by
+  design pending graph attribution. (minor, no transform registry)
+  answered structurally: the dispatch IS the registry-free enforcement —
+  any future y-moving transform that forgets the ledger fails its own
+  tests' validate() calls; `apply_island_placement` needed review
+  archaeology only because it predated the dispatch. (minor, presence-
+  only floor) hardened: hand-edge kinds must now count EXACTLY the
+  inserter population per fixture — over-emission fails. (minor, fold
+  attribution trade in PR body + nit, stale PR title/body) fixed at the
+  source: PR #574's title and body updated to describe Phases 0 + 1
+  slice 1, the dispatch, and the behavior trade-offs explicitly.
