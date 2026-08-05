@@ -18,6 +18,7 @@ pub mod blueprint_parser;
 pub mod bus;
 pub mod classify;
 pub mod common;
+pub mod connectivity;
 pub mod density;
 pub mod fixture;
 pub mod fluid_ports;

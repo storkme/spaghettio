@@ -49,6 +49,7 @@ pub enum MachineState {
     Working,
     FullOutput,
     ItemIngredientShortage,
+    FluidIngredientShortage,
 }
 
 impl MachineState {
@@ -58,6 +59,7 @@ impl MachineState {
             MachineState::Working => "working",
             MachineState::FullOutput => "full_output",
             MachineState::ItemIngredientShortage => "item_ingredient_shortage",
+            MachineState::FluidIngredientShortage => "fluid_ingredient_shortage",
         }
     }
 }
@@ -111,6 +113,18 @@ pub struct Machine {
     /// Recipe ingredients that are fluids — recorded so the report can say
     /// so rather than silently treating the machine as solid-fed.
     pub fluid_ingredients: Vec<String>,
+    /// Fluid ingredients ON HAND, keyed by interned id. (#570 Phase A)
+    pub fluid_input: FxHashMap<u16, u32>,
+    /// (interned fluid id, per-craft amount) — the fluid side of
+    /// `ingredients`.
+    pub fluid_needs: Vec<(u16, u32)>,
+    /// Fluid products per craft (expectations), the fluid side of `products`.
+    fluid_products: Vec<(u16, f64)>,
+    /// Fractional carry for fluid products (fluid side of `product_debt`).
+    fluid_debt: FxHashMap<u16, f64>,
+    /// Finished fluid products awaiting delivery to an adjacent consumer /
+    /// boundary drain.
+    pub fluid_output: FxHashMap<u16, u32>,
 }
 
 impl Machine {
@@ -133,35 +147,36 @@ impl Machine {
 
         let mut ingredients = Vec::new();
         let mut fluid_ingredients = Vec::new();
+        let mut fluid_needs = Vec::new();
         let mut buffer_cap = FxHashMap::default();
         for ing in &recipe.ingredients {
+            let id = items.intern(&ing.name);
             if ing.type_ == "fluid" {
                 fluid_ingredients.push(ing.name.clone());
+                fluid_needs.push((id.0, ing.amount.ceil().max(1.0) as u32));
+                buffer_cap.insert(id.0, ing.amount.ceil().max(1.0) as u32 * buffer_crafts);
                 continue;
             }
-            let id = items.intern(&ing.name);
             let amount = ing.amount.ceil().max(1.0) as u32;
             ingredients.push((id, amount));
             buffer_cap.insert(id.0, amount * buffer_crafts);
         }
 
         let mut products = Vec::new();
+        let mut fluid_products = Vec::new();
         for p in &recipe.products {
-            if p.type_ == "fluid" {
-                continue;
-            }
+            let id = items.intern(&p.name);
             // Probabilistic products are credited at **expectation**, and
             // the meter does not roll dice: a stochastic meter cannot be
             // compared tick-for-tick against a deterministic baseline.
-            //
-            // Kept as an f64 expectation rather than a rounded integer.
-            // `(amount * probability).round().max(1.0)` -- the first
-            // version -- credited a whole unit per craft no matter how
-            // small the probability, so a p=0.25 recycling product was
-            // over-credited 4x and uranium-235 at p=0.007 by ~143x, while
-            // the comment above it claimed expectation. No corpus fixture
-            // exercises a probabilistic recipe, so nothing caught it.
-            products.push((items.intern(&p.name), p.amount * p.probability));
+            // (Same expectation discipline for fluid products, which go to
+            // `fluid_output` rather than belt delivery.)
+            let expect = p.amount * p.probability;
+            if p.type_ == "fluid" {
+                fluid_products.push((id.0, expect));
+            } else {
+                products.push((id, expect));
+            }
         }
 
         Some(Machine {
@@ -182,6 +197,11 @@ impl Machine {
             state: MachineState::ItemIngredientShortage,
             crafts: 0,
             fluid_ingredients,
+            fluid_input: FxHashMap::default(),
+            fluid_needs,
+            fluid_products,
+            fluid_debt: FxHashMap::default(),
+            fluid_output: FxHashMap::default(),
         })
     }
 
@@ -205,6 +225,23 @@ impl Machine {
         let take = count.min(self.room_for(item));
         if take > 0 {
             *self.input.entry(item.0).or_insert(0) += take;
+        }
+        take
+    }
+
+    /// Fluid buffer room (like [`Self::room_for`], for a fluid ingredient).
+    pub fn fluid_room_for(&self, item: ItemId) -> u32 {
+        let Some(&cap) = self.buffer_cap.get(&item.0) else {
+            return 0; // not a fluid ingredient of this recipe
+        };
+        cap.saturating_sub(self.fluid_input.get(&item.0).copied().unwrap_or(0))
+    }
+
+    /// Insert up to `fluid_room_for`; returns how many were taken.
+    pub fn insert_fluid(&mut self, item: ItemId, count: u32) -> u32 {
+        let take = count.min(self.fluid_room_for(item));
+        if take > 0 {
+            *self.fluid_input.entry(item.0).or_insert(0) += take;
         }
         take
     }
@@ -242,52 +279,64 @@ impl Machine {
         self.ingredients
             .iter()
             .all(|(id, amount)| self.input.get(&id.0).copied().unwrap_or(0) >= *amount)
+            && self
+                .fluid_needs
+                .iter()
+                .all(|(id, amount)| self.fluid_input.get(id).copied().unwrap_or(0) >= *amount)
+    }
+
+    /// The first unmet ingredient: an item id if a SOLID is short,
+    /// `None` if the machine has everything it needs.
+    fn missing(&self) -> Option<(u16, bool)> {
+        for (id, amount) in &self.ingredients {
+            if self.input.get(&id.0).copied().unwrap_or(0) < *amount {
+                return Some((id.0, false));
+            }
+        }
+        for (id, amount) in &self.fluid_needs {
+            if self.fluid_input.get(id).copied().unwrap_or(0) < *amount {
+                return Some((*id, true));
+            }
+        }
+        None
     }
 
     /// Advance one tick.
     pub fn tick(&mut self) {
         self.emitted_this_tick.clear();
-        // Fluid-fed machines cannot run in PR 3. They are held in a
-        // shortage state rather than allowed to craft from nothing, so a
-        // fluid chain under-reports honestly instead of over-reporting.
-        if !self.fluid_ingredients.is_empty() {
-            self.state = MachineState::ItemIngredientShortage;
-            return;
-        }
         if self.total_output() >= self.output_cap {
             self.state = MachineState::FullOutput;
             return;
         }
         if self.progress <= 0.0 {
             if !self.has_ingredients() {
-                self.state = MachineState::ItemIngredientShortage;
+                // Distinguish a missing fluid from a missing solid so the
+                // census is comparable to the sim's.
+                self.state = if self
+                    .missing()
+                    .map(|(_, is_fluid)| is_fluid)
+                    .unwrap_or(false)
+                {
+                    MachineState::FluidIngredientShortage
+                } else {
+                    MachineState::ItemIngredientShortage
+                };
                 return;
             }
-            // Consume and start a craft.
+            // Consume and start a craft — solids AND fluids.
             for (id, amount) in &self.ingredients {
                 *self.input.get_mut(&id.0).unwrap() -= amount;
             }
-            // ACCUMULATE, never assign. The previous craft ended with
-            // `progress` slightly below zero; that overshoot is the
-            // fractional part of the true period and must carry forward.
-            // Assigning discards it and quantises the effective period to
-            // `ceil(craft_ticks)` — a recipe at 4.5 ticks would run on a
-            // 5-tick cycle, −10% throughput, invisibly.
-            //
-            // Same discipline as `Lane::tick`, `Source::tick`,
-            // `Chest::tick` and `Inserter::cycle` — whose comment already
-            // named this rule. `Machine` was the one place not following
-            // it, which is exactly where a repeated-mistake audit should
-            // have looked and didn't.
+            for (id, amount) in &self.fluid_needs {
+                *self.fluid_input.get_mut(id).unwrap() -= amount;
+            }
+            // ACCUMULATE, never assign (see the existing comment: the
+            // fractional overshoot of `progress` must carry forward).
             self.progress += self.craft_ticks;
         }
         self.state = MachineState::Working;
         self.progress -= 1.0;
         if self.progress <= 0.0 {
-            // Fractional expectations accumulate and emit whole units as
-            // they cross 1.0, so the long-run rate is the expectation
-            // without ever inventing a fraction of an item. Rounding per
-            // craft instead would credit 0 forever for anything under 0.5.
             for (id, amount) in &self.products {
                 let debt = self.product_debt.entry(id.0).or_insert(0.0);
                 *debt += *amount;
@@ -298,6 +347,17 @@ impl Machine {
                     self.emitted_this_tick.push((id.0, whole as u32));
                 }
             }
+            // Fluid products accumulate into `fluid_output` (delivered by the
+            // Factory to an adjacent consumer / boundary, not by a belt).
+            for (id, amount) in &self.fluid_products {
+                let debt = self.fluid_debt.entry(*id).or_insert(0.0);
+                *debt += *amount;
+                let whole = debt.floor();
+                if whole >= 1.0 {
+                    *debt -= whole;
+                    *self.fluid_output.entry(*id).or_insert(0) += whole as u32;
+                }
+            }
             self.crafts += 1;
         }
     }
@@ -306,7 +366,6 @@ impl Machine {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     /// A probabilistic product must be credited at **expectation over many
     /// crafts**, not a whole unit per craft. The first version rounded up
@@ -334,6 +393,11 @@ mod tests {
             crafts: 0,
             state: MachineState::Working,
             fluid_ingredients: Vec::new(),
+            fluid_input: FxHashMap::default(),
+            fluid_needs: Vec::new(),
+            fluid_products: Vec::new(),
+            fluid_debt: FxHashMap::default(),
+            fluid_output: FxHashMap::default(),
         };
         // output_cap is unbounded here, so nothing blocks and the machine
         // crafts every tick.
@@ -460,7 +524,7 @@ mod tests {
     /// A fluid-fed recipe must refuse to run rather than craft from
     /// nothing — under-report honestly, never over-report.
     #[test]
-    fn fluid_fed_machines_refuse_to_craft_in_pr3() {
+    fn fluid_ingredient_shortage_blocks_until_water_arrives() {
         let mut items = ItemInterner::default();
         let m = Machine::new(
             "chemical-plant",
@@ -472,11 +536,28 @@ mod tests {
         );
         if let Some(mut m) = m {
             assert!(!m.fluid_ingredients.is_empty(), "sulfuric acid needs water");
+            let water = items.intern("water");
+            let iron = items.intern("iron-plate");
+            let sulfur = items.intern("sulfur");
+            // Solids present, no water -> fluid shortage, no crafts.
+            m.insert(iron, 100);
+            m.insert(sulfur, 100);
             for _ in 0..600 {
                 m.tick();
             }
             assert_eq!(m.crafts, 0);
-            assert_eq!(m.state, MachineState::ItemIngredientShortage);
+            assert_eq!(m.state, MachineState::FluidIngredientShortage);
+            // Deliver water -> the machine now crafts.
+            for _ in 0..200 {
+                m.insert_fluid(water, 100);
+            }
+            for _ in 0..1200 {
+                m.tick();
+            }
+            assert!(
+                m.crafts > 0,
+                "fluid-fed sulfuric-acid must craft once water is delivered"
+            );
         }
     }
 

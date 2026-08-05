@@ -116,7 +116,7 @@ pub struct EdgeMeasurement {
 #[derive(Debug, Clone)]
 pub struct LayoutMeasure {
     /// Non-pole entity bounding box width (RFC-064 §(a)'s footprint
-    /// convention, reusing `bus::compaction::entity_dims`).
+    /// convention, reusing `common::oriented_entity_dims`).
     pub bbox_width: i32,
     pub bbox_height: i32,
     /// `max(width, height) / min(width, height)`.
@@ -435,7 +435,7 @@ fn is_pole_entity(name: &str) -> bool {
 }
 
 /// `(min_x, min_y, max_x, max_y)` over every non-pole entity's oriented
-/// footprint (`compaction::entity_dims`), RFC-064 §(a)'s "non-pole entity
+/// footprint (`common::oriented_entity_dims`), RFC-064 §(a)'s "non-pole entity
 /// bounding box" convention. `None` if `layout` has no non-pole entities.
 fn non_pole_bbox(layout: &LayoutResult) -> Option<(i32, i32, i32, i32)> {
     let mut acc: Option<(i32, i32, i32, i32)> = None;
@@ -443,7 +443,7 @@ fn non_pole_bbox(layout: &LayoutResult) -> Option<(i32, i32, i32, i32)> {
         if is_pole_entity(&e.name) {
             continue;
         }
-        let (w, h) = compaction::entity_dims(&e.name, e.direction);
+        let (w, h) = crate::common::oriented_entity_dims(&e.name, e.direction);
         let (x0, y0, x1, y1) = (e.x, e.y, e.x + w, e.y + h);
         acc = Some(match acc {
             None => (x0, y0, x1, y1),
@@ -592,7 +592,7 @@ impl SolidGraph {
         let mut consumer_boxes: Vec<(i32, i32, i32, i32)> = Vec::new();
         for e in &layout.entities {
             let Some(recipe) = e.recipe.as_deref() else { continue };
-            let (w, h) = compaction::entity_dims(&e.name, e.direction);
+            let (w, h) = crate::common::oriented_entity_dims(&e.name, e.direction);
             let bbox = (e.x, e.y, e.x + w, e.y + h);
             if producer_set.contains(recipe) {
                 producer_boxes.push(bbox);
@@ -1060,7 +1060,7 @@ mod tests {
             height: 60,
             ..Default::default()
         };
-        let (w, h) = compaction::entity_dims("assembling-machine-1", EntityDirection::North);
+        let (w, h) = crate::common::oriented_entity_dims("assembling-machine-1", EntityDirection::North);
         let bbox = non_pole_bbox(&layout).expect("non-pole entities present");
         assert_eq!(bbox, (0, 0, w, h));
     }

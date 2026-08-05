@@ -9,13 +9,16 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use spaghettio_meter::factory::Endpoint;
-use spaghettio_meter::{Factory, Manifest, MachineState};
+use spaghettio_meter::{Factory, MachineState, Manifest};
 
 fn main() {
-    let label = std::env::args().nth(1).unwrap_or_else(|| "chain-mil5plates-d0".into());
+    let label = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "chain-mil5plates-d0".into());
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/target/tmp");
     let bp = std::fs::read_to_string(dir.join(format!("{label}.bp"))).expect("blueprint");
-    let manifest = Manifest::from_path(dir.join(format!("{label}.manifest.json"))).expect("manifest");
+    let manifest =
+        Manifest::from_path(dir.join(format!("{label}.manifest.json"))).expect("manifest");
     let mut f = Factory::build(&bp, manifest).expect("build");
 
     f.run_for(60 * 60 * 2);
@@ -30,10 +33,15 @@ fn main() {
         match m.state {
             MachineState::Working => e.1 += 1,
             MachineState::FullOutput => e.2 += 1,
-            MachineState::ItemIngredientShortage => e.3 += 1,
+            MachineState::ItemIngredientShortage | MachineState::FluidIngredientShortage => {
+                e.3 += 1
+            }
         }
     }
-    println!("{:<28} {:>5} {:>8} {:>7} {:>9}", "recipe", "n", "working", "full", "starved");
+    println!(
+        "{:<28} {:>5} {:>8} {:>7} {:>9}",
+        "recipe", "n", "working", "full", "starved"
+    );
     for (recipe, (n, w, full, starved)) in &by_recipe {
         println!("{recipe:<28} {n:>5} {w:>8} {full:>7} {starved:>9}");
     }
@@ -89,7 +97,10 @@ fn main() {
                         items
                     )
                 }
-                Endpoint::Machine(o) => format!("machine {} at {:?}", f.machines[o].recipe, f.machines[o].pos),
+                Endpoint::Machine(o) => format!(
+                    "machine {} at {:?}",
+                    f.machines[o].recipe, f.machines[o].pos
+                ),
                 Endpoint::Nothing => "NOTHING".to_string(),
             };
             println!(

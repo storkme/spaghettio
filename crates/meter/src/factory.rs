@@ -24,13 +24,15 @@ use rustc_hash::FxHashMap;
 use serde::Serialize;
 
 use crate::belt::ItemId;
-use crate::blueprint_in::{self, RawEntity};
+use crate::blueprint_in::{self, Dir, RawEntity};
 use crate::entity_data::{self, InserterKind};
+use crate::fluid::{self, MachPort};
 use crate::inserter::Inserter;
 use crate::machine::{Machine, MachineState, DEFAULT_BUFFER_CRAFTS};
 use crate::manifest::Manifest;
 use crate::network::{BeltNetwork, NetworkBuilder, TopologyNote};
 use crate::world::ItemInterner;
+use spaghettio_core::recipe_db;
 
 /// What an inserter's hand reaches on one side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +115,9 @@ pub struct Factory {
     /// `(tick, total delivered)` sampled every [`CHECKPOINT_TICKS`] since
     /// the last counter reset. Feeds the convergence test in [`Self::report`].
     checkpoints: Vec<(u64, u64)>,
+    /// Fluid pipe topology (RFC-054 Phase B): connected pipe + port + feed
+    /// components that `tick_fluids` routes through.
+    pub fluids: crate::fluid::FluidSystem,
 }
 
 /// Convergence sampling cadence, matching `spaghettio-sim`'s 3600-tick
@@ -153,6 +158,8 @@ impl Factory {
 
         // --- machines ---------------------------------------------------
         let mut machines = Vec::new();
+        let mut machine_ports: Vec<MachPort> = Vec::new();
+        let db = recipe_db::db();
         for e in entities {
             if !entity_data::is_crafting_machine(&e.name) {
                 continue;
@@ -170,7 +177,93 @@ impl Factory {
                 &mut items,
                 DEFAULT_BUFFER_CRAFTS,
             ) {
-                Some(m) => machines.push(m),
+                Some(m) => {
+                    // Collect this machine's fluid ports, bound to the recipe's
+                    // fluid items (RFC-054 Phase B). Port fluid binding is
+                    // x-ascending over each IO face EXCEPT on the machines the
+                    // engine mirrors (oil-refinery, foundry, cryogenic-plant),
+                    // whose exported orientation binds recipe fluids
+                    // x-descending (the measured rule in `spaghettio_core::
+                    // fluid_ports`). The meter's blueprint decoder does not yet
+                    // parse the `mirror` flag, so it keys the reversal on the
+                    // mirrored-machine name unconditionally — a known
+                    // simplification (a genuinely-unmirrored single instance of
+                    // those three at some orientations would mis-bind). A
+                    // complete fix must key on BOTH a parsed mirror flag AND
+                    // the engine's direction+8 wire form (the engine exporter
+                    // omits the mirror key entirely for these rotation-mirrored
+                    // machines and encodes the mirror as the +8 rotation; the
+                    // meter reads neither today). For a single-fluid face
+                    // n-1-k == k, so this only matters for multi-fluid faces.
+                    let mirrored = matches!(
+                        e.name.as_str(),
+                        "oil-refinery" | "foundry" | "cryogenic-plant"
+                    );
+                    let mi = machines.len();
+                    if let Some(rdb) = db.recipes.get(recipe) {
+                        let mut in_fluids: Vec<String> = Vec::new();
+                        for ing in &rdb.ingredients {
+                            if ing.type_ == "fluid" {
+                                in_fluids.push(ing.name.clone());
+                            }
+                        }
+                        let mut out_fluids: Vec<String> = Vec::new();
+                        for p in &rdb.products {
+                            if p.type_ == "fluid" {
+                                out_fluids.push(p.name.clone());
+                            }
+                        }
+                        let base = entity_data::base_fluid_ports(&e.name);
+                        let w = size.0 as i32;
+                        // inputs
+                        let mut in_ports: Vec<(i32, i32)> = Vec::new();
+                        for &(dx, dy, io) in base {
+                            if io == entity_data::PortIO::Input {
+                                in_ports.push(entity_data::rotate_port(e.direction, dx, dy, w));
+                            }
+                        }
+                        in_ports.sort_by_key(|p| p.0);
+                        // Mirror the engine's `port_fluid_assignment` exactly:
+                        // only the first n = fluids.len() ports are used, and a
+                        // mirrored machine binds fluid fluids[n-1-k] to port k
+                        // (i.e. fluid at recipe-index k -> port index n-1-k).
+                        let n = in_fluids.len();
+                        for (k, name) in in_fluids.iter().enumerate() {
+                            let pk = if mirrored { n - 1 - k } else { k };
+                            if let Some(&(px, py)) = in_ports.get(pk) {
+                                machine_ports.push(MachPort {
+                                    machine: mi,
+                                    x: e.x + px,
+                                    y: e.y + py,
+                                    item: items.intern(name).0,
+                                    is_input: true,
+                                });
+                            }
+                        }
+                        // outputs
+                        let mut out_ports: Vec<(i32, i32)> = Vec::new();
+                        for &(dx, dy, io) in base {
+                            if io == entity_data::PortIO::Output {
+                                out_ports.push(entity_data::rotate_port(e.direction, dx, dy, w));
+                            }
+                        }
+                        out_ports.sort_by_key(|p| p.0);
+                        let n = out_fluids.len();
+                        for (k, name) in out_fluids.iter().enumerate() {
+                            let pk = if mirrored { n - 1 - k } else { k };
+                            if let Some(&(px, py)) = out_ports.get(pk) {
+                                machine_ports.push(MachPort {
+                                    machine: mi,
+                                    x: e.x + px,
+                                    y: e.y + py,
+                                    item: items.intern(name).0,
+                                    is_input: false,
+                                });
+                            }
+                        }
+                    }
+                    machines.push(m);
+                }
                 None => notes.push(format!(
                     "cannot model {} running {recipe} at ({},{})",
                     e.name, e.x, e.y
@@ -233,9 +326,11 @@ impl Factory {
 
         // --- boundary ---------------------------------------------------
         let mut feeds = Vec::new();
+        let mut fluid_feed_tiles: Vec<(u16, (i32, i32))> = Vec::new();
         for b in &manifest.boundary_inputs {
             if b.is_fluid {
-                notes.push(format!("fluid boundary input {} not modelled", b.item));
+                let id = items.intern(&b.item).0;
+                fluid_feed_tiles.push((id, (b.x, b.y)));
                 continue;
             }
             match net.tile_at((b.x, b.y)) {
@@ -266,6 +361,24 @@ impl Factory {
             }
         }
 
+        // --- fluid pipe network (RFC-054 Phase B) ------------------------
+        let mut pipe_entities: Vec<(i32, i32, &str, Dir)> = Vec::new();
+        for e in entities {
+            if e.name == "pipe" || e.name == "pipe-to-ground" || e.name == "pump" {
+                pipe_entities.push((e.x, e.y, &e.name, e.direction));
+            }
+        }
+        let fluids_system =
+            fluid::build_networks(&pipe_entities, &machine_ports, &fluid_feed_tiles);
+        for (item, (x, y)) in &fluids_system.unconnected_feeds {
+            notes.push(format!(
+                "fluid boundary input for {} at ({},{}) touches no pipe network",
+                items.name(ItemId(*item)),
+                x,
+                y
+            ));
+        }
+
         Ok(Factory {
             checkpoints: vec![(0, 0)],
             net,
@@ -278,6 +391,7 @@ impl Factory {
             crafted: FxHashMap::default(),
             delivered: FxHashMap::default(),
             notes,
+            fluids: fluids_system,
         })
     }
 
@@ -292,9 +406,127 @@ impl Factory {
         self.tick_feeds();
         self.tick_inserters();
         self.tick_machines();
+        self.tick_fluids();
         self.net.tick();
         self.drain_sinks();
         self.ticks += 1;
+    }
+
+    /// RFC-054 Phase B: route fluid through the pipe networks. Each connected
+    /// component's boundary feeds (infinite standing sources, matching the
+    /// saturated input rig) and producer `fluid_output` are pooled per item
+    /// and drawn by the component's consumers up to their per-craft need —
+    /// pipe-fast, so a petroleum→plastic→AC chain is not throttled to one
+    /// unit a tick the way Phase A's port-adjacency was. Unconsumed producer
+    /// output is drained as delivered (the target-fluid boundary exit),
+    /// preserving the Phase A behaviour that keeps e.g. an oil-refinery's
+    /// target petroleum-gas measuring correctly.
+    fn tick_fluids(&mut self) {
+        let mut drained: FxHashMap<u16, u64> = FxHashMap::default();
+        for net in &self.fluids.networks {
+            // Group ports by item.
+            let mut by_item: FxHashMap<u16, (Vec<usize>, Vec<usize>)> = FxHashMap::default();
+            for p in &net.ports {
+                let e = by_item.entry(p.item).or_default();
+                if p.is_input {
+                    e.1.push(p.machine);
+                } else {
+                    e.0.push(p.machine);
+                }
+            }
+            for (item, (producers, consumers)) in by_item {
+                // Boundary standing source: infinite (saturated rig).
+                let boundary = net.boundary.contains(&item);
+                // Snapshot each producer's on-hand amount for this item.
+                let mut total_held: u64 = producers
+                    .iter()
+                    .map(|&mi| {
+                        self.machines[mi]
+                            .fluid_output
+                            .get(&item)
+                            .copied()
+                            .unwrap_or(0) as u64
+                    })
+                    .sum();
+                // Deliver the producer pool fairly across consumers. A greedy
+                // always-serve-the-lowest-index-first allocation would starve
+                // the last consumer when supply is tight (a real pipe feeds
+                // every attached consumer in parallel and shares scarcity).
+                // Split each consumer's buffer room, then allocate the pool
+                // proportional to room, handing the fractional remainder out
+                // one unit at a time (deterministic, largest-remainder first).
+                let mut rooms: Vec<(usize, u32)> = Vec::new();
+                let mut total_room: u64 = 0;
+                for &ci in &consumers {
+                    let room = self.machines[ci].fluid_room_for(ItemId(item));
+                    if room > 0 {
+                        rooms.push((ci, room));
+                        total_room += room as u64;
+                    }
+                }
+                let mut pool_alloc: Vec<(usize, u32)> =
+                    rooms.iter().map(|&(c, _)| (c, 0)).collect();
+                if !rooms.is_empty() {
+                    if total_held >= total_room {
+                        for (i, &(c, room)) in rooms.iter().enumerate() {
+                            pool_alloc[i] = (c, room);
+                        }
+                        // fill every room; the excess the consumers cannot take
+                        // is genuine surplus and drains as delivered below.
+                        total_held -= total_room;
+                    } else {
+                        // deficient supply: proportional share, floor, then
+                        // hand leftover to the largest fractional remainders.
+                        let mut allocated: u64 = 0;
+                        let mut rem: Vec<(usize, u64)> = Vec::new();
+                        for (i, &(c, room)) in rooms.iter().enumerate() {
+                            let share = (room as u64 * total_held) / total_room;
+                            pool_alloc[i] = (c, share as u32);
+                            allocated += share;
+                            rem.push((i, (room as u64 * total_held) % total_room));
+                        }
+                        rem.sort_by_key(|&(_, r)| std::cmp::Reverse(r));
+                        let mut left = total_held - allocated;
+                        for (i, _) in rem {
+                            if left == 0 {
+                                break;
+                            }
+                            if pool_alloc[i].1 < rooms[i].1 {
+                                pool_alloc[i].1 += 1;
+                                left -= 1;
+                            }
+                        }
+                        total_held = left;
+                    }
+                }
+                // Drain whatever the producers held that no consumer took.
+                if total_held > 0 {
+                    *drained.entry(item).or_insert(0) += total_held;
+                }
+                // Every producer buffer is fully routed this tick.
+                for &pj in &producers {
+                    if let Some(v) = self.machines[pj].fluid_output.get_mut(&item) {
+                        *v = 0;
+                    }
+                }
+                // Credit consumers: their pool allocation, topped up from the
+                // (infinite) boundary source if any. Separate loop to avoid
+                // overlapping mutable borrows of `self.machines`.
+                for (ci, amt) in pool_alloc {
+                    let mut total = amt;
+                    if boundary {
+                        let room = self.machines[ci].fluid_room_for(ItemId(item));
+                        total += room.saturating_sub(total);
+                    }
+                    if total > 0 {
+                        self.machines[ci].insert_fluid(ItemId(item), total);
+                    }
+                }
+            }
+        }
+        for (item, n) in drained {
+            *self.delivered.entry(item).or_insert(0) += n;
+        }
     }
 
     pub fn run_for(&mut self, ticks: u64) {
@@ -460,6 +692,7 @@ impl Factory {
             MachineState::Working,
             MachineState::FullOutput,
             MachineState::ItemIngredientShortage,
+            MachineState::FluidIngredientShortage,
         ] {
             let n = self.machines.iter().filter(|m| m.state == state).count();
             if n > 0 {
@@ -585,8 +818,8 @@ mod convergence_tests {
     #[test]
     fn the_shipped_measurement_window_can_converge() {
         const WINDOW: u64 = 60 * 60 * 3; // corpus_replay.rs / measure.rs
-        // Replay exactly what reset_counters + run_for record for a
-        // perfectly steady factory.
+                                         // Replay exactly what reset_counters + run_for record for a
+                                         // perfectly steady factory.
         let mut cps = vec![(0u64, 0u64)];
         let mut delivered = 0u64;
         for t in 1..=WINDOW {
@@ -644,8 +877,11 @@ mod note_tests {
             ent("long-handed-inserter", 6, 0),
         ];
         let f = Factory::from_entities(&ents, Manifest::default()).expect("builds");
-        let spurious: Vec<&String> =
-            f.notes.iter().filter(|n| n.contains("not modelled")).collect();
+        let spurious: Vec<&String> = f
+            .notes
+            .iter()
+            .filter(|n| n.contains("not modelled"))
+            .collect();
         assert!(
             spurious.is_empty(),
             "no ordinary entity may be reported as an unmodelled inserter, got {spurious:?}"
@@ -661,7 +897,9 @@ mod note_tests {
         let ents = vec![ent("burner-inserter", 0, 0)];
         let f = Factory::from_entities(&ents, Manifest::default()).expect("builds");
         assert!(
-            f.notes.iter().any(|n| n.contains("burner-inserter") && n.contains("not modelled")),
+            f.notes
+                .iter()
+                .any(|n| n.contains("burner-inserter") && n.contains("not modelled")),
             "an inserter variant the meter cannot model must be noted, got {:?}",
             f.notes
         );

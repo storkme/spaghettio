@@ -59,58 +59,11 @@ fn build_belt_tile_set(entities: &[PlacedEntity]) -> FxHashSet<(i32, i32)> {
 }
 
 /// Build underground belt pair map: entry ↔ exit (bidirectional).
+/// RFC-065 Phase 1: delegates to the canonical derivation — this module's
+/// previous private copy was byte-identical (it already carried the
+/// same-name filter the canonical adopted) and is deleted.
 fn build_ug_pairs(entities: &[PlacedEntity]) -> FxHashMap<(i32, i32), (i32, i32)> {
-    let ug_inputs: Vec<&PlacedEntity> = entities
-        .iter()
-        .filter(|e| is_ug_belt(&e.name) && e.io_type.as_deref() == Some("input"))
-        .collect();
-    let ug_outputs: Vec<&PlacedEntity> = entities
-        .iter()
-        .filter(|e| is_ug_belt(&e.name) && e.io_type.as_deref() == Some("output"))
-        .collect();
-
-    let mut pairs = FxHashMap::default();
-    let mut used_outputs: FxHashSet<(i32, i32)> = FxHashSet::default();
-
-    for inp in &ug_inputs {
-        let (dx, dy) = dir_to_vec(inp.direction);
-        let mut best_out: Option<&PlacedEntity> = None;
-        let mut best_dist = i32::MAX;
-
-        for out in &ug_outputs {
-            if used_outputs.contains(&(out.x, out.y)) {
-                continue;
-            }
-            if out.direction != inp.direction || out.name != inp.name {
-                continue;
-            }
-            let rx = out.x - inp.x;
-            let ry = out.y - inp.y;
-            let dist = if dx != 0 {
-                if ry != 0 || (rx > 0) != (dx > 0) {
-                    continue;
-                }
-                rx.abs()
-            } else {
-                if rx != 0 || (ry > 0) != (dy > 0) {
-                    continue;
-                }
-                ry.abs()
-            };
-            if dist > 1 && dist < best_dist {
-                best_dist = dist;
-                best_out = Some(out);
-            }
-        }
-
-        if let Some(out) = best_out {
-            pairs.insert((inp.x, inp.y), (out.x, out.y));
-            pairs.insert((out.x, out.y), (inp.x, inp.y));
-            used_outputs.insert((out.x, out.y));
-        }
-    }
-
-    pairs
+    crate::connectivity::build_ug_pairs(entities)
 }
 
 /// All tiles occupied by machines.
