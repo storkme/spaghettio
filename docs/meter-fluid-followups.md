@@ -81,7 +81,7 @@ closed — keeps crossing/stacked fluid lines isolated).
   ~+2.2% contributor, and neither it nor distribution is the cause).
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).
 
-## Next steps / open items (2026-08-03)
+## Next steps / open items (2026-08-05)
 
 ### F5a stacked-PTG edge — FIXED
 A pipe-to-ground's surface mouth now only joins a regular pipe or a **back-facing**
@@ -124,15 +124,20 @@ four deepest (`m301/m302/m309/m310`, x=55/58) sit on EC buffers 1–12/280 (craf
 0.023–0.088/s; only `m310` labels `ItemIngredientShortage`, the other three read
 `Working` but run below rate) — but perfect redistribution would gain just
 **+0.013/s, ≈5% of the gap**. The dominant term is EC underproduction itself,
-tracking the ~13% plate shortfall upstream. **Deferred deliberately**: there is
-no identified meter defect left to fix — the previously nominated
-distribution / merge-priority / head-hog-fairness change is bounded at ≈5% by
-that arithmetic. The sim's own numbers do not reconcile (43.2 EC/s caps PU at
-1.80/s, yet it reports 1.987/s), its per-machine EC distribution is not in this
-run's stored `report.json` (its `timeseries` field is absent, so no per-machine
-craft/status checkpoints were captured), and it is −10% below plan everywhere.
-The leading hypothesis is now that the meter is **correctly** exposing that this
-factory cannot deliver 2/s PU. Tracked as item 7 in
+tracking the ~13% plate shortfall upstream. **Deferred deliberately.** The
+previously nominated distribution / merge-priority / head-hog-fairness change
+is bounded at ≈5% by that arithmetic, so it is not the fix — but the defect is
+**relocated, not retired**: real Factorio
+delivered 1.987 PU/s on this fixture, so it moved ≈47.7 EC/s (1.987 × 24), and
+the meter's 41.5 EC/s is ~13% short of that. The meter's PU stage is fine —
+99.2% of what its own EC allows — so the divergence lives in **EC/plate
+production**. (Do not run the ceiling argument on the sim to conclude it
+contradicts itself: its intermediates are indicative by this doc's own caveat,
+its target figure is the reference, and an earlier revision inverted that
+hierarchy.) Closing it needs per-machine detail on the reference side, which
+this run lacks — the sim's per-machine EC distribution is not in its stored
+`report.json` (its `timeseries` field is absent, so no per-machine craft/status
+checkpoints were captured). Tracked as item 7 in
 [`rfc064-phase2-followups.md`](rfc064-phase2-followups.md); full evidence in
 [`meter-divergence.md`](meter-divergence.md).
 

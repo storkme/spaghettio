@@ -6,7 +6,7 @@ that divergence is believed to live (model gap vs. known-open-item). Updated
 when the corpus sweep (`crates/meter/examples/sweep_corpus.rs`) moves a number
 or reveals a new one. Currently **one** residual.
 
-## Corpus status (2026-08-03, Phase B landed)
+## Corpus status (2026-08-05; Phase B landed 2026-08-03)
 
 `meter sweep: 70 layouts measured, 41 compared`. Every compared fixture is
 within ±10pp of sim except the one below. AC/PU families that were −80% in
@@ -58,42 +58,53 @@ in-fixture AC reads −3.9%).
     yields only 1.729/s — **+0.013/s, ≈5% of the 0.271/s sim-relative gap.** A
     distribution / merge-priority / head-hog-fairness model change therefore
     **cannot close this residual.** The dominant term is EC underproduction
-    itself (41.5/s = −13.5% vs plan), which tracks the ~13% plate shortfall
-    upstream (iron-plate 41.9/s caps EC at 41.9/s, at 1 plate per EC).
+    itself — 41.5/s against the **≈47.7/s the real factory moved** (see the
+    next-but-one bullet), i.e. −13% sim-relative; −13.5% against the 48/s
+    plan, which is the same number by coincidence and not the reference. That
+    tracks the plate shortfall upstream (iron-plate 41.9/s caps EC at 41.9/s,
+    at 1 plate per EC).
   - **The gap against each base, kept separate.** Meter 1.716/s is **0.271/s**
     below the sim's 1.987/s (the −13.6% sim-relative residual) and **0.284/s**
     below the 2.0/s ideal. Different denominators; earlier revisions of this
     entry quoted a single "~0.29/s ≈ −13%" that welded the ideal-relative
     magnitude to the sim-relative percentage.
-  - **The sim's own figures do not reconcile here.** 43.2 EC/s caps PU at
-    1.80/s, yet the sim reports 1.987/s — **10% above its own EC-supply
-    ceiling**. Per the caveat above its intermediates are indicative
-    measurements, not a closed mass balance, and that unreconciled 10% is a
-    larger term than anything the meter's distribution model contributes.
-- **Verdict**: an **upstream production shortfall**, on a single fixture whose
-  sim baseline is itself noisy (≈ −10% on everything) *and* arithmetically
-  unclosed on the very quantity in dispute. The meter's chain is internally
-  consistent end to end: plates −13% → EC 41.5/s → PU 1.716/s, each stage
-  within ~1% of what the stage above it can feed. The sim's is not: its
-  43.2 EC/s cannot support the 1.987 PU/s it reports. **Deferred, deliberately**
-  — and note this is a *weaker* claim of meter fault than earlier revisions
-  made. There is no identified meter defect left to fix here: the previously
-  nominated one (a merge-priority / head-hog fairness model) is bounded at
-  ≈5% of the gap by the ceiling arithmetic above. Closing the item needs a
-  reference that reconciles, which this run cannot supply — the sim's
-  per-machine EC distribution is not in its stored `report.json` (its
-  `timeseries` field is absent, so no per-machine craft/status checkpoints were
-  captured), its aggregate is −10% below plan on this very fixture, and the
-  meter's EC production already matches the sim within ±4%. The leading
-  hypothesis is now that the meter is **correctly** exposing that this factory
-  cannot deliver 2/s PU, and that the sim's 99% figure is the anomaly. Tracked
-  as item 7 in `rfc064-phase2-followups.md`; do not chase it inside this
-  meter-fluid thread.
-- **Next**: if this is ever reopened, the question to ask is why the **plate
-  stages** run ~13% below plan — not how EC is distributed (bounded at ≈5% of
-  the gap) and not the cycle order (~+2.2%). It needs a sim run whose
-  `timeseries` is captured so the baseline's own mass balance can be checked.
-  Any change needs a non-noisy, sim-baselined solid fixture to be verifiable.
+  - **What the sim's numbers actually license — and a trap to avoid.** It is
+    tempting to run the ceiling arithmetic on the sim too (43.2 EC/s caps PU
+    at 1.80/s, yet it reports 1.987/s) and conclude the sim contradicts
+    itself. **That inference is wrong, and a previous revision of this entry
+    made it.** The sim's intermediates are flagged *indicative* two bullets
+    above precisely because they are not a closed mass balance; its **target**
+    figure is the reference this whole calibration is defined against. Using
+    the unreliable number to impeach the reliable one inverts the hierarchy.
+    Read the other way round, the sim is informative: real Factorio delivered
+    1.987 PU/s, so it physically moved **≈47.7 EC/s** (1.987 × 24). Its
+    reported 43.2/s undercounts that by ~9% — an artifact of intermediate
+    reporting, consistent with the caveat. Measured against the real 47.7/s,
+    the meter's 41.5 EC/s is **≈13% short**.
+- **Verdict**: a real, meter-side divergence, **relocated upstream** — from
+  distribution at the PU machines to **EC/plate production**. The chain reads
+  cleanly: the meter's EC output is ~13% below what the real factory achieved,
+  and its PU output is 99.2% of what that reduced EC supply allows. So the PU
+  stage is behaving; the stage that is not is the one feeding it.
+  **Deferred, deliberately** — but note the defect is *relocated, not
+  retired.* An earlier revision of this entry concluded "no identified meter
+  defect left to fix" and that the meter was correctly exposing a factory that
+  cannot deliver 2/s PU. Both are overreach: Factorio delivered ~1.99/s on
+  this very fixture, so the factory demonstrably can. What the ceiling
+  arithmetic retires is the *distribution* hypothesis (≈5%), not meter fault
+  as such. Closing the item needs a reference with per-machine detail, which
+  this run cannot supply — the sim's per-machine EC distribution is not in its
+  stored `report.json` (its `timeseries` field is absent, so no per-machine
+  craft/status checkpoints were captured). Tracked as item 7 in
+  `rfc064-phase2-followups.md`; do not chase it inside this meter-fluid
+  thread.
+- **Next**: if this is ever reopened, the question to ask is why the meter's
+  **plate/EC stages** produce ~13% less than the real factory did (41.5 vs the
+  ≈47.7 EC/s implied by the sim's 1.987 PU/s) — not how EC is distributed
+  among the PU machines (bounded at ≈5% of the gap) and not the cycle order
+  (~+2.2%). It needs a sim run whose `timeseries` is captured, so per-machine
+  detail exists on the reference side. Any change needs a non-noisy,
+  sim-baselined solid fixture to be verifiable.
   Re-measure after any belt-network (notably merger/priority) changes.
 
 ## Closed / moved entries

@@ -95,19 +95,21 @@ the four deepest (`m301/m302/m309/m310` at x=55/58) are EC-constrained (buffers
 other three read `Working` but run below rate) — but perfect redistribution
 would gain only **+0.013/s, ≈5% of the gap**. The dominant term is EC
 underproduction itself, tracking the ~13% plate shortfall upstream.
-Deferred deliberately, and now on weaker grounds than before: **there is no
-identified meter defect left to fix.** The previously nominated
-distribution / merge-priority / head-hog-fairness change is bounded at ≈5% by
-that arithmetic, and the sim's own numbers do not reconcile (43.2 EC/s caps PU
-at 1.80/s, yet it reports 1.987/s). The sim's per-machine EC distribution is
-not in this run's stored `report.json` (its `timeseries` field is absent, so no
-per-machine craft/status checkpoints were captured) and its aggregate is −10%
-below plan on this very fixture. The leading hypothesis is that the meter
-**correctly** exposes that this factory cannot deliver 2/s PU and the sim's 99%
-is the anomaly. If reopened, the question is why the **plate stages** run ~13%
-below plan — not EC distribution (≈5%) and not the cycle order (≈ +2.2%). Needs
-a sim run with `timeseries` captured so the baseline's own mass balance can be
-checked.
+Deferred deliberately. The defect is **relocated, not retired** — that is the
+whole content of the 08-05 revision. The previously nominated distribution /
+merge-priority / head-hog-fairness change is bounded at ≈5% by the ceiling
+arithmetic, but real Factorio delivered 1.987 PU/s on this fixture, so it moved
+≈47.7 EC/s (1.987 × 24) and the meter's 41.5 EC/s is ~13% short of that. The
+meter's PU stage is behaving (99.2% of what its own EC allows); the divergence
+lives in **EC/plate production**. Do *not* run the ceiling argument on the sim
+to conclude it contradicts itself — its intermediates are indicative, its
+target figure is the reference this calibration is defined against, and an
+earlier revision of this entry inverted that hierarchy to claim the meter was
+right and the sim anomalous. Factorio built the factory and it delivered ~1.99
+PU/s; the meter cannot, and that is the open question. If reopened: why does
+the meter's plate/EC chain produce ~13% less than the real one — not EC
+distribution (≈5%), not the cycle order (≈ +2.2%). Needs a sim run with
+`timeseries` captured so per-machine detail exists on the reference side.
 
 ## Decided / closed (from Stage B)
 - **Never-worse holds** on the measurable subset → evidence supports
