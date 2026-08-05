@@ -236,9 +236,15 @@ positive); `AR_score = 1` means perfectly square (`AR = 1`); a candidate that
 becomes *more* elongated than native scores negative — deliberately
 unclamped, so a regression on this axis is visible in the composite rather
 than floored to "no worse than doing nothing." (Degenerate case:
-`AR(native) = 1` defines `AR_score(L) = 1` if `AR(L) = 1` else `0`, avoiding
+`AR(native) = 1` defines `AR_score(L) = 0` if `AR(L) = 1` else `-1`, avoiding
 division by zero on an already-square native, which does not occur on any
-fixture in the current corpus but is defined for completeness.)
+fixture in the current corpus but is defined for completeness. **Amended
+2026-08-05** — this parenthetical previously read "`= 1` if `AR(L) = 1` else
+`0`", which contradicted the `AR_score(native) = 0` invariant asserted two
+sentences above: a square native self-scored `1`, entered its own ranking at
+composite `0.5`, and could not be outranked on this axis. The rule now matches
+`Transit_score`'s zero-native rule — no change is neutral, strictly worse is a
+negative sentinel. See the decision log.)
 
 **Calibration anchor:** `chain-mil5ore`'s Factorio-verified 3-fold,
 `AR(native) = 17.3`, `AR(folded) = 1.09` →
@@ -1224,3 +1230,46 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   a re-review that surfaces only minors/nits ships with them recorded as
   follow-ups — majors still block. Without a stop rule, every push buys
   another review round indefinitely.
+
+- **2026-08-05 (bot round 3, on 25351dee) — the RFC's own `AR_score`
+  degenerate rule was self-contradictory; amended in §(a).** The reviewer
+  flagged `objective.rs::ar_score` returning `1.0` when both candidate and
+  native are perfectly square. The implementation was faithful — it is exactly
+  what §(a)'s parenthetical prescribed ("`AR(native) = 1` defines
+  `AR_score(L) = 1` if `AR(L) = 1` else `0`"). **The defect is in this RFC,
+  not the code.** That parenthetical contradicts the invariant asserted two
+  sentences above it in the same paragraph: `AR_score(native) = 0` "by
+  construction (no change scores neutral, not positive)". For a square native
+  both cannot hold. The consequence was not cosmetic: `score_vs_native(native,
+  native)` put the incumbent into its own ranking at composite **0.5** instead
+  of 0.0, and since every non-square candidate scored `0.0` against a square
+  native and every square one tied at `1.0`, **no candidate could outrank the
+  incumbent on the AR axis at all** whenever the native happened to be square.
+  Resolved in favour of the invariant, which is the load-bearing half — the
+  whole never-worse construction depends on the incumbent sitting at neutral
+  so candidates are measured as deltas against it. §(a)'s degenerate rule is
+  amended to `AR_score = 0` if `AR(L) = 1` else `-1`, which is precisely the
+  shape `Transit_score`'s zero-native rule already used, and which that
+  function's doc comment already *claimed* the two shared (the claim was false
+  when written; now true). Untestable-in-corpus per the RFC's own note — no
+  current fixture has a square native — so this is a latent-correctness fix,
+  not a measured behaviour change; no fixture flipped and the full suite is
+  unchanged at 1175 passed / 0 failed / 96 ignored. Pinned by three tests:
+  the `by_construction` invariant test now enumerates the degenerate case it
+  previously omitted (it asserted only `ar_score(3.0, 3.0)`, the branch that
+  could not fail), a named regression test for the square-native
+  self-inflation, and a test asserting the two degenerate rules agree so they
+  cannot drift apart silently again.
+
+- **2026-08-05 — merge of `origin/main` (38 commits): `entity_dims`
+  ownership resolved toward main's RFC-065 dedupe.** `compaction::entity_dims`
+  conflicted — this branch had made it `pub` for `objective.rs`'s three call
+  sites, while main had rewritten its body to delegate to the new canonical
+  `common::oriented_entity_dims` and deliberately kept it private ("kept as a
+  local name because this file calls it ~30 times"). Taking main's body and
+  re-exporting it `pub` would have re-introduced the public duplicate main had
+  just removed. Resolved instead by pointing `objective.rs` at
+  `common::oriented_entity_dims` directly, leaving `compaction::entity_dims`
+  private and main's dedupe intact. The two functions are semantically
+  identical (both special-case oriented splitters, then swap w/h for
+  East/West), so this is a call-site retarget, not a behaviour change.

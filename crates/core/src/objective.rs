@@ -195,13 +195,25 @@ pub fn measure(layout: &LayoutResult, solver: &SolverResult) -> Result<LayoutMea
 }
 
 /// `AR_score(L) = 1 - (AR(L) - 1) / (AR(native) - 1)`, RFC-064 §(a).
-/// Degenerate case (native already square): `1.0` if `ar_candidate` is also
-/// square, else `0.0`, avoiding division by zero — per the RFC's own stated
-/// rule, "does not occur on any fixture in the current corpus but is
-/// defined for completeness."
+///
+/// Degenerate case (native already square, `AR(native) = 1`): **`0.0`** if the
+/// candidate is also square, else **`-1.0`**.
+///
+/// This deliberately does *not* match the RFC's original parenthetical, which
+/// said `1.0` if `AR(L) = 1` else `0`. That rule contradicted the load-bearing
+/// invariant stated two sentences above it in the same paragraph —
+/// `AR_score(native) = 0` "by construction (no change scores neutral, not
+/// positive)". Under the old rule a perfectly square native self-scored `1.0`,
+/// so [`score_vs_native`] put the incumbent into its own ranking at composite
+/// `0.5` rather than `0.0`, and **no candidate could outrank it on this axis**
+/// (every non-square candidate scored `0.0`, every square one tied at `1.0`).
+/// Amended to the shape [`transit_score`] already uses — no-change is neutral,
+/// strictly-worse is a negative sentinel — which is also what that function's
+/// doc comment already claimed the two shared. RFC text and decision log
+/// updated together (2026-08-05).
 pub fn ar_score(ar_candidate: f64, ar_native: f64) -> f64 {
     if (ar_native - 1.0).abs() < DEGENERATE_EPS {
-        if (ar_candidate - 1.0).abs() < DEGENERATE_EPS { 1.0 } else { 0.0 }
+        if (ar_candidate - 1.0).abs() < DEGENERATE_EPS { 0.0 } else { -1.0 }
     } else {
         1.0 - (ar_candidate - 1.0) / (ar_native - 1.0)
     }
@@ -217,6 +229,10 @@ pub fn ar_score(ar_candidate: f64, ar_native: f64) -> f64 {
 /// worse than a zero-edge native by definition, so this returns a large
 /// negative sentinel rather than dividing by zero. This is a decision made
 /// here, not in the RFC — flag for the RFC's decision log.
+///
+/// The claimed analogy was false when written: [`ar_score`] returned `1.0`,
+/// not `0.0`, for its no-change degenerate case. That was an RFC defect,
+/// amended 2026-08-05 — the two now genuinely share this shape.
 pub fn transit_score(transit_candidate: f64, transit_native: f64) -> f64 {
     if transit_native.abs() < DEGENERATE_EPS {
         if transit_candidate.abs() < DEGENERATE_EPS { 0.0 } else { -1.0 }
@@ -789,9 +805,27 @@ mod tests {
         assert!((score - 0.9945).abs() < 0.001, "got {score}, expected ~0.9945");
     }
 
+    /// The invariant the RFC calls "by construction". This test previously
+    /// asserted only the non-degenerate case (3.0 vs 3.0), which is exactly
+    /// the case that could not fail — the square-native branch was the one
+    /// that violated it, and it went untested. Enumerate both.
     #[test]
     fn ar_score_native_is_zero_by_construction() {
         assert_eq!(ar_score(3.0, 3.0), 0.0);
+        assert_eq!(ar_score(17.3, 17.3), 0.0);
+        // The degenerate branch: a square native scored against itself.
+        assert_eq!(ar_score(1.0, 1.0), 0.0);
+    }
+
+    /// A square native cannot be outranked on the AR axis, but it must not
+    /// outrank everything either — it sits at neutral, like any other native.
+    #[test]
+    fn ar_score_square_native_does_not_self_inflate() {
+        // Regression: this returned 1.0, putting the incumbent into its own
+        // ranking at composite 0.5 and making it unbeatable on this axis.
+        assert_eq!(ar_score(1.0, 1.0), 0.0);
+        // Anything less square than an already-square native is strictly worse.
+        assert!(ar_score(2.0, 1.0) < 0.0);
     }
 
     #[test]
@@ -804,11 +838,22 @@ mod tests {
         assert!(ar_score(10.0, 5.0) < 0.0);
     }
 
-    /// Degenerate case: `AR(native) = 1`.
+    /// Degenerate case: `AR(native) = 1`. Amended 2026-08-05 — was
+    /// `1.0`/`0.0`, which contradicted `AR_score(native) = 0`. Now mirrors
+    /// [`transit_score`]'s zero-native rule: neutral for no change, negative
+    /// sentinel for strictly worse.
     #[test]
     fn ar_score_degenerate_native_square() {
-        assert_eq!(ar_score(1.0, 1.0), 1.0);
-        assert_eq!(ar_score(2.0, 1.0), 0.0);
+        assert_eq!(ar_score(1.0, 1.0), 0.0);
+        assert_eq!(ar_score(2.0, 1.0), -1.0);
+    }
+
+    /// The two degenerate rules are documented as sharing one shape. Pin that,
+    /// so they cannot drift apart again silently.
+    #[test]
+    fn degenerate_rules_agree_between_ar_and_transit() {
+        assert_eq!(ar_score(1.0, 1.0), transit_score(0.0, 0.0));
+        assert_eq!(ar_score(2.0, 1.0), transit_score(5.0, 0.0));
     }
 
     #[test]
