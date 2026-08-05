@@ -264,7 +264,7 @@ pub fn measure_realized_transit(
 }
 
 fn compatible(carries: Option<&str>, item: &str) -> bool {
-    carries.is_none_or(|carried| carried == item)
+    carries.is_some_and(|carried| carried == item)
 }
 
 fn machine_tiles(layout: &LayoutResult) -> FxHashMap<Tile, usize> {
@@ -692,5 +692,35 @@ mod tests {
         assert_eq!(measured.edges[0].path_length, 2.0);
         assert_eq!(measured.total, 4.0);
         assert!(measured.edges[0].direct_insertion);
+    }
+
+    /// An unlabelled transport tile must NOT be traversable by every net.
+    ///
+    /// `compatible` returned `carries.is_none_or(...)`, so a tile with no
+    /// `carries` was a universal shortcut: usable by any item, in both the
+    /// solid and fluid graphs. That is not hypothetical on this path —
+    /// `bands.rs` stamps band belt rows with
+    /// `carries: tag_items.then(...)` where `tag_items =
+    /// explicit_selection.is_some()`, so the **legacy RFC-058 `None` path
+    /// leaves every band belt row unlabelled**, and the metric would route
+    /// every net through every row.
+    ///
+    /// A decision-log entry previously downgraded this to "inert, 0 of 1889
+    /// belt-ish entities unlabelled". That census covered the six *recorded*
+    /// layouts, which are all explicit-selection and therefore tagged — i.e.
+    /// exactly the population where the bug cannot fire. Wrong scope, not
+    /// wrong count (PR #575 bot review, 3/3 passes, twice).
+    ///
+    /// Strict is also the behaviour this module's philosophy already implies:
+    /// an unmeasurable edge should surface as an `Unreachable*` refusal, not
+    /// as a shorter path.
+    #[test]
+    fn unlabelled_tiles_are_not_universal_shortcuts() {
+        assert!(compatible(Some("iron-plate"), "iron-plate"));
+        assert!(!compatible(Some("copper-plate"), "iron-plate"));
+        assert!(
+            !compatible(None, "iron-plate"),
+            "an unlabelled tile must not be usable by an arbitrary net"
+        );
     }
 }

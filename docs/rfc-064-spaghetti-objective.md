@@ -1678,3 +1678,34 @@ nothing else cross-depends). A phase's kill does not cancel the others.
     not imply a real admissible candidate. (f) `rfc064_packed_router.rs` pins
     exact metric strings and hardcoded row indices. (b), (c) and (e) are the
     ones that can move a gate verdict and should be taken first.
+
+- **2026-08-05 (bot round 3 on 7c0ab01d) — `compatible()` fixed strict; the
+  earlier "inert" triage was scoped to the wrong population.** A previous entry
+  here downgraded the unlabelled-tile wildcard to a follow-up on the evidence
+  that **0 of 1889** belt/UG/splitter/pipe entities across the six recorded
+  layouts carry `carries: null`. That count is accurate and irrelevant: those
+  six are all explicit-selection layouts, and `bands.rs:1605` stamps band belt
+  rows with `tag_items = explicit_selection.is_some()`, so **the legacy RFC-058
+  `None` path leaves every band belt row unlabelled** — the census covered
+  exactly the population in which the bug cannot fire. The reviewer raised this
+  twice at 3/3 passes; the second time it named the mechanism, which is what
+  made it checkable. Wrong scope, not wrong count, and a reminder that "I
+  measured it" is only as good as the population measured.
+  Fixed strictly (`carries.is_some_and(|c| c == item)`) rather than deferred,
+  because the honest failure for an unmeasurable edge in this module is an
+  `Unreachable*` refusal, not a shorter path. **Suite unchanged at 1189 passed
+  / 0 failed / 100 ignored**, which is the useful part: the recorded numbers
+  never relied on the wildcard, so the hole closes at zero cost to this PR's
+  results. Pinned by `unlabelled_tiles_are_not_universal_shortcuts`.
+- **2026-08-05 — mixed belt+DI edges remain a follow-up, now flagged on both
+  implementations.** `transit.rs`'s DI branch requires `sources.is_empty() &&
+  consumers.is_empty() && declared_di`, so an edge that is both belt-fed and
+  DI-fed falls through to belt-only measurement while `planned_rate` still
+  carries the full aggregate demand — over-charging path length and never
+  reporting the DI consumers. Current regression fixtures are DI-off, so
+  nothing pins it. Recorded rather than fixed here: the P1/P2 reviewer found
+  the *same* defect class in `objective.rs::measure_edge` (which averages DI
+  Manhattan samples together with belt Dijkstra samples), and two independent
+  implementations making the same mistake is evidence RFC-064 under-specifies
+  the DI/belt duality rather than either being careless. It belongs in the
+  transit-unification PR, where one answer can be given once.
