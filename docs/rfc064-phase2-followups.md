@@ -71,13 +71,14 @@ uranium voider). With the tuning now making sim ~2.7× cheaper, closing the
 if the coordinator wants the stronger gate. Otherwise the subset verdict stands
 as recorded.
 
-### 7. Meter belt-delivery residual: PU-from-ore −13% (from meter-fluid, #570)
+### 7. Meter EC-supply residual: PU-from-ore −13% (from meter-fluid, #570)
 Pick-up entry so the deferral is actually tracked here (the meter
 `meter-divergence.md` records the full evidence). The fast meter is −13% on
-`tier5_processing_unit_from_ore_am3` vs the sim — a **downstream solid belt
-delivery** divergence, not a fluid one: the meter matches the sim within ±4% on
-the whole direct chain but loses the rest on the electronic-circuit supply to
-the PU machines. Stated against both bases: 1.716/s is **0.271/s below the
+`tier5_processing_unit_from_ore_am3` vs the sim — an **upstream EC supply**
+divergence, not a fluid one and (per the 08-05 revision below) not a downstream
+belt-delivery one either: the meter matches the sim within ±4% on the whole
+direct chain, and its PU output sits at 99.2% of what its own EC production can
+support. Stated against both bases: 1.716/s is **0.271/s below the
 sim's 1.987/s** (the −13.6% sim-relative residual) and 0.284/s below the 2.0/s
 ideal — earlier revisions quoted a single "~0.29/s ≈ −13%" that conflated the
 two. **2026-08-04 revision of the root cause:** it is an **EC supply shortfall,

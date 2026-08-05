@@ -1,9 +1,12 @@
 # Meter fluid modelling — follow-ups (#570)
 
-**Status (2026-08-03, follow-up `f5a-ptg-edge` + `fluid-followups`): Phase A + B
+**Status (2026-08-05, follow-up `f5a-ptg-edge` + `fluid-followups`): Phase A + B
 LANDED and merged (#571). Calibration within ±10pp on the whole compared corpus
-EXCEPT `tier5_processing_unit_from_ore_am3` (−13%, a SOLID belt-delivery
-residual — characterised, deliberately deferred; see below). CI second-opinion
+EXCEPT `tier5_processing_unit_from_ore_am3` (−13%, an upstream **EC supply**
+residual — characterised, deliberately deferred; see below. Earlier status
+lines called this a SOLID belt-delivery residual and then a distribution one;
+both were retired on 2026-08-05 — the meter runs at 99.2% of its own EC-supply
+ceiling). CI second-opinion
 findings triaged: F5a stacked-PTG edge FIXED (#572); three latent code fixes
 (census precedence, chem-plant "shared box", orientation-keyed binding) were
 PROPOSED then all REVERTED on review — see the sections below; byproduct
@@ -22,12 +25,14 @@ x-descending fluid binding for oil-refinery/foundry/cryogenic-plant.
 Result over the corpus (meter `delivered_per_s`/`produced_per_s` vs sim):
 gear exact; EC + stress-EC ±0–2%; AOP/refinery exact; **the dedicated AC
 variants now ±0–2% (were −80%; the PU-from-ore exception fixture's own AC is
-−3.9%)**; PU from ore −80% → −13%. The lone residual is PU-from-ore, a
-solid-side belt **distribution** gap (not a fluid gap): supply-marginal tail
-starvation on the EC trunk, where the meter concentrates scarce EC on the head
-of the PU row and starves the four deepest machines — see the PU entry. (The
-belt cycle note on this fixture is real but only a ~+2.2% contributor, not the
-cause; open RFC-064 Phase 2 item 7.) Full divergence log:
+−3.9%)**; PU from ore −80% → −13%. The lone residual is PU-from-ore, an
+**upstream EC supply shortfall** (not a fluid gap, and — per the 2026-08-05
+revision — not a distribution gap either): the meter's PU output sits at 99.2%
+of what its own EC production can support, so redistributing that EC perfectly
+would gain ≈5% of the gap. See the PU entry. (Two earlier characterisations
+were retired: the 26-tile belt cycle is a ~+2.2% contributor, and head-hog
+distribution is the ≈5% one; neither is the cause. Open RFC-064 Phase 2
+item 7.) Full divergence log:
 [`meter-divergence.md`](meter-divergence.md).
 
 ## Goal / success criteria
@@ -69,10 +74,11 @@ closed — keeps crossing/stacked fluid lines isolated).
 **Phase C — calibration (close to done; one open residual).**
 - Re-run the meter corpus sweep (`examples/sweep_corpus.rs`); all compared
   fixtures within ±10pp EXCEPT `tier5_processing_unit_from_ore_am3` at −13%
-  (a solid **distribution** gap: supply-marginal tail starvation on the EC trunk,
-  12/16 PU machines at full rate, the four deepest EC-constrained — see
+  (an **upstream EC supply shortfall**: the meter runs at 99.2% of its own
+  EC-supply ceiling, so the head-hog gradient — 12/16 PU machines at full rate,
+  the four deepest EC-constrained — accounts for only ≈5% of the gap. See
   [`meter-divergence.md`](meter-divergence.md); the 26-tile belt cycle is a
-  ~+2.2% contributor, not the cause).
+  ~+2.2% contributor, and neither it nor distribution is the cause).
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).
 
 ## Next steps / open items (2026-08-03)

@@ -18,8 +18,10 @@ in-fixture AC reads −3.9%).
 ### `tier5_processing_unit_from_ore_am3` — meter ≈ −13% (`produced`)
 
 - **meter**: processing-unit 1.716/s vs sim produced 1.987/s / delivered 1.961/s.
-- **Direction**: underproduction in the **downstream solid belt delivery**, not a
-  fluid gap. Deep-dive (2026-08-03) established this precisely:
+- **Direction**: underproduction in the **upstream EC supply**, not a fluid gap
+  — and, per the 2026-08-05 revision below, not downstream belt *delivery*
+  either. That was the 2026-08-03 reading; the ceiling arithmetic retired it.
+  Deep-dive (2026-08-03) established the surrounding figures precisely:
   - The **sim itself** under-produces almost everything on this fixture
     (copper-plate 71.98/80, copper-cable 143.9/160, EC 43.2/48, plastic 7.2/8 —
     all ≈ −10%; petroleum-gas −17%); only the PU target reaches 99%. So plan is
