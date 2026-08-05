@@ -393,6 +393,18 @@ fn phase2_prefilter_is_outcome_identical() {
         stats_off.error_discards,
         "reject-fasts must map 1:1 onto baseline Error discards: {stats_on:?} vs {stats_off:?}"
     );
+    // Scope note (bot round 4): on this fixture the equalities above are
+    // the degenerate X+0==X — EC@2 has no Error-discard volume, so the
+    // reject-path teeth live in the two sibling pins (UG-normalizing:
+    // `prefilter_evals > 0`; head-on cut: `prefilter_rejects > 0`). This
+    // pin's jobs are pipeline-level byte-identity on a real solver
+    // fixture and, via the assert below, filter ENGAGEMENT — so "filter
+    // silently stopped running" still fails here even though "filter
+    // silently stopped rejecting" is the siblings' job.
+    assert!(
+        stats_on.prefilter_evals > 0,
+        "filter never engaged on the pipeline fixture: {stats_on:?}"
+    );
     eprintln!(
         "phase2a cut-path prefilter: {} rejects / {} Error discards / {} baseline validates",
         stats_on.prefilter_rejects, stats_off.error_discards, stats_off.validates_run,

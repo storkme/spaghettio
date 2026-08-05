@@ -3964,8 +3964,9 @@ fn export_fold_report_json() {
 /// cell fixture of the pre-registered corpus (`chain-mil5ore` — the two
 /// row-bus fixtures are probed from `connectivity_parity.rs`, which cannot
 /// reach `SimFixture`). Prints how many fold candidates paid a `validate()`
-/// and how many of those were Error discards — the only volume an
-/// Error-certain pre-filter could ever reject-fast.
+/// and how many of those were Error discards — the UPPER BOUND on the
+/// volume any sound Error-certain pre-filter could reject-fast (a wired
+/// detector covers a subset of Error causes).
 #[test]
 #[ignore = "measurement probe — prints fold-admission volume for chain-mil5ore"]
 fn phase2b_fold_admission_volume_chain_mil5ore() {

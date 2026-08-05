@@ -1075,3 +1075,28 @@ Per `CLAUDE.md` § verification protocol:
   instruments, not gates; CI-izing them would put ~40s of fold search
   on every run for figures that only change when the fold engine
   does).
+- **2026-08-05 — PR #579 bot round 4 (single pass, two minors, no
+  code findings): review converged; check green; the two precision
+  items land in this closing commit.** The round verified the core
+  claims independently (behavior-identity of both refactors,
+  Error-certainty of both classes against validator semantics,
+  accounting integrity, pin determinism) and found only: (1) the
+  EC@2 pipeline pin's counter-form equalities are degenerate X+0==X
+  on that fixture — true and by design after round 2 (the reject-path
+  teeth live in the UG-normalizing and head-on sibling pins); fixed
+  by adding the `prefilter_evals > 0` engagement assert here too and
+  reframing the comment, so "filter silently stopped running" fails
+  on this pin while "silently stopped rejecting" remains the
+  siblings' job; (2) the chain-mil5ore probe comment lacked round
+  2's "upper bound" qualifier on `error_discards` — one-word lag
+  behind the field doc it reports on, fixed. Loop-breaking note: the
+  in-thread reply initially deferred both to "the next commit that
+  touches these files" to avoid resetting the required check, but
+  that reply also cited this decision-log entry — which must
+  therefore exist — and an undocumented decision is the one kind
+  this repo disallows, so the deferral collapsed into this final
+  micro-commit. Round header also worth recording: "single pass"
+  (rounds ran ×2, ×3, ×3, ×1) — the union width is visibly
+  fluctuating with the action's pass-degradation behavior; a
+  posted-but-thin round is weaker evidence, consistent with how
+  CLAUDE.md says to treat this bot's silence.
