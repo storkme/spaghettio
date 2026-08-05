@@ -9,7 +9,9 @@
 
 use rustc_hash::FxHashSet;
 
-use spaghettio_core::bus::compaction::compact_validated_geometry;
+use spaghettio_core::bus::compaction::{
+    compact_validated_geometry, compact_validated_geometry_with_stats,
+};
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
 use spaghettio_core::connectivity::{
     check_record_integrity, derive_connectivity, diff, scan_graph_anomalies,
@@ -346,6 +348,46 @@ fn dispatched_validate_catches_stale_ledger() {
         issues.iter().any(|i| i.category == "record-effective-rows"),
         "validate() must now carry record-integrity findings for a stale ledger: {:#?}",
         issues.iter().map(|i| &i.category).collect::<Vec<_>>()
+    );
+}
+
+/// RFC-065 Phase 2a soundness pin (K65-5): the topology pre-filter may
+/// only reject-fast candidates full validation would also reject, so
+/// compaction outputs must be BYTE-IDENTICAL with the filter on or off.
+/// Any divergence means an "error-certain" signal class is not actually
+/// error-certain — drop the class, never relax this pin.
+///
+/// MEASUREMENT FINDING (Phase 2a, recorded in the RFC decision log): on
+/// the CUT path the filter has almost nothing to catch — the cut
+/// constructors structurally refuse most bad geometry before validation
+/// (EC@2: 6 validates, EC@20: 1). The engagement number is therefore
+/// REPORTED, not asserted; the validate-volume worth saving lives on the
+/// fold-search path, which needs the fold identity map (next slice).
+#[test]
+fn phase2_prefilter_is_outcome_identical() {
+    let (sr, layout) = build(
+        "electronic-circuit",
+        2.0,
+        "assembling-machine-2",
+        &["iron-ore", "copper-ore"],
+        LayoutOptions::from_belt_tier(None),
+    );
+    let (filtered, stats_on) = compact_validated_geometry_with_stats(&layout, &sr, true);
+    let (baseline, stats_off) = compact_validated_geometry_with_stats(&layout, &sr, false);
+
+    assert_eq!(
+        serde_json::to_string(&filtered).unwrap(),
+        serde_json::to_string(&baseline).unwrap(),
+        "pre-filter changed a compaction outcome — an 'error-certain' class is not"
+    );
+    assert_eq!(
+        stats_on.validates_run + stats_on.prefilter_rejects,
+        stats_off.validates_run,
+        "every candidate must be either validated or reject-fasted: {stats_on:?} vs {stats_off:?}"
+    );
+    eprintln!(
+        "phase2a cut-path prefilter: {} rejects / {} baseline validates",
+        stats_on.prefilter_rejects, stats_off.validates_run,
     );
 }
 

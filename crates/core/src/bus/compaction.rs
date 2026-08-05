@@ -543,14 +543,78 @@ fn accept_if_no_worse(
     candidate
 }
 
+/// Cut-admission telemetry for RFC-065 Phase 2: how many candidates paid a
+/// full `validate()` vs. how many the topology pre-filter reject-fasted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CutAdmissionStats {
+    pub validates_run: usize,
+    pub prefilter_rejects: usize,
+}
+
+impl CutAdmissionStats {
+    fn absorb(&mut self, other: CutAdmissionStats) {
+        self.validates_run += other.validates_run;
+        self.prefilter_rejects += other.prefilter_rejects;
+    }
+}
+
+/// One cut-loop admission decision (RFC-065 Phase 2). The pre-filter may
+/// reject-fast ONLY on `connectivity::error_certain_regression` signals —
+/// classes `validate()` is guaranteed to reject — so enabling it never
+/// changes which cuts are admitted, only how many full validations are
+/// paid (the byte-identity pin in `connectivity_parity.rs` enforces this).
+/// The filter engages only on index-stable candidates (equal entity
+/// counts — seam-coalescing candidates skip straight to validation), and
+/// the accepted candidate's derived graph is reused as the next
+/// iteration's base so an accepted cut costs no extra derivation.
+#[allow(clippy::too_many_arguments)]
+fn cut_admission(
+    current: &LayoutResult,
+    current_graph: &mut Option<crate::connectivity::ConnectivityGraph>,
+    candidate: &LayoutResult,
+    solver: &SolverResult,
+    prefilter: bool,
+    stats: &mut CutAdmissionStats,
+) -> (bool, Option<crate::connectivity::ConnectivityGraph>) {
+    use crate::validate::{self, LayoutStyle, Severity};
+
+    let mut candidate_graph = None;
+    if prefilter && candidate.entities.len() == current.entities.len() {
+        let base = current_graph
+            .get_or_insert_with(|| crate::connectivity::derive_connectivity(current));
+        let cand = crate::connectivity::derive_connectivity(candidate);
+        if crate::connectivity::error_certain_regression(base, &cand, candidate).is_some() {
+            stats.prefilter_rejects += 1;
+            return (false, None);
+        }
+        candidate_graph = Some(cand);
+    }
+    stats.validates_run += 1;
+    let issues = match validate::validate(candidate, Some(solver), LayoutStyle::Bus) {
+        Ok(issues) => issues,
+        Err(error) => error.issues,
+    };
+    let admitted = !issues.iter().any(|issue| issue.severity == Severity::Error);
+    (admitted, candidate_graph)
+}
+
 pub fn compact_validated_columns(
     layout: &LayoutResult,
     solver: &SolverResult,
     max_commits: usize,
 ) -> LayoutResult {
-    use crate::validate::{self, LayoutStyle, Severity};
+    compact_validated_columns_inner(layout, solver, max_commits, true, &mut CutAdmissionStats::default())
+}
 
+fn compact_validated_columns_inner(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    max_commits: usize,
+    prefilter: bool,
+    stats: &mut CutAdmissionStats,
+) -> LayoutResult {
     let mut current = accept_if_no_worse(layout, compact_transport_geometry(layout), solver);
+    let mut current_graph: Option<crate::connectivity::ConnectivityGraph> = None;
     let mut commits = 0;
     let mut cut = 1;
     while cut < current.width && commits < max_commits {
@@ -558,15 +622,14 @@ pub fn compact_validated_columns(
             cut += 1;
             continue;
         };
-        let issues = match validate::validate(&candidate, Some(solver), LayoutStyle::Bus) {
-            Ok(issues) => issues,
-            Err(error) => error.issues,
-        };
-        if issues.iter().any(|issue| issue.severity == Severity::Error) {
+        let (admitted, candidate_graph) =
+            cut_admission(&current, &mut current_graph, &candidate, solver, prefilter, stats);
+        if !admitted {
             cut += 1;
             continue;
         }
         current = candidate;
+        current_graph = candidate_graph;
         commits += 1;
         // Retry the same coordinate: several redundant columns may be
         // adjacent, and accepting a move changes every later cut.
@@ -580,9 +643,18 @@ pub fn compact_validated_rows(
     solver: &SolverResult,
     max_commits: usize,
 ) -> LayoutResult {
-    use crate::validate::{self, LayoutStyle, Severity};
+    compact_validated_rows_inner(layout, solver, max_commits, true, &mut CutAdmissionStats::default())
+}
 
+fn compact_validated_rows_inner(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    max_commits: usize,
+    prefilter: bool,
+    stats: &mut CutAdmissionStats,
+) -> LayoutResult {
     let mut current = accept_if_no_worse(layout, compact_transport_geometry(layout), solver);
+    let mut current_graph: Option<crate::connectivity::ConnectivityGraph> = None;
     let mut commits = 0;
     let mut cut = 1;
     while cut < current.height && commits < max_commits {
@@ -590,15 +662,14 @@ pub fn compact_validated_rows(
             cut += 1;
             continue;
         };
-        let issues = match validate::validate(&candidate, Some(solver), LayoutStyle::Bus) {
-            Ok(issues) => issues,
-            Err(error) => error.issues,
-        };
-        if issues.iter().any(|issue| issue.severity == Severity::Error) {
+        let (admitted, candidate_graph) =
+            cut_admission(&current, &mut current_graph, &candidate, solver, prefilter, stats);
+        if !admitted {
             cut += 1;
             continue;
         }
         current = candidate;
+        current_graph = candidate_graph;
         commits += 1;
     }
     current
@@ -607,19 +678,37 @@ pub fn compact_validated_rows(
 /// Full safe compaction entry point: transport resynthesis followed by
 /// alternating validated X/Y coordinate cuts to a small fixed point.
 pub fn compact_validated_geometry(layout: &LayoutResult, solver: &SolverResult) -> LayoutResult {
+    compact_validated_geometry_with_stats(layout, solver, true).0
+}
+
+/// RFC-065 Phase 2 instrument + identity-pin oracle: the same fixed-point
+/// compaction with the topology pre-filter toggleable and admission
+/// telemetry returned. `prefilter: false` is the pure-validate baseline the
+/// byte-identity pin compares against; production callers go through
+/// [`compact_validated_geometry`] (filter on).
+pub fn compact_validated_geometry_with_stats(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    prefilter: bool,
+) -> (LayoutResult, CutAdmissionStats) {
+    let mut stats = CutAdmissionStats::default();
     let mut current = accept_if_no_worse(layout, compact_transport_geometry(layout), solver);
     for _ in 0..3 {
-        let columns = compact_validated_columns(&current, solver, usize::MAX);
-        let next = compact_validated_rows(&columns, solver, usize::MAX);
+        let mut pass_stats = CutAdmissionStats::default();
+        let columns =
+            compact_validated_columns_inner(&current, solver, usize::MAX, prefilter, &mut pass_stats);
+        let next =
+            compact_validated_rows_inner(&columns, solver, usize::MAX, prefilter, &mut pass_stats);
+        stats.absorb(pass_stats);
         if next.width == current.width
             && next.height == current.height
             && next.entities.len() == current.entities.len()
         {
-            return next;
+            return (next, stats);
         }
         current = next;
     }
-    current
+    (current, stats)
 }
 
 fn collapse_vertical_cut(layout: &LayoutResult, cut: i32) -> Option<LayoutResult> {

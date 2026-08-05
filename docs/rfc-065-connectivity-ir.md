@@ -855,3 +855,29 @@ Per `CLAUDE.md` § verification protocol:
   (round 8 rationale: two distinct positioned statements); the
   admission-outcome pin ask (the hard-fail fixture IS the forward
   regression pin; corpus growth welcome but not gating).
+- **2026-08-05 — Phase 2 slice 2a (post-merge, fresh branch): the
+  error-certain pre-filter primitive lands; the cut-path measurement
+  says the money is on the fold path.** Built:
+  `connectivity::error_certain_regression` — the sound reject-fast
+  detector over index-stable diffs (net span loss per entrance, net
+  hand loss per inserter with retargets deliberately falling through,
+  added same-carries head-ons), unit-pinned per class; wired into both
+  cut loops via `cut_admission` with base-graph caching and admission
+  telemetry (`CutAdmissionStats`), toggleable through
+  `compact_validated_geometry_with_stats`. Soundness gate K65-5: cut
+  outcomes must be BYTE-IDENTICAL filter-on vs filter-off (pinned;
+  holds). MEASUREMENT: the cut path has almost no validate() volume to
+  save — the cut constructors refuse most bad geometry structurally
+  before validation (EC@2: six validated candidates, zero
+  filter-catchable; EC@20: one). The filter engagement number is
+  reported, not asserted, and the pin is honest about why. CONSEQUENCE,
+  recorded as the next slice's scoping: the validate() bottleneck that
+  motivated Phase 2 lives in `search_snake_fold` (a comb of candidates
+  × full validate each — the reason `FOLD_SEARCH_ENTITY_THRESHOLD`
+  exists), and fold candidates are index-UNSTABLE (fold_snake rebuilds
+  and reorders its entity list), so the fold-side pre-filter needs an
+  old→new identity map exported from the fold transform. Kill criterion
+  for that slice: if the mapped filter cannot reject-fast ≥30% of fold
+  candidates that validation rejects on the fold corpus (chain-mil5ore
+  + the two admissible row-bus fixtures), the mapping machinery is not
+  worth its complexity — measure on the spike before wiring.

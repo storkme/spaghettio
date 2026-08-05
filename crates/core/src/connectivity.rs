@@ -574,6 +574,86 @@ pub fn diff(before: &ConnectivityGraph, after: &ConnectivityGraph) -> TopologyDi
     TopologyDiff { added_edges, removed_edges, added_conflicts, removed_conflicts }
 }
 
+/// RFC-065 Phase 2: detect an ERROR-CERTAIN topology regression between two
+/// derivations over the SAME index-stable entity list — the sound
+/// reject-fast pre-filter for transform admission loops. Returns
+/// `Some(reason)` only for regression classes that `validate()` is
+/// guaranteed to reject, so a caller may skip validation for these
+/// candidates without changing any admission OUTCOME (the byte-identity
+/// pin in `connectivity_parity.rs` enforces exactly that):
+///
+/// - an underground ENTRANCE that had a span and lost it — check #19
+///   (`check_underground_belt_pairs`) errors every unpaired entrance;
+/// - an inserter that had a pickup (or drop) binding and now has NONE —
+///   the inserter checks error unbound hands. A RETARGETED hand (lost one
+///   binding, gained another) is deliberately not flagged: retargets can
+///   be validate-legal, so they fall through to full validation;
+/// - a NEW same-carries head-on contact — `check_belt_junctions` errors it
+///   (different-carries contacts are validator-tolerated and not flagged).
+///
+/// Callers MUST ensure index identity between the two derivations (same
+/// entities, same order — e.g. the compaction cut candidates, which shift
+/// coordinates in place). With entity insertion/removal the diff churns
+/// spuriously; callers guard on `entities.len()` equality and skip the
+/// filter otherwise.
+pub fn error_certain_regression(
+    before: &ConnectivityGraph,
+    after: &ConnectivityGraph,
+    layout_after: &LayoutResult,
+) -> Option<String> {
+    let n = layout_after.entities.len();
+    // Per-node counts for the three certain classes, before vs after.
+    let mut span_out_b = vec![0u16; n];
+    let mut span_out_a = vec![0u16; n];
+    let mut pick_b = vec![0u16; n];
+    let mut pick_a = vec![0u16; n];
+    let mut drop_b = vec![0u16; n];
+    let mut drop_a = vec![0u16; n];
+    let tally = |edges: &[Edge], span: &mut [u16], pick: &mut [u16], drp: &mut [u16]| {
+        for e in edges {
+            match e.kind {
+                EdgeKind::UgSpan if e.src < span.len() => span[e.src] += 1,
+                EdgeKind::InserterPickup if e.dst < pick.len() => pick[e.dst] += 1,
+                EdgeKind::InserterDrop if e.src < drp.len() => drp[e.src] += 1,
+                _ => {}
+            }
+        }
+    };
+    tally(&before.edges, &mut span_out_b, &mut pick_b, &mut drop_b);
+    tally(&after.edges, &mut span_out_a, &mut pick_a, &mut drop_a);
+
+    for i in 0..n {
+        if span_out_b[i] > 0 && span_out_a[i] == 0 {
+            let e = &layout_after.entities[i];
+            return Some(format!(
+                "underground entrance at ({},{}) lost its span",
+                e.x, e.y
+            ));
+        }
+        if (pick_b[i] > 0 && pick_a[i] == 0) || (drop_b[i] > 0 && drop_a[i] == 0) {
+            let e = &layout_after.entities[i];
+            return Some(format!("inserter at ({},{}) lost a hand binding", e.x, e.y));
+        }
+    }
+
+    // New same-carries head-on: conflicts are sorted+deduped, so a merge
+    // walk finds additions; only same-carries ones are Error-certain.
+    let before_set: std::collections::BTreeSet<Conflict> =
+        before.conflicts.iter().copied().collect();
+    for c in &after.conflicts {
+        if !before_set.contains(c)
+            && layout_after.entities[c.a].carries == layout_after.entities[c.b].carries
+        {
+            let e = &layout_after.entities[c.a];
+            return Some(format!(
+                "new same-carries head-on contact at ({},{})",
+                e.x, e.y
+            ));
+        }
+    }
+    None
+}
+
 /// Structural sanity over the derived graph. On a validator-green layout
 /// this must return nothing (K65-1); each finding is one positioned issue
 /// per instance (`docs/validator-reporting.md` rule 1). Not wired into
@@ -975,6 +1055,68 @@ mod tests {
         assert!(
             scan_graph_anomalies(&g, &lr).is_empty(),
             "validator-tolerated contact must not anomaly-error"
+        );
+    }
+
+    /// Phase 2 detector pins: each error-certain class fires; a RETARGET
+    /// (lost binding + gained replacement) deliberately does not.
+    #[test]
+    fn error_certain_regression_classes() {
+        use EntityDirection::East;
+        // Base: belt → UG span → belt, plus a machine-fed inserter → belt.
+        let base = layout(vec![
+            belt(0, 0, East),
+            ug(1, 0, East, "input"),
+            ug(4, 0, East, "output"),
+            belt(5, 0, East),
+            machine(0, 3, "iron-gear-wheel"),
+            inserter(3, 4, East),
+            belt(4, 4, East),
+        ]);
+        let g0 = derive_connectivity(&base);
+        assert!(error_certain_regression(&g0, &g0, &base).is_none());
+
+        // Sever the span: move the exit off-axis.
+        let mut severed = base.clone();
+        severed.entities[2].y = 9;
+        let g1 = derive_connectivity(&severed);
+        assert!(
+            error_certain_regression(&g0, &g1, &severed)
+                .is_some_and(|r| r.contains("lost its span")),
+            "severed span must be error-certain"
+        );
+
+        // Unbind a hand: move the drop belt away.
+        let mut unbound = base.clone();
+        unbound.entities[6].x = 9;
+        let g2 = derive_connectivity(&unbound);
+        assert!(
+            error_certain_regression(&g0, &g2, &unbound)
+                .is_some_and(|r| r.contains("lost a hand binding")),
+            "unbound hand must be error-certain"
+        );
+
+        // New same-carries head-on: flip the post-span belt to face the exit.
+        let mut headon = base.clone();
+        headon.entities[3].direction = EntityDirection::West;
+        let g3 = derive_connectivity(&headon);
+        assert!(
+            error_certain_regression(&g0, &g3, &headon)
+                .is_some_and(|r| r.contains("head-on")),
+            "same-carries head-on must be error-certain"
+        );
+
+        // RETARGET: slide the drop belt one tile so the hand re-binds to a
+        // different (still valid) target — must NOT be flagged.
+        let mut retarget = base.clone();
+        retarget.entities[6].name = "transport-belt".to_string();
+        // Replace the drop belt with a machine occupying the drop tile:
+        // hand now drops into a machine — a binding, not a loss.
+        retarget.entities[6] = machine(4, 3, "iron-gear-wheel");
+        let g4 = derive_connectivity(&retarget);
+        assert!(
+            error_certain_regression(&g0, &g4, &retarget).is_none(),
+            "a retargeted hand must fall through to full validation"
         );
     }
 
