@@ -705,3 +705,32 @@ Per `CLAUDE.md` § verification protocol:
   flagged "for completeness" — the documented registry-free-enforcement
   trade; a rejection-cause trace event for admission loops goes on the
   Phase 1 backlog.
+- **2026-08-05 — Bot review round 8 (the recovered re-run of the
+  degraded round) triaged: one guard added, one asymmetry declined with
+  rationale, one finding refuted, one genuinely sharp observation
+  recorded.** (2/3, unenforced band-occupancy assumption) taken beyond
+  round 7's comment: a `debug_assert` at the strip remap now trips on
+  any band whose final row is unoccupied — the padded-band failure mode
+  is checkable in every debug/test run instead of latent. (1/3,
+  population-vs-containment asymmetry) DECLINED: population's job is
+  detecting ghost bands (no machine presence at all); a lower-edge
+  straddler already produces its containment finding, and tightening
+  population to full footprint would emit TWO findings for one drifted
+  machine — the double-report shape, not a fix for masking. Nothing is
+  masked: every drifted machine reports; the band's misdescription IS
+  those findings. (1/3, Manhattan-distance comment "missing") REFUTED —
+  the exact comment exists at the cited site ("Pairs are axis-aligned,
+  so the axis delta is the pair distance the old loop tracked"). (1/3,
+  fold admission across attribution regimes) the round's sharpest
+  observation, recorded: `accept_if_no_worse` on a fold compares a
+  banded-attribution input against an empty-ledger candidate — two
+  different rate-attribution regimes. Not a regression (pre-fix
+  candidates carried STALE bands, a third and worse regime) and
+  subsumed by the documented clear trade, but named here because
+  graph-derived attribution must close it symmetrically. (1/3,
+  overlap-ordering question on orphan outputs) answered: dispatch is
+  unconditionally parallel — `check_entity_overlaps` always runs; no
+  ordering to confirm. Remaining echoes (name filter, RI-3 exposure
+  breadth, dead-code IR pending per-check migration, count-not-identity
+  floor, DI no-band latency, red-suite merge gating) all carry standing
+  dispositions from rounds 2–7; the red-suite item stays user-owned.

@@ -442,6 +442,17 @@ pub fn strip_empty_rows(layout: &LayoutResult) -> LayoutResult {
     // if row stripping ever stops firing, check this assumption first
     // (PR #574 bot round 7).
     for row in &mut compacted.effective_rows {
+        // The exactness tripwire for the assumption above (bot round 8):
+        // a band whose last covered row is unoccupied would over-shrink.
+        debug_assert!(
+            row.y_end <= 0
+                || row.y_end > layout.height
+                || occupied[(row.y_end - 1) as usize],
+            "effective_rows band [{},{}) has an unoccupied final row — the y_end remap \
+             would over-shrink it (see the occupancy comment above)",
+            row.y_start,
+            row.y_end,
+        );
         row.y_start = remap_y(row.y_start);
         row.y_end = remap_y(row.y_end);
     }
