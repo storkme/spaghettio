@@ -86,15 +86,14 @@ The derivation **reuses** the `pub(crate)` primitives that
 `validate::belt_flow` already exposes and `validate::belt_detour` already
 consumes:
 
-- `belt_flow::build_ug_pairs` — UG entrance tile → paired exit tile,
-  reused **verbatim**: nearest same-direction ahead, dist > 1, with NO
-  same-name filter. That is deliberately the primitive as it exists —
-  weaker than `check_underground_belt_pairs`, which additionally requires
-  name equality (as does the game, mechanics rule U5). The divergence
-  matters only for interleaved mixed-tier runs on one axis, which the
-  corpus never produces; adding a private stricter pairing here would be
-  a fork of the semantics Phase 1 exists to unify. Recorded as a
-  fidelity gap (review, 2026-08-04).
+- UG pairing — *(as landed; this bullet originally described Phase 0's
+  verbatim reuse of `belt_flow::build_ug_pairs`, direction-only)*: since
+  Phase 1 slice 1 the CANONICAL pairing lives in `connectivity` itself —
+  nearest same-direction, **same-name** (game rule U5) exit ahead at
+  dist > 1, bucketed O((I+O)·log O) — and `belt_flow`/`belt_structural`/
+  `check_underground_belt_pairs` all delegate to it. The Phase 0 fidelity
+  gap (no name filter) is closed; the history lives in the decision log
+  (2026-08-04 Phase 1 entry).
 - `common::{dir_to_vec, inserter_reach, splitter_second_tile,
   entity_size, oriented_splitter_dims, is_*}` — geometry vocabulary
 
