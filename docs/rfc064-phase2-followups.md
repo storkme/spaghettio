@@ -76,30 +76,37 @@ Pick-up entry so the deferral is actually tracked here (the meter
 `meter-divergence.md` records the full evidence). The fast meter is −13% on
 `tier5_processing_unit_from_ore_am3` vs the sim — a **downstream solid belt
 delivery** divergence, not a fluid one: the meter matches the sim within ±4% on
-the whole direct chain but loses the rest delivering electronic-circuit to the
-PU machines. **2026-08-04 revision of the root cause:** it is **supply-marginal
-tail starvation on the EC trunk (head-hog), NOT the belt-cycle update order.**
-An experiment permuting the 26-tile cyclic-update order moves PU only
-1.716→1.754/s (+2.2%) — real but minor. The dominant driver: PU/AC demand EC to
-~48/s but the fixture underproduces it (meter 41.5/s = −13.5% vs plan; sim
-43.2/s = −10%), and the meter concentrates that scarce EC on the head of the PU
-row: at steady state **12/16 PU machines run at full 0.125/s** while the four
-deepest (`m301/m302/m309/m310` at x=55/58) are EC-constrained (buffers 1–12/280,
-craft 0.023–0.088/s; only `m310` labels `ItemIngredientShortage` — the other
-three read `Working` but run below rate) — losing ~0.29/s of the 2.0/s ideal ≈
-the −13% sim-relative residual. The sim
-happens to feed the target to 99%. Deferred deliberately: closing it needs a
-speculative distribution / merge-priority / head-hog-fairness model change that
-**cannot be validated against a clean reference** — the sim's per-machine EC
-distribution is not in this run's stored `report.json` (its `timeseries`
-field is absent, so no per-machine craft/status checkpoints were captured),
-its aggregate is −10% below plan on this
-very fixture, and the meter's EC production already matches the sim within ±4%.
-It is genuinely undecidable here whether the meter (starving the tail) or the
-sim (feeding the target) is "right"; the meter may correctly expose that the
-factory cannot deliver 2/s PU. The cycle note is narrow blast-radius but is not
-the cause (≈ +2.2%). Any future change needs a non-noisy, sim-baselined solid
-fixture to be verifiable; re-measure after any belt merger/priority change.
+the whole direct chain but loses the rest on the electronic-circuit supply to
+the PU machines. Stated against both bases: 1.716/s is **0.271/s below the
+sim's 1.987/s** (the −13.6% sim-relative residual) and 0.284/s below the 2.0/s
+ideal — earlier revisions quoted a single "~0.29/s ≈ −13%" that conflated the
+two. **2026-08-04 revision of the root cause:** it is an **EC supply shortfall,
+NOT the belt-cycle update order.** An experiment permuting the 26-tile
+cyclic-update order moves PU only 1.716→1.754/s (+2.2%) — real but minor.
+**2026-08-05 second revision: distribution is not the dominant driver either.**
+Each PU consumes 24 EC (20 direct + 2 AC × 2), so the meter's 41.5 EC/s caps PU
+at 41.5/24 = **1.729/s** and it measures 1.716/s — **99.2% of its own supply
+ceiling**. EC is scarce only *relative to the 48/s plan rate*; at the operating
+point production and consumption balance (41.2/s consumed vs 41.5/s produced).
+The head-hog gradient is real — **12/16 PU machines run at full 0.125/s** while
+the four deepest (`m301/m302/m309/m310` at x=55/58) are EC-constrained (buffers
+1–12/280, craft 0.023–0.088/s; only `m310` labels `ItemIngredientShortage` — the
+other three read `Working` but run below rate) — but perfect redistribution
+would gain only **+0.013/s, ≈5% of the gap**. The dominant term is EC
+underproduction itself, tracking the ~13% plate shortfall upstream.
+Deferred deliberately, and now on weaker grounds than before: **there is no
+identified meter defect left to fix.** The previously nominated
+distribution / merge-priority / head-hog-fairness change is bounded at ≈5% by
+that arithmetic, and the sim's own numbers do not reconcile (43.2 EC/s caps PU
+at 1.80/s, yet it reports 1.987/s). The sim's per-machine EC distribution is
+not in this run's stored `report.json` (its `timeseries` field is absent, so no
+per-machine craft/status checkpoints were captured) and its aggregate is −10%
+below plan on this very fixture. The leading hypothesis is that the meter
+**correctly** exposes that this factory cannot deliver 2/s PU and the sim's 99%
+is the anomaly. If reopened, the question is why the **plate stages** run ~13%
+below plan — not EC distribution (≈5%) and not the cycle order (≈ +2.2%). Needs
+a sim run with `timeseries` captured so the baseline's own mass balance can be
+checked.
 
 ## Decided / closed (from Stage B)
 - **Never-worse holds** on the measurable subset → evidence supports
