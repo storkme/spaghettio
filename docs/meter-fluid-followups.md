@@ -31,9 +31,9 @@ variants now ±0–2% (were −80%; the PU-from-ore exception fixture's own AC i
 `research_all_technologies()` and so runs with productivity researched, while
 the meter models no productivity at all. Its effective 21.74 EC/PU against the
 recipe's 24 implies ≈10%, which with the meter's −3.9% EC deficit accounts for
-−12.7% of the −13.6% observed — *conditional on EC/AC carrying no
-productivity in the sim, which this sweep's own EC/AC ±0–2% figures make an
-open question*. See the PU entry — and note this is a hypothesis awaiting one
+−13.2% of the −13.6% observed. The sim's own AC, EC and cable balances agree
+that PU is boosted ≈+10.7% and EC/AC are not, which is why the gap shows on PU
+alone. See the PU entry — and note this is a hypothesis awaiting one
 measurement, after three retired predecessors. Open
 RFC-064 Phase 2 item 7. Full divergence log:
 [`meter-divergence.md`](meter-divergence.md).
@@ -122,7 +122,8 @@ Each PU consumes 24 EC (20 direct + 2 AC × 2), so the meter's 41.5 EC/s caps PU
 at 41.5/24 = 1.729/s and it measures 1.716/s — **99.2% of its own ceiling**. EC
 is scarce only *relative to the 48/s plan rate*: at the operating point
 production and consumption balance (41.2/s consumed vs 41.5/s produced). The
-head-hog gradient is real — 12/16 PU machines craft at full 0.125/s while the
+head-hog gradient (provenance unverified — see `meter-divergence.md`; treat as
+diagnostic, not load-bearing) — 12/16 PU machines craft at full 0.125/s while the
 four deepest (`m301/m302/m309/m310`, x=55/58) sit on EC buffers 1–12/280 (craft
 0.023–0.088/s; only `m310` labels `ItemIngredientShortage`, the other three read
 `Working` but run below rate) — but perfect redistribution would gain just
@@ -140,12 +141,14 @@ calls `research_all_technologies()` (`crates/sim-harness/src/scenario.rs`) and
 its parity block corrects only inserter capacity and belt stacking, not
 productivity; the meter documents that it takes nothing from `module_policy`
 and models no productivity at all. The sim's effective 21.74 EC/PU vs the
-recipe's 24 means it *behaves as if* at ≈+10%; attributing that to a
-+10%/level research is unverified. **Open joint**: the gap shows on PU alone
-(gear exact, EC/AC ±0–2%), so either productivity research is per-recipe with
-none for EC/AC, or they are boosted and the −3.9% EC term is not independent —
-in which case productivity alone covers the whole −13.6% rather than the
-−12.7% the compounded reading gives.
+recipe's 24 was a loose blended reading. Done properly the sim's own numbers
+pin both size and scope: AC:PU runs 1.807 against the recipe's 2, so PU
+carries **+10.7%** productivity (from AC production alone); the EC balance then
+fits AC *unboosted* (43.08 vs 43.2 measured) and rejects AC boosted (42.39);
+and the cable balance fits the full recipe ratio (143.96 vs 143.9). **PU is
+boosted, EC and AC are not** — which is why the corpus shows the gap on PU
+alone. Decomposition: −3.9% EC deficit compounded with −9.7% missing
+productivity = −13.2% against −13.6% observed.
 **Deferred deliberately, and not fixed on arithmetic**: three causes have now
 been proposed and retired here, so the fourth needs a measurement — dump the
 force's realized `processing-unit` productivity bonus in a sim run, the same

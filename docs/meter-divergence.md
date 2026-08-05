@@ -29,7 +29,8 @@ in-fixture AC reads −3.9%).
     all ≈ −10%; petroleum-gas −17%); only the PU target reaches 99%. So plan is
     not the reference; the sim is. (Intermediates here are *measured production*
     and do not always reconcile arithmetically with consumers — e.g. EC demand
-    from PU+AC ≈ 48/s vs ~43/s reported produced; the copper-plate→cable pair does
+    from PU+AC is ~46.9/s at the measured operating point (48/s is the *plan*
+    rate) vs ~43/s reported produced; the copper-plate→cable pair does
     reconcile (1 plate → 2 cable). Treat the intermediate figures as indicative,
     not load-bearing for the deferral's rationale.)
   - The meter matches sim within ±4% on the whole direct chain: copper-plate
@@ -115,64 +116,62 @@ in-fixture AC reads −3.9%).
     value, the meter's EC is only **−3.9%** — inside its own ±4% band — and
     the "EC/plate production is the divergence" story evaporates with it.
   - **⇒ Leading hypothesis (2026-08-05): a tech-state parity gap, not a
-    layout or belt defect at all.** If the sim really made 1.987 PU/s from
-    43.2 EC/s, its effective cost is **21.74 EC per PU** against the recipe's
-    24 — it is behaving **as if at ≈+10% productivity**. Two facts in-repo
-    make a parity gap the natural reading:
-    1. `crates/sim-harness/src/scenario.rs` calls
-       **`force.research_all_technologies()`**, so the sim world has every
-       technology researched. The tech-state parity block directly below that
-       call corrects **only** inserter capacity (#370) and belt stacking
-       (#385), each with an explicit assignment and a self-audit. **Nothing
-       corrects productivity research.**
-    2. `crates/meter/src/machine.rs` documents that it deliberately takes
-       *nothing* from `module_policy` and not `effective_crafting_speed`, so
-       the meter models **no productivity at all**, from modules or research.
-    **State the causal chain honestly**: what is measured is that the sim
-    behaves as if ~+10% on PU. That it comes from a +10%/level
-    processing-unit research is *attribution, not observation* — asserted from
-    outside-repo game knowledge and unverified here. Modules are the
-    alternative source, though `ModulePolicyKind` defaults to `None` and
-    module productivity would overshoot 10% considerably.
-  - **⚠ The pivotal unknown: does the sim boost EC and AC too?** This is the
-    hypothesis's weakest joint and it cuts two ways at once.
-    - **The corpus says the gap lands on PU alone.** This same sweep reports
-      gear exact, EC and stress-EC ±0–2%, AOP/refinery exact, the dedicated
-      AC variants ±0–2%. If `research_all_technologies()` boosted *every*
-      productivity-eligible recipe and the meter models none, those stages
-      should diverge by ~−9% as well. They do not.
-    - **Candidate explanation, unverified**: Space Age's productivity
-      research is *per-recipe*, and there is no electronic-circuit or
-      advanced-circuit productivity technology — so `research_all` boosts PU
-      and not its inputs. That would predict exactly the observed
-      selectivity. `allow_productivity: true` in `recipes.json` for EC/AC
-      does **not** settle it: that flag is module eligibility, not the
-      existence of a research tech.
-    - **If instead EC/AC *are* boosted, the decomposition below
-      double-counts.** The sim's EC output (43.2) would itself be
-      productivity-inflated against the meter's (41.5), so treating the
-      −3.9% EC difference as an independent supply term folds part of the
-      same effect in twice; the productivity term alone would then account
-      for roughly the whole −13.6%.
-  - **The decomposition, stated conditionally.** *Only if EC/AC carry no
-    productivity in the sim*: the meter's −3.9% EC deficit compounded with
-    the ≈−9.1% productivity it omits gives **−12.7%** against −13.6%
-    observed, ~0.9pp inside this fixture's noise. If EC/AC *are* boosted,
-    read it instead as the productivity term alone covering the whole gap.
-    Both readings point at the same fix; they differ on the arithmetic, so
-    neither should be quoted as settled.
-  - **⚠ NOT YET VERIFIED, and this entry has been wrong three times already.**
-    The check that settles all of the above is one run: dump the force's
-    realized productivity bonus **for `processing-unit`, `electronic-circuit`
-    and `advanced-circuit`** (the same self-audit pattern the inserter and
-    belt-stacking parity blocks already use) and compare against the meter's
-    implicit 1.0. The PU figure tests the hypothesis; the EC/AC figures
-    decide between the two decompositions and test the selectivity
-    explanation. Until then this is arithmetic with a mechanism, not a
-    measured result. It is the first of the four causes proposed here to
-    carry an *independent* corroboration (the cable reconciliation) rather
-    than resting only on the quantity in dispute — which is a reason to test
-    it first, not to believe it.
+    layout or belt defect at all.** Two facts in-repo make it the natural
+    reading: `crates/sim-harness/src/scenario.rs` calls
+    **`force.research_all_technologies()`** and its tech-state parity block
+    corrects **only** inserter capacity (#370) and belt stacking (#385) —
+    nothing corrects productivity; and `crates/meter/src/machine.rs`
+    documents that it takes *nothing* from `module_policy` and not
+    `effective_crafting_speed`, so the meter models **no productivity at
+    all**.
+  - **The sim's own numbers pin the size and the scope, three ways.** An
+    earlier revision read the bonus off a blended ratio (43.2 EC ÷ 1.987 PU =
+    21.74 against a flat 24). That is loose — the flat 24 assumes AC:PU = 2,
+    and this fixture runs 1.807. Doing it properly is both tighter and more
+    informative, because **the AC:PU ratio is itself the productivity
+    signature**:
+    1. **From AC production alone.** A PU recipe execution consumes 2 AC, so
+       AC:PU below 2 means executions are producing more than one PU each:
+       `2 / 1.807 − 1` = **+10.7% productivity on PU**. This uses no EC figure
+       at all.
+    2. **The EC balance then decides AC's status.** With PU at +10.7% and AC
+       *unboosted*: `20 × 1.987/1.107 + 2 × 3.59` = **43.08/s** against 43.2
+       measured (−0.3%). With AC *also* boosted it gives 42.39/s (−1.9%) — a
+       visibly worse fit. **AC is unboosted.**
+    3. **The cable balance says the same for EC.** `3 × 43.2 + 4 × 3.59` =
+       **143.96/s** against 143.9 measured (+0.04%), i.e. the full recipe
+       ratio. Boost EC/AC by 10% and demand drops to ~130.9/s, 13/s under
+       supply. *Caveat on this one*: cable production also equals `2 ×
+       copper-plate` exactly (2 × 71.98 = 143.96), so supply and unboosted
+       demand coincide here; the argument rests on a 13/s surplus having
+       produced visible backpressure, which it did not. Suggestive, not
+       airtight — unlike (1) and (2).
+    **So the scope question is answered by the data rather than by game
+    knowledge: PU is boosted ≈+10.7%, EC and AC are not.** That also removes
+    the double-counting worry — the meter's −3.9% EC deficit *is* an
+    independent term. No claim about which Space Age technologies exist is
+    needed for any of this, and the earlier "there is no EC/AC productivity
+    tech" assertion is withdrawn as the same class of unverified outside-repo
+    claim it was criticising.
+  - **Decomposition, on the corrected number.** The meter's −3.9% EC deficit
+    compounded with the −9.7% productivity it does not model
+    (`1/1.107 − 1`) gives **−13.2%**, against **−13.6%** observed — a 0.4pp
+    residual, comfortably inside this fixture's noise.
+  - **⚠ STILL NOT VERIFIED, and this entry has been wrong three times.** What
+    the arithmetic establishes is that *the sim behaves as if* PU carries
+    ≈+10.7% and its inputs carry none. **Why** is still attribution: a
+    productivity research granted by `research_all_technologies()` is the
+    obvious candidate, but that call does not research infinite/repeatable
+    technologies, and Space Age's productivity researches are repeatable — so
+    the mechanism may not be the obvious one, and modules (gated by the
+    `module_policy` the meter ignores, and defaulting to `None`) are the
+    alternative. The settling check is one run: dump the force's realized
+    productivity bonus for `processing-unit`, `electronic-circuit` and
+    `advanced-circuit`, the same self-audit pattern the inserter and
+    belt-stacking parity blocks already use. Note what the balances above do
+    and do not buy: they corroborate **the sim's reported EC figure and the
+    unboosted status of EC/AC**, which is what killed revision three — they do
+    not by themselves establish the *cause* of PU's bonus.
 - **Verdict**: **most likely not a meter modelling defect in the layout sense
   at all — an instrument/reference parity gap.** The sim researches everything
   and the meter models no productivity, so on a productivity-eligible recipe

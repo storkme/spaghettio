@@ -117,14 +117,19 @@ capacity (#370) and belt stacking (#385) — nothing corrects productivity
 research. `crates/meter/src/machine.rs` documents that it deliberately takes
 nothing from `module_policy` and not `effective_crafting_speed`, so the meter
 models no productivity at all. The sim's effective **21.74 EC/PU** against the
-recipe's 24 means it *behaves as if* at ≈+10% productivity. Attribution to a
-+10%/level research is unverified (module productivity would overshoot, and
-`ModulePolicyKind` defaults to `None`). **Open joint:** this sweep shows the
-gap on PU alone — gear exact, EC/AC ±0–2% — so either productivity research is
-per-recipe and EC/AC have none, or they *are* boosted and the −3.9% EC term is
-not independent, in which case the productivity term alone covers the whole
-−13.6%. Conditional on EC/AC carrying no productivity, −3.9% compounded with
-−9.1% is −12.7% of the −13.6% observed. Same failure class as #370/#385, and
+recipe's 24 was a loose blended reading; done properly, the sim's own numbers
+pin both the size and the scope. AC:PU runs **1.807** against the recipe's 2,
+so PU carries **+10.7%** productivity — derived from AC production alone. The
+EC balance then fits AC *unboosted* (20×1.987/1.107 + 2×3.59 = 43.08 vs 43.2
+measured) and rejects AC boosted (42.39); the cable balance fits the full
+recipe ratio (143.96 vs 143.9). **PU is boosted, EC and AC are not**, which is
+exactly why the corpus shows the gap on PU alone while gear/EC/AC sit at
+±0–2%. Decomposition: the meter's −3.9% EC deficit compounded with the −9.7%
+productivity it omits = **−13.2%** against −13.6% observed. What remains
+unverified is the *cause* of PU's bonus, not its size or scope:
+`research_all_technologies()` does not research repeatable technologies and
+Space Age's productivity researches are repeatable, so the obvious mechanism
+may not be the actual one. Same failure class as #370/#385, and
 the fix would be the same shape — align the sim's productivity with the
 fixture's declared level, or teach the meter it — **not** a distribution,
 merge-priority or belt-model change.
