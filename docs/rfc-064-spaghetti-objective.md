@@ -236,9 +236,15 @@ positive); `AR_score = 1` means perfectly square (`AR = 1`); a candidate that
 becomes *more* elongated than native scores negative — deliberately
 unclamped, so a regression on this axis is visible in the composite rather
 than floored to "no worse than doing nothing." (Degenerate case:
-`AR(native) = 1` defines `AR_score(L) = 1` if `AR(L) = 1` else `0`, avoiding
+`AR(native) = 1` defines `AR_score(L) = 0` if `AR(L) = 1` else `-1`, avoiding
 division by zero on an already-square native, which does not occur on any
-fixture in the current corpus but is defined for completeness.)
+fixture in the current corpus but is defined for completeness. **Amended
+2026-08-05** — this parenthetical previously read "`= 1` if `AR(L) = 1` else
+`0`", which contradicted the `AR_score(native) = 0` invariant asserted two
+sentences above: a square native self-scored `1`, entered its own ranking at
+composite `0.5`, and could not be outranked on this axis. The rule now matches
+`Transit_score`'s zero-native rule — no change is neutral, strictly worse is a
+negative sentinel. See the decision log.)
 
 **Calibration anchor:** `chain-mil5ore`'s Factorio-verified 3-fold,
 `AR(native) = 17.3`, `AR(folded) = 1.09` →
@@ -1039,3 +1045,298 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   ruled out), per the recorded subset decision. Adjudication and the tuning
   sweep wrote to the Job-2 corpora dir; resume any further Phase 2 work from
   the followups doc (`rfc064-phase2-followups.md`).
+
+- **2026-08-02 — P1/P2 evaluation primitives built as Phase-3 prerequisites
+  (owner-approved direction, this session): `objective`, `verdict`,
+  `candidate_runner` — on local branch `eval-primitives`, adversarial review
+  DEFERRED.** Rationale: every phase to date re-derived its instrument
+  (metrics in a gitignored dry-sweep example, three incompatible in-tree
+  never-worse tests, per-phase evaluation loops); Phase 3's packer needs the
+  loop to be a primitive, not a rebuild. Three units, Sonnet agents under
+  session-lead review, all additive — **no shipping-behavior change except
+  the `fold=1` knob's accept test** (stricter, see item 2; "no tested
+  fixture flips" is the established claim — the original "zero change"
+  wording here overclaimed it, corrected per the session review entry
+  below). `build_bus_layout` at default options and
+  `select_best_decomposition` are byte-identical; the runner is test-only
+  until a future, separately-gated call-site swap.
+  (1) **P1, `crates/core/src/objective.rs`** (97a63dbc): §(a)–(d) exactly;
+  Transit is REALIZED per-edge routed path length (Dijkstra over
+  `belt_flow`'s adjacency helpers), replacing Stage A's flagged
+  total-belt-length proxy. Unspecified-by-RFC decisions: `fluid_weight
+  = 0.5` (Phase 0's own log: no in-tree canonical value; RFC-055's 0.25 is
+  an unrelated test parameter); `Transit_score` zero-native degenerate
+  defined analogously to `AR_score`'s square-native rule (0.0 if candidate
+  also zero, else −1.0 sentinel); splitter crossover modeled as
+  both-outputs-reachable weight-2 (documented over-connection, not
+  per-lane-accurate); shortest path as representative length across
+  balancers; multi-instance producer/consumer averaged. Honest gap:
+  fluid edges routed entirely underground report `path_length: None`,
+  excluded from Transit, counted in `unattributed_edge_count` — never
+  silently proxied. (2) **P2a, `crates/core/src/verdict.rs`** (0f309a36,
+  a50a0454): tiered never-worse (Provenance/Positional/Count, tier recorded
+  on every verdict — the realism-ladder discipline applied to the gate
+  itself); per-category `GatePolicy` with presets codifying the prior fold
+  (all-categories count) and decomposition (one-category) gates exactly.
+  Design decisions: explicit `tier` parameter (absence of a map is
+  ambiguous between "Positional is safe" and "only Count is safe" — only
+  the caller knows its transform); unresolvable native-issue positions
+  degrade the WHOLE category to count comparison (instance-level degrade
+  produced false "new" regressions); exact integer-tile matching, multiset
+  one-for-one. `search_snake_fold` refit to Provenance tier via
+  `fold_point_correspondence` — a closed-form per-tile map (even segments
+  translate, odd segments point-reflect; entity width cancels), pinned by a
+  tile-set property test against `fold_snake`'s actual movements. **The
+  `fold=1` knob is now STRICTER**: intra-category churn (N resolved here,
+  N introduced there) previously netted zero and passed; it now rejects.
+  Owner pre-approved; no existing fixture flipped accept→reject
+  (fold-knob + mil5 multifold suites both still green). (3) **P2b,
+  `crates/core/src/bus/candidate_runner.rs`** (c800de40, a35227b9,
+  58401f90, 22843a83): `LayoutTransform` (declared `admissible_input`
+  budget + `TransformOutcome{layout, correspondence, tier}`),
+  `CandidatePlan` (reuses `DecompositionCandidate` for the base slot),
+  `run_candidate_field` (produce → transform → validate → measure →
+  verdict-vs-incumbent → `rank_admissible`; incumbent always in field,
+  scores 0 by construction — Phase 1's finding-2 "fold found ≠ fold good"
+  rule is now structural). Chain tier rule: any Count step degrades the
+  whole chain to Count; all-Positional stays Positional; all-Provenance
+  composes maps by lookup chaining. `FoldTransform` = Provenance
+  (Positional on the no-fold no-op path); `CompactTransform` = Count —
+  threading a correspondence map out of `strip_empty_columns/rows`' known
+  column/row shifts is a NAMED FOLLOW-UP, deliberately deferred. Fold's
+  call-site latency guard moved into `FoldTransform::admissible_input`
+  (`FOLD_SEARCH_ENTITY_THRESHOLD` now `pub(crate)`, value unchanged).
+  `LayoutOptions` doc-classified pinned-vs-searchable (belt tier, stacking,
+  inserter tier, quality, wire mode are NEVER search axes; the runner takes
+  opts once, unmodified — variation lives in transforms). Parity gates:
+  runner plans reproduce `build_bus_layout(compact_layout: true)` and
+  `(compact+fold)` as full-JSON byte-equality on the Phase 1 spike's own
+  admissible-fold fixture; incumbent-only field byte-identical to plain
+  `build_bus_layout`. Process notes, recorded for review honesty: P1's
+  agent committed once with `--no-verify` (hook's exact clippy invocation
+  verified clean manually before commit; nothing bypassed in substance);
+  P2b's completion report was lost to an agent-messaging failure — the
+  session lead reconstructed verification independently (code review of
+  tiers/parity assertions + full release-suite run + wasm `cargo check`)
+  and committed the agent's cosmetic tail (22843a83). **Review debt:**
+  this branch has had NO adversarial review (token budget); it touches
+  fold-accept semantics (validator-adjacent), so per repo rules it owes
+  both the PR bot pass AND session-side review before merging to main.
+  Stage B is unaffected (no shipping-path change).
+
+- **2026-08-02 (later) — eval-primitives review debt paid: PR #569 +
+  session-side adversarial review; three blocking findings, all fixed on
+  the branch.** Session review independently reproduced every verification
+  claim (suite 1131/0, clippy, wasm, fold/mil5 fixtures) and found:
+  (1) **`rank_admissible` winner was input-order-dependent** for 3+
+  candidates in chained near-ties — the pairwise ε comparator is
+  non-transitive, so `sort_by` output depended on list order (3 different
+  winners across 4 orderings on the reviewer's counterexample), violating
+  §(d) step 4's own reproducibility clause. FIXED: ε-banding is now
+  **anchored at each band's leader** (band = within ε of the band's best
+  composite; tie-break chain re-ranks within the band) — a formalization
+  the RFC text left open, chosen because chained pairwise ties have no
+  order-independent semantics; pinned by a 6-permutation test.
+  (2) **Total transit unattribution manufactured `transit_score = +1.0`**
+  (Transit 0.0 from zero attributed edges reads as "100% shorter") with no
+  way for callers to detect it — the measurement layer's "never silently
+  proxy" discipline was violated one layer up at scoring. FIXED:
+  `ObjectiveScores.transit_score` is now `Option<f64>` — `None` when either
+  side has production edges but zero attributed — contributing 0.0
+  (neutral) to the composite, with attributed/total edge counts for both
+  sides now carried on the scores struct. This retroactively explains the
+  Phase 3 driver's +1.0000 artifact rows (that driver, on the stacked
+  branch, predates the fix and must adapt when rebased.)
+  (3) **`Policy::fold()`'s doc described code this same diff deleted**
+  (present-tense reference to the pre-refit `profile`/`regressed` logic).
+  FIXED: doc now states it is the historical pre-refit semantics preserved
+  as the Count-tier record. Also fixed from the same review: the entry
+  above's "zero shipping-behavior change" overclaim (softened to the
+  established claim), and the correspondence property test upgraded from
+  1×1-only stand-ins to a real 3×3 assembler in the mirrored segment (the
+  reviewer hand-verified the formula is size-generic; now the test proves
+  it executably). **Recorded follow-ups (non-blocking, from the same
+  review):** (a) warnings-field parity between `build_bus_layout` and
+  `produce_plan` on >6000-entity layouts is untested; (b) byte-identity
+  parity tests cover the incumbent-only field, not the
+  competitive-field-incumbent-wins path (code-read as shared, unproven by
+  test); (c) residual risk that Provenance-tier matching could mask a new
+  issue as "resolved" near fold-seam reconnection geometry — no concrete
+  case constructed, flagged as a watch-item for Phase-4-style transforms.
+  Process: PR #569's required `second-opinion` check crashed on a
+  deterministic action bug for >128 KiB diffs (`[Errno 7]` — argv cap);
+  fixed upstream in storkme/second-opinion#18 (oversized prompts piped via
+  stdin after its own two review rounds rejected the @file approach for
+  silently changing prompt shape), v1 retagged, check re-runs against this
+  branch's post-review head.
+
+- **2026-08-02 (bot round) — the fixed action's first large-diff review
+  (dc359874) found three more majors; all confirmed and fixed.**
+  (1) `run_candidate_field` leaked a disabled trace sink on its two
+  incumbent-path early returns (`?` between `swap_sink(None)` and the
+  restore) — a thread would silently lose live trace streaming after one
+  incumbent failure once the runner reaches the shipping path. Fixed:
+  explicit restore-before-return on both.
+  (2) `fold_point_correspondence` omitted `fold_snake`'s final
+  normalization shift (`x_shift`, applied whenever a junction U-turn lands
+  at negative x — every multi-fold with a left-side junction), mapping
+  native issue positions `x_shift` tiles left of the candidate's frame, so
+  Provenance-tier verdicts would falsely reject good multi-folds. Latent,
+  not live: the knob fixture is a single fold (shift 0), the mil5
+  multifold test calls `fold_snake` directly, and a belt-less multi-fold
+  places no junctions — which is also why BOTH property-test upgrades to
+  date missed it. Fixed: new `fold_snake_with_shift` returns the shift
+  (it is not derivable from `(layout, folds)` — it depends on junction
+  placement outcomes), `FoldOutcome.x_shift` carries it, the map takes it
+  as a parameter, and a new multi-fold severed-belt property test asserts
+  `x_shift > 0` (fixture honesty) plus shifted tile-set equality.
+  (3) A chain's Provenance map is keyed in the candidate's base frame;
+  the runner applied it to the incumbent's issues even when bases
+  differed. Fixed: base-name mismatch degrades the verdict to Count —
+  the same guard `compose_chain`'s empty-chain branch already argued for.
+  Bot minors: Verdict.tier records the REQUESTED tier even when a
+  whole-category fallback ran (real; deferred — no caller gates on tier;
+  added to the follow-ups above); position-only issue matching (documented
+  design intent, no action); fold-seam masking (already the recorded
+  watch-item). The bot's line-level citations were verifiably real
+  (`x_shift` exists at its cited normalization step) — the finding-2
+  mechanism was confirmed in source before any fix was written.
+
+- **2026-08-02 (bot round 2, on 491efba6) — three further majors, all
+  confirmed and fixed; convergence rule adopted.** (A) Transit compared
+  each side's sum over its OWN attributed subset, biasing against
+  candidates that attribute MORE edges (extra measured terms inflate their
+  sum) and flattering ones that attribute fewer. Fixed: edges pair by
+  index (both sides derive from the same `ProductionSignature` order), and
+  `transit_score` is computed over the COMMONLY-attributed subset only,
+  with `common_attributed_edges` now carried on `ObjectiveScores` so a
+  1-of-10-edges transit claim is visibly weaker than 10-of-10. (B) A
+  zero-edge candidate against a nonzero-edge native bypassed the
+  evidence-free guard and scored transit +1.0 — mismatched edge-list
+  lengths (impossible same-solve) are now evidence-free outright.
+  (C) `fold_snake` ends in `replace_poles` — pole positions are
+  resynthesized, not geometric images — so Provenance instance-matching
+  falsely rejected folds carrying any pole-positioned issue. Fixed: the
+  fold gate's policy overrides the pole category to GateCount (the honest
+  gate for a resynthesized category). Minors fixed in the same pass:
+  duplicate plan names refused by the runner (winner replay is
+  name-keyed); DI Manhattan samples gated on inserter `carries` when
+  stamped (stray same-machine-pair items no longer contaminate an edge's
+  transit); the compact-parity test's "never increases any category"
+  wording scoped to its fixture (it is not an engine invariant); the
+  unreachable zero-extent-bbox branch no longer scores AR 1.0
+  (debug_assert + INFINITY). **Convergence rule, adopted now:** the
+  required check is green and findings are advisory; from this round on,
+  a re-review that surfaces only minors/nits ships with them recorded as
+  follow-ups — majors still block. Without a stop rule, every push buys
+  another review round indefinitely.
+
+- **2026-08-05 (bot round 3, on 25351dee) — the RFC's own `AR_score`
+  degenerate rule was self-contradictory; amended in §(a).** The reviewer
+  flagged `objective.rs::ar_score` returning `1.0` when both candidate and
+  native are perfectly square. The implementation was faithful — it is exactly
+  what §(a)'s parenthetical prescribed ("`AR(native) = 1` defines
+  `AR_score(L) = 1` if `AR(L) = 1` else `0`"). **The defect is in this RFC,
+  not the code.** That parenthetical contradicts the invariant asserted two
+  sentences above it in the same paragraph: `AR_score(native) = 0` "by
+  construction (no change scores neutral, not positive)". For a square native
+  both cannot hold. The consequence was not cosmetic: `score_vs_native(native,
+  native)` put the incumbent into its own ranking at composite **0.5** instead
+  of 0.0, and since every non-square candidate scored `0.0` against a square
+  native and every square one tied at `1.0`, **no candidate could outrank the
+  incumbent on the AR axis at all** whenever the native happened to be square.
+  Resolved in favour of the invariant, which is the load-bearing half — the
+  whole never-worse construction depends on the incumbent sitting at neutral
+  so candidates are measured as deltas against it. §(a)'s degenerate rule is
+  amended to `AR_score = 0` if `AR(L) = 1` else `-1`, which is precisely the
+  shape `Transit_score`'s zero-native rule already used, and which that
+  function's doc comment already *claimed* the two shared (the claim was false
+  when written; now true). Untestable-in-corpus per the RFC's own note — no
+  current fixture has a square native — so this is a latent-correctness fix,
+  not a measured behaviour change; no fixture flipped and the full suite is
+  unchanged at 1175 passed / 0 failed / 96 ignored. Pinned by three tests:
+  the `by_construction` invariant test now enumerates the degenerate case it
+  previously omitted (it asserted only `ar_score(3.0, 3.0)`, the branch that
+  could not fail), a named regression test for the square-native
+  self-inflation, and a test asserting the two degenerate rules agree so they
+  cannot drift apart silently again.
+
+- **2026-08-05 (bot round 3, finding 2) — the correspondence-map frame guard
+  now states its own soundness condition instead of relying on a coincidence.**
+  `run_candidate_field` maps the incumbent's issue positions through the
+  candidate chain's composed correspondence map, guarded only by base-*name*
+  equality. `compose_chain` keys that composed map in the frame the first
+  transform consumed — the candidate's base-output frame — so the mapping is
+  sound only if the incumbent's issues are also in a base-output frame. That
+  needs the incumbent to apply no transforms of its own, which was never
+  checked. It held only because `CompactTransform` declares Count, degrading
+  the canonical compact+fold chain to Count so the map went unused — a
+  property of today's tier assignments, not of the call site, and one this
+  PR's own named follow-up (giving compact a real correspondence map) was
+  going to remove. Now checked explicitly: `incumbent.transforms.is_empty()`
+  alongside the base-name test, either failing degrading to Count. No
+  behaviour change today — every current incumbent is a transform-free
+  `FullSelectionCandidate` — and the suite is unchanged at 1175 passed /
+  0 failed / 96 ignored. Filed as a fix rather than a follow-up because the
+  guard's inline comment asserted a soundness condition it did not enforce,
+  which is the failure mode this module exists to prevent.
+
+- **2026-08-05 — merge of `origin/main` (38 commits): `entity_dims`
+  ownership resolved toward main's RFC-065 dedupe.** `compaction::entity_dims`
+  conflicted — this branch had made it `pub` for `objective.rs`'s three call
+  sites, while main had rewritten its body to delegate to the new canonical
+  `common::oriented_entity_dims` and deliberately kept it private ("kept as a
+  local name because this file calls it ~30 times"). Taking main's body and
+  re-exporting it `pub` would have re-introduced the public duplicate main had
+  just removed. Resolved instead by pointing `objective.rs` at
+  `common::oriented_entity_dims` directly, leaving `compaction::entity_dims`
+  private and main's dedupe intact. The two functions are semantically
+  identical (both special-case oriented splitters, then swap w/h for
+  East/West), so this is a call-site retarget, not a behaviour change.
+
+- **2026-08-05 (bot round 4) — partial edge attribution was silent, and it is
+  NOT inert: 2 of 5 edges on the calibration fixture.** `measure_edge` averages
+  over the producer ports that reached a consumer and drops the rest. The
+  module's "never substitute a proxy for unmeasured flow" discipline only ever
+  covered the all-or-nothing case — zero samples give `path_length: None` and
+  land in `unattributed_edge_count`, but *some* samples silently produced a
+  mean over the reachable subset. Because unreachable producers are dropped
+  rather than penalised, that bias runs **short** — i.e. in the layout's
+  favour, which is the dangerous direction for a metric used to admit
+  candidates. The reviewer raised it at 1/3-pass confidence; instrumenting it
+  rather than reasoning about it gave `edges=5 unattributed=1
+  **partially_attributed=2**` on `stress-ac-partitioned-5s-pooled`, the
+  fixture this suite calibrates against. **Every RFC-064 transit figure
+  recorded so far was computed by this function**, so Phase 0/1/2's transit
+  numbers rest on partly-subset means to an extent not previously visible.
+  Fixed here to the extent that does not move numbers: `EdgeMeasurement` now
+  carries `ports_total`/`ports_sampled` and `LayoutMeasure` carries
+  `partially_attributed_edge_count`, so partial attribution is *visible*
+  instead of silent, mirroring what `unattributed_edge_count` already does for
+  the total case. **Deliberately NOT fixed here:** whether a partially
+  attributed edge should be demoted to unattributed outright (the reviewer's
+  suggestion) is a metric-policy question for §(b) — it would move every
+  recorded transit number and re-open the phase gates, so it is a follow-up
+  with a decision owed, not a silent change. Nor is the *cause* established:
+  the unreachable ports may be genuinely unrouted, or the item-filtered belt
+  graph may be failing to trace a route across a merge. That diagnosis is the
+  first task of the follow-up. Suite 1176 passed / 0 failed / 96 ignored.
+
+- **2026-08-05 (bot round 4) — remaining minors recorded as follow-ups under
+  the convergence rule.** The required check is green and these are advisory:
+  (a) incumbent validation/measure trace events are not truncated, so they
+  precede the winner's replayed stream; (b) the field loop has no
+  `catch_unwind`/RAII sink guard, so a panicking candidate leaves the trace
+  sink disabled for the thread; (c) `transit_score: None` is not neutral in
+  ranking — a candidate with zero attributable edges and a positive `ar_score`
+  can still outrank the incumbent; (d) the index-paired-edge contract in
+  `score_vs_native_weighted` is `debug_assert`-only, so release builds can
+  pair mismatched edges; (e) `search_snake_fold`'s refit gate can
+  false-reject a fold that relocates a native issue onto a seam tile with no
+  pre-image. (c) and (d) are the two that could affect a selection decision
+  and should be taken first. (f) Also recorded per the reviewer: with the
+  amended square-native rule, a `-1.0` sentinel plus 0.5/0.5 weights means a
+  genuine transit win can only *tie* a square-native incumbent, with
+  `ΔEntities%` breaking the tie — latent (no fixture has a square native) but
+  it does blunt §(d)'s delta-vs-incumbent intent, so the weights or the
+  sentinel may need revisiting when one appears.
