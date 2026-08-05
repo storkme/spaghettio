@@ -1002,3 +1002,39 @@ Per `CLAUDE.md` § verification protocol:
   volume), i.e. the reason the filter is off. Primitive-level
   soundness is now held by the direct contract pin instead, which is
   strictly stronger than a wired-path reject would be.
+- **2026-08-05 — PR #579 bot round 2 (union ×3, all minor): the
+  reject path IS reachable — round 1's "unreachable" reply corrected
+  and the nonzero-reject pin added; five accuracy fixes; the
+  telemetry-scope findings answered in-thread.** The round's recurring
+  top finding (reject path never exercised through the cut loop, both
+  rounds) fell to a probe: a cut that CREATES a same-carries head-on
+  is generatable (two opposing runs, decoy-anchored gap column; the
+  collapse shifts them adjacent). Round 1's in-thread "no such fixture
+  is reachable" was argued from the SPAN class only and did not
+  generalize — corrected publicly.
+  `phase2_prefilter_rejects_engage_on_head_on_creating_cut` now pins
+  it: 6 reject-fasts vs 6 baseline Error discards, byte-identical
+  outcomes, counter-form equality exercised non-trivially for the
+  first time (0+6==6, not X+0==X). Accepted accuracy fixes: (a)
+  `search_snake_fold_with_stats` doc's "ZERO across the corpus"
+  corrected to 0-on-row-bus / 1-in-151-on-chain-mil5ore (0.83%); (b)
+  index-stability doc rewritten — index identity is the contract,
+  `entities.len()` equality is the cut loop's proxy, valid there only
+  because cuts mutate in place (a net-zero remove+insert would churn
+  indices; Phase 3 consumers must track identity, not length); (c)
+  `error_discards` relabeled an UPPER BOUND on catchable volume (the
+  detector covers a subset of Error causes — note the bound favors
+  the filter, so the kill verdict only strengthens); (d) head-on
+  branch got bounds guards matching the span branch's defensive
+  posture (`.get()`, fall through, never panic); (e) detector
+  completeness stated explicitly (unpaired exits / over-reach spans
+  deliberately fall through — soundness is the load-bearing
+  direction). Answered in-thread, no change: structural-refusal
+  counts are fold_snake refusals by definition (comb-construction
+  skips never yield a candidate, so they cannot bear on validate
+  volume); `validates_run` deliberately scopes to the admission loop
+  the filter could affect (preamble/baseline validates are invariant
+  overhead under either arm, so they cancel in every on/off
+  comparison); the "converse soundness direction" ask is answered by
+  the negative pins + the now-engaged wired reject path, which
+  together are the strongest finite evidence available.

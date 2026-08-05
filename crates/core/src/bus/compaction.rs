@@ -550,9 +550,11 @@ pub struct CutAdmissionStats {
     pub validates_run: usize,
     pub prefilter_rejects: usize,
     /// Of `validates_run`, how many the validator rejected on Error
-    /// severity — the only subset a topology pre-filter could ever have
-    /// reject-fasted. The honest coverage denominator: with the filter off
-    /// this is total Error volume; with it on, the misses.
+    /// severity — an UPPER BOUND on what any sound Error-certain
+    /// pre-filter could reject-fast (the wired detector covers a subset
+    /// of Error causes, so its achievable catch is at most this). The
+    /// honest coverage denominator: with the filter off this is total
+    /// Error volume; with it on, the misses.
     pub error_discards: usize,
     /// How many candidates the pre-filter actually EVALUATED (the
     /// count-equality guard admitted them to the diff). Identity pins
@@ -4641,12 +4643,14 @@ pub fn search_snake_fold(
 /// built and measured one (anomaly-scan reject before `profile()`) and
 /// killed it on the RFC's pre-registered criterion: across the fold
 /// corpus the Error-discard volume a sound filter could reject-fast is
-/// ZERO — `fold_snake`'s own refusal machinery (`FoldRefusal`)
-/// structurally refuses Error-certain geometry before a candidate ever
-/// exists, and every candidate that reaches `validate()` either passes
-/// or regresses on warnings, which no Error-certain filter may touch.
-/// These counters keep that negative result checkable
-/// (`phase2b_fold_prefilter_measurement` in `connectivity_parity.rs`).
+/// 0 on the row-bus fixtures and 1-in-151 on chain-mil5ore — 0.83% of
+/// rejected candidates against the ≥30% bar. `fold_snake`'s own refusal
+/// machinery (`FoldRefusal`) structurally refuses Error-certain geometry
+/// before a candidate ever exists, and nearly every candidate that
+/// reaches `validate()` either passes or regresses on warnings, which no
+/// Error-certain filter may touch. These counters keep that negative
+/// result checkable (`phase2b_fold_prefilter_measurement` in
+/// `connectivity_parity.rs`).
 pub fn search_snake_fold_with_stats(
     layout: &LayoutResult,
     solver: &SolverResult,

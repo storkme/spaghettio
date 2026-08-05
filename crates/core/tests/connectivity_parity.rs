@@ -478,6 +478,74 @@ fn phase2_prefilter_identity_on_ug_normalizing_cut() {
     );
 }
 
+/// The nonzero-reject pin both bot rounds asked for (and round 1's reply
+/// wrongly called unreachable — that argument covered the span class
+/// only): a cut that CREATES a same-carries head-on. Two opposing belt
+/// runs separated by a gap column (decoy keeps it non-empty); collapsing
+/// the gap shifts the west run adjacent to the east run — a new head-on
+/// contact with equal carries. The filter rejects it (Error-certain
+/// class) and `validate()` rejects it too (`belt-junction` Error), so
+/// outcomes stay byte-identical while the reject path carries real
+/// volume: the counter-form soundness equality is exercised with
+/// `prefilter_rejects > 0` for the first time, not as `X + 0 == X`.
+#[test]
+fn phase2_prefilter_rejects_engage_on_head_on_creating_cut() {
+    use spaghettio_core::models::{EntityDirection, PlacedEntity};
+    use EntityDirection::{East, West};
+
+    let belt = |x: i32, y: i32, dir: EntityDirection| PlacedEntity {
+        name: "transport-belt".into(),
+        x,
+        y,
+        direction: dir,
+        carries: Some("iron-plate".into()),
+        ..Default::default()
+    };
+    let before = LayoutResult {
+        entities: vec![
+            belt(0, 0, East),
+            belt(1, 0, East),
+            belt(3, 0, West),
+            belt(4, 0, West),
+            belt(2, 2, East),
+        ],
+        width: 5,
+        height: 3,
+        ..Default::default()
+    };
+    let solver = SolverResult::default();
+
+    let (on, stats_on) = compact_validated_geometry_with_stats(&before, &solver, true);
+    let (off, stats_off) = compact_validated_geometry_with_stats(&before, &solver, false);
+
+    assert_eq!(
+        serde_json::to_string(&on).unwrap(),
+        serde_json::to_string(&off).unwrap(),
+        "pre-filter changed the head-on-creating cut outcome: on={}x{} off={}x{}",
+        on.width, on.height, off.width, off.height
+    );
+    assert!(
+        stats_on.prefilter_rejects > 0,
+        "fixture regressed — the reject path no longer engages: {stats_on:?}"
+    );
+    assert!(
+        stats_off.error_discards > 0,
+        "fixture regressed — the baseline no longer Error-discards the \
+         head-on candidates: {stats_off:?}"
+    );
+    assert_eq!(
+        stats_on.validates_run + stats_on.prefilter_rejects,
+        stats_off.validates_run,
+        "admission accounting diverged: {stats_on:?} vs {stats_off:?}"
+    );
+    assert_eq!(
+        stats_on.error_discards + stats_on.prefilter_rejects,
+        stats_off.error_discards,
+        "reject-fasts must map 1:1 onto baseline Error discards: \
+         {stats_on:?} vs {stats_off:?}"
+    );
+}
+
 /// RFC-065 Phase 2b measurement (not a gate): fold-search admission volume
 /// across the pre-registered row-bus corpus, against the ≥30% reject-fast
 /// kill criterion. Run with `--ignored --nocapture`. The cell fixture

@@ -603,11 +603,20 @@ pub fn diff(before: &ConnectivityGraph, after: &ConnectivityGraph) -> TopologyDi
 /// validate-admissible and must fall through (same 2026-08-05 review).
 /// A RETARGETED hand was never flagged for the same reason.
 ///
+/// The detector is deliberately INCOMPLETE: unpaired exits and
+/// over-reach spans are also Error-certain under check #19 but fall
+/// through to full validation — soundness (never reject what validate()
+/// admits) is the load-bearing direction; completeness only costs a
+/// validate() call.
+///
 /// Callers MUST ensure index identity between the two derivations (same
-/// entities, same order — e.g. the compaction cut candidates, which shift
-/// coordinates in place). With entity insertion/removal the diff churns
-/// spuriously; callers guard on `entities.len()` equality and skip the
-/// filter otherwise.
+/// entities, same order). That is the contract — `entities.len()`
+/// equality, which the cut loop checks, is only a cheap PROXY that is
+/// valid there because cut candidates mutate entities in place and never
+/// reorder; a transform that removes one entity and inserts another
+/// (net-zero length) would still churn indices and could make the
+/// detector fire on a validate-admissible candidate. Phase 3 consumers
+/// with any doubt must track identity explicitly, not by length.
 pub fn error_certain_regression(
     before: &ConnectivityGraph,
     after: &ConnectivityGraph,
@@ -651,14 +660,21 @@ pub fn error_certain_regression(
     let before_set: std::collections::BTreeSet<Conflict> =
         before.conflicts.iter().copied().collect();
     for c in &after.conflicts {
+        // Bounds guards match the span branch's defensive posture: a
+        // caller violating index identity gets a fall-through, not a
+        // panic, from this pub primitive.
+        let (Some(ea), Some(eb)) =
+            (layout_after.entities.get(c.a), layout_after.entities.get(c.b))
+        else {
+            continue;
+        };
         if matches!(c.kind, ConflictKind::HeadOn)
             && !before_set.contains(c)
-            && layout_after.entities[c.a].carries == layout_after.entities[c.b].carries
+            && ea.carries == eb.carries
         {
-            let e = &layout_after.entities[c.a];
             return Some(format!(
                 "new same-carries head-on contact at ({},{})",
-                e.x, e.y
+                ea.x, ea.y
             ));
         }
     }
