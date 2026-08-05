@@ -448,9 +448,13 @@ pub fn strip_empty_rows(layout: &LayoutResult) -> LayoutResult {
         // the violation ALSO pushes an artifact-carried warning — the
         // release-surviving signal this repo's validator culture demands
         // (same rationale as `ReactivePassNotConverged`).
-        let final_row_occupied = row.y_end <= 0
-            || row.y_end > layout.height
-            || occupied[(row.y_end - 1) as usize];
+        // Out-of-range ends are SUSPICIOUS, not blessed (bot round 10
+        // caught the first version short-circuiting `> height` to
+        // "occupied" — inverting the guard for exactly the band shape
+        // whose remap falls into the off-band fallback arm).
+        let final_row_occupied = row.y_end > 0
+            && row.y_end <= layout.height
+            && occupied[(row.y_end - 1) as usize];
         debug_assert!(
             final_row_occupied,
             "effective_rows band [{},{}) has an unoccupied final row — the y_end remap \

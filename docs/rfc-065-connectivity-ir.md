@@ -761,3 +761,27 @@ Per `CLAUDE.md` § verification protocol:
   re-deriving geometry. (1/2, graph not yet load-bearing in production)
   standing Phase-1-remainder disposition; stated plainly in the module
   doc since round 5.
+- **2026-08-05 — Bot review round 10 triaged: the guard-inversion
+  moderate FIXED (a real catch on round-8/9's own hardening), and the
+  mixed-tier thread closed for good on game-rule grounds.** (moderate,
+  inverted boundary arms) right: the occupancy guard short-circuited
+  `y_end > layout.height` to "occupied", silently blessing exactly the
+  band shape whose remap takes the off-band fallback arm. The boundary
+  arms now resolve to NOT-occupied — out-of-range ends warn. Its
+  annotate-don't-correct design is kept deliberately: a strip pass that
+  "corrected" a violating band would be inventing geometry; the
+  admission loops are the enforcement. (minor, straddle-strictness
+  coupling) standing harm-calibration disposition (rounds 2/8): a
+  future transform producing top-in-band straddles is drifting off the
+  construction invariant, and flagging that drift is the check's job —
+  the band is consumed as a window, not only as a spec key. (minor,
+  mixed-tier structural guard) CLOSED, terminally, on game-rule
+  grounds rather than census grounds: mechanics rule **B12 makes
+  mixed-tier same-axis interleaving LEGAL Factorio** — belt weaving
+  crosses lines by pairing each tier past the other. The name filter is
+  therefore not merely corpus-safe; it is what models legal weaving
+  CORRECTLY (direction-only pairing mis-paired across tiers on every
+  weave), and a structural guard flagging interleavings would
+  false-positive on legitimate geometry. Cross-tier arrangements that
+  do NOT self-pair within reach already hard-error at check #19. The
+  "Phase 1 backlog" guard item is retired in favor of this record.
