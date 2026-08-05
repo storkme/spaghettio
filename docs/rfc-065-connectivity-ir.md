@@ -197,8 +197,9 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue>
 ```
 
 Standalone in Phase 0 — **not** added to the `validate()` dispatch (see
-K65-4). One positioned issue per instance, per
-`docs/validator-reporting.md` rule 1. Checks:
+K65-4). *Phase 1 slice 1 then wired it in as check #40; the phrasing
+above records Phase 0's scope, not the current state.* One positioned
+issue per instance, per `docs/validator-reporting.md` rule 1. Checks:
 
 - **RI-1 `effective_rows` bands describe reality — harm-calibrated.**
   Every machine whose recipe has ≥1 `effective_rows` entry must have its
@@ -527,3 +528,39 @@ Per `CLAUDE.md` § verification protocol:
   none. Nits noted without action: power-wires detection robustness
   (deterministic on the pinned fixture), fold-admission semantics
   change (already logged 2026-08-04).
+- **2026-08-05 — Bot review round 2 (of the Phase 1 SHA) triaged: one
+  real transform gap fixed, two accuracy fixes, one dedupe; the major
+  finding is the intended Phase 1 semantics, answered here.**
+  Disposition: (major) "dispatching `check_record_integrity` is a
+  non-additive behavior change" — correct, and it is Phase 1's entire
+  point; K65-4's additive constraint bounded Phase 0, which held. The
+  claimed over-strictness ("errors even when functionally inert via
+  fail-open fallback") under-counts the consumer: `resolve_row_spec_
+  banded` returns the BAND as well as the spec, and the rate walkers
+  consume it as a row window, so exits and straddles are live drift
+  even where spec identity survives; and neither can occur on an
+  engine-built layout, so the green-corpus exposure is the committed
+  parity set's coverage, not the check's semantics. (minor,
+  apply_island_placement) REAL and fixed: the island transform
+  translated machines in 2D and left `effective_rows` untouched — the
+  exact class this RFC hunts, missing from its own transform list; it
+  now clears the ledger like `fold_snake` (2D relocation cannot be
+  band-represented). (minor, foreign-band message) correct — the
+  message claimed foreign-spec adoption but `resolve_row_spec_banded`
+  filters by recipe first and fails open to the recipe-global spec;
+  message and calibration pin rephrased to name the true mechanism.
+  (minor, straddle-vs-attribution) behavior kept, documentation
+  tightened: the straddle case is deliberate (band-as-window
+  consumers), impossible on engine output. (minor, name-filter has no
+  structural guard) acknowledged residual — the tightening moves the
+  primitive TOWARD game truth (U5), so any divergence it introduces is
+  a divergence from modeling flow the game does not perform; a
+  mixed-tier structural guard would be a new validator check and is
+  Phase 1 backlog, not a blocker. (minor, fold fail-open residual)
+  already logged 2026-08-04; graph-derived attribution remains the
+  Phase 1 successor. (minor, stale module doc) fixed — module doc and
+  this RFC's § record-integrity now state the dispatch wiring. (nit,
+  `oriented_dims` duplicate) fixed properly: canonical
+  `common::oriented_entity_dims` added; `connectivity::oriented_dims`,
+  `compaction::entity_dims`, AND `strip_empty_columns`' third inline
+  copy all delegate.

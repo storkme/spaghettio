@@ -56,14 +56,16 @@
 //! Phase 0 scope: solid transport + inserters + machines. Pipes are a mesh,
 //! not a flow lattice, and stay with `validate::fluids` until a later phase;
 //! poles stay with `power_wires` (only their index integrity is checked
-//! here). Nothing in this module is wired into the `validate()` dispatch —
-//! kill criterion K65-4 requires Phase 0 to be additive.
+//! here). Phase 0 landed fully additive (kill criterion K65-4); since
+//! Phase 1 slice 1, [`check_record_integrity`] runs inside the `validate()`
+//! dispatch (check #40) — the graph derivation and anomaly scan remain
+//! dispatch-free instruments.
 
 use rustc_hash::FxHashMap;
 
 use crate::common::{
-    dir_to_vec, entity_size, inserter_reach, is_inserter, is_machine_entity, is_splitter,
-    is_surface_belt, is_ug_belt, oriented_splitter_dims, splitter_second_tile,
+    dir_to_vec, inserter_reach, is_inserter, is_machine_entity, is_splitter, is_surface_belt,
+    is_ug_belt, splitter_second_tile,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity};
 use crate::validate::{Severity, ValidationIssue};
@@ -231,19 +233,11 @@ impl ConnectivityGraph {
     }
 }
 
-/// Direction-aware footprint. Mirrors `bus::compaction::entity_dims` (the
-/// splitter table first, then the E/W width/height swap for non-square
-/// entities — the recycler is 2×4 and rotates); unification into `common`
-/// is Phase 1 material.
+/// Direction-aware footprint — the canonical
+/// [`crate::common::oriented_entity_dims`] (unified there after the PR #574
+/// bot review flagged the duplicate against `bus::compaction::entity_dims`).
 fn oriented_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
-    if let Some((w, h)) = oriented_splitter_dims(name, direction) {
-        return (w as i32, h as i32);
-    }
-    let (mut w, mut h) = entity_size(name);
-    if matches!(direction, EntityDirection::East | EntityDirection::West) && w != h {
-        std::mem::swap(&mut w, &mut h);
-    }
-    (w as i32, h as i32)
+    crate::common::oriented_entity_dims(name, direction)
 }
 
 fn classify(e: &PlacedEntity) -> NodeClass {
@@ -607,16 +601,21 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
     // RI-1: effective_rows bands vs machine geometry.
     //
     // Calibrated to HARMFUL staleness, by construction of the consumer:
-    // `resolve_row_spec_banded` mis-attributes exactly when a machine's `y`
-    // resolves to a different band than the one that placed it — i.e. when
-    // the machine has crossed into a foreign-recipe band or exited every
-    // own-recipe band. A ledger that is off by less than the row's internal
-    // margins still resolves to the same spec and is functionally inert, so
-    // membership alone would under-detect (the first draft did) and
-    // edge-exactness would over-detect. The invariant with teeth, true by
-    // construction for every placed row: a machine's FULL footprint lies
-    // inside one own-recipe band, and bands are disjoint — so any harmful
-    // shift shows up as a straddle, an exit, or a foreign-band landing.
+    // `resolve_row_spec_banded` keys off the machine's top `y` within
+    // own-recipe bands and FAILS OPEN to the recipe-global spec otherwise —
+    // so spec attribution changes exactly when the machine exits every
+    // own-recipe band. A ledger off by less than the row's internal margins
+    // still resolves identically and is inert, so membership alone would
+    // under-detect (the first draft did) and edge-exactness would
+    // over-detect. The invariant with teeth, true by construction for every
+    // placed row: a machine's FULL footprint lies inside one own-recipe
+    // band. Two deliberate strictnesses beyond bare spec identity (bot
+    // review round 2 asked): a STRADDLE (top `y` still resolving, footprint
+    // poking past `y_end`) is flagged because resolve's returned band is
+    // consumed as a row WINDOW by the rate walkers — a window that no
+    // longer covers the machine is live drift; and both cases are
+    // impossible on engine-built layouts, so neither can red a green
+    // artifact (K65-1).
     let mut bands_by_recipe: FxHashMap<&str, Vec<(i32, i32)>> = FxHashMap::default();
     for row in &layout.effective_rows {
         bands_by_recipe
@@ -652,12 +651,18 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
             if bands.iter().any(|&(y0, y1)| e.y >= y0 && e.y + mh <= y1) {
                 continue;
             }
+            // Message mechanics (bot review round 2 correction):
+            // `resolve_row_spec_banded` filters by recipe FIRST, so a
+            // machine inside a foreign band never adopts the foreign spec —
+            // it falls back to the recipe-global one. The foreign band is
+            // reported as a location fact, not an attribution claim.
             let foreign = layout.effective_rows.iter().find(|row| {
                 row.spec.recipe != recipe && e.y >= row.y_start && e.y < row.y_end
             });
             let shape = if let Some(f) = foreign {
                 format!(
-                    "resolves into the {} band [{},{}) instead",
+                    "sits inside the {} band [{},{}) while its own attribution falls back \
+                     to the recipe-global spec",
                     f.spec.recipe, f.y_start, f.y_end
                 )
             } else if bands.iter().any(|&(y0, y1)| e.y >= y0 && e.y < y1) {
@@ -884,9 +889,10 @@ mod tests {
         let issues = check_record_integrity(&lr);
         assert!(
             issues.iter().any(|i| {
-                i.category == "record-effective-rows" && i.message.contains("resolves into")
+                i.category == "record-effective-rows"
+                    && i.message.contains("falls back to the recipe-global spec")
             }),
-            "foreign-band landing must fire: {issues:#?}"
+            "foreign-band landing must fire with the fail-open mechanism named: {issues:#?}"
         );
 
         // All-bands exit: own band far away, no foreign band → fires.

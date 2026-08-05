@@ -312,18 +312,10 @@ pub fn strip_empty_columns(layout: &LayoutResult) -> LayoutResult {
     }
     let mut occupied = vec![false; layout.width as usize];
     for entity in &layout.entities {
-        let (mut width, mut height) = oriented_splitter_dims(&entity.name, entity.direction)
-            .unwrap_or_else(|| entity_size(&entity.name));
-        if matches!(
-            entity.direction,
-            EntityDirection::East | EntityDirection::West
-        ) && width != height
-            && oriented_splitter_dims(&entity.name, entity.direction).is_none()
-        {
-            std::mem::swap(&mut width, &mut height);
-        }
-        let _ = height;
-        for x in entity.x.max(0)..(entity.x + width as i32).min(layout.width) {
+        // Same canonical footprint as entity_dims below (RFC-065 dedupe —
+        // this loop previously carried its own inline copy of the swap).
+        let (width, _) = crate::common::oriented_entity_dims(&entity.name, entity.direction);
+        for x in entity.x.max(0)..(entity.x + width).min(layout.width) {
             occupied[x as usize] = true;
         }
     }
@@ -3191,15 +3183,9 @@ fn hub_is_free(
 }
 
 fn entity_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
-    let (mut width, mut height) =
-        oriented_splitter_dims(name, direction).unwrap_or_else(|| entity_size(name));
-    if matches!(direction, EntityDirection::East | EntityDirection::West)
-        && width != height
-        && oriented_splitter_dims(name, direction).is_none()
-    {
-        std::mem::swap(&mut width, &mut height);
-    }
-    (width as i32, height as i32)
+    // Delegates to the canonical common::oriented_entity_dims (RFC-065
+    // dedupe); kept as a local name because this file calls it ~30 times.
+    crate::common::oriented_entity_dims(name, direction)
 }
 
 /// Recover the rigid production islands used by RFC-057's placement search.
@@ -3454,6 +3440,12 @@ pub fn apply_island_placement(
     }
     result.regions.clear();
     result.trace = None;
+    // Island placement relocates machines in 2D per island, which the
+    // per-row y-band ledger cannot represent — clear it like fold_snake
+    // does (PR #574 bot review round 2 caught this transform missing from
+    // RFC-065's vertical-move list; with record integrity dispatched, a
+    // stale ledger here would now fail validation).
+    result.effective_rows.clear();
     Ok(result)
 }
 
