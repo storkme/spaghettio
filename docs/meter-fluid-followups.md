@@ -31,8 +31,10 @@ variants now ±0–2% (were −80%; the PU-from-ore exception fixture's own AC i
 `research_all_technologies()` and so runs with productivity researched, while
 the meter models no productivity at all. Its effective 21.74 EC/PU against the
 recipe's 24 implies ≈10%, which with the meter's −3.9% EC deficit accounts for
-−12.7% of the −13.6% observed. See the PU entry — and note this is a
-hypothesis awaiting one measurement, after three retired predecessors. Open
+−12.7% of the −13.6% observed — *conditional on EC/AC carrying no
+productivity in the sim, which this sweep's own EC/AC ±0–2% figures make an
+open question*. See the PU entry — and note this is a hypothesis awaiting one
+measurement, after three retired predecessors. Open
 RFC-064 Phase 2 item 7. Full divergence log:
 [`meter-divergence.md`](meter-divergence.md).
 
@@ -138,8 +140,12 @@ calls `research_all_technologies()` (`crates/sim-harness/src/scenario.rs`) and
 its parity block corrects only inserter capacity and belt stacking, not
 productivity; the meter documents that it takes nothing from `module_policy`
 and models no productivity at all. The sim's effective 21.74 EC/PU vs the
-recipe's 24 implies ≈10%, matching Space Age's +10%/level to 0.4%, and
-compounds with the −3.9% EC deficit to −12.7% of the −13.6% observed.
+recipe's 24 means it *behaves as if* at ≈+10%; attributing that to a
++10%/level research is unverified. **Open joint**: the gap shows on PU alone
+(gear exact, EC/AC ±0–2%), so either productivity research is per-recipe with
+none for EC/AC, or they are boosted and the −3.9% EC term is not independent —
+in which case productivity alone covers the whole −13.6% rather than the
+−12.7% the compounded reading gives.
 **Deferred deliberately, and not fixed on arithmetic**: three causes have now
 been proposed and retired here, so the fourth needs a measurement — dump the
 force's realized `processing-unit` productivity bonus in a sim run, the same

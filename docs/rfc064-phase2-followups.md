@@ -99,8 +99,9 @@ would gain only **+0.013/s, ≈5% of the gap** — *at fixed EC supply*. (That
 ceiling is an operating point, not a hard invariant: the 08-04 permuted run
 reached 1.754/s, which needs 42.1 EC/s, above the 41.5/s the baseline made — so
 EC production itself responds to belt-model changes. See `meter-divergence.md`.)
-The dominant term is EC underproduction itself, tracking the ~13% plate
-shortfall upstream.
+(EC/plate production is **not** the dominant term — that reading is retracted
+immediately below; this paragraph's ceiling arithmetic survives it, the
+conclusion drawn from it does not.)
 **2026-08-05, third revision — the "upstream EC/plate production" reading is
 retracted.** It rested on imputing 47.7 EC/s from the sim's PU output
 (1.987 × 24). The sim's own copper-cable measurement refutes that: EC takes 3
@@ -116,9 +117,14 @@ capacity (#370) and belt stacking (#385) — nothing corrects productivity
 research. `crates/meter/src/machine.rs` documents that it deliberately takes
 nothing from `module_policy` and not `effective_crafting_speed`, so the meter
 models no productivity at all. The sim's effective **21.74 EC/PU** against the
-recipe's 24 implies ≈10%, matching Space Age's +10%/level to 0.4%; compounded
-with the meter's −3.9% EC deficit that is −12.7% of the −13.6% observed,
-leaving ~0.9pp inside the fixture's noise. Same failure class as #370/#385, and
+recipe's 24 means it *behaves as if* at ≈+10% productivity. Attribution to a
++10%/level research is unverified (module productivity would overshoot, and
+`ModulePolicyKind` defaults to `None`). **Open joint:** this sweep shows the
+gap on PU alone — gear exact, EC/AC ±0–2% — so either productivity research is
+per-recipe and EC/AC have none, or they *are* boosted and the −3.9% EC term is
+not independent, in which case the productivity term alone covers the whole
+−13.6%. Conditional on EC/AC carrying no productivity, −3.9% compounded with
+−9.1% is −12.7% of the −13.6% observed. Same failure class as #370/#385, and
 the fix would be the same shape — align the sim's productivity with the
 fixture's declared level, or teach the meter it — **not** a distribution,
 merge-priority or belt-model change.
