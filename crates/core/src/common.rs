@@ -237,6 +237,29 @@ pub fn non_machine_multi_tile_dims(entity: &str) -> Option<(u32, u32)> {
 /// exported at center `x+0.5` instead of `x+1.0`; before #351, the same was
 /// true for beacon/storage-tank/electric-mining-drill/lab/biolab/rocket-
 /// silo/steel-furnace/crusher.
+/// Direction-aware tile footprint: the splitter orientation table first,
+/// otherwise [`entity_size`] with the width/height swap for E/W-facing
+/// non-square entities (the recycler is 2×4 and rotates). Canonical home
+/// (RFC-065): `bus::compaction::entity_dims` and
+/// `connectivity::oriented_dims` both delegate here.
+pub fn oriented_entity_dims(
+    entity: &str,
+    direction: crate::models::EntityDirection,
+) -> (i32, i32) {
+    if let Some((w, h)) = oriented_splitter_dims(entity, direction) {
+        return (w as i32, h as i32);
+    }
+    let (mut w, mut h) = entity_size(entity);
+    if matches!(
+        direction,
+        crate::models::EntityDirection::East | crate::models::EntityDirection::West
+    ) && w != h
+    {
+        std::mem::swap(&mut w, &mut h);
+    }
+    (w as i32, h as i32)
+}
+
 pub fn entity_size(entity: &str) -> (u32, u32) {
     if is_machine_entity(entity) {
         machine_dims(entity)

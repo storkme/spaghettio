@@ -312,18 +312,10 @@ pub fn strip_empty_columns(layout: &LayoutResult) -> LayoutResult {
     }
     let mut occupied = vec![false; layout.width as usize];
     for entity in &layout.entities {
-        let (mut width, mut height) = oriented_splitter_dims(&entity.name, entity.direction)
-            .unwrap_or_else(|| entity_size(&entity.name));
-        if matches!(
-            entity.direction,
-            EntityDirection::East | EntityDirection::West
-        ) && width != height
-            && oriented_splitter_dims(&entity.name, entity.direction).is_none()
-        {
-            std::mem::swap(&mut width, &mut height);
-        }
-        let _ = height;
-        for x in entity.x.max(0)..(entity.x + width as i32).min(layout.width) {
+        // Same canonical footprint as entity_dims below (RFC-065 dedupe —
+        // this loop previously carried its own inline copy of the swap).
+        let (width, _) = crate::common::oriented_entity_dims(&entity.name, entity.direction);
+        for x in entity.x.max(0)..(entity.x + width).min(layout.width) {
             occupied[x as usize] = true;
         }
     }
@@ -434,6 +426,27 @@ pub fn strip_empty_rows(layout: &LayoutResult) -> LayoutResult {
     }
     for (_, _, y) in &mut compacted.surplus_exits {
         *y = remap_y(*y);
+    }
+    // `effective_rows` bands are y-coordinates like the boundary records
+    // above; leaving them unmapped hands `resolve_row_spec_banded` a stale
+    // ledger it fails OPEN against — every rate-shaped verdict on the
+    // compacted layout then mis-attributes silently (RFC-065 § Motivation;
+    // this was live in every `?compact=1` layout).
+    //
+    // The remap is EXACT for every band, unconditionally — no occupancy
+    // assumption needed (PR #574 bot round 11, falsifying the guard
+    // machinery rounds 7–10 accreted here; the arc is in the RFC decision
+    // log). Proof sketch: strip removes exactly the unoccupied rows, and
+    // `remap_y(y) = y − #removed-below-y` is applied to entities and band
+    // bounds alike. Any kept row `r ∈ [y_start, y_end)` is itself
+    // occupied, so `remap_y(y_end) ≥ remap_y(r) + 1` — every surviving
+    // occupant stays strictly inside the remapped half-open band,
+    // whether the band carries leading, interior, or trailing padding
+    // (padding rows simply compress away). The clamp arms of `remap_y`
+    // only widen this inequality.
+    for row in &mut compacted.effective_rows {
+        row.y_start = remap_y(row.y_start);
+        row.y_end = remap_y(row.y_end);
     }
     normalize_adjacent_undergrounds(&mut compacted);
     compacted.height -= removed_before[layout.height as usize];
@@ -720,6 +733,17 @@ fn collapse_horizontal_cut(layout: &LayoutResult, cut: i32) -> Option<LayoutResu
     for (_, _, y) in &mut candidate.surplus_exits {
         if *y >= cut {
             *y -= 1;
+        }
+    }
+    // Same ledger discipline as strip_empty_rows: `effective_rows` bands
+    // shift with the tiles they describe. `y_end` is exclusive, so it moves
+    // when the last covered tile (`y_end - 1`) is at or past the cut.
+    for row in &mut candidate.effective_rows {
+        if row.y_start >= cut {
+            row.y_start -= 1;
+        }
+        if row.y_end > cut {
+            row.y_end -= 1;
         }
     }
 
@@ -3170,15 +3194,9 @@ fn hub_is_free(
 }
 
 fn entity_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
-    let (mut width, mut height) =
-        oriented_splitter_dims(name, direction).unwrap_or_else(|| entity_size(name));
-    if matches!(direction, EntityDirection::East | EntityDirection::West)
-        && width != height
-        && oriented_splitter_dims(name, direction).is_none()
-    {
-        std::mem::swap(&mut width, &mut height);
-    }
-    (width as i32, height as i32)
+    // Delegates to the canonical common::oriented_entity_dims (RFC-065
+    // dedupe); kept as a local name because this file calls it ~30 times.
+    crate::common::oriented_entity_dims(name, direction)
 }
 
 /// Recover the rigid production islands used by RFC-057's placement search.
@@ -3433,6 +3451,12 @@ pub fn apply_island_placement(
     }
     result.regions.clear();
     result.trace = None;
+    // Island placement relocates machines in 2D per island, which the
+    // per-row y-band ledger cannot represent — clear it like fold_snake
+    // does (PR #574 bot review round 2 caught this transform missing from
+    // RFC-065's vertical-move list; with record integrity dispatched, a
+    // stale ledger here would now fail validation).
+    result.effective_rows.clear();
     Ok(result)
 }
 
@@ -3560,6 +3584,39 @@ pub fn extract_route_nets(layout: &LayoutResult) -> Vec<RouteNet> {
 mod tests {
     use super::*;
     use crate::models::{ItemFlow, MachineSpec};
+
+    /// RFC-065: a fold cannot express `effective_rows` (it relocates
+    /// x-ranges of one y-band independently), so `fold_snake` must ship an
+    /// EMPTY ledger — fail-open attribution — never the source layout's
+    /// stale bands. Minimal foldable geometry: two disconnected south
+    /// belt stubs either side of the fold column, nothing crossing it.
+    #[test]
+    fn fold_snake_clears_effective_rows() {
+        use crate::models::{EffectiveRow, EntityDirection, PlacedEntity};
+        let belt = |x: i32, y: i32| PlacedEntity {
+            name: "transport-belt".to_string(),
+            x,
+            y,
+            direction: EntityDirection::South,
+            ..Default::default()
+        };
+        let mut layout = LayoutResult {
+            entities: vec![belt(2, 0), belt(2, 1), belt(10, 0), belt(10, 1)],
+            width: 13,
+            height: 3,
+            ..Default::default()
+        };
+        layout.effective_rows = vec![EffectiveRow {
+            y_start: 0,
+            y_end: 3,
+            spec: MachineSpec::default(),
+        }];
+        let folded = fold_snake(&layout, &[6]).expect("trivial fold must succeed");
+        assert!(
+            folded.effective_rows.is_empty(),
+            "fold must clear the effective_rows ledger it cannot remap"
+        );
+    }
 
     #[test]
     fn production_signature_is_order_independent() {
@@ -5751,6 +5808,12 @@ pub fn fold_snake(
     };
     result.regions.clear();
     result.trace = None;
+    // A fold cuts at x-columns and relocates different x-ranges of the SAME
+    // y-band to different places, so the per-row y-band encoding of
+    // `effective_rows` cannot represent the result. An honest empty ledger
+    // (uniform fail-open attribution) beats a stale one — same precedent as
+    // clearing `regions`/`trace` above (RFC-065 decision log, 2026-08-04).
+    result.effective_rows.clear();
     // Poles must be re-placed, not carried: see `replace_poles`.
     result = replace_poles(&result);
     // Boundary records and surplus exits are coordinates into the layout and
