@@ -656,3 +656,28 @@ Per `CLAUDE.md` § verification protocol:
   attribution trade in PR body + nit, stale PR title/body) fixed at the
   source: PR #574's title and body updated to describe Phases 0 + 1
   slice 1, the dispatch, and the behavior trade-offs explicitly.
+- **2026-08-05 — Bot review round 6 triaged: the 3/3 DI-predicate
+  finding fixed (a genuine self-inflicted parallel derivation), and the
+  recurring name-filter major closed with its terminal answer.**
+  (minor 3/3, `di-row:` exemption gap) verified and fixed: the
+  canonical `validate::is_di_cell_entity` covers BOTH `di-cell:`
+  (stacked, Phase 1) and `di-row:` (horizontal, Phase 2) stamps; RI-1's
+  hand-rolled `di-cell:` prefix check missed the row form — and
+  re-derived a predicate that already existed, this RFC's own smell.
+  Now delegates to the canonical predicate; pin extended with the
+  `di-row:` variant. (major 2/3, name-filter tightening "silent") the
+  TERMINAL disposition, sharper than the game-truth argument alone: the
+  scenario is not silent. A mixed-tier interleaving that direction-only
+  pairing would have "paired" produces unpaired entrance/exit ERRORS
+  from `check_underground_belt_pairs` (name-filtered since long before
+  this RFC), so any input relying on cross-tier spans fails loudly at
+  check #19 — the lane walkers' quieter severed treatment is backstopped
+  by a hard error on the same geometry. There is no silent verdict
+  change to guard against. (minor 1/3, zero-machine sibling RowSpan)
+  speculative — no known path places a zero-machine row; adding
+  tolerance would blunt real detection; revisit only with a repro.
+  (minor 1/3, single-fixture contingency of the compact pin) standing
+  deliberate design (hard-fail contract), logged 2026-08-05 round 2.
+  (nit, RI-3 duplicate issues on degenerate self-loop wires) fixed —
+  one issue per bad endpoint reference. (nit, reviewer lacks a Rust
+  toolchain) environmental; local + CI runs are the gate.

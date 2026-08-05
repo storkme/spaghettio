@@ -740,12 +740,15 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
             // round 3): a fused PRODUCER is stamped inside its consumer's
             // row, so its own recipe's bands — when the same solve also
             // places a standalone producer row — legitimately do not
-            // contain it. Cell membership is artifact-ground-truth via the
-            // `di-cell:` segment stamp (`di_cell.rs`), so the exemption
-            // cannot leak to ordinary rows. Fused machines still count for
-            // band POPULATION below — a fused consumer row's own band is
-            // populated by exactly these machines.
-            if e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-cell:")) {
+            // contain it. Membership comes from the CANONICAL
+            // `validate::is_di_cell_entity` predicate (bot round 6: a
+            // hand-rolled `di-cell:` prefix here missed the Phase 2
+            // `di-row:` horizontal cells — and re-derived a predicate that
+            // already exists, the exact smell this RFC campaigns against).
+            // Fused machines still count for band POPULATION below — a
+            // fused consumer row's own band is populated by exactly these
+            // machines.
+            if crate::validate::is_di_cell_entity(e.segment_id.as_deref()) {
                 continue;
             }
             let (_, mh) = oriented_dims(&e.name, e.direction);
@@ -823,7 +826,11 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
     // computed) is skipped — only a computed-then-invalidated graph fires.
     if let Some(wires) = &layout.power_wires {
         for &(a, b) in wires {
-            for idx in [a, b] {
+            // A degenerate self-loop wire names one endpoint twice; emit
+            // one issue per bad ENDPOINT reference, not per tuple slot
+            // (`docs/validator-reporting.md` rule 1 — bot round 6 nit).
+            let endpoints: &[u32] = if a == b { &[a] } else { &[a, b] };
+            for &idx in endpoints {
                 match layout.entities.get(idx as usize) {
                     None => issues.push(ValidationIssue::with_pos(
                         Severity::Error,
@@ -1127,6 +1134,14 @@ mod tests {
         assert!(
             check_record_integrity(&lr).is_empty(),
             "DI-fused producer must be exempt from own-recipe containment"
+        );
+
+        // The Phase 2 horizontal-row stamp must exempt identically (bot
+        // round 6 — the canonical predicate covers both).
+        lr.entities[0].segment_id = Some("di-row:copper-cable:electronic-circuit".to_string());
+        assert!(
+            check_record_integrity(&lr).is_empty(),
+            "di-row fused producer must be exempt like di-cell"
         );
 
         // Same geometry WITHOUT the DI stamp: the cable machine at y=10 is
