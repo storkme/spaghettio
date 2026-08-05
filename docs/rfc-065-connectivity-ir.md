@@ -1,6 +1,7 @@
 # RFC-065: Connectivity IR — a derived topology lens for `LayoutResult`
 
-Status: Phase 0 in progress (2026-08-04). Registry: `docs/rfcs.md` RFC-065.
+Status: Active — Phase 0 landed; Phase 1 slice 1 landed (2026-08-05).
+Registry: `docs/rfcs.md` RFC-065.
 
 ## Summary
 
@@ -592,3 +593,32 @@ Per `CLAUDE.md` § verification protocol:
   uranium-processing voider @0.05/s under `SurplusPolicy::Void`), and
   both pass — K65-1 is pinned on the exotic row kinds, not
   review-session folklore.
+- **2026-08-05 — Bot review round 4 triaged: the K65-3 instrument gap
+  closed by fixing the algorithm, plus two kind-fidelity corrections.**
+  (major) `build_ug_pairs` was O(I×O) and the K65-3 bench had ZERO
+  undergrounds — the class `undergroundify` mass-produces. Rather than
+  just re-measure, the canonical pairing is now bucketed
+  (`(name, direction, cross-coord)` → `BTreeSet` of along-coords):
+  O((I+O)·log O), exact-equivalent by construction, held by a PERMANENT
+  300-soup seeded equivalence pin against the retained naive reference
+  (the Phase 1 probe's discipline, committed this time). New UG-dense
+  bench: 11k entities / 5,500 pairs incl. a 500-pair single-row naive
+  worst case — **2.48 ms** release; serpentine bench unchanged.
+  (minor, splitter kinds) geometry-first now: `SplitterOut` only for
+  aligned exits, perpendicular receivers are `Sideload` whatever the
+  source (a receiver rotation always changes the edge set — the diff-
+  blessing concern), and a head-on into a splitter's face is a recorded
+  conflict (the one splitter-adjacent case the "mirrors exactly" claim
+  missed); both pinned. `EntityDirection` gained `derive(Hash)` for the
+  bucket key. (moderate ×2, census-only name-filter guard + silent
+  decline-to-compact on residual false positives) both acknowledged
+  standing residuals, unchanged from rounds 2–3 dispositions; the
+  parity corpus at 14 fixtures incl. the exotic row kinds is the
+  operative mitigation, and a mixed-tier structural guard remains
+  Phase 1 backlog. (minor, DI-stamp trust) accepted with the sharper
+  observation recorded: a displaced fused machine is invisible to RI-1
+  by exemption but NOT to `validate()` — the dispatched inserter
+  direction/chain checks catch a severed cell; graph-derived
+  attribution subsumes this properly. (minor, orphan-output overlap
+  delta + deliberately fragile fixtures) already recorded 2026-08-04/05.
+  (nit, status header) fixed.

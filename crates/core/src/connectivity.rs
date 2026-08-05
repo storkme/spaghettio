@@ -75,7 +75,82 @@ use crate::validate::{Severity, ValidationIssue};
 /// ahead of it that shares its direction AND its name (game rule U5 — a
 /// yellow entrance never pairs a red exit), at distance > 1; greedy in
 /// entity order. Returns a bidirectional tile map (entrance ↔ exit).
+///
+/// Bucketed to O((I+O)·log O) — exits keyed by `(name, direction,
+/// cross-axis coordinate)` with along-axis positions in a `BTreeSet`, so
+/// "nearest unused ahead" is one range lookup + removal. The historical
+/// naive O(I×O) scan (PR #574 bot round 4: quadratic, and the K65-3 bench
+/// had zero undergrounds — the class `undergroundify` mass-produces) is
+/// kept as the test-only reference; a seeded-soup equivalence pin holds
+/// the two identical, and equivalence is exact by construction: buckets
+/// partition the naive scan's candidate set (name/direction/axis filters),
+/// the range start `along + 2` is `dist > 1`, the `BTreeSet` minimum is
+/// "nearest ahead", removal is `used_outputs`, and input entity order is
+/// preserved.
 pub fn build_ug_pairs(entities: &[PlacedEntity]) -> FxHashMap<(i32, i32), (i32, i32)> {
+    // Along-axis signing makes "ahead" = "increasing along" for every
+    // direction: E:+x, W:−x, S:+y, N:−y. Cross axis is the other one.
+    fn along_cross(dir: EntityDirection, x: i32, y: i32) -> (i32, i32) {
+        match dir {
+            EntityDirection::East => (x, y),
+            EntityDirection::West => (-x, y),
+            EntityDirection::South => (y, x),
+            EntityDirection::North => (-y, x),
+        }
+    }
+    fn tile_from(dir: EntityDirection, along: i32, cross: i32) -> (i32, i32) {
+        match dir {
+            EntityDirection::East => (along, cross),
+            EntityDirection::West => (-along, cross),
+            EntityDirection::South => (cross, along),
+            EntityDirection::North => (cross, -along),
+        }
+    }
+
+    let mut buckets: FxHashMap<(&str, EntityDirection, i32), std::collections::BTreeSet<i32>> =
+        FxHashMap::default();
+    let mut ug_inputs: Vec<&PlacedEntity> = Vec::new();
+    for e in entities {
+        if is_ug_belt(&e.name) {
+            match e.io_type.as_deref() {
+                Some("input") => ug_inputs.push(e),
+                Some("output") => {
+                    let (along, cross) = along_cross(e.direction, e.x, e.y);
+                    buckets
+                        .entry((e.name.as_str(), e.direction, cross))
+                        .or_default()
+                        .insert(along);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut pairs: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
+    for inp in &ug_inputs {
+        let (along_in, cross) = along_cross(inp.direction, inp.x, inp.y);
+        let Some(bucket) = buckets.get_mut(&(inp.name.as_str(), inp.direction, cross)) else {
+            continue;
+        };
+        // dist > 1 on the shared axis ⇔ along ≥ along_in + 2.
+        let Some(&along_out) = bucket.range(along_in + 2..).next() else {
+            continue;
+        };
+        bucket.remove(&along_out);
+        let out_tile = tile_from(inp.direction, along_out, cross);
+        pairs.insert((inp.x, inp.y), out_tile);
+        pairs.insert(out_tile, (inp.x, inp.y));
+    }
+    pairs
+}
+
+/// Test-only naive reference for [`build_ug_pairs`] — the historical
+/// O(I×O) scan, byte-for-byte the pre-optimization semantics. Exists
+/// solely for the seeded equivalence pin.
+#[cfg(test)]
+pub(crate) fn build_ug_pairs_naive(
+    entities: &[PlacedEntity],
+) -> FxHashMap<(i32, i32), (i32, i32)> {
     let mut ug_inputs: Vec<&PlacedEntity> = Vec::new();
     let mut ug_outputs: Vec<&PlacedEntity> = Vec::new();
     for e in entities {
@@ -316,10 +391,18 @@ pub fn derive_connectivity(layout: &LayoutResult) -> ConnectivityGraph {
         match classes[dst] {
             NodeClass::Splitter => {
                 // Splitters accept aligned rear input only; a perpendicular
-                // or head-on feed transfers nothing (a stall the dead-end
-                // check owns, not a merge).
+                // feed transfers nothing (a stall the dead-end check owns,
+                // not a merge). A head-on into the splitter's output face is
+                // recorded like any other head-on (bot round 4: the
+                // validator's junction check covers splitter tiles too).
                 if receiver_dir == d {
                     edges.push(Edge { src, dst, kind: EdgeKind::SplitterIn });
+                } else if head_on {
+                    conflicts.push(Conflict {
+                        a: src.min(dst),
+                        b: src.max(dst),
+                        kind: ConflictKind::HeadOn,
+                    });
                 }
             }
             NodeClass::SurfaceBelt | NodeClass::UgEntrance => {
@@ -329,10 +412,16 @@ pub fn derive_connectivity(layout: &LayoutResult) -> ConnectivityGraph {
                         b: src.max(dst),
                         kind: ConflictKind::HeadOn,
                     });
-                } else if src_is_splitter {
-                    edges.push(Edge { src, dst, kind: EdgeKind::SplitterOut });
                 } else if receiver_dir == d {
-                    edges.push(Edge { src, dst, kind: EdgeKind::BeltFlow });
+                    // Kind is GEOMETRY-FIRST (bot round 4): `SplitterOut`
+                    // marks an aligned splitter exit; a perpendicular
+                    // receiver is a Sideload whatever the source, so a
+                    // receiver rotation always changes the edge set.
+                    edges.push(Edge {
+                        src,
+                        dst,
+                        kind: if src_is_splitter { EdgeKind::SplitterOut } else { EdgeKind::BeltFlow },
+                    });
                 } else {
                     edges.push(Edge { src, dst, kind: EdgeKind::Sideload });
                 }
@@ -853,6 +942,87 @@ mod tests {
         );
     }
 
+    /// Seeded equivalence pin: the bucketed pairing must match the naive
+    /// O(I×O) reference exactly, forever — same soups discipline as the
+    /// Phase 1 refactor probe, kept permanent this time (bot round 4).
+    #[test]
+    fn bucketed_pairing_matches_naive_reference() {
+        struct Lcg(u64);
+        impl Lcg {
+            fn next(&mut self) -> u64 {
+                self.0 =
+                    self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                self.0 >> 33
+            }
+            fn pick(&mut self, n: usize) -> usize {
+                (self.next() % n as u64) as usize
+            }
+        }
+        const TIERS: [&str; 3] =
+            ["underground-belt", "fast-underground-belt", "express-underground-belt"];
+        const DIRS: [EntityDirection; 4] = [
+            EntityDirection::North,
+            EntityDirection::East,
+            EntityDirection::South,
+            EntityDirection::West,
+        ];
+        let mut rng = Lcg(0x0804_2026_5EED);
+        for round in 0..300 {
+            let n = 4 + rng.pick(20);
+            let mut entities = Vec::new();
+            let mut taken = rustc_hash::FxHashSet::default();
+            for _ in 0..n {
+                let (x, y) = (rng.pick(10) as i32, rng.pick(10) as i32);
+                if !taken.insert((x, y)) {
+                    continue;
+                }
+                entities.push(PlacedEntity {
+                    name: TIERS[rng.pick(3)].to_string(),
+                    x,
+                    y,
+                    direction: DIRS[rng.pick(4)],
+                    io_type: Some(
+                        if rng.pick(2) == 0 { "input" } else { "output" }.to_string(),
+                    ),
+                    ..Default::default()
+                });
+            }
+            assert_eq!(
+                build_ug_pairs(&entities),
+                build_ug_pairs_naive(&entities),
+                "bucketed vs naive divergence on soup #{round}: {entities:#?}"
+            );
+        }
+    }
+
+    /// Bot round 4 kind-fidelity pins: an aligned splitter exit is
+    /// `SplitterOut`; a perpendicular receiver is a `Sideload` whatever the
+    /// source; a head-on into a splitter's output face is a recorded
+    /// conflict.
+    #[test]
+    fn splitter_kind_is_geometry_first() {
+        use EntityDirection::{East, North, West};
+        let spl = |x, y, dir| PlacedEntity {
+            name: "splitter".to_string(),
+            x,
+            y,
+            direction: dir,
+            ..Default::default()
+        };
+        // Splitter exit into a perpendicular belt: edge exists, kind Sideload.
+        let lr = layout(vec![spl(0, 0, East), belt(1, 0, North)]);
+        let g = derive_connectivity(&lr);
+        assert!(edge(&g, 0, 1, EdgeKind::Sideload), "{:?}", g.edges);
+        assert!(!edge(&g, 0, 1, EdgeKind::SplitterOut), "{:?}", g.edges);
+
+        // Belt head-on into the splitter's output face (splitter as
+        // RECEIVER — the arm bot round 4 flagged as unrecorded).
+        let lr2 = layout(vec![belt(0, 0, East), spl(1, 0, West)]);
+        let g2 = derive_connectivity(&lr2);
+        assert_eq!(g2.conflicts.len(), 1, "{:?}", g2.conflicts);
+        assert!(g2.edges.is_empty(), "{:?}", g2.edges);
+    }
+
     /// PR #574 bot review: no flow edge onto a UG exit's flank — an edge
     /// there would let `diff` bless flow the game cannot perform.
     #[test]
@@ -1235,6 +1405,42 @@ mod tests {
             lr.entities.len(),
             derive_ms,
             derive_ms + diff_ms,
+        );
+    }
+
+    /// K65-3 companion at the UG-dense end (bot round 4: the serpentine
+    /// bench had ZERO undergrounds — the class `undergroundify` mass-
+    /// produces, and the one that exercised the pairing's former O(I×O)
+    /// scan). 5,000 pairs across 100 rows plus a 500-pair single row (the
+    /// naive worst case). Run with
+    /// `cargo test --release -p spaghettio_core connectivity::tests::bench -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_derive_at_ug_dense_scale() {
+        use EntityDirection::East;
+        let mut entities = Vec::new();
+        for r in 0..100 {
+            for k in 0..50 {
+                entities.push(ug(k * 4, r * 2, East, "input"));
+                entities.push(ug(k * 4 + 2, r * 2, East, "output"));
+            }
+        }
+        // Naive worst case: one long row, 500 same-tier pairs.
+        for k in 0..500 {
+            entities.push(ug(k * 4, 300, East, "input"));
+            entities.push(ug(k * 4 + 2, 300, East, "output"));
+        }
+        let lr = LayoutResult { entities, width: 2100, height: 302, ..Default::default() };
+        let t0 = std::time::Instant::now();
+        let g = derive_connectivity(&lr);
+        let derive_ms = t0.elapsed().as_secs_f64() * 1e3;
+        let spans = g.edges.iter().filter(|e| e.kind == EdgeKind::UgSpan).count();
+        assert_eq!(spans, 5500, "every pair must span");
+        eprintln!(
+            "derive_connectivity over {} entities ({} UG pairs): {:.2} ms",
+            lr.entities.len(),
+            spans,
+            derive_ms,
         );
     }
 }
