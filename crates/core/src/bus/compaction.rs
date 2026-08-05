@@ -4643,8 +4643,10 @@ pub fn search_snake_fold(
 /// built and measured one (anomaly-scan reject before `profile()`) and
 /// killed it on the RFC's pre-registered criterion: across the fold
 /// corpus the Error-discard volume a sound filter could reject-fast is
-/// 0 on the row-bus fixtures and 1-in-151 on chain-mil5ore — 0.83% of
-/// rejected candidates against the ≥30% bar. `fold_snake`'s own refusal
+/// 0 on the row-bus fixtures and 1 on chain-mil5ore — in the criterion's
+/// own denominator, 1 Error-class of 120 validation-rejected candidates
+/// corpus-wide (0.83%) against the ≥30% bar (as a share of
+/// chain-mil5ore's 151 validates: 0.66%). `fold_snake`'s own refusal
 /// machinery (`FoldRefusal`) structurally refuses Error-certain geometry
 /// before a candidate ever exists, and nearly every candidate that
 /// reaches `validate()` either passes or regresses on warnings, which no

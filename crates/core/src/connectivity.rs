@@ -610,19 +610,36 @@ pub fn diff(before: &ConnectivityGraph, after: &ConnectivityGraph) -> TopologyDi
 /// validate() call.
 ///
 /// Callers MUST ensure index identity between the two derivations (same
-/// entities, same order). That is the contract — `entities.len()`
-/// equality, which the cut loop checks, is only a cheap PROXY that is
-/// valid there because cut candidates mutate entities in place and never
-/// reorder; a transform that removes one entity and inserts another
-/// (net-zero length) would still churn indices and could make the
-/// detector fire on a validate-admissible candidate. Phase 3 consumers
-/// with any doubt must track identity explicitly, not by length.
+/// entities, same order); the function bails to `None` (fall through to
+/// validation) when the two graphs disagree with `layout_after` on node
+/// count. To be precise about what the contract protects (bot round 3 on
+/// PR #579): SOUNDNESS does not depend on it — both classes' fire
+/// conditions are grounded in after-geometry alone (a still-an-entrance
+/// node with no span is unpaired under check #19; a same-carries head-on
+/// present in `after` errors under `check_belt_junctions`), so even under
+/// index churn a fired candidate is one `validate()` rejects. What the
+/// contract protects is the DIFF SEMANTICS: the before-side gates
+/// (`span_out_b > 0`, conflict-set membership) are what make a firing a
+/// *regression* rather than a pre-existing condition, and under churn
+/// they mis-attribute. `entities.len()` equality — the cut loop's guard —
+/// is a cheap proxy valid there because cut candidates mutate in place
+/// and never reorder; a net-zero remove+insert would churn indices while
+/// passing it. Phase 3 consumers wanting regression attribution must
+/// track identity explicitly, not by length.
 pub fn error_certain_regression(
     before: &ConnectivityGraph,
     after: &ConnectivityGraph,
     layout_after: &LayoutResult,
 ) -> Option<String> {
     let n = layout_after.entities.len();
+    // Explicit contract check (bot round 3): a caller handing us graphs
+    // of a different shape than `layout_after` gets a uniform
+    // fall-through to full validation, not a panic and not a
+    // silently-partial tally (the per-branch guards below then only ever
+    // see in-range indices).
+    if before.classes.len() != n || after.classes.len() != n {
+        return None;
+    }
     // Per-node span counts for the entrance class, before vs after.
     let mut span_out_b = vec![0u16; n];
     let mut span_out_a = vec![0u16; n];
@@ -660,9 +677,8 @@ pub fn error_certain_regression(
     let before_set: std::collections::BTreeSet<Conflict> =
         before.conflicts.iter().copied().collect();
     for c in &after.conflicts {
-        // Bounds guards match the span branch's defensive posture: a
-        // caller violating index identity gets a fall-through, not a
-        // panic, from this pub primitive.
+        // Belt-and-braces under the up-front shape check: malformed edge
+        // indices inside a well-shaped graph still fall through.
         let (Some(ea), Some(eb)) =
             (layout_after.entities.get(c.a), layout_after.entities.get(c.b))
         else {

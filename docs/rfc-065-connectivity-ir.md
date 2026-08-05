@@ -867,7 +867,9 @@ Per `CLAUDE.md` § verification protocol:
   says the money is on the fold path.** Built:
   `connectivity::error_certain_regression` — the sound reject-fast
   detector over index-stable diffs (net span loss per entrance, net
-  hand loss per inserter with retargets deliberately falling through,
+  hand loss per inserter with retargets deliberately falling through
+  — a class the adversarial-review entry below later proves NOT
+  Error-certain and removes; kept here as the historical record,
   added same-carries head-ons), unit-pinned per class; wired into both
   cut loops via `cut_admission` with base-graph caching and admission
   telemetry (`CutAdmissionStats`), toggleable through
@@ -905,7 +907,7 @@ Per `CLAUDE.md` § verification protocol:
   ec10-ore 0/0 (30 refusals), ac5-plates 0/62 (all 62 pass;
   regression_rejects=0), chain-mil5ore 1/151 (119 warning-regression
   rejects). Of the corpus's 120 validation-rejected candidates, ≤1
-  (0.8%) was Error-class — the ≥30% criterion is tripped by a factor
+  (0.83%) was Error-class — the ≥30% criterion is tripped by a factor
   of ~40. WHY: `fold_snake`'s `FoldRefusal` machinery structurally
   refuses Error-certain geometry before a candidate exists (that was
   RFC-057's design), so validation volume is spent on candidates that
@@ -923,7 +925,11 @@ Per `CLAUDE.md` § verification protocol:
   discards), negligible volume (6 validates on its pin fixture), and
   it is the `error_certain_regression` primitive's only production
   call site — the primitive's real customers are Phase 3 transforms,
-  which will NOT have per-transform refusal machinery. CONSEQUENCE for
+  which will NOT have per-transform refusal machinery. (Superseded by
+  the adversarial-review entry below: the filter was then demoted to
+  default-off, so the wired path is exercised by the identity pins
+  only — the primitive currently has no default-on production caller.)
+  CONSEQUENCE for
   the backlog: "fold identity map" is moot (dropped); the fold-search
   cost lever is not Error rejection but the 119-strong
   warning-regression volume — any future slice there must predict
@@ -1017,7 +1023,9 @@ Per `CLAUDE.md` § verification protocol:
   outcomes, counter-form equality exercised non-trivially for the
   first time (0+6==6, not X+0==X). Accepted accuracy fixes: (a)
   `search_snake_fold_with_stats` doc's "ZERO across the corpus"
-  corrected to 0-on-row-bus / 1-in-151-on-chain-mil5ore (0.83%); (b)
+  corrected to 0-on-row-bus / 1-on-chain-mil5ore — 1 of 120 rejected
+  candidates corpus-wide (0.83%), or 0.66% of that fixture's 151
+  validates; (b)
   index-stability doc rewritten — index identity is the contract,
   `entities.len()` equality is the cut loop's proxy, valid there only
   because cuts mutate in place (a net-zero remove+insert would churn
@@ -1038,3 +1046,32 @@ Per `CLAUDE.md` § verification protocol:
   comparison); the "converse soundness direction" ask is answered by
   the negative pins + the now-engaged wired reject path, which
   together are the strongest finite evidence available.
+- **2026-08-05 — PR #579 bot round 3 (union ×3, all minor): one
+  coherent contract fix closes the three code findings; denominator
+  self-inconsistency corrected; two stale-record annotations.** The
+  round's 3/3 finding (span tally silently drops out-of-range
+  `before` edges) and 2/3 finding (span branch indexes unguarded
+  while the head-on comment claims matched posture — that comment was
+  FALSE) share a root with its sharpest observation (1/3, and
+  correct): both classes' fire conditions are grounded in
+  after-geometry alone, so index churn threatens diff SEMANTICS
+  (regression attribution), never soundness. Fix: an up-front shape
+  check (`before`/`after` class-vector lengths vs `layout_after`)
+  bails to fall-through, making every downstream index in-range by
+  construction; the contract doc now states precisely what identity
+  protects (attribution) and what it does not need to protect
+  (soundness), so Phase 3 readers neither under- nor over-engineer.
+  Denominator fix (2/3): "1-in-151 … 0.83%" conflated two
+  denominators; all records now state 1 of 120 rejected candidates
+  corpus-wide (0.83%) and 0.66% of chain-mil5ore's 151 validates —
+  the criterion's own denominator is the rejected-candidate one.
+  Stale-record annotations (1/3 each, accepted): the 2a entry's hand
+  class now points at its later removal; the 2a "only production call
+  site" claim is marked superseded by the default-off demotion (the
+  wired path is exercised by identity pins only). Pin-comment scope
+  corrected (nit): `prefilter_evals` guards filter engagement, not
+  the normalize shape specifically. The `#[ignore]`-probe-drift nit
+  is an acknowledged design choice (probes are measurement
+  instruments, not gates; CI-izing them would put ~40s of fold search
+  on every run for figures that only change when the fold engine
+  does).

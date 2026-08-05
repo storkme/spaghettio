@@ -464,9 +464,11 @@ fn phase2_prefilter_identity_on_ug_normalizing_cut() {
     );
     // Guard the fixture itself, both ways it could go vacuous: the cut
     // loop must be doing the collapsing, and the pre-filter must actually
-    // have evaluated index-stable candidates (a fixture that stops
-    // producing the in-place-normalize shape would otherwise silence this
-    // pin without failing anything — bot round 1 on PR #579).
+    // have evaluated index-stable candidates. (Bot round 3 scope note:
+    // `prefilter_evals` counts every count-equality candidate, so this
+    // guards engagement of the FILTER, not specifically the in-place
+    // normalize shape — the byte-identity assert above plus the
+    // width-collapse guard below carry the normalize-specific claim.)
     assert!(
         off.width < before.width,
         "fixture regressed — the validated cut loop no longer collapses the gap"
