@@ -564,3 +564,31 @@ Per `CLAUDE.md` § verification protocol:
   `common::oriented_entity_dims` added; `connectivity::oriented_dims`,
   `compaction::entity_dims`, AND `strip_empty_columns`' third inline
   copy all delegate.
+- **2026-08-05 — Bot review round 3 (of the round-2 SHA) triaged: no
+  blocker; the DI-fusion structural gap closed, the two committed-corpus
+  holes plugged.** The round independently re-derived the remap math and
+  swept every y-moving transform ("no missed transform") — converging.
+  Disposition: (minor/moderate, DI fusion vs RI-1) structurally right
+  even though likely unreachable today (a coupling requires the
+  producer's ENTIRE output, so a same-recipe standalone row alongside a
+  fused cell needs partition-sibling geometry at minimum): containment
+  now EXEMPTS machines stamped `di-cell:` (artifact ground truth from
+  `di_cell.rs`'s segment stamping — no reachability argument needed);
+  fused machines still count for band population. Pinned by a synthetic
+  fixture with a fused producer inside the consumer band while a
+  standalone producer band exists — exempt with the stamp, fires
+  without it. The bot's requested solver-built discriminating fixture
+  is not constructible on demand (entire-output coupling), recorded
+  here instead. (minor, no consumer-level mixed-tier pin) added:
+  `belt_detour` now pins that a cross-tier entrance/exit severs the run
+  (two runs where direction-only pairing walked one). (minor,
+  fold/island attribution weakening) acknowledged and already logged —
+  restated plainly: on cleared-ledger transforms RI-1 is vacuous by
+  construction and per-row rate attribution degrades to recipe-global;
+  graph-derived attribution is the Phase 1 successor and this is the
+  standing motivation for it. (informational, voider/kovarex parity
+  uncommitted — "the single biggest unclosed risk") closed: both are
+  now committed parity fixtures (kovarex self-loop @0.1/s am3;
+  uranium-processing voider @0.05/s under `SurplusPolicy::Void`), and
+  both pass — K65-1 is pinned on the exotic row kinds, not
+  review-session folklore.

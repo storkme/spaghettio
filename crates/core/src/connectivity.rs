@@ -647,6 +647,18 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
         };
         for &i in machine_indices {
             let e = &layout.entities[i];
+            // DI-fused machines are exempt from containment (PR #574 bot
+            // round 3): a fused PRODUCER is stamped inside its consumer's
+            // row, so its own recipe's bands — when the same solve also
+            // places a standalone producer row — legitimately do not
+            // contain it. Cell membership is artifact-ground-truth via the
+            // `di-cell:` segment stamp (`di_cell.rs`), so the exemption
+            // cannot leak to ordinary rows. Fused machines still count for
+            // band POPULATION below — a fused consumer row's own band is
+            // populated by exactly these machines.
+            if e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-cell:")) {
+                continue;
+            }
             let (_, mh) = oriented_dims(&e.name, e.direction);
             if bands.iter().any(|&(y0, y1)| e.y >= y0 && e.y + mh <= y1) {
                 continue;
@@ -901,6 +913,48 @@ mod tests {
         assert!(
             issues.iter().any(|i| i.category == "record-effective-rows"),
             "all-bands exit must fire: {issues:#?}"
+        );
+    }
+
+    /// PR #574 bot round 3: a DI-fused producer machine sits inside its
+    /// consumer's row, so when the same solve ALSO has a standalone
+    /// producer row (own-recipe bands exist), containment must exempt the
+    /// fused machine — identified by its `di-cell:` segment stamp — while
+    /// an ordinary machine in the same position still fires.
+    #[test]
+    fn di_fused_machines_are_exempt_from_band_containment() {
+        let band = |y0: i32, y1: i32, recipe: &str| EffectiveRow {
+            y_start: y0,
+            y_end: y1,
+            spec: MachineSpec {
+                recipe: recipe.to_string(),
+                entity: "assembling-machine-2".to_string(),
+                ..Default::default()
+            },
+        };
+        // Fused cable producer at y=10 inside the EC band [8,14); a
+        // standalone cable band exists far away at [30,36) (and is
+        // populated by its own standalone machine, so direction 2 stays
+        // quiet).
+        let mut fused = machine(0, 10, "copper-cable");
+        fused.segment_id = Some("di-cell:copper-cable:electronic-circuit:0:producer".to_string());
+        let standalone = machine(0, 30, "copper-cable");
+        let mut lr = layout(vec![fused, standalone, machine(5, 8, "electronic-circuit")]);
+        lr.effective_rows = vec![
+            band(8, 14, "electronic-circuit"),
+            band(30, 36, "copper-cable"),
+        ];
+        assert!(
+            check_record_integrity(&lr).is_empty(),
+            "DI-fused producer must be exempt from own-recipe containment"
+        );
+
+        // Same geometry WITHOUT the DI stamp: the cable machine at y=10 is
+        // outside its only band → must fire.
+        lr.entities[0].segment_id = None;
+        assert!(
+            !check_record_integrity(&lr).is_empty(),
+            "un-fused machine in the same position must still fire"
         );
     }
 

@@ -25,9 +25,21 @@ fn build(
     inputs: &[&str],
     opts: LayoutOptions,
 ) -> (SolverResult, LayoutResult) {
+    build_with_exclusions(item, rate, machine, inputs, &[], opts)
+}
+
+fn build_with_exclusions(
+    item: &str,
+    rate: f64,
+    machine: &str,
+    inputs: &[&str],
+    excluded: &[&str],
+    opts: LayoutOptions,
+) -> (SolverResult, LayoutResult) {
     let inputs: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
-    let solver_result =
-        solver::solve(item, rate, &inputs, machine).unwrap_or_else(|e| panic!("solve {item}: {e:?}"));
+    let excluded: FxHashSet<String> = excluded.iter().map(|s| s.to_string()).collect();
+    let solver_result = solver::solve_with_exclusions(item, rate, &inputs, machine, &excluded)
+        .unwrap_or_else(|e| panic!("solve {item}: {e:?}"));
     let layout = build_bus_layout(&solver_result, opts)
         .unwrap_or_else(|e| panic!("layout {item}: {e}"));
     (solver_result, layout)
@@ -339,6 +351,40 @@ fn compaction_remaps_effective_rows() {
              compaction moves rows"
         );
     }
+}
+
+/// PR #574 bot round 3 (the "single biggest unclosed risk"): now that
+/// record integrity runs inside every `validate()`, the shapes most likely
+/// to hide an RI-1 false positive are the exotic row kinds — the kovarex
+/// self-loop and the voider recycler bank (recyclers are 2×4 and rotate).
+/// Committed here so K65-1 is pinned on them, not review-session folklore.
+#[test]
+fn parity_kovarex_self_loop() {
+    let (sr, layout) = build_with_exclusions(
+        "uranium-235",
+        0.1,
+        "assembling-machine-3",
+        &["uranium-238"],
+        &["uranium-processing"],
+        LayoutOptions::default(),
+    );
+    assert_green_and_ir_parity("kovarex-self-loop", &layout, &sr);
+}
+
+#[test]
+fn parity_uranium_voider() {
+    let (sr, layout) = build_with_exclusions(
+        "uranium-235",
+        0.05,
+        "assembling-machine-3",
+        &["uranium-ore"],
+        &["kovarex-enrichment-process"],
+        LayoutOptions {
+            surplus_policy: spaghettio_core::bus::layout::SurplusPolicy::Void,
+            ..LayoutOptions::default()
+        },
+    );
+    assert_green_and_ir_parity("uranium-voider", &layout, &sr);
 }
 
 /// Second in-corpus parity fixture from the RFC's K65-1 corpus definition
