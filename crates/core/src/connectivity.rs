@@ -144,9 +144,11 @@ pub fn build_ug_pairs(entities: &[PlacedEntity]) -> FxHashMap<(i32, i32), (i32, 
     pairs
 }
 
-/// Test-only naive reference for [`build_ug_pairs`] — the historical
-/// O(I×O) scan, byte-for-byte the pre-optimization semantics. Exists
-/// solely for the seeded equivalence pin.
+/// Test-only naive reference for [`build_ug_pairs`] — the O(I×O) scan
+/// carrying the PRE-BUCKETING semantics (Phase 1's name-filtered pairing;
+/// the direction-only pre-Phase-1 variant is intentionally not what this
+/// pins — bot round 12 wording correction). Exists solely for the seeded
+/// equivalence pin.
 #[cfg(test)]
 pub(crate) fn build_ug_pairs_naive(
     entities: &[PlacedEntity],
@@ -712,10 +714,13 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
             .or_default()
             .push((row.y_start, row.y_end));
     }
-    // Machines collected ONCE (entity index per recipe): both RI-1
-    // directions read from this instead of rescanning the full entity list
-    // per band — the naive form cost ~11 ms/call at 20k entities × 50
-    // bands, a real tax on the fold search's per-candidate validate().
+    // Machines collected ONCE (entity index per recipe). Precision on the
+    // win (bot round 12): this de-duplicates the band-POPULATION direction
+    // (previously a full entity scan per band — ~11 ms/call at 20k
+    // entities × 50 bands, a real tax on the fold search's per-candidate
+    // validate(); now 0.27 ms). The containment direction remains
+    // per-machine over its own recipe's few bands, which was never the
+    // hot term.
     let mut machines_by_recipe: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
     for (i, e) in layout.entities.iter().enumerate() {
         if is_machine_entity(&e.name) {
@@ -779,8 +784,8 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
             });
             let shape = if let Some(f) = foreign {
                 format!(
-                    "sits inside the {} band [{},{}) while its own attribution falls back \
-                     to the recipe-global spec",
+                    "has its top row inside the {} band [{},{}) while its own attribution \
+                     falls back to the recipe-global spec",
                     f.spec.recipe, f.y_start, f.y_end
                 )
             } else if bands.iter().any(|&(y0, y1)| e.y >= y0 && e.y < y1) {
@@ -1003,7 +1008,10 @@ mod tests {
             let mut entities = Vec::new();
             let mut taken = rustc_hash::FxHashSet::default();
             for _ in 0..n {
-                let (x, y) = (rng.pick(10) as i32, rng.pick(10) as i32);
+                // Straddle negative coordinates (bot round 12: the
+                // along/tile_from signing math was only ever exercised in
+                // the positive quadrant).
+                let (x, y) = (rng.pick(16) as i32 - 8, rng.pick(16) as i32 - 8);
                 if !taken.insert((x, y)) {
                     continue;
                 }

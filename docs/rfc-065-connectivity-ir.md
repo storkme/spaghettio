@@ -831,3 +831,27 @@ Per `CLAUDE.md` § verification protocol:
   disposition. (nits) name-filter warning-sets closed round 10 (B12);
   detection-test ordering fragility noted, deterministic on the pinned
   fixtures.
+- **2026-08-05 — Bot review round 12 triaged: five micro-fixes taken,
+  the DI blind spot bounded precisely, the rest standing.** Taken:
+  the parity belt-floor now keys on the surface-flow FAMILY (a
+  hypothetical all-turns fixture is legal geometry); the equivalence
+  soups straddle negative coordinates (the signing math was only
+  positive-quadrant-tested); the foreign-band message says "top row
+  inside" (top-y is what resolution keys on); the naive-reference doc
+  says pre-BUCKETING (it pins Phase 1's name-filtered semantics, not
+  the retired direction-only variant); the "collected once" comment is
+  narrowed to the population direction. Bounded (2/3, DI displaced-
+  producer blind spot): the residual hole is a fused producer drifting
+  WITHIN its own footprint span (≤2 tiles before its coupled inserter
+  hands land off-footprint and the dispatched inserter checks fire);
+  rigid whole-cell displacement is caught via the consumer (checked
+  since round 9); and any systematic transform bug hitting cells also
+  hits non-exempt rows. Real, small, and exactly what graph-derived
+  cell contracts (Phase 1 remainder) close. Standing: the name-filter
+  item (closed rounds 6/10 — note round 12's sweep of
+  `belt_structural` into the changed-consumer list is wrong, its copy
+  was always name-filtered); fold/island vacuous-RI-1 (documented
+  trade, in the PR body since round 11); the double-finding design
+  (round 8 rationale: two distinct positioned statements); the
+  admission-outcome pin ask (the hard-fail fixture IS the forward
+  regression pin; corpus growth welcome but not gating).

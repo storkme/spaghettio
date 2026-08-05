@@ -81,7 +81,6 @@ fn assert_green_and_ir_parity(name: &str, layout: &LayoutResult, solver_result: 
     // belts via inserters, so a derivation that silently drops or
     // mis-classifies these edge kinds must fail here, not pass quietly.
     for kind in [
-        spaghettio_core::connectivity::EdgeKind::BeltFlow,
         spaghettio_core::connectivity::EdgeKind::InserterPickup,
         spaghettio_core::connectivity::EdgeKind::InserterDrop,
     ] {
@@ -90,6 +89,18 @@ fn assert_green_and_ir_parity(name: &str, layout: &LayoutResult, solver_result: 
             "{name}: derived graph has zero {kind:?} edges — derivation went quiet"
         );
     }
+    // Belt-family floor keyed on the FAMILY, not one kind (bot round 12:
+    // requiring BeltFlow specifically would couple the gate to incidental
+    // topology — a hypothetical all-turns fixture is legal).
+    assert!(
+        graph.edges.iter().any(|e| matches!(
+            e.kind,
+            spaghettio_core::connectivity::EdgeKind::BeltFlow
+                | spaghettio_core::connectivity::EdgeKind::Sideload
+                | spaghettio_core::connectivity::EdgeKind::SplitterOut
+        )),
+        "{name}: derived graph has zero surface-flow edges — derivation went quiet"
+    );
     // Exact count invariant (bot round 5: presence alone tolerates
     // over-emission): on a validator-green layout every inserter has
     // exactly one pickup and one drop binding, so each hand-edge kind
