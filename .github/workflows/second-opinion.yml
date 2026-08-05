@@ -36,11 +36,14 @@ jobs:
     # The gates live lower instead: the runner itself skips drafts with a
     # real green conclusion (exit 0), and the fork gate is on the step.
     runs-on: ubuntu-latest
-    # Worst case is K=3 sequential passes at the 900s per-pass timeout
-    # (45 min), plus the union-merge call (its own 600s HTTP timeout) and
-    # the docker-action image build. 50 left ~5 min of headroom and could
-    # kill a legitimately slow run of a required check (#561 review
-    # finding); typical observed runtime is ~15-20 min.
+    # Passes run in PARALLEL (second-opinion v1.3.0+ uses a ThreadPoolExecutor
+    # for OpenRouter), so K=3 costs about one pass of wall-clock, not three.
+    # Worst case is therefore ~1800s for the slowest pass + the union-merge
+    # call (its own 600s HTTP timeout) + the docker-action image build (~30s
+    # measured) = ~40 min, leaving ~20 min of headroom in 60. Do not read this
+    # as sequential: 3 x 1800s would blow the cap mid-pass and skip the
+    # degraded report entirely, which is strictly worse than a pass timeout.
+    # Typical observed runtime is ~15-20 min.
     timeout-minutes: 60
     permissions:
       contents: read
@@ -69,29 +72,74 @@ jobs:
           # models. Passes are sampled; the union keeps a finding if ANY
           # pass raises it. Still ~cents per PR at this pricing.
           k: "3"
+          # Generated artifacts are enormous here and sort BEFORE crates/ in git
+          # path order, and the diff filter stops at the first file chunk that
+          # overflows the cap rather than skipping it — so they deterministically
+          # starve the source files behind them. Measured on #575: the excerpt
+          # carried 1 of 16 changed files (a single artifact HTML, itself clipped
+          # mid-file) and all 12 Rust sources went unseen, with the check green.
+          # Dropping artifacts/** takes that PR to 13 of 16 — every source file —
+          # at the 300k cap set below. (12 of 16 at the previous 200k cap; the
+          # earlier "12" figure predates the cap bump.)
+          # NOTE: this input REPLACES the action's default list rather than
+          # extending it, so the defaults are re-listed here verbatim. Adding a
+          # glob without them would silently re-admit lockfiles and images.
+          exclude-globs: >-
+            **/*.lock,**/package-lock.json,**/yarn.lock,**/pnpm-lock.yaml,
+            **/Cargo.lock,**/go.sum,**/*.min.js,**/*.map,
+            **/build/**,**/dist/**,**/node_modules/**,**/vendor/**,
+            **/*.png,**/*.jpg,**/*.jpeg,**/*.webp,**/*.gif,**/*.svg,
+            **/*.pdf,**/*.ico,
+            artifacts/**
           # The 60k default was sized for 128k-context models. This model
           # has 1M context, and layout-engine PRs here routinely exceed
-          # 60k chars of diff.
-          max-diff-chars: "200000"
+          # 60k chars of diff. 300k because 200k still truncated #575 once
+          # artifacts were excluded (its source alone is ~214k).
+          max-diff-chars: "300000"
           # 65536 = deepseek-v4-flash-0731's cap. A reasoning model can exhaust a
           # smaller max_tokens in its reasoning channel and return an empty 200
           # (the #565/#566/#574 empty-review failure class), so give it headroom.
           max-tokens: "65536"
+          # 900s (the action default at time of writing) is too tight for a
+          # reasoning model on these diffs: #575 and #574-attempt-1 both had ALL
+          # passes hit the wall and post nothing, and the attempt that did
+          # succeed on #574 used 827/779/787s of 900 — 87-92%, a coin flip per
+          # run. K=3 does not cover this: parallel passes give redundancy when
+          # ONE pass fails, but a systematic cause takes all three together.
+          # Redundant with the action's own default since v1.5.0, kept as an
+          # explicit guard so a future default change cannot silently shorten it.
+          # Budget check: 1800s pass + up to 600s merge + ~30s build = ~40 min of
+          # the 60 min job cap. A job cap firing mid-pass would skip the degraded
+          # report entirely, so the remaining ~20 min is the margin that matters.
+          pass-timeout-seconds: "1800"
           # Persist per-pass pi session transcripts under the runner workspace so
           # the step below can upload them as an artifact. Lets us replay a
           # blocked/empty review pass (and read real token/cost usage) instead of
-          # relying on OpenRouter's opt-in logging. Takes effect once @v1 tracks a
-          # second-opinion release that supports this input.
-          session-dir: /github/workspace/.second-opinion
+          # relying on OpenRouter's opt-in logging. Transcripts are secret-redacted
+          # before the upload step below keeps them.
+          # NOT a dotted path: this was `.second-opinion` and every run logged
+          # "No files were found with the provided path", uploading nothing, while
+          # the review footer still reported real token counts — proving the
+          # transcripts existed and were read. upload-artifact@v4 excludes hidden
+          # files by default, and a leading-dot directory is hidden. Renaming
+          # removes the variable entirely rather than relying on the opt-in below.
+          session-dir: /github/workspace/second-opinion-sessions
           # guidance-file: .github/review-guidance.md
           # ^ enable once the checklist is bootstrapped from review history
           #   (second-opinion-bootstrap) and committed.
       - name: Upload review session transcripts
-        # `always()` so a failing (e.g. empty-review) run still keeps its transcripts;
-        # with if-no-files-found:ignore this is a no-op until @v1 supports session-dir.
+        # `always()` so a failing (e.g. empty-review) run still keeps its transcripts.
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: second-opinion-sessions-${{ github.event.pull_request.number }}
-          path: ${{ github.workspace }}/.second-opinion
-          if-no-files-found: ignore
+          path: ${{ github.workspace }}/second-opinion-sessions
+          # Belt and braces alongside the un-dotted path above: v4 excludes hidden
+          # files by default, so a future dotted path would silently upload nothing.
+          include-hidden-files: true
+          # `warn`, not `ignore`. With `ignore` this step reported success while
+          # uploading nothing on every run since it was added — a green step doing
+          # no work, which is the exact failure class this whole workflow exists to
+          # catch. It must not be a required-check failure (a missing transcript is
+          # not a bad review), but it must not be silent either.
+          if-no-files-found: warn
