@@ -93,8 +93,12 @@ The head-hog gradient is real — **12/16 PU machines run at full 0.125/s** whil
 the four deepest (`m301/m302/m309/m310` at x=55/58) are EC-constrained (buffers
 1–12/280, craft 0.023–0.088/s; only `m310` labels `ItemIngredientShortage` — the
 other three read `Working` but run below rate) — but perfect redistribution
-would gain only **+0.013/s, ≈5% of the gap**. The dominant term is EC
-underproduction itself, tracking the ~13% plate shortfall upstream.
+would gain only **+0.013/s, ≈5% of the gap** — *at fixed EC supply*. (That
+ceiling is an operating point, not a hard invariant: the 08-04 permuted run
+reached 1.754/s, which needs 42.1 EC/s, above the 41.5/s the baseline made — so
+EC production itself responds to belt-model changes. See `meter-divergence.md`.)
+The dominant term is EC underproduction itself, tracking the ~13% plate
+shortfall upstream.
 Deferred deliberately. The defect is **relocated, not retired** — that is the
 whole content of the 08-05 revision. The previously nominated distribution /
 merge-priority / head-hog-fairness change is bounded at ≈5% by the ceiling
@@ -108,7 +112,8 @@ earlier revision of this entry inverted that hierarchy to claim the meter was
 right and the sim anomalous. Factorio built the factory and it delivered ~1.99
 PU/s; the meter cannot, and that is the open question. If reopened: why does
 the meter's plate/EC chain produce ~13% less than the real one — not EC
-distribution (≈5%), not the cycle order (≈ +2.2%). Needs a sim run with
+distribution (≈5% of the gap), not the cycle order (≈14% of the gap — larger,
+but still not the cause). Needs a sim run with
 `timeseries` captured so per-machine detail exists on the reference side.
 
 ## Decided / closed (from Stage B)

@@ -30,8 +30,9 @@ variants now ±0–2% (were −80%; the PU-from-ore exception fixture's own AC i
 revision — not a distribution gap either): the meter's PU output sits at 99.2%
 of what its own EC production can support, so redistributing that EC perfectly
 would gain ≈5% of the gap. See the PU entry. (Two earlier characterisations
-were retired: the 26-tile belt cycle is a ~+2.2% contributor, and head-hog
-distribution is the ≈5% one; neither is the cause. Open RFC-064 Phase 2
+were retired, both quoted against the 0.271/s gap: the 26-tile belt cycle
+≈14% and head-hog distribution ≈5%; neither is the cause, and note the cycle
+order is the larger of the two. Open RFC-064 Phase 2
 item 7.) Full divergence log:
 [`meter-divergence.md`](meter-divergence.md).
 
@@ -77,8 +78,8 @@ closed — keeps crossing/stacked fluid lines isolated).
   (an **upstream EC supply shortfall**: the meter runs at 99.2% of its own
   EC-supply ceiling, so the head-hog gradient — 12/16 PU machines at full rate,
   the four deepest EC-constrained — accounts for only ≈5% of the gap. See
-  [`meter-divergence.md`](meter-divergence.md); the 26-tile belt cycle is a
-  ~+2.2% contributor, and neither it nor distribution is the cause).
+  [`meter-divergence.md`](meter-divergence.md); on that same gap base the
+  26-tile belt cycle is ≈14%, so neither it nor distribution is the cause).
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).
 
 ## Next steps / open items (2026-08-05)
@@ -123,7 +124,9 @@ head-hog gradient is real — 12/16 PU machines craft at full 0.125/s while the
 four deepest (`m301/m302/m309/m310`, x=55/58) sit on EC buffers 1–12/280 (craft
 0.023–0.088/s; only `m310` labels `ItemIngredientShortage`, the other three read
 `Working` but run below rate) — but perfect redistribution would gain just
-**+0.013/s, ≈5% of the gap**. The dominant term is EC underproduction itself,
+**+0.013/s, ≈5% of the gap** — *at fixed EC supply* (the 08-04 permuted run hit
+1.754/s, needing 42.1 EC/s against the baseline's 41.5/s, so the ceiling is an
+operating point rather than an invariant; see `meter-divergence.md`). The dominant term is EC underproduction itself,
 tracking the ~13% plate shortfall upstream. **Deferred deliberately.** The
 previously nominated distribution / merge-priority / head-hog-fairness change
 is bounded at ≈5% by that arithmetic, so it is not the fix — but the defect is

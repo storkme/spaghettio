@@ -48,6 +48,23 @@ in-fixture AC reads −3.9%).
     surplus — so EC is scarce only *relative to the 48/s plan rate*, not in
     absolute terms at the rate this fixture actually runs. (An earlier revision
     of this entry called EC "genuinely scarce" without that qualifier.)
+  - **⚠ The ceiling is an operating-point statement, not a hard invariant —
+    and the 08-04 experiment proves it.** The permuted-cycle run reached
+    1.754 PU/s, which needs 1.754 × 24 = **42.1 EC/s** — above the 41.5/s the
+    baseline run produced, and 0.025/s above the 1.729/s ceiling that number
+    implies. So EC production is **not fixed**: it responds to belt-model
+    changes, because EC's own inputs (iron plate, copper cable) are belt-
+    delivered too. Two consequences, and they pull in the same direction:
+    (1) every "≈5% of the gap" distribution bound below holds **at fixed EC
+    supply** — it bounds what redistributing a *given* 41.5/s can buy, not
+    what the meter could reach if supply moved; (2) the cycle-order experiment
+    most likely bought its +0.038/s **through EC supply rather than through PU
+    distribution**, which is further evidence the binding constraint lives
+    upstream. **Unverified**: the permuted run's own EC figure was not
+    recorded, so (2) is inference from the arithmetic, not measurement. Re-run
+    the permutation capturing EC production before relying on it. Flagged
+    rather than silently reconciled — the two numbers *are* in tension as
+    published (bot review round 7, 3/3 passes).
   - **The head-hog gradient is how the shortfall lands, not why it exists.**
     At steady state the meter runs **12/16 PU machines at full rate (0.125/s)**
     while the four deepest (x=55/58: `m301/m302/m309/m310`) are EC-constrained,
@@ -55,14 +72,24 @@ in-fixture AC reads −3.9%).
     labels `ItemIngredientShortage`; the other three read `Working` but run
     below rate (the census label and the full-rate count are different things).
     But redistributing the available EC *perfectly* across all 16 machines
-    yields only 1.729/s — **+0.013/s, ≈5% of the 0.271/s sim-relative gap.** A
-    distribution / merge-priority / head-hog-fairness model change therefore
-    **cannot close this residual.** The dominant term is EC underproduction
-    itself — 41.5/s against the **≈47.7/s the real factory moved** (see the
-    next-but-one bullet), i.e. −13% sim-relative; −13.5% against the 48/s
-    plan, which is the same number by coincidence and not the reference. That
-    tracks the plate shortfall upstream (iron-plate 41.9/s caps EC at 41.9/s,
-    at 1 plate per EC).
+    yields only 1.729/s — **+0.013/s, ≈5% of the 0.271/s sim-relative gap**
+    (at fixed EC supply; see the ceiling caveat above). A distribution /
+    merge-priority / head-hog-fairness model change therefore **cannot close
+    this residual.**
+  - **Both minor terms, quoted on one base.** Against the 0.271/s sim-relative
+    gap: **cycle order ≈14%** (+0.038/s) and **distribution ≈5%** (+0.013/s).
+    Note the ordering — the cycle order is the *larger* of the two, ~2.9×
+    distribution, despite being the hypothesis retired first. Earlier
+    revisions quoted cycle order as "+2.2%" (of throughput) against
+    distribution's "≈5%" (of the gap), two different denominators that made
+    the smaller term look bigger. Neither is the cause: together they account
+    for under a fifth of the gap.
+  - **The dominant term is EC underproduction itself** — 41.5/s against the
+    **≈47.7/s the real factory moved** (see below), i.e. **−13.0%**
+    sim-relative. (It is −13.5% against the 48/s plan; those are close but
+    distinct numbers against distinct bases, and the sim-relative one is the
+    reference.) That tracks the plate shortfall upstream — iron-plate 41.9/s
+    caps EC at 41.9/s, at 1 plate per EC.
   - **The gap against each base, kept separate.** Meter 1.716/s is **0.271/s**
     below the sim's 1.987/s (the −13.6% sim-relative residual) and **0.284/s**
     below the 2.0/s ideal. Different denominators; earlier revisions of this
@@ -101,8 +128,8 @@ in-fixture AC reads −3.9%).
 - **Next**: if this is ever reopened, the question to ask is why the meter's
   **plate/EC stages** produce ~13% less than the real factory did (41.5 vs the
   ≈47.7 EC/s implied by the sim's 1.987 PU/s) — not how EC is distributed
-  among the PU machines (bounded at ≈5% of the gap) and not the cycle order
-  (~+2.2%). It needs a sim run whose `timeseries` is captured, so per-machine
+  among the PU machines (≈5% of the gap) and not the cycle order (≈14% of
+  the gap — the larger of the two minor terms, though still not the cause). It needs a sim run whose `timeseries` is captured, so per-machine
   detail exists on the reference side. Any change needs a non-noisy,
   sim-baselined solid fixture to be verifiable.
   Re-measure after any belt-network (notably merger/priority) changes.
