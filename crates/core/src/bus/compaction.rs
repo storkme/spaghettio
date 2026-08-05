@@ -444,15 +444,28 @@ pub fn strip_empty_rows(layout: &LayoutResult) -> LayoutResult {
     for row in &mut compacted.effective_rows {
         // The exactness tripwire for the assumption above (bot round 8):
         // a band whose last covered row is unoccupied would over-shrink.
+        // Round 9: debug_assert alone is compiled out of release/WASM, so
+        // the violation ALSO pushes an artifact-carried warning — the
+        // release-surviving signal this repo's validator culture demands
+        // (same rationale as `ReactivePassNotConverged`).
+        let final_row_occupied = row.y_end <= 0
+            || row.y_end > layout.height
+            || occupied[(row.y_end - 1) as usize];
         debug_assert!(
-            row.y_end <= 0
-                || row.y_end > layout.height
-                || occupied[(row.y_end - 1) as usize],
+            final_row_occupied,
             "effective_rows band [{},{}) has an unoccupied final row — the y_end remap \
              would over-shrink it (see the occupancy comment above)",
             row.y_start,
             row.y_end,
         );
+        if !final_row_occupied {
+            compacted.warnings.push(format!(
+                "strip_empty_rows: effective_rows band [{},{}) ends on an unoccupied row — \
+                 remap may over-shrink it and RI-1 will reject compact candidates \
+                 (RFC-065 occupancy assumption violated)",
+                row.y_start, row.y_end,
+            ));
+        }
         row.y_start = remap_y(row.y_start);
         row.y_end = remap_y(row.y_end);
     }

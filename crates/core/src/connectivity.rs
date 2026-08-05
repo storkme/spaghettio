@@ -736,19 +736,33 @@ pub fn check_record_integrity(layout: &LayoutResult) -> Vec<ValidationIssue> {
         };
         for &i in machine_indices {
             let e = &layout.entities[i];
-            // DI-fused machines are exempt from containment (PR #574 bot
-            // round 3): a fused PRODUCER is stamped inside its consumer's
-            // row, so its own recipe's bands — when the same solve also
-            // places a standalone producer row — legitimately do not
-            // contain it. Membership comes from the CANONICAL
-            // `validate::is_di_cell_entity` predicate (bot round 6: a
-            // hand-rolled `di-cell:` prefix here missed the Phase 2
-            // `di-row:` horizontal cells — and re-derived a predicate that
-            // already exists, the exact smell this RFC campaigns against).
-            // Fused machines still count for band POPULATION below — a
-            // fused consumer row's own band is populated by exactly these
-            // machines.
-            if crate::validate::is_di_cell_entity(e.segment_id.as_deref()) {
+            // DI-fused PRODUCERS are exempt from containment (PR #574 bot
+            // rounds 3/6/9): a fused producer is stamped inside its
+            // consumer's row, so its own recipe's bands — when the same
+            // solve also places a standalone producer row — legitimately
+            // do not contain it. Fused CONSUMERS are NOT exempt (round 9,
+            // 2/2): they live inside their own recipe's band and keep full
+            // coverage. Role resolution follows the stamps `di_cell.rs`
+            // actually writes: stacked cells suffix `:producer`/`:consumer`;
+            // horizontal `di-row:` cells stamp BOTH machine roles with the
+            // plain seg, whose trailing component is the CONSUMER recipe —
+            // so there the producer is the machine whose recipe differs
+            // from it. Cell membership gate stays the canonical
+            // `validate::is_di_cell_entity`.
+            let fused_producer = e.segment_id.as_deref().is_some_and(|s| {
+                if !crate::validate::is_di_cell_entity(Some(s)) {
+                    return false;
+                }
+                if s.ends_with(":producer") {
+                    return true;
+                }
+                if s.ends_with(":consumer") {
+                    return false;
+                }
+                // Plain `di-row:{item}:{consumer_recipe}` stamp.
+                s.rsplit(':').next() != Some(recipe)
+            });
+            if fused_producer {
                 continue;
             }
             let (_, mh) = oriented_dims(&e.name, e.direction);
@@ -1137,11 +1151,33 @@ mod tests {
         );
 
         // The Phase 2 horizontal-row stamp must exempt identically (bot
-        // round 6 — the canonical predicate covers both).
+        // round 6 — the canonical predicate covers both). Role there is
+        // recipe-based: this machine's recipe (copper-cable) differs from
+        // the seg's trailing consumer recipe → producer → exempt.
         lr.entities[0].segment_id = Some("di-row:copper-cable:electronic-circuit".to_string());
         assert!(
             check_record_integrity(&lr).is_empty(),
             "di-row fused producer must be exempt like di-cell"
+        );
+
+        // Round 9 (2/2): fused CONSUMERS keep containment coverage. A
+        // displaced consumer — EC machine outside the EC band — must fire
+        // under both stamp forms.
+        let mut consumer_displaced = lr.clone();
+        consumer_displaced.entities[0].recipe = Some("electronic-circuit".to_string());
+        consumer_displaced.entities[0].segment_id =
+            Some("di-cell:copper-cable:electronic-circuit:0:consumer".to_string());
+        // Move it outside the EC band [8,14).
+        consumer_displaced.entities[0].y = 20;
+        assert!(
+            !check_record_integrity(&consumer_displaced).is_empty(),
+            "displaced di-cell consumer must still fire containment"
+        );
+        consumer_displaced.entities[0].segment_id =
+            Some("di-row:copper-cable:electronic-circuit".to_string());
+        assert!(
+            !check_record_integrity(&consumer_displaced).is_empty(),
+            "displaced di-row consumer (recipe == seg consumer recipe) must still fire"
         );
 
         // Same geometry WITHOUT the DI stamp: the cable machine at y=10 is

@@ -734,3 +734,31 @@ Per `CLAUDE.md` § verification protocol:
   breadth, dead-code IR pending per-check migration, count-not-identity
   floor, DI no-band latency, red-suite merge gating) all carry standing
   dispositions from rounds 2–7; the red-suite item stays user-owned.
+- **2026-08-05 — Bot review round 9 triaged: the DI exemption narrowed
+  to producers (2/2 — correct and taken), the debug_assert given a
+  release-surviving voice, one sibling-path claim refuted by case
+  analysis, one structural bound added.** (2/2, consumer over-exemption)
+  right: only fused PRODUCERS legitimately sit in foreign bands; fused
+  consumers live in their own band and now keep containment coverage.
+  Role resolution follows the stamps as actually written — stacked
+  cells suffix `:producer`/`:consumer`; `di-row:` stamps BOTH machine
+  roles with the plain seg (verified `di_cell.rs` — `seg.clone()` for
+  both), so there the producer is the machine whose recipe differs from
+  the seg's trailing consumer-recipe component. Pinned both stamp forms,
+  exempt and displaced-consumer directions; the DI parity fixture
+  passing with consumers re-checked confirms corpus safety. (2/2,
+  debug_assert compiled out of release) taken: the occupancy violation
+  now ALSO pushes an artifact-carried warning — the release-surviving
+  signal, `ReactivePassNotConverged` precedent. (1/2, "same tripwire
+  missing on collapse_horizontal_cut") REFUTED by case analysis: the
+  cut path's decrement is padding-robust — it removes exactly one known
+  row, so a band with trailing padding either shrinks its padding
+  (content intact) or is untouched; over-shrink requires the strip
+  path's counted-removal semantics, which is where the guard lives. The
+  premise is NOT identical between the siblings. (1/2, BeltFlow-family
+  over-emission unbounded) taken structurally: the parity helper now
+  enforces the per-source cap — at most one outgoing surface-flow edge
+  per entity, two for splitters — so phantom edges fail without
+  re-deriving geometry. (1/2, graph not yet load-bearing in production)
+  standing Phase-1-remainder disposition; stated plainly in the module
+  doc since round 5.

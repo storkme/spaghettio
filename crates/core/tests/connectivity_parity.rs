@@ -110,6 +110,32 @@ fn assert_green_and_ir_parity(name: &str, layout: &LayoutResult, solver_result: 
             "{name}: {kind:?} edge count must equal the inserter population"
         );
     }
+    // Structural over-emission bound for the flow-edge family (bot round
+    // 9): a source has ONE forward tile, so it carries at most one
+    // outgoing surface-flow edge — two for splitters (two footprint
+    // tiles). Phantom extra BeltFlow/Sideload/SplitterOut edges fail
+    // here.
+    {
+        use spaghettio_core::connectivity::EdgeKind;
+        let mut outgoing: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for e in &graph.edges {
+            if matches!(e.kind, EdgeKind::BeltFlow | EdgeKind::Sideload | EdgeKind::SplitterOut) {
+                *outgoing.entry(e.src).or_default() += 1;
+            }
+        }
+        for (&src, &n) in &outgoing {
+            let cap = if spaghettio_core::common::is_splitter(&layout.entities[src].name) {
+                2
+            } else {
+                1
+            };
+            assert!(
+                n <= cap,
+                "{name}: entity {src} ({}) has {n} outgoing surface-flow edges (cap {cap})",
+                layout.entities[src].name
+            );
+        }
+    }
 }
 
 #[test]
