@@ -185,8 +185,21 @@ pub struct LayoutOptions {
     pub band_packing: bool,
     /// RFC-064 Phase 3 measurement seam: when band packing is enabled,
     /// materialize this exact shelf-search member instead of RFC-058's legacy
-    /// minimum-area/gap-widening choice. `None` preserves the frozen builder
-    /// byte-for-byte; no default or decomposition candidate sets this field.
+    /// minimum-area/gap-widening choice.
+    ///
+    /// `None` preserves the frozen builder's **selection** — it takes the same
+    /// legacy minimum-area/gap-widening member RFC-058 took. It does *not*
+    /// promise byte-identical output against artifacts recorded before this
+    /// PR: `route_packed_nets`'s hardening (consumer-target narrowing,
+    /// one-shot producer stubs, the `fed_by_existing` guard, UG-exit
+    /// straightness, splitter occupancy) runs on both the `None` and the
+    /// explicit-selection paths, so a regenerated RFC-058 artifact can differ
+    /// from its recorded predecessor. An earlier revision of this comment
+    /// claimed byte-for-byte without that scope (PR #575 bot review). Nothing
+    /// in the shipping path is affected either way — `band_packing` is
+    /// default-off and nothing consumes its positions yet.
+    ///
+    /// No default or decomposition candidate sets this field.
     pub band_pack_selection: Option<crate::bus::bands::PackSelection>,
 }
 

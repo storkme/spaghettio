@@ -1293,3 +1293,50 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   ignored full-search probe reproduces the all-order refusal (328.49 seconds in
   release on the recorded run). No candidate proceeds to a valid simulation
   adjudication and no selector ships.
+
+- **2026-08-05 (bot round on 33a0c30f) — Phase 3 review triage: one confirmed
+  bug, one confirmed non-bug, two scoped-down claims.**
+  - **Confirmed and fixed — the rotation search had no usable row bound.**
+    `enumerate_rotation_plans` enumerates `1usize << count` masks with
+    `count = rows.len()`. `build_rotation_aware_layout_selected` guarded
+    `rows.len() > u64::BITS`, off by one: exactly 64 rows passed and then
+    `1usize << 64` overflowed (debug panic; release wraps to `1usize << 0 == 1`,
+    silently searching one mask and reporting a complete search). The
+    unselected `build_rotation_aware_layout` had **no guard at all** — the
+    review said so and an earlier session-side check wrongly contradicted it,
+    having grepped `build_rotation_aware_layout` and matched the `_selected`
+    variant on the shared prefix. Both entry points now call a shared
+    `check_rotation_row_budget`, bounded at `MAX_ROTATION_ROWS = 20` rather
+    than 64: the mask loop is multiplied by the gap (7), target-width and
+    shelf-order loops, so 64 bounds nothing reachable and the real limit is
+    tractability, not the shift width. A `debug_assert` inside
+    `enumerate_rotation_plans` catches a future third caller that skips the
+    budget check. Unreachable for the frozen ~8-row fixture; suite unchanged
+    at 1094 passed / 0 failed / 98 ignored.
+  - **Confirmed NOT a bug — the `[major]` on `artifacts/rfc064-phase3-layouts.html`.**
+    The review reported `DATA` "never defined anywhere in the file", so the
+    page renders only boilerplate. `DATA` is defined at line **372**, inside
+    the same `<script>` block (opens 371, closes 466), before its use at
+    435–459; parsed and verified valid JSON with all three keys the script
+    reads (`layouts` 6 entries / 281 entities in the first, `search`,
+    `refusals` 2). The false positive has a mechanical cause worth recording:
+    the file is 351 KB on 468 lines because line 372 is a single 321 KB line,
+    and the reviewer's read tool truncates at 50 KiB / 2000 lines — so it
+    asserted a global negative from a partial read. No action taken; recorded
+    so a later pass does not "fix" a working page.
+  - **Real but inert on this PR's numbers — `transit.rs::compatible` treats a
+    `None` carry as compatible with every item.** An unlabelled belt tile
+    would be a universal shortcut that could shorten or falsely connect a
+    net's measured transit. Counted rather than argued: across all six
+    recorded layouts there are **1889 belt/UG/splitter/pipe entities and zero
+    with `carries: null`**, so this cannot have affected any number this PR
+    records. Left as-is and tracked as a follow-up — tightening it is a
+    behaviour change that should land with a fixture that exercises it.
+  - **Scoped down — the `band_pack_selection: None` "byte-for-byte" claim.**
+    The doc comment promised the frozen builder byte-for-byte; the router
+    hardening in `route_packed_nets` runs on both the `None` and the explicit
+    -selection paths, so a regenerated RFC-058 artifact can differ from its
+    recorded predecessor. Reworded to scope the promise to *selection* (`None`
+    still takes the legacy minimum-area/gap-widening member) and to say so
+    explicitly. No shipping-path effect: `band_packing` is default-off and
+    nothing consumes its positions yet.

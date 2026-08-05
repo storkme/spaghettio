@@ -551,12 +551,53 @@ fn estimate_transit(
     cost
 }
 
+/// Hard bound on rows entering the rotation search.
+///
+/// [`enumerate_rotation_plans`] enumerates `2^count` rotation masks and
+/// multiplies each by the gap (7), target-width and shelf-order loops, so the
+/// row count is the sole exponential term. Two separate reasons to bound it:
+///
+///  1. **Overflow.** `1usize << count` is undefined for `count >= 64` — a
+///     panic in debug, a silent wrap to `1usize << 0 == 1` in release, which
+///     would quietly search exactly one mask and report a "complete" search.
+///  2. **Tractability.** 64 does not bound anything useful; `2^64` masks are
+///     unreachable by many orders of magnitude. Even 2^20 masks times the
+///     inner loops is already far past practical. The bound below is a
+///     tractability limit that happens to also make (1) unreachable.
+///
+/// The frozen Science-2 fixture this search is currently gated to runs well
+/// under this; the bound exists so an unfrozen future caller fails loudly
+/// instead of hanging or silently truncating its own search.
+const MAX_ROTATION_ROWS: usize = 20;
+
+/// Shared refusal for both [`build_rotation_aware_layout`] and
+/// [`build_rotation_aware_layout_selected`]. Previously only the `_selected`
+/// entry point checked this, and it checked `> u64::BITS` — off by one, so
+/// exactly 64 rows passed the guard and then overflowed the shift. The
+/// unselected path had no check at all. (PR #575 bot review.)
+fn check_rotation_row_budget(rows: &[RowSpan]) -> Result<(), String> {
+    if rows.len() > MAX_ROTATION_ROWS {
+        return Err(format!(
+            "rotation-refusal: {} rows exceed the {MAX_ROTATION_ROWS}-row rotation search bound",
+            rows.len()
+        ));
+    }
+    Ok(())
+}
+
 fn enumerate_rotation_plans(
     macros: &[RowMacro],
     rows: &[RowSpan],
     solver_result: &SolverResult,
 ) -> Vec<RotationPlan> {
     let count = macros.len();
+    // Both callers gate on `check_rotation_row_budget` first. This catches a
+    // future third caller that forgets to, in tests, rather than at 2^count.
+    debug_assert!(
+        count <= MAX_ROTATION_ROWS,
+        "enumerate_rotation_plans called with {count} rows, above the \
+         {MAX_ROTATION_ROWS}-row bound — caller skipped check_rotation_row_budget"
+    );
     let mut plans = Vec::new();
     for mask in 0usize..(1usize << count) {
         let rotations: Vec<_> = (0..count)
@@ -1716,12 +1757,7 @@ pub(crate) fn build_rotation_aware_layout_selected(
             "rotation-refusal: first slice is frozen to the solid Science-2 fixture".into(),
         );
     }
-    if rows.len() > u64::BITS as usize {
-        return Err(format!(
-            "rotation-refusal: {} rows exceed the 64-bit selection mask",
-            rows.len()
-        ));
-    }
+    check_rotation_row_budget(rows)?;
     let macros = extract_row_macros(rows, &native.entities)?;
     let plans = enumerate_rotation_plans(&macros, rows, solver_result);
     let plan = plans
@@ -1836,6 +1872,7 @@ pub(crate) fn build_rotation_aware_layout(
             "rotation-refusal: first slice is frozen to the solid Science-2 fixture".into(),
         );
     }
+    check_rotation_row_budget(rows)?;
     let macros = extract_row_macros(rows, &native.entities)?;
     let plans = enumerate_rotation_plans(&macros, rows, solver_result);
     if plans.is_empty() {
