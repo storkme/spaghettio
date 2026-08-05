@@ -46,10 +46,12 @@
 //! convention matches `belt_structural`/`belt_detour`: pickup =
 //! `pos − dir·reach`, drop = `pos + dir·reach`.
 //!
-//! Known fidelity gaps, recorded for Phase 1 (all empirically inert on the
-//! green corpus): head-on conflicts are carries-blind where the validator's
-//! head-on error is same-carries-only; a perpendicular `Sideload` edge onto
-//! a `UgExit` receiver models a transfer the game does not perform.
+//! Two former fidelity gaps closed after the PR #574 bot review: head-on
+//! ANOMALIES are now same-carries-only (mirroring `check_belt_junctions`'s
+//! carries-inequality skip; the conflict itself stays recorded for `diff`),
+//! and a perpendicular feed onto a `UgExit` tile no longer produces a flow
+//! edge (sideloading is an entrance-side mechanic — U7; an exit-side edge
+//! would let `diff` bless game-impossible flow).
 //!
 //! Phase 0 scope: solid transport + inserters + machines. Pipes are a mesh,
 //! not a flow lattice, and stay with `validate::fluids` until a later phase;
@@ -342,20 +344,19 @@ pub fn derive_connectivity(layout: &LayoutResult) -> ConnectivityGraph {
                 }
             }
             NodeClass::UgExit => {
-                // The exit's rear is its underground mouth: an aligned
-                // surface feed from behind transfers nothing. Perpendicular
-                // sideloads onto the exit tile are ordinary belt physics.
+                // No surface feed reaches an exit tile: its rear is the
+                // underground mouth (aligned feed-from-behind stalls), and
+                // sideloading is an ENTRANCE-side mechanic (mechanics doc
+                // U7 covers entrances; nothing accepts side input on an
+                // exit). Recording a flow edge here would let `diff` bless
+                // topology the game cannot move items through — the PR
+                // #574 bot review's Phase-2 concern. Head-on remains a
+                // recorded conflict.
                 if head_on {
                     conflicts.push(Conflict {
                         a: src.min(dst),
                         b: src.max(dst),
                         kind: ConflictKind::HeadOn,
-                    });
-                } else if receiver_dir != d {
-                    edges.push(Edge {
-                        src,
-                        dst,
-                        kind: if src_is_splitter { EdgeKind::SplitterOut } else { EdgeKind::Sideload },
                     });
                 }
             }
@@ -562,12 +563,23 @@ pub fn scan_graph_anomalies(
     }
     for c in &graph.conflicts {
         let e = &layout.entities[c.a];
+        let other = &layout.entities[c.b];
+        // Mirror `check_belt_junctions` exactly (belt_flow.rs — the
+        // carries-inequality skip): a head-on is an ERROR only when both
+        // sides carry the same item. Different-carries contacts are
+        // validator-tolerated geometry — the conflict stays recorded for
+        // `diff` visibility, but anomaly-erroring it would red a
+        // validator-green layout (the PR #574 bot review's 3/3-pass
+        // finding; the RI-2 false-positive class).
+        if e.carries != other.carries {
+            continue;
+        }
         issues.push(ValidationIssue::with_pos(
             Severity::Error,
             "connectivity-anomaly",
             format!(
                 "head-on belt contact between entities at ({},{}) and ({},{}) — no flow crosses there",
-                e.x, e.y, layout.entities[c.b].x, layout.entities[c.b].y
+                e.x, e.y, other.x, other.y
             ),
             e.x,
             e.y,
@@ -800,6 +812,89 @@ mod tests {
         assert_eq!(
             g.conflicts,
             vec![Conflict { a: 0, b: 1, kind: ConflictKind::HeadOn }]
+        );
+        // Same carries (both iron-plate): the validator errors this, so the
+        // anomaly scan must too.
+        assert_eq!(scan_graph_anomalies(&g, &lr).len(), 1);
+    }
+
+    /// PR #574 bot review (3/3-pass finding): different-carries head-on
+    /// contacts are validator-TOLERATED (`check_belt_junctions` skips
+    /// carries-unequal neighbors), so the anomaly scan must stay quiet on
+    /// them — the conflict remains recorded for `diff`.
+    #[test]
+    fn different_carries_head_on_is_not_an_anomaly() {
+        use EntityDirection::{East, West};
+        let mut b2 = belt(1, 0, West);
+        b2.carries = Some("copper-plate".to_string());
+        let lr = layout(vec![belt(0, 0, East), b2]);
+        let g = derive_connectivity(&lr);
+        assert_eq!(g.conflicts.len(), 1, "conflict still recorded: {:?}", g.conflicts);
+        assert!(
+            scan_graph_anomalies(&g, &lr).is_empty(),
+            "validator-tolerated contact must not anomaly-error"
+        );
+    }
+
+    /// PR #574 bot review: no flow edge onto a UG exit's flank — an edge
+    /// there would let `diff` bless flow the game cannot perform.
+    #[test]
+    fn perpendicular_feed_onto_ug_exit_is_not_flow() {
+        use EntityDirection::{East, North};
+        let lr = layout(vec![
+            ug(1, 3, East, "output"),
+            belt(1, 4, North), // points at the exit tile from the south
+        ]);
+        let g = derive_connectivity(&lr);
+        assert!(
+            !g.edges.iter().any(|e| e.dst == 0),
+            "no surface flow may enter an exit tile: {:?}",
+            g.edges
+        );
+    }
+
+    /// Harm-calibration pin (PR #574 bot review: the gross-shift detection
+    /// test alone cannot discriminate the calibration). Inert drift —
+    /// ledger off by one row but the machine still fully inside its own
+    /// band — must stay CLEAN; a foreign-band landing and an all-bands
+    /// exit must FIRE.
+    #[test]
+    fn effective_rows_calibration_boundary() {
+        let band = |y0: i32, y1: i32, recipe: &str| EffectiveRow {
+            y_start: y0,
+            y_end: y1,
+            spec: MachineSpec {
+                recipe: recipe.to_string(),
+                entity: "assembling-machine-2".to_string(),
+                ..Default::default()
+            },
+        };
+        // Machine footprint occupies y ∈ [10, 13).
+        let mut lr = layout(vec![machine(0, 10, "iron-gear-wheel")]);
+
+        // Inert drift: own band [9, 15) — one row off a true [8, 14), but
+        // the footprint is still contained → attribution unchanged → clean.
+        lr.effective_rows = vec![band(9, 15, "iron-gear-wheel")];
+        assert!(check_record_integrity(&lr).is_empty(), "inert drift must not fire");
+
+        // Foreign landing: machine's y resolves into another recipe's band
+        // while its own band moved away → fires with the foreign shape.
+        lr.effective_rows =
+            vec![band(8, 14, "copper-cable"), band(30, 36, "iron-gear-wheel")];
+        let issues = check_record_integrity(&lr);
+        assert!(
+            issues.iter().any(|i| {
+                i.category == "record-effective-rows" && i.message.contains("resolves into")
+            }),
+            "foreign-band landing must fire: {issues:#?}"
+        );
+
+        // All-bands exit: own band far away, no foreign band → fires.
+        lr.effective_rows = vec![band(30, 36, "iron-gear-wheel")];
+        let issues = check_record_integrity(&lr);
+        assert!(
+            issues.iter().any(|i| i.category == "record-effective-rows"),
+            "all-bands exit must fire: {issues:#?}"
         );
     }
 

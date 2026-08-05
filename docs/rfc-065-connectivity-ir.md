@@ -501,3 +501,29 @@ Per `CLAUDE.md` § verification protocol:
   directions): **0.27 ms/call**, 40× better, negligible in any loop.
   Full suite with the slice applied: green except exactly the two
   pre-existing tier4/scoreboard failures (unchanged profiles).
+- **2026-08-05 — PR #574 second-opinion bot review (of the Phase 0 SHA)
+  triaged; two derivation fixes and four gate-hardenings taken.**
+  Disposition per finding: (1) "integrity pass is production-dead code"
+  — already resolved by the Phase 1 slice the bot hadn't seen
+  (dispatched as check #40). (2) carries-blind HeadOn anomalies (3/3
+  passes — the strongest finding): FIXED — `scan_graph_anomalies` now
+  errors a head-on only when both sides carry the same item, mirroring
+  `check_belt_junctions`'s carries-inequality skip exactly; the conflict
+  stays recorded for `diff`. New pin: different-carries head-on is
+  conflict-recorded, anomaly-silent. (3) gross-shift detection test
+  can't discriminate the harm calibration: FIXED with a dedicated
+  calibration-boundary pin (inert one-row drift stays clean;
+  foreign-band landing and all-bands exit fire). (4) silent skip in the
+  compact reconstruction test: now a hard failure, so a fixture that
+  stops discriminating breaks the build instead of rotting the gate.
+  (5) Sideload-onto-UgExit false flow edge: FIXED — no surface flow
+  edge enters an exit tile (sideloading is an entrance-side mechanic,
+  U7); an exit-side edge would have let Phase 2's `diff` bless
+  game-impossible flow. (6) absence-only parity: the parity helper now
+  asserts a positive structural floor (BeltFlow/InserterPickup/
+  InserterDrop present) on every fixture. (7) narrow committed corpus:
+  EC@20-from-ore added (the second RI-2-falsifying shape); voider/
+  kovarex remain review-verified but uncommitted — open. Declined:
+  none. Nits noted without action: power-wires detection robustness
+  (deterministic on the pinned fixture), fold-admission semantics
+  change (already logged 2026-08-04).

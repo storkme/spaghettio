@@ -64,6 +64,20 @@ fn assert_green_and_ir_parity(name: &str, layout: &LayoutResult, solver_result: 
         integrity.is_empty(),
         "{name}: K65-1 — record-integrity findings on a validator-green layout: {integrity:#?}"
     );
+    // Positive structural floor (PR #574 bot review: absence-only parity
+    // is the check-went-quiet shape). Every engine fixture moves items on
+    // belts via inserters, so a derivation that silently drops or
+    // mis-classifies these edge kinds must fail here, not pass quietly.
+    for kind in [
+        spaghettio_core::connectivity::EdgeKind::BeltFlow,
+        spaghettio_core::connectivity::EdgeKind::InserterPickup,
+        spaghettio_core::connectivity::EdgeKind::InserterDrop,
+    ] {
+        assert!(
+            graph.edges.iter().any(|e| e.kind == kind),
+            "{name}: derived graph has zero {kind:?} edges — derivation went quiet"
+        );
+    }
 }
 
 #[test]
@@ -314,12 +328,29 @@ fn compaction_remaps_effective_rows() {
             "pre-fix reconstruction (stale ledger on compacted geometry) produced no finding"
         );
     } else {
-        // Vertical compaction found nothing to move here; the remap is
-        // exercised by other fixtures/unit tests, but say so loudly rather
-        // than letting the reconstruction half pass vacuously.
-        eprintln!(
-            "note: compaction moved no effective_rows bands on this fixture; \
-             pre-fix reconstruction half skipped"
+        // PR #574 bot review: a silent skip here is the check-went-quiet
+        // shape — if compaction stops moving bands on this fixture, the
+        // test's discriminating power is GONE and it must say so as a
+        // failure, so the fixture gets re-chosen instead of the gate
+        // rotting.
+        panic!(
+            "compaction moved no effective_rows bands on this fixture — the pre-fix \
+             reconstruction half cannot discriminate; pick a fixture where vertical \
+             compaction moves rows"
         );
     }
+}
+
+/// Second in-corpus parity fixture from the RFC's K65-1 corpus definition
+/// (EC@20-from-ore was one of the shapes that falsified the removed RI-2).
+#[test]
+fn parity_ec20_from_ore_default() {
+    let (sr, layout) = build(
+        "electronic-circuit",
+        20.0,
+        "assembling-machine-2",
+        &["iron-ore", "copper-ore"],
+        LayoutOptions::from_belt_tier(None),
+    );
+    assert_green_and_ir_parity("ec20-ore-default", &layout, &sr);
 }
