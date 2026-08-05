@@ -612,7 +612,7 @@ pub fn compact_validated_columns(
     solver: &SolverResult,
     max_commits: usize,
 ) -> LayoutResult {
-    compact_validated_columns_inner(layout, solver, max_commits, true, &mut CutAdmissionStats::default())
+    compact_validated_columns_inner(layout, solver, max_commits, false, &mut CutAdmissionStats::default())
 }
 
 fn compact_validated_columns_inner(
@@ -652,7 +652,7 @@ pub fn compact_validated_rows(
     solver: &SolverResult,
     max_commits: usize,
 ) -> LayoutResult {
-    compact_validated_rows_inner(layout, solver, max_commits, true, &mut CutAdmissionStats::default())
+    compact_validated_rows_inner(layout, solver, max_commits, false, &mut CutAdmissionStats::default())
 }
 
 fn compact_validated_rows_inner(
@@ -687,14 +687,21 @@ fn compact_validated_rows_inner(
 /// Full safe compaction entry point: transport resynthesis followed by
 /// alternating validated X/Y coordinate cuts to a small fixed point.
 pub fn compact_validated_geometry(layout: &LayoutResult, solver: &SolverResult) -> LayoutResult {
-    compact_validated_geometry_with_stats(layout, solver, true).0
+    compact_validated_geometry_with_stats(layout, solver, false).0
 }
 
 /// RFC-065 Phase 2 instrument + identity-pin oracle: the same fixed-point
 /// compaction with the topology pre-filter toggleable and admission
-/// telemetry returned. `prefilter: false` is the pure-validate baseline the
-/// byte-identity pin compares against; production callers go through
-/// [`compact_validated_geometry`] (filter on).
+/// telemetry returned.
+///
+/// Production callers go through [`compact_validated_geometry`] with the
+/// filter OFF. Phase 2's measurement found ~zero Error-discard volume on
+/// the cut path (nothing to save), and the 2026-08-05 adversarial review
+/// demonstrated an unsound detector class diverging outcomes in a
+/// default-on build — so the filter is test machinery: the byte-identity
+/// pin runs it both ways to keep `error_certain_regression`'s soundness
+/// contract honest for its real customers (Phase 3 transforms, which
+/// lack per-transform refusal machinery).
 pub fn compact_validated_geometry_with_stats(
     layout: &LayoutResult,
     solver: &SolverResult,

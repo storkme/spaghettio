@@ -582,14 +582,26 @@ pub fn diff(before: &ConnectivityGraph, after: &ConnectivityGraph) -> TopologyDi
 /// candidates without changing any admission OUTCOME (the byte-identity
 /// pin in `connectivity_parity.rs` enforces exactly that):
 ///
-/// - an underground ENTRANCE that had a span and lost it — check #19
-///   (`check_underground_belt_pairs`) errors every unpaired entrance;
-/// - an inserter that had a pickup (or drop) binding and now has NONE —
-///   the inserter checks error unbound hands. A RETARGETED hand (lost one
-///   binding, gained another) is deliberately not flagged: retargets can
-///   be validate-legal, so they fall through to full validation;
+/// - an underground entrance that had a span, lost it, and is STILL an
+///   entrance in `after` — check #19 (`check_underground_belt_pairs`,
+///   same canonical pairing as the derive) errors every unpaired
+///   entrance. The still-an-entrance condition is load-bearing: an
+///   in-place rewrite of the entity to something else (e.g.
+///   `normalize_adjacent_undergrounds` collapsing a cut-adjacent pair to
+///   surface belts, entity count unchanged) legitimately drops the span,
+///   and the 2026-08-05 adversarial review demonstrated the unguarded
+///   class rejecting exactly that validator-clean candidate;
 /// - a NEW same-carries head-on contact — `check_belt_junctions` errors it
 ///   (different-carries contacts are validator-tolerated and not flagged).
+///
+/// DELIBERATELY NOT a class — "inserter lost a hand binding": no
+/// validator check errors an unbound hand per se. `check_inserter_chains`
+/// errors a *machine* with no adjacent inserter, `check_inserter_direction`
+/// errors only when NEITHER hand touches a machine, and the coverage /
+/// input-rate backstops tolerate redundant inserters (or emit Warning
+/// only) — so a redundant inserter losing its belt-side pickup is
+/// validate-admissible and must fall through (same 2026-08-05 review).
+/// A RETARGETED hand was never flagged for the same reason.
 ///
 /// Callers MUST ensure index identity between the two derivations (same
 /// entities, same order — e.g. the compaction cut candidates, which shift
@@ -602,37 +614,31 @@ pub fn error_certain_regression(
     layout_after: &LayoutResult,
 ) -> Option<String> {
     let n = layout_after.entities.len();
-    // Per-node counts for the three certain classes, before vs after.
+    // Per-node span counts for the entrance class, before vs after.
     let mut span_out_b = vec![0u16; n];
     let mut span_out_a = vec![0u16; n];
-    let mut pick_b = vec![0u16; n];
-    let mut pick_a = vec![0u16; n];
-    let mut drop_b = vec![0u16; n];
-    let mut drop_a = vec![0u16; n];
-    let tally = |edges: &[Edge], span: &mut [u16], pick: &mut [u16], drp: &mut [u16]| {
+    let tally = |edges: &[Edge], span: &mut [u16]| {
         for e in edges {
-            match e.kind {
-                EdgeKind::UgSpan if e.src < span.len() => span[e.src] += 1,
-                EdgeKind::InserterPickup if e.dst < pick.len() => pick[e.dst] += 1,
-                EdgeKind::InserterDrop if e.src < drp.len() => drp[e.src] += 1,
-                _ => {}
+            if let EdgeKind::UgSpan = e.kind {
+                if e.src < span.len() {
+                    span[e.src] += 1;
+                }
             }
         }
     };
-    tally(&before.edges, &mut span_out_b, &mut pick_b, &mut drop_b);
-    tally(&after.edges, &mut span_out_a, &mut pick_a, &mut drop_a);
+    tally(&before.edges, &mut span_out_b);
+    tally(&after.edges, &mut span_out_a);
 
     for i in 0..n {
-        if span_out_b[i] > 0 && span_out_a[i] == 0 {
+        if span_out_b[i] > 0
+            && span_out_a[i] == 0
+            && matches!(after.classes[i], NodeClass::UgEntrance)
+        {
             let e = &layout_after.entities[i];
             return Some(format!(
                 "underground entrance at ({},{}) lost its span",
                 e.x, e.y
             ));
-        }
-        if (pick_b[i] > 0 && pick_a[i] == 0) || (drop_b[i] > 0 && drop_a[i] == 0) {
-            let e = &layout_after.entities[i];
-            return Some(format!("inserter at ({},{}) lost a hand binding", e.x, e.y));
         }
     }
 
@@ -1058,8 +1064,11 @@ mod tests {
         );
     }
 
-    /// Phase 2 detector pins: each error-certain class fires; a RETARGET
-    /// (lost binding + gained replacement) deliberately does not.
+    /// Phase 2 detector pins: each error-certain class fires; the cases
+    /// the 2026-08-05 adversarial review proved validate-admissible
+    /// (in-place UG normalization, unbound redundant hand, retarget)
+    /// deliberately do not — re-adding either unsound class flips a
+    /// negative pin here before it can diverge production outcomes.
     #[test]
     fn error_certain_regression_classes() {
         use EntityDirection::East;
@@ -1086,14 +1095,31 @@ mod tests {
             "severed span must be error-certain"
         );
 
-        // Unbind a hand: move the drop belt away.
+        // In-place UG normalization (adversarial-review finding 1): both
+        // halves rewritten to surface belts, indices and count unchanged —
+        // the span disappears LEGITIMATELY (the node is no longer an
+        // entrance), exactly what `normalize_adjacent_undergrounds`
+        // produces after a cut. Must NOT be flagged.
+        let mut normalized = base.clone();
+        for i in [1usize, 2] {
+            normalized.entities[i] = belt(normalized.entities[i].x, 0, East);
+        }
+        let g_norm = derive_connectivity(&normalized);
+        assert!(
+            error_certain_regression(&g0, &g_norm, &normalized).is_none(),
+            "an in-place UG-to-belt rewrite is validate-admissible and must fall through"
+        );
+
+        // Unbound hand (adversarial-review finding 2): the drop belt moves
+        // away. No validator check errors an unbound hand per se
+        // (redundant-inserter geometries stay Error-free), so this must
+        // NOT be flagged — it falls through to full validation.
         let mut unbound = base.clone();
         unbound.entities[6].x = 9;
         let g2 = derive_connectivity(&unbound);
         assert!(
-            error_certain_regression(&g0, &g2, &unbound)
-                .is_some_and(|r| r.contains("lost a hand binding")),
-            "unbound hand must be error-certain"
+            error_certain_regression(&g0, &g2, &unbound).is_none(),
+            "hand-binding loss is not error-certain and must fall through"
         );
 
         // New same-carries head-on: flip the post-span belt to face the exit.

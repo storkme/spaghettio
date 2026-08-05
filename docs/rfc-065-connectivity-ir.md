@@ -1,9 +1,13 @@
 # RFC-065: Connectivity IR — a derived topology lens for `LayoutResult`
 
 Status: Active — Phase 0 landed; Phase 1 slice 1 landed; Phase 2 closed
-by measurement (2026-08-05): cut-side primitive + telemetry landed,
-fold-side pre-filter killed on the pre-registered ≥30% criterion
-(Error-catchable share of rejected fold candidates measured at ≤0.8%).
+by measurement (2026-08-05): the admission pre-filter is dead on both
+paths — fold-side killed on the pre-registered ≥30% criterion
+(Error-catchable share of rejected fold candidates measured at 0.83%),
+cut-side default-off after adversarial review falsified one detector
+class. What survives: the hardened `error_certain_regression`
+primitive (unit- and identity-pinned, for Phase 3), admission
+telemetry, and the measurement probes.
 Registry: `docs/rfcs.md` RFC-065.
 
 ## Summary
@@ -898,8 +902,8 @@ Per `CLAUDE.md` § verification protocol:
   validates run, how many the validator Error-rejected, i.e. the only
   volume any sound Error-certain filter could ever reject-fast):
   gear15-ore 0 discards / 0 validates (130 structural refusals),
-  ec10-ore 0/0 (30 refusals), ac5-plates 0/62 (all 62 pass or
-  warning-regress), chain-mil5ore 1/151 (119 warning-regression
+  ec10-ore 0/0 (30 refusals), ac5-plates 0/62 (all 62 pass;
+  regression_rejects=0), chain-mil5ore 1/151 (119 warning-regression
   rejects). Of the corpus's 120 validation-rejected candidates, ≤1
   (0.8%) was Error-class — the ≥30% criterion is tripped by a factor
   of ~40. WHY: `fold_snake`'s `FoldRefusal` machinery structurally
@@ -924,3 +928,47 @@ Per `CLAUDE.md` § verification protocol:
   cost lever is not Error rejection but the 119-strong
   warning-regression volume — any future slice there must predict
   *warning* profiles from the graph, a different (unscoped) premise.
+- **2026-08-05 — Local adversarial review of both Phase 2 slices:
+  slice 2a's soundness claim FALSIFIED; detector hardened, cut-side
+  filter demoted to default-off test machinery.** The reviewer built a
+  working counterexample (finding 1, blocker): `collapse_vertical_cut`
+  calls `normalize_adjacent_undergrounds`, which rewrites a
+  cut-adjacent UG pair to surface belts IN PLACE — entity count
+  unchanged, so the count-equality guard engaged the filter, the diff
+  saw the entrance's span vanish, and the filter rejected a candidate
+  `validate()` admits with zero Errors (probe: filter-on stuck at
+  width 5 / 5 entities vs width 1 / 1 entity off; a dist-2 UG pair
+  with a decoy belt anchoring the gap column). Not exotic: iterative
+  cuts shorten any progressively-cuttable span gap to the dist-2 →
+  adjacent step. Finding 2 (concern): the "lost a hand binding" class
+  rationale was factually wrong — no validator check errors an unbound
+  hand per se (`check_inserter_chains` errors machines without
+  inserters; `check_inserter_direction` errors only when neither hand
+  touches a machine; coverage/input-rate backstops tolerate redundant
+  inserters or emit Warning) — so a redundant inserter losing its
+  belt-side pickup is validate-admissible. Finding 3 (concern): the
+  K65-5 byte-identity pin was VACUOUS — its fixture never engaged the
+  reject path (0 rejects / 6 validates), so it could not have caught
+  finding 1; weak evidence dressed as a gate, the recurring
+  check-went-quiet shape from `docs/validator-reporting.md`. What
+  survived attack, per the reviewer's own re-runs: the 2b telemetry
+  refactor (line-level behavior-identical), the `error_discards`
+  counter semantics (validate() Errs iff an Error-severity issue
+  exists), all four corpus measurements (reproduced exactly), and the
+  fold-side kill-criterion arithmetic and disposition. FIXES, same
+  session: span-loss class narrowed (fires only if the node is STILL a
+  UG entrance in `after` — sound because derive and check #19 share
+  the canonical pairing since Phase 1); hand-binding class REMOVED
+  (negative unit pins now guard both unsound classes against
+  re-introduction); cut-side filter flipped to default OFF everywhere
+  (`compact_validated_columns/rows/geometry`) — its measured benefit
+  was already zero, and post-review the burden is on evidence of
+  benefit, not absence of divergence; the reviewer's counterexample
+  ported as `phase2_prefilter_identity_on_ug_normalizing_cut`, a pin
+  that engages the filter and FAILS on the unguarded class rather than
+  passing vacuously. Production cut behavior is back to pre-2a
+  (pure-validate admission). Nits absorbed: status-line share
+  corrected to 0.83% (1/120); ac5-plates note corrected to "all 62
+  pass" (regression_rejects=0); the 2a entry's "EC@20: one validate"
+  stands as a session observation but has no committed instrument —
+  treat the four probe-backed numbers as the reproducible record.

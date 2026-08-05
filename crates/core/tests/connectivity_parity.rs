@@ -399,6 +399,77 @@ fn phase2_prefilter_is_outcome_identical() {
     );
 }
 
+/// The discriminating K65-5 fixture, from the 2026-08-05 adversarial
+/// review that falsified the original "error-certain" claim: a
+/// distance-2 underground pair whose gap column only the validated cut
+/// loop can collapse (a decoy belt blocks `strip_empty_columns`). The
+/// cut shifts the exit adjacent to the entrance and
+/// `normalize_adjacent_undergrounds` rewrites BOTH halves to surface
+/// belts IN PLACE — entity count unchanged, so the pre-filter engages on
+/// a validator-clean candidate. The unguarded span-loss class rejected
+/// it (filter-on stuck at width 5 vs width 1 off); the fixed detector
+/// requires the node to still be a UG entrance in `after` and must wave
+/// it through. Unlike the pipeline fixture above, this pin FAILS on that
+/// unsound-class regression rather than passing vacuously.
+#[test]
+fn phase2_prefilter_identity_on_ug_normalizing_cut() {
+    use spaghettio_core::models::{EntityDirection, PlacedEntity};
+
+    let belt = |x: i32, y: i32| PlacedEntity {
+        name: "transport-belt".into(),
+        x,
+        y,
+        direction: EntityDirection::East,
+        carries: Some("iron-plate".into()),
+        ..Default::default()
+    };
+    let ug = |x: i32, io: &str| PlacedEntity {
+        name: "underground-belt".into(),
+        x,
+        y: 0,
+        direction: EntityDirection::East,
+        io_type: Some(io.into()),
+        carries: Some("iron-plate".into()),
+        ..Default::default()
+    };
+    // belt → UG entrance → (gap) → UG exit → belt, decoy at (2,2).
+    let before = LayoutResult {
+        entities: vec![belt(0, 0), ug(1, "input"), ug(3, "output"), belt(4, 0), belt(2, 2)],
+        width: 5,
+        height: 3,
+        ..Default::default()
+    };
+    let solver = SolverResult::default();
+
+    let (on, stats_on) = compact_validated_geometry_with_stats(&before, &solver, true);
+    let (off, stats_off) = compact_validated_geometry_with_stats(&before, &solver, false);
+
+    assert_eq!(
+        serde_json::to_string(&on).unwrap(),
+        serde_json::to_string(&off).unwrap(),
+        "pre-filter changed the UG-normalizing cut outcome — the span-loss \
+         class is rejecting an in-place UG rewrite validate() admits \
+         (adversarial-review finding 1): on={}x{} off={}x{}",
+        on.width, on.height, off.width, off.height
+    );
+    assert_eq!(
+        stats_on.validates_run + stats_on.prefilter_rejects,
+        stats_off.validates_run,
+        "admission accounting diverged: {stats_on:?} vs {stats_off:?}"
+    );
+    assert_eq!(
+        stats_on.error_discards + stats_on.prefilter_rejects,
+        stats_off.error_discards,
+        "reject-fasts must map 1:1 onto baseline Error discards: {stats_on:?} vs {stats_off:?}"
+    );
+    // Guard the fixture itself: the cut loop must actually be doing the
+    // collapsing here, or this pin has gone vacuous too.
+    assert!(
+        off.width < before.width,
+        "fixture regressed — the validated cut loop no longer collapses the gap"
+    );
+}
+
 /// RFC-065 Phase 2b measurement (not a gate): fold-search admission volume
 /// across the pre-registered row-bus corpus, against the ≥30% reject-fast
 /// kill criterion. Run with `--ignored --nocapture`. The cell fixture
