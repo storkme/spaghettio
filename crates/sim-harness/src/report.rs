@@ -645,6 +645,101 @@ fn print_measurement(m: &MeasurementQuality, converged: bool) {
     }
 }
 
+/// Surface the productivity-parity probe (RFC-064 item 7).
+///
+/// Printed rather than merely stored, because this repo's own rule is that
+/// "a verification channel nobody checks is not a verification channel"
+/// (`scenario.rs`, the tech-state parity self-audit). A boosted recipe here
+/// means the sim and the fast meter — which models no productivity at all —
+/// are measuring different worlds on that recipe, so any rate comparison
+/// against the meter inherits the gap.
+///
+/// Only non-zero entries and probe faults are printed: a fully-zero result is
+/// the common case and says "no parity gap on the probed recipes", which the
+/// one-line summary covers.
+fn print_productivity_parity(report: &Report) {
+    let mut boosted: Vec<String> = Vec::new();
+    let mut faults: Vec<String> = Vec::new();
+    let mut numeric = 0usize;
+
+    // `productivity_force` maps recipe -> number (or a sentinel string).
+    if let Some(map) = report.productivity_force.as_object() {
+        for (name, v) in map {
+            match v.as_f64() {
+                Some(n) => {
+                    numeric += 1;
+                    if n.abs() > f64::EPSILON {
+                        boosted.push(format!("{name}={:+.1}% (force)", n * 100.0));
+                    }
+                }
+                // The Lua probe reports a missing/erroring field as a
+                // sentinel STRING rather than crashing the run.
+                None => faults.push(format!("force:{name}={v}")),
+            }
+        }
+    }
+    // `productivity_entity` maps recipe -> {min, max, n, faults}, aggregated
+    // over every machine of that recipe rather than the first one seen.
+    if let Some(map) = report.productivity_entity.as_object() {
+        for (name, v) in map {
+            let lo = v.get("min").and_then(|x| x.as_f64());
+            let hi = v.get("max").and_then(|x| x.as_f64());
+            let n = v.get("n").and_then(|x| x.as_u64()).unwrap_or(0);
+            let f = v.get("faults").and_then(|x| x.as_u64()).unwrap_or(0);
+            if n > 0 {
+                numeric += 1;
+                let (lo, hi) = (lo.unwrap_or(0.0), hi.unwrap_or(0.0));
+                if lo.abs() > f64::EPSILON || hi.abs() > f64::EPSILON {
+                    boosted.push(if (hi - lo).abs() > f64::EPSILON {
+                        format!("{name}={:+.1}..{:+.1}% (entity, n={n})", lo * 100.0, hi * 100.0)
+                    } else {
+                        format!("{name}={:+.1}% (entity, n={n})", lo * 100.0)
+                    });
+                }
+            }
+            if f > 0 {
+                faults.push(format!("entity:{name}={f} machine(s) faulted"));
+            }
+        }
+    }
+    let modules = report
+        .productivity_modules
+        .as_object()
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    if numeric == 0 && faults.is_empty() {
+        return; // probe absent entirely (e.g. a report from before it existed)
+    }
+    if numeric == 0 {
+        // Self-audit: every channel faulted. Without this line an all-sentinel
+        // run is indistinguishable from a genuine "no productivity anywhere",
+        // which would silently license a wrong conclusion.
+        println!(
+            "productivity parity: PROBE FAILED — no channel returned a number \
+             ({} fault(s): {}). Treat any productivity claim from this run as \
+             unmeasured.",
+            faults.len(),
+            faults.join(", ")
+        );
+        return;
+    }
+    if boosted.is_empty() && modules == 0 {
+        println!("productivity parity: none on the probed recipes ({numeric} read, 0 boosted)");
+    } else {
+        println!(
+            "productivity parity: BOOSTED [{}]{} — the fast meter models no \
+             productivity, so meter-vs-sim rates on these recipes are not \
+             like-for-like (RFC-064 item 7)",
+            boosted.join(", "),
+            if modules > 0 { format!(", {modules} module slot group(s)") } else { String::new() }
+        );
+    }
+    if !faults.is_empty() {
+        println!("  probe faults: {}", faults.join(", "));
+    }
+}
+
 pub fn print_human(report: &Report) {
     println!("=== spaghettio-sim report: {} ===", report.label);
     println!(
@@ -672,6 +767,7 @@ pub fn print_human(report: &Report) {
         report.inserter_stack_size_bonus,
         report.bulk_inserter_capacity_bonus
     );
+    print_productivity_parity(report);
     if !report.external_inputs.is_empty() {
         let inputs: Vec<String> = report
             .external_inputs

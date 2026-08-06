@@ -1172,6 +1172,12 @@ local function finalize(s, converged)
     if v == nil then return "NIL" end
     return v
   end
+  -- MEASURED 2026-08-06, against a review claim that `LuaRecipe` exposes no
+  -- such field and this channel "will always serialize as FIELD_ABSENT": it
+  -- returned 0.1 for processing-unit and 0.0 for the five others in the same
+  -- run. A non-existent field cannot produce a recipe-DISCRIMINATING value,
+  -- so the read is real. That discrimination is also the strongest evidence
+  -- the probe worked at all -- a broken probe returns uniform sentinels.
   local prod_force = {}
   for _, rn in ipairs({"processing-unit", "electronic-circuit", "advanced-circuit",
                        "iron-plate", "copper-plate", "copper-cable"}) do
@@ -1189,9 +1195,24 @@ local function finalize(s, converged)
       return r.name
     end)
     if type(rn) == "string" and rn ~= "NIL" and rn ~= "FIELD_ABSENT" then
-      if prod_entity[rn] == nil then
-        prod_entity[rn] = probe(function() return m.productivity_bonus end)
+      -- Aggregate across EVERY machine of the recipe, not just the first seen.
+      -- First-seen made the reported bonus an arbitrary run-to-run pick when
+      -- machines of one recipe carry different module loadouts, and a
+      -- first-machine probe fault suppressed every later machine that might
+      -- have exposed a real number (PR #580 review, 3/3). Numeric readings
+      -- collapse to min/max so a heterogeneous set is visible as a spread;
+      -- faults are counted separately so they cannot masquerade as zeros.
+      local eb = probe(function() return m.productivity_bonus end)
+      local agg = prod_entity[rn]
+      if agg == nil then agg = {min = nil, max = nil, n = 0, faults = 0} end
+      if type(eb) == "number" then
+        if agg.min == nil or eb < agg.min then agg.min = eb end
+        if agg.max == nil or eb > agg.max then agg.max = eb end
+        agg.n = agg.n + 1
+      else
+        agg.faults = agg.faults + 1
       end
+      prod_entity[rn] = agg
       local inv = probe(function() return m.get_module_inventory() end)
       if type(inv) ~= "string" then
         local contents = probe(function() return inv.get_contents() end)
