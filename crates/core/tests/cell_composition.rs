@@ -3960,6 +3960,39 @@ fn export_fold_report_json() {
     println!("wrote target/tmp/fold-report.json");
 }
 
+/// RFC-065 Phase 2b measurement probe: fold-search admission volume on the
+/// cell fixture of the pre-registered corpus (`chain-mil5ore` — the two
+/// row-bus fixtures are probed from `connectivity_parity.rs`, which cannot
+/// reach `SimFixture`). Prints how many fold candidates paid a `validate()`
+/// and how many of those were Error discards — the UPPER BOUND on the
+/// volume any sound Error-certain pre-filter could reject-fast (a wired
+/// detector covers a subset of Error causes).
+#[test]
+#[ignore = "measurement probe — prints fold-admission volume for chain-mil5ore"]
+fn phase2b_fold_admission_volume_chain_mil5ore() {
+    use spaghettio_core::bus::compaction::{
+        compact_validated_geometry, search_snake_fold_with_stats,
+    };
+
+    let fixture = SimFixture::find("chain-mil5ore");
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    )
+    .unwrap();
+    let base = fixture.compose_layout();
+    let compact = compact_validated_geometry(&base, &sr);
+    let (search, stats) = search_snake_fold_with_stats(&compact, &sr, 4);
+    println!(
+        "chain-mil5ore: validates={} error_discards={} regression_rejects={} \
+         refusals={} legal_columns={} best={:?}",
+        stats.validates_run, stats.error_discards, search.rejected_by_validation,
+        search.refusals.len(), search.legal_columns,
+        search.best.as_ref().map(|b| &b.folds),
+    );
+}
+
 /// Export `mega-chain-chem5raw` at its registry-declared capacity, for
 /// re-blessing its pinned geometry after a change.
 ///

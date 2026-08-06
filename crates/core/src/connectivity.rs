@@ -574,6 +574,129 @@ pub fn diff(before: &ConnectivityGraph, after: &ConnectivityGraph) -> TopologyDi
     TopologyDiff { added_edges, removed_edges, added_conflicts, removed_conflicts }
 }
 
+/// RFC-065 Phase 2: detect an ERROR-CERTAIN topology regression between two
+/// derivations over the SAME index-stable entity list — the sound
+/// reject-fast pre-filter for transform admission loops. Returns
+/// `Some(reason)` only for regression classes that `validate()` is
+/// guaranteed to reject, so a caller may skip validation for these
+/// candidates without changing any admission OUTCOME (the byte-identity
+/// pin in `connectivity_parity.rs` enforces exactly that):
+///
+/// - an underground entrance that had a span, lost it, and is STILL an
+///   entrance in `after` — check #19 (`check_underground_belt_pairs`,
+///   same canonical pairing as the derive) errors every unpaired
+///   entrance. The still-an-entrance condition is load-bearing: an
+///   in-place rewrite of the entity to something else (e.g.
+///   `normalize_adjacent_undergrounds` collapsing a cut-adjacent pair to
+///   surface belts, entity count unchanged) legitimately drops the span,
+///   and the 2026-08-05 adversarial review demonstrated the unguarded
+///   class rejecting exactly that validator-clean candidate;
+/// - a NEW same-carries head-on contact — `check_belt_junctions` errors it
+///   (different-carries contacts are validator-tolerated and not flagged).
+///
+/// DELIBERATELY NOT a class — "inserter lost a hand binding": no
+/// validator check errors an unbound hand per se. `check_inserter_chains`
+/// errors a *machine* with no adjacent inserter, `check_inserter_direction`
+/// errors only when NEITHER hand touches a machine, and the coverage /
+/// input-rate backstops tolerate redundant inserters (or emit Warning
+/// only) — so a redundant inserter losing its belt-side pickup is
+/// validate-admissible and must fall through (same 2026-08-05 review).
+/// A RETARGETED hand was never flagged for the same reason.
+///
+/// The detector is deliberately INCOMPLETE: unpaired exits and
+/// over-reach spans are also Error-certain under check #19 but fall
+/// through to full validation — soundness (never reject what validate()
+/// admits) is the load-bearing direction; completeness only costs a
+/// validate() call.
+///
+/// Callers MUST ensure index identity between the two derivations (same
+/// entities, same order); the function bails to `None` (fall through to
+/// validation) when the two graphs disagree with `layout_after` on node
+/// count. To be precise about what the contract protects (bot round 3 on
+/// PR #579): SOUNDNESS does not depend on it — both classes' fire
+/// conditions are grounded in after-geometry alone (a still-an-entrance
+/// node with no span is unpaired under check #19; a same-carries head-on
+/// present in `after` errors under `check_belt_junctions`), so even under
+/// index churn a fired candidate is one `validate()` rejects. What the
+/// contract protects is the DIFF SEMANTICS: the before-side gates
+/// (`span_out_b > 0`, conflict-set membership) are what make a firing a
+/// *regression* rather than a pre-existing condition, and under churn
+/// they mis-attribute. `entities.len()` equality — the cut loop's guard —
+/// is a cheap proxy valid there because cut candidates mutate in place
+/// and never reorder; a net-zero remove+insert would churn indices while
+/// passing it. Phase 3 consumers wanting regression attribution must
+/// track identity explicitly, not by length.
+pub fn error_certain_regression(
+    before: &ConnectivityGraph,
+    after: &ConnectivityGraph,
+    layout_after: &LayoutResult,
+) -> Option<String> {
+    let n = layout_after.entities.len();
+    // Explicit contract check (bot round 3): a caller handing us graphs
+    // of a different shape than `layout_after` gets a uniform
+    // fall-through to full validation, not a panic and not a
+    // silently-partial tally (the per-branch guards below then only ever
+    // see in-range indices).
+    if before.classes.len() != n || after.classes.len() != n {
+        return None;
+    }
+    // Per-node span counts for the entrance class, before vs after.
+    let mut span_out_b = vec![0u16; n];
+    let mut span_out_a = vec![0u16; n];
+    let tally = |edges: &[Edge], span: &mut [u16]| {
+        for e in edges {
+            if let EdgeKind::UgSpan = e.kind {
+                if e.src < span.len() {
+                    span[e.src] += 1;
+                }
+            }
+        }
+    };
+    tally(&before.edges, &mut span_out_b);
+    tally(&after.edges, &mut span_out_a);
+
+    for i in 0..n {
+        if span_out_b[i] > 0
+            && span_out_a[i] == 0
+            && matches!(after.classes[i], NodeClass::UgEntrance)
+        {
+            let e = &layout_after.entities[i];
+            return Some(format!(
+                "underground entrance at ({},{}) lost its span",
+                e.x, e.y
+            ));
+        }
+    }
+
+    // New same-carries head-on: conflicts are sorted+deduped, so a merge
+    // walk finds additions; only same-carries ones are Error-certain.
+    // The kind guard is future-proofing (bot round 1 on PR #579): HeadOn
+    // is the only variant the derive emits today, but this class must not
+    // silently broaden the day a validator-tolerated conflict kind is
+    // added.
+    let before_set: std::collections::BTreeSet<Conflict> =
+        before.conflicts.iter().copied().collect();
+    for c in &after.conflicts {
+        // Belt-and-braces under the up-front shape check: malformed edge
+        // indices inside a well-shaped graph still fall through.
+        let (Some(ea), Some(eb)) =
+            (layout_after.entities.get(c.a), layout_after.entities.get(c.b))
+        else {
+            continue;
+        };
+        if matches!(c.kind, ConflictKind::HeadOn)
+            && !before_set.contains(c)
+            && ea.carries == eb.carries
+        {
+            return Some(format!(
+                "new same-carries head-on contact at ({},{})",
+                ea.x, ea.y
+            ));
+        }
+    }
+    None
+}
+
 /// Structural sanity over the derived graph. On a validator-green layout
 /// this must return nothing (K65-1); each finding is one positioned issue
 /// per instance (`docs/validator-reporting.md` rule 1). Not wired into
@@ -975,6 +1098,164 @@ mod tests {
         assert!(
             scan_graph_anomalies(&g, &lr).is_empty(),
             "validator-tolerated contact must not anomaly-error"
+        );
+    }
+
+    /// Phase 2 detector pins: each error-certain class fires; the cases
+    /// the 2026-08-05 adversarial review proved validate-admissible
+    /// (in-place UG normalization, unbound redundant hand, retarget)
+    /// deliberately do not — re-adding either unsound class flips a
+    /// negative pin here before it can diverge production outcomes.
+    #[test]
+    fn error_certain_regression_classes() {
+        use EntityDirection::East;
+        // Base: belt → UG span → belt, plus a machine-fed inserter → belt.
+        let base = layout(vec![
+            belt(0, 0, East),
+            ug(1, 0, East, "input"),
+            ug(4, 0, East, "output"),
+            belt(5, 0, East),
+            machine(0, 3, "iron-gear-wheel"),
+            inserter(3, 4, East),
+            belt(4, 4, East),
+        ]);
+        let g0 = derive_connectivity(&base);
+        assert!(error_certain_regression(&g0, &g0, &base).is_none());
+
+        // Sever the span: move the exit off-axis.
+        let mut severed = base.clone();
+        severed.entities[2].y = 9;
+        let g1 = derive_connectivity(&severed);
+        assert!(
+            error_certain_regression(&g0, &g1, &severed)
+                .is_some_and(|r| r.contains("lost its span")),
+            "severed span must be error-certain"
+        );
+
+        // In-place UG normalization (adversarial-review finding 1): both
+        // halves rewritten to surface belts, indices and count unchanged —
+        // the span disappears LEGITIMATELY (the node is no longer an
+        // entrance), exactly what `normalize_adjacent_undergrounds`
+        // produces after a cut. Must NOT be flagged.
+        let mut normalized = base.clone();
+        for i in [1usize, 2] {
+            normalized.entities[i] = belt(normalized.entities[i].x, 0, East);
+        }
+        let g_norm = derive_connectivity(&normalized);
+        assert!(
+            error_certain_regression(&g0, &g_norm, &normalized).is_none(),
+            "an in-place UG-to-belt rewrite is validate-admissible and must fall through"
+        );
+
+        // Unbound hand (adversarial-review finding 2): the drop belt moves
+        // away. No validator check errors an unbound hand per se
+        // (redundant-inserter geometries stay Error-free), so this must
+        // NOT be flagged — it falls through to full validation.
+        let mut unbound = base.clone();
+        unbound.entities[6].x = 9;
+        let g2 = derive_connectivity(&unbound);
+        assert!(
+            error_certain_regression(&g0, &g2, &unbound).is_none(),
+            "hand-binding loss is not error-certain and must fall through"
+        );
+
+        // New same-carries head-on: flip the post-span belt to face the exit.
+        let mut headon = base.clone();
+        headon.entities[3].direction = EntityDirection::West;
+        let g3 = derive_connectivity(&headon);
+        assert!(
+            error_certain_regression(&g0, &g3, &headon)
+                .is_some_and(|r| r.contains("head-on")),
+            "same-carries head-on must be error-certain"
+        );
+
+        // RETARGET: replace the drop belt with a 3x3 machine whose footprint
+        // covers the drop tile (4,4) — the hand re-binds from belt to
+        // machine. Must NOT be flagged (and would fall through even as a
+        // pure loss, per the removed hand class). The edge assertion pins
+        // that this fixture really is a retarget, not an unbound hand
+        // (bot round 1 on PR #579 claimed the drop tile goes empty).
+        let mut retarget = base.clone();
+        retarget.entities[6] = machine(4, 3, "iron-gear-wheel");
+        let g4 = derive_connectivity(&retarget);
+        assert!(
+            edge(&g4, 5, 6, EdgeKind::InserterDrop),
+            "fixture must re-bind the drop to the machine: {:?}",
+            g4.edges
+        );
+        assert!(
+            error_certain_regression(&g0, &g4, &retarget).is_none(),
+            "a retargeted hand must fall through to full validation"
+        );
+    }
+
+    /// The Error-CERTAIN half of the detector contract, checked against
+    /// `validate()` itself rather than asserted in prose (bot round 1 on
+    /// PR #579): for each class the detector fires on, the after-layout
+    /// must carry an Error in the corresponding validator category that
+    /// the base layout does not. A class that fires without its validator
+    /// Error is exactly the unsoundness the adversarial review
+    /// demonstrated — this pin makes that a one-line failure.
+    #[test]
+    fn error_certain_classes_are_validator_errors() {
+        use crate::validate::{self, LayoutStyle, Severity};
+        use EntityDirection::East;
+
+        let error_categories = |l: &LayoutResult| -> std::collections::BTreeSet<String> {
+            let issues = match validate::validate(l, None, LayoutStyle::Bus) {
+                Ok(issues) => issues,
+                Err(error) => error.issues,
+            };
+            issues
+                .into_iter()
+                .filter(|i| i.severity == Severity::Error)
+                .map(|i| i.category)
+                .collect()
+        };
+
+        let base = layout(vec![
+            belt(0, 0, East),
+            ug(1, 0, East, "input"),
+            ug(4, 0, East, "output"),
+            belt(5, 0, East),
+        ]);
+        let g0 = derive_connectivity(&base);
+        let base_errors = error_categories(&base);
+
+        // Span loss (still an entrance): check #19's category must appear.
+        let mut severed = base.clone();
+        severed.entities[2].y = 9;
+        let g1 = derive_connectivity(&severed);
+        assert!(
+            error_certain_regression(&g0, &g1, &severed).is_some(),
+            "detector must fire on the severed span"
+        );
+        assert!(
+            !base_errors.contains("underground-belt"),
+            "base fixture must not already carry the category: {base_errors:?}"
+        );
+        assert!(
+            error_categories(&severed).contains("underground-belt"),
+            "span loss fired but validate() has no underground-belt Error — \
+             the class is not Error-certain"
+        );
+
+        // New same-carries head-on: check_belt_junctions' category.
+        let mut headon = base.clone();
+        headon.entities[3].direction = EntityDirection::West;
+        let g2 = derive_connectivity(&headon);
+        assert!(
+            error_certain_regression(&g0, &g2, &headon).is_some(),
+            "detector must fire on the same-carries head-on"
+        );
+        assert!(
+            !base_errors.contains("belt-junction"),
+            "base fixture must not already carry the category: {base_errors:?}"
+        );
+        assert!(
+            error_categories(&headon).contains("belt-junction"),
+            "head-on fired but validate() has no belt-junction Error — \
+             the class is not Error-certain"
         );
     }
 
