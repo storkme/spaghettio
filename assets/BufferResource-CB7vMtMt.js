@@ -1,4 +1,4 @@
-import { y as U, B as g, D as c, F as S, H as _, J as m, E as I, K as p } from "./index-n-zDykRi.js";
+import { y as U, B as g, D as c, F as S, H as _, J as m, E as I, K as p } from "./index-3akP8KWG.js";
 const x = { name: "local-uniform-bit", vertex: { header: `
 
             struct LocalUniforms {
