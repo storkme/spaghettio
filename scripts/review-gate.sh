@@ -37,7 +37,7 @@ TIMEOUT="${TIMEOUT:-3900}"   # 65 min: outlasts the second-opinion job's own
                              # timeout (#561 review finding). Typical runs
                              # are ~15-20 min; claude-review's were 8-11.
 
-usage() { sed -n '2,31p' "$0"; exit 2; }
+usage() { sed -n '2,29p' "$0"; exit 2; }
 
 cmd_wait() {
   local pr="${1:?usage: review-gate.sh wait <pr>}"
@@ -148,9 +148,46 @@ cmd_override() {
       exit 2
       ;;
   esac
-  if [ -z "${reason//[[:space:]]/}" ]; then
-    echo "override requires a non-blank reason — it is posted to the PR as the" >&2
-    echo "record of why the required check was bypassed." >&2
+  # Require an actual word character, not merely "not ASCII-blank". glibc's
+  # [[:space:]] is ASCII-only, so a reason of a single NBSP (U+00A0) passed the
+  # earlier strip and produced a visually-blank record (PR #588 re-review,
+  # confirmed through a full stubbed cycle). Demanding [[:alnum:]] closes that
+  # without trying to enumerate Unicode blanks.
+  if ! printf '%s' "$reason" | grep -q '[[:alnum:]]'; then
+    echo "override requires a reason containing at least one alphanumeric" >&2
+    echo "character — it is posted to the PR as the record of why the required" >&2
+    echo "check was bypassed, and a blank record is worse than none." >&2
+    exit 2
+  fi
+
+  # Refuse unless protection is in the state we think we're overriding.
+  #
+  # If enforce_admins is ALREADY false, the DELETE below is a no-op and the
+  # script would end by POSTing it true — silently *tightening* a state it did
+  # not create, while the read-back cheerfully "verifies" a restoration to a
+  # state that never held (PR #588 re-review). It is the safe direction, but
+  # it is an out-of-mandate mutation, and it hides the thing worth noticing:
+  # an override running while main was already loose.
+  local enforced
+  enforced=$(gh api "repos/$REPO/branches/main/protection" --jq '.enforce_admins.enabled' 2>/dev/null || echo "unknown")
+  if [ "$enforced" != "true" ]; then
+    echo "refusing: enforce_admins on $REPO@main reads '$enforced', not 'true'." >&2
+    echo "  Nothing to override, and restoring would tighten a state this script" >&2
+    echo "  did not set. Investigate why protection is already loose:" >&2
+    echo "    scripts/review-gate.sh status" >&2
+    exit 2
+  fi
+
+  # Refuse a PR that cannot be merged anyway. Without this, a closed/merged/
+  # draft PR passes validation, gets a real ATTEMPTED comment (comments work
+  # on closed PRs), opens the protection window, fails the merge, and closes
+  # it again — a pointless bypass window, truthfully recorded but avoidable.
+  local prstate isdraft
+  prstate=$(gh pr view "$pr" -R "$REPO" --json state --jq .state 2>/dev/null || echo "")
+  isdraft=$(gh pr view "$pr" -R "$REPO" --json isDraft --jq .isDraft 2>/dev/null || echo "")
+  if [ "$prstate" != "OPEN" ] || [ "$isdraft" != "false" ]; then
+    echo "refusing: #$pr is state='${prstate:-unknown}' isDraft='${isdraft:-unknown}'." >&2
+    echo "  Only an open, non-draft PR can be merged; not opening a window for it." >&2
     exit 2
   fi
 
@@ -193,7 +230,10 @@ is flipped for the duration of this merge only; the required check stays in
 force for every other PR.
 
 *If no \"override succeeded\" comment follows this one, the merge did **not**
-happen — see the operator's terminal for why.*" >/dev/null || {
+happen — see the operator's terminal for why. If this comment is the last word
+on the PR, the run may have been killed mid-override: check protection with
+\`scripts/review-gate.sh status\` and restore \`enforce_admins\` if it reads
+false.*" >/dev/null || {
     echo "!! could not comment on #$pr (does it exist?) — nothing touched." >&2
     trap - EXIT
     exit 1
@@ -203,17 +243,30 @@ happen — see the operator's terminal for why.*" >/dev/null || {
   gh api -X DELETE "repos/$REPO/branches/main/protection/enforce_admins" >/dev/null
 
   echo "Merging #$pr…"
-  if gh pr merge "$pr" -R "$REPO" --merge --admin; then
-    echo "Merged #$pr."
-    gh pr comment "$pr" -R "$REPO" \
-      --body "**Override succeeded** — #$pr merged past \`$CHECK\`. \`enforce_admins\` restored." \
-      >/dev/null || echo "  (merged, but the confirmation comment failed to post)"
-  else
+  if ! gh pr merge "$pr" -R "$REPO" --merge --admin; then
     echo "!! Merge of #$pr FAILED — restoring protection, PR left open." >&2
     restore_enforce || exit 1
     exit 1
   fi
-  restore_enforce || exit 1
+  echo "Merged #$pr."
+
+  # Restore FIRST, then report. The confirmation says "enforce_admins restored"
+  # in the past tense, so posting it before the POST reintroduces exactly the
+  # bug the ATTEMPTED wording fixed, one comment later: between the comment and
+  # the restore, main is bypassable while the durable record says it is not —
+  # and if the restore fails or the run is killed there, that false claim is
+  # the PR's permanent last word (PR #588 re-review). The merge has already
+  # happened by this point, so nothing is lost by waiting.
+  if restore_enforce; then
+    gh pr comment "$pr" -R "$REPO" \
+      --body "**Override succeeded** — #$pr merged past \`$CHECK\`, and \`enforce_admins\` has been restored (verified by read-back)." \
+      >/dev/null || echo "  (merged and restored, but the confirmation comment failed to post)"
+  else
+    gh pr comment "$pr" -R "$REPO" \
+      --body "**Override merged, but RESTORE FAILED** — #$pr merged past \`$CHECK\`, and \`enforce_admins\` could **not** be restored. \`main\` is admin-bypassable right now. Run \`scripts/review-gate.sh status\` and re-enable it." \
+      >/dev/null || echo "  (restore failed AND the warning comment failed to post — fix main by hand)"
+    exit 1
+  fi
 }
 
 case "${1:-}" in
