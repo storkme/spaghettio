@@ -149,6 +149,18 @@ pub struct Manifest {
     pub stacking: u8,
     #[serde(default)]
     pub inserter_capacity: u8,
+    /// Declared research-sourced productivity, per recipe. The engine plans
+    /// and the meter measures at this; the scenario checks the sim's realized
+    /// bonus against it and refuses to let a mismatch pass silently.
+    ///
+    /// Unlike `stacking` and `inserter_capacity`, this is **checked, not
+    /// assigned**: recipe productivity is derived from researched technologies
+    /// rather than a settable force field, so the scenario cannot simply pin
+    /// it the way it pins the inserter and belt bonuses. Detecting the
+    /// disagreement is what stops a run being compared against a plan built in
+    /// a different world — which is exactly what RFC-064 Phase 2 item 7 was.
+    #[serde(default)]
+    pub research_productivity: std::collections::BTreeMap<String, f64>,
 }
 
 impl Manifest {

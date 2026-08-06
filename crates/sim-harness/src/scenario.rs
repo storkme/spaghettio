@@ -725,6 +725,22 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
         manifest.inserter_capacity
     );
     let _ = writeln!(out, "local STACKING = {}", manifest.stacking);
+    // Declared research productivity, per recipe. Emitted as a Lua table so
+    // the scenario can check the sim's realized bonus against what the plan
+    // and the meter assumed. Empty table when undeclared, which is every
+    // manifest written before the axis existed.
+    {
+        let entries: Vec<String> = manifest
+            .research_productivity
+            .iter()
+            .map(|(recipe, bonus)| format!("[\"{recipe}\"]={bonus}"))
+            .collect();
+        let _ = writeln!(
+            out,
+            "local DECLARED_PRODUCTIVITY = {{{}}}",
+            entries.join(",")
+        );
+    }
     {
         let items: Vec<String> = manifest
             .planned_rates
@@ -1152,6 +1168,43 @@ local function finalize(s, converged)
       if v == st then census[k] = (census[k] or 0) + 1 end
     end
   end
+  -- Research-productivity parity (RFC-064 Phase 2 item 7). CHECKED, not
+  -- assigned: a recipe's productivity is derived from researched technologies
+  -- rather than a settable force field, so unlike the two axes above this
+  -- cannot be pinned -- only detected. Detecting is the point. The engine
+  -- plans and the meter measures at the DECLARED value; if the sim's world
+  -- disagrees, every rate comparison in this run is against a plan built for a
+  -- different world, and that is what item 7 turned out to be: the sim carried
+  -- +10% on processing-unit that nothing on the engine side modelled, and the
+  -- resulting -13% was chased as a belt defect across three sessions.
+  --
+  -- Undeclared recipes are checked against 0: a manifest that says nothing is
+  -- asserting no research productivity, which is what the engine assumed.
+  --
+  -- Scoped to recipes this factory actually CRAFTS. Iterating every recipe in
+  -- the force flags things like steel-plate and low-density-structure that the
+  -- layout never builds — true but irrelevant, and a kit error that cries wolf
+  -- gets ignored, which is the failure mode this whole check exists to avoid.
+  local crafted = {}
+  for _, m in pairs(s.find_entities_filtered{
+    type = {"assembling-machine", "furnace", "chemical-plant", "oil-refinery"}
+  }) do
+    local ok, r = pcall(function() return m.get_recipe() end)
+    if ok and r ~= nil then crafted[r.name] = true end
+  end
+  for name, _ in pairs(crafted) do
+    local recipe = game.forces.player.recipes[name]
+    local declared = DECLARED_PRODUCTIVITY[name] or 0
+    local ok, realized = pcall(function() return recipe.productivity_bonus end)
+    if ok and realized ~= nil and math.abs(realized - declared) > 1e-6 then
+      table.insert(storage.kit_errors,
+        "research-productivity parity: '" .. name .. "' realized "
+        .. realized .. " but the manifest declares " .. declared
+        .. " -- rates for this run are not comparable against a plan built at "
+        .. "the declared value (RFC-064 item 7)")
+    end
+  end
+
   -- RFC-064 item 7 productivity-parity probe (2026-08-06).
   -- The meter models NO productivity at all (crates/meter/src/machine.rs
   -- deliberately takes nothing from module_policy and not
