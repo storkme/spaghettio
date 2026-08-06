@@ -1253,8 +1253,9 @@ mod tests {
         headon.entities[3].direction = EntityDirection::West;
         let g2 = derive_connectivity(&headon);
         assert!(
-            error_certain_regression(&g0, &g2, &headon).is_some(),
-            "detector must fire on the same-carries head-on"
+            error_certain_regression(&g0, &g2, &headon)
+                .is_some_and(|r| r.contains("head-on")),
+            "detector must fire (head-on arm) on the same-carries head-on"
         );
         assert!(
             !base_errors.contains("belt-junction"),
@@ -1275,8 +1276,9 @@ mod tests {
         entrance_headon.entities[0] = belt(2, 0, EntityDirection::West);
         let g5 = derive_connectivity(&entrance_headon);
         assert!(
-            error_certain_regression(&g0, &g5, &entrance_headon).is_some(),
-            "detector must fire on the entrance-boundary head-on"
+            error_certain_regression(&g0, &g5, &entrance_headon)
+                .is_some_and(|r| r.contains("head-on")),
+            "detector must fire (head-on arm) on the entrance-boundary head-on"
         );
         assert!(
             error_categories(&entrance_headon).contains("belt-junction"),
@@ -1306,8 +1308,9 @@ mod tests {
         sp_headon.entities[2] = belt(5, 0, EntityDirection::West);
         let sp_g1 = derive_connectivity(&sp_headon);
         assert!(
-            error_certain_regression(&sp_g0, &sp_g1, &sp_headon).is_some(),
-            "detector must fire on the splitter-tile head-on"
+            error_certain_regression(&sp_g0, &sp_g1, &sp_headon)
+                .is_some_and(|r| r.contains("head-on")),
+            "detector must fire (head-on arm) on the splitter-tile head-on"
         );
         assert!(
             !sp_base_errors.contains("belt-junction"),

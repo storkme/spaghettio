@@ -3969,7 +3969,8 @@ fn export_fold_report_json() {
 /// detector covers a subset of Error causes). The RFC-recorded figure
 /// (1/151, the corpus's only Error discard) predates RFC-064's
 /// `never_worse` fold gate; that refit can shift regression-reject
-/// counts only, not `error_discards`.
+/// counts only, not `error_discards` (the gate runs downstream of
+/// `validate()` — see `search_snake_fold_with_stats`).
 #[test]
 #[ignore = "measurement probe — prints fold-admission volume for chain-mil5ore"]
 fn phase2b_fold_admission_volume_chain_mil5ore() {

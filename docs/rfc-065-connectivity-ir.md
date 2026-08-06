@@ -1159,3 +1159,29 @@ Per `CLAUDE.md` § verification protocol:
   after which RFC-065's Phase 2 arc is fully closed: merged at
   0e73b4d, kill criterion honored, primitive + telemetry + probes
   standing, Phase 3 gated as above.
+- **2026-08-06 — PR #581 (close-out) bot round 1 (union ×3, three
+  minors, each 1/3 passes): dispositions.** (1) Head-on sub-case
+  asserts pinned bare `is_some()` — ACCEPTED; all three head-on
+  sub-cases in `error_certain_classes_are_validator_errors` (the
+  pre-existing exit-boundary case included) now pin the arm via
+  `.is_some_and(|r| r.contains("head-on"))`, matching the
+  `error_certain_regression_classes` sibling, so a spurious span-arm
+  fire can no longer satisfy them. (2) Canonical record silent on
+  Phase 2 — ACCEPTED; a close-out PR that leaves `docs/rfcs.md`
+  reading "Active … Remaining: …" with no Phase 2 outcome fails its
+  own doc-sync purpose. The registry row gains the
+  closed-by-measurement clause and `docs/status.md` gains the
+  close-out entry, in this PR as flagged. (3) "`error_discards` is
+  gate-independent" called over-strong via an admitted-subset
+  argument ("the gate controls which candidates reach `validate()`;
+  a stricter gate can only decrease the numerator") — REFUTED on the
+  code: in `search_snake_fold_with_stats` the `never_worse` verdict
+  is consulted strictly downstream of `validate()`, and candidates
+  are generated from the immutable native layout (comb over
+  `legal_fold_columns`), never from an accepted incumbent, so
+  admission policy cannot shape the validated stream;
+  `validates_run`/`error_discards` are functions of
+  (layout, solver, max_folds) alone. The claim is kept and now
+  carries this grounding at each site so the subset misreading
+  cannot recur. Tests + docs only, no behavior change — same
+  envelope as the PR it reviews.

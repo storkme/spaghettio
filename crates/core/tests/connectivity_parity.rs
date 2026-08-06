@@ -579,7 +579,11 @@ fn phase2_prefilter_rejects_engage_on_head_on_creating_cut() {
 /// per-candidate derivation cost. Figures were measured under the
 /// pre-RFC-064 count-diff admission gate; the stricter `never_worse`
 /// instance gate can move regression-reject counts only —
-/// `error_discards` counts validator Errors and is gate-independent.
+/// `error_discards` counts validator Errors and is gate-independent:
+/// the gate runs strictly after `validate()`, on a candidate stream
+/// generated from the native layout alone (see
+/// `search_snake_fold_with_stats`), so admission policy cannot change
+/// which candidates get validated.
 #[test]
 #[ignore = "measurement probe — prints fold-admission volume per fixture"]
 fn phase2b_fold_prefilter_measurement() {

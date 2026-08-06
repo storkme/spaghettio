@@ -4835,7 +4835,12 @@ pub fn search_snake_fold(
 /// the pre-RFC-064 count-diff admission gate; the gate is now
 /// `verdict::never_worse` (stricter, instance-level), which can only
 /// move regression-reject counts — `error_discards` counts validator
-/// Errors and is gate-independent.
+/// Errors and is gate-independent: the verdict is consulted strictly
+/// downstream of `validate()` in the loop below, and candidates are
+/// generated from the immutable native layout (comb over
+/// `legal_fold_columns`), never from an accepted incumbent, so
+/// admission policy cannot shape the validated stream (pinned against
+/// PR #581 bot round 1's admitted-subset reading).
 pub fn search_snake_fold_with_stats(
     layout: &LayoutResult,
     solver: &SolverResult,
