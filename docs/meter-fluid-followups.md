@@ -1,6 +1,6 @@
 # Meter fluid modelling — follow-ups (#570)
 
-**Status (2026-08-05, follow-up `f5a-ptg-edge` + `fluid-followups`): Phase A + B
+**Status (2026-08-06, follow-up `f5a-ptg-edge` + `fluid-followups`): Phase A + B
 LANDED and merged (#571). Calibration within ±10pp on the whole compared corpus
 EXCEPT `tier5_processing_unit_from_ore_am3` (−13%) — **CLOSED 2026-08-06**:
 measured as a **productivity tech-state parity gap**, not a model defect. The
@@ -69,7 +69,7 @@ cryogenic-plant bind x-descending). Topology: F4 (PTG underground pairs), F5
 (blueprint direction = surface-opening side), F5a (PTG perpendicular sides
 closed — keeps crossing/stacked fluid lines isolated).
 
-**Phase C — calibration (close to done; one open residual).**
+**Phase C — calibration — COMPLETE (the last residual closed 2026-08-06).**
 - Re-run the meter corpus sweep (`examples/sweep_corpus.rs`); all compared
   fixtures within ±10pp EXCEPT `tier5_processing_unit_from_ore_am3` at −13% —
   **closed 2026-08-06** as a productivity tech-state parity gap (sim +10.0% on
@@ -78,7 +78,7 @@ closed — keeps crossing/stacked fluid lines isolated).
   distribution defect.
 - Log any residual divergence in [`meter-divergence.md`](meter-divergence.md).
 
-## Next steps / open items (2026-08-05)
+## Next steps / open items (2026-08-06)
 
 ### F5a stacked-PTG edge — FIXED
 A pipe-to-ground's surface mouth now only joins a regular pipe or a **back-facing**
@@ -103,8 +103,10 @@ ever enters the corpus.
 
 ### Confirm/close the PU-from-ore −13% — **CLOSED 2026-08-06 (parity gap)**
 Measured, not inferred. The sim harness now dumps realized productivity (PR
-#580): **processing-unit +10.0%**, electronic-circuit / advanced-circuit /
-iron-plate / copper-plate / copper-cable all **0.0%**, and no productivity
+#580): **processing-unit +10.0%** and **plastic-bar +10.0%** (the latter found only
+when the probe was widened to chemical-plant legs), with
+electronic-circuit / advanced-circuit / iron-plate / copper-plate /
+copper-cable / sulfur / the oil steps all **0.0%**, and no productivity
 modules anywhere — so the source is `research_all_technologies()`. The meter
 models no productivity at all by design (`crates/meter/src/machine.rs`), so on
 this recipe instrument and reference measure different worlds. Decomposition:

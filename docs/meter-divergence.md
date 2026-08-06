@@ -7,7 +7,7 @@ when the corpus sweep (`crates/meter/examples/sweep_corpus.rs`) moves a number
 or reveals a new one. The last open residual closed 2026-08-06 —
 measured as an instrument-parity gap, not a model defect.
 
-## Corpus status (2026-08-05; Phase B landed 2026-08-03)
+## Corpus status (2026-08-06; Phase B landed 2026-08-03)
 
 `meter sweep: 70 layouts measured, 41 compared`. Every compared fixture is
 within ±10pp of sim except the one below. AC/PU families that were −80% in
@@ -126,14 +126,34 @@ in-fixture AC reads −3.9%).
     | recipe | realized force/research productivity |
     |---|---|
     | **processing-unit** | **+10.0%** |
+    | **plastic-bar** | **+10.0%** |
     | advanced-circuit | 0.0% |
     | electronic-circuit | 0.0% |
     | iron-plate | 0.0% |
     | copper-plate | 0.0% |
     | copper-cable | 0.0% |
+    | sulfur / sulfuric-acid / basic- + advanced-oil-processing | 0.0% |
+
+    **`plastic-bar` was missed by the first probe** and found only when the
+    review pushed the coverage wider: plastic is crafted in a *chemical plant*,
+    and both the probed recipe list and the entity-type filter covered only
+    assembler/furnace legs. The same wrong-population mistake as the "0 of 1889
+    unlabelled tiles" triage earlier in this campaign — an accurate count over
+    exactly the cases where the thing cannot appear. It does **not** move the
+    decomposition below (meter and sim both deliver 7.2 plastic/s, so the boost
+    changes the sim's *petroleum input per plastic*, not its plastic output),
+    but "processing-unit alone" was a claim the first probe could not support.
 
     `productivity_modules: {}` — empty, so the source is **research**, not
-    modules. `force.research_all_technologies()` does grant it, which also
+    modules.
+  - **The sim's own figures reconcile under it, to 0.35%.** A check worth
+    running because it uses none of the disputed quantities: at +10%, 43.2 EC/s
+    ÷ 24 EC per craft = 1.800 crafts/s × 1.1 = **1.980 PU/s**, against the
+    **1.987** the sim measured. The sim's EC production and its PU output are
+    consistent with each other *only* under the measured bonus — at zero
+    productivity the same EC would cap it at 1.800 PU/s, 9% below what it
+    delivered. This is independent of the AC:PU route below and of the probe
+    itself. `force.research_all_technologies()` does grant it, which also
     settles a doubt recorded here on 08-05 about repeatable technologies.
   - **What that closes.** The meter models no productivity at all (deliberately
     — `crates/meter/src/machine.rs` takes nothing from `module_policy` and not
@@ -142,8 +162,9 @@ in-fixture AC reads −3.9%).
     compounded with the −9.1% productivity it does not model = **−12.7%**
     against **−13.6%** observed, ~1pp inside this fixture's noise.
     The measurement also confirms the **selectivity** the corpus had been
-    showing all along — EC and AC unboosted, hence their ±0–2% while only PU
-    diverges — and **kills the competing reading** that the signature was a
+    showing all along — EC and AC unboosted, hence their ±0–2%, while the two
+    boosted recipes are PU (which diverges) and plastic-bar (whose output does
+    not, for the reason above) — and **kills the competing reading** that the signature was a
     sim-side reporting artifact. There is a real bonus.
   - **Scoreboard for the prediction.** The AC:PU ratio (1.807 against the
     recipe's 2) predicted **+10.7%** before the run; measured **+10.0%**. The
@@ -170,10 +191,19 @@ in-fixture AC reads −3.9%).
   the signature was a sim reporting artifact (falsified by the probe). The
   thing that finally settled it was a measurement, not a fifth derivation.
 - **Next**: decide the fix direction (sim-side parity assignment vs meter-side
-  productivity model). Nothing further to diagnose here. If the meter is taught
-  productivity, re-run this fixture and expect the residual to fall to ≈−3.9%,
-  the EC deficit alone — that is the falsifiable prediction this entry now
-  makes.
+  productivity model). Nothing further to diagnose here.
+  **Falsifiable prediction.** Teach the meter +10% on PU and its output should
+  land at **≈1.902 PU/s** — 41.5 EC/s ÷ 24 = 1.729 crafts/s, each yielding 1.1
+  PU — i.e. a residual of **≈−4.3%** against the sim's 1.987, essentially the
+  −3.9% EC deficit alone.
+  Note the trap in that arithmetic, since a reviewer fell into it: the 1.729
+  figure quoted elsewhere in this entry as the meter's "ceiling" is a ceiling
+  *at zero productivity*. Productivity does not change EC consumed per craft
+  (still 24) — it changes PU produced per craft (1 → 1.1), so it raises the
+  ceiling rather than leaving output capped beneath it. Reading 1.729 as a cap
+  that survives the fix predicts a residual of ≈−13% and concludes the
+  productivity story cannot work; that is arithmetic on a stale ceiling, not a
+  contradiction in the evidence.
 
 ## Closed / moved entries
 

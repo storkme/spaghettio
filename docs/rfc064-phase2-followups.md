@@ -80,6 +80,7 @@ else). Against `tier5_processing_unit_from_ore_am3`:
 | recipe | realized force/research productivity |
 |---|---|
 | **processing-unit** | **+10.0%** |
+| **plastic-bar** | **+10.0%** |
 | advanced-circuit | 0.0% |
 | electronic-circuit | 0.0% |
 | iron-plate / copper-plate / copper-cable | 0.0% |
@@ -100,7 +101,11 @@ reading that the signature was a sim-side reporting artifact.
 defect.** Same class as #370 and #385. Remaining work is a decision, not a
 diagnosis: align the sim's productivity to the fixture's declared level, or
 teach the meter the fixture's productivity. Falsifiable prediction if the
-latter: the residual should fall to ≈−3.9%, the EC deficit alone.
+latter: output should land at ≈1.902 PU/s (41.5 EC/s ÷ 24 = 1.729 crafts/s,
+each yielding 1.1 PU), a residual of ≈−4.3% — essentially the −3.9% EC deficit
+alone. Do not read the 1.729 "ceiling" as surviving the fix: it is a ceiling at
+*zero* productivity, and productivity raises it rather than capping output
+beneath it.
 
 **Process note worth keeping.** Four causes were proposed and retired before
 this one — belt-cycle update order (≈14% of the gap), head-hog distribution
