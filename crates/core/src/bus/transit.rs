@@ -12,7 +12,7 @@ use std::collections::BinaryHeap;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::bus::compaction::{ProductionEdge, ProductionSignature};
+use crate::bus::compaction::{ProductionEdge, ProductionSignature, RATE_SCALE};
 use crate::common::{
     dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter, is_machine_entity,
     is_splitter, is_ug_belt, splitter_second_tile,
@@ -23,7 +23,10 @@ use crate::models::{EntityDirection, LayoutResult, SolverResult};
 type Tile = (i32, i32);
 type Graph = FxHashMap<Tile, Vec<(Tile, i64)>>;
 
-const RATE_SCALE: f64 = 1_000_000_000.0;
+// NOTE `RATE_SCALE` is imported from `compaction` above rather than
+// redeclared here: both sides of this conversion chain must rescale together
+// or the planned-rate and weighted-cost maths silently diverge (PR #582
+// review).
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeTransit {
@@ -416,7 +419,24 @@ fn direct_insertion_lengths(
         };
         let producer_recipe = layout.entities[producer].recipe.as_deref();
         let consumer_recipe = layout.entities[consumer].recipe.as_deref();
-        if producer_recipe.is_some_and(|recipe| edge.producer_recipes.iter().any(|r| r == recipe))
+        // Item guard. A machine PAIR can be bridged by several inserters
+        // carrying different items (any dual-input direct-insertion row), so
+        // matching on the recipe pair alone contributes every one of them to
+        // every edge between those recipes — the stray-sample contamination
+        // PR #569 fixed in `objective.rs`'s DI path. That guard lived only
+        // there, and deleting that implementation (PR #582) took it with it;
+        // this restores it in the surviving one.
+        //
+        // Unstamped (`carries: None`) inserters are accepted rather than
+        // skipped: unlike a belt tile, an inserter with no label is not a
+        // routing shortcut, it is simply unannotated, and refusing it would
+        // turn missing metadata into an unmeasurable edge.
+        let item_ok = inserter
+            .carries
+            .as_deref()
+            .is_none_or(|carried| carried == edge.item);
+        if item_ok
+            && producer_recipe.is_some_and(|recipe| edge.producer_recipes.iter().any(|r| r == recipe))
             && consumer_recipe == Some(edge.consumer_recipe.as_str())
         {
             lengths.push((drop.0 - pickup.0).abs() as i64 + (drop.1 - pickup.1).abs() as i64);
@@ -696,6 +716,72 @@ mod tests {
         assert_eq!(measured.edges[0].path_length, 2.0);
         assert_eq!(measured.total, 4.0);
         assert!(measured.edges[0].direct_insertion);
+    }
+
+    /// A machine pair bridged by several inserters carrying DIFFERENT items
+    /// must contribute only the matching one to an edge's DI samples.
+    ///
+    /// Regression for a guard that existed only in `objective.rs`'s deleted DI
+    /// path (added by PR #569 as "DI Manhattan samples gated on inserter
+    /// `carries` when stamped") and was lost when that implementation was
+    /// removed in PR #582. Matching on the recipe pair alone means every
+    /// inserter between those two machines feeds every edge between them, so a
+    /// dual-input direct-insertion row contaminates each item's transit with
+    /// the other's.
+    #[test]
+    fn direct_insertion_ignores_inserters_carrying_another_item() {
+        let mut sr = solver("part", 2.0, false);
+        sr.di_couplings.push(DICoupling {
+            producer_recipe: "producer".to_string(),
+            consumer_recipe: "consumer".to_string(),
+            item: "part".to_string(),
+            producer_count: 1.0,
+            consumer_count: 1.0,
+        });
+
+        let tagged = |x: i32, y: i32, item: Option<&str>| PlacedEntity {
+            carries: item.map(str::to_string),
+            ..inserter(x, y)
+        };
+        let layout = LayoutResult {
+            entities: vec![
+                machine("producer", 0, 0),
+                // The matching bridge, and a longer one carrying something
+                // else between the SAME machine pair.
+                tagged(3, 1, Some("part")),
+                // A LONG-HANDED inserter on the same tile column: reach 2, so
+                // it bridges the SAME machine pair (pickup (1,1) inside the
+                // producer, drop (5,1) inside the consumer) at Manhattan 4
+                // rather than 2.
+                //
+                // Getting this fixture right took two attempts, both caught by
+                // running the negative control rather than by reading the test:
+                // at (3,2) both inserters spanned 2, so `path_length` passed
+                // whether or not the guard fired; at (2,3) the stray stopped
+                // bridging the pair at all, so the test went green with the
+                // guard DISABLED — a regression test that had stopped
+                // regressing. Only a differing span over the same pair makes
+                // the primary assertion bite.
+                PlacedEntity {
+                    name: "long-handed-inserter".to_string(),
+                    carries: Some("other-item".to_string()),
+                    x: 3,
+                    y: 1,
+                    direction: EntityDirection::East,
+                    ..Default::default()
+                },
+                machine("consumer", 4, 0),
+            ],
+            ..Default::default()
+        };
+        let measured = measure_realized_transit(&layout, &sr, 0.5)
+            .expect("declared direct insertion must measure");
+        assert_eq!(
+            measured.edges[0].path_length, 2.0,
+            "only the 'part' inserter may contribute a sample; averaging the \
+             'other-item' bridge in would move this off 2.0"
+        );
+        assert_eq!(measured.edges[0].producer_terminals, 1, "one matching bridge, not two");
     }
 
     /// An unlabelled transport tile must NOT be traversable by every net.

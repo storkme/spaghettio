@@ -1741,3 +1741,144 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   rewrites >4 rather than failing loudly, which is against this project's
   never-degrade-silently convention; (f) the regression pins exact validator
   strings and hardcoded row indices. (a), (b) and (d) can move a gate verdict.
+
+- **2026-08-06 — the two §(b) implementations are one: `objective.rs`'s was
+  non-conforming and is deleted.** Both `objective::measure` and
+  `bus::transit::measure_realized_transit` implemented §(b) independently. The
+  question was not which was nicer — measuring them against each other first
+  showed they disagree by **−29% to +98%** on real fixtures, and in *both*
+  directions, so the error does not cancel in `1 − T(cand)/T(native)`:
+
+  | fixture | objective | bus::transit | delta |
+  |---|---:|---:|---:|
+  | ac5-plate-native | 2879.95 | 5549.00 | +92.7% |
+  | ac5-plate-compact | 2719.95 | 5389.00 | +98.1% |
+  | asp5-ore | 587.50 | 810.00 | +37.9% |
+  | ec10-ore | 2163.25 | 1532.50 | −29.2% |
+  | lsp2-ore | 809.80 | 1164.50 | +43.8% |
+
+  The cause is that they aggregate over opposite sides of the edge, and **§(b)
+  already says which**: "run a directed multi-source shortest-path search from
+  every matching producer-output transport terminal; measure the distance to
+  every distinct matching consumer-input terminal; and define `path_length(e)`
+  as the arithmetic mean of those **consumer-terminal** distances."
+  `bus::transit` does exactly that; `objective` meaned over *producers*. The
+  same paragraph settles the other two disputes the reviewers had raised
+  separately: "any other unreachable terminal makes the metric unmeasurable and
+  the candidate inadmissible — never silently fall back" (transit's refusal,
+  not objective's partial averaging), and the direct-insertion Manhattan rule
+  applies only "with no transport network" (transit's exact condition, so
+  objective's mixing of DI samples into belt means was the violation, not
+  transit's refusal to mix). **Four counts, one spec, decided before either was
+  written.** So this is a bug fix, not an arbitration, and ~340 lines of
+  duplicate implementation are deleted rather than reconciled.
+  **Blast radius checked before acting**: `objective::measure` is consumed only
+  by `candidate_runner`, which has no shipping caller, so no recorded RFC-064
+  gate result was computed with the non-conforming metric — Phase 3's numbers
+  already came from `bus::transit`. On fixtures where `objective` reported
+  unattributed and partial edges (ac5: 1 unattributed, 2 partial; lsp2: 4
+  unattributed) `bus::transit` measures them cleanly, so adopting it *removes*
+  refusals rather than causing them.
+  **What went with it**: `LayoutMeasure`'s `unattributed_edge_count` /
+  `partially_attributed_edge_count`, `EdgeMeasurement::path_length`'s `Option`,
+  `ObjectiveScores`'s `*_attributed_edges`, and
+  `score_vs_native_weighted`'s common-subset machinery — all of which described
+  a partial state §(b) does not permit. The length-mismatch guard stays and is
+  now the whole guard; it still closes the zero-edge-candidate hole.
+  This also retires the mixed belt+DI follow-up on the `objective` side
+  outright, leaving only the genuine open question on the `transit` side:
+  whether a mixed edge should refuse or sum both costs, which §(b) does not
+  say. Suite 1193 passed / 0 failed / 102 ignored; clippy and the WASM check
+  clean.
+  **Two coverage losses, named rather than hidden.**
+  (a) `candidate_runner`'s `degrading_transform_loses_the_ranking_...` used a
+  transform that tears the belt network in half; the conforming metric refuses
+  such a layout instead of scoring it, so the test now accepts either exclusion
+  and the score-based rejection it exercised is covered at unit level instead.
+  (b) `new_gated_issue_excludes_a_candidate_even_with_a_better_composite` lost
+  its premise: the old measurement credited its shrink with a transit
+  improvement the layout does not physically have, so the candidate no longer
+  out-scores the incumbent. The gate assertion is intact but no longer runs
+  *against* a winning score. FOLLOW-UP: build a synthetic transform that both
+  improves the composite and leaves the layout measurable, and restore it.
+
+- **2026-08-06 — the incumbent-unmeasurable abort path is now reachable, and
+  that is intended.** Delegating §(b) to `bus::transit` turns
+  `objective::measure` into a fallible-for-real function: it returns `Err` on
+  an unreachable terminal where the old non-conforming version degraded to a
+  partial result. `run_candidate_field` hard-fails the **entire field** when
+  the *incumbent* fails to measure, so a base layout with a single genuinely
+  unreachable terminal now aborts candidate selection rather than ranking
+  through it. Recorded as a decision rather than discovered later: this is the
+  §(b) conformance being bought, not a regression. A candidate field whose own
+  baseline cannot be measured has no valid comparison to offer, and the
+  alternative — scoring candidates against a partially-measured incumbent — is
+  exactly the silent-proxy behaviour §(b) forbids. **Now verified** by
+  `an_unmeasurable_incumbent_fails_the_field_with_a_named_cause`, which drives a
+  base candidate producing machines with every belt, pipe and inserter stripped
+  and asserts the field fails naming both the incumbent and `bus::transit`'s
+  cause. This entry originally recorded the path as designed-but-unverified; a
+  reviewer flagged that gap twice at 3/3, correctly — an availability change
+  that exists only in prose is the kind that gets rediscovered in anger. If it ever fires in anger the
+  useful diagnostic is `bus::transit`'s error variant, which names the item,
+  consumer recipe and terminal.
+
+- **2026-08-06 (bot review on #582) — deleting `objective.rs`'s measurement
+  silently took a guard with it.** Its direct-insertion path filtered inserters
+  by item (`if let Some(c) = &e.carries { if c != item { continue; } }`), added
+  by #569 as "DI Manhattan samples gated on inserter `carries` when stamped".
+  `bus::transit::direct_insertion_lengths` matches on the producer/consumer
+  **recipe pair only**, so once `objective` became pure delegation the guard
+  existed nowhere: a machine pair bridged by several inserters carrying
+  different items contributed every one of them to every edge between those
+  recipes — exactly the stray-sample contamination #569 fixed. Restored in the
+  surviving implementation, pinned by
+  `direct_insertion_ignores_inserters_carrying_another_item`, and
+  negative-controlled (disable the guard → that test alone fails). Unstamped
+  inserters are still accepted: unlike a belt tile, an unlabelled inserter is
+  not a routing shortcut, and refusing it would turn missing metadata into an
+  unmeasurable edge. **The lesson is about deletion, not about DI**: "the
+  surviving implementation is the conforming one" was true of the aggregation,
+  the refusal semantics and the PTG modelling, and false of this guard. Caught
+  at 1/3 — the low-confidence findings are not the safe ones to skip.
+
+- **2026-08-06 — the degrading-transform test stopped testing what it is named
+  for, and now does again.** Its transform shoved alternate entities half a
+  layout-width apart, severing every belt run; under §(b) that makes the
+  candidate unmeasurable, so it was excluded by *refusal* rather than by score,
+  and the assertion had been widened to accept either — tautological, since it
+  passes whichever path fires. The transform now appends one isolated belt tile
+  far to the east: the non-pole bbox grows so `ar_score` genuinely worsens,
+  every routed path is untouched so the candidate still measures, and the test
+  requires the Evaluated branch with a negative composite.
+  **Still outstanding**: no shipped test exercises a candidate that both
+  *out-scores* the incumbent and is measurable, because a synthetic transform
+  that improves AR without disturbing routing is not obvious to construct. So
+  `new_gated_issue_excludes_...` verifies the gate, but not the gate *against a
+  winning score*.
+
+- **2026-08-06 (bot review round 2 on #582) — the DI regression test did not
+  regress, twice, and only the negative control said so.** The fixture placed
+  the stray inserter where both bridges spanned Manhattan 2, so the primary
+  `path_length` assertion passed whether or not the guard fired and the
+  regression was caught solely by a secondary terminal-count assertion. Moving
+  the stray to a different tile then made it stop bridging the machine pair at
+  all — the test went **green with the guard disabled**, i.e. a regression test
+  that had stopped regressing. It now uses a long-handed inserter on the same
+  column: same machine pair, span 4 instead of 2, so with the guard off the
+  mean moves 2.0 → 3.0 and the primary assertion fails. Recorded because the
+  first version's negative control had *already been run* and reported
+  "passes" — it did, on the wrong assertion. Running the control is necessary
+  and not sufficient; it has to fail for the reason the test claims.
+  Also in this round: `RATE_SCALE` was redeclared in `transit.rs` rather than
+  imported from `compaction`, so a future rescale would have desynchronised
+  the two halves of the same conversion chain silently; and `measure`'s own doc
+  comment never mentioned that delegation made it fail on any unmeasurable
+  edge.
+  **Left as an open question, named rather than settled**: the restored DI item
+  guard accepts `carries: None` inserters into every edge between a recipe
+  pair, which is inconsistent with the strict `compatible()` used on the
+  belt/pipe graphs on the same path. Refusing them would turn missing metadata
+  into an unmeasurable edge; accepting them re-admits a smaller version of the
+  contamination the guard exists to stop. The deciding evidence is a count of
+  unstamped DI inserters in real layouts, which nobody has taken.
