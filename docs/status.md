@@ -129,6 +129,31 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
+**`rfc-065-connectivity-ir.md` Phase 2 close-out (2026-08-05, killed by
+measurement — premise falsified on both paths)**: the phase's
+Error-certain admissibility pre-filter (skip `validate()` on candidates
+the connectivity diff proves doomed) was measured before being wired,
+per the RFC's own kill criterion. Cut path: the constructors
+structurally refuse almost everything bad before validation ever runs
+(EC@2: 6 validates, EC@20: 1 — nothing worth saving). Fold path: the
+corpus counts 1 Error discard among 120 validation-rejected candidates
+(0.83% vs the ≥30% reject-fast bar; as a share of chain-mil5ore's 151
+validates, 0.66%) — row-bus fixtures are zero everywhere (gear15-ore
+0/0 validates with 130 structural refusals, ec10-ore 0/0, ac5-plates
+0/62), the single hit is chain-mil5ore's. The filter was removed rather
+than shipped as dead per-candidate derivation cost. What survives: the
+hardened `error_certain_regression` primitive (severed-span + head-on
+classes pinned Error-certain against the validator on
+surface/entrance/exit/splitter geometries), the `CutAdmissionStats`
+admission telemetry, and the ignored measurement probes that keep the
+negative result re-checkable. Phase 3 (movable component, own RFC)
+gains a pre-registered gate: corpus-wide both-arms sweep with
+byte-identity + accounting-identity before the primitive goes behind
+any new transform. The RFC stays Active (Phase 1 remaining slices;
+enabling work for RFC-064 Phases 3–5). Merged at `0e73b4d` (PR #579);
+close-out + canonical-record sync in PR #581. Full trail: the RFC's
+decision log.
+
 **`rfc-062-multi-target-outputs.md` (2026-08-01, PARTIAL — engine
 correctness lands, the final gate's two measurement kill criteria both
 FAIL as measured)**: N ≥ 1 simultaneous solve targets in one factory
