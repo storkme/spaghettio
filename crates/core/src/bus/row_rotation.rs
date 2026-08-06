@@ -1694,6 +1694,12 @@ fn finish_layout(mut work: RouteWork, native: &LayoutResult) -> Result<LayoutRes
         wire_mode: native.wire_mode,
         stacking: native.stacking,
         inserter_capacity: native.inserter_capacity,
+        // Declared research productivity travels with the other declared
+        // axes. Dropping it here would export a manifest claiming no
+        // productivity for a plan that assumed some — the exact
+        // instrument-vs-plan mismatch this axis exists to kill, and this
+        // rotation path is where the axis gets declared first.
+        research_productivity: native.research_productivity.clone(),
         ..Default::default()
     };
     layout.power_wires = Some(crate::power_wires::compute_pole_wires(
