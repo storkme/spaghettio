@@ -37,7 +37,7 @@ TIMEOUT="${TIMEOUT:-3900}"   # 65 min: outlasts the second-opinion job's own
                              # timeout (#561 review finding). Typical runs
                              # are ~15-20 min; claude-review's were 8-11.
 
-usage() { sed -n '2,25p' "$0"; exit 2; }
+usage() { sed -n '2,31p' "$0"; exit 2; }
 
 cmd_wait() {
   local pr="${1:?usage: review-gate.sh wait <pr>}"
@@ -132,8 +132,27 @@ cmd_unrequire() {
 # quietly leaves main bypassable would be worse than having no override.
 cmd_override() {
   local pr="${1:-}" reason="${2:-}"
-  [ -n "$pr" ]     || { echo "usage: review-gate.sh override <pr> \"<reason>\"" >&2; exit 2; }
-  [ -n "$reason" ] || { echo "override requires a reason (it is posted to the PR)" >&2; exit 2; }
+  # Validate BEFORE touching protection. Neither check was here originally,
+  # and both were exploitable in ways that matter (PR #588 review):
+  #   - `[ -n "$reason" ]` accepts a single space, so the mandatory-reason gate
+  #     — the entire audit story — was bypassable by typing " ".
+  #   - `pr` was never checked, so `override --help "x"` ran a full
+  #     flip-restore cycle, posted NO audit comment (gh help exits 0), merged
+  #     nothing, and reported `Merged #--help.` with exit 0. A protection
+  #     window with no record and a success message is the worst outcome this
+  #     script can produce.
+  case "$pr" in
+    ''|*[!0-9]*)
+      echo "usage: review-gate.sh override <pr-number> \"<reason>\"" >&2
+      echo "  <pr-number> must be numeric; got ${pr:-<empty>}" >&2
+      exit 2
+      ;;
+  esac
+  if [ -z "${reason//[[:space:]]/}" ]; then
+    echo "override requires a non-blank reason — it is posted to the PR as the" >&2
+    echo "record of why the required check was bypassed." >&2
+    exit 2
+  fi
 
   ENFORCE_RESTORED=0
   restore_enforce() {
@@ -156,22 +175,39 @@ cmd_override() {
   }
   trap 'restore_enforce || true' EXIT
 
-  echo "Recording the override on #$pr…"
-  gh pr comment "$pr" --body "**Merged via \`review-gate.sh override\`**, bypassing the required \`$CHECK\` check.
+  # Posted BEFORE the flip, deliberately: it doubles as an existence check for
+  # `$pr`, so a bad number fails here rather than after protection is down.
+  #
+  # But it must therefore describe an ATTEMPT, not a completed merge. The first
+  # version said "Merged via override" up front, so a failed merge left a
+  # permanent false "Merged" comment on a PR that never landed (PR #588
+  # review). Success is confirmed by a follow-up comment below.
+  echo "Recording the override attempt on #$pr…"
+  gh pr comment "$pr" -R "$REPO" --body "**Override ATTEMPTED via \`review-gate.sh override\`** — merging past the required \`$CHECK\` check.
 
 Reason: $reason
 
-The check was not green at merge time. This was a deliberate call, not an
-accident — recorded here so the bypass is visible to anyone reading this PR
-later. \`enforce_admins\` was flipped for the duration of this merge only; the
-required check stayed in force for every other PR." >/dev/null
+The check was not green. This is a deliberate call, not an accident — recorded
+here so the bypass is visible to anyone reading this PR later. \`enforce_admins\`
+is flipped for the duration of this merge only; the required check stays in
+force for every other PR.
+
+*If no \"override succeeded\" comment follows this one, the merge did **not**
+happen — see the operator's terminal for why.*" >/dev/null || {
+    echo "!! could not comment on #$pr (does it exist?) — nothing touched." >&2
+    trap - EXIT
+    exit 1
+  }
 
   echo "Disabling enforce_admins (the check stays required for everyone else)…"
   gh api -X DELETE "repos/$REPO/branches/main/protection/enforce_admins" >/dev/null
 
   echo "Merging #$pr…"
-  if gh pr merge "$pr" --merge --admin; then
+  if gh pr merge "$pr" -R "$REPO" --merge --admin; then
     echo "Merged #$pr."
+    gh pr comment "$pr" -R "$REPO" \
+      --body "**Override succeeded** — #$pr merged past \`$CHECK\`. \`enforce_admins\` restored." \
+      >/dev/null || echo "  (merged, but the confirmation comment failed to post)"
   else
     echo "!! Merge of #$pr FAILED — restoring protection, PR left open." >&2
     restore_enforce || exit 1
