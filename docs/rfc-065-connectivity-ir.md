@@ -1342,3 +1342,40 @@ Per `CLAUDE.md` § verification protocol:
   walk could already see; the two survey-config gains sit in
   fixtures without exact-count e2e pins). Ladder + self-loop notes
   synced in `docs/status.md`.
+- **2026-08-06 — Slice 2 session-side adversarial review (worktree
+  agent): APPROVE-WITH-NITS; every claim held under attack, three
+  nits fixed in the same commit, two observations recorded.**
+  Attacks run and survived: an equivalence audit over every
+  constructible edge-kind/class combination plus a 60,000-soup fuzz
+  differential (12,267 divergence-free soups, ZERO findings;
+  divergent soups all reduce to the five documented classes, some
+  compound — entrance-behind-splitter is D5+D3, splitter-into-exit-
+  rear is D2); all five pins re-derived by hand with their
+  game-rule bases checked against the mechanics doc (D4 correctly
+  framed as K65-1 policy, not game rule); the corpus differential
+  re-run reproducing 620 healed boundaries and the exact five-tuple
+  drift, with fragment arithmetic spot-checked (17+10=27 …); all
+  three geometry adjudications independently reproduced; the
+  fold-gate veto mechanism reproduced live (folded mil5 winner
+  carries 4 seam verdicts 211/66…210/65 vs 0 native under the new
+  measurement, 0 vs 0 under the oracle — the vacuity claim proven,
+  and independently corroborated by mil5's multi-fold assert having
+  been green on main); a channel sweep finding no other production
+  belt-detour steering (the only `never_worse` callers are the fold
+  gate and the caller-less `run_candidate_field`). Nits fixed:
+  (1) the module doc listed four tightenings — D5, the only
+  corpus-reachable one, was missing from the module-level list;
+  now five. (2) The adjudication probe claimed coverage of all five
+  drifts but carried four cases — the from-plates case is added
+  (the reviewer verified that adjudication independently via its
+  own probe; it is accurate). (3) The in-suite fast differential
+  asserted verdict-identity where the pre-registration recorded
+  run-list identity — strengthened to full run-list equality, which
+  both fixtures satisfy. Observations recorded, no action taken:
+  (a) the opt-in RFC-064 row-rotation spike fails closed on ANY
+  validation issue, belt-detour included — a non-default channel
+  outside "report-only", now named where the default-pipeline claim
+  is made; that spike's policy belongs to RFC-064. (b)
+  `run_candidate_field` has no production caller and its test
+  harness count-gates belt-detour via `Policy::fold()` — revisit if
+  it ever gains one.

@@ -55,21 +55,28 @@
 //! the endpoint entities — 1 for surface flow, the span length
 //! underground), and every anchor ingredient above is an edge kind. Flow
 //! edges are game-truthful where the old tile-walk was orientation-blind,
-//! which tightens four behaviors on geometry the engine never emits (or
-//! already rejects as Errors) — each pinned in the tests below with the
-//! old behavior asserted alongside for contrast:
+//! which tightens five behaviors — D1-D4 on geometry the engine never
+//! emits (or already rejects as Errors), D5 on live corpus geometry —
+//! each pinned in the tests below with the old behavior asserted
+//! alongside for contrast:
 //!
-//! - runs stop at head-on contacts (a conflict, not a flow edge; the
+//! - (D1) runs stop at head-on contacts (a conflict, not a flow edge; the
 //!   tile-walk walked through them);
-//! - nothing surface-feeds a UG exit (rear feed stalls in game; the walk
-//!   flowed into the exit and counted the rear feeder as a merge);
-//! - splitter anchors are orientation-true (the tile-walk marked any belt
-//!   ahead/behind a footprint tile; on a perpendicular belt passing behind
-//!   a splitter it cut the run and orphaned the downstream tail from
-//!   measurement entirely);
-//! - io-untagged undergrounds are invisible (`NodeClass::Other`, K65-1
-//!   posture: no role-guessing for hand-built entities; the dir map walked
-//!   them as plain tiles).
+//! - (D2) nothing surface-feeds a UG exit (rear feed stalls in game; the
+//!   walk flowed into the exit and counted the rear feeder as a merge);
+//! - (D3) splitter anchors are orientation-true (the tile-walk marked any
+//!   belt ahead/behind a footprint tile; on a perpendicular belt passing
+//!   behind a splitter it cut the run and orphaned the downstream tail
+//!   from measurement entirely);
+//! - (D4) io-untagged undergrounds are invisible (`NodeClass::Other`,
+//!   K65-1 posture: no role-guessing for hand-built entities; the dir map
+//!   walked them as plain tiles);
+//! - (D5) a UG entrance no longer phantom-feeds the surface tile directly
+//!   ahead of it (its items go underground, but its dir-map entry made
+//!   the tile-walk count it as a predecessor, cutting crossing lanes
+//!   mid-run on weave geometry). The one CORPUS-REACHABLE divergence —
+//!   the source of every healed run boundary in the migration
+//!   differential.
 //!
 //! The pre-migration tile-walk survives verbatim in [`reference`] as the
 //! differential oracle — corpus equivalence gates live in `e2e.rs`

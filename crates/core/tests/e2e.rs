@@ -10837,7 +10837,9 @@ fn belt_detour_survey() {
 // legal and expected where D5 weave geometry heals the oracle's phantom
 // entrance-predecessor cuts (see the RFC decision log's slice-2 pick-up
 // entry) — the `#[ignore]` full differential quantifies it per fixture for
-// adjudication; the fast in-suite gate pins verdicts on two cheap fixtures.
+// adjudication; the fast in-suite gate pins FULL run-list identity (the
+// pre-registered strength) on two cheap fixtures that carry no D-class
+// geometry today.
 // ---------------------------------------------------------------------------
 
 type DetourVerdict = ((i32, i32), (i32, i32), i64, i64);
@@ -10875,10 +10877,10 @@ fn belt_detour_migration_differential_fast() {
         let new = measure_belt_runs(&result.layout);
         let old = reference::measure_belt_runs_tilewalk(&result.layout);
         assert_eq!(
-            detour_verdicts(&new),
-            detour_verdicts(&old),
-            "{name}: belt-detour verdicts drifted between the graph decomposition and the \
-             tile-walk oracle"
+            new, old,
+            "{name}: run decomposition drifted from the tile-walk oracle — if this fixture \
+             gained D-class geometry (belt_detour's module doc), check verdicts and \
+             adjudicate via belt_detour_migration_differential + the RFC-065 log"
         );
     }
 }
@@ -11030,6 +11032,7 @@ fn belt_detour_adjudication_probe() {
 
     // (fixture name, walk start tile, dump region (x range, y range))
     let cases: &[(&str, (i32, i32), (i32, i32), (i32, i32))] = &[
+        ("tier4_advanced_circuit_from_plates", (11, 39), (5, 18), (34, 46)),
         ("tier4_advanced_circuit_from_ore_am2", (8, 85), (2, 16), (78, 96)),
         ("tier_kovarex_self_loop", (21, 14), (2, 24), (2, 18)),
         ("stress_advanced_circuit_partitioned_5s_from_plates_partitioned", (13, 38), (6, 20), (33, 46)),
