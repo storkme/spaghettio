@@ -1054,8 +1054,9 @@ nothing to bring in).
 opportunistically as PRs touch those files"; the evidence in this very
 paragraph argues against it. That strategy has already been run and failed —
 `e2e.rs` and `layout.rs` are among the most-touched files in the repo and
-accumulated anyway — and the class regrows under the current regime, with 2 of
-the 28 arriving in the week to 2026-08-06 out of careful, reviewed work. The
+accumulated anyway — and the class regrows under the current regime, with the
+3 `objective.rs` sites above arriving in the week to 2026-08-06 out of
+careful, reviewed work. The
 backlog is 1-2 hours and cannot regress anything CI-visible, because CI cannot
 see any of it. The flag is the fix; the cleanup is a one-time toll, not a
 programme.
