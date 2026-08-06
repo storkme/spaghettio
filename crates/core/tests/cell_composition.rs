@@ -3966,7 +3966,11 @@ fn export_fold_report_json() {
 /// reach `SimFixture`). Prints how many fold candidates paid a `validate()`
 /// and how many of those were Error discards — the UPPER BOUND on the
 /// volume any sound Error-certain pre-filter could reject-fast (a wired
-/// detector covers a subset of Error causes).
+/// detector covers a subset of Error causes). The RFC-recorded figure
+/// (1/151, the corpus's only Error discard) predates RFC-064's
+/// `never_worse` fold gate; that refit can shift regression-reject
+/// counts only, not `error_discards` (the gate runs downstream of
+/// `validate()` — see `search_snake_fold_with_stats`).
 #[test]
 #[ignore = "measurement probe — prints fold-admission volume for chain-mil5ore"]
 fn phase2b_fold_admission_volume_chain_mil5ore() {

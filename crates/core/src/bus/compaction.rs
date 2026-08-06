@@ -554,8 +554,9 @@ pub struct CutAdmissionStats {
     /// severity — an UPPER BOUND on what any sound Error-certain
     /// pre-filter could reject-fast (the wired detector covers a subset
     /// of Error causes, so its achievable catch is at most this). The
-    /// honest coverage denominator: with the filter off this is total
-    /// Error volume; with it on, the misses.
+    /// honest coverage denominator: with the filter off — which includes
+    /// every production path — this is total Error volume; with it on
+    /// (the `with_stats` test oracle only), the misses.
     pub error_discards: usize,
     /// How many candidates the pre-filter actually EVALUATED (the
     /// count-equality guard admitted them to the diff). Identity pins
@@ -613,6 +614,8 @@ fn cut_admission(
     };
     let admitted = !issues.iter().any(|issue| issue.severity == Severity::Error);
     if !admitted {
+        // Counts the same event as the fold path's validate-Err arm —
+        // see the coupling note there (bot round 6 on PR #579).
         stats.error_discards += 1;
     }
     (admitted, candidate_graph)
@@ -4832,7 +4835,12 @@ pub fn search_snake_fold(
 /// the pre-RFC-064 count-diff admission gate; the gate is now
 /// `verdict::never_worse` (stricter, instance-level), which can only
 /// move regression-reject counts — `error_discards` counts validator
-/// Errors and is gate-independent.
+/// Errors and is gate-independent: the verdict is consulted strictly
+/// downstream of `validate()` in the loop below, and candidates are
+/// generated from the immutable native layout (comb over
+/// `legal_fold_columns`), never from an accepted incumbent, so
+/// admission policy cannot shape the validated stream (pinned against
+/// PR #581 bot round 1's admitted-subset reading).
 pub fn search_snake_fold_with_stats(
     layout: &LayoutResult,
     solver: &SolverResult,
@@ -4922,6 +4930,13 @@ pub fn search_snake_fold_with_stats(
             };
             stats.validates_run += 1;
             let Some(candidate_issues) = validate_issues(&folded) else {
+                // COUPLING (bot round 6 on PR #579): this arm counts an
+                // Error discard via `validate().ok() == None`, while
+                // `cut_admission` counts Error-severity issues in the
+                // returned list. They agree because `validate()` returns
+                // `Err` iff at least one Error-severity issue exists
+                // (validate/mod.rs) — the RFC-065 corpus figures rest on
+                // that iff, so a change to it must revisit both arms.
                 stats.error_discards += 1;
                 continue;
             };
