@@ -1,6 +1,6 @@
-//! RFC-064 "spaghetti objective" primitives (P1): the aspect-ratio score
-//! and rate-weighted belt-transit metric, computed on a validated, fully
-//! routed [`LayoutResult`] — never on an unrouted IR estimate, per
+//! RFC-064 "spaghetti objective" primitives (P1): the aspect-ratio score,
+//! the composite, and the admissible-ranking rule, computed on a validated,
+//! fully routed [`LayoutResult`] — never on an unrouted IR estimate, per
 //! `docs/rfc-064-spaghetti-objective.md`'s own realism-step discipline.
 //!
 //! This module is pure and additive: nothing in the pipeline calls it.
@@ -12,60 +12,31 @@
 //! changing anything here — the definitions below are transcriptions of
 //! that section, not independent designs.
 //!
-//! ## Realized per-edge path length: approach and known gaps
+//! ## Where transit comes from
 //!
-//! [`measure`] computes `Transit(L)` per [`crate::bus::compaction::ProductionEdge`]
-//! (the RFC's own edge model — reused verbatim from `bus::compaction`, never
-//! re-derived) as a **realized physical path length** over the routed
-//! geometry:
+//! **This module does not measure transit.** [`measure`] delegates §(b)
+//! wholly to [`crate::bus::transit::measure_realized_transit`] and adds only
+//! §(a)'s bbox/aspect terms around it.
 //!
-//! - **Solid (belt/underground) edges**: for every producer machine of the
-//!   edge's `producer_recipes` and every consumer machine of its
-//!   `consumer_recipe`, the inserter that drops the item onto a belt tile
-//!   (a "producer port") and the inserter that picks it up off a belt tile
-//!   (a "consumer port") are located from `PlacedEntity` geometry. A
-//!   Dijkstra search over the belt/underground tile graph (built from the
-//!   same `pub(crate)` adjacency helpers `belt_detour.rs` uses —
-//!   `belt_dir_map_from`/`build_ug_pairs`/`build_splitter_siblings` in
-//!   `validate::belt_flow` — so this module never re-derives belt/UG/
-//!   splitter adjacency) finds the shortest tile-count path from each
-//!   producer port to the nearest consumer port, filtered to tiles carrying
-//!   the edge's item. Splitters are crossed (both outputs reachable from
-//!   either input, weight 2 per crossing — a documented over-connection,
-//!   not a claim any specific item can freely choose lanes) rather than
-//!   treated as hard walls the way `belt_detour`'s run decomposition does,
-//!   since a producer-to-consumer path routinely crosses balancers.
-//!   Direct-insertion edges (producer and consumer bridged by one inserter
-//!   with no belt at all) fall back to the Manhattan distance between the
-//!   inserter's pickup and drop tile, exactly as RFC-064's Phase 0 decision
-//!   log (2026-08-01) describes ("Manhattan fallback only for
-//!   direct-insertion edges").
-//! - **Fluid edges**: producer/consumer fluid ports come from
-//!   [`crate::fluid_ports::fluid_ports`] (the same geometry table the bus
-//!   templates and fluid validator use); the path is a BFS over adjacent
-//!   `pipe`/`pipe-to-ground` tiles carrying the edge's item. **Known gap,
-//!   not silently papered over**: pipe-to-ground pairing (the underground
-//!   jump) is NOT modeled here — plain 4-adjacency BFS cannot see across a
-//!   genuinely buried pipe run with no surface tiles in between. A fluid
-//!   edge routed underground for its entire span reports `path_length:
-//!   None` (excluded from `Transit`, counted in `unattributed_edge_count`)
-//!   rather than a silently wrong number. Reimplementing the validator's
-//!   pipe-to-ground pairing (`validate::fluids::find_ptg_pairs`, private to
-//!   that module) was judged out of scope for this additive pass; see the
-//!   PR report for the sizing of that follow-up.
-//! - When multiple producer or consumer instances exist for one edge, each
-//!   producer port's shortest reachable distance is one sample; the edge's
-//!   `path_length` is the arithmetic mean of all samples found. An edge
-//!   with zero samples (no port pairing found by any means above) is
-//!   `path_length: None` — excluded from `Transit(L)`, never substituted
-//!   with a proxy (e.g. total belt length), per this project's own
-//!   instruction that doing so would defeat the point of this module.
-//! - When a physical layout offers multiple routes between a producer and
-//!   consumer port (e.g. across a balancer), the **shortest** is used as
-//!   the representative length — a deterministic choice, not a claim that
-//!   every unit of the commodity takes that exact path.
-
-
+//! It used to carry its own implementation, and that implementation was
+//! non-conforming — it meaned over *producer* ports where §(b) specifies "the
+//! arithmetic mean of those **consumer-terminal** distances", averaged over
+//! whatever it could reach instead of refusing, modelled no pipe-to-ground
+//! jump, and mixed direct-insertion samples into belt means. The two
+//! disagreed by −29% to +98% on real fixtures. Do not reintroduce any of it;
+//! the spec settled every one of those points before either version existed.
+//!
+//! Two consequences worth knowing before editing:
+//!
+//! - **A measurement is total or it does not exist.** §(b): "any other
+//!   unreachable terminal makes the metric unmeasurable and the candidate
+//!   inadmissible — never silently fall back to Manhattan for a broken routed
+//!   edge." So [`measure`] returns `Err` where the old one returned a partial
+//!   result, and every [`EdgeMeasurement`] in a successful measure carries a
+//!   real `path_length`. There is no "attributed subset" to reason about.
+//! - **Pipe-to-ground is modelled**, by `bus::transit` via
+//!   `validate::fluids::find_ptg_pairs`. The known gap this module used to
+//!   document (fully-underground fluid edges reporting no length) is closed.
 use crate::models::{LayoutResult, SolverResult};
 
 /// Weight applied to fluid-edge rate in [`LayoutMeasure::transit`], per
@@ -89,10 +60,10 @@ pub const COMPOSITE_TIE_EPSILON: f64 = 0.02;
 
 const DEGENERATE_EPS: f64 = 1e-9;
 
-/// One production edge's realized measurement. `path_length: None` means
-/// this edge could not be attributed by any means this module implements
-/// (see module docs "Known gaps") — it is excluded from
-/// [`LayoutMeasure::transit`], not zero-filled.
+/// One production edge's realized measurement, as `bus::transit` reported it.
+/// Every field is populated: §(b) makes an unmeasurable edge fatal to the
+/// whole measurement, so there is no "this edge could not be attributed"
+/// state for an edge that reaches this struct.
 #[derive(Debug, Clone)]
 pub struct EdgeMeasurement {
     pub producer_recipes: Vec<String>,
@@ -282,23 +253,33 @@ impl Default for CompositeWeights {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ObjectiveScores {
     pub ar_score: f64,
-    /// `None` = **no transit evidence**: one side of the comparison has
-    /// production edges but attributed NONE of them. A `Transit` of `0.0`
-    /// from total unattribution would otherwise masquerade as
-    /// `transit_score = +1.0` ("100% shorter") — indistinguishable from a
-    /// genuinely perfect candidate (PR #569 adversarial review, finding 2;
-    /// the RFC-064 Phase 3 gate driver hit exactly this artifact). The
-    /// composite treats `None` as `0.0` — neutral: no claimed win, no
-    /// claimed loss — and the four `*_edges` counts below let callers
-    /// report the evidence gap instead of silently ranking through it.
+    /// `None` = **not comparable**: the two measures have different edge
+    /// counts, so they are not from the same solve and no transit comparison
+    /// is meaningful. That also covers a zero-edge candidate against a
+    /// nonzero native, which would otherwise report `Transit 0.0` as
+    /// `transit_score = +1.0` ("100% shorter") and rank as a perfect layout
+    /// (PR #569 adversarial review, finding 2 — the Phase 3 gate driver hit
+    /// exactly that artifact).
+    ///
+    /// It no longer signals *unattribution*. That was the other way this
+    /// could be `None` while this module carried its own partial-capable
+    /// measurement; §(b) makes an unmeasurable edge fail the whole measure
+    /// instead, so a `LayoutMeasure` in hand is always fully attributed.
+    ///
+    /// The composite treats `None` as `0.0` — neutral: no claimed win, no
+    /// claimed loss.
     pub transit_score: Option<f64>,
     pub candidate_total_edges: usize,
     pub native_total_edges: usize,
-    /// Edges attributed on BOTH sides — the only subset `transit_score` is
-    /// computed over (each side's own sum would bias the comparison, see
-    /// `score_vs_native_weighted`). Callers reporting a transit claim
-    /// should report this alongside it: `Some(score)` over 1 common edge
-    /// of 10 is much weaker evidence than over 10 of 10.
+    /// Edges the transit comparison covered: `0` when `transit_score` is
+    /// `None`, otherwise the full edge count of both sides.
+    ///
+    /// **Effectively vestigial.** It existed to express partial coverage —
+    /// "`Some(score)` over 1 common edge of 10 is weaker evidence than over
+    /// 10 of 10" — and under §(b) there is no partial coverage to express.
+    /// Retained because callers report it alongside a transit claim, and
+    /// because a future §(b) amendment that permits partial measurement would
+    /// need it back.
     pub common_attributed_edges: usize,
     /// `(entities(L) - entities(native)) / entities(native)`, RFC-064 §(c).
     pub delta_entities_pct: f64,
@@ -959,10 +940,9 @@ mod tests {
         assert_eq!(m.transit, 4.0 * FLUID_WEIGHT * 6.0, "fluid edges must carry FLUID_WEIGHT, not the solid weight");
     }
 
-    /// A fluid edge whose only route requires an underground pipe jump
-    /// (module docs "Known gaps": pipe-to-ground pairing is not modeled)
-    /// must report `path_length: None` and count toward
-    /// `unattributed_edge_count` — never silently fall back to a proxy.
+    /// A fluid edge with no route at all must make the whole measurement
+    /// refuse — never silently fall back to a proxy, and never report a
+    /// partial result for the edges that did measure.
     #[test]
     fn measure_refuses_when_a_fluid_terminal_is_unreachable() {
         let sr = SolverResult {

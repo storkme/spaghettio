@@ -1801,3 +1801,20 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   out-scores the incumbent. The gate assertion is intact but no longer runs
   *against* a winning score. FOLLOW-UP: build a synthetic transform that both
   improves the composite and leaves the layout measurable, and restore it.
+
+- **2026-08-06 — the incumbent-unmeasurable abort path is now reachable, and
+  that is intended.** Delegating §(b) to `bus::transit` turns
+  `objective::measure` into a fallible-for-real function: it returns `Err` on
+  an unreachable terminal where the old non-conforming version degraded to a
+  partial result. `run_candidate_field` hard-fails the **entire field** when
+  the *incumbent* fails to measure, so a base layout with a single genuinely
+  unreachable terminal now aborts candidate selection rather than ranking
+  through it. Recorded as a decision rather than discovered later: this is the
+  §(b) conformance being bought, not a regression. A candidate field whose own
+  baseline cannot be measured has no valid comparison to offer, and the
+  alternative — scoring candidates against a partially-measured incumbent — is
+  exactly the silent-proxy behaviour §(b) forbids. **No fixture exercises this
+  path**, so it is untested in-tree; the honest statement is that the failure
+  mode is designed, not that it is verified. If it ever fires in anger the
+  useful diagnostic is `bus::transit`'s error variant, which names the item,
+  consumer recipe and terminal.

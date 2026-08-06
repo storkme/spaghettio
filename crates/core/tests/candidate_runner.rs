@@ -411,7 +411,24 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
             CandidateOutcome::Evaluated(ec) if ec.name == "shrink-overlap" => Some(ec),
             _ => None,
         })
-        .expect("shrink-overlap must have produced and evaluated");
+        .unwrap_or_else(|| {
+            // Not a bare `expect`: under the conforming metric a candidate can
+            // now be REFUSED (unmeasurable transit) rather than evaluated, and
+            // this fixture's measurability is an assumption, not a guarantee.
+            // Say which it was, so a future fixture drift reads as a fixture
+            // problem rather than a missing candidate (PR #582 review).
+            let outcomes: Vec<String> = result
+                .entries
+                .iter()
+                .map(|e| match e {
+                    CandidateOutcome::Evaluated(ec) => format!("Evaluated({})", ec.name),
+                    CandidateOutcome::Refused { name, reason } => {
+                        format!("Refused({name}: {reason})")
+                    }
+                })
+                .collect();
+            panic!("shrink-overlap must have produced and evaluated; field was {outcomes:?}");
+        });
 
     // PREMISE WEAKENED, deliberately and visibly. This used to assert
     // `composite > 0.0` — the transform had to genuinely out-score the
