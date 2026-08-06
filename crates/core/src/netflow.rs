@@ -75,7 +75,7 @@ const ACTIVE_TOL: f64 = 1e-9;
 /// docs/rfc-solver-net-flow.md decision log). Both default to `false`, so
 /// every existing caller (`solve_netflow`, both `solve_*` entry points in
 /// `solver.rs`) is behaviorally unchanged.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct NetflowOptions {
     /// Admit `category == "recycling"` (and `"recycling-or-hand-crafting"`
     /// — see the note on [`is_recycling_category`]) recipes as LP columns
@@ -109,6 +109,26 @@ pub struct NetflowOptions {
     /// legitimately flip free-mode recipe selection (accepted; RFC-044
     /// rev 2 decision log).
     pub module_policy: crate::module_policy::ModulePolicy,
+    /// Research-sourced productivity to plan at, per recipe (e.g.
+    /// `{"processing-unit": 0.10}`).
+    ///
+    /// A **declared axis**, carried on the manifest beside `stacking` and
+    /// `inserter_capacity` — see
+    /// [`crate::models::LayoutResult::research_productivity`]. Empty (the
+    /// default) is bit-identical to the pre-existing behaviour.
+    ///
+    /// Distinct from [`Self::module_policy`], which covers productivity from
+    /// *modules* and a machine's `base_effect`. Research productivity was
+    /// modelled nowhere: the sim runs `research_all_technologies()`, so it
+    /// planned against a world the solver did not know about. Concretely, on
+    /// `tier5_processing_unit_from_ore_am3` the sim carries +10% on
+    /// `processing-unit`, and planning without it over-provisions the AC stage
+    /// — measured at +19% more AC per PU craft than the recipe needs, which
+    /// then eats the EC that PU wanted. See `docs/meter-divergence.md`.
+    ///
+    /// Composed **additively** with module and base-effect productivity, which
+    /// is how Factorio composes them.
+    pub research_productivity: std::collections::BTreeMap<String, f64>,
 }
 
 /// True for both recycling-shaped categories in the bundled data.
@@ -426,7 +446,7 @@ pub fn solve_netflow_multi_with_options(
     // below inspects `r.machines` / `r.surplus_outputs` post-solve, never a
     // single `target_idx`, so this loop needed no changes to generalize.
     let mut extra_excluded: FxHashSet<String> = FxHashSet::default();
-    let mut attempt_options = *options;
+    let mut attempt_options = options.clone();
     let mut last_refusal: Option<SolverError> = None;
     // Eight acyclic-fallback exclusions plus at most one free-mode oil-path
     // exclusivity re-solve (#476).
@@ -748,8 +768,19 @@ fn solve_attempt(
         // catalyst-exempt portion BEFORE netting (site 1 of 3 — the raw
         // sign logic in `classify_self_loop` deliberately stays on raw
         // amounts).
-        let effects =
+        let mut effects =
             crate::module_policy::resolve_machine_modules(&options.module_policy, &machine, recipe);
+        // Research productivity stacks on top of module + base-effect
+        // productivity, additively, as Factorio composes them. Folding it into
+        // `effects` here means all three downstream result sites (candidate
+        // net, per-machine rates, self-loop rates) pick it up through the
+        // existing `prod_bonus` path rather than each growing its own copy —
+        // which is how this codebase ended up with two transit metrics.
+        effects.prod_bonus += options
+            .research_productivity
+            .get(recipe.name.as_str())
+            .copied()
+            .unwrap_or(0.0);
         let crafting_speed = crafting_speed * effects.speed_multiplier;
         let net = if effects.prod_bonus > 0.0 {
             let mut net_map: FxHashMap<usize, f64> = FxHashMap::default();
