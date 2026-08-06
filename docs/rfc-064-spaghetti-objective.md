@@ -1813,8 +1813,46 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   §(b) conformance being bought, not a regression. A candidate field whose own
   baseline cannot be measured has no valid comparison to offer, and the
   alternative — scoring candidates against a partially-measured incumbent — is
-  exactly the silent-proxy behaviour §(b) forbids. **No fixture exercises this
-  path**, so it is untested in-tree; the honest statement is that the failure
-  mode is designed, not that it is verified. If it ever fires in anger the
+  exactly the silent-proxy behaviour §(b) forbids. **Now verified** by
+  `an_unmeasurable_incumbent_fails_the_field_with_a_named_cause`, which drives a
+  base candidate producing machines with every belt, pipe and inserter stripped
+  and asserts the field fails naming both the incumbent and `bus::transit`'s
+  cause. This entry originally recorded the path as designed-but-unverified; a
+  reviewer flagged that gap twice at 3/3, correctly — an availability change
+  that exists only in prose is the kind that gets rediscovered in anger. If it ever fires in anger the
   useful diagnostic is `bus::transit`'s error variant, which names the item,
   consumer recipe and terminal.
+
+- **2026-08-06 (bot review on #582) — deleting `objective.rs`'s measurement
+  silently took a guard with it.** Its direct-insertion path filtered inserters
+  by item (`if let Some(c) = &e.carries { if c != item { continue; } }`), added
+  by #569 as "DI Manhattan samples gated on inserter `carries` when stamped".
+  `bus::transit::direct_insertion_lengths` matches on the producer/consumer
+  **recipe pair only**, so once `objective` became pure delegation the guard
+  existed nowhere: a machine pair bridged by several inserters carrying
+  different items contributed every one of them to every edge between those
+  recipes — exactly the stray-sample contamination #569 fixed. Restored in the
+  surviving implementation, pinned by
+  `direct_insertion_ignores_inserters_carrying_another_item`, and
+  negative-controlled (disable the guard → that test alone fails). Unstamped
+  inserters are still accepted: unlike a belt tile, an unlabelled inserter is
+  not a routing shortcut, and refusing it would turn missing metadata into an
+  unmeasurable edge. **The lesson is about deletion, not about DI**: "the
+  surviving implementation is the conforming one" was true of the aggregation,
+  the refusal semantics and the PTG modelling, and false of this guard. Caught
+  at 1/3 — the low-confidence findings are not the safe ones to skip.
+
+- **2026-08-06 — the degrading-transform test stopped testing what it is named
+  for, and now does again.** Its transform shoved alternate entities half a
+  layout-width apart, severing every belt run; under §(b) that makes the
+  candidate unmeasurable, so it was excluded by *refusal* rather than by score,
+  and the assertion had been widened to accept either — tautological, since it
+  passes whichever path fires. The transform now appends one isolated belt tile
+  far to the east: the non-pole bbox grows so `ar_score` genuinely worsens,
+  every routed path is untouched so the candidate still measures, and the test
+  requires the Evaluated branch with a negative composite.
+  **Still outstanding**: no shipped test exercises a candidate that both
+  *out-scores* the incumbent and is measurable, because a synthetic transform
+  that improves AR without disturbing routing is not obvious to construct. So
+  `new_gated_issue_excludes_...` verifies the gate, but not the gate *against a
+  winning score*.
