@@ -477,7 +477,7 @@ this head had none yet), a close/reopen (times UTC):
 |---|---|---|
 | `31124347719` | 17:51:39 | **cancelled** 17:54:47 — annotation: "Canceling since a higher priority waiting request for second-opinion-576 exists" |
 | `31124497214` attempt 1 | 17:54:41 | job cancelled 18:13:18 — "The job was not acquired by Runner of type hosted even after multiple attempts" |
-| `31124497214` attempt 2 (`gh run rerun`) | 18:31 | queued indefinitely |
+| `31124497214` attempt 2 (`gh run rerun`) | 18:31:05 | job cancelled 20:03:00 — same runner-acquisition failure, after **92 min** queued |
 
 Two distinct causes composed. The first cancellation is the concurrency
 group: `second-opinion-<pr>` with an unconditional `cancel-in-progress: true`
@@ -485,8 +485,11 @@ keys on the PR **number**, so a `reopened` event for the *same head SHA*
 cancelled the in-progress run — a cancellation that buys nothing (no newer
 SHA exists) and costs the head its only chance at a concluded check. The
 second and third are a platform runner-acquisition stall that day, not
-concurrency — but the group turned a transient stall into a dead end, because
-under it *any* subsequent same-PR event could keep killing recovery attempts.
+concurrency — githubstatus.com carried Actions at **`major_outage`** through
+that evening (22:46 UTC check), so this is a confirmed platform incident
+rather than an inference from our own logs. But the group turned a transient
+stall into a dead end, because under it *any* subsequent same-PR event could
+keep killing recovery attempts.
 End state: `second-opinion` (required, `enforce_admins`) had no successful
 conclusion on the head and the PR was unmergeable without a protection
 override.
