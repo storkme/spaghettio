@@ -55,6 +55,22 @@ pub struct Manifest {
     /// Declared belt stack size (1–4).
     #[serde(default = "one")]
     pub stacking: u8,
+    /// Declared research-sourced productivity, per recipe (e.g.
+    /// `{"processing-unit": 0.10}`).
+    ///
+    /// Same contract as the two axes above: an input the meter takes and
+    /// never infers. Empty = none, which is what every manifest written
+    /// before this field existed deserializes to, so their measurements are
+    /// unchanged.
+    ///
+    /// This exists because the sim runs `research_all_technologies()` and so
+    /// carried productivity that neither the solver nor this meter modelled —
+    /// the meter then under-produced by exactly that factor and the gap was
+    /// chased for three sessions as a belt/distribution defect. Declaring it
+    /// makes the two worlds match by construction rather than by luck. See
+    /// `docs/meter-divergence.md`.
+    #[serde(default)]
+    pub research_productivity: BTreeMap<String, f64>,
     #[serde(default)]
     pub entities: usize,
 }

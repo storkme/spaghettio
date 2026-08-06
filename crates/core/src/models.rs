@@ -10,6 +10,7 @@
 //! - [`PlacedEntity`] — a single entity placed on the tile grid (belt, machine, inserter, etc.)
 //! - [`LayoutResult`] — the complete spatial layout ready for blueprint export
 
+use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// An item flowing at a certain rate.
@@ -457,6 +458,25 @@ pub struct LayoutResult {
     /// unresearched; consumers clamp via `common::inserter_hand`.
     #[serde(default, skip_serializing_if = "u8_is_zero")]
     pub inserter_capacity: u8,
+    /// Research-sourced productivity this layout was planned at, per recipe
+    /// (e.g. `{"processing-unit": 0.10}` for one level of Space Age's
+    /// processing-unit productivity).
+    ///
+    /// A **declared axis**, exactly like [`Self::stacking`] and
+    /// [`Self::inserter_capacity`]: the engine takes it as an input and never
+    /// infers it, and it rides the manifest so the meter and the sim harness
+    /// can be held to the same world. Empty = no research productivity, which
+    /// is the pre-existing behaviour bit-for-bit.
+    ///
+    /// Distinct from module productivity, which `module_policy` already
+    /// covers. This is the axis nothing modelled: the sim runs
+    /// `research_all_technologies()`, so it had productivity the solver and
+    /// the meter did not know about — measured as +10% on `processing-unit`
+    /// and `plastic-bar` and 0% everywhere else on the PU-from-ore fixture,
+    /// which is the whole of RFC-064 Phase 2 item 7. See
+    /// `docs/meter-divergence.md`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub research_productivity: BTreeMap<String, f64>,
 }
 
 fn u8_is_zero(v: &u8) -> bool {
