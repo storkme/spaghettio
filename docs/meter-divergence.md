@@ -30,15 +30,22 @@ in-fixture AC reads −3.9%).
     (copper-plate 71.98/80, copper-cable 143.9/160, EC 43.2/48, plastic 7.2/8 —
     all ≈ −10%; petroleum-gas −17%); only the PU target reaches 99%. So plan is
     not the reference; the sim is. (Intermediates here are *measured production*
-    and do not always reconcile arithmetically with consumers — e.g. EC demand
-    from PU+AC is ~46.9/s at the measured operating point (48/s is the *plan*
-    rate) — **note this is computed at zero productivity** (20 EC per PU
-    *unit*); at the +10% this entry settles on, a craft consumes 24 EC and
-    yields 1.1 PU, so demand is 1.987×24/1.1 + 3.59×2 ≈ **50.5/s**, a *larger*
-    shortfall. Left as a carryover figure and flagged rather than restated,
-    since the surrounding block is explicitly indicative vs ~43/s reported produced; the copper-plate→cable pair does
-    reconcile (1 plate → 2 cable). Treat the intermediate figures as indicative,
-    not load-bearing for the deferral's rationale.)
+    and do not always reconcile arithmetically with consumers. EC demand from
+    PU+AC reads ~46.9/s at the measured operating point against ~43/s reported
+    produced (48/s is the *plan* rate), but **that 46.9 is computed at zero
+    productivity** — 20 EC per PU *unit*. At the +10% this entry settles on,
+    1.987 PU/s takes 1.987/1.1 = 1.806 crafts/s, so demand is
+    1.806×20 (direct) + 3.61 AC/s ×2 = **≈43.3/s** — *smaller* than the
+    zero-productivity figure, and consistent with the 43.2/s the sim reports
+    producing. (An earlier revision of this line published ≈50.5/s by taking
+    1.987×24/1.1 **and** adding AC's 3.59×2 again: the 24 already bundles AC's
+    share, so that double-counted it — and 50.5 flatly contradicted this
+    entry's own 0.35% reconciliation two bullets down, which would have made
+    the sim EC-starved to ~86% and unable to deliver the PU it measured. The
+    same welding-two-bases error this whole entry exists to correct.)
+    The copper-plate→cable pair does reconcile (1 plate → 2 cable). Treat the
+    intermediate figures as indicative, not load-bearing for the deferral's
+    rationale.)
   - The meter matches sim within ±4% on the whole direct chain: copper-plate
     69.5 vs sim 71.98 (−3.4% — the meter is slightly *further* below plan),
     copper-cable 139 vs 143.9, iron-plate 41.9 vs 43.4, EC 41.5 vs 43.2,
@@ -149,8 +156,9 @@ in-fixture AC reads −3.9%).
     changes the sim's *petroleum input per plastic*, not its plastic output),
     but "processing-unit alone" was a claim the first probe could not support.
     **One consequence is asserted rather than checked**: at +10% the sim makes
-    its 7.2 plastic/s from ~9% less petroleum than the meter models (≈131 vs
-    ≈144/s). The sim's petroleum-gas was already reported −17%, so if that
+    its 7.2 plastic/s from ~9% less petroleum than the meter models (≈65.5 vs
+    ≈72/s — plastic-bar is 20 petroleum → **2** plastic, i.e. 10 per unit; an
+    earlier revision doubled both figures by treating it as 20 per unit). The sim's petroleum-gas was already reported −17%, so if that
     input ever binds this is a second parity gap of the same class. It almost
     certainly does not bind here (PU reaches 99%), but nobody has verified the
     sulfur/oil leg against it.

@@ -22,12 +22,15 @@ side) and F5a (PTG perpendicular sides closed), and the measured mirrored-port
 x-descending fluid binding for oil-refinery/foundry/cryogenic-plant.
 
 Result over the corpus (meter `delivered_per_s`/`produced_per_s` vs sim):
-gear exact; EC + stress-EC ±0–2%; AOP/refinery exact; **the dedicated AC
-variants now ±0–2% (were −80%; the PU-from-ore exception fixture's own AC is
-−3.9%)**; PU from ore −80% → −13%. The one residual, PU-from-ore, is **closed**: measured 2026-08-06 as a
+gear exact; the dedicated EC + stress-EC fixtures ±0–2%; AOP/refinery exact;
+**the dedicated AC variants now ±0–2% (were −80%)**. Those bands are for the
+DEDICATED fixtures: on the PU-from-ore exception fixture both its EC and its AC
+read −3.9%; PU from ore −80% → −13%. The one residual, PU-from-ore, is **closed**: measured 2026-08-06 as a
 **productivity parity gap**. The sim carries +10.0% research productivity on
-processing-unit and 0% on electronic-circuit, advanced-circuit and every plate/
-cable stage (no modules involved); the meter models no productivity at all. That
+**processing-unit and plastic-bar**, and 0% on electronic-circuit,
+advanced-circuit and every plate/cable stage (no modules involved). Only PU's
+boost moves the target: meter and sim both deliver 7.2 plastic/s, so plastic's
+changes the sim's petroleum input rather than its plastic output; the meter models no productivity at all. That
 is also why the gap landed on PU alone while everything else sat at ±0–2%. The
 meter's −3.9% EC deficit compounded with the −9.1% it cannot model gives −12.7%
 against −13.6% observed. Full divergence log:
