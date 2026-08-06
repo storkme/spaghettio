@@ -725,6 +725,22 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
         manifest.inserter_capacity
     );
     let _ = writeln!(out, "local STACKING = {}", manifest.stacking);
+    // Declared research productivity, per recipe. Emitted as a Lua table so
+    // the scenario can check the sim's realized bonus against what the plan
+    // and the meter assumed. Empty table when undeclared, which is every
+    // manifest written before the axis existed.
+    {
+        let entries: Vec<String> = manifest
+            .research_productivity
+            .iter()
+            .map(|(recipe, bonus)| format!("[\"{recipe}\"]={bonus}"))
+            .collect();
+        let _ = writeln!(
+            out,
+            "local DECLARED_PRODUCTIVITY = {{{}}}",
+            entries.join(",")
+        );
+    }
     {
         let items: Vec<String> = manifest
             .planned_rates
@@ -1152,6 +1168,43 @@ local function finalize(s, converged)
       if v == st then census[k] = (census[k] or 0) + 1 end
     end
   end
+  -- Research-productivity parity (RFC-064 Phase 2 item 7). CHECKED, not
+  -- assigned: a recipe's productivity is derived from researched technologies
+  -- rather than a settable force field, so unlike the two axes above this
+  -- cannot be pinned -- only detected. Detecting is the point. The engine
+  -- plans and the meter measures at the DECLARED value; if the sim's world
+  -- disagrees, every rate comparison in this run is against a plan built for a
+  -- different world, and that is what item 7 turned out to be: the sim carried
+  -- +10% on processing-unit that nothing on the engine side modelled, and the
+  -- resulting -13% was chased as a belt defect across three sessions.
+  --
+  -- Undeclared recipes are checked against 0: a manifest that says nothing is
+  -- asserting no research productivity, which is what the engine assumed.
+  --
+  -- Scoped to recipes this factory actually CRAFTS. Iterating every recipe in
+  -- the force flags things like steel-plate and low-density-structure that the
+  -- layout never builds — true but irrelevant, and a kit error that cries wolf
+  -- gets ignored, which is the failure mode this whole check exists to avoid.
+  local crafted = {}
+  for _, m in pairs(s.find_entities_filtered{
+    type = {"assembling-machine", "furnace", "chemical-plant", "oil-refinery"}
+  }) do
+    local ok, r = pcall(function() return m.get_recipe() end)
+    if ok and r ~= nil then crafted[r.name] = true end
+  end
+  for name, _ in pairs(crafted) do
+    local recipe = game.forces.player.recipes[name]
+    local declared = DECLARED_PRODUCTIVITY[name] or 0
+    local ok, realized = pcall(function() return recipe.productivity_bonus end)
+    if ok and realized ~= nil and math.abs(realized - declared) > 1e-6 then
+      table.insert(storage.kit_errors,
+        "research-productivity parity: '" .. name .. "' realized "
+        .. realized .. " but the manifest declares " .. declared
+        .. " -- rates for this run are not comparable against a plan built at "
+        .. "the declared value (RFC-064 item 7)")
+    end
+  end
+
   -- RFC-064 item 7 productivity-parity probe (2026-08-06).
   -- The meter models NO productivity at all (crates/meter/src/machine.rs
   -- deliberately takes nothing from module_policy and not
@@ -2217,5 +2270,55 @@ mod tests {
         let plain = RunParams::defaults_for(&m, "t".into(), 16, Some(18000));
         assert!(build_control_lua(&m, "0eNBPFAKE", &plain)
             .contains("local WRITE_TIMESERIES_CSV = false"));
+    }
+
+    /// The parity block must actually be emitted into the scenario.
+    ///
+    /// Added because a local adversarial review found this PR shipped ZERO
+    /// template tests, against this module's own ~25 `build_control_lua`
+    /// string-pin precedent — deleting the whole parity block still left
+    /// 73/73 green. These pin the three pieces that make the check work at
+    /// all: the declared table, the crafted-recipe scoping, and the kit-error
+    /// on disagreement.
+    #[test]
+    fn research_productivity_parity_block_is_emitted() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "test-prod-parity".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+
+        assert!(
+            lua.contains("local DECLARED_PRODUCTIVITY = {"),
+            "the declared axis must reach the scenario as a table"
+        );
+        assert!(
+            lua.contains("research-productivity parity:"),
+            "a disagreement must raise a kit error, which is what forces NO DATA"
+        );
+        assert!(
+            lua.contains("storage.kit_errors"),
+            "the parity finding must go to kit_errors, not a bare print"
+        );
+        // Scoped to what the layout crafts: iterating every force recipe
+        // flagged steel-plate and low-density-structure on a PU fixture, and a
+        // kit error that cries wolf gets ignored.
+        assert!(
+            lua.contains("crafted[r.name] = true"),
+            "the check must be scoped to recipes the layout actually crafts"
+        );
+    }
+
+    /// A declared value must survive into the emitted table, not just an empty
+    /// one — the empty case would pass every assertion above.
+    #[test]
+    fn declared_productivity_values_reach_the_lua_table() {
+        let mut m = fixture();
+        m.research_productivity.insert("processing-unit".to_string(), 0.10);
+        let params = RunParams::defaults_for(&m, "test-prod-declared".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(
+            lua.contains(r#"["processing-unit"]=0.1"#),
+            "declared entries must be emitted verbatim; got the table line: {:?}",
+            lua.lines().find(|l| l.contains("DECLARED_PRODUCTIVITY"))
+        );
     }
 }
