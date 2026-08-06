@@ -1012,12 +1012,13 @@ timeout-ceiling bumps (~5 min/push, experiment already documented in
 `.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy
 tests (measure before adopting).
 
-**Clippy's test/example debt: measured 2026-08-06, and it is bigger than the
-deferral assumed.** Not a newly-found gap — `ci.yml`'s clippy step carries the
-comment *"Lib-only on purpose: `--all-targets` trips pre-existing test/example
-debt"*, a deliberate deferral taken at the #434 workspace-widening on
-2026-07-24. What is new here is the size of the debt and the proof that
-clearing it is behaviour-free.
+**Clippy's test/example debt: measured 2026-08-06 — the deferral never sized
+it; it is 28 sites.** Not a newly-found gap — `ci.yml`'s clippy step carries
+the comment *"Lib-only on purpose: `--all-targets` trips pre-existing
+test/example debt"*, a deliberate deferral taken at the #434
+workspace-widening on 2026-07-24 (commit `b31c7bb0`, which wrote that comment
+in the same change). What is new here is the size and the proof that clearing
+it is behaviour-free.
 
 **28 warning sites (14 distinct file × lint pairs)** live in
 `crates/core/tests/*` and in `#[cfg(test)]` modules under `src/` — invisible
@@ -1034,16 +1035,19 @@ Composition: 6 `type_complexity` + 3 `too_many_arguments` (e2e helper
 signatures — type aliases or a test-scoped `#[allow]`), 5
 `doc_lazy_continuation`, 4 `field_reassign_with_default`, 2 `dead_code`, 2
 `unnecessary_sort_by`, and 6 singletons. Nothing architectural; the whole set
-is mechanical and behaviour-free. Two of the `dead_code` entries are #582's —
-`objective.rs:486`'s `DICoupling` import and the `belt`/`inserter_at` helpers
-at 871/875, written by #569 and orphaned when #582 deleted the duplicate §(b)
+is mechanical and behaviour-free. Three of the sites are #582's leavings — the
+unused `DICoupling` import at `objective.rs:486` (one of the singletons) and
+the dead `belt`/`inserter_at` helpers at 871/875 (both `dead_code` entries) —
+written by #569 and orphaned when #582 deleted the duplicate §(b)
 implementation.
 
-**Two more gates share the blind spot**, so the flag has to move in both
-places at once: `.githooks/pre-commit` runs `cargo clippy -p spaghettio_core`
-— core-only *and* lib-only, i.e. narrower than CI, so a hook-green commit can
-still fail CI — and `crates/core/examples/sim_export.rs`, load-bearing wiring
-since #591, is unlinted for the same reason (contributes zero warnings today).
+**One more gate shares the blind spot**, so the flag has to move in two places
+at once: `.githooks/pre-commit` runs `cargo clippy -p spaghettio_core` —
+core-only *and* lib-only, i.e. narrower than CI, so a hook-green commit can
+still fail CI. And one more **target** starts being covered when it moves:
+`crates/core/examples/sim_export.rs`, load-bearing wiring since #591, is
+unlinted today for the same reason (it contributes zero warnings, so it costs
+nothing to bring in).
 
 **Recommended: clear it in one mechanical pass, then flip `--all-targets` in
 `ci.yml` *and* the pre-commit hook.** An earlier draft here said "clean
