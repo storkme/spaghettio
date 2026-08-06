@@ -4,8 +4,9 @@ Running record of where the fast meter's `produced_per_s`/`delivered_per_s`
 diverges from the measured headless-Factorio sim by more than ±10pp, and why
 that divergence is believed to live (model gap vs. known-open-item). Updated
 when the corpus sweep (`crates/meter/examples/sweep_corpus.rs`) moves a number
-or reveals a new one. The last open residual closed 2026-08-06 —
-measured as an instrument-parity gap, not a model defect.
+or reveals a new one. One residual remains: its **diagnosis** closed
+2026-08-06 (an instrument-parity gap, not a model defect), its **fix** is
+decided but unmerged.
 
 ## Corpus status (2026-08-06; Phase B landed 2026-08-03)
 
@@ -14,9 +15,9 @@ within ±10pp of sim except the one below. AC/PU families that were −80% in
 Phase A are now within ±2% (the dedicated AC fixtures) / −13% (PU-from-ore; its
 in-fixture AC reads −3.9%).
 
-## Closed residual (2026-08-06)
+## Residual: diagnosis closed 2026-08-06, fix open
 
-### `tier5_processing_unit_from_ore_am3` — meter ≈ −13% (`produced`) — CLOSED
+### `tier5_processing_unit_from_ore_am3` — meter ≈ −13% (`produced`) — diagnosis CLOSED, fix OPEN
 
 - **meter**: processing-unit 1.716/s vs sim produced 1.987/s / delivered 1.961/s.
 - **Cause (measured 2026-08-06)**: a **productivity tech-state parity gap**
@@ -101,13 +102,40 @@ in-fixture AC reads −3.9%).
   match by construction rather than by coincidence — a meter that models a
   declared level while the sim runs an incidental one agrees only by luck.
 
-- **Next / falsifiable prediction**: teach the meter +10% on PU and its output
-  should land at **≈1.902 PU/s** — 41.5 EC/s ÷ 24 = 1.729 crafts/s, each
-  yielding 1.1 PU — i.e. a residual of **≈−4.3%**, essentially the −3.9% EC
-  deficit alone. Note the trap: the 1.729 figure is a ceiling *at zero
-  productivity*. Productivity does not change EC consumed per craft (still 24),
-  it changes PU produced per craft (1 → 1.1), so it raises that ceiling rather
-  than capping output beneath it.
+- **Prediction, and its result (2026-08-06).** Teaching the meter +10% on PU
+  was predicted to land its output at **≈1.902 PU/s**. Implemented on
+  `feat/research-productivity-axis` and measured on this fixture at the Stage B
+  deep-chain warmup:
+
+  | config | PU | EC | ceiling@EC | % of ceiling |
+  |---|---|---|---|---|
+  | declared none | 1.7056/s | 41.49 | 1.7287 | 98.7% |
+  | declared +10% | **1.8500/s** | 41.49 | **1.9018** | 97.3% |
+
+  **The ceiling under productivity measures 1.9018 against the predicted
+  1.902** — the productivity model is exactly right. What the prediction got
+  wrong is assuming the meter would *reach* its ceiling. The remaining gap to
+  the sim decomposes with nothing left over: −3.9% EC supply deficit (41.49 vs
+  43.2) plus −2.7% ceiling shortfall = −6.6% against −6.9% observed. Tie-off:
+  1.9018 × (43.2/41.49) = 1.980, i.e. the sim's own 1.987.
+  Note also that EC production is **identical (41.49/s) in both configs**, so
+  declaring productivity does not move it — EC is genuinely unboosted and
+  supply-limited, corroborating the probe's `electronic-circuit: 0.0%`
+  independently.
+- **Still open after the meter fix**: the −2.7% ceiling shortfall (the
+  distribution term, which grows slightly as the same EC supply feeds more
+  output) and the −3.9% EC deficit itself. The latter is where the **solver's**
+  own blind spot to research productivity lands: `netflow.rs` models modules and
+  `base_effect` only, so the plan is over-provisioned by the same factor. That
+  is the other half of the fix.
+- **Superseded**: this bullet previously predicted the residual would fall to
+  ≈−4.3%, "essentially the −3.9% EC deficit alone". The measurement above puts
+  it at −6.9%: the prediction's *ceiling* was right to four figures, but it
+  assumed the meter would sit on that ceiling, and it does not. The trap it
+  warned about still stands and is worth keeping — the 1.729 figure quoted
+  elsewhere is a ceiling *at zero productivity*; productivity does not change
+  EC consumed per craft (still 24), it changes PU produced per craft (1 → 1.1),
+  so it raises the ceiling rather than capping output beneath it.
 
 - **Open, not closed**: (a) the ~1pp decomposition residual is attributed to
   fixture noise, not explained; (b) plastic-bar's input-side consequence is

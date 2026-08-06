@@ -2,7 +2,7 @@
 
 **Status (2026-08-06, follow-up `f5a-ptg-edge` + `fluid-followups`): Phase A + B
 LANDED and merged (#571). Calibration within ±10pp on the whole compared corpus
-EXCEPT `tier5_processing_unit_from_ore_am3` (−13%) — **CLOSED 2026-08-06**:
+EXCEPT `tier5_processing_unit_from_ore_am3` (−13%) — **diagnosis CLOSED 2026-08-06, fix OPEN**:
 measured as a **productivity tech-state parity gap**, not a model defect. The
 sim runs processing-unit at +10% research productivity (probe: PR #580); the
 meter models none. Four earlier causes were proposed and retired first. CI second-opinion
@@ -31,7 +31,8 @@ read −3.9%; PU from ore −80% → −13%. The one residual, PU-from-ore, is *
 advanced-circuit and every plate/cable stage (no modules involved). Only PU's
 boost moves the target: meter and sim both deliver 7.2 plastic/s, so plastic's
 changes the sim's petroleum input rather than its plastic output; the meter models no productivity at all. That
-is also why the gap landed on PU alone while everything else sat at ±0–2%. The
+is also why the gap landed on PU alone, while this fixture's own AC and EC sat
+at −3.9% (the ±0–2% band is for the DEDICATED AC/EC fixtures). The
 meter's −3.9% EC deficit compounded with the −9.1% it cannot model gives −12.7%
 against −13.6% observed. Full divergence log:
 [`meter-divergence.md`](meter-divergence.md).
@@ -77,8 +78,11 @@ fix (2026-08-06).** Stated precisely because the two are different things: the
 acceptance criterion is "all compared fixtures within ±10pp", and
 `tier5_processing_unit_from_ore_am3` is still at −13%. What is finished is the
 *diagnosis* — the cause is measured and is an instrument-parity gap, not a
-meter model defect. The fix is undecided and unimplemented, and even once made
-is predicted to leave ≈−4.3%.
+meter model defect. **The fix is DECIDED (owner, 2026-08-06: teach the meter productivity) and
+implemented on `feat/research-productivity-axis`**, but not merged, and the
+meter-side fix alone leaves a residual — measured at −6.9% on this fixture,
+which decomposes as the −3.9% EC supply deficit plus a −2.7% distribution
+shortfall against the meter's own ceiling.
 - Re-run the meter corpus sweep (`examples/sweep_corpus.rs`); all compared
   fixtures within ±10pp EXCEPT `tier5_processing_unit_from_ore_am3` at −13% —
   **closed 2026-08-06** as a productivity tech-state parity gap (sim +10.0% on
@@ -110,7 +114,7 @@ Factorio physics but a different measurement philosophy; recorded here so the ca
 is explicit, not accidental. Revisit only if a sim-baselined byproduct-loop fixture
 ever enters the corpus.
 
-### Confirm/close the PU-from-ore −13% — **CLOSED 2026-08-06 (parity gap)**
+### Confirm/close the PU-from-ore −13% — **diagnosis CLOSED 2026-08-06 (parity gap), fix OPEN**
 Measured, not inferred. The sim harness now dumps realized productivity (PR
 #580): **processing-unit +10.0%** and **plastic-bar +10.0%** (the latter found only
 when the probe was widened to chemical-plant legs), with
@@ -128,8 +132,9 @@ Four causes were proposed and retired before this one: belt-cycle update order
 reading (falsified by the probe). The lesson worth keeping is that what settled
 it was balancing the sim's reported numbers against each other and then
 *measuring*, not reasoning about mechanism — the AC:PU ratio predicted +10.7%
-against a measured +10.0%. Remaining decision (not a diagnosis): align the sim's
-productivity to the fixture's declared level, or teach the meter productivity.
+against a measured +10.0%. Decision made (owner, 2026-08-06): **teach the meter productivity**;
+implementation on `feat/research-productivity-axis`. The solver's own blind
+spot to research productivity is the other half and is not yet addressed.
 Full evidence in [`meter-divergence.md`](meter-divergence.md).
 
 ### Orientation-keyed port binding — PROPOSED then REVERTED (this thread)

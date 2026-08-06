@@ -71,7 +71,7 @@ uranium voider). With the tuning now making sim ~2.7× cheaper, closing the
 if the coordinator wants the stronger gate. Otherwise the subset verdict stands
 as recorded.
 
-### 7. Meter productivity-parity residual: PU-from-ore −13% — **CLOSED 2026-08-06**
+### 7. Meter productivity-parity residual: PU-from-ore −13% — **diagnosis CLOSED 2026-08-06, fix OPEN**
 **Measured, not inferred.** The sim harness now dumps realized productivity
 (PR #580 — the verification channel this axis lacked; the tech-state parity
 block covered inserter capacity (#370) and belt stacking (#385) and nothing
