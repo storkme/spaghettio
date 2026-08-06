@@ -102,7 +102,7 @@ reading that the signature was a sim-side reporting artifact.
 defect.** Same class as #370 and #385. **DECIDED (owner, 2026-08-06): teach the meter productivity** — the sim stays
 the reference and the instrument learns to model what it actually does.
 Widened scope found while recording it: the **solver** does not model
-research-sourced productivity either (`netflow.rs` covers modules and
+research-sourced productivity either (`netflow — **implemented 2026-08-06 (#587)**; only caller wiring remains.rs` covers modules and
 `base_effect` only), so the plan is over-provisioned on PU by the same 10%.
 The fix should follow #370/#385: carry research productivity as a declared
 manifest axis beside `stacking`/`inserter_capacity`, applied by the meter and

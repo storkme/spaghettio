@@ -1670,4 +1670,63 @@ mod tests {
             "EC as target must suppress the EC->AC coupling, got {couplings2:?}"
         );
     }
+
+    /// The declared research-productivity axis must actually reach the plan.
+    ///
+    /// Added because a local adversarial review found that NOTHING in the tree
+    /// set `NetflowOptions::research_productivity` — reverting the fold in
+    /// `solve_attempt` left all 1340 tests green. The PR body's own scaling
+    /// table was the shape of the missing pin, so this is that table as a
+    /// test.
+    ///
+    /// Asserts the *ratio*, not absolute machine counts, so it survives recipe
+    /// or palette data changes that shift the baseline. Productivity reduces
+    /// the crafts needed for a fixed output, so a stage carrying +10% must
+    /// need 1/1.1 of the machines it needed at none.
+    #[test]
+    fn declared_research_productivity_shrinks_the_plan() {
+        let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let solve = |rp: std::collections::BTreeMap<String, f64>| {
+            solve_netflow_with_options(
+                "advanced-circuit",
+                5.0,
+                &inputs,
+                &crate::recipe_db::MachinePalette::default(),
+                "assembling-machine-2",
+                &FxHashSet::default(),
+                RecipeScope::Free,
+                &CostTable::default(),
+                &NetflowOptions { research_productivity: rp, ..Default::default() },
+            )
+            .expect("solve should succeed")
+        };
+        let count = |r: &SolverResult, recipe: &str| {
+            r.machines.iter().find(|m| m.recipe == recipe).map(|m| m.count).unwrap_or(0.0)
+        };
+
+        let base = solve(Default::default());
+        let mut rp = std::collections::BTreeMap::new();
+        rp.insert("advanced-circuit".to_string(), 0.10);
+        let boosted = solve(rp);
+
+        let (b, o) = (count(&base, "advanced-circuit"), count(&boosted, "advanced-circuit"));
+        assert!(b > 0.0, "fixture must build advanced-circuit to be meaningful");
+        assert!(
+            (o - b / 1.10).abs() < 1e-6,
+            "declared +10% on advanced-circuit must need 1/1.1 of the machines: \
+             {b} -> {o}, expected {}",
+            b / 1.10
+        );
+        // And an UNDECLARED stage must not move: only the boosted recipe's own
+        // machine count changes for a fixed output.
+        let (bc, oc) = (count(&base, "copper-cable"), count(&boosted, "copper-cable"));
+        assert!(
+            oc <= bc + 1e-9,
+            "an undeclared upstream stage must not grow: {bc} -> {oc}"
+        );
+    }
 }
