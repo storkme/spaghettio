@@ -22,7 +22,11 @@
 #   scripts/review-gate.sh wait <pr>       # block until the review check completes
 #   scripts/review-gate.sh status          # report main's protection state
 #   scripts/review-gate.sh require         # make the review check required on main
-#   scripts/review-gate.sh unrequire       # remove that protection
+#   scripts/review-gate.sh unrequire       # remove ALL protection (blunt)
+#   scripts/review-gate.sh override <pr> "<reason>"
+#                                          # merge ONE pr past the check, on
+#                                          # the record, restoring
+#                                          # enforce_admins immediately after
 set -euo pipefail
 
 REPO="${REPO:-storkme/spaghettio}"
@@ -108,10 +112,79 @@ cmd_unrequire() {
   echo "Protection removed from $REPO@main."
 }
 
+# Merge ONE pr past the required check, deliberately and on the record.
+#
+# Why this exists: the only override used to be `unrequire`, which DELETES all
+# of main's protection — the required check, the force-push block and the
+# deletion block together — and leaves it off until someone remembers to run
+# `require`. That is far too blunt for "I have read this PR and I am choosing
+# to merge it now", and its blast radius is every other PR and every concurrent
+# session, not the one being merged.
+#
+# This flips ONLY `enforce_admins`, for the duration of one merge:
+#   - the required check stays required for everyone else
+#   - force-push and deletion protection never drop
+#   - an EXIT trap restores it even if the merge fails or the script is killed
+#
+# A reason is mandatory and is posted to the PR BEFORE anything is touched, so
+# the override is auditable afterwards instead of invisible. If the restore
+# ever fails the script exits non-zero and says so loudly — an override that
+# quietly leaves main bypassable would be worse than having no override.
+cmd_override() {
+  local pr="${1:-}" reason="${2:-}"
+  [ -n "$pr" ]     || { echo "usage: review-gate.sh override <pr> \"<reason>\"" >&2; exit 2; }
+  [ -n "$reason" ] || { echo "override requires a reason (it is posted to the PR)" >&2; exit 2; }
+
+  ENFORCE_RESTORED=0
+  restore_enforce() {
+    [ "$ENFORCE_RESTORED" = 1 ] && return 0
+    echo "Restoring enforce_admins on $REPO@main…"
+    if gh api -X POST "repos/$REPO/branches/main/protection/enforce_admins" >/dev/null 2>&1; then
+      local now
+      now=$(gh api "repos/$REPO/branches/main/protection" --jq '.enforce_admins.enabled' 2>/dev/null)
+      if [ "$now" = "true" ]; then
+        ENFORCE_RESTORED=1
+        echo "enforce_admins restored."
+        return 0
+      fi
+      echo "!! enforce_admins reads '$now' after restore — CHECK MAIN NOW" >&2
+      return 1
+    fi
+    echo "!! FAILED to restore enforce_admins — main is admin-bypassable until fixed." >&2
+    echo "!! Run: gh api -X POST repos/$REPO/branches/main/protection/enforce_admins" >&2
+    return 1
+  }
+  trap 'restore_enforce || true' EXIT
+
+  echo "Recording the override on #$pr…"
+  gh pr comment "$pr" --body "**Merged via \`review-gate.sh override\`**, bypassing the required \`$CHECK\` check.
+
+Reason: $reason
+
+The check was not green at merge time. This was a deliberate call, not an
+accident — recorded here so the bypass is visible to anyone reading this PR
+later. \`enforce_admins\` was flipped for the duration of this merge only; the
+required check stayed in force for every other PR." >/dev/null
+
+  echo "Disabling enforce_admins (the check stays required for everyone else)…"
+  gh api -X DELETE "repos/$REPO/branches/main/protection/enforce_admins" >/dev/null
+
+  echo "Merging #$pr…"
+  if gh pr merge "$pr" --merge --admin; then
+    echo "Merged #$pr."
+  else
+    echo "!! Merge of #$pr FAILED — restoring protection, PR left open." >&2
+    restore_enforce || exit 1
+    exit 1
+  fi
+  restore_enforce || exit 1
+}
+
 case "${1:-}" in
   wait)      shift; cmd_wait "$@" ;;
   status)    cmd_status ;;
   require)   cmd_require ;;
   unrequire) cmd_unrequire ;;
+  override)  shift; cmd_override "$@" ;;
   *)         usage ;;
 esac
