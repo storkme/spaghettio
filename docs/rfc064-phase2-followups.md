@@ -94,7 +94,8 @@ instrument and its reference measure different worlds.
 **Decomposition**: the meter's −3.9% EC deficit compounded with the −9.1%
 productivity it cannot model = **−12.7%** against **−13.6%** observed, ~1pp
 inside the fixture's noise. The measurement also explains the selectivity —
-EC/AC unboosted, hence ±0–2% while only PU diverged — and kills the competing
+EC/AC unboosted, hence their single-digit deviation (both −3.9%, not the
+±0–2% an earlier revision claimed) while only PU diverged — and kills the competing
 reading that the signature was a sim-side reporting artifact.
 
 **This is an instrument-parity gap, not a layout, belt, distribution or supply

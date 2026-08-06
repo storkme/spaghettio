@@ -32,7 +32,11 @@ in-fixture AC reads −3.9%).
     not the reference; the sim is. (Intermediates here are *measured production*
     and do not always reconcile arithmetically with consumers — e.g. EC demand
     from PU+AC is ~46.9/s at the measured operating point (48/s is the *plan*
-    rate) vs ~43/s reported produced; the copper-plate→cable pair does
+    rate) — **note this is computed at zero productivity** (20 EC per PU
+    *unit*); at the +10% this entry settles on, a craft consumes 24 EC and
+    yields 1.1 PU, so demand is 1.987×24/1.1 + 3.59×2 ≈ **50.5/s**, a *larger*
+    shortfall. Left as a carryover figure and flagged rather than restated,
+    since the surrounding block is explicitly indicative vs ~43/s reported produced; the copper-plate→cable pair does
     reconcile (1 plate → 2 cable). Treat the intermediate figures as indicative,
     not load-bearing for the deferral's rationale.)
   - The meter matches sim within ±4% on the whole direct chain: copper-plate
@@ -119,7 +123,8 @@ in-fixture AC reads −3.9%).
     the "EC/plate production is the divergence" story evaporates with it.
   - **⇒ MEASURED AND SETTLED (2026-08-06): a productivity tech-state parity
     gap.** No longer a hypothesis. The sim harness now dumps the realized
-    productivity bonus (PR #580, the verification channel this axis lacked —
+    productivity bonus (PR #580, **merged 2026-08-06** — the verification channel
+    this axis lacked;
     the parity block corrected inserter capacity (#370) and belt stacking
     (#385) and nothing else). Run against this fixture:
 
@@ -143,6 +148,12 @@ in-fixture AC reads −3.9%).
     decomposition below (meter and sim both deliver 7.2 plastic/s, so the boost
     changes the sim's *petroleum input per plastic*, not its plastic output),
     but "processing-unit alone" was a claim the first probe could not support.
+    **One consequence is asserted rather than checked**: at +10% the sim makes
+    its 7.2 plastic/s from ~9% less petroleum than the meter models (≈131 vs
+    ≈144/s). The sim's petroleum-gas was already reported −17%, so if that
+    input ever binds this is a second parity gap of the same class. It almost
+    certainly does not bind here (PU reaches 99%), but nobody has verified the
+    sulfur/oil leg against it.
 
     `productivity_modules: {}` — empty, so the source is **research**, not
     modules.
@@ -162,7 +173,8 @@ in-fixture AC reads −3.9%).
     compounded with the −9.1% productivity it does not model = **−12.7%**
     against **−13.6%** observed, ~1pp inside this fixture's noise.
     The measurement also confirms the **selectivity** the corpus had been
-    showing all along — EC and AC unboosted, hence their ±0–2%, while the two
+    showing all along — EC and AC unboosted, hence their **single-digit** deviation (EC −3.9%, AC −3.9% — *not* the ±0–2% an earlier
+    revision of this line claimed, which the same file's own figures contradict), while the two
     boosted recipes are PU (which diverges) and plastic-bar (whose output does
     not, for the reason above) — and **kills the competing reading** that the signature was a
     sim-side reporting artifact. There is a real bonus.

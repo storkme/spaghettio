@@ -69,7 +69,13 @@ cryogenic-plant bind x-descending). Topology: F4 (PTG underground pairs), F5
 (blueprint direction = surface-opening side), F5a (PTG perpendicular sides
 closed — keeps crossing/stacked fluid lines isolated).
 
-**Phase C — calibration — COMPLETE (the last residual closed 2026-08-06).**
+**Phase C — investigation COMPLETE; calibration acceptance PENDING the parity
+fix (2026-08-06).** Stated precisely because the two are different things: the
+acceptance criterion is "all compared fixtures within ±10pp", and
+`tier5_processing_unit_from_ore_am3` is still at −13%. What is finished is the
+*diagnosis* — the cause is measured and is an instrument-parity gap, not a
+meter model defect. The fix is undecided and unimplemented, and even once made
+is predicted to leave ≈−4.3%.
 - Re-run the meter corpus sweep (`examples/sweep_corpus.rs`); all compared
   fixtures within ±10pp EXCEPT `tier5_processing_unit_from_ore_am3` at −13% —
   **closed 2026-08-06** as a productivity tech-state parity gap (sim +10.0% on
