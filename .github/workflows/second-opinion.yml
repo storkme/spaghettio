@@ -69,6 +69,19 @@ jobs:
         uses: storkme/second-opinion@v1
         with:
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          # Runtime monitoring (second-opinion v1.7.0+): one JSON event per review
+          # pushed to the estate's Grafana Cloud Loki, so cost, duration and
+          # degraded-rate are visible without opening individual run logs. Highest
+          # value here of the three consumers, because k:3 below means three passes
+          # can degrade independently — the event carries pass_statuses (e.g.
+          # "ok,timeout,ok") plus passes_ok/passes_degraded, so a review that quietly
+          # became a union of 2 instead of 3 is greppable rather than invisible.
+          # URL and instance id are repo variables (an unset var expands to "" and
+          # disables metrics with no network call — vars.LOKI_URL is the kill
+          # switch); only the token is a secret, scoped to logs:write.
+          loki-url: ${{ vars.LOKI_URL }}
+          loki-user: ${{ vars.LOKI_USER }}
+          loki-token: ${{ secrets.LOKI_TOKEN }}
           # DeepSeek V4 Flash (2026-07-31 release): 1M context, priced at
           # ~$0.14/M input. Pinned rather than left to the action's default
           # for the same reason claude-review pinned its model: review
