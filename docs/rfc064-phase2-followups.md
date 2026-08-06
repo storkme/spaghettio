@@ -71,75 +71,44 @@ uranium voider). With the tuning now making sim ~2.7× cheaper, closing the
 if the coordinator wants the stronger gate. Otherwise the subset verdict stands
 as recorded.
 
-### 7. Meter productivity-parity residual: PU-from-ore −13% (from meter-fluid, #570)
-Pick-up entry so the deferral is actually tracked here (the meter
-`meter-divergence.md` records the full evidence). The fast meter is −13% on
-`tier5_processing_unit_from_ore_am3` vs the sim. Most likely **not a layout,
-belt or fluid divergence at all** — the leading hypothesis is a productivity
-tech-state gap between the sim and the meter (below). Three earlier causes were
-proposed and retired in turn: belt-cycle order, head-hog distribution, and
-upstream EC/plate production. The meter matches the sim within ±4% on the whole
-direct chain, and its PU output sits at 99.2% of what its own EC production can
-support (at that supply level — see the ceiling caveat below). Stated against both bases: 1.716/s is **0.271/s below the
-sim's 1.987/s** (the −13.6% sim-relative residual) and 0.284/s below the 2.0/s
-ideal — earlier revisions quoted a single "~0.29/s ≈ −13%" that conflated the
-two. **2026-08-04 revision of the root cause:** it is an **EC supply shortfall,
-NOT the belt-cycle update order.** An experiment permuting the 26-tile
-cyclic-update order moves PU only 1.716→1.754/s (+2.2%) — real but minor.
-**2026-08-05 second revision: distribution is not the dominant driver either.**
-Each PU consumes 24 EC (20 direct + 2 AC × 2), so the meter's 41.5 EC/s caps PU
-at 41.5/24 = **1.729/s** and it measures 1.716/s — **99.2% of its own supply
-ceiling** (an operating point, not an invariant; see below). EC is scarce only *relative to the 48/s plan rate*; at the operating
-point production and consumption balance (41.2/s consumed vs 41.5/s produced).
-The head-hog gradient is real — **12/16 PU machines run at full 0.125/s** while
-the four deepest (`m301/m302/m309/m310` at x=55/58) are EC-constrained (buffers
-1–12/280, craft 0.023–0.088/s; only `m310` labels `ItemIngredientShortage` — the
-other three read `Working` but run below rate) — but perfect redistribution
-would gain only **+0.013/s, ≈5% of the gap** — *at fixed EC supply*. (That
-ceiling is an operating point, not a hard invariant: the 08-04 permuted run
-reached 1.754/s, which needs 42.1 EC/s, above the 41.5/s the baseline made — so
-EC production itself responds to belt-model changes. See `meter-divergence.md`.)
-(EC/plate production is **not** the dominant term — that reading is retracted
-immediately below; this paragraph's ceiling arithmetic survives it, the
-conclusion drawn from it does not.)
-**2026-08-05, third revision — the "upstream EC/plate production" reading is
-retracted.** It rested on imputing 47.7 EC/s from the sim's PU output
-(1.987 × 24). The sim's own copper-cable measurement refutes that: EC takes 3
-cable and AC takes 4, so its reported figures imply 3×43.2 + 4×3.59 =
-**143.96/s** against **143.9/s** measured — a 0.04% match — while the imputed
-47.7 would need 157.5/s, 9.4% high. The sim's reported EC is corroborated by an
-independent measurement in the same run; the imputation is not. Taken at face
-value the meter's EC is only −3.9%, inside its own band.
-**Leading hypothesis: a productivity tech-state parity gap.**
-`crates/sim-harness/src/scenario.rs` calls `force.research_all_technologies()`,
-and the tech-state parity block directly below it corrects only inserter
-capacity (#370) and belt stacking (#385) — nothing corrects productivity
-research. `crates/meter/src/machine.rs` documents that it deliberately takes
-nothing from `module_policy` and not `effective_crafting_speed`, so the meter
-models no productivity at all. The sim's effective **21.74 EC/PU** against the
-recipe's 24 was a loose blended reading; done properly, the sim's own numbers
-pin both the size and the scope. AC:PU runs **1.807** against the recipe's 2,
-so PU carries **+10.7%** productivity — derived from AC production alone. The
-EC balance then fits AC *unboosted* (20×1.987/1.107 + 2×3.59 = 43.08 vs 43.2
-measured) and rejects AC boosted (42.39); the cable balance fits the full
-recipe ratio (143.96 vs 143.9). **PU is boosted, EC and AC are not**, which is
-exactly why the corpus shows the gap on PU alone while gear/EC/AC sit at
-±0–2%. Decomposition: the meter's −3.9% EC deficit compounded with the −9.7%
-productivity it omits = **−13.2%** against −13.6% observed. What remains
-unverified is the *cause* of PU's bonus, not its size or scope:
-`research_all_technologies()` does not research repeatable technologies and
-Space Age's productivity researches are repeatable, so the obvious mechanism
-may not be the actual one. Same failure class as #370/#385, and
-the fix would be the same shape — align the sim's productivity with the
-fixture's declared level, or teach the meter it — **not** a distribution,
-merge-priority or belt-model change.
-**Deferred, and deliberately not fixed on arithmetic.** This item has now
-proposed and retired three root causes, so the bar for the fourth is a
-measurement: dump the force's realized `processing-unit` productivity bonus in
-a sim run — the self-audit pattern the inserter and belt-stacking parity blocks
-already use — and compare against the meter's implicit zero. Only if that
-disconfirms does the upstream-supply question reopen, and then with
-`timeseries` captured.
+### 7. Meter productivity-parity residual: PU-from-ore −13% — **CLOSED 2026-08-06**
+**Measured, not inferred.** The sim harness now dumps realized productivity
+(PR #580 — the verification channel this axis lacked; the tech-state parity
+block covered inserter capacity (#370) and belt stacking (#385) and nothing
+else). Against `tier5_processing_unit_from_ore_am3`:
+
+| recipe | realized force/research productivity |
+|---|---|
+| **processing-unit** | **+10.0%** |
+| advanced-circuit | 0.0% |
+| electronic-circuit | 0.0% |
+| iron-plate / copper-plate / copper-cable | 0.0% |
+
+No productivity modules anywhere, so the source is
+`force.research_all_technologies()`. The fast meter models no productivity at
+all by design (`crates/meter/src/machine.rs` deliberately takes nothing from
+`module_policy` and not `effective_crafting_speed`), so on this recipe the
+instrument and its reference measure different worlds.
+
+**Decomposition**: the meter's −3.9% EC deficit compounded with the −9.1%
+productivity it cannot model = **−12.7%** against **−13.6%** observed, ~1pp
+inside the fixture's noise. The measurement also explains the selectivity —
+EC/AC unboosted, hence ±0–2% while only PU diverged — and kills the competing
+reading that the signature was a sim-side reporting artifact.
+
+**This is an instrument-parity gap, not a layout, belt, distribution or supply
+defect.** Same class as #370 and #385. Remaining work is a decision, not a
+diagnosis: align the sim's productivity to the fixture's declared level, or
+teach the meter the fixture's productivity. Falsifiable prediction if the
+latter: the residual should fall to ≈−3.9%, the EC deficit alone.
+
+**Process note worth keeping.** Four causes were proposed and retired before
+this one — belt-cycle update order (≈14% of the gap), head-hog distribution
+(≈5%), upstream EC/plate production (falsified by the sim's own copper-cable
+balance), and the sim-reporting-artifact reading (falsified by the probe). What
+finally worked was balancing the sim's reported figures against each other —
+the AC:PU ratio predicted +10.7% against a measured +10.0% — and then running
+the measurement. Four narrative root causes cost more than one probe did.
 
 ## Decided / closed (from Stage B)
 - **Never-worse holds** on the measurable subset → evidence supports
