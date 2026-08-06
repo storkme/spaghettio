@@ -39,7 +39,18 @@ pub struct EdgeTransit {
     pub consumer_terminals: usize,
     pub path_length: f64,
     pub weighted_cost: f64,
+    /// True only for a pure direct-insertion edge — solver-declared DI with
+    /// no transport network at all (§(b)'s port-to-port Manhattan case).
+    /// A mixed belt+DI edge reports `false` here and its bridge count in
+    /// [`Self::di_bridges`].
     pub direct_insertion: bool,
+    /// Direct-insertion bridges folded into this edge's consumer-terminal
+    /// mean: 0 for a belt/pipe-only edge, the full bridge count for a pure
+    /// DI edge, and the bridge count for a mixed edge. Reported separately
+    /// so a mixed measurement is visible as such rather than hiding inside
+    /// `consumer_terminals` (validator-reporting rule: named counts, never
+    /// blended ones).
+    pub di_bridges: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,8 +166,15 @@ impl TerminalBuckets {
 /// matching producer terminal to every distinct consumer terminal. Surface
 /// steps cost one tile; underground jumps cost their physical Manhattan span.
 /// A solver-declared direct-insertion edge with no transport terminals uses
-/// its actual machine-to-machine inserter span. Any other missing or
-/// unreachable terminal is an error, making the candidate inadmissible.
+/// its actual machine-to-machine inserter span. A **mixed** edge — declared
+/// DI with bridges present AND a transport network — folds each bridge into
+/// the same consumer-terminal mean as one more consumer terminal whose
+/// distance is its Manhattan span; both pure cases are the degenerate ends
+/// of that rule (RFC-064 §(b), amended 2026-08-06). The transport network
+/// participating in a mixed edge must still be well-formed: missing or
+/// unreachable terminals refuse exactly as they do without DI, and bridges
+/// never repair them. Any other missing or unreachable terminal is an
+/// error, making the candidate inadmissible.
 pub fn measure_realized_transit(
     layout: &LayoutResult,
     solver_result: &SolverResult,
@@ -201,49 +219,73 @@ pub fn measure_realized_transit(
                 && coupling.consumer_recipe == edge.consumer_recipe
                 && edge.producer_recipes.contains(&coupling.producer_recipe)
         });
-        let (path_length, producer_count, consumer_count, direct_insertion) = if sources.is_empty()
-            && consumers.is_empty()
-            && declared_di
-            && !direct_lengths.is_empty()
-        {
-            (
-                direct_lengths.iter().sum::<i64>() as f64 / direct_lengths.len() as f64,
-                direct_lengths.len(),
-                direct_lengths.len(),
-                true,
-            )
-        } else {
-            if sources.is_empty() {
-                return Err(TransitError::MissingProducerTerminal {
-                    item: edge.item.clone(),
-                    consumer_recipe: edge.consumer_recipe.clone(),
-                });
-            }
-            if consumers.is_empty() {
-                return Err(TransitError::MissingConsumerTerminal {
-                    item: edge.item.clone(),
-                    consumer_recipe: edge.consumer_recipe.clone(),
-                });
-            }
-            let distance = shortest_distances(&graph, &sources);
-            let mut total_length = 0i64;
-            for &terminal in &consumers {
-                let Some(&length) = distance.get(&terminal) else {
-                    return Err(TransitError::UnreachableConsumerTerminal {
+        // DI participates in this edge's measurement only when the solver
+        // declared the coupling AND the layout realized at least one
+        // machine-to-machine bridge. Declared-but-unrealized DI (the placer
+        // declined the coupling) measures as a plain belt edge; undeclared
+        // bridges never contribute (§(b): "a solver-declared direct-insertion
+        // edge").
+        let di_active = declared_di && !direct_lengths.is_empty();
+        let (path_length, producer_count, consumer_count, direct_insertion, di_bridges) =
+            if sources.is_empty() && consumers.is_empty() && di_active {
+                // Pure DI: §(b)'s "no transport network" Manhattan case.
+                (
+                    direct_lengths.iter().sum::<i64>() as f64 / direct_lengths.len() as f64,
+                    direct_lengths.len(),
+                    direct_lengths.len(),
+                    true,
+                    direct_lengths.len(),
+                )
+            } else {
+                // A transport network participates (or should). It must be
+                // well-formed on BOTH sides regardless of DI: a half-formed
+                // belt network is §(b)'s "broken routed edge", and DI bridges
+                // must not paper over it (decision log, 2026-08-06).
+                if sources.is_empty() {
+                    return Err(TransitError::MissingProducerTerminal {
                         item: edge.item.clone(),
                         consumer_recipe: edge.consumer_recipe.clone(),
-                        terminal,
                     });
-                };
-                total_length += length;
-            }
-            (
-                total_length as f64 / consumers.len() as f64,
-                sources.len(),
-                consumers.len(),
-                false,
-            )
-        };
+                }
+                if consumers.is_empty() {
+                    return Err(TransitError::MissingConsumerTerminal {
+                        item: edge.item.clone(),
+                        consumer_recipe: edge.consumer_recipe.clone(),
+                    });
+                }
+                let distance = shortest_distances(&graph, &sources);
+                let mut total_length = 0i64;
+                for &terminal in &consumers {
+                    let Some(&length) = distance.get(&terminal) else {
+                        return Err(TransitError::UnreachableConsumerTerminal {
+                            item: edge.item.clone(),
+                            consumer_recipe: edge.consumer_recipe.clone(),
+                            terminal,
+                        });
+                    };
+                    total_length += length;
+                }
+                // Mixed belt+DI edge (RFC-064 §(b), amended 2026-08-06): each
+                // DI bridge is one more consumer terminal whose distance is
+                // its port-to-port Manhattan span. The aggregate planned_rate
+                // stays and is apportioned evenly across belt terminals and
+                // bridges alike — the same equivalence §(b) states for the
+                // all-belt mean. Falling through to belt-only measurement
+                // here (the pre-fix behaviour) charged the full rate at the
+                // belt-only mean, silently apportioning DI machines' demand
+                // onto belt paths they do not use.
+                let bridges = if di_active { direct_lengths.len() } else { 0 };
+                if di_active {
+                    total_length += direct_lengths.iter().sum::<i64>();
+                }
+                (
+                    total_length as f64 / (consumers.len() + bridges) as f64,
+                    sources.len() + bridges,
+                    consumers.len() + bridges,
+                    false,
+                    bridges,
+                )
+            };
 
         let planned_rate = edge.rate as f64 / RATE_SCALE;
         let weighted_cost =
@@ -264,6 +306,7 @@ pub fn measure_realized_transit(
             path_length,
             weighted_cost,
             direct_insertion,
+            di_bridges,
         });
     }
     result.total = result.solid_total + result.fluid_total;
@@ -782,6 +825,184 @@ mod tests {
              'other-item' bridge in would move this off 2.0"
         );
         assert_eq!(measured.edges[0].producer_terminals, 1, "one matching bridge, not two");
+    }
+
+    /// A mixed belt+DI edge folds each DI bridge into the consumer-terminal
+    /// mean as one more terminal at its Manhattan span (RFC-064 §(b),
+    /// amended 2026-08-06).
+    ///
+    /// The fixture makes all three candidate behaviours produce DIFFERENT
+    /// numbers, so the primary assertion discriminates (the PR #582 round-2
+    /// lesson — a fixture where two behaviours coincide is not a regression
+    /// test): belt consumer terminal at Dijkstra distance 4, DI bridge at
+    /// Manhattan span 2, so
+    ///   - mixed mean (this rule):          (4 + 2) / 2 = 3.0
+    ///   - belt-only fall-through (pre-fix): 4.0
+    ///   - pure-DI fallback:                 2.0
+    #[test]
+    fn mixed_belt_and_di_edge_folds_bridges_into_the_consumer_mean() {
+        let mut sr = solver("part", 2.0, false);
+        sr.di_couplings.push(DICoupling {
+            producer_recipe: "producer".to_string(),
+            consumer_recipe: "consumer".to_string(),
+            item: "part".to_string(),
+            producer_count: 1.0,
+            consumer_count: 1.0,
+        });
+
+        let south = |entity: PlacedEntity| PlacedEntity {
+            direction: EntityDirection::South,
+            ..entity
+        };
+        let mut layout = LayoutResult {
+            entities: vec![
+                machine("producer", 0, 0),
+                // DI half: bridge into a consumer machine at Manhattan 2.
+                inserter(3, 1),
+                machine("consumer", 4, 0),
+                // Belt half: drop south of the producer ...
+                south(inserter(1, 3)),
+            ],
+            ..Default::default()
+        };
+        // ... down a 5-belt southward run (drop terminal (1,4), pickup
+        // terminal (1,8): Dijkstra distance 4) ...
+        layout
+            .entities
+            .extend((4..=8).map(|y| south(belt("transport-belt", 1, y, None))));
+        // ... into a second consumer machine of the same recipe.
+        layout
+            .entities
+            .extend([south(inserter(1, 9)), machine("consumer", 0, 10)]);
+
+        let measured = measure_realized_transit(&layout, &sr, 0.5)
+            .expect("a mixed belt+DI edge must measure, not refuse");
+        let edge = &measured.edges[0];
+        assert_eq!(
+            edge.path_length, 3.0,
+            "mean over belt terminal (4) and DI bridge (2); belt-only \
+             fall-through would report 4.0, pure-DI 2.0"
+        );
+        assert_eq!(
+            edge.consumer_terminals, 2,
+            "the DI-fed consumer must appear in the terminal count, not be \
+             silently dropped"
+        );
+        assert_eq!(edge.producer_terminals, 2);
+        assert_eq!(edge.di_bridges, 1, "the mixed edge reports its bridge count");
+        assert!(
+            !edge.direct_insertion,
+            "direct_insertion stays reserved for the pure no-network case"
+        );
+        assert_eq!(measured.total, 6.0, "full aggregate rate 2.0 x mean 3.0");
+    }
+
+    /// DI bridges must NOT repair a half-formed transport network: a
+    /// declared-DI edge whose belt side has producer drop terminals but no
+    /// consumer pickup terminal is §(b)'s "broken routed edge" and refuses,
+    /// exactly as it would without the bridges (decision log, 2026-08-06).
+    #[test]
+    fn di_bridges_do_not_repair_a_half_formed_belt_network() {
+        let mut sr = solver("part", 2.0, false);
+        sr.di_couplings.push(DICoupling {
+            producer_recipe: "producer".to_string(),
+            consumer_recipe: "consumer".to_string(),
+            item: "part".to_string(),
+            producer_count: 1.0,
+            consumer_count: 1.0,
+        });
+
+        let south = |entity: PlacedEntity| PlacedEntity {
+            direction: EntityDirection::South,
+            ..entity
+        };
+        // Same fixture as the mixed test, minus the pickup inserter: the
+        // southward belt run now feeds nothing, so the edge has a producer
+        // terminal but no consumer terminal.
+        let mut layout = LayoutResult {
+            entities: vec![
+                machine("producer", 0, 0),
+                inserter(3, 1),
+                machine("consumer", 4, 0),
+                south(inserter(1, 3)),
+            ],
+            ..Default::default()
+        };
+        layout
+            .entities
+            .extend((4..=8).map(|y| south(belt("transport-belt", 1, y, None))));
+
+        let error = measure_realized_transit(&layout, &sr, 0.5)
+            .expect_err("a half-formed belt network must refuse despite DI bridges");
+        assert_eq!(
+            error,
+            TransitError::MissingConsumerTerminal {
+                item: "part".to_string(),
+                consumer_recipe: "consumer".to_string(),
+            },
+            "the refusal must name the missing belt consumer terminal, not \
+             degrade to a pure-DI measurement"
+        );
+    }
+
+    /// Fluid transit must traverse a pipe-to-ground pair in BOTH directions:
+    /// Factorio fluid networks are undirected, so a routed path that crosses
+    /// the pair from its output-labelled end to its input-labelled end is
+    /// just as real as the canonical input-to-output crossing.
+    ///
+    /// Pins the follow-up recorded twice in RFC-064's decision log
+    /// (2026-08-05, bot rounds 2 and 4 on PR #575), which claimed
+    /// `find_ptg_pairs` maps input->output only and would falsely refuse the
+    /// reverse traversal. Inspection showed the claim false — the pair map
+    /// has inserted BOTH directions since its introduction, and `fluid_graph`
+    /// adds the underground arc from whichever end it iterates — but nothing
+    /// pinned it, so a future "fix" could introduce exactly the defect the
+    /// log describes. Producer sits on the output-PTG side, consumer on the
+    /// input-PTG side; if the underground arc existed only input->output the
+    /// consumer terminal would be unreachable and this would refuse.
+    #[test]
+    fn fluid_transit_traverses_ptg_pairs_output_to_input() {
+        let pipe = |x: i32, y: i32| PlacedEntity {
+            name: "pipe".to_string(),
+            x,
+            y,
+            carries: Some("water".to_string()),
+            ..Default::default()
+        };
+        let ptg = |x: i32, y: i32, direction: EntityDirection, io_type: &str| PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x,
+            y,
+            direction,
+            io_type: Some(io_type.to_string()),
+            carries: Some("water".to_string()),
+            ..Default::default()
+        };
+        let layout = LayoutResult {
+            entities: vec![
+                // Producer output port (south face) at (1,3).
+                machine("producer", 0, 0),
+                pipe(1, 3),
+                pipe(2, 3),
+                pipe(3, 3),
+                // The pair: output-labelled PTG surfaces WEST toward the
+                // producer, input-labelled PTG surfaces EAST toward the
+                // consumer — so the flow crosses output -> input.
+                ptg(4, 3, EntityDirection::East, "output"),
+                ptg(10, 3, EntityDirection::West, "input"),
+                pipe(11, 3),
+                // Consumer input port (north face) at (11,3).
+                machine("consumer", 10, 4),
+            ],
+            ..Default::default()
+        };
+        let measured = measure_realized_transit(&layout, &solver("water", 10.0, true), 0.5)
+            .expect("output->input PTG traversal must measure, not refuse");
+        assert_eq!(
+            measured.edges[0].path_length, 10.0,
+            "3 surface steps + 6-tile underground span + 1 surface step"
+        );
+        assert_eq!(measured.fluid_total, 50.0, "rate 10.0 x weight 0.5 x length 10");
     }
 
     /// An unlabelled transport tile must NOT be traversable by every net.

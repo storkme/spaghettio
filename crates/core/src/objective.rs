@@ -88,6 +88,11 @@ pub struct EdgeMeasurement {
     /// edge with no transport network (§(b)'s port-to-port Manhattan case)
     /// rather than over the belt/pipe graph.
     pub direct_insertion: bool,
+    /// Direct-insertion bridges folded into the consumer-terminal mean
+    /// (§(b)'s mixed-edge rule, amended 2026-08-06): 0 for a belt/pipe-only
+    /// edge, the full bridge count for a pure DI edge, the bridge count for
+    /// a mixed edge. Reported so a mixed measurement is visible as such.
+    pub di_bridges: usize,
 }
 
 /// Raw per-layout numbers RFC-064's Metrics section defines, computed on a
@@ -174,6 +179,7 @@ pub fn measure(layout: &LayoutResult, solver: &SolverResult) -> Result<LayoutMea
             producer_terminals: e.producer_terminals,
             consumer_terminals: e.consumer_terminals,
             direct_insertion: e.direct_insertion,
+            di_bridges: e.di_bridges,
         })
         .collect();
 
@@ -711,6 +717,7 @@ mod tests {
             producer_terminals: 1,
             consumer_terminals: 1,
             direct_insertion: false,
+            di_bridges: 0,
         };
         let mut native = measure_with(1.5, 100.0, 500);
         native.edges = vec![edge.clone()];
@@ -746,6 +753,7 @@ mod tests {
             producer_terminals: 1,
             consumer_terminals: 1,
             direct_insertion: false,
+            di_bridges: 0,
         };
         let mut native = measure_with(1.5, 200.0, 500);
         native.edges = vec![edge(100.0), edge(100.0)];
@@ -774,6 +782,7 @@ mod tests {
             producer_terminals: 1,
             consumer_terminals: 1,
             direct_insertion: false,
+            di_bridges: 0,
         }];
         let zero_edge_cand = measure_with(1.5, 0.0, 500);
         let scores = score_vs_native(&zero_edge_cand, &native);
