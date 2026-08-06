@@ -99,9 +99,15 @@ EC/AC unboosted, hence their single-digit deviation (both −3.9%, not the
 reading that the signature was a sim-side reporting artifact.
 
 **This is an instrument-parity gap, not a layout, belt, distribution or supply
-defect.** Same class as #370 and #385. Remaining work is a decision, not a
-diagnosis: align the sim's productivity to the fixture's declared level, or
-teach the meter the fixture's productivity. Falsifiable prediction if the
+defect.** Same class as #370 and #385. **DECIDED (owner, 2026-08-06): teach the meter productivity** — the sim stays
+the reference and the instrument learns to model what it actually does.
+Widened scope found while recording it: the **solver** does not model
+research-sourced productivity either (`netflow.rs` covers modules and
+`base_effect` only), so the plan is over-provisioned on PU by the same 10%.
+The fix should follow #370/#385: carry research productivity as a declared
+manifest axis beside `stacking`/`inserter_capacity`, applied by the meter and
+*pinned* by the sim's parity block, so the two match by construction rather
+than by coincidence. Falsifiable prediction if the
 latter: output should land at ≈1.902 PU/s (41.5 EC/s ÷ 24 = 1.729 crafts/s,
 each yielding 1.1 PU), a residual of ≈−4.3% — essentially the −3.9% EC deficit
 alone. Do not read the 1.729 "ceiling" as surviving the fix: it is a ceiling at

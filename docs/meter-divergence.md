@@ -76,9 +76,30 @@ in-fixture AC reads −3.9%).
 
 - **Verdict**: an instrument/reference parity gap, same class as the
   inserter-capacity (#370) and belt-stacking (#385) fixes already in the
-  scenario. What remains is a **decision, not a diagnosis**: align the sim's
-  productivity to the fixture's declared level, or teach the meter the
-  fixture's productivity.
+  scenario.
+- **DECIDED (owner, 2026-08-06): teach the meter productivity.** Rationale
+  recorded verbatim-in-spirit — *"it's important for the meter to be able to be
+  flexible, and for it to match what we actually produce as measured in the
+  sim."* The sim stays the reference; the instrument learns to model what the
+  reference actually does.
+
+  One scoping fact found while writing this up, which widens the fix beyond the
+  meter: **the solver does not model research productivity either.**
+  `netflow.rs` applies productivity from *modules* and a machine's
+  `base_effect`, gated on the recipe's `allow_productivity`, and
+  `ModulePolicyKind` defaults to `None`. Research-sourced productivity — the
+  +10% the sim actually runs with — is modelled nowhere on the engine side. So
+  the *plan* is over-provisioned on PU by the same 10% as the meter's
+  prediction is short; this is not only an instrument gap.
+
+  Shape the fix should take, following the pattern #370 and #385 already
+  established for exactly this problem: make research productivity a
+  **declared axis** carried on the manifest alongside `stacking` and
+  `inserter_capacity`, so that (a) the meter applies it, and (b) the sim
+  *pins* it in its tech-state parity block instead of inheriting whatever
+  `research_all_technologies()` grants. Declaring it on both sides makes them
+  match by construction rather than by coincidence — a meter that models a
+  declared level while the sim runs an incidental one agrees only by luck.
 
 - **Next / falsifiable prediction**: teach the meter +10% on PU and its output
   should land at **≈1.902 PU/s** — 41.5 EC/s ÷ 24 = 1.729 crafts/s, each
