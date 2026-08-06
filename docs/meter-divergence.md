@@ -4,59 +4,166 @@ Running record of where the fast meter's `produced_per_s`/`delivered_per_s`
 diverges from the measured headless-Factorio sim by more than ±10pp, and why
 that divergence is believed to live (model gap vs. known-open-item). Updated
 when the corpus sweep (`crates/meter/examples/sweep_corpus.rs`) moves a number
-or reveals a new one. Currently **one** residual.
+or reveals a new one. One residual remains: its **diagnosis** closed
+2026-08-06 (an instrument-parity gap, not a model defect), its **fix** is
+decided but unmerged.
 
-## Corpus status (2026-08-03, Phase B landed)
+## Corpus status (2026-08-06; Phase B landed 2026-08-03)
 
 `meter sweep: 70 layouts measured, 41 compared`. Every compared fixture is
 within ±10pp of sim except the one below. AC/PU families that were −80% in
 Phase A are now within ±2% (the dedicated AC fixtures) / −13% (PU-from-ore; its
 in-fixture AC reads −3.9%).
 
-## Open residual
+## Residual: diagnosis closed 2026-08-06, fix open
 
-### `tier5_processing_unit_from_ore_am3` — meter ≈ −13% (`produced`)
+### `tier5_processing_unit_from_ore_am3` — meter ≈ −13% (`produced`) — diagnosis CLOSED, fix OPEN
 
 - **meter**: processing-unit 1.716/s vs sim produced 1.987/s / delivered 1.961/s.
-- **Direction**: underproduction in the **downstream solid belt delivery**, not a
-  fluid gap. Deep-dive (2026-08-03) established this precisely:
-  - The **sim itself** under-produces almost everything on this fixture
-    (copper-plate 71.98/80, copper-cable 143.9/160, EC 43.2/48, plastic 7.2/8 —
-    all ≈ −10%; petroleum-gas −17%); only the PU target reaches 99%. So plan is
-    not the reference; the sim is. (Intermediates here are *measured production*
-    and do not always reconcile arithmetically with consumers — e.g. EC demand
-    from PU+AC ≈ 47/s vs ~43/s reported produced; the copper-plate→cable pair does
-    reconcile (1 plate → 2 cable). Treat the intermediate figures as indicative,
-    not load-bearing for the deferral's rationale.)
-  - The meter matches sim within ±4% on the whole direct chain: copper-plate
-    69.5 vs sim 71.98 (−3.4% — the meter is slightly *further* below plan),
-    copper-cable 139 vs 143.9, iron-plate 41.9 vs 43.4, EC 41.5 vs 43.2,
-    plastic 7.2 vs 7.2 (=), AC 3.45 vs 3.59. So the direct-production chain
-    tracks the sim closely; the order-of-magnitude-larger shortfall is PU alone.
-  - The extra loss is in delivering EC to the PU machine: producer `m#310`
-    sits short on EC (12 of a 20/craft need) despite EC production (41.5/s)
-    meeting total demand (AC ~6.9 + PU ~34 = ~41/s). The sim feeds PU fully.
-  - The machine census is dominated by `full_output` + `working`; only ~9 are
-    left short on a solid and one on a fluid, all downstream of the EC belt.
-    Caveat: this "~9/1" split was captured on code that had the (later-reverted)
-    census-precedence change active, so it is precedence-sensitive and not
-    re-verified on the merged solids-first code — it is diagnostic, not load-bearing.
-  - The fixture's wiring produces the **only** topology note in the corpus:
-    *"26 tiles in a belt cycle; update order arbitrary"* — a cyclic belt (the
-    many-EC-producers merge trunk into the few PU/AC consumers), which the meter
-    steps in an arbitrary-but-deterministic order and which is the strong
-    candidate for the delivery shortfall.
-- **Verdict**: a genuine belt-model divergence, on a single fixture whose sim
-  baseline is itself noisy (≈ −10% on everything). **Deferred, deliberately**:
-  fixing it needs a speculative belt-cycle-update-order / merge-priority model
-  change that cannot be validated against a clean reference on this fixture.
-  (Blast radius is lower than "the whole corpus": this fixture carries the only
-  cycle note, so a change gated on `CycleInUpdateOrder` would touch ~nothing
-  else — but it is still an unverifiable change on a fixture whose own sim is
-  noisy, which are the binding reasons to defer.) Tracked as item 7 in
-  `rfc064-phase2-followups.md`; do not chase it inside this meter-fluid thread.
-- **Next**: investigate as a belt-throughput/cycle divergence, not a fluid one.
-  Re-measure after any belt-network changes.
+- **Cause (measured 2026-08-06)**: a **productivity tech-state parity gap**
+  between the sim and the fast meter — not a layout, belt, distribution or
+  supply defect. The sim calls `force.research_all_technologies()`, and its
+  tech-state parity block corrects only inserter capacity (#370) and belt
+  stacking (#385); nothing corrects productivity. The meter models no
+  productivity at all, deliberately (`crates/meter/src/machine.rs` takes
+  nothing from `module_policy` and not `effective_crafting_speed`). So on a
+  boosted recipe the instrument and its reference measure different worlds.
+
+  Realized force/research productivity, dumped by the harness probe (PR #580):
+
+  | recipe | bonus |
+  |---|---|
+  | **processing-unit** | **+10.0%** |
+  | **plastic-bar** | **+10.0%** |
+  | advanced-circuit, electronic-circuit, iron-plate, copper-plate, copper-cable, sulfur, sulfuric-acid, basic-/advanced-oil-processing | 0.0% |
+
+  `productivity_modules: {}` — empty, so the source is research, not modules.
+
+  **Corroboration, out-of-sample**: the +10% came from a force-state read, not
+  from any rate figure, and it correctly predicts the relationship between two
+  independently measured rates — 43.2 EC/s ÷ 24 × 1.1 = **1.980 PU/s** against
+  the **1.987** the sim measured, 0.35% apart. At zero productivity that same
+  EC caps output at 1.800 PU/s, 9% below what it delivered. This is the check
+  the four retired causes never had.
+
+- **Decomposition**: the meter's −3.9% EC deficit compounded with the −9.1%
+  productivity it does not model = **−12.7%** against **−13.6%** observed,
+  ~1pp inside this fixture's noise (every intermediate here is ≈10% off plan).
+  Only PU's boost moves the target: meter and sim both deliver 7.2 plastic/s,
+  so plastic's boost changes the sim's petroleum input rather than its output.
+
+- **⚠ Provenance of the probe run**: it used `--warmup 600` to reach finalize
+  quickly, so its **throughput numbers are buffer-fill artifacts** and must not
+  be compared against the recorded baselines above. Only the productivity
+  fields are load-bearing — force state set at init, warmup-independent.
+  (Factorio 2.0.77, matching `PINNED_VERSION`.)
+
+- **Four causes were proposed and retired before this one.** Kept as a list
+  because the bounds are the reusable part; the full derivations were removed
+  on 2026-08-06 after they had cost more review rounds than they were worth.
+  - *Belt-cycle update order* — permuting the 26-tile cyclic order moves PU
+    1.716→1.754/s, ≈14% of the 0.271/s gap. Real, not the cause.
+  - *Head-hog distribution* — 12/16 PU machines run at full rate while the four
+    deepest starve, but perfectly redistributing the available EC yields only
+    1.729/s: **+0.013/s, ≈5% of the gap**, at fixed EC supply. (That ceiling is
+    an operating point, not an invariant — the permuted run reached 1.754/s,
+    which needs more EC than the baseline produced, so EC production itself
+    responds to belt-model changes.)
+  - *Upstream EC/plate production* — rested on imputing 47.7 EC/s from the sim's
+    PU output. Falsified by the sim's own copper-cable balance: 3×43.2 + 4×3.59
+    = 143.96/s against 143.9/s measured, while the imputed figure needs 157.5/s.
+  - *Sim-side reporting artifact* — falsified by the probe: there is a real
+    bonus.
+
+- **Verdict**: an instrument/reference parity gap, same class as the
+  inserter-capacity (#370) and belt-stacking (#385) fixes already in the
+  scenario.
+- **DECIDED (owner, 2026-08-06): teach the meter productivity.** Rationale
+  recorded verbatim-in-spirit — *"it's important for the meter to be able to be
+  flexible, and for it to match what we actually produce as measured in the
+  sim."* The sim stays the reference; the instrument learns to model what the
+  reference actually does.
+
+  One scoping fact found while writing this up, which widens the fix beyond the
+  meter: **the solver does not model research productivity either.**
+  `netflow.rs` applies productivity from *modules* and a machine's
+  `base_effect`, gated on the recipe's `allow_productivity`, and
+  `ModulePolicyKind` defaults to `None`. Research-sourced productivity — the
+  +10% the sim actually runs with — is modelled nowhere on the engine side. So
+  the *plan* is over-provisioned on PU by the same 10% as the meter's
+  prediction is short; this is not only an instrument gap.
+
+  Shape the fix should take, following the pattern #370 and #385 already
+  established for exactly this problem: make research productivity a
+  **declared axis** carried on the manifest alongside `stacking` and
+  `inserter_capacity`, so that (a) the meter applies it, and (b) the sim
+  *pins* it in its tech-state parity block instead of inheriting whatever
+  `research_all_technologies()` grants. Declaring it on both sides makes them
+  match by construction rather than by coincidence — a meter that models a
+  declared level while the sim runs an incidental one agrees only by luck.
+
+- **Prediction, and its result (2026-08-06).** Teaching the meter +10% on PU
+  was predicted to land its output at **≈1.902 PU/s**. Implemented on
+  `feat/research-productivity-axis` and measured on this fixture at the Stage B
+  deep-chain warmup:
+
+  | config | PU | EC | ceiling@EC | % of ceiling |
+  |---|---|---|---|---|
+  | declared none | 1.7056/s | 41.49 | 1.7287 | 98.7% |
+  | declared +10% | **1.8500/s** | 41.49 | **1.9018** | 97.3% |
+
+  **The ceiling under productivity measures 1.9018 against the predicted
+  1.902** — the productivity model is exactly right. What the prediction got
+  wrong is assuming the meter would *reach* its ceiling.
+
+  **What the shortfall actually is — AC over-production, not distribution.**
+  The `E/24` ceiling assumes AC is produced exactly in proportion (2 per PU
+  craft). It is not. Computing against the *measured* AC instead —
+  `(E − 2·AC)/20 × 1.1` — fits far better:
+
+  | config | observed | `E/24` | net of measured AC |
+  |---|---|---|---|
+  | none | 1.7056 | 1.7288 (98.7%) | 1.7123 (**99.6%**) |
+  | +10% | 1.8500 | 1.9016 (97.3%) | 1.8407 (**100.5%**) |
+
+  Because AC runs over: **2.12 AC per PU craft baseline (+6%), 2.39 with
+  productivity (+19%)**, against the recipe's 2. That surplus consumes EC which
+  would otherwise reach PU, and it is not a distribution loss — it is the
+  **solver's** blind spot to research productivity showing up downstream. The
+  plan sizes the AC stage for a PU stage that needs no productivity; give PU
+  +10% and it needs fewer crafts, so the unchanged AC sizing over-serves it.
+  An earlier revision of this entry attributed the gap to distribution; that
+  was wrong, and it was caught by a reviewer pointing out that `24 EC per
+  craft` is a full-chain figure rather than a per-craft one (a PU craft
+  consumes 20 EC directly plus 2 AC).
+
+  So the residual after the meter-side fix is **the other half of the same
+  bug**, and closing the solver side should close most of what is left.
+  Note also that EC production is **identical (41.49/s) in both configs**, so
+  declaring productivity does not move it — EC is genuinely unboosted and
+  supply-limited, corroborating the probe's `electronic-circuit: 0.0%`
+  independently.
+- **Still open after the meter fix**: the −2.7% ceiling shortfall (the
+  distribution term, which grows slightly as the same EC supply feeds more
+  output) and the −3.9% EC deficit itself. The latter is where the **solver's**
+  own blind spot to research productivity lands: `netflow.rs` models modules and
+  `base_effect` only, so the plan is over-provisioned by the same factor. That
+  is the other half of the fix.
+- **Superseded**: this bullet previously predicted the residual would fall to
+  ≈−4.3%, "essentially the −3.9% EC deficit alone". The measurement above puts
+  it at −6.9%: the prediction's *ceiling* was right to four figures, but it
+  assumed the meter would sit on that ceiling, and it does not. The trap it
+  warned about still stands and is worth keeping — the 1.729 figure quoted
+  elsewhere is a ceiling *at zero productivity*; productivity does not change
+  EC consumed per PU including its AC leg (still 24; a craft itself takes 20 EC plus 2 AC), it changes PU produced per craft (1 → 1.1),
+  so it raises the ceiling rather than capping output beneath it.
+
+- **Open, not closed**: (a) the ~1pp decomposition residual is attributed to
+  fixture noise, not explained; (b) plastic-bar's input-side consequence is
+  asserted, not checked — at +10% the sim makes its 7.2 plastic/s from ~9% less
+  petroleum than the meter models (≈65.5 vs ≈72/s), and the sim's petroleum-gas
+  was already −17%, so if that input ever binds it is a second gap of the same
+  class.
 
 ## Closed / moved entries
 
