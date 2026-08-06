@@ -27,6 +27,8 @@
 //!   --belt <entity>        max belt tier (default: engine picks by rate)
 //!   --quality <name>       normal|uncommon|rare|epic|legendary (default normal)
 //!   --stacking <1..4>      belt stacking (default 1)
+//!   --research-productivity <recipe=bonus,...>   declared research
+//!                          productivity, e.g. processing-unit=0.10 (default none)
 //!   --inserter-cap <n>     inserter capacity level (default: engine default)
 //!   --inputs a,b,c         raw inputs (default: the six-ore set)
 //!   --label <name>         output subdirectory + manifest label
@@ -129,6 +131,8 @@ fn main() {
     let mut belt: Option<String> = None;
     let mut quality = QualityTier::Normal;
     let mut stacking: u8 = 1;
+    let mut research_productivity: std::collections::BTreeMap<String, f64> =
+        Default::default();
     let mut inserter_cap: Option<u8> = None;
     let mut inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
     let mut label: Option<String> = None;
@@ -168,6 +172,28 @@ fn main() {
                 stacking = need(i)
                     .parse()
                     .unwrap_or_else(|_| usage("--stacking must be 1..4"))
+            }
+            // Declared research productivity, e.g.
+            //   --research-productivity processing-unit=0.10,plastic-bar=0.10
+            // Passed to BOTH the solve and the layout, deliberately from one
+            // parsed value: they are separate knobs (NetflowOptions vs
+            // LayoutOptions) with no consistency guard between them, so a
+            // caller that sets one and not the other would plan in a
+            // different world from the one it declares on the manifest — the
+            // exact class this axis exists to eliminate.
+            "--research-productivity" => {
+                for pair in need(i).split(',').filter(|p| !p.is_empty()) {
+                    let (recipe, bonus) = pair
+                        .split_once('=')
+                        .unwrap_or_else(|| usage("--research-productivity wants recipe=bonus"));
+                    let bonus: f64 = bonus.parse().unwrap_or_else(|_| {
+                        usage("--research-productivity bonus must be a number, e.g. 0.10")
+                    });
+                    if !(0.0..=10.0).contains(&bonus) {
+                        usage("--research-productivity bonus must be a fraction (0.10 = +10%), not a percentage");
+                    }
+                    research_productivity.insert(recipe.to_string(), bonus);
+                }
             }
             "--inserter-cap" => {
                 inserter_cap = Some(
@@ -211,14 +237,24 @@ fn main() {
     // `solve_with_palette_exclusions_and_quality` call by construction
     // (kill criterion 5), so there is one solve code path here, not a
     // single/multi fork.
-    let solved = spaghettio_core::solver::solve_multi_with_palette_exclusions_quality_and_modules(
+    let solved = spaghettio_core::netflow::solve_netflow_multi_with_options(
         &targets,
         &input_set,
         &MachinePalette::default(),
         &tier,
         &FxHashSet::default(),
-        quality,
-        spaghettio_core::module_policy::ModulePolicy::default(),
+        spaghettio_core::netflow::RecipeScope::Free,
+        &spaghettio_core::netflow::CostTable::default(),
+        &spaghettio_core::netflow::NetflowOptions {
+            quality,
+            module_policy: spaghettio_core::module_policy::ModulePolicy::default(),
+            research_productivity: research_productivity.clone(),
+            // Everything else exactly as
+            // `solve_multi_with_palette_exclusions_quality_and_modules` set
+            // it — this call replaces that wrapper only to reach the one
+            // field it cannot pass, and must not change anything else.
+            ..Default::default()
+        },
     )
     .unwrap_or_else(|e| {
         eprintln!("solve failed for {} on {tier}: {e}", targets_desc());
@@ -230,6 +266,7 @@ fn main() {
         max_belt_tier: belt,
         quality,
         stacking,
+        research_productivity,
         ..Default::default()
     };
     if let Some(c) = claim {

@@ -745,9 +745,11 @@ fn productivity_parity_lines(
         out.push(format!("productivity parity: none on the probed recipes ({numeric} read, 0 boosted)"));
     } else {
         out.push(format!(
-            "productivity parity: BOOSTED [{}] — the fast meter models no \
-             productivity, so meter-vs-sim rates on these recipes are not \
-             like-for-like (RFC-064 item 7)",
+            "productivity parity: BOOSTED [{}] — rates on these recipes are \
+             comparable ONLY against a plan and a meter that declare the same \
+             bonus (manifest `research_productivity`). The scenario raises a \
+             kit error if this run's manifest disagrees, so a clean run here \
+             means they match (RFC-064 item 7)",
             boosted.join(", ")
         ));
     }
