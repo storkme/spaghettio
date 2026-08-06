@@ -1152,6 +1152,98 @@ local function finalize(s, converged)
       if v == st then census[k] = (census[k] or 0) + 1 end
     end
   end
+  -- RFC-064 item 7 productivity-parity probe (2026-08-06).
+  -- The meter models NO productivity at all (crates/meter/src/machine.rs
+  -- deliberately takes nothing from module_policy and not
+  -- effective_crafting_speed), while this scenario calls
+  -- research_all_technologies() above and its tech-state parity block corrects
+  -- only inserter capacity (#370) and belt stacking (#385). If the sim carries
+  -- a productivity bonus the meter cannot see, the PU-from-ore -13% residual
+  -- may reduce to that parity gap rather than any layout or belt defect.
+  --
+  -- Read DEFENSIVELY: the exact 2.0 API spelling is not assumed here. A field
+  -- that does not exist reports "FIELD_ABSENT" instead of killing the run, so
+  -- a wrong guess costs a re-run, not a lost measurement. Both candidate
+  -- sources are probed separately -- force/research bonus per recipe, and
+  -- per-machine module contents -- because they imply different fixes.
+  local function probe(get)
+    local ok, v = pcall(get)
+    if not ok then return "FIELD_ABSENT" end
+    if v == nil then return "NIL" end
+    return v
+  end
+  -- MEASURED 2026-08-06, against a review claim that `LuaRecipe` exposes no
+  -- such field and this channel "will always serialize as FIELD_ABSENT": it
+  -- returned 0.1 for processing-unit and 0.0 for the five others in the same
+  -- run. A non-existent field cannot produce a recipe-DISCRIMINATING value,
+  -- so the read is real. That discrimination is also the strongest evidence
+  -- the probe worked at all -- a broken probe returns uniform sentinels.
+  local prod_force = {}
+  -- The list spans the WHOLE tier5_processing_unit_from_ore chain, not just
+  -- its assembler legs: plastic-bar, sulfur and the oil steps are crafted in
+  -- chemical plants / refineries, and a productivity bonus on any of them
+  -- would move the target rate just as surely (PR #580 review). Probing a
+  -- recipe the run never crafts is harmless -- the printer only reports
+  -- bonuses for recipes the layout actually contains.
+  for _, rn in ipairs({"processing-unit", "electronic-circuit", "advanced-circuit",
+                       "iron-plate", "copper-plate", "copper-cable",
+                       "plastic-bar", "sulfur", "sulfuric-acid",
+                       "basic-oil-processing", "advanced-oil-processing"}) do
+    prod_force[rn] = probe(function()
+      local r = game.forces.player.recipes[rn]
+      if r == nil then return nil end
+      return r.productivity_bonus
+    end)
+  end
+  local prod_entity, prod_modules = {}, {}
+  for _, m in pairs(s.find_entities_filtered{
+    type = {"assembling-machine", "furnace", "chemical-plant", "oil-refinery"}
+  }) do
+    local rn = probe(function()
+      local r = m.get_recipe()
+      if r == nil then return nil end
+      return r.name
+    end)
+    if type(rn) == "string" and rn ~= "NIL" and rn ~= "FIELD_ABSENT" then
+      -- Aggregate across EVERY machine of the recipe, not just the first seen.
+      -- First-seen made the reported bonus an arbitrary run-to-run pick when
+      -- machines of one recipe carry different module loadouts, and a
+      -- first-machine probe fault suppressed every later machine that might
+      -- have exposed a real number (PR #580 review, 3/3). Numeric readings
+      -- collapse to min/max so a heterogeneous set is visible as a spread;
+      -- faults are counted separately so they cannot masquerade as zeros.
+      local eb = probe(function() return m.productivity_bonus end)
+      local agg = prod_entity[rn]
+      if agg == nil then agg = {min = nil, max = nil, n = 0, faults = 0} end
+      if type(eb) == "number" then
+        if agg.min == nil or eb < agg.min then agg.min = eb end
+        if agg.max == nil or eb > agg.max then agg.max = eb end
+        agg.n = agg.n + 1
+      else
+        agg.faults = agg.faults + 1
+      end
+      prod_entity[rn] = agg
+      local inv = probe(function() return m.get_module_inventory() end)
+      if type(inv) ~= "string" then
+        local contents = probe(function() return inv.get_contents() end)
+        if type(contents) == "table" then
+          -- 2.0 returns an array of {name=,count=}; 1.1 returned name->count.
+          for k, c in pairs(contents) do
+            local nm, ct
+            if type(c) == "table" then nm, ct = c.name, c.count else nm, ct = k, c end
+            -- Productivity-family ONLY. Counting speed/efficiency/quality
+            -- modules here made a speed-moduled layout print a BOOSTED banner
+            -- with an empty boost list (PR #580 review, 3/3) -- a module is
+            -- only a productivity parity gap if it grants productivity.
+            if nm ~= nil and string.find(tostring(nm), "productivity", 1, true) then
+              local key = rn .. "/" .. tostring(nm)
+              prod_modules[key] = (prod_modules[key] or 0) + (ct or 1)
+            end
+          end
+        end
+      end
+    end
+  end
   helpers.write_file("harness-result.json", helpers.table_to_json{
     import_rc = storage.import_rc, ghosts = storage.ghosts, revived = storage.revived,
     factory_eeis = storage.factory_eeis, pole_networks = storage.net_count,
@@ -1164,7 +1256,13 @@ local function finalize(s, converged)
     -- verification channel that the tech rollback actually took effect.
     inserter_stack_size_bonus = game.forces.player.inserter_stack_size_bonus,
     bulk_inserter_capacity_bonus = game.forces.player.bulk_inserter_capacity_bonus,
-    belt_stack_size_bonus = game.forces.player.belt_stack_size_bonus}, false)
+    belt_stack_size_bonus = game.forces.player.belt_stack_size_bonus,
+    -- RFC-064 item 7 probe (see the block above). Three separate channels so
+    -- a research source and a module source are distinguishable, and so an
+    -- API-spelling miss is visible as FIELD_ABSENT rather than a silent zero.
+    productivity_force = prod_force,
+    productivity_entity = prod_entity,
+    productivity_modules = prod_modules}, false)
   print("HARNESS_DONE")
   -- Deliberately NOT deregistering the tick handler here: runtime
   -- `script.on_nth_tick(60, nil)` makes the server's handler set differ
