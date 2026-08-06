@@ -2271,4 +2271,54 @@ mod tests {
         assert!(build_control_lua(&m, "0eNBPFAKE", &plain)
             .contains("local WRITE_TIMESERIES_CSV = false"));
     }
+
+    /// The parity block must actually be emitted into the scenario.
+    ///
+    /// Added because a local adversarial review found this PR shipped ZERO
+    /// template tests, against this module's own ~25 `build_control_lua`
+    /// string-pin precedent — deleting the whole parity block still left
+    /// 73/73 green. These pin the three pieces that make the check work at
+    /// all: the declared table, the crafted-recipe scoping, and the kit-error
+    /// on disagreement.
+    #[test]
+    fn research_productivity_parity_block_is_emitted() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "test-prod-parity".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+
+        assert!(
+            lua.contains("local DECLARED_PRODUCTIVITY = {"),
+            "the declared axis must reach the scenario as a table"
+        );
+        assert!(
+            lua.contains("research-productivity parity:"),
+            "a disagreement must raise a kit error, which is what forces NO DATA"
+        );
+        assert!(
+            lua.contains("storage.kit_errors"),
+            "the parity finding must go to kit_errors, not a bare print"
+        );
+        // Scoped to what the layout crafts: iterating every force recipe
+        // flagged steel-plate and low-density-structure on a PU fixture, and a
+        // kit error that cries wolf gets ignored.
+        assert!(
+            lua.contains("crafted[r.name] = true"),
+            "the check must be scoped to recipes the layout actually crafts"
+        );
+    }
+
+    /// A declared value must survive into the emitted table, not just an empty
+    /// one — the empty case would pass every assertion above.
+    #[test]
+    fn declared_productivity_values_reach_the_lua_table() {
+        let mut m = fixture();
+        m.research_productivity.insert("processing-unit".to_string(), 0.10);
+        let params = RunParams::defaults_for(&m, "test-prod-declared".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(
+            lua.contains(r#"["processing-unit"]=0.1"#),
+            "declared entries must be emitted verbatim; got the table line: {:?}",
+            lua.lines().find(|l| l.contains("DECLARED_PRODUCTIVITY"))
+        );
+    }
 }
