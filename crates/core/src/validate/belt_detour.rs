@@ -509,6 +509,47 @@ mod tests {
         assert_eq!(after.exit, (7, 0));
     }
 
+    /// Consumer-level pin for the RFC-065 Phase 1 pairing tightening
+    /// (PR #574 bot round 3 asked for one at a `build_ug_pairs` consumer,
+    /// not just the primitive): a cross-TIER entrance/exit on one axis is
+    /// no longer a pair, so the run SEVERS at the entrance instead of
+    /// jumping the span — two runs where the old direction-only pairing
+    /// walked one.
+    #[test]
+    fn mixed_tier_underground_severs_the_run() {
+        use EntityDirection::East;
+        let mut entities = vec![inserter(-1, 0, East), belt(0, 0, East)];
+        entities.push(PlacedEntity {
+            name: "underground-belt".to_string(),
+            x: 1,
+            y: 0,
+            direction: East,
+            io_type: Some("input".to_string()),
+            carries: Some("iron-plate".to_string()),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "fast-underground-belt".to_string(),
+            x: 5,
+            y: 0,
+            direction: East,
+            io_type: Some("output".to_string()),
+            carries: Some("iron-plate".to_string()),
+            ..Default::default()
+        });
+        entities.push(belt(6, 0, East));
+        entities.push(inserter(7, 0, East));
+
+        let layout = LayoutResult { entities, width: 10, height: 3, ..Default::default() };
+        let runs = measure_belt_runs(&layout);
+        let first = runs.iter().find(|r| r.entry == (0, 0)).expect("run from the feeder");
+        assert_eq!(first.exit, (1, 0), "run must die at the unpaired entrance: {runs:#?}");
+        assert!(
+            runs.iter().any(|r| r.entry == (5, 0)),
+            "the orphan exit must start its own run: {runs:#?}"
+        );
+    }
+
     /// An underground pair's span counts as the tiles it spans, not just
     /// the two entities.
     #[test]

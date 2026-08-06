@@ -83,77 +83,26 @@ fn build_belt_tile_set(entities: &[PlacedEntity]) -> FxHashSet<(i32, i32)> {
 // Underground belt pair map
 // ---------------------------------------------------------------------------
 
+/// Delegates to the canonical [`crate::connectivity::build_ug_pairs`]
+/// (RFC-065 Phase 1). NOTE a deliberate semantic tightening at the
+/// hand-off: the old local copy paired by direction alone; the canonical
+/// pairing is additionally NAME-FILTERED (game rule U5, matching
+/// `check_underground_belt_pairs`'s own loop and `belt_structural`'s
+/// now-deleted private duplicate). Divergence is possible only for
+/// interleaved mixed-tier undergrounds on one axis, which the engine never
+/// emits (corpus-censused; see the RFC decision log, 2026-08-04 Phase 1).
 pub(crate) fn build_ug_pairs(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
-    let mut ug_inputs: Vec<&PlacedEntity> = Vec::new();
-    let mut ug_outputs: Vec<&PlacedEntity> = Vec::new();
-    for e in &layout.entities {
-        if is_ug_belt(&e.name) {
-            match e.io_type.as_deref() {
-                Some("input") => ug_inputs.push(e),
-                Some("output") => ug_outputs.push(e),
-                _ => {}
-            }
-        }
-    }
-
-    let mut pairs: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
-    let mut used_outputs: FxHashSet<(i32, i32)> = FxHashSet::default();
-
-    for inp in &ug_inputs {
-        let (dx, dy) = dir_to_vec(inp.direction);
-        let mut best_out: Option<&PlacedEntity> = None;
-        let mut best_dist = i32::MAX;
-
-        for out in &ug_outputs {
-            if used_outputs.contains(&(out.x, out.y)) {
-                continue;
-            }
-            if out.direction != inp.direction {
-                continue;
-            }
-            let rx = out.x - inp.x;
-            let ry = out.y - inp.y;
-            let dist = if dx != 0 {
-                if ry != 0 || (rx > 0) != (dx > 0) {
-                    continue;
-                }
-                rx.abs()
-            } else {
-                if rx != 0 || (ry > 0) != (dy > 0) {
-                    continue;
-                }
-                ry.abs()
-            };
-            if dist > 1 && dist < best_dist {
-                best_dist = dist;
-                best_out = Some(out);
-            }
-        }
-
-        if let Some(out) = best_out {
-            pairs.insert((inp.x, inp.y), (out.x, out.y));
-            pairs.insert((out.x, out.y), (inp.x, inp.y));
-            used_outputs.insert((out.x, out.y));
-        }
-    }
-    pairs
+    crate::connectivity::build_ug_pairs(&layout.entities)
 }
 
 // ---------------------------------------------------------------------------
 // Splitter sibling map
 // ---------------------------------------------------------------------------
 
+/// Delegates to the canonical [`crate::connectivity::build_splitter_siblings`]
+/// (RFC-065 Phase 1). Pure code motion — bit-identical behavior.
 pub(crate) fn build_splitter_siblings(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
-    let mut siblings: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
-    for e in &layout.entities {
-        if !is_splitter(&e.name) {
-            continue;
-        }
-        let second = splitter_second_tile(e);
-        siblings.insert((e.x, e.y), second);
-        siblings.insert(second, (e.x, e.y));
-    }
-    siblings
+    crate::connectivity::build_splitter_siblings(&layout.entities)
 }
 
 // ---------------------------------------------------------------------------
@@ -1583,43 +1532,20 @@ pub fn check_underground_belt_pairs(layout: &LayoutResult) -> Vec<ValidationIssu
         }
     }
 
-    let mut used_outputs: FxHashSet<(i32, i32)> = FxHashSet::default();
+    // RFC-065 Phase 1: the pairing itself comes from the canonical
+    // derivation — this check's previous inline loop was byte-equivalent
+    // (same-name + same-direction + nearest ahead + dist > 1, greedy in
+    // entity order) and is deleted rather than kept as a fourth copy. This
+    // check keeps what it alone owns: reach, interception, and orphan
+    // REPORTING over those pairs.
+    let pairs = crate::connectivity::build_ug_pairs(&layout.entities);
 
     for inp in &ug_inputs {
         let (dx, dy) = dir_to_vec(inp.direction);
         let surface_tier = ug_to_surface_tier(&inp.name);
         let max_reach = ug_max_reach(surface_tier) as i32;
 
-        let mut best_out: Option<&PlacedEntity> = None;
-        let mut best_dist = i32::MAX;
-
-        for out in &ug_outputs {
-            if used_outputs.contains(&(out.x, out.y)) {
-                continue;
-            }
-            if out.direction != inp.direction || out.name != inp.name {
-                continue;
-            }
-            let rx = out.x - inp.x;
-            let ry = out.y - inp.y;
-            let dist = if dx != 0 {
-                if ry != 0 || (rx > 0) != (dx > 0) {
-                    continue;
-                }
-                rx.abs()
-            } else {
-                if rx != 0 || (ry > 0) != (dy > 0) {
-                    continue;
-                }
-                ry.abs()
-            };
-            if dist > 1 && dist < best_dist {
-                best_dist = dist;
-                best_out = Some(out);
-            }
-        }
-
-        if best_out.is_none() {
+        let Some(&(out_x, out_y)) = pairs.get(&(inp.x, inp.y)) else {
             issues.push(ValidationIssue::with_pos(
                 Severity::Error,
                 "underground-belt",
@@ -1631,9 +1557,10 @@ pub fn check_underground_belt_pairs(layout: &LayoutResult) -> Vec<ValidationIssu
                 inp.y,
             ));
             continue;
-        }
-        let out = best_out.unwrap();
-        used_outputs.insert((out.x, out.y));
+        };
+        // Pairs are axis-aligned, so the axis delta is the pair distance
+        // the old loop tracked as `best_dist`.
+        let best_dist = (out_x - inp.x).abs() + (out_y - inp.y).abs();
 
         if best_dist > max_reach + 1 {
             issues.push(ValidationIssue::with_pos(
@@ -1641,7 +1568,7 @@ pub fn check_underground_belt_pairs(layout: &LayoutResult) -> Vec<ValidationIssu
                 "underground-belt",
                 format!(
                     "Underground belt pair ({},{})->({},{}) distance {} exceeds max reach {} for {}",
-                    inp.x, inp.y, out.x, out.y, best_dist, max_reach, surface_tier
+                    inp.x, inp.y, out_x, out_y, best_dist, max_reach, surface_tier
                 ),
                 inp.x,
                 inp.y,
@@ -1650,7 +1577,7 @@ pub fn check_underground_belt_pairs(layout: &LayoutResult) -> Vec<ValidationIssu
 
         // Check for intercepting UG belts
         for ug in &all_ug {
-            if (ug.x, ug.y) == (inp.x, inp.y) || (ug.x, ug.y) == (out.x, out.y) {
+            if (ug.x, ug.y) == (inp.x, inp.y) || (ug.x, ug.y) == (out_x, out_y) {
                 continue;
             }
             if ug.name != inp.name || ug.direction != inp.direction {
@@ -1675,7 +1602,7 @@ pub fn check_underground_belt_pairs(layout: &LayoutResult) -> Vec<ValidationIssu
                     "underground-belt",
                     format!(
                         "Underground belt at ({},{}) intercepts pair ({},{})->({},{})",
-                        ug.x, ug.y, inp.x, inp.y, out.x, out.y
+                        ug.x, ug.y, inp.x, inp.y, out_x, out_y
                     ),
                     ug.x,
                     ug.y,
@@ -1684,9 +1611,10 @@ pub fn check_underground_belt_pairs(layout: &LayoutResult) -> Vec<ValidationIssu
         }
     }
 
-    // Unpaired outputs
+    // Unpaired outputs: the bidirectional pair map contains an output's
+    // tile iff some input claimed it.
     for out in &ug_outputs {
-        if !used_outputs.contains(&(out.x, out.y)) {
+        if !pairs.contains_key(&(out.x, out.y)) {
             issues.push(ValidationIssue::with_pos(
                 Severity::Error,
                 "underground-belt",

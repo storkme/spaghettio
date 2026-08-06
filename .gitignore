@@ -39,6 +39,11 @@ web/.playwright-mcp/
 # Environment-local secrets
 .env
 
+# Ephemeral per-session scheduler lock (session id + pid). Accidentally
+# tracked once; every concurrent Claude session rewrites it, so tracking it
+# guarantees permanent working-tree churn.
+.claude/scheduled_tasks.lock
+
 # Web app
 web/node_modules/
 web/dist/

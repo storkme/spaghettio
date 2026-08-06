@@ -3960,6 +3960,39 @@ fn export_fold_report_json() {
     println!("wrote target/tmp/fold-report.json");
 }
 
+/// RFC-065 Phase 2b measurement probe: fold-search admission volume on the
+/// cell fixture of the pre-registered corpus (`chain-mil5ore` — the two
+/// row-bus fixtures are probed from `connectivity_parity.rs`, which cannot
+/// reach `SimFixture`). Prints how many fold candidates paid a `validate()`
+/// and how many of those were Error discards — the UPPER BOUND on the
+/// volume any sound Error-certain pre-filter could reject-fast (a wired
+/// detector covers a subset of Error causes).
+#[test]
+#[ignore = "measurement probe — prints fold-admission volume for chain-mil5ore"]
+fn phase2b_fold_admission_volume_chain_mil5ore() {
+    use spaghettio_core::bus::compaction::{
+        compact_validated_geometry, search_snake_fold_with_stats,
+    };
+
+    let fixture = SimFixture::find("chain-mil5ore");
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    )
+    .unwrap();
+    let base = fixture.compose_layout();
+    let compact = compact_validated_geometry(&base, &sr);
+    let (search, stats) = search_snake_fold_with_stats(&compact, &sr, 4);
+    println!(
+        "chain-mil5ore: validates={} error_discards={} regression_rejects={} \
+         refusals={} legal_columns={} best={:?}",
+        stats.validates_run, stats.error_discards, search.rejected_by_validation,
+        search.refusals.len(), search.legal_columns,
+        search.best.as_ref().map(|b| &b.folds),
+    );
+}
+
 /// Export `mega-chain-chem5raw` at its registry-declared capacity, for
 /// re-blessing its pinned geometry after a change.
 ///
@@ -5110,6 +5143,53 @@ fn rfc058_best_pack(
     best
 }
 
+/// RFC-058's deliberately cheap pre-route transit proxy, shared by its own
+/// premise probe and RFC-064 Phase 3's objective-ceiling probe. It is not the
+/// RFC-064 gate metric: packed 2D geometry may distort this band-centre
+/// Manhattan estimate differently from a stacked bus.
+fn rfc058_transport_cost(bands: &[Rfc058Band], sr: &spaghettio_core::models::SolverResult) -> f64 {
+    let mut produced_by: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+    for spec in &sr.machines {
+        for out in &spec.outputs {
+            for (i, b) in bands.iter().enumerate() {
+                if b.recipes.iter().any(|r| r == &spec.recipe) {
+                    produced_by.entry(out.item.as_str()).or_default().push(i);
+                }
+            }
+        }
+    }
+    let mut total = 0.0;
+    for spec in &sr.machines {
+        let consumers: Vec<usize> = bands
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.recipes.iter().any(|r| r == &spec.recipe))
+            .map(|(i, _)| i)
+            .collect();
+        if consumers.is_empty() {
+            continue;
+        }
+        for inp in &spec.inputs {
+            let rate = inp.rate * spec.count;
+            for &ci in &consumers {
+                let c = &bands[ci];
+                let d = match produced_by.get(inp.item.as_str()) {
+                    Some(ps) if !ps.is_empty() => ps
+                        .iter()
+                        .map(|&pi| {
+                            let p = &bands[pi];
+                            (p.cx() - c.cx()).abs() + (p.cy() - c.cy()).abs()
+                        })
+                        .fold(f64::INFINITY, f64::min),
+                    _ => c.cx(),
+                };
+                total += rate * d / consumers.len() as f64;
+            }
+        }
+    }
+    total
+}
+
 /// RFC-058 Phase 0 instrument: band census + packing headroom.
 ///
 /// This reproduces every number the RFC cites, so its premise is checkable by
@@ -5131,60 +5211,6 @@ fn rfc058_best_pack(
 #[test]
 #[ignore = "RFC-058 Phase 0 probe — run with --ignored --nocapture"]
 fn probe_band_packing_headroom() {
-    use spaghettio_core::models::SolverResult;
-
-    // Rate-weighted transport: for every (band, consumed item) pair, Manhattan
-    // distance to the nearest band producing it, times planned rate. External
-    // inputs are priced from a spine at x=0.
-    //
-    // This is a PROXY and it has a known directional risk, recorded in the
-    // RFC: real bus transport runs down a trunk then across to a row, which is
-    // close to Manhattan for the stacked control but not necessarily for a
-    // packed layout whose bands are no longer in one column. It may therefore
-    // flatter packing. The area result does not depend on it.
-    fn transport_cost(bands: &[Rfc058Band], sr: &SolverResult) -> f64 {
-        let mut produced_by: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
-        for spec in &sr.machines {
-            for out in &spec.outputs {
-                for (i, b) in bands.iter().enumerate() {
-                    if b.recipes.iter().any(|r| r == &spec.recipe) {
-                        produced_by.entry(out.item.as_str()).or_default().push(i);
-                    }
-                }
-            }
-        }
-        let mut total = 0.0;
-        for spec in &sr.machines {
-            let consumers: Vec<usize> = bands
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.recipes.iter().any(|r| r == &spec.recipe))
-                .map(|(i, _)| i)
-                .collect();
-            if consumers.is_empty() {
-                continue;
-            }
-            for inp in &spec.inputs {
-                let rate = inp.rate * spec.count;
-                for &ci in &consumers {
-                    let c = &bands[ci];
-                    let d = match produced_by.get(inp.item.as_str()) {
-                        Some(ps) if !ps.is_empty() => ps
-                            .iter()
-                            .map(|&pi| {
-                                let p = &bands[pi];
-                                (p.cx() - c.cx()).abs() + (p.cy() - c.cy()).abs()
-                            })
-                            .fold(f64::INFINITY, f64::min),
-                        _ => c.cx(),
-                    };
-                    total += rate * d / consumers.len() as f64;
-                }
-            }
-        }
-        total
-    }
-
     // Minimising bbox AREA alone drives every packing to a one-shelf ribbon
     // (all bands side by side). That is the shape this workstream exists to
     // remove — pu4-raw ships one at 2752x90 — so area is only a valid
@@ -5255,10 +5281,10 @@ fn probe_band_packing_headroom() {
         multi_band += 1;
         let (cw, ch) = rfc058_bbox(&bands);
         let ctrl_area = (cw as i64) * (ch as i64);
-        let ctrl_tx = transport_cost(&bands, &sr);
+        let ctrl_tx = rfc058_transport_cost(&bands, &sr);
 
         let best = rfc058_best_pack(&bands, GAP, MAX_ASPECT)
-            .map(|(area, w, h, packed)| (area, transport_cost(&packed, &sr), w, h));
+            .map(|(area, w, h, packed)| (area, rfc058_transport_cost(&packed, &sr), w, h));
 
         corpus_ctrl += ctrl_area;
         match best {
@@ -5325,6 +5351,790 @@ fn probe_band_packing_headroom() {
         cases.len(),
         packable as f64 / cases.len() as f64 * 100.0,
     );
+}
+
+/// RFC-064 Phase 3, first inert slice: rescore RFC-058's EXISTING shelf
+/// search instead of changing the placement mechanism or repairing the
+/// frozen packed router.
+///
+/// This is deliberately a geometry ceiling, not the Phase 3 gate:
+///
+/// - aspect is structural-band bbox vs structural-band bbox;
+/// - transit is RFC-058's known-risk band-centre Manhattan proxy;
+/// - no packed route is materialised, validated, or sim-anchored.
+///
+/// Its one bounded question is whether the old target-width/order search,
+/// with the builder's already-existing gap range 2..=8 retained as a scoring
+/// dimension, contains candidates capable of clearing the new shape bar. A
+/// miss here kills before correctness work; a hit only funds the routed
+/// measurement slice.
+#[test]
+#[ignore = "RFC-064 Phase 3 objective ceiling — run with --ignored --nocapture"]
+fn probe_rfc064_phase3_objective_ceiling() {
+    use spaghettio_core::bus::bands::{enumerate_pack_plans, Band, PackOrder, MAX_ASPECT};
+
+    #[derive(Debug, Clone)]
+    struct Scored {
+        gap: i32,
+        target_width: i32,
+        order: PackOrder,
+        w: i32,
+        h: i32,
+        ar_score: f64,
+        transit_score: f64,
+        composite: f64,
+        transit: f64,
+    }
+
+    fn ar(w: i32, h: i32) -> f64 {
+        w.max(h) as f64 / w.min(h).max(1) as f64
+    }
+
+    fn ar_score(native: f64, candidate: f64) -> f64 {
+        if (native - 1.0).abs() <= f64::EPSILON {
+            if (candidate - 1.0).abs() <= f64::EPSILON {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            1.0 - (candidate - 1.0) / (native - 1.0)
+        }
+    }
+
+    // RFC-058's three KC1 fixtures plus the fourth original packed winner,
+    // belt5-ore, which RFC-064 now freezes as the holdout.
+    type CeilingCase<'a> = (&'a str, &'a str, &'a str, f64, &'a [&'a str], &'a str);
+    let cases: &[CeilingCase<'_>] = &[
+        (
+            "gate",
+            "sci1-ore",
+            "automation-science-pack",
+            1.0,
+            &["iron-ore", "copper-ore"],
+            "assembling-machine-1",
+        ),
+        (
+            "gate",
+            "sci2-ore",
+            "logistic-science-pack",
+            2.0,
+            &["iron-ore", "copper-ore"],
+            "assembling-machine-2",
+        ),
+        (
+            "gate",
+            "pu1-plate",
+            "processing-unit",
+            1.0,
+            &["iron-plate", "copper-plate", "sulfuric-acid"],
+            "assembling-machine-2",
+        ),
+        (
+            "holdout",
+            "belt5-ore",
+            "transport-belt",
+            5.0,
+            &["iron-ore"],
+            "assembling-machine-2",
+        ),
+    ];
+
+    let (mut aggregate_native_transit, mut aggregate_candidate_transit) = (0.0, 0.0);
+    let mut every_fixture_has_shape_headroom = true;
+
+    println!("=== RFC-064 Phase 3 objective ceiling (UNROUTED; proxy transit) ===");
+    for (role, label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap_or_else(|e| panic!("{label}: solver refused: {e}"));
+        let native = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| panic!("{label}: native layout refused: {e}"));
+        let bands = rfc058_extract_bands(&native);
+        assert!(bands.len() >= 3, "{label}: only {} bands", bands.len());
+        let (native_w, native_h) = rfc058_bbox(&bands);
+        let native_ar = ar(native_w, native_h);
+        let native_transit = rfc058_transport_cost(&bands, &sr);
+
+        let engine_bands: Vec<Band> = bands
+            .iter()
+            .map(|b| Band {
+                x: b.x,
+                y: b.y,
+                w: b.w,
+                h: b.h,
+                row_indices: Vec::new(),
+                recipes: b.recipes.clone(),
+            })
+            .collect();
+
+        let mut candidate_count = 0usize;
+        let mut shape_count = 0usize;
+        let mut best_composite: Option<Scored> = None;
+        let mut best_shape: Option<Scored> = None;
+        for gap in 2..=8 {
+            for candidate in enumerate_pack_plans(&engine_bands, gap, MAX_ASPECT) {
+                candidate_count += 1;
+                let mut placed = bands.clone();
+                for (band, &(x, y)) in placed.iter_mut().zip(&candidate.plan.positions) {
+                    band.x = x;
+                    band.y = y;
+                }
+                let candidate_ar = ar(candidate.plan.w, candidate.plan.h);
+                let candidate_transit = rfc058_transport_cost(&placed, &sr);
+                let scored = Scored {
+                    gap,
+                    target_width: candidate.target_width,
+                    order: candidate.order,
+                    w: candidate.plan.w,
+                    h: candidate.plan.h,
+                    ar_score: ar_score(native_ar, candidate_ar),
+                    transit_score: 1.0 - candidate_transit / native_transit.max(f64::EPSILON),
+                    composite: 0.0,
+                    transit: candidate_transit,
+                };
+                let scored = Scored {
+                    composite: 0.5 * scored.ar_score + 0.5 * scored.transit_score,
+                    ..scored
+                };
+                if scored.ar_score >= 0.5 {
+                    shape_count += 1;
+                    if best_shape
+                        .as_ref()
+                        .is_none_or(|best| scored.composite > best.composite + 1e-12)
+                    {
+                        best_shape = Some(scored.clone());
+                    }
+                }
+                if best_composite
+                    .as_ref()
+                    .is_none_or(|best| scored.composite > best.composite + 1e-12)
+                {
+                    best_composite = Some(scored);
+                }
+            }
+        }
+
+        let best = best_composite.unwrap_or_else(|| panic!("{label}: search produced no plan"));
+        every_fixture_has_shape_headroom &= best_shape.is_some();
+        aggregate_native_transit += native_transit;
+        aggregate_candidate_transit += best.transit;
+        println!(
+            "{role:<7} {label:<10} native {native_w}x{native_h} AR={native_ar:.3}; \
+             {candidate_count} plans, {shape_count} clear AR_score>=0.5"
+        );
+        println!(
+            "         composite-best {}x{} gap={} target={} order={:?}: \
+             AR_score={:+.3} Transit_score(est)={:+.3} Composite={:+.3}",
+            best.w,
+            best.h,
+            best.gap,
+            best.target_width,
+            best.order,
+            best.ar_score,
+            best.transit_score,
+            best.composite,
+        );
+        if let Some(shape) = best_shape {
+            println!(
+                "         best shape-clearing plan: {}x{} gap={} target={} order={:?}: \
+                 AR_score={:+.3} Transit_score(est)={:+.3} Composite={:+.3}",
+                shape.w,
+                shape.h,
+                shape.gap,
+                shape.target_width,
+                shape.order,
+                shape.ar_score,
+                shape.transit_score,
+                shape.composite,
+            );
+        }
+    }
+
+    let aggregate_transit_score =
+        1.0 - aggregate_candidate_transit / aggregate_native_transit.max(f64::EPSILON);
+    println!(
+        "aggregate composite-best Transit_score(est)={aggregate_transit_score:+.3} \
+         ({aggregate_native_transit:.1} -> {aggregate_candidate_transit:.1})"
+    );
+    assert!(
+        every_fixture_has_shape_headroom,
+        "the unchanged RFC-058 shelf search cannot clear AR_score>=0.5 on every frozen fixture"
+    );
+}
+
+/// RFC-064 Phase 3, second inert slice: materialize the four plans selected by
+/// the unrouted ceiling and run the faithful post-route metric on the resulting
+/// artifacts. This remains reporting-only: explicit selection is fail-closed,
+/// never used by the default builder, and a refusal or validation error is
+/// recorded as a miss rather than replaced by the native layout.
+#[test]
+#[ignore = "RFC-064 Phase 3 routed selected-plan probe — run with --ignored --nocapture"]
+fn probe_rfc064_phase3_routed_selected_plans() {
+    use spaghettio_core::bus::bands::{PackOrder, PackSelection};
+    use spaghettio_core::bus::transit::measure_realized_transit;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+
+    fn non_pole_bbox(layout: &spaghettio_core::models::LayoutResult) -> (i32, i32) {
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for entity in &layout.entities {
+            if entity.name.contains("electric-pole") {
+                continue;
+            }
+            let (width, height) = spaghettio_core::common::entity_size(&entity.name);
+            min_x = min_x.min(entity.x);
+            min_y = min_y.min(entity.y);
+            max_x = max_x.max(entity.x + width as i32);
+            max_y = max_y.max(entity.y + height as i32);
+        }
+        if min_x == i32::MAX {
+            (0, 0)
+        } else {
+            (max_x - min_x, max_y - min_y)
+        }
+    }
+
+    fn aspect((width, height): (i32, i32)) -> f64 {
+        width.max(height) as f64 / width.min(height).max(1) as f64
+    }
+
+    fn shape_score(native: f64, candidate: f64) -> f64 {
+        if (native - 1.0).abs() <= f64::EPSILON {
+            if (candidate - 1.0).abs() <= f64::EPSILON {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            1.0 - (candidate - 1.0) / (native - 1.0)
+        }
+    }
+
+    type RoutedCase<'a> = (
+        &'a str,
+        &'a str,
+        &'a str,
+        f64,
+        &'a [&'a str],
+        &'a str,
+        PackSelection,
+    );
+    let cases: &[RoutedCase<'_>] = &[
+        (
+            "gate",
+            "sci1-ore",
+            "automation-science-pack",
+            1.0,
+            &["iron-ore", "copper-ore"],
+            "assembling-machine-1",
+            PackSelection {
+                gap: 7,
+                target_width: 30,
+                order: PackOrder::Source,
+            },
+        ),
+        (
+            "gate",
+            "sci2-ore",
+            "logistic-science-pack",
+            2.0,
+            &["iron-ore", "copper-ore"],
+            "assembling-machine-2",
+            PackSelection {
+                gap: 7,
+                target_width: 56,
+                order: PackOrder::HeightDescending,
+            },
+        ),
+        (
+            "gate",
+            "pu1-plate",
+            "processing-unit",
+            1.0,
+            &["iron-plate", "copper-plate", "sulfuric-acid"],
+            "assembling-machine-2",
+            PackSelection {
+                gap: 2,
+                target_width: 49,
+                order: PackOrder::Source,
+            },
+        ),
+        (
+            "holdout",
+            "belt5-ore",
+            "transport-belt",
+            5.0,
+            &["iron-ore"],
+            "assembling-machine-2",
+            PackSelection {
+                gap: 8,
+                target_width: 36,
+                order: PackOrder::HeightDescending,
+            },
+        ),
+    ];
+
+    let mut native_total = 0.0;
+    let mut candidate_total = 0.0;
+    let mut materialized = 0usize;
+    let mut validated = 0usize;
+    let mut measured = 0usize;
+    println!("=== RFC-064 Phase 3 routed selected plans (faithful transit) ===");
+    for (role, label, item, rate, inputs, machine, selection) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|value| value.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap_or_else(|error| panic!("{label}: solver refused: {error}"));
+        let base = layout::LayoutOptions {
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            horizontal_candidate: false,
+            ..Default::default()
+        };
+        let native = layout::build_bus_layout(&sr, base.clone())
+            .unwrap_or_else(|error| panic!("{label}: native layout refused: {error}"));
+        let native_transit = measure_realized_transit(&native, &sr, 0.5)
+            .unwrap_or_else(|error| panic!("{label}: native transit unmeasurable: {error}"));
+        native_total += native_transit.total;
+        let native_dims = non_pole_bbox(&native);
+        let native_aspect = aspect(native_dims);
+
+        let candidate = match layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                band_packing: true,
+                band_pack_selection: Some(*selection),
+                ..base
+            },
+        ) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                println!(
+                    "{role:<7} {label:<10} native {}x{} transit={:.2}; REFUSED: {error}",
+                    native_dims.0, native_dims.1, native_transit.total,
+                );
+                continue;
+            }
+        };
+        materialized += 1;
+        let candidate_dims = non_pole_bbox(&candidate);
+        let ar_score = shape_score(native_aspect, aspect(candidate_dims));
+
+        let issues = match validate::validate(&candidate, Some(&sr), LayoutStyle::Bus) {
+            Ok(issues) => issues,
+            Err(error) => error.issues,
+        };
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|issue| issue.severity == Severity::Error)
+            .collect();
+        if !errors.is_empty() {
+            let mut categories: std::collections::BTreeMap<&str, usize> = Default::default();
+            for issue in &errors {
+                *categories.entry(issue.category.as_str()).or_default() += 1;
+            }
+            println!(
+                "{role:<7} {label:<10} native {}x{} transit={:.2}; selected {}x{} \
+                 AR_score={ar_score:+.3}; INVALID: {} errors {categories:?}",
+                native_dims.0,
+                native_dims.1,
+                native_transit.total,
+                candidate_dims.0,
+                candidate_dims.1,
+                errors.len(),
+            );
+            continue;
+        }
+        validated += 1;
+
+        let candidate_transit = match measure_realized_transit(&candidate, &sr, 0.5) {
+            Ok(measurement) => measurement,
+            Err(error) => {
+                println!("{role:<7} {label:<10} VALID but transit unmeasurable: {error}");
+                continue;
+            }
+        };
+        measured += 1;
+        candidate_total += candidate_transit.total;
+        let transit_score = 1.0 - candidate_transit.total / native_transit.total;
+        println!(
+            "{role:<7} {label:<10} native {}x{} transit={:.2}; selected {}x{} \
+             transit={:.2}: AR_score={ar_score:+.3} Transit_score={transit_score:+.3}",
+            native_dims.0,
+            native_dims.1,
+            native_transit.total,
+            candidate_dims.0,
+            candidate_dims.1,
+            candidate_transit.total,
+        );
+    }
+    println!(
+        "summary: materialized={materialized}/4 validated={validated}/4 measured={measured}/4; \
+         native transit baseline sum={native_total:.2}"
+    );
+    if measured == cases.len() {
+        println!(
+            "aggregate Transit_score={:+.3} ({native_total:.2} -> {candidate_total:.2})",
+            1.0 - candidate_total / native_total,
+        );
+    } else {
+        println!("aggregate Transit_score NOT ADJUDICATED — every refusal/error stays in scope");
+    }
+}
+
+/// RFC-064 Phase 3, third measurement slice: evaluate the whole frozen
+/// shelf-search space, rather than letting the unrouted proxy nominate one
+/// plan per fixture.  A candidate is a miss when its exact selection refuses
+/// to materialize or validates with an error; neither case is replaced by the
+/// native layout.  Realized transit is deliberately measured only after the
+/// zero-error validation gate.
+///
+/// This is report-only evidence, not a selection policy.  It is ignored both
+/// because it materializes every shape-clearing plan and because a change in
+/// the frozen router should update the reported admissibility landscape before
+/// it can be promoted into a gate.
+#[test]
+#[ignore = "RFC-064 Phase 3 candidate-wide admissibility probe — run with --ignored --nocapture"]
+fn probe_rfc064_phase3_candidate_wide_admissibility() {
+    use spaghettio_core::bus::bands::{enumerate_pack_plans, Band, PackSelection, MAX_ASPECT};
+    use spaghettio_core::bus::transit::measure_realized_transit;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+
+    #[derive(Clone, Debug)]
+    struct Scored {
+        selection: PackSelection,
+        w: i32,
+        h: i32,
+        ar_score: f64,
+        transit: f64,
+        transit_score: f64,
+        composite: f64,
+    }
+
+    fn non_pole_bbox(layout: &spaghettio_core::models::LayoutResult) -> (i32, i32) {
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for entity in &layout.entities {
+            if entity.name.contains("electric-pole") {
+                continue;
+            }
+            let (width, height) = spaghettio_core::common::entity_size(&entity.name);
+            min_x = min_x.min(entity.x);
+            min_y = min_y.min(entity.y);
+            max_x = max_x.max(entity.x + width as i32);
+            max_y = max_y.max(entity.y + height as i32);
+        }
+        if min_x == i32::MAX {
+            (0, 0)
+        } else {
+            (max_x - min_x, max_y - min_y)
+        }
+    }
+
+    fn aspect(w: i32, h: i32) -> f64 {
+        w.max(h) as f64 / w.min(h).max(1) as f64
+    }
+
+    fn shape_score(native: f64, candidate: f64) -> f64 {
+        if (native - 1.0).abs() <= f64::EPSILON {
+            if (candidate - 1.0).abs() <= f64::EPSILON {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            1.0 - (candidate - 1.0) / (native - 1.0)
+        }
+    }
+
+    fn validation_issues(
+        candidate: &spaghettio_core::models::LayoutResult,
+        sr: &spaghettio_core::models::SolverResult,
+    ) -> Vec<spaghettio_core::validate::ValidationIssue> {
+        match validate::validate(candidate, Some(sr), LayoutStyle::Bus) {
+            Ok(issues) => issues,
+            Err(error) => error.issues,
+        }
+    }
+
+    type CandidateCase<'a> = (&'a str, &'a str, &'a str, f64, &'a [&'a str], &'a str);
+    // RFC-058's three KC1 fixtures plus its frozen RFC-064 holdout.
+    let cases: &[CandidateCase<'_>] = &[
+        (
+            "gate",
+            "sci1-ore",
+            "automation-science-pack",
+            1.0,
+            &["iron-ore", "copper-ore"],
+            "assembling-machine-1",
+        ),
+        (
+            "gate",
+            "sci2-ore",
+            "logistic-science-pack",
+            2.0,
+            &["iron-ore", "copper-ore"],
+            "assembling-machine-2",
+        ),
+        (
+            "gate",
+            "pu1-plate",
+            "processing-unit",
+            1.0,
+            &["iron-plate", "copper-plate", "sulfuric-acid"],
+            "assembling-machine-2",
+        ),
+        (
+            "holdout",
+            "belt5-ore",
+            "transport-belt",
+            5.0,
+            &["iron-ore"],
+            "assembling-machine-2",
+        ),
+    ];
+
+    let mut enumerated = 0usize;
+    let mut materialized = 0usize;
+    let mut below_shape = 0usize;
+    let mut shape_eligible = 0usize;
+    let mut refusals = 0usize;
+    let mut validation_errors = 0usize;
+    let mut admissible = 0usize;
+    let mut transit_unmeasurable = 0usize;
+    let mut validation_categories: std::collections::BTreeMap<String, usize> = Default::default();
+    let (mut aggregate_native_transit, mut aggregate_candidate_transit) = (0.0, 0.0);
+    let mut fixtures_with_measured_best = 0usize;
+
+    println!("=== RFC-064 Phase 3 candidate-wide admissibility ===");
+    for (role, label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|value| value.to_string()).collect();
+        let sr = match solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        ) {
+            Ok(sr) => sr,
+            Err(error) => {
+                println!("{role:<7} {label:<10} SOLVER REFUSED: {error}");
+                continue;
+            }
+        };
+        let base = layout::LayoutOptions {
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            horizontal_candidate: false,
+            ..Default::default()
+        };
+        let native = match layout::build_bus_layout(&sr, base.clone()) {
+            Ok(layout) => layout,
+            Err(error) => {
+                println!("{role:<7} {label:<10} NATIVE REFUSED: {error}");
+                continue;
+            }
+        };
+        let native_transit = match measure_realized_transit(&native, &sr, 0.5) {
+            Ok(measurement) => measurement.total,
+            Err(error) => {
+                println!("{role:<7} {label:<10} NATIVE TRANSIT UNMEASURABLE: {error}");
+                continue;
+            }
+        };
+        let native_errors: Vec<_> = validation_issues(&native, &sr)
+            .into_iter()
+            .filter(|issue| issue.severity == Severity::Error)
+            .collect();
+        if !native_errors.is_empty() {
+            let mut categories: std::collections::BTreeMap<&str, usize> = Default::default();
+            for issue in &native_errors {
+                *categories.entry(issue.category.as_str()).or_default() += 1;
+            }
+            println!(
+                "{role:<7} {label:<10} native has {} error reports {categories:?}; \
+                 candidate error categories below are not a clean regression baseline",
+                native_errors.len(),
+            );
+        }
+
+        let bands = rfc058_extract_bands(&native);
+        if bands.len() < 3 {
+            println!(
+                "{role:<7} {label:<10} only {} structural bands — no packing search",
+                bands.len()
+            );
+            continue;
+        }
+        let (native_w, native_h) = non_pole_bbox(&native);
+        let native_ar = aspect(native_w, native_h);
+        let engine_bands: Vec<Band> = bands
+            .iter()
+            .map(|band| Band {
+                x: band.x,
+                y: band.y,
+                w: band.w,
+                h: band.h,
+                row_indices: Vec::new(),
+                recipes: band.recipes.clone(),
+            })
+            .collect();
+
+        let (mut case_enumerated, mut case_materialized, mut case_below_shape, mut case_eligible) =
+            (0usize, 0usize, 0usize, 0usize);
+        let (mut case_refusals, mut case_validation_errors, mut case_admissible) =
+            (0usize, 0usize, 0usize);
+        let mut case_transit_unmeasurable = 0usize;
+        let mut case_categories: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut best: Option<Scored> = None;
+
+        for gap in 2..=8 {
+            for candidate in enumerate_pack_plans(&engine_bands, gap, MAX_ASPECT) {
+                case_enumerated += 1;
+                enumerated += 1;
+                let selection = candidate.selection();
+                let packed = match layout::build_bus_layout(
+                    &sr,
+                    layout::LayoutOptions {
+                        band_packing: true,
+                        band_pack_selection: Some(selection),
+                        ..base.clone()
+                    },
+                ) {
+                    Ok(layout) => layout,
+                    Err(_) => {
+                        case_refusals += 1;
+                        refusals += 1;
+                        continue;
+                    }
+                };
+                case_materialized += 1;
+                materialized += 1;
+                let (candidate_w, candidate_h) = non_pole_bbox(&packed);
+                let ar_score = shape_score(native_ar, aspect(candidate_w, candidate_h));
+                if ar_score < 0.5 {
+                    case_below_shape += 1;
+                    below_shape += 1;
+                    continue;
+                }
+                case_eligible += 1;
+                shape_eligible += 1;
+                let errors: Vec<_> = validation_issues(&packed, &sr)
+                    .into_iter()
+                    .filter(|issue| issue.severity == Severity::Error)
+                    .collect();
+                if !errors.is_empty() {
+                    case_validation_errors += 1;
+                    validation_errors += 1;
+                    for issue in errors {
+                        *case_categories.entry(issue.category.clone()).or_default() += 1;
+                        *validation_categories.entry(issue.category).or_default() += 1;
+                    }
+                    continue;
+                }
+                case_admissible += 1;
+                admissible += 1;
+
+                let transit = match measure_realized_transit(&packed, &sr, 0.5) {
+                    Ok(measurement) => measurement.total,
+                    Err(error) => {
+                        case_transit_unmeasurable += 1;
+                        transit_unmeasurable += 1;
+                        println!(
+                            "{role:<7} {label:<10} VALID selection {selection:?} has unmeasurable transit: {error}"
+                        );
+                        continue;
+                    }
+                };
+                let transit_score = 1.0 - transit / native_transit.max(f64::EPSILON);
+                let scored = Scored {
+                    selection,
+                    w: candidate_w,
+                    h: candidate_h,
+                    ar_score,
+                    transit,
+                    transit_score,
+                    composite: 0.5 * ar_score + 0.5 * transit_score,
+                };
+                if best
+                    .as_ref()
+                    .is_none_or(|current| scored.composite > current.composite + 1e-12)
+                {
+                    best = Some(scored);
+                }
+            }
+        }
+
+        println!(
+            "{role:<7} {label:<10} final native {native_w}x{native_h} AR={native_ar:.3} \
+             transit={native_transit:.2}; plans={case_enumerated}, materialized={case_materialized}, \
+             below-AR={case_below_shape}, final AR_score>=0.5={case_eligible}: \
+             refusal={case_refusals}, validation-error={case_validation_errors}, admissible={case_admissible} \
+             (transit measured={}/{case_admissible})",
+            case_admissible - case_transit_unmeasurable,
+        );
+        if !case_categories.is_empty() {
+            println!("         validation error reports by category: {case_categories:?}");
+        }
+        match &best {
+            Some(best) => println!(
+                "         best measured admissible final {}x{} selection={:?}: AR_score={:+.3} \
+                 Transit_score={:+.3} Composite={:+.3} transit={:.2}",
+                best.w,
+                best.h,
+                best.selection,
+                best.ar_score,
+                best.transit_score,
+                best.composite,
+                best.transit,
+            ),
+            None => println!(
+                "         no measured admissible candidate — refusals and validation errors remain misses"
+            ),
+        }
+        if let Some(best) = best {
+            fixtures_with_measured_best += 1;
+            aggregate_native_transit += native_transit;
+            aggregate_candidate_transit += best.transit;
+        }
+    }
+
+    println!(
+        "summary: enumerated={enumerated}, materialized={materialized}, below-final-AR={below_shape}, \
+         final-AR_score>=0.5={shape_eligible}; refusal={refusals}, \
+         validation-error={validation_errors}, admissible={admissible} (transit-unmeasurable={transit_unmeasurable})"
+    );
+    println!("validation error reports by category: {validation_categories:?}");
+    if fixtures_with_measured_best == cases.len() {
+        println!(
+            "aggregate best-admissible Transit_score={:+.3} ({aggregate_native_transit:.2} -> \
+             {aggregate_candidate_transit:.2})",
+            1.0 - aggregate_candidate_transit / aggregate_native_transit.max(f64::EPSILON),
+        );
+    } else {
+        println!(
+            "aggregate Transit_score NOT ADJUDICATED — only {fixtures_with_measured_best}/{} fixtures \
+             have a measured admissible best",
+            cases.len(),
+        );
+    }
+    println!("refusal is a miss: no refusing candidate was replaced with a native layout.");
 }
 
 /// RFC-058's premise must not evaporate silently.
@@ -5736,6 +6546,10 @@ fn probe_trunk_spike_gate_fixtures() {
         starts: &[(i32, i32)],
         targets: &FxHashSet<(i32, i32)>,
     ) -> Option<Vec<(i32, i32)>> {
+        type Tile = (i32, i32);
+        type RouteState = (Tile, bool);
+        type QueueEntry = (i32, i32, Tile, bool);
+
         // Admissible heuristic: Manhattan distance to the targets' bounding
         // rectangle. Every target lies inside the rect, so this never
         // exceeds the true remaining cost and is 0 on every target tile —
@@ -5748,9 +6562,9 @@ fn probe_trunk_spike_gate_fixtures() {
         let h = move |t: (i32, i32)| {
             (tx0 - t.0).max(t.0 - tx1).max(0) + (ty0 - t.1).max(t.1 - ty1).max(0)
         };
-        let mut open: BinaryHeap<Reverse<(i32, i32, (i32, i32), bool)>> = BinaryHeap::new();
-        let mut best: FxHashMap<((i32, i32), bool), i32> = FxHashMap::default();
-        let mut parent: FxHashMap<((i32, i32), bool), ((i32, i32), bool)> = FxHashMap::default();
+        let mut open: BinaryHeap<Reverse<QueueEntry>> = BinaryHeap::new();
+        let mut best: FxHashMap<RouteState, i32> = FxHashMap::default();
+        let mut parent: FxHashMap<RouteState, RouteState> = FxHashMap::default();
         for &s in starts {
             for horizontal in [true, false] {
                 if !grid.passable(s, horizontal) {

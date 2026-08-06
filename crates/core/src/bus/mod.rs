@@ -24,6 +24,9 @@
 //! - [`junction_solver`] — region-growth outer loop for resolving contested crossings
 //! - [`junction_sat_strategy`] — SAT-backed `JunctionStrategy` fallback
 //! - [`junction`] — `Junction` snapshot type consumed by strategies
+//! - [`decomposition_search`] — evaluates base-production `DecompositionCandidate`s, picks a winner
+//! - [`candidate_runner`] — RFC-064 P2b: general produce→transform→verdict→rank loop for post-layout `LayoutTransform`s (new, parallel entry point; not yet wired into `build_bus_layout`)
+//! - [`compaction`] — RFC-057 topology-preserving repacking (`compact_validated_geometry`, `search_snake_fold`)
 
 pub mod balancer;
 pub mod bands;
@@ -33,6 +36,7 @@ pub mod balancer_classify;
 pub mod balancer_generate;
 pub mod balancer_library;
 pub mod balancer_topology;
+pub mod candidate_runner;
 pub mod decomposition_search;
 pub mod di_cell;
 pub(crate) mod ghost_occupancy;
@@ -51,10 +55,12 @@ pub mod layout;
 pub mod output_merger;
 pub mod partitioner;
 pub mod placer;
+pub mod row_rotation;
 pub mod stacking_ctx;
 pub(crate) mod shape_fix;
 pub mod tapoff_search;
 pub mod template_validate;
 pub mod templates;
+pub mod transit;
 pub mod trunk_renderer;
 pub mod voider;
