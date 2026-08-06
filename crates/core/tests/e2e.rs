@@ -10836,10 +10836,11 @@ fn belt_detour_survey() {
 // runs clearing both calibrated floors must not move. Run-LIST drift is
 // legal and expected where D5 weave geometry heals the oracle's phantom
 // entrance-predecessor cuts (see the RFC decision log's slice-2 pick-up
-// entry) — the `#[ignore]` full differential quantifies it per fixture for
-// adjudication; the fast in-suite gate pins FULL run-list identity (the
-// pre-registered strength) on two cheap fixtures that carry no D-class
-// geometry today.
+// entry) — the always-on full differential below enforces the adjudicated
+// drift table exactly; the fast gate additionally pins FULL run-list
+// identity (the pre-registered strength) on two cheap fixtures that carry
+// no D-class geometry today, a stronger per-fixture pin than the
+// verdict-table gate makes.
 // ---------------------------------------------------------------------------
 
 type DetourVerdict = ((i32, i32), (i32, i32), i64, i64);
@@ -10885,11 +10886,14 @@ fn belt_detour_migration_differential_fast() {
     }
 }
 
-// Full-corpus differential. Run with:
-//   cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
-//       belt_detour_migration_differential --exact --ignored --nocapture
+// Full-corpus differential — ALWAYS-ON since PR #583 bot round 1 (major,
+// 3/3): an `#[ignore]` gate never runs in CI, and the adjudicated-drift
+// table below is exactly the invariant that must not move silently. The
+// ~35 duplicate fixture builds this adds to the default suite are the
+// accepted cost of continuous enforcement (they rebuild fixtures the
+// suite already builds elsewhere; zone-cache-pinned in CI per the
+// measurement protocol).
 #[test]
-#[ignore]
 fn belt_detour_migration_differential() {
     use spaghettio_core::validate::belt_detour::{measure_belt_runs, reference, BeltRun};
 
@@ -11014,8 +11018,19 @@ fn belt_detour_migration_differential() {
     for (name, v, side) in &verdict_drift {
         eprintln!("VERDICT {side}: {name} {v:?}");
     }
+    // No silent corpus shrinkage (bot round 1 on PR #583): a fixture that
+    // stops building must fail this gate, not narrow it.
+    assert_eq!(built, 35, "survey corpus shrank — fixtures failed to build");
+    // Set-style comparison (bot round 1): ordering here follows
+    // `survey_fixtures()` iteration order, which is not part of the
+    // contract — sort both sides so corpus reordering cannot produce a
+    // spurious ordering failure.
+    let mut got = verdict_drift;
+    let mut expected = expected_drift;
+    got.sort();
+    expected.sort();
     assert_eq!(
-        verdict_drift, expected_drift,
+        got, expected,
         "unadjudicated verdict drift — take it to the RFC-065 decision log before merge"
     );
 }

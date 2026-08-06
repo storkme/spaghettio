@@ -135,8 +135,19 @@ pub fn measure_belt_runs(layout: &LayoutResult) -> Vec<BeltRun> {
 
 /// [`measure_belt_runs`] over a caller-supplied graph — the seam a future
 /// once-per-`validate()` shared derivation hoists through.
+///
+/// CONTRACT: `graph` must be derived from THIS `layout`
+/// (`derive_connectivity(layout)`, unmutated since) — classes and edges
+/// are entity-index-aligned, so a stale or foreign graph misindexes
+/// silently. Asserted on the cheap alignment signal below (bot round 1 on
+/// PR #583).
 pub fn measure_belt_runs_on(layout: &LayoutResult, graph: &ConnectivityGraph) -> Vec<BeltRun> {
     let n = layout.entities.len();
+    assert_eq!(
+        graph.classes.len(),
+        n,
+        "measure_belt_runs_on: graph is not derived from this layout"
+    );
     let belt_like = |i: usize| {
         matches!(
             graph.classes[i],
@@ -159,8 +170,15 @@ pub fn measure_belt_runs_on(layout: &LayoutResult, graph: &ConnectivityGraph) ->
                 if belt_like(e.src) && belt_like(e.dst) {
                     // A belt-like node emits at most one flow edge (one
                     // surface_flow call per belt/exit, one span per
-                    // entrance) — builder drift here would corrupt runs.
-                    debug_assert!(flow_out[e.src].is_none());
+                    // entrance). Builder drift here would silently corrupt
+                    // run decomposition via last-write-wins, so the guard
+                    // is always-on, not debug-only (bot round 1 on
+                    // PR #583); it is one branch per edge, once per
+                    // validate, nowhere near a hot path.
+                    assert!(
+                        flow_out[e.src].is_none(),
+                        "derive_connectivity emitted two flow edges from one belt-like node"
+                    );
                     flow_out[e.src] = Some(e.dst);
                     in_flow[e.dst] += 1;
                 } else if graph.classes[e.src] == NodeClass::Splitter && belt_like(e.dst) {

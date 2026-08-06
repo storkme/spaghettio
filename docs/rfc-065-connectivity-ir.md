@@ -1379,3 +1379,39 @@ Per `CLAUDE.md` § verification protocol:
   `run_candidate_field` has no production caller and its test
   harness count-gates belt-detour via `Policy::fold()` — revisit if
   it ever gains one.
+- **2026-08-06 — PR #583 bot round 1 (union ×3; two majors at 3/3,
+  six minors): dispositions — the strongest round of this arc, and
+  its first major is taken in full.** (major 1, ACCEPTED) The corpus
+  differential was `#[ignore]` — the RFC's own written gate never
+  ran in CI, leaving unpinned fixtures open to silent verdict drift
+  (a 1→0 over-merge would have passed). Promoted to always-on in the
+  default suite; the ~35 duplicate fixture builds are the accepted
+  cost of continuous enforcement, noted in the test comment for the
+  owner to demote deliberately if CI time matters more. (major 2,
+  DECLINED with rationale) "ReportOnly masks ALL fold-introduced
+  detours, not just seams" — factually true and BY DESIGN: the
+  2026-08-01 selection exclusion this mirrors is categorical, not
+  seam-scoped, because an uncalibrated survey-derived diagnostic must
+  not steer shipping layouts through ANY channel; fold transit
+  quality is priced by RFC-064's objective (aspect + rate-weighted
+  belt transit), which is the calibrated channel — a fold introducing
+  a genuine monster detour pays there, in score, where calibration
+  exists. Seam-vs-non-seam attribution is real future work and
+  belongs to the calibration follow-up already noted. (minor,
+  ACCEPTED ×4) verdict-drift comparison is now set-style (sorted both
+  sides); `built == 35` asserted so the corpus cannot silently
+  shrink; `measure_belt_runs_on` documents and asserts its
+  graph-belongs-to-layout contract on the classes-length signal; the
+  one-flow-edge-per-node invariant upgraded from `debug_assert` to an
+  always-on assert (one branch per edge, once per validate — silent
+  last-write-wins corruption is the never-degrade-silently failure
+  mode). (minor, DECLINED ×2) The kovarex pin "enforces calibration
+  debt": pins pin measured shipping reality — the run measures 2.5×
+  and the check fires; when a calibration slice reclassifies catalyst
+  returns, the pin changes WITH it, and the debt is tracked where
+  debt lives (this log), not by leaving the suite blind. The fast
+  gate's "poor cost/coverage + fails loudly on future weave
+  geometry": failing loudly on new D-class geometry is its designed
+  behavior (the assert message says exactly what to do), the two
+  builds cost seconds, and its full run-list identity is a stronger
+  per-fixture pin than the verdict-table gate makes — kept.
