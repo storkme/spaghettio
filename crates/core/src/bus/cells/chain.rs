@@ -1731,6 +1731,8 @@ fn compose_chain_with_capacity_and_order(
         width,
         height,
         stacking: 1,
+        // Declared axes travel with the rebuilt result — see row_rotation.
+        research_productivity: Default::default(),
         // The composed layout DECLARES the capacity its cells were sized
         // at — registry world-matching (`verification_note`) reads this.
         inserter_capacity,
