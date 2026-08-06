@@ -175,6 +175,9 @@ cmd_override() {
     echo "  Nothing to override, and restoring would tighten a state this script" >&2
     echo "  did not set. Investigate why protection is already loose:" >&2
     echo "    scripts/review-gate.sh status" >&2
+    echo "  This is not a dead end: while enforce_admins is false the required" >&2
+    echo "  check does not bind admins, so a plain \`gh pr merge $pr --admin\`" >&2
+    echo "  already works. You do not need an override to land this." >&2
     exit 2
   fi
 
@@ -229,11 +232,13 @@ here so the bypass is visible to anyone reading this PR later. \`enforce_admins\
 is flipped for the duration of this merge only; the required check stays in
 force for every other PR.
 
-*If no \"override succeeded\" comment follows this one, the merge did **not**
-happen — see the operator's terminal for why. If this comment is the last word
-on the PR, the run may have been killed mid-override: check protection with
-\`scripts/review-gate.sh status\` and restore \`enforce_admins\` if it reads
-false.*" >/dev/null || {
+*If no \"override succeeded\" comment follows this one, the merge **may not**
+have happened — check this PR's merged status, and see the operator's terminal
+for why. (The confirmation comment can itself fail to post, so its absence is
+not proof; GitHub's own merged state is authoritative.) If this comment is the
+last word on the PR, the run may have been killed mid-override: check
+protection with \`scripts/review-gate.sh status\` and restore
+\`enforce_admins\` if it reads false.*" >/dev/null || {
     echo "!! could not comment on #$pr (does it exist?) — nothing touched." >&2
     trap - EXIT
     exit 1
@@ -257,7 +262,12 @@ false.*" >/dev/null || {
   # and if the restore fails or the run is killed there, that false claim is
   # the PR's permanent last word (PR #588 re-review). The merge has already
   # happened by this point, so nothing is lost by waiting.
-  if restore_enforce; then
+  # Retried once before reporting failure, because the EXIT trap would retry
+  # anyway *after* the warning is posted. A first-POST-fails/retry-succeeds run
+  # therefore left a permanent "main is admin-bypassable right now" on a PR
+  # whose protection was, by then, fine (PR #588 round-3 review). Doing the
+  # retry here instead means the comment describes the end state.
+  if restore_enforce || restore_enforce; then
     gh pr comment "$pr" -R "$REPO" \
       --body "**Override succeeded** — #$pr merged past \`$CHECK\`, and \`enforce_admins\` has been restored (verified by read-back)." \
       >/dev/null || echo "  (merged and restored, but the confirmation comment failed to post)"
