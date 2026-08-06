@@ -1741,3 +1741,63 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   rewrites >4 rather than failing loudly, which is against this project's
   never-degrade-silently convention; (f) the regression pins exact validator
   strings and hardcoded row indices. (a), (b) and (d) can move a gate verdict.
+
+- **2026-08-06 — the two §(b) implementations are one: `objective.rs`'s was
+  non-conforming and is deleted.** Both `objective::measure` and
+  `bus::transit::measure_realized_transit` implemented §(b) independently. The
+  question was not which was nicer — measuring them against each other first
+  showed they disagree by **−29% to +98%** on real fixtures, and in *both*
+  directions, so the error does not cancel in `1 − T(cand)/T(native)`:
+
+  | fixture | objective | bus::transit | delta |
+  |---|---:|---:|---:|
+  | ac5-plate-native | 2879.95 | 5549.00 | +92.7% |
+  | ac5-plate-compact | 2719.95 | 5389.00 | +98.1% |
+  | asp5-ore | 587.50 | 810.00 | +37.9% |
+  | ec10-ore | 2163.25 | 1532.50 | −29.2% |
+  | lsp2-ore | 809.80 | 1164.50 | +43.8% |
+
+  The cause is that they aggregate over opposite sides of the edge, and **§(b)
+  already says which**: "run a directed multi-source shortest-path search from
+  every matching producer-output transport terminal; measure the distance to
+  every distinct matching consumer-input terminal; and define `path_length(e)`
+  as the arithmetic mean of those **consumer-terminal** distances."
+  `bus::transit` does exactly that; `objective` meaned over *producers*. The
+  same paragraph settles the other two disputes the reviewers had raised
+  separately: "any other unreachable terminal makes the metric unmeasurable and
+  the candidate inadmissible — never silently fall back" (transit's refusal,
+  not objective's partial averaging), and the direct-insertion Manhattan rule
+  applies only "with no transport network" (transit's exact condition, so
+  objective's mixing of DI samples into belt means was the violation, not
+  transit's refusal to mix). **Four counts, one spec, decided before either was
+  written.** So this is a bug fix, not an arbitration, and ~340 lines of
+  duplicate implementation are deleted rather than reconciled.
+  **Blast radius checked before acting**: `objective::measure` is consumed only
+  by `candidate_runner`, which has no shipping caller, so no recorded RFC-064
+  gate result was computed with the non-conforming metric — Phase 3's numbers
+  already came from `bus::transit`. On fixtures where `objective` reported
+  unattributed and partial edges (ac5: 1 unattributed, 2 partial; lsp2: 4
+  unattributed) `bus::transit` measures them cleanly, so adopting it *removes*
+  refusals rather than causing them.
+  **What went with it**: `LayoutMeasure`'s `unattributed_edge_count` /
+  `partially_attributed_edge_count`, `EdgeMeasurement::path_length`'s `Option`,
+  `ObjectiveScores`'s `*_attributed_edges`, and
+  `score_vs_native_weighted`'s common-subset machinery — all of which described
+  a partial state §(b) does not permit. The length-mismatch guard stays and is
+  now the whole guard; it still closes the zero-edge-candidate hole.
+  This also retires the mixed belt+DI follow-up on the `objective` side
+  outright, leaving only the genuine open question on the `transit` side:
+  whether a mixed edge should refuse or sum both costs, which §(b) does not
+  say. Suite 1193 passed / 0 failed / 102 ignored; clippy and the WASM check
+  clean.
+  **Two coverage losses, named rather than hidden.**
+  (a) `candidate_runner`'s `degrading_transform_loses_the_ranking_...` used a
+  transform that tears the belt network in half; the conforming metric refuses
+  such a layout instead of scoring it, so the test now accepts either exclusion
+  and the score-based rejection it exercised is covered at unit level instead.
+  (b) `new_gated_issue_excludes_a_candidate_even_with_a_better_composite` lost
+  its premise: the old measurement credited its shrink with a transit
+  improvement the layout does not physically have, so the candidate no longer
+  out-scores the incumbent. The gate assertion is intact but no longer runs
+  *against* a winning score. FOLLOW-UP: build a synthetic transform that both
+  improves the composite and leaves the layout measurable, and restore it.

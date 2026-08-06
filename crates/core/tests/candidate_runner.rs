@@ -338,23 +338,40 @@ fn degrading_transform_loses_the_ranking_even_when_verdict_passes() {
     )
     .expect("run_candidate_field must succeed");
 
-    let evaluated = result
+    // The transform shoves alternate entities half a layout-width apart, which
+    // physically tears the belt network. Under RFC-064 §(b) — "any other
+    // unreachable terminal makes the metric unmeasurable and the candidate
+    // inadmissible" — such a layout is REFUSED rather than scored, so both
+    // outcomes are correct exclusions and this asserts the one that matters:
+    // the degrading candidate never wins.
+    //
+    // Before the metric became conforming, this candidate was scored (the old
+    // measurement averaged over whichever ports it could still reach on a torn
+    // layout, which is precisely the behaviour §(b) forbids) and the test
+    // pinned a negative composite. That path is gone; the score-based
+    // rejection it exercised is still covered at unit level in
+    // `objective.rs`'s `negative_ar_score_candidate_loses_composite_to_native`
+    // and `full_attribution_compares_totals_directly`.
+    match result
         .entries
         .iter()
-        .find_map(|e| match e {
-            CandidateOutcome::Evaluated(ec) if ec.name == "bbox-doubler" => Some(ec),
-            _ => None,
-        })
-        .expect("bbox-doubler must have produced and evaluated");
-    assert!(
-        evaluated.verdict.pass,
-        "ReportOnly policy must never fail the verdict"
-    );
-    assert!(
-        evaluated.scores.composite < 0.0,
-        "a candidate with a far worse aspect ratio must score a negative composite, got {}",
-        evaluated.scores.composite
-    );
+        .find(|e| matches!(e, CandidateOutcome::Evaluated(ec) if ec.name == "bbox-doubler")
+            || matches!(e, CandidateOutcome::Refused { name, .. } if name == "bbox-doubler"))
+        .expect("bbox-doubler must appear in the field")
+    {
+        CandidateOutcome::Evaluated(ec) => {
+            assert!(ec.verdict.pass, "ReportOnly policy must never fail the verdict");
+            assert!(
+                ec.scores.composite < 0.0,
+                "a scored candidate with a far worse aspect ratio must score negative, got {}",
+                ec.scores.composite
+            );
+        }
+        CandidateOutcome::Refused { reason, .. } => assert!(
+            reason.contains("transit is not measurable"),
+            "a torn layout must be refused for unmeasurability, got: {reason}"
+        ),
+    }
     assert_eq!(
         result.winner_name, "incumbent",
         "the incumbent (composite 0.0 by construction) must outrank a verdict-passing \
@@ -396,11 +413,20 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
         })
         .expect("shrink-overlap must have produced and evaluated");
 
-    assert!(
-        evaluated.scores.composite > 0.0,
-        "the shrink must genuinely improve the composite for this test to mean anything, got {}",
-        evaluated.scores.composite
-    );
+    // PREMISE WEAKENED, deliberately and visibly. This used to assert
+    // `composite > 0.0` — the transform had to genuinely out-score the
+    // incumbent for "the gate beats the score" to mean anything. Under the
+    // conforming metric it no longer does: the old non-conforming measurement
+    // credited this shrink with a transit improvement it does not physically
+    // have. Rather than tune the fixture until the number comes back, the
+    // premise is recorded as lost and the gate assertion below — which is what
+    // this test is actually for — is kept intact.
+    //
+    // FOLLOW-UP: rebuild a synthetic transform that both improves the
+    // composite AND leaves the layout measurable, and restore the premise.
+    // Until then this test proves the gate excludes a verdict-failing
+    // candidate, but not that it does so *against* a winning score.
+    let composite = evaluated.scores.composite;
     assert!(
         !evaluated.verdict.pass,
         "a brand new entity-overlap error must fail the verdict"
@@ -416,7 +442,8 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
     );
     assert_eq!(
         result.winner_name, "incumbent",
-        "a verdict-failing candidate must be excluded from ranking regardless of composite"
+        "a verdict-failing candidate must be excluded from ranking regardless of \
+         composite (candidate scored {composite})"
     );
 }
 
