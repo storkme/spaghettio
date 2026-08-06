@@ -21,7 +21,7 @@
 
 use rustc_hash::FxHashSet;
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy};
-use spaghettio_core::objective::{measure, rank_admissible, score_vs_native};
+use spaghettio_core::objective::{measure, rank_admissible, score_vs_native, FLUID_WEIGHT};
 use spaghettio_core::solver;
 
 fn set(items: &[&str]) -> FxHashSet<String> {
@@ -113,30 +113,22 @@ fn fold_ranks_above_native_on_stress_ac_partitioned() {
     assert_eq!(ranked[0], "folded", "rank_admissible must place the fold first: {ranked:?}");
 }
 
-/// Instrument the partial-attribution counter on a real fixture, rather than
-/// assuming it is inert.
+/// RFC-064 §(b) makes a measurement TOTAL: "Any other unreachable terminal
+/// makes the metric unmeasurable and the candidate inadmissible — never
+/// silently fall back to Manhattan for a broken routed edge."
 ///
-/// `measure_edge` averages over the producer ports that reached a consumer and
-/// drops the ones that did not. Until PR #569's round-4 review, that drop was
-/// silent: an edge with 4 unreachable producers and 1 reachable reported the
-/// reachable one's (short, flattering) length as if it were the whole edge.
-/// The module's "never substitute a proxy for unmeasured flow" discipline only
-/// covered the all-or-nothing case.
+/// This pins that invariant at the API boundary. It replaces a test that
+/// counted *partial* attribution, which was meaningful only while this module
+/// carried its own non-conforming measurement: that one averaged over whichever
+/// producer ports it could reach and reported the mean as if it were the whole
+/// edge. On this very fixture it reported 1 unattributed and 2 partially
+/// attributed edges out of 5. The conforming implementation measures all five.
 ///
-/// **The bug is not inert.** On this fixture the measured figure is
-/// `edges=5 unattributed=1 partially_attributed=2` — two of five edges have
-/// their transit averaged over only some of their producer ports. Whatever
-/// the cause (genuinely unreachable producers, or the item-filtered graph
-/// failing to trace a route across a merge), the metric was reporting those
-/// as whole numbers.
-///
-/// This deliberately does *not* assert zero, and does not assert 2 either:
-/// the first would be false today and the second would freeze a number this
-/// PR does not yet explain. It asserts the counter is *consistent* with the
-/// per-edge coverage fields so the two cannot drift, and prints the figure so
-/// a change in it is visible rather than silently averaged in.
+/// There is deliberately no "partial" case to assert any more — that is the
+/// point of the change, and a test asserting one would re-introduce the state
+/// the spec forbids.
 #[test]
-fn partial_attribution_counter_agrees_with_per_edge_coverage() {
+fn measurement_is_total_or_it_refuses() {
     let sr = solver::solve_with_exclusions(
         "advanced-circuit",
         5.0,
@@ -152,38 +144,35 @@ fn partial_attribution_counter_agrees_with_per_edge_coverage() {
     .expect("layout should build");
     let m = measure(&layout, &sr).expect("measure should succeed");
 
+    assert!(!m.edges.is_empty(), "fixture must have production edges to measure");
     for e in &m.edges {
         assert!(
-            e.ports_sampled <= e.ports_total,
-            "{} -> {}: sampled {} exceeds total {}",
+            e.path_length.is_finite() && e.path_length >= 0.0,
+            "{} -> {}: every edge of a successful measure carries a real length",
             e.item,
-            e.consumer_recipe,
-            e.ports_sampled,
-            e.ports_total
+            e.consumer_recipe
         );
-        assert_eq!(
-            e.path_length.is_none(),
-            e.ports_sampled == 0,
-            "{} -> {}: path_length and ports_sampled disagree on attribution",
+        assert!(
+            e.consumer_terminals > 0,
+            "{} -> {}: §(b) means over consumer terminals, so there must be at least one",
             e.item,
             e.consumer_recipe
         );
     }
 
-    let recomputed = m
+    // The reported total is the sum of its parts, and the medium split adds up.
+    let summed: f64 = m
         .edges
         .iter()
-        .filter(|e| e.path_length.is_some() && e.ports_sampled < e.ports_total)
-        .count();
-    assert_eq!(
-        recomputed, m.partially_attributed_edge_count,
-        "partially_attributed_edge_count disagrees with the per-edge fields"
+        .map(|e| e.rate * if e.is_fluid { FLUID_WEIGHT } else { 1.0 } * e.path_length)
+        .sum();
+    assert!(
+        (summed - m.transit).abs() < 1e-6,
+        "transit {} disagrees with the sum over its own edges {summed}",
+        m.transit
     );
-
-    println!(
-        "edges={} unattributed={} partially_attributed={}",
-        m.edges.len(),
-        m.unattributed_edge_count,
-        m.partially_attributed_edge_count
+    assert!(
+        (m.solid_transit + m.fluid_transit - m.transit).abs() < 1e-6,
+        "solid+fluid split must reconstruct the total"
     );
 }

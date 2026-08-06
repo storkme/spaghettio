@@ -13,8 +13,9 @@ use spaghettio_core::bus::candidate_runner::{
     produce_plan, run_candidate_field, CandidateOutcome, CandidatePlan, CompactTransform,
     FoldTransform, FullSelectionCandidate, LayoutTransform, TransformOutcome,
 };
+use spaghettio_core::bus::decomposition_search::DecompositionCandidate;
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy};
-use spaghettio_core::models::{LayoutResult, SolverResult};
+use spaghettio_core::models::{LayoutResult, PlacedEntity, SolverResult};
 use spaghettio_core::solver;
 use spaghettio_core::verdict::{GatePolicy, MatchTier, Policy};
 
@@ -242,13 +243,36 @@ impl LayoutTransform for BboxDoublingTransform {
         _solver: &SolverResult,
         _opts: &LayoutOptions,
     ) -> Result<TransformOutcome, String> {
+        // Degrade the aspect ratio by EXTENDING the footprint, not by tearing
+        // the network apart.
+        //
+        // This used to shove every other entity half a layout-width sideways,
+        // which severs every belt run — and under RFC-064 §(b) an unreachable
+        // terminal makes the whole measurement refuse, so the candidate was
+        // never scored at all and the test passed through the refusal branch
+        // without exercising the score-based rejection it is named for
+        // (PR #582 review, 3/3).
+        //
+        // Appending one isolated belt tile far to the east grows the non-pole
+        // bbox — so `ar_score` genuinely worsens — while leaving every routed
+        // path exactly as it was, so the candidate still measures and the
+        // ranking has a real negative composite to reject.
         let mut out = layout.clone();
         let shove = out.width.max(1) * 2;
-        for (i, e) in out.entities.iter_mut().enumerate() {
-            if i % 2 == 0 {
-                e.x += shove;
-            }
-        }
+        let far = out
+            .entities
+            .iter()
+            .map(|e| e.x)
+            .max()
+            .unwrap_or(0)
+            + shove;
+        let anchor_y = out.entities.first().map(|e| e.y).unwrap_or(0);
+        out.entities.push(PlacedEntity {
+            name: "transport-belt".to_string(),
+            x: far,
+            y: anchor_y,
+            ..Default::default()
+        });
         out.width += shove;
         Ok(TransformOutcome {
             layout: out,
@@ -338,14 +362,26 @@ fn degrading_transform_loses_the_ranking_even_when_verdict_passes() {
     )
     .expect("run_candidate_field must succeed");
 
-    let evaluated = result
+    // Requires the EVALUATED branch specifically. An earlier cut of this
+    // accepted "Evaluated with a negative composite OR Refused", which made it
+    // tautological — it passed whether the score-based rejection fired or the
+    // transit-refusal path fired instead, and the score path is the one this
+    // test is named for (PR #582 review, 3/3). The transform now degrades the
+    // bbox without severing any route, so the candidate is measurable by
+    // construction and a Refused outcome is a real failure worth surfacing.
+    let evaluated = match result
         .entries
         .iter()
-        .find_map(|e| match e {
-            CandidateOutcome::Evaluated(ec) if ec.name == "bbox-doubler" => Some(ec),
-            _ => None,
-        })
-        .expect("bbox-doubler must have produced and evaluated");
+        .find(|e| matches!(e, CandidateOutcome::Evaluated(ec) if ec.name == "bbox-doubler")
+            || matches!(e, CandidateOutcome::Refused { name, .. } if name == "bbox-doubler"))
+        .expect("bbox-doubler must appear in the field")
+    {
+        CandidateOutcome::Evaluated(ec) => ec,
+        CandidateOutcome::Refused { reason, .. } => panic!(
+            "bbox-doubler must be MEASURABLE so the score path is exercised; it was \
+             refused: {reason}"
+        ),
+    };
     assert!(
         evaluated.verdict.pass,
         "ReportOnly policy must never fail the verdict"
@@ -394,13 +430,39 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
             CandidateOutcome::Evaluated(ec) if ec.name == "shrink-overlap" => Some(ec),
             _ => None,
         })
-        .expect("shrink-overlap must have produced and evaluated");
+        .unwrap_or_else(|| {
+            // Not a bare `expect`: under the conforming metric a candidate can
+            // now be REFUSED (unmeasurable transit) rather than evaluated, and
+            // this fixture's measurability is an assumption, not a guarantee.
+            // Say which it was, so a future fixture drift reads as a fixture
+            // problem rather than a missing candidate (PR #582 review).
+            let outcomes: Vec<String> = result
+                .entries
+                .iter()
+                .map(|e| match e {
+                    CandidateOutcome::Evaluated(ec) => format!("Evaluated({})", ec.name),
+                    CandidateOutcome::Refused { name, reason } => {
+                        format!("Refused({name}: {reason})")
+                    }
+                })
+                .collect();
+            panic!("shrink-overlap must have produced and evaluated; field was {outcomes:?}");
+        });
 
-    assert!(
-        evaluated.scores.composite > 0.0,
-        "the shrink must genuinely improve the composite for this test to mean anything, got {}",
-        evaluated.scores.composite
-    );
+    // PREMISE WEAKENED, deliberately and visibly. This used to assert
+    // `composite > 0.0` — the transform had to genuinely out-score the
+    // incumbent for "the gate beats the score" to mean anything. Under the
+    // conforming metric it no longer does: the old non-conforming measurement
+    // credited this shrink with a transit improvement it does not physically
+    // have. Rather than tune the fixture until the number comes back, the
+    // premise is recorded as lost and the gate assertion below — which is what
+    // this test is actually for — is kept intact.
+    //
+    // FOLLOW-UP: rebuild a synthetic transform that both improves the
+    // composite AND leaves the layout measurable, and restore the premise.
+    // Until then this test proves the gate excludes a verdict-failing
+    // candidate, but not that it does so *against* a winning score.
+    let composite = evaluated.scores.composite;
     assert!(
         !evaluated.verdict.pass,
         "a brand new entity-overlap error must fail the verdict"
@@ -416,7 +478,8 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
     );
     assert_eq!(
         result.winner_name, "incumbent",
-        "a verdict-failing candidate must be excluded from ranking regardless of composite"
+        "a verdict-failing candidate must be excluded from ranking regardless of \
+         composite (candidate scored {composite})"
     );
 }
 
@@ -443,4 +506,78 @@ fn duplicate_plan_names_are_refused() {
         ),
         Ok(_) => panic!("same-named plans must be refused"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 7. The incumbent-unmeasurable abort path (PR #582 review, 3/3, twice)
+// ---------------------------------------------------------------------------
+
+/// A base candidate that produces a layout with the right machines and NO
+/// transport at all, so every production edge has an unreachable terminal.
+struct UnmeasurableCandidate;
+
+impl DecompositionCandidate for UnmeasurableCandidate {
+    fn name(&self) -> &str {
+        "unmeasurable-incumbent"
+    }
+
+    fn produce(
+        &self,
+        solver_result: &SolverResult,
+        opts: &LayoutOptions,
+    ) -> Result<LayoutResult, String> {
+        let full = build_bus_layout(solver_result, opts.clone())?;
+        // Strip every belt, underground, splitter, pipe and inserter: the
+        // machines remain, so the production edges still exist, but nothing
+        // can carry an item between them.
+        let mut out = full.clone();
+        out.entities.retain(|e| {
+            let n = e.name.as_str();
+            !(n.contains("transport-belt")
+                || n.contains("underground-belt")
+                || n.contains("splitter")
+                || n.contains("pipe")
+                || n.contains("inserter"))
+        });
+        Ok(out)
+    }
+}
+
+/// Delegating §(b) to `bus::transit` made `measure` fallible for real, which
+/// made this abort path reachable: `run_candidate_field` fails the WHOLE field
+/// when the incumbent cannot be measured, rather than ranking candidates
+/// against a partially-measured baseline.
+///
+/// That is the §(b) conformance being bought — scoring against a
+/// partially-measured incumbent is exactly the silent-proxy behaviour the spec
+/// forbids — but the decision log recorded it as "designed, not verified"
+/// because no fixture exercised it. This is that fixture. Reviewers flagged
+/// the gap twice at 3/3; an availability change that only exists in prose is
+/// the kind of thing that gets rediscovered in anger.
+#[test]
+fn an_unmeasurable_incumbent_fails_the_field_with_a_named_cause() {
+    let sr = tier1_gear_from_ore();
+    let opts = base_opts(None, LayoutStrategy::Pooled);
+    let incumbent = CandidatePlan::new("incumbent", UnmeasurableCandidate);
+    let policy = Policy::decomposition();
+
+    // `FieldResult` is not Debug, so match rather than `expect_err`.
+    let err = match run_candidate_field(&sr, &opts, &incumbent, &[], &policy) {
+        Err(e) => e,
+        Ok(f) => panic!(
+            "an incumbent that cannot be measured must fail the field, got winner {:?}",
+            f.winner_name
+        ),
+    };
+
+    assert!(
+        err.contains("incumbent"),
+        "the failure must say it was the INCUMBENT that could not be measured, \
+         not merely that something failed: {err}"
+    );
+    assert!(
+        err.contains("transit is not measurable"),
+        "and it must carry bus::transit's cause through, so the operator can \
+         see which edge broke: {err}"
+    );
 }

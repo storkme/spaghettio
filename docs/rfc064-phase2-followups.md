@@ -71,22 +71,58 @@ uranium voider). With the tuning now making sim ~2.7× cheaper, closing the
 if the coordinator wants the stronger gate. Otherwise the subset verdict stands
 as recorded.
 
-### 7. Meter belt-delivery residual: PU-from-ore −13% (from meter-fluid, #570)
-Pick-up entry so the deferral is actually tracked here (the meter
-`meter-divergence.md` records the full evidence). The fast meter is −13% on
-`tier5_processing_unit_from_ore_am3` vs the sim — a **downstream solid belt
-delivery** divergence, not a fluid one: the meter matches the sim within ±4% on
-the whole direct chain but loses ~10% delivering electronic-circuit to the PU
-machine (the served PU machine, `m#310`, sits short on EC despite adequate EC
-production). The fixture's only topology note is a 26-tile belt cycle; the
-meter steps cyclic belts in an arbitrary-but-deterministic order, the likely
-cause. Deferred deliberately: a fix needs a speculative belt-cycle-update-order
-/ merge-priority model change, unverifiable on this noisy fixture (the sim is
-~−10% on every intermediate). Note the blast radius is narrow — this fixture has
-the corpus's only cycle note, so a `CycleInUpdateOrder`-gated change would touch
-~nothing else; the binding reasons to defer are the noisy sim baseline and the
-unverifiability, not a broad corpus risk. Investigate
-as a belt-model divergence, re-measuring after any belt-network change.
+### 7. Meter productivity-parity residual: PU-from-ore −13% — **diagnosis CLOSED 2026-08-06, fix OPEN**
+**Measured, not inferred.** The sim harness now dumps realized productivity
+(PR #580 — the verification channel this axis lacked; the tech-state parity
+block covered inserter capacity (#370) and belt stacking (#385) and nothing
+else). Against `tier5_processing_unit_from_ore_am3`:
+
+| recipe | realized force/research productivity |
+|---|---|
+| **processing-unit** | **+10.0%** |
+| **plastic-bar** | **+10.0%** |
+| advanced-circuit | 0.0% |
+| electronic-circuit | 0.0% |
+| iron-plate / copper-plate / copper-cable | 0.0% |
+
+No productivity modules anywhere, so the source is
+`force.research_all_technologies()`. The fast meter models no productivity at
+all by design (`crates/meter/src/machine.rs` deliberately takes nothing from
+`module_policy` and not `effective_crafting_speed`), so on this recipe the
+instrument and its reference measure different worlds.
+
+**Decomposition**: the meter's −3.9% EC deficit compounded with the −9.1%
+productivity it cannot model = **−12.7%** against **−13.6%** observed, ~1pp
+inside the fixture's noise. The measurement also explains the selectivity —
+EC/AC unboosted, hence their single-digit deviation (both −3.9%, not the
+±0–2% an earlier revision claimed) while only PU diverged — and kills the competing
+reading that the signature was a sim-side reporting artifact.
+
+**This is an instrument-parity gap, not a layout, belt, distribution or supply
+defect.** Same class as #370 and #385. **DECIDED (owner, 2026-08-06): teach the meter productivity** — the sim stays
+the reference and the instrument learns to model what it actually does.
+Widened scope found while recording it: the **solver** does not model
+research-sourced productivity either (`netflow.rs` covers modules and
+`base_effect` only), so the plan is over-provisioned on PU by the same 10%.
+The fix should follow #370/#385: carry research productivity as a declared
+manifest axis beside `stacking`/`inserter_capacity`, applied by the meter and
+*pinned* by the sim's parity block, so the two match by construction rather
+than by coincidence. Falsifiable prediction if the
+latter: output was predicted at ≈1.902 PU/s. **Measured 2026-08-06** on
+`feat/research-productivity-axis`: 1.850/s, a −6.9% residual, not the ≈−4.3%
+predicted. The prediction's *ceiling* was right (1.9018 measured vs 1.902
+predicted); it wrongly assumed the meter would sit on it. The shortfall is AC
+over-production (2.39 AC per PU craft against the recipe's 2) consuming EC —
+i.e. the solver's own blind spot to research productivity, not a meter defect.
+Full numbers in [`meter-divergence.md`](meter-divergence.md).
+
+**Process note worth keeping.** Four causes were proposed and retired before
+this one — belt-cycle update order (≈14% of the gap), head-hog distribution
+(≈5%), upstream EC/plate production (falsified by the sim's own copper-cable
+balance), and the sim-reporting-artifact reading (falsified by the probe). What
+finally worked was balancing the sim's reported figures against each other —
+the AC:PU ratio predicted +10.7% against a measured +10.0% — and then running
+the measurement. Four narrative root causes cost more than one probe did.
 
 ## Decided / closed (from Stage B)
 - **Never-worse holds** on the measurable subset → evidence supports
