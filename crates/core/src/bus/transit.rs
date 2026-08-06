@@ -12,7 +12,7 @@ use std::collections::BinaryHeap;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::bus::compaction::{ProductionEdge, ProductionSignature};
+use crate::bus::compaction::{ProductionEdge, ProductionSignature, RATE_SCALE};
 use crate::common::{
     dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter, is_machine_entity,
     is_splitter, is_ug_belt, splitter_second_tile,
@@ -23,7 +23,10 @@ use crate::models::{EntityDirection, LayoutResult, SolverResult};
 type Tile = (i32, i32);
 type Graph = FxHashMap<Tile, Vec<(Tile, i64)>>;
 
-const RATE_SCALE: f64 = 1_000_000_000.0;
+// NOTE `RATE_SCALE` is imported from `compaction` above rather than
+// redeclared here: both sides of this conversion chain must rescale together
+// or the planned-rate and weighted-cost maths silently diverge (PR #582
+// review).
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeTransit {
@@ -746,7 +749,27 @@ mod tests {
                 // The matching bridge, and a longer one carrying something
                 // else between the SAME machine pair.
                 tagged(3, 1, Some("part")),
-                tagged(3, 2, Some("other-item")),
+                // A LONG-HANDED inserter on the same tile column: reach 2, so
+                // it bridges the SAME machine pair (pickup (1,1) inside the
+                // producer, drop (5,1) inside the consumer) at Manhattan 4
+                // rather than 2.
+                //
+                // Getting this fixture right took two attempts, both caught by
+                // running the negative control rather than by reading the test:
+                // at (3,2) both inserters spanned 2, so `path_length` passed
+                // whether or not the guard fired; at (2,3) the stray stopped
+                // bridging the pair at all, so the test went green with the
+                // guard DISABLED — a regression test that had stopped
+                // regressing. Only a differing span over the same pair makes
+                // the primary assertion bite.
+                PlacedEntity {
+                    name: "long-handed-inserter".to_string(),
+                    carries: Some("other-item".to_string()),
+                    x: 3,
+                    y: 1,
+                    direction: EntityDirection::East,
+                    ..Default::default()
+                },
                 machine("consumer", 4, 0),
             ],
             ..Default::default()

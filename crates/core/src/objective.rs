@@ -121,8 +121,14 @@ pub struct LayoutMeasure {
 }
 
 /// Compute [`LayoutMeasure`] for `layout`, the routed output of the solve
-/// `solver` describes. Errors if `layout` has no non-pole entities (nothing
-/// to measure) or if `solver`'s production graph cannot be derived.
+/// `solver` describes.
+///
+/// Errors if `layout` has no non-pole entities (nothing to measure), if
+/// `solver`'s production graph cannot be derived, **or if any production edge
+/// is unmeasurable** — an unreachable producer or consumer terminal fails the
+/// whole call, per RFC-064 §(b), rather than yielding a partial result. That
+/// third case arrives via [`crate::bus::transit`] and is the common one in
+/// practice; callers that treat `measure` as near-infallible are wrong.
 pub fn measure(layout: &LayoutResult, solver: &SolverResult) -> Result<LayoutMeasure, String> {
     let (min_x, min_y, max_x, max_y) = non_pole_bbox(layout)
         .ok_or_else(|| "layout has no non-pole entities to measure".to_string())?;

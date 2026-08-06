@@ -1856,3 +1856,29 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   that improves AR without disturbing routing is not obvious to construct. So
   `new_gated_issue_excludes_...` verifies the gate, but not the gate *against a
   winning score*.
+
+- **2026-08-06 (bot review round 2 on #582) — the DI regression test did not
+  regress, twice, and only the negative control said so.** The fixture placed
+  the stray inserter where both bridges spanned Manhattan 2, so the primary
+  `path_length` assertion passed whether or not the guard fired and the
+  regression was caught solely by a secondary terminal-count assertion. Moving
+  the stray to a different tile then made it stop bridging the machine pair at
+  all — the test went **green with the guard disabled**, i.e. a regression test
+  that had stopped regressing. It now uses a long-handed inserter on the same
+  column: same machine pair, span 4 instead of 2, so with the guard off the
+  mean moves 2.0 → 3.0 and the primary assertion fails. Recorded because the
+  first version's negative control had *already been run* and reported
+  "passes" — it did, on the wrong assertion. Running the control is necessary
+  and not sufficient; it has to fail for the reason the test claims.
+  Also in this round: `RATE_SCALE` was redeclared in `transit.rs` rather than
+  imported from `compaction`, so a future rescale would have desynchronised
+  the two halves of the same conversion chain silently; and `measure`'s own doc
+  comment never mentioned that delegation made it fail on any unmeasurable
+  edge.
+  **Left as an open question, named rather than settled**: the restored DI item
+  guard accepts `carries: None` inserters into every edge between a recipe
+  pair, which is inconsistent with the strict `compatible()` used on the
+  belt/pipe graphs on the same path. Refusing them would turn missing metadata
+  into an unmeasurable edge; accepting them re-admits a smaller version of the
+  contamination the guard exists to stop. The deciding evidence is a count of
+  unstamped DI inserters in real layouts, which nobody has taken.
