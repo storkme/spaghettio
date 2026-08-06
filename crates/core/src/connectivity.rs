@@ -634,9 +634,11 @@ pub fn error_certain_regression(
     let n = layout_after.entities.len();
     // Explicit contract check (bot round 3): a caller handing us graphs
     // of a different shape than `layout_after` gets a uniform
-    // fall-through to full validation, not a panic and not a
-    // silently-partial tally (the per-branch guards below then only ever
-    // see in-range indices).
+    // fall-through to full validation, not a panic. Scope honesty (bot
+    // rounds 5/6): this checks the CLASS VECTORS only — edge/conflict
+    // endpoint indices inside a well-shaped graph are protected by the
+    // runtime guards below, which stay load-bearing; do not delete them
+    // on this comment's authority.
     if before.classes.len() != n || after.classes.len() != n {
         return None;
     }
@@ -673,7 +675,11 @@ pub fn error_certain_regression(
     // The kind guard is future-proofing (bot round 1 on PR #579): HeadOn
     // is the only variant the derive emits today, but this class must not
     // silently broaden the day a validator-tolerated conflict kind is
-    // added.
+    // added. The novelty gate (`!before_set.contains`) is a BEFORE-side
+    // suppressor: a contact that pre-existed with tolerated carries and
+    // became same-carries is a deliberate miss (falls through to
+    // validation), consistent with the fire-conditions-from-after,
+    // suppressors-from-before split documented above (bot round 6).
     let before_set: std::collections::BTreeSet<Conflict> =
         before.conflicts.iter().copied().collect();
     for c in &after.conflicts {
@@ -1240,7 +1246,9 @@ mod tests {
              the class is not Error-certain"
         );
 
-        // New same-carries head-on: check_belt_junctions' category.
+        // New same-carries head-on: check_belt_junctions' category. (The
+        // flipped belt faces the UG EXIT at (4,0), so this sub-case also
+        // holds the exit-boundary head-on to the validator.)
         let mut headon = base.clone();
         headon.entities[3].direction = EntityDirection::West;
         let g2 = derive_connectivity(&headon);
@@ -1256,6 +1264,60 @@ mod tests {
             error_categories(&headon).contains("belt-junction"),
             "head-on fired but validate() has no belt-junction Error — \
              the class is not Error-certain"
+        );
+
+        // UG-ENTRANCE-boundary head-on (bot round 5 on PR #579: the derive
+        // emits HeadOn for entrance/exit/splitter neighbors too, so the
+        // Error-certainty claim must be held to the validator on those
+        // geometries, not just surface<->surface). Move the feed belt in
+        // front of the entrance, facing back at it — index-stable.
+        let mut entrance_headon = base.clone();
+        entrance_headon.entities[0] = belt(2, 0, EntityDirection::West);
+        let g5 = derive_connectivity(&entrance_headon);
+        assert!(
+            error_certain_regression(&g0, &g5, &entrance_headon).is_some(),
+            "detector must fire on the entrance-boundary head-on"
+        );
+        assert!(
+            error_categories(&entrance_headon).contains("belt-junction"),
+            "entrance-boundary head-on fired but validate() has no \
+             belt-junction Error — the class is not Error-certain there"
+        );
+
+        // Splitter-tile head-on, same claim on the third boundary the
+        // derive records conflicts for. Separate mini-fixture: rear-fed
+        // splitter with an output belt flipped back into its face.
+        let splitter = |x: i32, y: i32| PlacedEntity {
+            name: "splitter".to_string(),
+            x,
+            y,
+            direction: EntityDirection::East,
+            carries: Some("iron-plate".to_string()),
+            ..Default::default()
+        };
+        let sp_base = layout(vec![
+            belt(3, 0, EntityDirection::East),
+            splitter(4, 0),
+            belt(5, 0, EntityDirection::East),
+        ]);
+        let sp_g0 = derive_connectivity(&sp_base);
+        let sp_base_errors = error_categories(&sp_base);
+        let mut sp_headon = sp_base.clone();
+        sp_headon.entities[2] = belt(5, 0, EntityDirection::West);
+        let sp_g1 = derive_connectivity(&sp_headon);
+        assert!(
+            error_certain_regression(&sp_g0, &sp_g1, &sp_headon).is_some(),
+            "detector must fire on the splitter-tile head-on"
+        );
+        assert!(
+            !sp_base_errors.contains("belt-junction"),
+            "splitter base fixture must not already carry the category: \
+             {sp_base_errors:?}"
+        );
+        assert!(
+            error_categories(&sp_headon).contains("belt-junction"),
+            "splitter-tile head-on fired but validate() has no \
+             belt-junction Error — the class is not Error-certain there"
         );
     }
 

@@ -360,9 +360,11 @@ fn dispatched_validate_catches_stale_ledger() {
 /// MEASUREMENT FINDING (Phase 2a, recorded in the RFC decision log): on
 /// the CUT path the filter has almost nothing to catch — the cut
 /// constructors structurally refuse most bad geometry before validation
-/// (EC@2: 6 validates, EC@20: 1). The engagement number is therefore
-/// REPORTED, not asserted; the validate-volume worth saving lives on the
-/// fold-search path, which needs the fold identity map (next slice).
+/// (EC@2: 6 validates). Slice 2b then measured the fold path and killed
+/// the filter premise there too (no identity map was ever needed — see
+/// the RFC's 2b entries); engagement here IS asserted below since bot
+/// round 4. Figures are as measured at the pin's introduction; the cut
+/// admission gate is unchanged by RFC-064's fold-gate refit.
 #[test]
 fn phase2_prefilter_is_outcome_identical() {
     let (sr, layout) = build(
@@ -567,11 +569,17 @@ fn phase2_prefilter_rejects_engage_on_head_on_creating_cut() {
 /// measured by the probe there.
 ///
 /// RESULT (2026-08-05, the measurement that killed the fold-side
-/// pre-filter): `error_discards` is ZERO on every fixture — gear15-ore
-/// 0/0 validates (130 structural refusals), ec10-ore 0/0 (30 refusals),
-/// ac5-plates 0/62 (62 validates, all pass or warning-regress). A sound
-/// Error-certain filter had nothing to reject-fast, so it was removed
-/// rather than shipped as dead per-candidate derivation cost.
+/// pre-filter): row-bus `error_discards` is zero everywhere —
+/// gear15-ore 0/0 validates (130 structural refusals), ec10-ore 0/0
+/// (30 refusals), ac5-plates 0/62 (all 62 pass; regression_rejects=0);
+/// chain-mil5ore, measured by the `cell_composition.rs` probe, adds the
+/// corpus's single Error discard (1/151). A sound Error-certain filter
+/// had at most 1 of 120 rejected candidates to catch (0.83% vs the
+/// ≥30% bar), so it was removed rather than shipped as dead
+/// per-candidate derivation cost. Figures were measured under the
+/// pre-RFC-064 count-diff admission gate; the stricter `never_worse`
+/// instance gate can move regression-reject counts only —
+/// `error_discards` counts validator Errors and is gate-independent.
 #[test]
 #[ignore = "measurement probe — prints fold-admission volume per fixture"]
 fn phase2b_fold_prefilter_measurement() {

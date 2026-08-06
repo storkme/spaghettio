@@ -337,13 +337,25 @@ Per `CLAUDE.md` § verification protocol:
   assert topology preservation via `diff` before full validation;
   measure the latency win against the RFC-064 threshold guard
   (`FOLD_SEARCH_ENTITY_THRESHOLD` exists only because validation is the
-  bottleneck).
+  bottleneck). *Closed by measurement 2026-08-05 (PR #579): premise
+  falsified on both paths — see the decision log. What survives for
+  Phase 3: the hardened `error_certain_regression` primitive and the
+  admission telemetry.*
 - **Phase 3 — movable component (own RFC).** Promote
   `RigidIsland`/`IslandTerminal` to a first-class unit with directed
   ports and a D4 transform that composes `direction` × `mirror` ×
   splitter chirality × `fluid_ports` (the never-built `CellVariant`
   checklist from RFC-055; `zone_cache`'s D4 code is the seed). Gated on
   Phase 0–2 holding and on RFC-064's Phase 4 needing it.
+  **Pre-registered gate for that RFC** (PR #579 bot round 5, accepted):
+  before wiring `error_certain_regression` behind any Phase 3
+  transform, a corpus-wide sweep must run both arms of the wired path
+  over the full regression corpus and hold byte-identity plus
+  accounting-identity — fixture-shaped evidence (this RFC's four pins)
+  is explicitly not sufficient for new transform geometry. If Phase 3
+  transforms need regression *attribution* (not just admission), they
+  must track index identity explicitly — length equality is only the
+  cut loop's in-place proxy.
 - **Phase 4 — port-to-port fabric (own RFC).** The single-lane
   shared-trunk tier between arbitrarily-placed components — RFC-057's
   specified-but-never-built recommendation. Explicitly not funded here.
@@ -1117,3 +1129,33 @@ Per `CLAUDE.md` § verification protocol:
   validator Errors and is gate-independent, so the 0.83% kill basis
   stands. Probe re-runs under the new gate supersede the
   regression-reject figures only.
+- **2026-08-05 — PR #579 bot rounds 5–6 (both union ×3, no code
+  findings either round) and merge: dispositions.** Round 5: (1)
+  UG-pin count-stability introspection — DECLINED as machinery for a
+  regression the finding itself rates unreachable; the rewrite shape
+  is pinned at the primitive level (`error_certain_regression_classes`
+  normalized-UG negative case), which survives loop-shape drift, and
+  a count-unstable future collapse makes the filter *skip* (sound
+  fall-through). (2) Corpus-wide on/off sweep — ACCEPTED as a
+  pre-registered gate written into the Phase 3 scoping above, where
+  the geometry it must cover will exist. (3) Boundary head-on
+  category pins — ACCEPTED, landed in the close-out (entrance +
+  splitter sub-cases; the existing flipped-belt case already faces
+  the exit). (4) "In-range by construction" over-promise — ACCEPTED,
+  comment now scopes the shape check to class vectors and marks the
+  runtime guards load-bearing. (5) Stale measurement-probe doc —
+  ACCEPTED, synced to the corrected record. Round 6: (1) cross-path
+  `error_discards` coupling on validate()'s Err⟺Error iff — ACCEPTED
+  as documentation; the iff was verified in round 2 and both arms now
+  carry a coupling comment naming it. (2) Edge-index shape-check
+  scope — same fix as round 5 item 4. (3) Novelty-gate carries-change
+  miss — ACCEPTED as documentation; it is a before-side suppressor
+  (miss-only, falls through), now stated at the gate. Stale-figure
+  nits: test/probe docs synced with gate-provenance notes; the two
+  historical decision-log entries are NOT rewritten — the merge-note
+  entry above governs their interpretation, which is how this log
+  treats superseded records. Close-out shipped as its own PR (main is
+  branch-protected on the second-opinion check, so no direct push),
+  after which RFC-065's Phase 2 arc is fully closed: merged at
+  0e73b4d, kill criterion honored, primitive + telemetry + probes
+  standing, Phase 3 gated as above.
