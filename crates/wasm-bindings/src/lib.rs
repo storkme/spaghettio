@@ -80,6 +80,11 @@ fn layout_options(
     };
     LayoutOptions {
         strategy,
+        // The web UI exposes no research-productivity control yet, so the
+        // browser plans at none — identical to every layout before this axis
+        // existed. Wiring a control is a separate change; defaulting here
+        // keeps the boundary explicit rather than relying on `..Default`.
+        research_productivity: Default::default(),
         max_belt_tier,
         row_layout,
         surplus_policy: SurplusPolicy::default(),

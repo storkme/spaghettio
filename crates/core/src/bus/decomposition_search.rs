@@ -489,6 +489,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
         // existing `(item, module_id)` keying.
         let inner_opts = LayoutOptions {
             strategy: LayoutStrategy::Pooled,
+            research_productivity: opts.research_productivity.clone(),
             max_belt_tier: opts.max_belt_tier.clone(),
             row_layout: opts.row_layout,
             surplus_policy: opts.surplus_policy,
@@ -1645,6 +1646,7 @@ mod tests {
     fn empty_layout() -> LayoutResult {
         LayoutResult {
             entities: vec![],
+            research_productivity: Default::default(),
             width: 0,
             height: 0,
             boundary_inputs: vec![],

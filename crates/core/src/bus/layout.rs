@@ -141,6 +141,10 @@ pub struct LayoutOptions {
     /// Plumbed through wasm-bindings `layout*` and the web UI (URL
     /// `st=`, sidebar "Belt stacking") since Phase 2.
     pub stacking: u8,
+    /// Research-sourced productivity to plan at, per recipe. Declared axis —
+    /// see [`crate::models::LayoutResult::research_productivity`]. Empty (the
+    /// default) is bit-identical to the pre-existing behaviour.
+    pub research_productivity: std::collections::BTreeMap<String, f64>,
     /// Inserter-capacity research level (RFC-049): 0 = unresearched
     /// (default; bit-identical to pre-RFC — kill 1), 1..=7 pinned
     /// schedule (`common::inserter_hand`). User-specified like its
@@ -245,6 +249,7 @@ impl Default for LayoutOptions {
             merge_tap: false,
             splitter_tap_spacers: false,
             stacking: 1,
+            research_productivity: Default::default(),
             // Default assumes L2 research (red+green science), not the raw
             // unresearched world — see `common::DEFAULT_INSERTER_CAPACITY`
             // (2026-07-24, #383). RFC-049's "L0 == pre-RFC" model invariant
@@ -1643,6 +1648,9 @@ fn layout_pass(
     Ok((
         LayoutResult {
             entities: all_entities,
+            // The layout records the axis it was planned at, so the manifest,
+            // the meter and the sim can all be held to the same world.
+            research_productivity: opts.research_productivity.clone(),
             width,
             height: max_y,
             warnings,

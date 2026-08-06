@@ -127,6 +127,20 @@ pub struct Machine {
     pub fluid_output: FxHashMap<u16, u32>,
 }
 
+
+/// Factorio's productivity rule: the bonus multiplies output per craft and
+/// leaves ingredients untouched, except for the catalyst portion a recipe
+/// declares `ignored_by_productivity`, which is returned unmultiplied.
+///
+/// Deliberately a local replication — see the call site.
+fn effective_product_amount(amount: f64, ignored_by_productivity: f64, prod_bonus: f64) -> f64 {
+    if prod_bonus == 0.0 {
+        return amount;
+    }
+    let ignored = ignored_by_productivity.clamp(0.0, amount);
+    (amount - ignored) * (1.0 + prod_bonus) + ignored
+}
+
 impl Machine {
     /// Build from a blueprint entity. `None` when the recipe is unknown.
     pub fn new(
@@ -136,6 +150,10 @@ impl Machine {
         size: (u32, u32),
         items: &mut ItemInterner,
         buffer_crafts: u32,
+        // Declared research productivity for THIS recipe, e.g. `0.10`. A
+        // manifest-declared axis, never inferred — see
+        // `Manifest::research_productivity`.
+        research_productivity: f64,
     ) -> Option<Self> {
         let db = recipe_db::db();
         let recipe = db.recipes.get(recipe_name)?;
@@ -171,7 +189,22 @@ impl Machine {
             // compared tick-for-tick against a deterministic baseline.
             // (Same expectation discipline for fluid products, which go to
             // `fluid_output` rather than belt delivery.)
-            let expect = p.amount * p.probability;
+            // Productivity multiplies OUTPUT per craft, leaving ingredients
+            // alone — and never applies to the catalyst portion a recipe
+            // marks `ignored_by_productivity`.
+            //
+            // The formula is replicated here rather than imported from
+            // `spaghettio_core::module_policy::effective_product_amount`, to
+            // hold this module's stated boundary: it takes Factorio prototype
+            // facts from `recipe_db` and nothing from `module_policy`, whose
+            // job is engine POLICY (which modules to fit) rather than game
+            // semantics. `productivity_matches_engine_formula` pins the two
+            // against each other so the replication cannot drift.
+            let expect = effective_product_amount(
+                p.amount,
+                p.ignored_by_productivity,
+                research_productivity,
+            ) * p.probability;
             if p.type_ == "fluid" {
                 fluid_products.push((id.0, expect));
             } else {
@@ -420,6 +453,7 @@ mod tests {
             (3, 3),
             items,
             DEFAULT_BUFFER_CRAFTS,
+            0.0,
         )
         .expect("EC on AM3 is a known recipe")
     }
@@ -533,6 +567,7 @@ mod tests {
             (3, 3),
             &mut items,
             DEFAULT_BUFFER_CRAFTS,
+            0.0,
         );
         if let Some(mut m) = m {
             assert!(!m.fluid_ingredients.is_empty(), "sulfuric acid needs water");
@@ -570,7 +605,8 @@ mod tests {
             (0, 0),
             (3, 3),
             &mut items,
-            14
+            14,
+            0.0
         )
         .is_none());
         assert!(Machine::new(
@@ -579,8 +615,39 @@ mod tests {
             (0, 0),
             (3, 3),
             &mut items,
-            14
+            14,
+            0.0
         )
         .is_none());
+    }
+
+    /// The productivity formula replicated in this module must agree with the
+    /// engine's canonical one exactly.
+    ///
+    /// `machine.rs` deliberately takes nothing from `module_policy` — its job
+    /// is engine POLICY (which modules to fit), and inheriting it would put a
+    /// calibrated number inside the instrument meant to check it. But the
+    /// *arithmetic* of productivity is Factorio prototype semantics, the same
+    /// class as `recipe_db`, which this module does take. So the formula is
+    /// replicated rather than imported, and pinned here so the copy cannot
+    /// drift from the original.
+    #[test]
+    fn productivity_matches_engine_formula() {
+        for (amount, ignored, bonus) in [
+            (1.0, 0.0, 0.0),
+            (1.0, 0.0, 0.10),
+            (2.0, 0.0, 0.10),
+            // Catalyst portion is never multiplied.
+            (5.0, 2.0, 0.10),
+            (5.0, 5.0, 0.50),
+            // Clamped: a recipe declaring more catalyst than output.
+            (1.0, 3.0, 0.25),
+        ] {
+            assert_eq!(
+                effective_product_amount(amount, ignored, bonus),
+                spaghettio_core::module_policy::effective_product_amount(amount, ignored, bonus),
+                "diverged at amount={amount} ignored={ignored} bonus={bonus}",
+            );
+        }
     }
 }
