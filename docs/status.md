@@ -1012,6 +1012,23 @@ timeout-ceiling bumps (~5 min/push, experiment already documented in
 `.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy
 tests (measure before adopting).
 
+**CI clippy does not lint test code (found 2026-08-06).** `ci.yml:153` runs
+`cargo clippy --workspace -- -D warnings` with no `--all-targets`, so
+`crates/core/tests/*` and every `#[cfg(test)]` module in `src/` are never
+linted. **28 distinct warnings** have accumulated there unseen — measured by
+inventorying warnings without `-D` (with it, cargo aborts at the first failing
+unit, so a plain run reports a truncated and misleading subset; two such runs
+are not comparable to each other either). Same count on `origin/main`
+`dbeed392` and on the RFC-064 productivity stack, i.e. it is pure backlog, not
+anyone's regression. Examples: `objective.rs:486` imports `DICoupling` unused
+and `objective.rs:871`/`875` are dead `belt`/`inserter_at` helpers, both left
+by #582's transit unification; `layout.rs:2960-2962` doc-quote markers;
+`Default::default()` field reassignment in `layout.rs` and `power_wires.rs`;
+`di_cell.rs:2124` `filter().next_back()` → `rfind()`. Adding `--all-targets`
+to the CI step turns the whole backlog red at once, so it needs a cleanup pass
+first — cheapest path is to clean opportunistically whenever a PR next touches
+one of those files, then flip the flag.
+
 ## Sim-harness measurement integrity (2026-07-22)
 
 The #357 investigation inverted itself: **every "clean-but-failing" sweep
