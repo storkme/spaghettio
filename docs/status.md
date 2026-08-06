@@ -1012,22 +1012,49 @@ timeout-ceiling bumps (~5 min/push, experiment already documented in
 `.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy
 tests (measure before adopting).
 
-**CI clippy does not lint test code (found 2026-08-06).** `ci.yml:153` runs
-`cargo clippy --workspace -- -D warnings` with no `--all-targets`, so
-`crates/core/tests/*` and every `#[cfg(test)]` module in `src/` are never
-linted. **28 distinct warnings** have accumulated there unseen — measured by
-inventorying warnings without `-D` (with it, cargo aborts at the first failing
-unit, so a plain run reports a truncated and misleading subset; two such runs
-are not comparable to each other either). Same count on `origin/main`
-`dbeed392` and on the RFC-064 productivity stack, i.e. it is pure backlog, not
-anyone's regression. Examples: `objective.rs:486` imports `DICoupling` unused
-and `objective.rs:871`/`875` are dead `belt`/`inserter_at` helpers, both left
-by #582's transit unification; `layout.rs:2960-2962` doc-quote markers;
-`Default::default()` field reassignment in `layout.rs` and `power_wires.rs`;
-`di_cell.rs:2124` `filter().next_back()` → `rfind()`. Adding `--all-targets`
-to the CI step turns the whole backlog red at once, so it needs a cleanup pass
-first — cheapest path is to clean opportunistically whenever a PR next touches
-one of those files, then flip the flag.
+**Clippy's test/example debt: measured 2026-08-06, and it is bigger than the
+deferral assumed.** Not a newly-found gap — `ci.yml`'s clippy step carries the
+comment *"Lib-only on purpose: `--all-targets` trips pre-existing test/example
+debt"*, a deliberate deferral taken at the #434 workspace-widening on
+2026-07-24. What is new here is the size of the debt and the proof that
+clearing it is behaviour-free.
+
+**28 warning sites (14 distinct file × lint pairs)** live in
+`crates/core/tests/*` and in `#[cfg(test)]` modules under `src/` — invisible
+to every gate we run. Measured by inventorying warnings *without* `-D`: with
+it, cargo aborts at the first failing unit, so a plain run reports a truncated
+subset, and two such runs stop at different points and are not comparable to
+each other. Identical inventories on `origin/main` `dbeed392` and on the
+RFC-064 productivity stack tip, `comm` empty in both directions —
+independently re-derived by a second agent via a different method
+(`--message-format=json`, dedup by file+line+lint). Pure backlog, nobody's
+regression.
+
+Composition: 6 `type_complexity` + 3 `too_many_arguments` (e2e helper
+signatures — type aliases or a test-scoped `#[allow]`), 5
+`doc_lazy_continuation`, 4 `field_reassign_with_default`, 2 `dead_code`, 2
+`unnecessary_sort_by`, and 6 singletons. Nothing architectural; the whole set
+is mechanical and behaviour-free. Two of the `dead_code` entries are #582's —
+`objective.rs:486`'s `DICoupling` import and the `belt`/`inserter_at` helpers
+at 871/875, written by #569 and orphaned when #582 deleted the duplicate §(b)
+implementation.
+
+**Two more gates share the blind spot**, so the flag has to move in both
+places at once: `.githooks/pre-commit` runs `cargo clippy -p spaghettio_core`
+— core-only *and* lib-only, i.e. narrower than CI, so a hook-green commit can
+still fail CI — and `crates/core/examples/sim_export.rs`, load-bearing wiring
+since #591, is unlinted for the same reason (contributes zero warnings today).
+
+**Recommended: clear it in one mechanical pass, then flip `--all-targets` in
+`ci.yml` *and* the pre-commit hook.** An earlier draft here said "clean
+opportunistically as PRs touch those files"; the evidence in this very
+paragraph argues against it. That strategy has already been run and failed —
+`e2e.rs` and `layout.rs` are among the most-touched files in the repo and
+accumulated anyway — and the class regrows under the current regime, with 2 of
+the 28 arriving in the week to 2026-08-06 out of careful, reviewed work. The
+backlog is 1-2 hours and cannot regress anything CI-visible, because CI cannot
+see any of it. The flag is the fix; the cleanup is a one-time toll, not a
+programme.
 
 ## Sim-harness measurement integrity (2026-07-22)
 
