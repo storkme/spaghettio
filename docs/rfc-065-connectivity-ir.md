@@ -1,6 +1,13 @@
 # RFC-065: Connectivity IR — a derived topology lens for `LayoutResult`
 
-Status: Active — Phase 0 landed; Phase 1 slice 1 landed (2026-08-05).
+Status: Active — Phase 0 landed; Phase 1 slice 1 landed; Phase 2 closed
+by measurement (2026-08-05): the admission pre-filter is dead on both
+paths — fold-side killed on the pre-registered ≥30% criterion
+(Error-catchable share of rejected fold candidates measured at 0.83%),
+cut-side default-off after adversarial review falsified one detector
+class. What survives: the hardened `error_certain_regression`
+primitive (unit- and identity-pinned, for Phase 3), admission
+telemetry, and the measurement probes.
 Registry: `docs/rfcs.md` RFC-065.
 
 ## Summary
@@ -855,3 +862,258 @@ Per `CLAUDE.md` § verification protocol:
   (round 8 rationale: two distinct positioned statements); the
   admission-outcome pin ask (the hard-fail fixture IS the forward
   regression pin; corpus growth welcome but not gating).
+- **2026-08-05 — Phase 2 slice 2a (post-merge, fresh branch): the
+  error-certain pre-filter primitive lands; the cut-path measurement
+  says the money is on the fold path.** Built:
+  `connectivity::error_certain_regression` — the sound reject-fast
+  detector over index-stable diffs (net span loss per entrance, net
+  hand loss per inserter with retargets deliberately falling through
+  — a class the adversarial-review entry below later proves NOT
+  Error-certain and removes; kept here as the historical record,
+  added same-carries head-ons), unit-pinned per class; wired into both
+  cut loops via `cut_admission` with base-graph caching and admission
+  telemetry (`CutAdmissionStats`), toggleable through
+  `compact_validated_geometry_with_stats`. Soundness gate K65-5: cut
+  outcomes must be BYTE-IDENTICAL filter-on vs filter-off (pinned;
+  holds). MEASUREMENT: the cut path has almost no validate() volume to
+  save — the cut constructors refuse most bad geometry structurally
+  before validation (EC@2: six validated candidates, zero
+  filter-catchable; EC@20: one). The filter engagement number is
+  reported, not asserted, and the pin is honest about why. CONSEQUENCE,
+  recorded as the next slice's scoping: the validate() bottleneck that
+  motivated Phase 2 lives in `search_snake_fold` (a comb of candidates
+  × full validate each — the reason `FOLD_SEARCH_ENTITY_THRESHOLD`
+  exists), and fold candidates are index-UNSTABLE (fold_snake rebuilds
+  and reorders its entity list), so the fold-side pre-filter needs an
+  old→new identity map exported from the fold transform. Kill criterion
+  for that slice: if the mapped filter cannot reject-fast ≥30% of fold
+  candidates that validation rejects on the fold corpus (chain-mil5ore
+  + the two admissible row-bus fixtures), the mapping machinery is not
+  worth its complexity — measure on the spike before wiring.
+- **2026-08-05 — Phase 2 slice 2b: fold-side pre-filter KILLED on the
+  pre-registered criterion; the measurement instrumentation is the
+  slice's deliverable.** Design first: the identity map slice 2a scoped
+  turned out to be unnecessary — the fold search's `profile()` returns
+  `None` (silent discard) for any Error-carrying candidate, so a
+  candidate-only anomaly scan (`scan_graph_anomalies`: unpaired UG
+  halves, unbound hands, same-carries head-ons — all Error-certain)
+  is sound with no base comparison and no index mapping at all. That
+  version was built, wired toggleably, and held the K65-5 byte-identity
+  pin on the admissible fold fixture (AC@5-from-plates). MEASUREMENT
+  (via the new `CutAdmissionStats::error_discards` counter — of the
+  validates run, how many the validator Error-rejected, i.e. the only
+  volume any sound Error-certain filter could ever reject-fast):
+  gear15-ore 0 discards / 0 validates (130 structural refusals),
+  ec10-ore 0/0 (30 refusals), ac5-plates 0/62 (all 62 pass;
+  regression_rejects=0), chain-mil5ore 1/151 (119 warning-regression
+  rejects). Of the corpus's 120 validation-rejected candidates, ≤1
+  (0.83%) was Error-class — the ≥30% criterion is tripped by a factor
+  of ~40. WHY: `fold_snake`'s `FoldRefusal` machinery structurally
+  refuses Error-certain geometry before a candidate exists (that was
+  RFC-057's design), so validation volume is spent on candidates that
+  pass or regress on warnings — untouchable by a sound Error-certain
+  filter. DISPOSITION per the stop rule: the fold-side filter is
+  REMOVED, not shipped default-off (62–151 dead graph derivations per
+  search for zero savings); what ships is the admission telemetry
+  (`search_snake_fold_with_stats`, `error_discards` on both paths) and
+  the two `#[ignore]` measurement probes
+  (`phase2b_fold_prefilter_measurement` in `connectivity_parity.rs`,
+  `phase2b_fold_admission_volume_chain_mil5ore` in
+  `cell_composition.rs`) that keep the negative result checkable. The
+  cut-side filter (slice 2a) stays as committed: byte-identity pinned
+  (now also counter-form: rejects must map 1:1 onto baseline Error
+  discards), negligible volume (6 validates on its pin fixture), and
+  it is the `error_certain_regression` primitive's only production
+  call site — the primitive's real customers are Phase 3 transforms,
+  which will NOT have per-transform refusal machinery. (Superseded by
+  the adversarial-review entry below: the filter was then demoted to
+  default-off, so the wired path is exercised by the identity pins
+  only — the primitive currently has no default-on production caller.)
+  CONSEQUENCE for
+  the backlog: "fold identity map" is moot (dropped); the fold-search
+  cost lever is not Error rejection but the 119-strong
+  warning-regression volume — any future slice there must predict
+  *warning* profiles from the graph, a different (unscoped) premise.
+- **2026-08-05 — Local adversarial review of both Phase 2 slices:
+  slice 2a's soundness claim FALSIFIED; detector hardened, cut-side
+  filter demoted to default-off test machinery.** The reviewer built a
+  working counterexample (finding 1, blocker): `collapse_vertical_cut`
+  calls `normalize_adjacent_undergrounds`, which rewrites a
+  cut-adjacent UG pair to surface belts IN PLACE — entity count
+  unchanged, so the count-equality guard engaged the filter, the diff
+  saw the entrance's span vanish, and the filter rejected a candidate
+  `validate()` admits with zero Errors (probe: filter-on stuck at
+  width 5 / 5 entities vs width 1 / 1 entity off; a dist-2 UG pair
+  with a decoy belt anchoring the gap column). Not exotic: iterative
+  cuts shorten any progressively-cuttable span gap to the dist-2 →
+  adjacent step. Finding 2 (concern): the "lost a hand binding" class
+  rationale was factually wrong — no validator check errors an unbound
+  hand per se (`check_inserter_chains` errors machines without
+  inserters; `check_inserter_direction` errors only when neither hand
+  touches a machine; coverage/input-rate backstops tolerate redundant
+  inserters or emit Warning) — so a redundant inserter losing its
+  belt-side pickup is validate-admissible. Finding 3 (concern): the
+  K65-5 byte-identity pin was VACUOUS — its fixture never engaged the
+  reject path (0 rejects / 6 validates), so it could not have caught
+  finding 1; weak evidence dressed as a gate, the recurring
+  check-went-quiet shape from `docs/validator-reporting.md`. What
+  survived attack, per the reviewer's own re-runs: the 2b telemetry
+  refactor (line-level behavior-identical), the `error_discards`
+  counter semantics (validate() Errs iff an Error-severity issue
+  exists), all four corpus measurements (reproduced exactly), and the
+  fold-side kill-criterion arithmetic and disposition. FIXES, same
+  session: span-loss class narrowed (fires only if the node is STILL a
+  UG entrance in `after` — sound because derive and check #19 share
+  the canonical pairing since Phase 1); hand-binding class REMOVED
+  (negative unit pins now guard both unsound classes against
+  re-introduction); cut-side filter flipped to default OFF everywhere
+  (`compact_validated_columns/rows/geometry`) — its measured benefit
+  was already zero, and post-review the burden is on evidence of
+  benefit, not absence of divergence; the reviewer's counterexample
+  ported as `phase2_prefilter_identity_on_ug_normalizing_cut`, a pin
+  that engages the filter and FAILS on the unguarded class rather than
+  passing vacuously. Production cut behavior is back to pre-2a
+  (pure-validate admission). Nits absorbed: status-line share
+  corrected to 0.83% (1/120); ac5-plates note corrected to "all 62
+  pass" (regression_rejects=0); the 2a entry's "EC@20: one validate"
+  stands as a session observation but has no committed instrument —
+  treat the four probe-backed numbers as the reproducible record.
+- **2026-08-05 — PR #579 bot round 1 (second-opinion, union ×2): three
+  fixes pushed, one refuted with a committed assertion, one answered
+  in-thread.** (1) Major, and the round's real catch: the
+  "error-certain" contract rested on prose — the unit pins proved the
+  detector FIRES but never ran `validate()` to prove the classes are
+  Error-certain. Fixed with
+  `error_certain_classes_are_validator_errors`: each class's
+  after-layout must carry the specific validator Error category
+  (`underground-belt` for span loss, `belt-junction` for head-ons)
+  that the base lacks — an unsound class is now a one-line failure,
+  not a prose dispute. (2) Minor, accepted: the head-on class lacked a
+  `ConflictKind::HeadOn` guard (correct today only because HeadOn is
+  the sole variant; would silently broaden with a new kind) — guard
+  added. (3) Minor, accepted: pin-vacuousness had a second face — the
+  UG pin's `off.width` guard proved compaction happened, not that the
+  filter ENGAGED. Added `CutAdmissionStats::prefilter_evals`
+  (count-equality branch taken) and the UG pin now asserts it nonzero.
+  (4) Minor, REFUTED: the claim that the retarget sub-case's drop tile
+  goes empty is wrong on geometry — `machine(4,3)` is a 3×3
+  assembling-machine-2 covering the (4,4) drop tile; settled by
+  asserting the `InserterDrop 5→6` edge exists in the retarget
+  fixture (the dead `name` assignment the bot also flagged was real
+  and removed). (5) The "no fixture drives `prefilter_rejects > 0`"
+  gap is answered in-thread, not fixed: through the production cut
+  loop no such fixture is REACHABLE — cuts only shorten spans, occupied
+  columns aren't cuttable, and adjacent pairs normalize in place;
+  that unreachability is the Phase 2 measurement (zero catchable
+  volume), i.e. the reason the filter is off. Primitive-level
+  soundness is now held by the direct contract pin instead, which is
+  strictly stronger than a wired-path reject would be.
+- **2026-08-05 — PR #579 bot round 2 (union ×3, all minor): the
+  reject path IS reachable — round 1's "unreachable" reply corrected
+  and the nonzero-reject pin added; five accuracy fixes; the
+  telemetry-scope findings answered in-thread.** The round's recurring
+  top finding (reject path never exercised through the cut loop, both
+  rounds) fell to a probe: a cut that CREATES a same-carries head-on
+  is generatable (two opposing runs, decoy-anchored gap column; the
+  collapse shifts them adjacent). Round 1's in-thread "no such fixture
+  is reachable" was argued from the SPAN class only and did not
+  generalize — corrected publicly.
+  `phase2_prefilter_rejects_engage_on_head_on_creating_cut` now pins
+  it: 6 reject-fasts vs 6 baseline Error discards, byte-identical
+  outcomes, counter-form equality exercised non-trivially for the
+  first time (0+6==6, not X+0==X). Accepted accuracy fixes: (a)
+  `search_snake_fold_with_stats` doc's "ZERO across the corpus"
+  corrected to 0-on-row-bus / 1-on-chain-mil5ore — 1 of 120 rejected
+  candidates corpus-wide (0.83%), or 0.66% of that fixture's 151
+  validates; (b)
+  index-stability doc rewritten — index identity is the contract,
+  `entities.len()` equality is the cut loop's proxy, valid there only
+  because cuts mutate in place (a net-zero remove+insert would churn
+  indices; Phase 3 consumers must track identity, not length); (c)
+  `error_discards` relabeled an UPPER BOUND on catchable volume (the
+  detector covers a subset of Error causes — note the bound favors
+  the filter, so the kill verdict only strengthens); (d) head-on
+  branch got bounds guards matching the span branch's defensive
+  posture (`.get()`, fall through, never panic); (e) detector
+  completeness stated explicitly (unpaired exits / over-reach spans
+  deliberately fall through — soundness is the load-bearing
+  direction). Answered in-thread, no change: structural-refusal
+  counts are fold_snake refusals by definition (comb-construction
+  skips never yield a candidate, so they cannot bear on validate
+  volume); `validates_run` deliberately scopes to the admission loop
+  the filter could affect (preamble/baseline validates are invariant
+  overhead under either arm, so they cancel in every on/off
+  comparison); the "converse soundness direction" ask is answered by
+  the negative pins + the now-engaged wired reject path, which
+  together are the strongest finite evidence available.
+- **2026-08-05 — PR #579 bot round 3 (union ×3, all minor): one
+  coherent contract fix closes the three code findings; denominator
+  self-inconsistency corrected; two stale-record annotations.** The
+  round's 3/3 finding (span tally silently drops out-of-range
+  `before` edges) and 2/3 finding (span branch indexes unguarded
+  while the head-on comment claims matched posture — that comment was
+  FALSE) share a root with its sharpest observation (1/3, and
+  correct): both classes' fire conditions are grounded in
+  after-geometry alone, so index churn threatens diff SEMANTICS
+  (regression attribution), never soundness. Fix: an up-front shape
+  check (`before`/`after` class-vector lengths vs `layout_after`)
+  bails to fall-through, making every downstream index in-range by
+  construction; the contract doc now states precisely what identity
+  protects (attribution) and what it does not need to protect
+  (soundness), so Phase 3 readers neither under- nor over-engineer.
+  Denominator fix (2/3): "1-in-151 … 0.83%" conflated two
+  denominators; all records now state 1 of 120 rejected candidates
+  corpus-wide (0.83%) and 0.66% of chain-mil5ore's 151 validates —
+  the criterion's own denominator is the rejected-candidate one.
+  Stale-record annotations (1/3 each, accepted): the 2a entry's hand
+  class now points at its later removal; the 2a "only production call
+  site" claim is marked superseded by the default-off demotion (the
+  wired path is exercised by identity pins only). Pin-comment scope
+  corrected (nit): `prefilter_evals` guards filter engagement, not
+  the normalize shape specifically. The `#[ignore]`-probe-drift nit
+  is an acknowledged design choice (probes are measurement
+  instruments, not gates; CI-izing them would put ~40s of fold search
+  on every run for figures that only change when the fold engine
+  does).
+- **2026-08-05 — PR #579 bot round 4 (single pass, two minors, no
+  code findings): review converged; check green; the two precision
+  items land in this closing commit.** The round verified the core
+  claims independently (behavior-identity of both refactors,
+  Error-certainty of both classes against validator semantics,
+  accounting integrity, pin determinism) and found only: (1) the
+  EC@2 pipeline pin's counter-form equalities are degenerate X+0==X
+  on that fixture — true and by design after round 2 (the reject-path
+  teeth live in the UG-normalizing and head-on sibling pins); fixed
+  by adding the `prefilter_evals > 0` engagement assert here too and
+  reframing the comment, so "filter silently stopped running" fails
+  on this pin while "silently stopped rejecting" remains the
+  siblings' job; (2) the chain-mil5ore probe comment lacked round
+  2's "upper bound" qualifier on `error_discards` — one-word lag
+  behind the field doc it reports on, fixed. Loop-breaking note: the
+  in-thread reply initially deferred both to "the next commit that
+  touches these files" to avoid resetting the required check, but
+  that reply also cited this decision-log entry — which must
+  therefore exist — and an undocumented decision is the one kind
+  this repo disallows, so the deferral collapsed into this final
+  micro-commit. Round header also worth recording: "single pass"
+  (rounds ran ×2, ×3, ×3, ×1) — the union width is visibly
+  fluctuating with the action's pass-degradation behavior; a
+  posted-but-thin round is weaker evidence, consistent with how
+  CLAUDE.md says to treat this bot's silence.
+- **2026-08-05 — merge of post-#569 main (RFC-064 eval primitives):
+  concurrent-session collision on `search_snake_fold`, resolved by
+  composition.** PR #569 refit fold admission onto
+  `verdict::never_worse` (instance-level gating through
+  `fold_point_correspondence`, owner-pre-approved as stricter than the
+  count-diff gate) while this branch was threading telemetry through
+  the same function. Resolution keeps #569's admission semantics
+  wholesale and re-threads the RFC-065 counters around it:
+  `validates_run` before the candidate validate, `error_discards` on
+  its Error-discard arm, tuple returns. Record-keeping consequence:
+  the Phase 2b corpus figures above (62/151 validates, 119 regression
+  rejects) were measured under the count-diff gate at base 32861da;
+  the stricter instance gate can only move regression-reject counts,
+  and `error_discards` — the kill criterion's numerator — counts
+  validator Errors and is gate-independent, so the 0.83% kill basis
+  stands. Probe re-runs under the new gate supersede the
+  regression-reject figures only.

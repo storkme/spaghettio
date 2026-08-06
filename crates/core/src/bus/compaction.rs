@@ -544,14 +544,97 @@ fn accept_if_no_worse(
     candidate
 }
 
+/// Cut-admission telemetry for RFC-065 Phase 2: how many candidates paid a
+/// full `validate()` vs. how many the topology pre-filter reject-fasted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CutAdmissionStats {
+    pub validates_run: usize,
+    pub prefilter_rejects: usize,
+    /// Of `validates_run`, how many the validator rejected on Error
+    /// severity — an UPPER BOUND on what any sound Error-certain
+    /// pre-filter could reject-fast (the wired detector covers a subset
+    /// of Error causes, so its achievable catch is at most this). The
+    /// honest coverage denominator: with the filter off this is total
+    /// Error volume; with it on, the misses.
+    pub error_discards: usize,
+    /// How many candidates the pre-filter actually EVALUATED (the
+    /// count-equality guard admitted them to the diff). Identity pins
+    /// assert this is nonzero so a fixture that quietly stops producing
+    /// index-stable candidates fails loudly instead of going vacuous
+    /// (bot round 1 on PR #579).
+    pub prefilter_evals: usize,
+}
+
+impl CutAdmissionStats {
+    fn absorb(&mut self, other: CutAdmissionStats) {
+        self.validates_run += other.validates_run;
+        self.prefilter_rejects += other.prefilter_rejects;
+        self.error_discards += other.error_discards;
+        self.prefilter_evals += other.prefilter_evals;
+    }
+}
+
+/// One cut-loop admission decision (RFC-065 Phase 2). The pre-filter may
+/// reject-fast ONLY on `connectivity::error_certain_regression` signals —
+/// classes `validate()` is guaranteed to reject — so enabling it never
+/// changes which cuts are admitted, only how many full validations are
+/// paid (the byte-identity pin in `connectivity_parity.rs` enforces this).
+/// The filter engages only on index-stable candidates (equal entity
+/// counts — seam-coalescing candidates skip straight to validation), and
+/// the accepted candidate's derived graph is reused as the next
+/// iteration's base so an accepted cut costs no extra derivation.
+#[allow(clippy::too_many_arguments)]
+fn cut_admission(
+    current: &LayoutResult,
+    current_graph: &mut Option<crate::connectivity::ConnectivityGraph>,
+    candidate: &LayoutResult,
+    solver: &SolverResult,
+    prefilter: bool,
+    stats: &mut CutAdmissionStats,
+) -> (bool, Option<crate::connectivity::ConnectivityGraph>) {
+    use crate::validate::{self, LayoutStyle, Severity};
+
+    let mut candidate_graph = None;
+    if prefilter && candidate.entities.len() == current.entities.len() {
+        stats.prefilter_evals += 1;
+        let base = current_graph
+            .get_or_insert_with(|| crate::connectivity::derive_connectivity(current));
+        let cand = crate::connectivity::derive_connectivity(candidate);
+        if crate::connectivity::error_certain_regression(base, &cand, candidate).is_some() {
+            stats.prefilter_rejects += 1;
+            return (false, None);
+        }
+        candidate_graph = Some(cand);
+    }
+    stats.validates_run += 1;
+    let issues = match validate::validate(candidate, Some(solver), LayoutStyle::Bus) {
+        Ok(issues) => issues,
+        Err(error) => error.issues,
+    };
+    let admitted = !issues.iter().any(|issue| issue.severity == Severity::Error);
+    if !admitted {
+        stats.error_discards += 1;
+    }
+    (admitted, candidate_graph)
+}
+
 pub fn compact_validated_columns(
     layout: &LayoutResult,
     solver: &SolverResult,
     max_commits: usize,
 ) -> LayoutResult {
-    use crate::validate::{self, LayoutStyle, Severity};
+    compact_validated_columns_inner(layout, solver, max_commits, false, &mut CutAdmissionStats::default())
+}
 
+fn compact_validated_columns_inner(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    max_commits: usize,
+    prefilter: bool,
+    stats: &mut CutAdmissionStats,
+) -> LayoutResult {
     let mut current = accept_if_no_worse(layout, compact_transport_geometry(layout), solver);
+    let mut current_graph: Option<crate::connectivity::ConnectivityGraph> = None;
     let mut commits = 0;
     let mut cut = 1;
     while cut < current.width && commits < max_commits {
@@ -559,15 +642,14 @@ pub fn compact_validated_columns(
             cut += 1;
             continue;
         };
-        let issues = match validate::validate(&candidate, Some(solver), LayoutStyle::Bus) {
-            Ok(issues) => issues,
-            Err(error) => error.issues,
-        };
-        if issues.iter().any(|issue| issue.severity == Severity::Error) {
+        let (admitted, candidate_graph) =
+            cut_admission(&current, &mut current_graph, &candidate, solver, prefilter, stats);
+        if !admitted {
             cut += 1;
             continue;
         }
         current = candidate;
+        current_graph = candidate_graph;
         commits += 1;
         // Retry the same coordinate: several redundant columns may be
         // adjacent, and accepting a move changes every later cut.
@@ -581,9 +663,18 @@ pub fn compact_validated_rows(
     solver: &SolverResult,
     max_commits: usize,
 ) -> LayoutResult {
-    use crate::validate::{self, LayoutStyle, Severity};
+    compact_validated_rows_inner(layout, solver, max_commits, false, &mut CutAdmissionStats::default())
+}
 
+fn compact_validated_rows_inner(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    max_commits: usize,
+    prefilter: bool,
+    stats: &mut CutAdmissionStats,
+) -> LayoutResult {
     let mut current = accept_if_no_worse(layout, compact_transport_geometry(layout), solver);
+    let mut current_graph: Option<crate::connectivity::ConnectivityGraph> = None;
     let mut commits = 0;
     let mut cut = 1;
     while cut < current.height && commits < max_commits {
@@ -591,15 +682,14 @@ pub fn compact_validated_rows(
             cut += 1;
             continue;
         };
-        let issues = match validate::validate(&candidate, Some(solver), LayoutStyle::Bus) {
-            Ok(issues) => issues,
-            Err(error) => error.issues,
-        };
-        if issues.iter().any(|issue| issue.severity == Severity::Error) {
+        let (admitted, candidate_graph) =
+            cut_admission(&current, &mut current_graph, &candidate, solver, prefilter, stats);
+        if !admitted {
             cut += 1;
             continue;
         }
         current = candidate;
+        current_graph = candidate_graph;
         commits += 1;
     }
     current
@@ -608,19 +698,44 @@ pub fn compact_validated_rows(
 /// Full safe compaction entry point: transport resynthesis followed by
 /// alternating validated X/Y coordinate cuts to a small fixed point.
 pub fn compact_validated_geometry(layout: &LayoutResult, solver: &SolverResult) -> LayoutResult {
+    compact_validated_geometry_with_stats(layout, solver, false).0
+}
+
+/// RFC-065 Phase 2 instrument + identity-pin oracle: the same fixed-point
+/// compaction with the topology pre-filter toggleable and admission
+/// telemetry returned.
+///
+/// Production callers go through [`compact_validated_geometry`] with the
+/// filter OFF. Phase 2's measurement found ~zero Error-discard volume on
+/// the cut path (nothing to save), and the 2026-08-05 adversarial review
+/// demonstrated an unsound detector class diverging outcomes in a
+/// default-on build — so the filter is test machinery: the byte-identity
+/// pin runs it both ways to keep `error_certain_regression`'s soundness
+/// contract honest for its real customers (Phase 3 transforms, which
+/// lack per-transform refusal machinery).
+pub fn compact_validated_geometry_with_stats(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    prefilter: bool,
+) -> (LayoutResult, CutAdmissionStats) {
+    let mut stats = CutAdmissionStats::default();
     let mut current = accept_if_no_worse(layout, compact_transport_geometry(layout), solver);
     for _ in 0..3 {
-        let columns = compact_validated_columns(&current, solver, usize::MAX);
-        let next = compact_validated_rows(&columns, solver, usize::MAX);
+        let mut pass_stats = CutAdmissionStats::default();
+        let columns =
+            compact_validated_columns_inner(&current, solver, usize::MAX, prefilter, &mut pass_stats);
+        let next =
+            compact_validated_rows_inner(&columns, solver, usize::MAX, prefilter, &mut pass_stats);
+        stats.absorb(pass_stats);
         if next.width == current.width
             && next.height == current.height
             && next.entities.len() == current.entities.len()
         {
-            return next;
+            return (next, stats);
         }
         current = next;
     }
-    current
+    (current, stats)
 }
 
 fn collapse_vertical_cut(layout: &LayoutResult, cut: i32) -> Option<LayoutResult> {
@@ -4695,8 +4810,38 @@ pub fn search_snake_fold(
     solver: &SolverResult,
     max_folds: usize,
 ) -> FoldSearch {
+    search_snake_fold_with_stats(layout, solver, max_folds).0
+}
+
+/// The fold search with admission telemetry returned (RFC-065 Phase 2b).
+///
+/// There is deliberately NO topology pre-filter on this path. Phase 2b
+/// built and measured one (anomaly-scan reject before validation) and
+/// killed it on the RFC's pre-registered criterion: across the fold
+/// corpus the Error-discard volume a sound filter could reject-fast is
+/// 0 on the row-bus fixtures and 1 on chain-mil5ore — in the criterion's
+/// own denominator, 1 Error-class of 120 validation-rejected candidates
+/// corpus-wide (0.83%) against the ≥30% bar (as a share of
+/// chain-mil5ore's 151 validates: 0.66%). `fold_snake`'s own refusal
+/// machinery (`FoldRefusal`) structurally refuses Error-certain geometry
+/// before a candidate ever exists, and nearly every candidate that
+/// reaches `validate()` either passes or regresses on warnings, which no
+/// Error-certain filter may touch. These counters keep that negative
+/// result checkable (`phase2b_fold_prefilter_measurement` in
+/// `connectivity_parity.rs`). Those corpus numbers were measured under
+/// the pre-RFC-064 count-diff admission gate; the gate is now
+/// `verdict::never_worse` (stricter, instance-level), which can only
+/// move regression-reject counts — `error_discards` counts validator
+/// Errors and is gate-independent.
+pub fn search_snake_fold_with_stats(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    max_folds: usize,
+) -> (FoldSearch, CutAdmissionStats) {
     use crate::validate::{self, LayoutStyle, ValidationIssue};
     use crate::verdict::{self, GatePolicy, MatchTier, Policy};
+
+    let mut stats = CutAdmissionStats::default();
 
     let validate_issues =
         |l: &LayoutResult| -> Option<Vec<ValidationIssue>> { validate::validate(l, Some(solver), LayoutStyle::Bus).ok() };
@@ -4709,13 +4854,13 @@ pub fn search_snake_fold(
         validation_regressions: BTreeMap::new(),
     };
     let Some(native_issues) = validate_issues(layout) else {
-        return out;
+        return (out, stats);
     };
 
     let legal = legal_fold_columns(layout);
     out.legal_columns = legal.len();
     if legal.is_empty() {
-        return out;
+        return (out, stats);
     }
     let snap = |target: i32| -> Option<i32> {
         legal.iter().copied().min_by_key(|&f| (f - target).abs())
@@ -4775,7 +4920,9 @@ pub fn search_snake_fold(
                     continue;
                 }
             };
+            stats.validates_run += 1;
             let Some(candidate_issues) = validate_issues(&folded) else {
+                stats.error_discards += 1;
                 continue;
             };
             let correspondence = fold_point_correspondence(layout, &folds, x_shift);
@@ -4806,7 +4953,7 @@ pub fn search_snake_fold(
     }
 
     out.best = best.map(|(_, folds, layout, x_shift)| FoldOutcome { folds, layout, x_shift });
-    out
+    (out, stats)
 }
 
 /// Columns a fold may legally cut, i.e. those that pass between entities
