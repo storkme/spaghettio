@@ -114,10 +114,31 @@ in-fixture AC reads −3.9%).
 
   **The ceiling under productivity measures 1.9018 against the predicted
   1.902** — the productivity model is exactly right. What the prediction got
-  wrong is assuming the meter would *reach* its ceiling. The remaining gap to
-  the sim decomposes with nothing left over: −3.9% EC supply deficit (41.49 vs
-  43.2) plus −2.7% ceiling shortfall = −6.6% against −6.9% observed. Tie-off:
-  1.9018 × (43.2/41.49) = 1.980, i.e. the sim's own 1.987.
+  wrong is assuming the meter would *reach* its ceiling.
+
+  **What the shortfall actually is — AC over-production, not distribution.**
+  The `E/24` ceiling assumes AC is produced exactly in proportion (2 per PU
+  craft). It is not. Computing against the *measured* AC instead —
+  `(E − 2·AC)/20 × 1.1` — fits far better:
+
+  | config | observed | `E/24` | net of measured AC |
+  |---|---|---|---|
+  | none | 1.7056 | 1.7288 (98.7%) | 1.7123 (**99.6%**) |
+  | +10% | 1.8500 | 1.9016 (97.3%) | 1.8407 (**100.5%**) |
+
+  Because AC runs over: **2.12 AC per PU craft baseline (+6%), 2.39 with
+  productivity (+19%)**, against the recipe's 2. That surplus consumes EC which
+  would otherwise reach PU, and it is not a distribution loss — it is the
+  **solver's** blind spot to research productivity showing up downstream. The
+  plan sizes the AC stage for a PU stage that needs no productivity; give PU
+  +10% and it needs fewer crafts, so the unchanged AC sizing over-serves it.
+  An earlier revision of this entry attributed the gap to distribution; that
+  was wrong, and it was caught by a reviewer pointing out that `24 EC per
+  craft` is a full-chain figure rather than a per-craft one (a PU craft
+  consumes 20 EC directly plus 2 AC).
+
+  So the residual after the meter-side fix is **the other half of the same
+  bug**, and closing the solver side should close most of what is left.
   Note also that EC production is **identical (41.49/s) in both configs**, so
   declaring productivity does not move it — EC is genuinely unboosted and
   supply-limited, corroborating the probe's `electronic-circuit: 0.0%`
@@ -134,7 +155,7 @@ in-fixture AC reads −3.9%).
   assumed the meter would sit on that ceiling, and it does not. The trap it
   warned about still stands and is worth keeping — the 1.729 figure quoted
   elsewhere is a ceiling *at zero productivity*; productivity does not change
-  EC consumed per craft (still 24), it changes PU produced per craft (1 → 1.1),
+  EC consumed per PU including its AC leg (still 24; a craft itself takes 20 EC plus 2 AC), it changes PU produced per craft (1 → 1.1),
   so it raises the ceiling rather than capping output beneath it.
 
 - **Open, not closed**: (a) the ~1pp decomposition residual is attributed to

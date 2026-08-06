@@ -108,11 +108,13 @@ The fix should follow #370/#385: carry research productivity as a declared
 manifest axis beside `stacking`/`inserter_capacity`, applied by the meter and
 *pinned* by the sim's parity block, so the two match by construction rather
 than by coincidence. Falsifiable prediction if the
-latter: output should land at ≈1.902 PU/s (41.5 EC/s ÷ 24 = 1.729 crafts/s,
-each yielding 1.1 PU), a residual of ≈−4.3% — essentially the −3.9% EC deficit
-alone. Do not read the 1.729 "ceiling" as surviving the fix: it is a ceiling at
-*zero* productivity, and productivity raises it rather than capping output
-beneath it.
+latter: output was predicted at ≈1.902 PU/s. **Measured 2026-08-06** on
+`feat/research-productivity-axis`: 1.850/s, a −6.9% residual, not the ≈−4.3%
+predicted. The prediction's *ceiling* was right (1.9018 measured vs 1.902
+predicted); it wrongly assumed the meter would sit on it. The shortfall is AC
+over-production (2.39 AC per PU craft against the recipe's 2) consuming EC —
+i.e. the solver's own blind spot to research productivity, not a meter defect.
+Full numbers in [`meter-divergence.md`](meter-divergence.md).
 
 **Process note worth keeping.** Four causes were proposed and retired before
 this one — belt-cycle update order (≈14% of the gap), head-hog distribution
