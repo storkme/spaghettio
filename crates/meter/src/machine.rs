@@ -650,4 +650,47 @@ mod tests {
             );
         }
     }
+
+    /// The declared axis must actually reach the product amounts.
+    ///
+    /// `productivity_matches_engine_formula` pins the replicated formula
+    /// against the engine's, and would keep passing if `Machine::new` ignored
+    /// its `research_productivity` argument entirely or the factory always
+    /// passed 0.0 — it proves the arithmetic, not the wiring. This drives the
+    /// constructor and asserts the products moved (PR #584 adversarial
+    /// review, "passes either way" finding).
+    #[test]
+    fn declared_productivity_reaches_the_product_amounts() {
+        let base = {
+            let mut items = ItemInterner::default();
+            Machine::new(
+                "assembling-machine-3", "electronic-circuit", (0, 0), (3, 3),
+                &mut items, DEFAULT_BUFFER_CRAFTS, 0.0,
+            )
+            .expect("EC on AM3 is a known recipe")
+            .products
+            .iter()
+            .map(|(_, n)| *n)
+            .sum::<f64>()
+        };
+        let boosted = {
+            let mut items = ItemInterner::default();
+            Machine::new(
+                "assembling-machine-3", "electronic-circuit", (0, 0), (3, 3),
+                &mut items, DEFAULT_BUFFER_CRAFTS, 0.10,
+            )
+            .expect("EC on AM3 is a known recipe")
+            .products
+            .iter()
+            .map(|(_, n)| *n)
+            .sum::<f64>()
+        };
+        assert!(base > 0.0, "fixture must produce something to compare");
+        assert!(
+            (boosted - base * 1.10).abs() < 1e-9,
+            "declared +10% must raise output per craft by exactly 1.1x: \
+             {base} -> {boosted}, expected {}",
+            base * 1.10
+        );
+    }
 }
