@@ -174,6 +174,18 @@ pub struct Report {
     /// self-audits the assignment into `kit_errors` at init.
     pub inserter_stack_size_bonus: f64,
     pub bulk_inserter_capacity_bonus: f64,
+    /// RFC-064 item 7 productivity-parity probe (2026-08-06). The scenario
+    /// calls `research_all_technologies()` while the tech-state parity block
+    /// corrects only inserter capacity (#370) and belt stacking (#385) —
+    /// nothing corrects productivity. The fast meter models no productivity
+    /// at all, so any bonus here is a divergence between instrument and
+    /// reference rather than a layout property. Three channels because a
+    /// research source and a module source imply different fixes; carried as
+    /// raw JSON since the probe reads defensively and may report
+    /// `FIELD_ABSENT` for an API spelling this harness guessed wrong.
+    pub productivity_force: serde_json::Value,
+    pub productivity_entity: serde_json::Value,
+    pub productivity_modules: serde_json::Value,
     /// Per-machine + per-item rate-vs-time record, one entry per closed
     /// checkpoint window (#537 — see `docs/sim-harness.md`'s "Reading the
     /// time-series" section). Additive field: absent or malformed
@@ -550,6 +562,18 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
             .get("bulk_inserter_capacity_bonus")
             .and_then(|v| v.as_f64())
             .unwrap_or(-1.0),
+        productivity_force: result
+            .get("productivity_force")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        productivity_entity: result
+            .get("productivity_entity")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        productivity_modules: result
+            .get("productivity_modules")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
         timeseries: parse_timeseries(result),
     }
 }
