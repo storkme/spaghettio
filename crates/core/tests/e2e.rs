@@ -10795,3 +10795,306 @@ fn belt_detour_survey() {
         .expect("write survey.json");
     eprintln!("\nwrote {}", out_path.display());
 }
+
+// ---------------------------------------------------------------------------
+// RFC-065 Phase 1 slice 2 (2026-08-06): graph-derived `measure_belt_runs`
+// vs the retained tile-walk oracle (`belt_detour::reference`).
+//
+// The slice's written gate is VERDICT-identity on the corpus: the set of
+// runs clearing both calibrated floors must not move. Run-LIST drift is
+// legal and expected where D5 weave geometry heals the oracle's phantom
+// entrance-predecessor cuts (see the RFC decision log's slice-2 pick-up
+// entry) — the `#[ignore]` full differential quantifies it per fixture for
+// adjudication; the fast in-suite gate pins verdicts on two cheap fixtures.
+// ---------------------------------------------------------------------------
+
+type DetourVerdict = ((i32, i32), (i32, i32), i64, i64);
+
+fn detour_verdicts(
+    runs: &[spaghettio_core::validate::belt_detour::BeltRun],
+) -> Vec<DetourVerdict> {
+    use spaghettio_core::validate::belt_detour::{DETOUR_EXCESS_TILES, DETOUR_RATIO_THRESHOLD};
+    let mut v: Vec<_> = runs
+        .iter()
+        .filter(|r| r.efficiency() >= DETOUR_RATIO_THRESHOLD && r.excess() >= DETOUR_EXCESS_TILES)
+        .map(|r| (r.entry, r.exit, r.actual_length, r.direct_distance))
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn belt_detour_migration_differential_fast() {
+    use spaghettio_core::validate::belt_detour::{measure_belt_runs, reference};
+
+    for (name, item, rate, machine, inputs) in [
+        ("tier1_iron_gear_wheel", "iron-gear-wheel", 10.0, "assembling-machine-1", &["iron-plate"][..]),
+        (
+            "tier2_electronic_circuit",
+            "electronic-circuit",
+            10.0,
+            "assembling-machine-2",
+            &["iron-plate", "copper-plate"][..],
+        ),
+    ] {
+        let inputs: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let result =
+            run_e2e(name, item, rate, machine, None, &inputs).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let new = measure_belt_runs(&result.layout);
+        let old = reference::measure_belt_runs_tilewalk(&result.layout);
+        assert_eq!(
+            detour_verdicts(&new),
+            detour_verdicts(&old),
+            "{name}: belt-detour verdicts drifted between the graph decomposition and the \
+             tile-walk oracle"
+        );
+    }
+}
+
+// Full-corpus differential. Run with:
+//   cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+//       belt_detour_migration_differential --exact --ignored --nocapture
+#[test]
+#[ignore]
+fn belt_detour_migration_differential() {
+    use spaghettio_core::validate::belt_detour::{measure_belt_runs, reference, BeltRun};
+
+    let key = |r: &BeltRun| (r.entry, r.exit, r.actual_length, r.direct_distance);
+    let mut built = 0usize;
+    let mut fixtures_with_drift = 0usize;
+    let mut total_old = 0usize;
+    let mut total_new = 0usize;
+    let mut verdict_drift: Vec<(&str, DetourVerdict, &str)> = Vec::new();
+
+    // Adjudicated verdict drift (RFC-065 decision log, slice-2 corpus
+    // adjudication entry, 2026-08-06 — geometry eyeballed per case via
+    // the probe below before acceptance):
+    //
+    // - Four only-new verdicts are TRUE POSITIVES the tile-walk's D5
+    //   phantom cuts split into sub-threshold fragments. Three are the
+    //   calibration doc's known AC last-segment loop family (drop routed
+    //   away from the destination trunk, wrapped back east right past
+    //   its own start; near-identical coordinates across fixtures, as
+    //   that doc already noted for the original 9). The kovarex one is
+    //   the U-235 catalyst return line measured whole for the first
+    //   time (55/22 = 2.5x; the fixture postdates the 2026-08-01
+    //   calibration survey).
+    // - The one only-old verdict was an ARTIFACT: a phantom-bounded
+    //   fragment (8,85)->(7,90) at 15/6 = 2.5x whose true journey
+    //   measures (8,85)->(7,95) at 20/11 = 1.82x — under the ratio
+    //   floor by the same rules that admitted it before.
+    //
+    // Anything beyond this table is UNADJUDICATED drift and fails.
+    let expected_drift: Vec<(&str, DetourVerdict, &str)> = vec![
+        ("tier4_advanced_circuit_from_plates", ((11, 39), (11, 42), 14, 3), "only-new"),
+        ("tier4_advanced_circuit_from_ore_am2", ((8, 85), (7, 90), 15, 6), "only-old"),
+        ("tier_kovarex_self_loop", ((21, 14), (6, 7), 55, 22), "only-new"),
+        (
+            "stress_advanced_circuit_partitioned_5s_from_plates_partitioned",
+            ((13, 38), (14, 42), 24, 5),
+            "only-new",
+        ),
+        (
+            "stress_advanced_circuit_partitioned_4s_from_plates_pooled",
+            ((12, 39), (11, 42), 15, 4),
+            "only-new",
+        ),
+    ];
+
+    for f in survey_fixtures() {
+        let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
+        let excluded: FxHashSet<String> = f.excluded.iter().map(|s| s.to_string()).collect();
+        let result = match f.variant {
+            SurveyVariant::Plain => run_e2e(f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs),
+            SurveyVariant::Strategy(strategy) => run_e2e_with_strategy(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, strategy,
+            ),
+            SurveyVariant::Excluded => run_e2e_with_exclusions(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, &excluded,
+            ),
+            SurveyVariant::ExcludedVoid => run_e2e_with_exclusions_and_surplus_policy(
+                f.name,
+                f.item,
+                f.rate,
+                f.machine,
+                f.belt_tier,
+                &inputs,
+                &excluded,
+                spaghettio_core::bus::layout::SurplusPolicy::Void,
+            ),
+        };
+        let result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIP {}: {e}", f.name);
+                continue;
+            }
+        };
+        built += 1;
+
+        let new = measure_belt_runs(&result.layout);
+        let old = reference::measure_belt_runs_tilewalk(&result.layout);
+        total_new += new.len();
+        total_old += old.len();
+
+        // Verdict drift is collected across the WHOLE corpus and asserted
+        // at the end against the adjudicated table — a mid-loop assert
+        // would leave later fixtures unverified.
+        let vn = detour_verdicts(&new);
+        let vo = detour_verdicts(&old);
+        for v in vn.iter().filter(|v| !vo.contains(v)) {
+            verdict_drift.push((f.name, *v, "only-new"));
+        }
+        for v in vo.iter().filter(|v| !vn.contains(v)) {
+            verdict_drift.push((f.name, *v, "only-old"));
+        }
+
+        let new_set: std::collections::BTreeSet<_> = new.iter().map(key).collect();
+        let old_set: std::collections::BTreeSet<_> = old.iter().map(key).collect();
+        if new_set == old_set {
+            eprintln!("{:<70} identical ({} runs)", f.name, new.len());
+        } else {
+            fixtures_with_drift += 1;
+            let only_old: Vec<_> = old_set.difference(&new_set).collect();
+            let only_new: Vec<_> = new_set.difference(&old_set).collect();
+            eprintln!(
+                "{:<70} runs old={} new={} | only-old={} only-new={}",
+                f.name,
+                old.len(),
+                new.len(),
+                only_old.len(),
+                only_new.len()
+            );
+            for r in only_old.iter().take(6) {
+                eprintln!("    only-old {r:?}");
+            }
+            for r in only_new.iter().take(6) {
+                eprintln!("    only-new {r:?}");
+            }
+        }
+    }
+
+    eprintln!(
+        "---\nfixtures built={built} with-drift={fixtures_with_drift} runs old={total_old} new={total_new}"
+    );
+    for (name, v, side) in &verdict_drift {
+        eprintln!("VERDICT {side}: {name} {v:?}");
+    }
+    assert_eq!(
+        verdict_drift, expected_drift,
+        "unadjudicated verdict drift — take it to the RFC-065 decision log before merge"
+    );
+}
+
+// Adjudication probe for the slice-2 verdict drifts (kept, per the repo's
+// probes-keep-results-re-checkable discipline): dumps the geometry around
+// each adjudicated run and walks its graph path — the instrument behind
+// the RFC-065 decision log's 2026-08-06 corpus-adjudication entry.
+#[test]
+#[ignore]
+fn belt_detour_adjudication_probe() {
+    use spaghettio_core::connectivity::{derive_connectivity, EdgeKind, NodeClass};
+    use spaghettio_core::validate::belt_detour::{measure_belt_runs, reference};
+
+    // (fixture name, walk start tile, dump region (x range, y range))
+    let cases: &[(&str, (i32, i32), (i32, i32), (i32, i32))] = &[
+        ("tier4_advanced_circuit_from_ore_am2", (8, 85), (2, 16), (78, 96)),
+        ("tier_kovarex_self_loop", (21, 14), (2, 24), (2, 18)),
+        ("stress_advanced_circuit_partitioned_5s_from_plates_partitioned", (13, 38), (6, 20), (33, 46)),
+        ("stress_advanced_circuit_partitioned_4s_from_plates_pooled", (12, 39), (6, 20), (33, 46)),
+    ];
+
+    for &(name, start_tile, (x0, x1), (y0, y1)) in cases {
+        let f = survey_fixtures()
+            .into_iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("no survey fixture named {name}"));
+        let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
+        let excluded: FxHashSet<String> = f.excluded.iter().map(|s| s.to_string()).collect();
+        let result = match f.variant {
+            SurveyVariant::Plain => run_e2e(f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs),
+            SurveyVariant::Strategy(strategy) => run_e2e_with_strategy(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, strategy,
+            ),
+            SurveyVariant::Excluded => run_e2e_with_exclusions(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, &excluded,
+            ),
+            SurveyVariant::ExcludedVoid => run_e2e_with_exclusions_and_surplus_policy(
+                f.name,
+                f.item,
+                f.rate,
+                f.machine,
+                f.belt_tier,
+                &inputs,
+                &excluded,
+                spaghettio_core::bus::layout::SurplusPolicy::Void,
+            ),
+        };
+        let result = result.expect("build fixture");
+        let layout = &result.layout;
+
+        eprintln!("\n===== {name}: region x {x0}..={x1}, y {y0}..={y1} =====");
+        for e in &layout.entities {
+            if (x0..=x1).contains(&e.x) && (y0..=y1).contains(&e.y) && e.name != "medium-electric-pole"
+            {
+                eprintln!(
+                    "  ({:>3},{:>3}) {:<24} {:?} io={:?} carries={:?}",
+                    e.x, e.y, e.name, e.direction, e.io_type, e.carries
+                );
+            }
+        }
+
+        let g = derive_connectivity(layout);
+        let n = layout.entities.len();
+        let belt_like = |i: usize| {
+            matches!(
+                g.classes[i],
+                NodeClass::SurfaceBelt | NodeClass::UgEntrance | NodeClass::UgExit
+            )
+        };
+        let mut flow_out: Vec<Option<usize>> = vec![None; n];
+        for e in &g.edges {
+            if matches!(e.kind, EdgeKind::BeltFlow | EdgeKind::Sideload | EdgeKind::UgSpan)
+                && belt_like(e.src)
+                && belt_like(e.dst)
+            {
+                flow_out[e.src] = Some(e.dst);
+            }
+        }
+        let Some(start) = g.occupant(start_tile) else {
+            eprintln!("  (no entity at {start_tile:?})");
+            continue;
+        };
+        let mut cur = start;
+        let mut steps = 0;
+        eprintln!("--- graph walk from {start_tile:?} ---");
+        loop {
+            let e = &layout.entities[cur];
+            eprintln!("  ({:>3},{:>3}) {} {:?}", e.x, e.y, e.name, e.direction);
+            steps += 1;
+            if steps > 70 {
+                eprintln!("  ... (cap)");
+                break;
+            }
+            match flow_out[cur] {
+                Some(next) if next != start => cur = next,
+                _ => break,
+            }
+        }
+
+        let in_region =
+            |t: (i32, i32)| (x0..=x1).contains(&t.0) && (y0..=y1).contains(&t.1);
+        eprintln!("--- OLD runs intersecting region ---");
+        for r in reference::measure_belt_runs_tilewalk(layout) {
+            if in_region(r.entry) || in_region(r.exit) {
+                eprintln!("  {r:?}");
+            }
+        }
+        eprintln!("--- NEW runs intersecting region ---");
+        for r in measure_belt_runs(layout) {
+            if in_region(r.entry) || in_region(r.exit) {
+                eprintln!("  {r:?}");
+            }
+        }
+    }
+}
