@@ -124,6 +124,27 @@ finally worked was balancing the sim's reported figures against each other —
 the AC:PU ratio predicted +10.7% against a measured +10.0% — and then running
 the measurement. Four narrative root causes cost more than one probe did.
 
+
+### 8. Declared research productivity: two open seams (from #591 review)
+Both found by adversarial review of the wiring PR; neither reachable today,
+both the same class as bugs this campaign already paid for.
+
+- **The axis stops at the cell-composition pipeline.** `CellComposedCandidate`
+  is default-eligible and re-derives cells through `extract.rs`'s plain solve,
+  which cannot see the axis; `chain.rs` declares empty on the composed result.
+  So if a declared export ever ships a cell-composed rescue — and the e2e pins
+  that this happens under *default* options for chain shapes
+  (`chain_am2_default_options_ships_cell_composed_rescue`) — the manifest
+  silently loses the caller's declaration while `planned_rates` stay boosted.
+  The sim's parity check then fail-closes the run, correctly but as an
+  unexplained mystery. Same class #415 solved for inserter capacity.
+- **`SolverResult` does not record the axis it solved at.** The manifest
+  records what the LAYOUT was told, which equals the solve only because
+  `sim_export` passes one parsed value to both knobs. That is caller
+  discipline, not a guarantee, and nothing detects plan-vs-manifest
+  disagreement. Durable fix: have `SolverResult` carry the axis and have the
+  layout and manifest copy it from there.
+
 ## Decided / closed (from Stage B)
 - **Never-worse holds** on the measurable subset → evidence supports
   `compact_layout` default-on (representative-scope).

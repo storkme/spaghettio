@@ -664,6 +664,9 @@ fn productivity_parity_lines(
 ) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut boosted: Vec<String> = Vec::new();
+    // Recipes boosted via the ENTITY channel (modules / base_effect), which
+    // the manifest axis cannot declare and the kit error does not check.
+    let mut entity_only: Vec<String> = Vec::new();
     let mut faults: Vec<String> = Vec::new();
     let mut numeric = 0usize;
 
@@ -707,6 +710,7 @@ fn productivity_parity_lines(
                 numeric += 1;
                 let (lo, hi) = (lo.unwrap_or(0.0), hi.unwrap_or(0.0));
                 if lo.abs() > f64::EPSILON || hi.abs() > f64::EPSILON {
+                    entity_only.push(name.clone());
                     boosted.push(if (hi - lo).abs() > f64::EPSILON {
                         format!("{name}={:+.1}..{:+.1}% (entity, n={n})", lo * 100.0, hi * 100.0)
                     } else {
@@ -745,12 +749,35 @@ fn productivity_parity_lines(
         out.push(format!("productivity parity: none on the probed recipes ({numeric} read, 0 boosted)"));
     } else {
         out.push(format!(
-            "productivity parity: BOOSTED [{}] — rates on these recipes are \
-             comparable ONLY against a plan and a meter that declare the same \
-             bonus (manifest `research_productivity`). The scenario raises a \
-             kit error if this run's manifest disagrees, so a clean run here \
-             means they match (RFC-064 item 7)",
-            boosted.join(", ")
+            "productivity parity: BOOSTED [{}]{}",
+            boosted.join(", "),
+            if entity_only.is_empty() {
+                // Every boosted entry came from the force/research channel,
+                // which is exactly what the manifest declares and the
+                // scenario's kit error checks. A clean run therefore means
+                // plan, meter and sim agree.
+                " — rates on these recipes are comparable ONLY against a plan \
+                 and a meter declaring the same bonus (manifest \
+                 `research_productivity`); the scenario raises a kit error if \
+                 this run's manifest disagrees, so a clean run means they \
+                 match (RFC-064 item 7)"
+                    .to_string()
+            } else {
+                // Entity-channel productivity includes MODULE and base-effect
+                // bonuses. The manifest axis cannot declare those, the kit
+                // error does not check them, and the meter models neither —
+                // so the strong claim above would be false here. Say the
+                // weaker true thing instead (PR #591 review).
+                format!(
+                    " — WARNING: {} carr{} entity-channel productivity \
+                     (modules or machine base_effect). The manifest axis \
+                     declares research only, and the parity kit error does \
+                     not check the entity channel, so a clean run does NOT \
+                     establish that these are accounted for (RFC-064 item 7)",
+                    entity_only.join(", "),
+                    if entity_only.len() == 1 { "ies" } else { "y" },
+                )
+            }
         ));
     }
     if modules > 0 {
@@ -907,6 +934,37 @@ mod tests {
         assert_eq!(lines.len(), 1, "got {lines:?}");
         assert!(lines[0].contains("none on the probed recipes"), "got {lines:?}");
         assert!(!lines[0].contains("BOOSTED"), "got {lines:?}");
+    }
+
+    /// The strong "a clean run means they match" claim is only true when
+    /// every boosted entry came from the FORCE channel — the one the manifest
+    /// declares and the kit error checks. Entity-channel productivity is
+    /// modules and base_effect, which the axis cannot declare and the check
+    /// does not cover.
+    ///
+    /// Neither previous wording of this sentence was ever pinned, which is
+    /// how one rewrite fixed the research half and silently broke the
+    /// module half (PR #591 review).
+    #[test]
+    fn productivity_parity_weakens_its_claim_on_entity_channel_boosts() {
+        let force_only = productivity_parity_lines_of(
+            serde_json::json!({"processing-unit": 0.1}),
+            serde_json::json!({"processing-unit": {"min": 0.0, "max": 0.0, "n": 2, "faults": 0}}),
+            serde_json::json!({}),
+        );
+        assert!(force_only[0].contains("a clean run means they match"), "got {force_only:?}");
+        assert!(!force_only[0].contains("WARNING"), "got {force_only:?}");
+
+        let with_entity = productivity_parity_lines_of(
+            serde_json::json!({"processing-unit": 0.0}),
+            serde_json::json!({"processing-unit": {"min": 0.25, "max": 0.25, "n": 2, "faults": 0}}),
+            serde_json::json!({"processing-unit/productivity-module": 4}),
+        );
+        assert!(with_entity[0].contains("WARNING"), "got {with_entity:?}");
+        assert!(
+            with_entity[0].contains("does NOT establish"),
+            "an entity-channel boost must not claim the numbers are accounted for: {with_entity:?}"
+        );
     }
 
     /// A module present but zero productivity is NOT a parity gap. This is the

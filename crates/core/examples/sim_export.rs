@@ -14,7 +14,11 @@
 //!                       targets instead of one, solved as a single combined
 //!                       plan (spaghettio_core::solver::
 //!                       solve_multi_with_palette_exclusions_quality_and_modules
-//!                       — the same entry point the wasm `solve_multi`
+//! the same solve the wasm `solve_multi` boundary uses, reached through
+//! `netflow::solve_netflow_multi_with_options` rather than the
+//! `solve_multi_with_palette_exclusions_quality_and_modules` wrapper — the
+//! wrapper cannot pass the declared research-productivity axis. Every other
+//! option is left at the value that wrapper set.
 //!                       boundary uses). Replaces the <item> <rate>
 //!                       positionals; every flag below still applies. N=1
 //!                       is bit-identical to the plain positional form by
@@ -84,6 +88,7 @@ fn parse_target_token(tok: &str) -> (String, f64) {
         .unwrap_or_else(|_| usage(&format!("bad rate in target {tok:?}")));
     (item.to_string(), rate)
 }
+
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -182,17 +187,9 @@ fn main() {
             // different world from the one it declares on the manifest — the
             // exact class this axis exists to eliminate.
             "--research-productivity" => {
-                for pair in need(i).split(',').filter(|p| !p.is_empty()) {
-                    let (recipe, bonus) = pair
-                        .split_once('=')
-                        .unwrap_or_else(|| usage("--research-productivity wants recipe=bonus"));
-                    let bonus: f64 = bonus.parse().unwrap_or_else(|_| {
-                        usage("--research-productivity bonus must be a number, e.g. 0.10")
-                    });
-                    if !(0.0..=10.0).contains(&bonus) {
-                        usage("--research-productivity bonus must be a fraction (0.10 = +10%), not a percentage");
-                    }
-                    research_productivity.insert(recipe.to_string(), bonus);
+                match spaghettio_core::module_policy::parse_declared_productivity(&need(i)) {
+                    Ok(map) => research_productivity.extend(map),
+                    Err(e) => usage(&e),
                 }
             }
             "--inserter-cap" => {
