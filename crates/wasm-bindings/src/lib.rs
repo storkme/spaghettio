@@ -157,10 +157,13 @@ fn layout_options(
         // be added here later if a real need appears (RFC-060 decision
         // log, 2026-07-30).
         horizontal_candidate: true,
-        // RFC-058 phase 2 is engine-only: the packer emits a trace plan and
-        // moves nothing, so there is no web surface to expose yet. Wire a
-        // URL param here only when phase 4 gives the flag visible effect.
+        // RFC-058's concluded packed builder remains engine-only and
+        // default-off; there is no web surface for the falsification artifact.
         band_packing: false,
+        // RFC-064's explicit-plan seam is measurement-only. It must never be
+        // inferred at the public boundary or turn into an undocumented URL
+        // policy axis.
+        band_pack_selection: None,
         // No `..Default::default()`: adding `direct_insertion` completed
         // the field list, and a no-op struct update is a clippy error
         // under the workspace's `-D warnings`. A field added to

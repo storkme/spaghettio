@@ -227,7 +227,11 @@ pub fn export_with_manifest(
         "bbox_min": [bbox_min_x, bbox_min_y],
         "dims": [layout.width, layout.height],
         "entities": layout.entities.len(),
-        "stacking": layout.stacking,
+        // `LayoutResult::default()` uses 0 as the internal legacy spelling of
+        // unstacked, but Factorio's force bonus is `stacking - 1` and rejects
+        // negative values. The manifest boundary must use the deployable
+        // 1..=4 representation consumed by the sim harness.
+        "stacking": layout.stacking.clamp(1, 4),
         "inserter_capacity": layout.inserter_capacity,
     });
     (bp, manifest)
@@ -430,6 +434,16 @@ mod tests {
     use super::*;
     use crate::models::{EntityDirection, PlacedEntity};
     use std::io::Read;
+
+    #[test]
+    fn manifest_normalizes_legacy_zero_stacking_to_one() {
+        let (_, manifest) = export_with_manifest(
+            &LayoutResult::default(),
+            &crate::models::SolverResult::default(),
+            "default-stacking",
+        );
+        assert_eq!(manifest["stacking"], 1);
+    }
 
     /// RFC-062 Phase 3 final-gate finding: a solid TARGET routed through
     /// the dual-purpose lane's `surplus_exits` claim (Phase 2's shape —
