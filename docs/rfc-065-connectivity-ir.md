@@ -1325,3 +1325,20 @@ Per `CLAUDE.md` § verification protocol:
   triple fold returns ([138, 276, 414]) and the remaining fold
   rejections are all `input-rate-delivery` (110), the calibrated
   gate doing its actual job. `cell_composition` 25/25 green.
+- **2026-08-06 — Slice 2 full-suite results: four e2e warning pins
+  moved, all four the adjudicated fixtures; re-pinned with the
+  adjudication cited at each site.** 67/71 e2e green on first run;
+  the four failures were exactly `tier4_advanced_circuit_from_plates`
+  ({} → belt-detour 1), `tier_kovarex_self_loop` ({} →
+  belt-detour 1), `tier4_advanced_circuit_from_ore_am2` (belt-detour
+  1 → 0, the retired artifact), and
+  `quality_differential_kovarex_self_loop_normal_vs_legendary`
+  (Normal arm gains the same return-line run its own 2026-08-01
+  comment had recorded as "worst run 1.96x — just under the ratio
+  floor": that fragment WAS this run, phantom-cut; independent
+  corroboration of the adjudication from a comment written before
+  the migration existed). Stress AC partitioned/pooled pins at other
+  rates hold unchanged (their old verdicts were real detours the old
+  walk could already see; the two survey-config gains sit in
+  fixtures without exact-count e2e pins). Ladder + self-loop notes
+  synced in `docs/status.md`.

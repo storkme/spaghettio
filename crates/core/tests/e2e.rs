@@ -1759,7 +1759,15 @@ fn tier4_advanced_circuit_from_plates() {
     assert_no_errors(&result);
     // RFC Phase 1: 14 inserter-bound machine-sides (advanced-circuit @1/s chain).
     // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row (copper-cable) ladder-sized; advanced-circuit triple_input_row + electronic-circuit dual_input_row are Phase 2/3 scope, residue remains (14 -> 6).
-    assert_warnings_exactly(&result, &[]);
+    // RFC-065 slice 2 (2026-08-06, decision-log adjudication): the graph
+    // decomposition heals a phantom D5 cut and surfaces the EC
+    // last-segment loop — drop (11,38) routes 5W, 3S, back E on the y=42
+    // trunk to its pickup: 14 tiles for a 3-tile separation (4.67x). A
+    // real detour of the known AC family, previously invisible because
+    // the copper-cable UG entrance at (6,38) phantom-fed the turn tile.
+    // Same family as the partitioned/pooled pins below; root-cause
+    // tracked in docs/status.md "Open tracking issues".
+    assert_warnings_exactly(&result, &[("belt-detour", 1)]);
     assert_produces(&result, "advanced-circuit", 1.0);
     assert_round_trip(&result);
 }
@@ -2266,7 +2274,12 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // issues"): one belt run at 2.5x/9 tiles excess, past the check's
     // floors, not yet root-caused. Tolerated explicitly rather than
     // silently allowed.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 11), ("belt-detour", 1)]);
+    // RFC-065 slice 2 (2026-08-06, decision-log adjudication): the old
+    // belt-detour verdict here was a phantom-BOUNDED fragment
+    // ((8,85)->(7,90) at 15/6 = 2.5x); measured whole, the true
+    // balancer-weave journey is 20/11 = 1.82x — under the ratio floor by
+    // the same rules that admitted the fragment. Artifact retired.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 11)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -2378,7 +2391,15 @@ fn tier_kovarex_self_loop() {
     // beyond any medium pole — the dormant SUBSTATION path fires for the first
     // time on the corpus: one substation's ±9 supply reaches down over the
     // recirc bank. 16 -> 0.
-    assert_warnings_exactly(&result, &[]);
+    //
+    // RFC-065 slice 2 (2026-08-06, decision-log adjudication): the U-235
+    // catalyst return line measures whole for the first time — 55 tiles
+    // for a 22-tile separation (2.5x, excess 33). The old walk's phantom
+    // cut left its worst fragment at 1.96x, knife-edge under the ratio
+    // floor (the quality-differential test's old comment recorded exactly
+    // that number). Correctly measured; whether catalyst returns deserve
+    // their own calibration class is noted follow-up work in the RFC log.
+    assert_warnings_exactly(&result, &[("belt-detour", 1)]);
     assert_produces(&result, "uranium-235", 0.1);
 
     let centrifuge_count = result
@@ -7573,16 +7594,27 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
         assert!(errors.is_empty(), "{label}: expected 0 errors, got {errors:?}");
     }
     // Both tiers are fully clean of everything but belt-detour (matches
-    // `tier_kovarex_self_loop`'s Normal pin) — the power arc introduces no
+    // `tier_kovarex_self_loop`'s pin) — the power arc introduces no
     // warnings at either tier.
-    assert!(normal_issues.is_empty(), "normal: expected 0 issues, got {normal_issues:?}");
+    //
+    // RFC-065 slice 2 (2026-08-06, decision-log adjudication): Normal's
+    // catalyst return line now measures whole — the survey-era "worst run
+    // 1.96x, just under the ratio floor" recorded below was the phantom-
+    // cut FRAGMENT of exactly this run; healed, it is 55/22 = 2.5x and
+    // fires, matching `tier_kovarex_self_loop`.
+    assert_eq!(
+        normal_issues.len(),
+        1,
+        "normal: expected exactly one issue, got {normal_issues:?}"
+    );
+    assert_eq!(normal_issues[0].category, "belt-detour", "normal: {:?}", normal_issues[0]);
     // 2026-08-01 belt-detour survey finding (docs/status.md "Open tracking
     // issues"): Legendary's quality-scaled machine footprint (fewer,
     // bigger centrifuges than Normal) shifts the recirc layout enough to
-    // newly clear the belt-detour floors — one run at 2.5x/25 tiles
-    // excess. Normal stays clean (matches `tier_kovarex_self_loop`, whose
-    // worst run in the corpus survey was 1.96x — just under the ratio
-    // floor). Not yet root-caused; tolerated explicitly.
+    // clear the belt-detour floors even under the old tile-walk — one run
+    // at 2.5x/25 tiles excess. (Normal's twin run was phantom-cut to
+    // 1.96x back then — see above.) Not yet root-caused; tolerated
+    // explicitly.
     assert_eq!(
         leg_issues.len(),
         1,

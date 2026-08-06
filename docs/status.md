@@ -40,7 +40,7 @@ below are gated by the default (non-ignored) suite unless noted.
 | 1 | `iron-gear-wheel` | 1 recipe, 1 solid input | SOLVED — clean, incl. 20/s |
 | 2 | `electronic-circuit` | 2 recipes, 2 solid inputs | SOLVED, 0 errors; **#519 recalibration (2026-07-31)** surfaces the tail-starvation the blessed ec10 sim baseline has recorded since 2026-07-22 (FAIL −50%, #352): from-ore pins 3 input-rate-delivery + 1 belt-margin, from-plates pins 1. Stress-gated at 20/22/23/30/35/40/s (yellow) and 60/s (red) from ore |
 | 3 | `plastic-bar` | 1 recipe, 1 fluid + 1 solid input | SOLVED — clean, incl. from crude; sulfuric-acid, heavy-oil cracking, and multi-machine advanced-oil-processing also gated at this tier |
-| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED — from plates fully clean; from ore (AM2) **validator-clean since RFC-060** (the horizontal-stack candidate wins strictly-better and deletes the long-standing input-rate-delivery residual), and the [#519](https://github.com/storkme/spaghettio/issues/519) recalibration (2026-07-31) now REPORTS that flux honestly: the from-ore AM2 fixture pins 11 input-rate-delivery warnings — the check agreeing with `ac@5`'s sim measurement (75% of plan at what was then E0/W0) instead of hiding it. Partitioned 4/s + 5/s (+2 pinned) and horizontal-stack 7/s stress-gated. |
+| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED — from plates green with 1 known belt-detour warning (the AC last-segment loop, measured whole by RFC-065 slice 2's phantom-cut fix 2026-08-06; root-cause open); from ore (AM2) **validator-clean since RFC-060** (the horizontal-stack candidate wins strictly-better and deletes the long-standing input-rate-delivery residual), and the [#519](https://github.com/storkme/spaghettio/issues/519) recalibration (2026-07-31) now REPORTS that flux honestly: the from-ore AM2 fixture pins 11 input-rate-delivery warnings — the check agreeing with `ac@5`'s sim measurement (75% of plan at what was then E0/W0) instead of hiding it. Partitioned 4/s + 5/s (+2 pinned) and horizontal-stack 7/s stress-gated. |
 | 5 | `processing-unit` | Deep chain, multiple fluids | SOLVED, 0 errors — from ore (AM3, 2/s) pins 32 input-rate-delivery since #519 (pu@3's sim-measured uniform −24% chain, now visible statically); horizontal-stack gated at 2/s (pipe bypass) and 25/s (pole coverage). Higher-rate partitioned strategies still have junction + starvation issues — `partition_strategy_scoreboard_extended`. |
 | 6 | `flying-robot-frame` | Adds lubricant: advanced-oil-processing refinery rows with 3 fluid outputs | SOLVED via the USP chain (0 errors). No dedicated FRF fixture yet. |
 | 7 | `utility-science-pack` | Very deep chain (LDS + PU + FRF) | SOLVED — fully clean at 1/s (gauntlet 2026-07-21: 0 errors, 0 warnings, 6796 entities, 208×285). |
@@ -66,7 +66,11 @@ on every push:
 
 - **Self-loop / byproduct chains** (net-flow solver): Kovarex enrichment,
   uranium processing (surplus export + voider variants, voider purity),
-  pentapod-egg, fish-breeding, and bacteria self-loops.
+  pentapod-egg, fish-breeding, and bacteria self-loops. (Kovarex carries
+  1 known belt-detour warning since RFC-065 slice 2 measured its catalyst
+  return line whole — 2.5×/33-excess, inherent loop topology; whether
+  catalyst returns deserve their own calibration class is noted follow-up
+  in the RFC-065 log.)
 - **Space Age machines**: electromagnetic plant (superconductor), cryogenic
   plant (fusion power cell), foundry (molten iron), biochamber
   (biolubricant); substation as a first-class entity.
