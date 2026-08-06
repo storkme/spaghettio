@@ -657,14 +657,31 @@ fn print_measurement(m: &MeasurementQuality, converged: bool) {
 /// Only non-zero entries and probe faults are printed: a fully-zero result is
 /// the common case and says "no parity gap on the probed recipes", which the
 /// one-line summary covers.
-fn print_productivity_parity(report: &Report) {
+fn productivity_parity_lines(
+    force: &serde_json::Value,
+    entity: &serde_json::Value,
+    modules: &serde_json::Value,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
     let mut boosted: Vec<String> = Vec::new();
     let mut faults: Vec<String> = Vec::new();
     let mut numeric = 0usize;
 
     // `productivity_force` maps recipe -> number (or a sentinel string).
-    if let Some(map) = report.productivity_force.as_object() {
+    // Recipes the layout actually crafts, from the entity channel. The force
+    // channel probes a fixed list, so without this a run that never crafts
+    // processing-unit would still print a processing-unit banner (PR #580
+    // review). Empty entity channel → report everything rather than nothing,
+    // since suppressing on missing evidence is the worse failure here.
+    let crafted: Option<Vec<&String>> = entity
+        .as_object()
+        .map(|m| m.keys().collect())
+        .filter(|k: &Vec<&String>| !k.is_empty());
+    if let Some(map) = force.as_object() {
         for (name, v) in map {
+            if crafted.as_ref().is_some_and(|c| !c.contains(&name)) {
+                continue;
+            }
             match v.as_f64() {
                 Some(n) => {
                     numeric += 1;
@@ -680,7 +697,7 @@ fn print_productivity_parity(report: &Report) {
     }
     // `productivity_entity` maps recipe -> {min, max, n, faults}, aggregated
     // over every machine of that recipe rather than the first one seen.
-    if let Some(map) = report.productivity_entity.as_object() {
+    if let Some(map) = entity.as_object() {
         for (name, v) in map {
             let lo = v.get("min").and_then(|x| x.as_f64());
             let hi = v.get("max").and_then(|x| x.as_f64());
@@ -702,42 +719,48 @@ fn print_productivity_parity(report: &Report) {
             }
         }
     }
-    let modules = report
-        .productivity_modules
-        .as_object()
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let modules = modules.as_object().map(|m| m.len()).unwrap_or(0);
 
     if numeric == 0 && faults.is_empty() {
-        return; // probe absent entirely (e.g. a report from before it existed)
+        return out; // probe absent entirely (e.g. a report from before it existed)
     }
     if numeric == 0 {
         // Self-audit: every channel faulted. Without this line an all-sentinel
         // run is indistinguishable from a genuine "no productivity anywhere",
         // which would silently license a wrong conclusion.
-        println!(
+        out.push(format!(
             "productivity parity: PROBE FAILED — no channel returned a number \
              ({} fault(s): {}). Treat any productivity claim from this run as \
              unmeasured.",
             faults.len(),
             faults.join(", ")
-        );
-        return;
+        ));
+        return out;
     }
-    if boosted.is_empty() && modules == 0 {
-        println!("productivity parity: none on the probed recipes ({numeric} read, 0 boosted)");
+    // BOOSTED is gated on a non-empty boost list ALONE. Folding the module
+    // count into this condition made a layout with any module at all print
+    // "BOOSTED []" — an empty boost list under a boosted header, claiming a
+    // parity gap that the numbers do not show (PR #580 review, 3/3).
+    if boosted.is_empty() {
+        out.push(format!("productivity parity: none on the probed recipes ({numeric} read, 0 boosted)"));
     } else {
-        println!(
-            "productivity parity: BOOSTED [{}]{} — the fast meter models no \
+        out.push(format!(
+            "productivity parity: BOOSTED [{}] — the fast meter models no \
              productivity, so meter-vs-sim rates on these recipes are not \
              like-for-like (RFC-064 item 7)",
-            boosted.join(", "),
-            if modules > 0 { format!(", {modules} module slot group(s)") } else { String::new() }
-        );
+            boosted.join(", ")
+        ));
+    }
+    if modules > 0 {
+        // Informational and separate: these are productivity-family modules
+        // only (the Lua side filters), reported as distinct (recipe, module)
+        // pairs rather than slot counts.
+        out.push(format!("  productivity modules present: {modules} (recipe, module) pair(s)"));
     }
     if !faults.is_empty() {
-        println!("  probe faults: {}", faults.join(", "));
+        out.push(format!("  probe faults: {}", faults.join(", ")));
     }
+    out
 }
 
 pub fn print_human(report: &Report) {
@@ -767,7 +790,13 @@ pub fn print_human(report: &Report) {
         report.inserter_stack_size_bonus,
         report.bulk_inserter_capacity_bonus
     );
-    print_productivity_parity(report);
+    for line in productivity_parity_lines(
+        &report.productivity_force,
+        &report.productivity_entity,
+        &report.productivity_modules,
+    ) {
+        println!("{line}");
+    }
     if !report.external_inputs.is_empty() {
         let inputs: Vec<String> = report
             .external_inputs
@@ -836,6 +865,84 @@ fn fmt_pct(v: Option<f64>) -> String {
 
 #[cfg(test)]
 mod tests {
+
+
+    fn productivity_parity_lines_of(
+        force: serde_json::Value,
+        entity: serde_json::Value,
+        modules: serde_json::Value,
+    ) -> Vec<String> {
+        productivity_parity_lines(&force, &entity, &modules)
+    }
+
+    /// All three branches of the productivity-parity summary, pinned.
+    ///
+    /// The review that prompted these noted every branch was unasserted — and
+    /// two of them were wrong at the time: `BOOSTED` fired on any module at
+    /// all (including speed/efficiency), printing an empty boost list under a
+    /// boosted header.
+    #[test]
+    fn productivity_parity_reports_boosted_only_when_something_is_boosted() {
+        let lines = productivity_parity_lines_of(
+            serde_json::json!({"processing-unit": 0.1, "electronic-circuit": 0.0}),
+            serde_json::json!({"processing-unit": {"min": 0.0, "max": 0.0, "n": 4, "faults": 0}}),
+            serde_json::json!({}),
+        );
+        assert!(lines[0].contains("BOOSTED"), "got {lines:?}");
+        assert!(lines[0].contains("processing-unit=+10.0%"), "got {lines:?}");
+        // electronic-circuit is probed but not crafted in this layout, and is
+        // 0.0 anyway — it must not appear.
+        assert!(!lines[0].contains("electronic-circuit"), "got {lines:?}");
+    }
+
+    #[test]
+    fn productivity_parity_reports_none_when_nothing_is_boosted() {
+        let lines = productivity_parity_lines_of(
+            serde_json::json!({"iron-plate": 0.0}),
+            serde_json::json!({"iron-plate": {"min": 0.0, "max": 0.0, "n": 2, "faults": 0}}),
+            serde_json::json!({}),
+        );
+        assert_eq!(lines.len(), 1, "got {lines:?}");
+        assert!(lines[0].contains("none on the probed recipes"), "got {lines:?}");
+        assert!(!lines[0].contains("BOOSTED"), "got {lines:?}");
+    }
+
+    /// A module present but zero productivity is NOT a parity gap. This is the
+    /// case that used to print "BOOSTED []".
+    #[test]
+    fn productivity_parity_does_not_claim_boost_from_modules_alone() {
+        let lines = productivity_parity_lines_of(
+            serde_json::json!({"iron-plate": 0.0}),
+            serde_json::json!({"iron-plate": {"min": 0.0, "max": 0.0, "n": 1, "faults": 0}}),
+            serde_json::json!({"iron-plate/productivity-module": 2}),
+        );
+        assert!(lines[0].contains("none on the probed recipes"), "got {lines:?}");
+        assert!(
+            lines.iter().any(|l| l.contains("productivity modules present")),
+            "module presence must still be reported, separately: {lines:?}"
+        );
+    }
+
+    /// Self-audit: an all-sentinel run must say so, not read as "no productivity".
+    #[test]
+    fn productivity_parity_flags_a_wholly_failed_probe() {
+        let lines = productivity_parity_lines_of(
+            serde_json::json!({"processing-unit": "FIELD_ABSENT"}),
+            serde_json::json!({}),
+            serde_json::json!({}),
+        );
+        assert!(lines[0].contains("PROBE FAILED"), "got {lines:?}");
+    }
+
+    /// A report predating the probe prints nothing rather than a false "none".
+    #[test]
+    fn productivity_parity_is_silent_when_the_probe_is_absent() {
+        let lines = productivity_parity_lines_of(
+            serde_json::Value::Null, serde_json::Value::Null, serde_json::Value::Null,
+        );
+        assert!(lines.is_empty(), "got {lines:?}");
+    }
+
     use super::*;
     use crate::manifest::Manifest;
 

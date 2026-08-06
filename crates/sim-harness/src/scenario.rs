@@ -1179,8 +1179,16 @@ local function finalize(s, converged)
   -- so the read is real. That discrimination is also the strongest evidence
   -- the probe worked at all -- a broken probe returns uniform sentinels.
   local prod_force = {}
+  -- The list spans the WHOLE tier5_processing_unit_from_ore chain, not just
+  -- its assembler legs: plastic-bar, sulfur and the oil steps are crafted in
+  -- chemical plants / refineries, and a productivity bonus on any of them
+  -- would move the target rate just as surely (PR #580 review). Probing a
+  -- recipe the run never crafts is harmless -- the printer only reports
+  -- bonuses for recipes the layout actually contains.
   for _, rn in ipairs({"processing-unit", "electronic-circuit", "advanced-circuit",
-                       "iron-plate", "copper-plate", "copper-cable"}) do
+                       "iron-plate", "copper-plate", "copper-cable",
+                       "plastic-bar", "sulfur", "sulfuric-acid",
+                       "basic-oil-processing", "advanced-oil-processing"}) do
     prod_force[rn] = probe(function()
       local r = game.forces.player.recipes[rn]
       if r == nil then return nil end
@@ -1188,7 +1196,9 @@ local function finalize(s, converged)
     end)
   end
   local prod_entity, prod_modules = {}, {}
-  for _, m in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
+  for _, m in pairs(s.find_entities_filtered{
+    type = {"assembling-machine", "furnace", "chemical-plant", "oil-refinery"}
+  }) do
     local rn = probe(function()
       local r = m.get_recipe()
       if r == nil then return nil end
@@ -1221,7 +1231,11 @@ local function finalize(s, converged)
           for k, c in pairs(contents) do
             local nm, ct
             if type(c) == "table" then nm, ct = c.name, c.count else nm, ct = k, c end
-            if nm ~= nil then
+            -- Productivity-family ONLY. Counting speed/efficiency/quality
+            -- modules here made a speed-moduled layout print a BOOSTED banner
+            -- with an empty boost list (PR #580 review, 3/3) -- a module is
+            -- only a productivity parity gap if it grants productivity.
+            if nm ~= nil and string.find(tostring(nm), "productivity", 1, true) then
               local key = rn .. "/" .. tostring(nm)
               prod_modules[key] = (prod_modules[key] or 0) + (ct or 1)
             end
