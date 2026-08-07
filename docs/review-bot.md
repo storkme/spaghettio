@@ -464,6 +464,55 @@ same-run attempts each failing the guard — that means the parking is
 deterministic for that PR, and the canary-gated `Agent` ban becomes the next
 lever.
 
+### Failure class 11: same-SHA event cancelled the required check (2026-08-06)
+
+The first second-opinion entry in this ledger, and the inverse of class 10:
+there the wrong run survived a cancellation race; here **nothing** survived,
+and the victim was a *required* check.
+
+On PR #576, at its final head `0d92f93a` (earlier SHAs had green reviews;
+this head had none yet), a close/reopen (times UTC):
+
+| run | created | outcome |
+|---|---|---|
+| `31124347719` | 17:51:39 | **cancelled** 17:54:47 — annotation: "Canceling since a higher priority waiting request for second-opinion-576 exists" |
+| `31124497214` attempt 1 | 17:54:41 | job cancelled 18:13:18 — "The job was not acquired by Runner of type hosted even after multiple attempts" |
+| `31124497214` attempt 2 (`gh run rerun`) | 18:31:05 | job cancelled 20:03:00 — same runner-acquisition failure, after **92 min** queued |
+
+Two distinct causes composed. The first cancellation is the concurrency
+group: `second-opinion-<pr>` with an unconditional `cancel-in-progress: true`
+keys on the PR **number**, so a `reopened` event for the *same head SHA*
+cancelled the in-progress run — a cancellation that buys nothing (no newer
+SHA exists) and costs the head its only chance at a concluded check. The
+second and third are a platform runner-acquisition stall that day, not
+concurrency — githubstatus.com carried Actions at **`major_outage`** through
+that evening (22:46 UTC check), so this is a confirmed platform incident
+rather than an inference from our own logs. But the group turned a transient
+stall into a dead end, because under it *any* subsequent same-PR event could
+keep killing recovery attempts.
+End state: `second-opinion` (required, `enforce_admins`) had no successful
+conclusion on the head and the PR was unmergeable without a protection
+override.
+
+**Fix:** `cancel-in-progress: ${{ github.event.action == 'synchronize' }}`.
+Cancellation was added for exactly one case — a new push supersedes the SHA
+under review, and reviewing a superseded SHA is billed spend — and
+`synchronize` is the only trigger in that case. Same-head events (`reopened`,
+`ready_for_review`) now queue behind the running review instead of killing
+it; when the queued duplicate runs, the runner's per-SHA marker gate
+(`already_reviewed`, checked before any model call, exit 0) makes it a green
+no-op. Keying the *group* on head SHA was considered and rejected: it fixes
+the same-SHA kill but isolates each push in its own group, so superseded
+runs would never be cancelled — reintroducing the spend the cancellation
+exists to stop.
+
+**Residual, accepted:** GitHub's own near-simultaneous-queue race (two runs
+entering one group at the same instant can cancel each other) still exists
+for bursts of pushes, and a run cancelled mid-flight by a genuine
+`synchronize` still leaves a `cancelled` conclusion on the *old* SHA — both
+fine, since the new head gets its own run. The recovery path is what the fix
+hardens: a `gh run rerun` can no longer be shot down by same-SHA event noise.
+
 ## Forensics playbook
 
 **Run signatures** (from the action's result JSON in the job log — grep the
