@@ -201,6 +201,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 | Entity sizes | `crates/core/src/common.rs` (`entity_size`) |
 | Validation checks | `crates/core/src/validate/` (40 checks, dispatched from `mod.rs`) |
 | How a check should report (and the nine times it didn't) | [`docs/validator-reporting.md`](docs/validator-reporting.md) |
+| What a check's report is worth (severity, selection participation, calibration receipts, known holes) | [`docs/validator-trust.md`](docs/validator-trust.md) — update it in the same PR as any severity/category/selection change |
 | Snapshot format | `crates/core/src/snapshot.rs` + [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md) |
 | Sim measurement semantics + forensics | [`docs/sim-harness-forensics.md`](docs/sim-harness-forensics.md) (what each spaghettio-sim number means, artifact classes, debug playbook) |
 | Belt lane physics | [`docs/factorio-mechanics.md`](docs/factorio-mechanics.md) |

@@ -1,0 +1,215 @@
+# Validator trust table
+
+**Status (2026-08-07):** initial version. Written after the PU@1/s incident
+below. This page is the **registry** for two per-check properties the codebase
+previously kept implicit and scattered: what happens when a check fires
+(consequence), and how much we believe it (trust). **Owner rule: a PR that
+changes a check's severity, adds/removes a category, or changes selection
+participation must update this table in the same PR.** Graduation
+preconditions ("promote X once Y is proven") live *here*, not in doc comments
+— the #519 exit condition lived in a code comment plus a status bullet whose
+rationale had gone stale, and nothing re-asked whether the precondition had
+been met until a sim failure forced the question (see hole 2).
+
+Sibling doc: [`validator-reporting.md`](validator-reporting.md) covers *how* a
+check should report (one positioned issue per instance, etc.) and the ten
+incidents of checks going quiet. This page covers *what the report is worth*.
+
+## Why this page exists
+
+On 2026-08-07 a PU@1/s parity fixture measured **68.2% of plan** in the sim.
+The layout carried three `input-rate-delivery` warnings naming the exact
+starving machines (0.0/s electronic-circuit delivered to three consumers) —
+the validator had localised the defect before the sim ever ran. Nothing acted
+on the warnings: candidate selection was deliberately excluding the category
+from ranking, export has no validation gate, the sim manifest carries no
+validator state, and the parity report quoted 68.2% with no mention of them.
+Every stage behaved as designed; the designs disagreed about what a Warning
+means.
+
+The structural lesson: **severity conflates two independent properties.**
+
+- **Consequence** — what the pipeline does when the check fires: refuse the
+  candidate, re-rank it, or just print.
+- **Trust** — how confident we are that a fire is real, and (separately)
+  that silence means absence. Coverage gaps are a trust property too: an
+  Error-severity check with a blind spot is *worse* than a Warning, because
+  its silence is taken as clearance.
+
+A physically-impossible-layout check and a taste heuristic both emitting
+"Warning" is how a factory whose math visibly doesn't add up gets simmed
+without comment.
+
+## Consequence channels — what actually has teeth today
+
+| # | Stage | What validation does there |
+|---|---|---|
+| C1 | e2e fixtures | fixtures that call `validate()` and unwrap fail on any Error; scoreboards count both severities |
+| C2 | candidate search (`bus/decomposition_search.rs`) | DI arm **refuses** any Error-carrying layout; `IssueCounts` (errors, selection-scoped warnings, `LayoutResult.warnings`) are component-wise never-worse **floors**; `selection_warning_count` ranks candidates by Warning count **minus exclusions** (`input-rate-delivery`, `belt-detour`); `score_layout` hard-gates `missing-balancer-template` |
+| C3 | transactional transforms (`bus/compaction.rs`) | a cut/candidate that has (or adds) Errors is rejected; the pre-transform layout survives. RFC-065 adds a `connectivity::error_certain_regression` reject-fast prefilter ahead of the full validate |
+| C4 | web UI | issues render as markers; export button works regardless |
+| C5 | blueprint export | **no gate** — export never consults validation |
+| C6 | sim / meter harness | **no gate, no visibility** — the manifest (`crates/sim-harness/src/manifest.rs::Manifest`) carries geometry, rates, boundaries, and the declared axes, but no issue state at all |
+
+Second issue channel: `LayoutResult.warnings` — strings stamped by the layout
+pipeline itself (e.g. "No N→M balancer template"), never seen by `validate()`.
+Floor-protected in `IssueCounts`; reading only the validator has already
+produced one false "0 errors 0 warnings" claim (#462).
+
+Note what is *absent*: nothing between "the search picked a winner" and "the
+sim measured it" ever re-asks the validator. C5 and C6 are the holes the
+2026-08-07 incident went through.
+
+## The trust ladder
+
+- **Physical/structural fact** — deterministic geometry or graph property
+  (overlap, UG pairing, pipe adjacency, dead ends). A fire is definitionally
+  real; false positives only via modelling bugs. Trust the fires; audit the
+  *coverage* (the ten incidents were mostly silence, not noise).
+- **Ledger conservation** — cross-checks of solver/layout bookkeeping against
+  physical entities (boundary records, stranded byproducts, shared-row
+  claims). Each of these was born from a specific validator-clean-but-
+  game-dead incident; they encode "a ledger entry is a claim, the entity at
+  its tile is the fact".
+- **Rate model** — derived flow rates (lane walker, delivery, inserter
+  hands). Both false positives (#519 pre-recalibration) and false negatives
+  (holes 1, 4) observed. **Needs sim anchoring before it steers selection**;
+  after anchoring, needs this table updated with the receipt.
+- **Heuristic** — corpus-calibrated taste (`belt-detour`). Report-only by
+  design until a sim case is made.
+
+## The table
+
+Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
+`selection_warning_count` (Warnings) / triggers refusal+floors (Errors).
+
+### Physical / structural facts (trust the fire)
+
+| Category | Sev | Sel | Notes |
+|---|---|---|---|
+| `entity-overlap` | E | yes | |
+| `belt-connectivity` | E | yes | |
+| `belt-dead-end` | E | yes | |
+| `belt-loop` | E | yes | |
+| `belt-topology` | E/W | yes | spaghetti-style check |
+| `belt-item-isolation` | E | yes | contamination class |
+| `belt-junction` | E/W | yes | head-on = Error, else Warning |
+| `output-belt` | E | yes | |
+| `tap-priority` | E | yes | |
+| `underground-belt` | E/W | yes | pair/sideload lane rules per `factorio-mechanics.md`. NB `classify_errors` (decomposition_search.rs) matches `"underground-belt-sideload"`, which nothing emits — see hole 5 |
+| `pipe-isolation` | E | yes | |
+| `fluid-connectivity` | E | yes | |
+| `fluid-network` | E | yes | |
+| `inserter` | E | yes | chain completeness |
+| `inserter-direction` | E | yes | |
+| `power` | E/W | yes | coverage + pole connectivity (incidents 2–4 in validator-reporting.md were here) |
+| `unresolved-junction` | E | yes | router self-report; definitionally real |
+| `belt-throughput` | W | yes | **misleading name**: overlapping route entities, NOT rate-vs-capacity. No check owns planned-rate-vs-capacity — that's hole 1 |
+| `orphan-belt-segment` | W | yes | |
+| `sushi-boundary` | E | yes | |
+| `module-slots`, `module-eligibility` | W | yes | data-table facts |
+| `missing-balancer-template` | W | yes + hard gate | the one Warning with teeth (`score_layout` rejects outright) |
+
+### Ledger conservation (incident-born, trusted)
+
+| Category | Sev | Sel | Born from |
+|---|---|---|---|
+| `boundary-record-integrity` | E (missing entity) / W (carries mismatch) | yes | the 0.00/s stale-boundary-record incident (`validate/mod.rs` doc comment; validator-reporting.md #1) |
+| `stranded-byproduct` | E | yes | net-flow RFC's "validator-clean but game-dead" class (USP's stranded AOP light-oil) |
+| `shared-row-outflow-overclaim` | E (plan-level) / W (built-only) | yes | RFC-062; severity split calibrated on a real EC+AC ceil-slack false positive |
+| `shared-row-outflow-underclaim` | E | yes | RFC-062 Phase 0 observed a target export silently dropped with zero errors |
+| `record-effective-rows` | E | yes | RFC-065: machine footprints vs `effective_rows` bands, harm-calibrated |
+| `record-power-wires` | E | yes | RFC-065: stored wire endpoints must be in-bounds pole entities |
+| `connectivity-anomaly` | E | **not dispatched** | emitted by `connectivity::scan_graph_anomalies`, deliberately not wired into `validate()` in RFC-065 Phase 0 — a category that exists but reaches no consequence channel; consumed by tests and the C3 prefilter only |
+
+### Rate models (calibration status is the load-bearing column)
+
+| Category | Sev | Sel | Calibration status |
+|---|---|---|---|
+| `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. **Known blind spot**: emitted zero errors on the 2026-08-07 stacking winner carrying 376 stamped-over-capacity tiles (hole 1) |
+| `input-rate-delivery` | W | **excluded** | **sim-anchored both directions, 2026-08-07** (receipts below): flagged layout 68.2% of plan, warning-free re-ranked layout 102.0%. Exclusion predates the anchor; lifting it is blocked on hole 1 only |
+| `belt-flow-path` | E spaghetti / **W bus** | yes | graph-flow walk; Warning on the default (Bus) pipeline — hole 4 |
+| `belt-flow-reachability` | E spaghetti / **W bus** | yes | the #520 check, rewritten per-tile after incident ten; still cannot block a Bus layout — hole 4 |
+| `inserter-throughput` | W | yes | hand-capacity model; never sim-anchored |
+| `inserter-item-throughput` | W | yes | never sim-anchored |
+| `row-output-lane-budget` | W | yes | never sim-anchored |
+| `row-input-belt-margin` | W | yes | deliberately conservative (both-lane ceiling); never sim-anchored |
+| `sushi-saturation` | E | yes | the only Error-severity rate model; reporting fixed in incident #5, model itself never sim-anchored |
+
+### Heuristics
+
+| Category | Sev | Sel | Status |
+|---|---|---|---|
+| `belt-detour` | W | **excluded** | corpus-survey-calibrated thresholds; report-only by explicit design until sim-anchored (its own doc comment) |
+
+## Known holes, ranked by measured cost
+
+1. **No validator check compares stamped/planned belt rates to physical
+   capacity** (the #311 class, parked in #527). The only detector is a
+   test-side audit closure inside the two `stacking_ec_60s` e2e fixtures.
+   Measured cost: a re-ranked candidate carrying 376 tiles at 90/s on
+   30/s-cap yellow belt passed the validator with **zero errors**
+   (2026-08-07, `fix/input-rate-delivery-counts-for-selection` adjudication).
+   **Next action:** promote the audit into `validate/` as an Error — it is a
+   physical law, the cheapest-possible check, and it unblocks hole 2.
+2. **`input-rate-delivery` is excluded from selection despite now being
+   sim-anchored in both directions.** The branch that lifts the exemption
+   exists and improves PU, EC@2/AM2, and tier2 — but shipping it before
+   hole 1 trades a starvation warning for a physically impossible winner
+   (reproduced exactly as the exemption's doc comment predicted). Land 1,
+   then lift, then re-adjudicate the fixture drift.
+3. **The sim/meter side has no validator visibility.** `Manifest` carries no
+   issue state, so parity sweeps can quote a condemned layout as a parity
+   number — which is precisely how 68.2% was first reported with no mention
+   of the three warnings that explained it. This is a **recorded RFC-050
+   Phase 0 deferral**, not an unnoticed gap: the RFC's Design section
+   promises `validator_errors`/`validator_warnings` in the manifest, and
+   `crates/sim-harness/src/manifest.rs`'s module doc documents that Phase 0
+   shipped without them (resolved as optional/absent-tolerant). **Next
+   action:** emit the fields the RFC already promised — per-category counts,
+   not just totals (`validator-reporting.md` rule: totals can't tell 2 from
+   218) — and make the sweep/report print them next to every rate, flagging
+   any "parity" number measured on a warned layout as measuring the layout,
+   not the pipeline.
+4. **`belt-flow-path` / `belt-flow-reachability` are Warnings on Bus**, the
+   default pipeline — the check rewritten after the #520 0.50-ratio incident
+   cannot block the style of layout that incident shipped.
+5. **`classify_errors` string drift**: it buckets `"underground-belt-sideload"`
+   as contamination, but the UG checks emit `"underground-belt"` — sideload
+   errors silently fall through to the starvation bucket. Consequence is
+   bounded (only the scoped Pooled merge-tap quality comparison), but it is
+   a live instance of category strings having no registry. This table is now
+   that registry.
+6. **Severity has no "uncalibrated" tier**, so calibration firewalls are
+   implemented as silent exclusions inside `selection_warning_count`. The
+   #519 firewall's written exit condition ("lift once sim-anchored") lived
+   in a code comment and a status.md bullet; no mechanism ever re-asked
+   whether the precondition had been met, and the bullet's rationale
+   ("selections are bit-identical") had been falsified by review without
+   the bullet changing. Rule going forward: an exclusion or severity choice
+   made for *trust* reasons gets a row here with its graduation
+   precondition and the receipt that would satisfy it.
+
+## Receipts (sim anchors and falsifications)
+
+- **2026-08-07 — `input-rate-delivery`, two-sided anchor.** PU@1/s AM3
+  from-ore, research productivity +10% (PU, plastic). Flagged layout (three
+  warnings, 0.0/s EC to three named machines): **0.682/s vs 1.0 plan**
+  (converged at minimum checkpoint count; see rfc064-phase2-followups §9's
+  caveats). Re-ranked layout with the warnings selected away: **1.020/s
+  delivered (102.0%)**, converged, census 140 working / 4 full-output /
+  1 ingredient-short. The check discriminates in both directions.
+- **2026-08-07 — over-capacity blind spot.** Same adjudication:
+  `stacking_ec_60s` fixtures' audit caught 376 stamped-over-cap tiles on a
+  validator-clean (0 errors) candidate. Anchor for hole 1.
+- **2026-07-31 — #520 (incident ten).** `small-electric-pole@5` DI layout,
+  clean on every channel, measured **2.52/s vs 5.00 plan**; native 5.08/s.
+  Falsified "clean means working"; produced the per-tile reachability
+  rewrite and parked `di_claim_order` Search.
+- **stress-EC throughput ceiling** (rfc064-phase2-followups §1).
+  `merge_output_rows` collapsing every row's output to one belt; found only
+  by in-client observation — **no check fired**. Standing evidence that the
+  rate-model family's coverage is incomplete.
+- **RFC-053 KC3.** DI cell shape sim-measured at **112% of plan** — the
+  positive case: the cell exemptions in the inserter/output checks are
+  justified by measurement, not assumption.
