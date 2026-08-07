@@ -143,9 +143,88 @@ def build_points(report: dict, arm: str, label: str, run_id: str, end_wallclock:
     return points
 
 
+def follow_csv(csv: pathlib.Path, arm: str, label: str, run_id: str, poll: float = 2.0):
+    """Tail the scenario's live `timeseries.csv` and push each window as it lands.
+
+    The scenario writes one line per planned item per checkpoint window:
+        tick,item,,,,,,,<item>,<produced_delta>
+    plus per-machine lines carrying crafts_delta and status. Rates come from
+    the item delta over the window's TICK span (authoritative), while the
+    timestamp is wall-clock now — so a live run reads left-to-right on the
+    dashboard at the speed you are watching it.
+    """
+    import time
+
+    print(f"following {csv} (ctrl-c to stop)", flush=True)
+    seen = 0
+    prev_tick = {}
+    while True:
+        if not csv.is_file():
+            time.sleep(poll)
+            continue
+        lines = csv.read_text(errors="replace").splitlines()
+        if len(lines) <= seen:
+            time.sleep(poll)
+            continue
+        batch, now = [], int(time.time())
+        status_counts = {}
+        for ln in lines[seen:]:
+            f = ln.split(",")
+            if len(f) < 10:
+                continue
+            try:
+                tick = int(f[0])
+            except ValueError:
+                continue
+            if f[1] == "item" and f[8]:
+                item, delta = f[8], float(f[9] or 0)
+                span = tick - prev_tick.get(item, tick)
+                prev_tick[item] = tick
+                if span <= 0:
+                    continue
+                rate = delta / (span / TICKS_PER_SECOND)
+                batch.append({
+                    "name": "spaghettio.sim.rate_produced", "value": rate, "time": now,
+                    "interval": 10,
+                    "tags": [f"item={item}", "series=rate_produced", f"fixture={label}",
+                             f"arm={arm}", f"run={run_id}"],
+                })
+            elif f[1] == "machine" and f[7]:
+                status_counts[f[7]] = status_counts.get(f[7], 0) + 1
+        for st, n in status_counts.items():
+            batch.append({
+                "name": "spaghettio.sim.machines", "value": float(n), "time": now,
+                "interval": 10,
+                "tags": [f"status={st}", "series=machines", f"fixture={label}",
+                         f"arm={arm}", f"run={run_id}"],
+            })
+        seen = len(lines)
+        if batch:
+            push(batch)
+            print(f"  pushed {len(batch)} pts ({len(prev_tick)} items)", flush=True)
+        time.sleep(poll)
+
+
+def push(points):
+    import base64
+
+    token = load_token()
+    req = urllib.request.Request(GRAPHITE_URL, data=json.dumps(points).encode(), method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header(
+        "Authorization",
+        "Basic " + base64.b64encode(f"{GRAPHITE_USER}:{token}".encode()).decode(),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        sys.exit(f"push failed: HTTP {e.code} {e.read(500).decode(errors='replace')}")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("report", type=pathlib.Path)
+    ap.add_argument("report", type=pathlib.Path, help="report.json, or timeseries.csv with --follow")
     ap.add_argument("--arm", default="unknown", help="e.g. lift / main")
     ap.add_argument("--label", default=None, help="fixture label (default: report stem)")
     ap.add_argument(
@@ -158,7 +237,20 @@ def main():
         "reports need 'now'. Runs stay distinguishable by their fixture/run tags.",
     )
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--follow",
+        action="store_true",
+        help="Treat the positional arg as the scenario's live timeseries.csv and "
+        "stream it to Grafana as the run progresses (use with `run --timeseries`).",
+    )
     args = ap.parse_args()
+
+    if args.follow:
+        import time
+
+        label = args.label or "live"
+        follow_csv(args.report, args.arm, label, f"{label}-{int(time.time())}")
+        return
 
     report = json.loads(args.report.read_text())
     label = args.label or args.report.stem.replace("-report", "")
@@ -178,19 +270,7 @@ def main():
         print(json.dumps(points[:3], indent=2))
         return
 
-    token = load_token()
-    body = json.dumps(points).encode()
-    req = urllib.request.Request(GRAPHITE_URL, data=body, method="POST")
-    req.add_header("Content-Type", "application/json")
-    import base64
-
-    auth = base64.b64encode(f"{GRAPHITE_USER}:{token}".encode()).decode()
-    req.add_header("Authorization", f"Basic {auth}")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            print(f"pushed: HTTP {resp.status} {resp.read(200).decode(errors='replace')}")
-    except urllib.error.HTTPError as e:
-        sys.exit(f"push failed: HTTP {e.code} {e.read(500).decode(errors='replace')}")
+    print(f"pushed: HTTP {push(points)} ({len(points)} points)")
 
 
 if __name__ == "__main__":

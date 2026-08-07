@@ -414,6 +414,28 @@ from `$GRAFANA_GRAPHITE_TOKEN` or `~/.config/spaghettio/grafana-token`.
 Dashboard: `/d/spaghettio-sim`. It works on any report, so the existing
 `job2-sim-baselines` corpus can be backfilled without re-running anything.
 
+### Watching a run live (`scripts/sim-live.sh`)
+
+```bash
+scripts/sim-live.sh <label> <bp.txt> <manifest-real.json> -- --warmup 432000 --speed 32
+```
+
+Runs the fixture with `--timeseries`, locates the scratch dir (its suffix is
+random, so the CSV path is only knowable after launch), streams each
+checkpoint window to Grafana as it lands, and prints a dashboard link
+**pre-filtered to that fixture** with a live window and auto-refresh.
+
+The live stream carries more than the batch export: the scenario's CSV has a
+per-machine line with `crafts_delta` and `status`, so `spaghettio.sim.machines`
+gives a live count of machines by status — idle and starved machines visible
+as they happen, not inferred afterwards.
+
+Live rates still come from the **tick span** of each window; only the
+timestamp is wall-clock, so the run reads left-to-right at the speed you are
+watching it. When the run finishes the wrapper also pushes the full
+`report.json`, so the run's history survives at sample fidelity rather than
+just the live windows.
+
 Two things that are load-bearing and not obvious:
 
 - **Rates are computed in the exporter, from the game-tick delta**, and
