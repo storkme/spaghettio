@@ -7852,30 +7852,59 @@ fn stacking_ec_60s_red_one_belt_headline() {
             .collect()
     };
 
-    // S=1: the committed-golden behavior — 0 validation errors, but the
-    // direct audit finds tiles above unstacked capacity. That IS #311.
+    // ── The `audit` closure above is REPORTING-ONLY as of 2026-08-07 ─────
+    //
+    // It compared `PlacedEntity::rate` against belt capacity, and that
+    // comparison is a CATEGORY ERROR, not a throughput measurement.
+    // `e.rate` is stamped from `BusLane::rate`, whose own doc reads
+    // "Total throughput ... for belt/pipe tier selection" — a lane-FAMILY
+    // total. A family that exceeds one belt is realised as SEVERAL
+    // PARALLEL BELTS, each tile stamped with the family's whole figure, so
+    // `rate > capacity` is routine and says nothing about flow.
+    //
+    // Three sim measurements retired it (all kit_errors-empty, converged):
+    //   AC@7/s horizontal stack   audit "3.00x over" -> measured  94% of plan
+    //   EC@45/s express legendary audit "1.11x over" -> measured 101% (PASS)
+    //   THIS fixture, S=2, under the input-rate-delivery selection fix:
+    //                             audit "3.00x over" -> measured  96.0%
+    //                             (57.60/s vs 60 planned, converged)
+    // A 3x-throttled factory cannot deliver 96% of plan.
+    //
+    // This is deliberately NOT "delete the check that started failing".
+    // The assertions below were removed because they gate merges on a
+    // quantity that does not exist, proven by measuring the exact layout
+    // they condemned — the opposite of the check-goes-quiet failure in
+    // docs/validator-reporting.md, which is a check silently stopping
+    // discriminating. Recorded in docs/validator-trust.md hole 1.
+    //
+    // WHAT THIS COSTS: this fixture no longer pins #311 at all. Its S=1
+    // "teeth" assertion was the same broken comparison, so it never did —
+    // it only appeared to. #311 (parked, #527) needs a real instrument:
+    // either `validate::check_lane_throughput`'s walked flow, or a sim
+    // measurement of the S=1 layout, which has NOT been taken. Do not read
+    // this fixture's silence as evidence #311 is fixed.
     let (l1, issues1) = run(1);
     let errors1: Vec<_> = issues1.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors1.is_empty(), "S=1 baseline drifted from the stress golden: {errors1:?}");
-    let over1 = audit(&l1, 1);
-    assert!(
-        !over1.is_empty(),
-        "S=1 audit found nothing above unstacked capacity — #311 got fixed; \
-         update this fixture (and close the issue) consciously"
-    );
 
-    // S=2: same plan, physically valid end to end.
+    // S=2: same plan, still validator-clean, and records its stack size.
     let (l2, issues2) = run(2);
     assert_eq!(l2.stacking, 2, "layout must record its stack size");
     let errors2: Vec<_> = issues2.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors2.is_empty(), "expected 0 errors at S=2, got {errors2:?}");
-    let over2 = audit(&l2, 2);
-    assert!(over2.is_empty(), "tiles above physical stacked capacity at S=2: {over2:?}");
 
-    // Teeth: some belt genuinely carries more than its unstacked cap
-    // (the 60/s merger on red), and the forcing rule placed the stack
-    // inserters that make that physically real.
-    assert!(!audit(&l2, 1).is_empty(), "no belt exceeds unstacked capacity — vacuous headline");
+    // Reporting only — printed so a reader can see the family-total
+    // figures without any assertion depending on them.
+    println!(
+        "stacking_ec_60s (informational, NOT a capacity verdict): \
+         S=1 family-total-over-cap tiles = {}, S=2 = {}",
+        audit(&l1, 1).len(),
+        audit(&l2, 2).len(),
+    );
+
+    // The surviving structural claim: S=2 forces stack inserters beyond
+    // the ladder's S=1 choices. This one is a real entity count, not a
+    // derived rate, so it means exactly what it says.
     assert!(
         l2.entities.iter().filter(|e| e.name == "stack-inserter").count()
             > l1.entities.iter().filter(|e| e.name == "stack-inserter").count(),
@@ -8451,10 +8480,27 @@ fn stacking_ec_60s_express_legendary_s2() {
             over.push(format!("{} at ({},{}) rate {rate} > stacked cap {cap}", e.name, e.x, e.y));
         }
     }
-    assert!(over.is_empty(), "tiles above physical stacked capacity: {over:?}");
+    // Same category error as `stacking_ec_60s_red_one_belt_headline` — see
+    // the long note there. `e.rate` is a lane-FAMILY total stamped on every
+    // belt of a multi-belt family, so comparing it to one belt's capacity
+    // measures nothing about throughput; three sim runs retired the
+    // comparison on 2026-08-07 (docs/validator-trust.md hole 1). Reported,
+    // never asserted.
+    println!(
+        "stacking_ec_60s_express_legendary_s2 (informational, NOT a capacity \
+         verdict): {} family-total-over-cap tiles, max stamped {max_seen}",
+        over.len(),
+    );
+
+    // Surviving claim: the stacked credit engaged at all. `max_seen` is the
+    // largest FAMILY total stamped, so "> 45" says the planner committed a
+    // family beyond one express belt's capacity and relied on stacking to
+    // place it — a statement about the plan, which is what this fixture is
+    // actually for. It is NOT a claim that any single belt moves > 45/s.
     assert!(
         max_seen > 45.0,
-        "no belt above unstacked express capacity (max {max_seen}) — stacked credit never engaged"
+        "no family total above unstacked express capacity (max {max_seen}) — \
+         stacked credit never engaged"
     );
 }
 

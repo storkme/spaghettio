@@ -104,7 +104,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 | `inserter-direction` | E | yes | |
 | `power` | E/W | yes | coverage + pole connectivity (incidents 2–4 in validator-reporting.md were here) |
 | `unresolved-junction` | E | yes | router self-report; definitionally real |
-| `belt-throughput` | W | yes | **misleading name**: overlapping route entities, NOT rate-vs-capacity. No check owns planned-rate-vs-capacity — that's hole 1 |
+| `belt-throughput` | W | yes | **misleading name**: overlapping route entities, NOT rate-vs-capacity. The rate-vs-capacity question is owned by `lane-throughput` (walked flow); the *stamped*-rate version is unanswerable — hole 1 |
 | `orphan-belt-segment` | W | yes | |
 | `sushi-boundary` | E | yes | |
 | `module-slots`, `module-eligibility` | W | yes | data-table facts |
@@ -126,8 +126,8 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 
 | Category | Sev | Sel | Calibration status |
 |---|---|---|---|
-| `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. **Known blind spot**: emitted zero errors on the 2026-08-07 stacking winner carrying 376 stamped-over-capacity tiles (hole 1) |
-| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor; lifting it is blocked on hole 1 only |
+| `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps; seeding deliberately uncapped so over-commit stays visible. **Vindicated 2026-08-07**: an earlier draft called its silence on the 376-tile stacking winner a blind spot — that layout measures 96.0% of plan, so the silence was correct and the 376 figure was the artifact (hole 1) |
+| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor; its hole-1 blocker was retired by measurement 2026-08-07 (see hole 2) |
 | `belt-flow-path` | E spaghetti / **W bus** | yes | graph-flow walk; Warning under `LayoutStyle::Bus`, which every production call site passes (the enum's *derived default* is Spaghetti — don't confuse the two) — hole 4 |
 | `belt-flow-reachability` | E spaghetti / **W bus** | yes | the #520 check, rewritten per-tile after incident ten; still cannot block a Bus layout — hole 4 |
 | `inserter-throughput` | W | yes | hand-capacity model; never sim-anchored |
@@ -144,23 +144,64 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 
 ## Known holes, ranked by measured cost
 
-1. **No validator check compares stamped/planned belt rates to physical
-   capacity** (the #311 class, parked in #527). The only detector is a
-   test-side audit closure inside the two `stacking_ec_60s` e2e fixtures.
-   Measured cost: a re-ranked candidate carrying 376 tiles at 90/s on
-   yellow belt (15/s nominal; the audit's cap is 30/s = the S=2 stacked
-   figure, in a fixture whose belt-tier ceiling is red) passed the
-   validator with **zero errors**
-   (2026-08-07, `fix/input-rate-delivery-counts-for-selection` adjudication).
-   **Next action:** promote the audit into `validate/` as an Error — it is a
-   physical law, the cheapest-possible check, and it unblocks hole 2.
-2. **`input-rate-delivery` is excluded from selection despite now being
-   anchored** (positive direction measured, negative direction confirmed
-   in-client; see the table row). The branch that lifts the exemption
-   exists and improves PU, EC@2/AM2, and tier2 — but shipping it before
-   hole 1 trades a starvation warning for a physically impossible winner
-   (reproduced exactly as the exemption's doc comment predicted). Land 1,
-   then lift, then re-adjudicate the fixture drift.
+1. **The layout carries no per-tile flow figure, so "is this belt
+   over capacity?" is not answerable from a stamped rate.**
+   `PlacedEntity::rate` comes from `BusLane::rate`, whose own doc says
+   *"Total throughput (items/s or fluid/s) for **belt/pipe tier
+   selection**"* — a lane-FAMILY total. When a family exceeds one belt the
+   planner realises it as several parallel belts and stamps **every tile
+   with the family total**, so `e.rate > belt_capacity` is routine and
+   means nothing about throughput.
+
+   **This entry previously said the opposite twice, and both versions cost
+   real work** — recorded here because the misunderstanding is the
+   expensive part, not the code:
+
+   - v1 (this page's first draft) claimed *"no check compares planned
+     rates to physical capacity"*. False: `check_lane_throughput` does
+     exactly that, at `Severity::Error`, and does it **correctly** by
+     walking rates through the belt graph instead of trusting a stamp.
+   - Acting on v1, a `belt-capacity` check was written comparing `e.rate`
+     to `belt_throughput_stacked`. It reported 12 fixtures broken and was
+     **falsified by measurement**: a layout it flagged at "3.00× over"
+     delivered **94% of plan** in the sim, another at "1.11×" delivered
+     **101%** (both `kit_errors` empty, converged). Parked, unmerged.
+   - The `stacking_ec_60s` e2e fixtures contain a **test-side audit
+     closure making the identical comparison**, and it is wrong for the
+     identical reason. Its verdict on the `input-rate-delivery` selection
+     fix — "376 tiles at 3.00× over physical capacity" — was settled by
+     measuring that exact layout: **96.0% of plan** (57.60/s against 60,
+     converged, kit-clean). A 3×-throttled factory cannot do that.
+
+   A false-positive test that ruled out the family-total hypothesis is
+   what made this stick: stamped values *differ across tiles* (28.33 and
+   45.00 on one item), which reads like genuine per-tile flow. It isn't —
+   parallel **paths** differ from each other while every belt within a
+   path shares one number.
+
+   **Next action: none of the obvious ones.** Do NOT promote the fixture
+   audit into `validate/`; it measures the wrong quantity. A sound
+   capacity check needs per-tile flow the layout does not currently carry,
+   which is a data-model change, not a check. `check_lane_throughput`
+   already covers the answerable version. **And the two `stacking_ec_60s`
+   fixtures need rewriting** — their S=2 assertion gates merges on a
+   quantity that does not exist.
+2. **`input-rate-delivery` is excluded from selection despite being
+   anchored.** Positive direction sim-measured (the re-ranked PU layout
+   delivers **102.0%** of plan); negative direction confirmed in-client.
+   The branch that lifts the exemption exists and improves PU, EC@2/AM2
+   and tier2.
+
+   **Its blocker was hole 1 and is now retired.** The objection was that
+   lifting the exemption re-ranks `stacking_ec_60s` onto a "physically
+   impossible" winner; that layout measures 96.0% of plan. What the
+   measurement did surface is a real but much smaller question: on that
+   fixture the re-ranked layout delivers **57.60/s vs the control's
+   58.80/s** (96.0% vs 98.0%) while being **39% smaller** (163×105 vs
+   167×167, 4629 vs 5192 entities, 35 vs 47 warnings). That is a
+   footprint-versus-rate trade, which this project reserves for the owner
+   — and single runs cannot separate a 2-point gap from run-to-run
+   variance, so repeats come before the trade is even put.
 3. **The sim/meter side has no validator visibility.** `Manifest` carries no
    issue state, so parity sweeps can quote a condemned layout as a parity
    number — which is precisely how 68.2% was first reported with no mention
@@ -218,9 +259,21 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
   shortfall the warnings named, independent of the rate figure. A long
   re-run + #591 reconciliation would upgrade this to a fully measured
   two-sided anchor.
-- **2026-08-07 — over-capacity blind spot.** Same adjudication:
-  `stacking_ec_60s` fixtures' audit caught 376 stamped-over-cap tiles on a
-  validator-clean (0 errors) candidate. Anchor for hole 1.
+- **2026-08-07 — the "over-capacity" readings are not throughput.**
+  Three measurements, all `kit_errors` empty and converged, retiring the
+  stamped-rate-vs-capacity comparison entirely:
+
+  | layout | audit says | measured |
+  |---|---|---|
+  | AC@7/s horizontal stack, yellow | 104 tiles, **3.00×** over | **94%** of plan |
+  | EC@45/s express legendary | 72 tiles, **1.11×** over | **101%** (PASS) |
+  | `stacking_ec_60s` S=2, re-ranked | 376 tiles, **3.00×** over | **96.0%** (57.60/60) |
+
+  Its control (main as shipped, audit-clean) measures **98.0%**
+  (58.80/60) at **39% more footprint**. An earlier draft of this page
+  cited the 376-tile figure as the anchor FOR hole 1; it is now the
+  anchor against it. See hole 1 for why the comparison is a category
+  error.
 - **2026-07-31 — #520 (incident ten).** `small-electric-pole@5` DI layout,
   clean on every channel, measured **2.52/s vs 5.00 plan**; native 5.08/s.
   Falsified "clean means working"; produced the per-tile reachability
