@@ -126,8 +126,8 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 
 | Category | Sev | Sel | Calibration status |
 |---|---|---|---|
-| `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. **Known blind spot**: emitted zero errors on the 2026-08-07 stacking winner carrying 376 stamped-over-capacity tiles (hole 1) |
-| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor; lifting it is blocked on hole 1 only |
+| `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. The "blind spot" recorded here until 2026-08-07 — zero errors on a stacking winner carrying 376 *stamped*-over-capacity tiles — **was not a blind spot**: those tiles carry 0.0–30.0/s against a 60/s cap, so zero was the right answer. This check is the only sound per-tile authority ([`rate-stamp-semantics.md`](rate-stamp-semantics.md)). Caveat: `validate/mod.rs:943` dispatches the `belt_structural` implementation, and the parallel `belt_flow` one disagrees on the S=1 ore belts — unexplained, worth a look |
+| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor; it was blocked on hole 1, which **closed 2026-08-07 as a category error** — lifting it is now unblocked, pending fixture-drift adjudication only |
 | `belt-flow-path` | E spaghetti / **W bus** | yes | graph-flow walk; Warning under `LayoutStyle::Bus`, which every production call site passes (the enum's *derived default* is Spaghetti — don't confuse the two) — hole 4 |
 | `belt-flow-reachability` | E spaghetti / **W bus** | yes | the #520 check, rewritten per-tile after incident ten; still cannot block a Bus layout — hole 4 |
 | `inserter-throughput` | W | yes | hand-capacity model; never sim-anchored |
@@ -144,23 +144,34 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 
 ## Known holes, ranked by measured cost
 
-1. **No validator check compares stamped/planned belt rates to physical
-   capacity** (the #311 class, parked in #527). The only detector is a
-   test-side audit closure inside the two `stacking_ec_60s` e2e fixtures.
-   Measured cost: a re-ranked candidate carrying 376 tiles at 90/s on
-   yellow belt (15/s nominal; the audit's cap is 30/s = the S=2 stacked
-   figure, in a fixture whose belt-tier ceiling is red) passed the
-   validator with **zero errors**
-   (2026-08-07, `fix/input-rate-delivery-counts-for-selection` adjudication).
-   **Next action:** promote the audit into `validate/` as an Error — it is a
-   physical law, the cheapest-possible check, and it unblocks hole 2.
-2. **`input-rate-delivery` is excluded from selection despite now being
+1. ~~**No validator check compares stamped/planned belt rates to physical
+   capacity**~~ — **CLOSED, NOT A HOLE (2026-08-07).** This entry asked for
+   a check that cannot exist. `PlacedEntity::rate` is a planned *aggregate*
+   (row / lane-family / merger-cascade total) at every one of its 89 stamp
+   sites; it is never per-tile flow, so comparing it to a belt's capacity is
+   a category error. The "376 tiles at 90/s" anchor cited here is the
+   artifact, not the evidence: those tiles carry 0.0–30.0/s by both lane
+   models against a 60/s cap, the same layout measures 96.0% of plan in the
+   sim, and the audit has **zero true positives** across all 684 tiles it
+   flags. Full census and evidence:
+   [`rate-stamp-semantics.md`](rate-stamp-semantics.md).
+
+   Two further claims in the original entry were also wrong: a check *does*
+   compare flow to capacity — `validate::check_lane_throughput`, at
+   `Severity::Error`, correctly, by walking the belt graph from machine
+   specs — and the previous **"Next action: promote the audit into
+   `validate/` as an Error"** is precisely the check that was written on
+   2026-08-07 and falsified within hours. **Do not do it.** The audit has
+   instead been retired from the three fixtures that carried it.
+2. **`input-rate-delivery` is excluded from selection despite being
    anchored** (positive direction measured, negative direction confirmed
    in-client; see the table row). The branch that lifts the exemption
-   exists and improves PU, EC@2/AM2, and tier2 — but shipping it before
-   hole 1 trades a starvation warning for a physically impossible winner
-   (reproduced exactly as the exemption's doc comment predicted). Land 1,
-   then lift, then re-adjudicate the fixture drift.
+   improves PU, EC@2/AM2, and tier2. It was held behind hole 1 — "trades a
+   starvation warning for a physically impossible winner" — and **that
+   blocker is now void**: the winner it selects is not physically
+   impossible, it was only measured with the wrong instrument. Lifting the
+   exemption is unblocked; the remaining work is fixture-drift
+   adjudication, not a physical objection.
 3. **The sim/meter side has no validator visibility.** `Manifest` carries no
    issue state, so parity sweeps can quote a condemned layout as a parity
    number — which is precisely how 68.2% was first reported with no mention

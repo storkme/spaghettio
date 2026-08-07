@@ -1,7 +1,31 @@
 # Handoff: what does `PlacedEntity::rate` actually mean?
 
-**Status (2026-08-07):** open question, blocking three things. Pick this up
-first — everything else in the area queues behind it.
+**Status (2026-08-07): ANSWERED — see
+[`rate-stamp-semantics.md`](rate-stamp-semantics.md).** Kept as the record of
+what was believed going in; the brief below is superseded and two of its
+claims turned out to be wrong (noted inline). Do not act from this file.
+
+**The answer:** the number is *never* per-tile flow. At all 89 stamp sites it
+is a planned aggregate — row, lane-family, or merger-cascade total. So
+`rate > belt capacity` is a category error, the audit has zero true positives
+across the 684 tiles it flags, the guard has been retired from all three
+fixtures, `validator-trust.md`'s hole 1 is closed as a non-hole, and the PU
+fix is unblocked.
+
+**Two corrections to this brief.** (1) Its census — "76 stamp sites, 65
+`templates.rs` / 9 `output_merger.rs` / 2 `ghost_router.rs`" — misses the two
+*mutation* sites (`placer.rs:1543`, `trunk_renderer.rs:121`) because it
+enumerated struct literals only; `placer.rs:1543` is the site that stamps
+**all 376** tiles the brief is about. (2) The repro branch
+`fix/input-rate-delivery-counts-for-selection` on `origin` carries **no fix
+commit** — it points at `e0d0bd9e`, the old `main` tip. The fix is the
+one-line lift of the `input-rate-delivery` exemption in
+`validate::selection_warning_count`.
+
+---
+
+**Original status (2026-08-07):** open question, blocking three things. Pick
+this up first — everything else in the area queues behind it.
 
 ## The question in one line
 

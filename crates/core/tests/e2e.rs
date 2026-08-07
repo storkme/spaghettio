@@ -7770,18 +7770,26 @@ fn quality_ec_45s_legendary_tree_wire_differential() {
 // RFC-046 belt stacking — differential fixtures (docs/rfc-046-belt-stacking.md)
 // ═════════════════════════════════════════════════════════════════════════
 
-/// RFC-046 headline: the #311 stress config (EC@60/s red from ore) —
-/// whose committed S=1 golden stamps 60/s onto a 30/s red merger belt
-/// with zero warnings (the validator blind spot, snapshot-proven
-/// 2026-07-20) — becomes PHYSICALLY VALID at S=2: red stacked carries
-/// 30 × 2 = 60/s, so the whole plan fits one stacked belt.
+/// RFC-046 headline: the #311 stress config (EC@60/s red from ore). The
+/// EC family moves 60/s, which does not fit one unstacked red belt (30/s)
+/// but does fit one red belt stacked ×2 — so at S=2 the planner can carry
+/// the whole plan on a single belt.
 ///
-/// Kill-criterion-2 discipline: "0 errors" is NOT trusted alone this
-/// close to #311's blind spot (the lane walker never visits merger
-/// tiles). Every rate-stamped belt-surface tile is audited directly
-/// against physical stacked capacity — and the S=1 run is audited with
-/// the same probe to prove it has teeth: at S=1 the identical layout
-/// carries tiles ABOVE unstacked capacity (that is #311), at S=2 zero.
+/// **Corrected 2026-08-07 (docs/rate-stamp-semantics.md).** This probe used
+/// to be described as a *physical* audit proving individual tiles were
+/// over-committed, and its S=1 hits were read as "that IS #311". Both
+/// readings were wrong: `PlacedEntity::rate` is a family/row/cascade
+/// AGGREGATE at every stamp site, never per-tile flow, so comparing it to
+/// one belt's capacity says nothing about any tile. Attribution of the
+/// tiles this probe flags showed 0 true positives — they carry 7.5–9.0/s
+/// where stamped 60/s — and the S=2 layout measures 96.0% of plan in the
+/// sim. The probe is kept because the *tier-selection* statement it makes
+/// is true and is what RFC-046 is about; the physical claim is retired.
+/// Per-tile physics is owned by `check_lane_throughput` (dispatched, Error
+/// severity), covered here by the `errors.is_empty()` assertions.
+///
+/// (The old note claiming "the lane walker never visits merger tiles" was
+/// also stale — both lane models return rates for all of them.)
 #[test]
 fn stacking_ec_60s_red_one_belt_headline() {
     use spaghettio_core::common::{
@@ -7828,9 +7836,13 @@ fn stacking_ec_60s_red_one_belt_headline() {
         (layout, issues)
     };
 
-    // Physical audit: rate-stamped belt-surface tiles above the belt's
-    // stacked capacity at stack size `s`.
-    let audit = |l: &spaghettio_core::models::LayoutResult, s: u8| -> Vec<String> {
+    // TIER-SELECTION probe (NOT a physical audit — see the note on this
+    // test): belt tiles whose stamped FAMILY TOTAL exceeds what one belt
+    // of their tier carries at stack size `s`. `PlacedEntity::rate` is a
+    // row / lane-family / merger-cascade aggregate, so this says "the
+    // family does not fit on a single belt", not "this tile is
+    // over-committed". docs/rate-stamp-semantics.md.
+    let family_over_one_belt = |l: &spaghettio_core::models::LayoutResult, s: u8| -> Vec<String> {
         l.entities
             .iter()
             .filter_map(|e| {
@@ -7846,36 +7858,40 @@ fn stacking_ec_60s_red_one_belt_headline() {
                 let rate = e.rate?;
                 let cap = belt_throughput_stacked(tier, s);
                 (rate > cap + 0.01).then(|| {
-                    format!("{} at ({},{}) rate {rate} > cap {cap}", e.name, e.x, e.y)
+                    format!("{} at ({},{}) family total {rate} > one-belt cap {cap}", e.name, e.x, e.y)
                 })
             })
             .collect()
     };
 
-    // S=1: the committed-golden behavior — 0 validation errors, but the
-    // direct audit finds tiles above unstacked capacity. That IS #311.
+    // S=1: 0 validation errors, and the EC family total does NOT fit one
+    // unstacked red belt.
     let (l1, issues1) = run(1);
     let errors1: Vec<_> = issues1.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors1.is_empty(), "S=1 baseline drifted from the stress golden: {errors1:?}");
-    let over1 = audit(&l1, 1);
+    let over1 = family_over_one_belt(&l1, 1);
     assert!(
         !over1.is_empty(),
-        "S=1 audit found nothing above unstacked capacity — #311 got fixed; \
-         update this fixture (and close the issue) consciously"
+        "S=1: no family total exceeds one unstacked belt — the stacking \
+         differential this fixture measures has gone vacuous; update it \
+         consciously"
     );
 
-    // S=2: same plan, physically valid end to end.
+    // S=2: same plan, and stacking makes the family fit one belt.
     let (l2, issues2) = run(2);
     assert_eq!(l2.stacking, 2, "layout must record its stack size");
     let errors2: Vec<_> = issues2.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors2.is_empty(), "expected 0 errors at S=2, got {errors2:?}");
-    let over2 = audit(&l2, 2);
-    assert!(over2.is_empty(), "tiles above physical stacked capacity at S=2: {over2:?}");
+    let over2 = family_over_one_belt(&l2, 2);
+    assert!(over2.is_empty(), "family totals above one STACKED belt at S=2: {over2:?}");
 
-    // Teeth: some belt genuinely carries more than its unstacked cap
-    // (the 60/s merger on red), and the forcing rule placed the stack
-    // inserters that make that physically real.
-    assert!(!audit(&l2, 1).is_empty(), "no belt exceeds unstacked capacity — vacuous headline");
+    // Teeth: the S=2 layout's families genuinely need the stacking (they
+    // exceed one UNstacked belt), and the forcing rule placed the stack
+    // inserters that make that real.
+    assert!(
+        !family_over_one_belt(&l2, 1).is_empty(),
+        "no family exceeds one unstacked belt — vacuous headline"
+    );
     assert!(
         l2.entities.iter().filter(|e| e.name == "stack-inserter").count()
             > l1.entities.iter().filter(|e| e.name == "stack-inserter").count(),
@@ -8126,9 +8142,13 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors.is_empty(), "expected 0 errors at S=2, got {errors:?}");
 
-    // Per-tile physical audit: every rate-stamped belt-surface tile must be
-    // within its belt's stacked capacity at S=2 (mirrors the #311 headline).
-    let audit = |l: &spaghettio_core::models::LayoutResult, s: u8| -> Vec<String> {
+    // TIER-SELECTION probe (NOT a per-tile physical audit — corrected
+    // 2026-08-07, docs/rate-stamp-semantics.md): `PlacedEntity::rate` is a
+    // family/row/cascade AGGREGATE at every stamp site, so this asserts
+    // "no family total exceeds one stacked belt", not "no tile is
+    // over-committed". Per-tile physics is owned by check_lane_throughput,
+    // covered by the `errors.is_empty()` assertion above.
+    let family_over_one_belt = |l: &spaghettio_core::models::LayoutResult, s: u8| -> Vec<String> {
         l.entities
             .iter()
             .filter_map(|e| {
@@ -8143,13 +8163,14 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
                 };
                 let rate = e.rate?;
                 let cap = belt_throughput_stacked(tier, s);
-                (rate > cap + 0.01)
-                    .then(|| format!("{} at ({},{}) rate {rate} > cap {cap}", e.name, e.x, e.y))
+                (rate > cap + 0.01).then(|| {
+                    format!("{} at ({},{}) family total {rate} > one-belt cap {cap}", e.name, e.x, e.y)
+                })
             })
             .collect()
     };
-    let over2 = audit(&l2, 2);
-    assert!(over2.is_empty(), "tiles above physical stacked capacity at S=2: {over2:?}");
+    let over2 = family_over_one_belt(&l2, 2);
+    assert!(over2.is_empty(), "family totals above one STACKED belt at S=2: {over2:?}");
 
     // Teeth, on a DI-Off S=2 arm (review finding on #525: the default
     // arm's winner takes cable off belts entirely since the #519
@@ -8157,7 +8178,7 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     // vacuous — DI-Off forces cable ONTO belts, so this arm isolates the
     // RFC-047 stacking lift the way the S=1 refusal arm does). It must
     // build (S=1 DI-Off refuses; only the doubled ceiling makes it
-    // buildable), stay within the stacked audit, and genuinely use the
+    // buildable), keep every family total within one stacked belt, and genuinely use the
     // lift: some belt above one unstacked yellow's 15/s.
     let l2_belts = layout::build_bus_layout(
         &sr,
@@ -8167,8 +8188,8 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
         },
     )
     .unwrap_or_else(|e| panic!("S=2 with DI Off must build via the stacked lift: {e}"));
-    let over2b = audit(&l2_belts, 2);
-    assert!(over2b.is_empty(), "DI-Off S=2 arm above stacked capacity: {over2b:?}");
+    let over2b = family_over_one_belt(&l2_belts, 2);
+    assert!(over2b.is_empty(), "DI-Off S=2 arm: family total above one stacked belt: {over2b:?}");
     assert!(
         l2_belts.entities.iter().any(|e| e.rate.is_some_and(|r| r > 15.0)),
         "no belt exceeds unstacked full-belt capacity on the DI-Off arm — vacuous lift"
@@ -8385,7 +8406,9 @@ fn stacking_kovarex_family_exempt_s2() {
 /// (047-1b consolidation removed the 50-tile crossing) and the ±3%
 /// overshoot died with worst-lane output-belt sizing (kill-4 root cause:
 /// midpoint-bridge integer lane asymmetry at zero-headroom tiers).
-/// Kill-2 discipline: per-tile physical audit, not warning-count trust.
+/// Kill-2 discipline: the probe below was described as a per-tile physical
+/// audit until 2026-08-07; it is a tier-selection check on family totals
+/// (docs/rate-stamp-semantics.md). Per-tile physics is `check_lane_throughput`.
 #[test]
 fn stacking_ec_60s_express_legendary_s2() {
     use spaghettio_core::common::{
@@ -8432,6 +8455,11 @@ fn stacking_ec_60s_express_legendary_s2() {
     let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors.is_empty(), "expected 0 errors, got {errors:?}");
 
+    // TIER-SELECTION probe (NOT a per-tile physical audit — corrected
+    // 2026-08-07, docs/rate-stamp-semantics.md): `PlacedEntity::rate` is a
+    // family/row/cascade AGGREGATE, so this asserts "no family total
+    // exceeds one stacked belt". Per-tile physics is owned by
+    // check_lane_throughput, covered by `errors.is_empty()` above.
     let mut over: Vec<String> = Vec::new();
     let mut max_seen = 0.0_f64;
     for e in &layout_result.entities {
@@ -8448,10 +8476,13 @@ fn stacking_ec_60s_express_legendary_s2() {
         max_seen = max_seen.max(rate);
         let cap = belt_throughput_stacked(tier, 2);
         if rate > cap + 0.01 {
-            over.push(format!("{} at ({},{}) rate {rate} > stacked cap {cap}", e.name, e.x, e.y));
+            over.push(format!(
+                "{} at ({},{}) family total {rate} > one stacked belt {cap}",
+                e.name, e.x, e.y
+            ));
         }
     }
-    assert!(over.is_empty(), "tiles above physical stacked capacity: {over:?}");
+    assert!(over.is_empty(), "family totals above one STACKED belt: {over:?}");
     assert!(
         max_seen > 45.0,
         "no belt above unstacked express capacity (max {max_seen}) — stacked credit never engaged"
