@@ -425,6 +425,16 @@ Two things that are load-bearing and not obvious:
 - **Timestamps are snapped to the 20s interval boundary.** Metrictank
   buckets by the declared interval; unaligned points store fine and read
   back as nulls under any function needing consecutive samples.
+- **Grafana Cloud's Graphite ingest silently DROPS points more than about a
+  day old** — and still answers `200 {"published": N}`. Backfilling the
+  2026-08-01 corpus "succeeded" 54/54 and not one point was queryable. Use
+  `--anchor now` for anything historical: it lands the run's last sample at
+  the current time, so chronology across runs is lost but the shape and the
+  %-of-plan comparison — the things actually being read — are intact. Runs
+  stay distinguishable by their `fixture` / `run` tags.
+
+**All three of these failed the same way: HTTP 200 and empty panels.** When
+wiring a new series, verify a panel *returns data* before believing it.
 
 The panel that earns its keep is **% of plan per stage** — measured rate
 divided by the solver's planned rate, per item. A deep chain that

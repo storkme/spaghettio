@@ -148,13 +148,26 @@ def main():
     ap.add_argument("report", type=pathlib.Path)
     ap.add_argument("--arm", default="unknown", help="e.g. lift / main")
     ap.add_argument("--label", default=None, help="fixture label (default: report stem)")
+    ap.add_argument(
+        "--anchor",
+        choices=("mtime", "now"),
+        default="mtime",
+        help="Where the run's LAST sample lands on the wall clock. 'mtime' keeps "
+        "true chronology but Grafana Cloud's Graphite ingest silently DROPS points "
+        "more than ~a day old (it still answers 200 {published: N}), so old corpus "
+        "reports need 'now'. Runs stay distinguishable by their fixture/run tags.",
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     report = json.loads(args.report.read_text())
     label = args.label or args.report.stem.replace("-report", "")
     run_id = f"{label}-{int(args.report.stat().st_mtime)}"
-    end_wallclock = int(args.report.stat().st_mtime)
+    import time
+
+    end_wallclock = (
+        int(time.time()) if args.anchor == "now" else int(args.report.stat().st_mtime)
+    )
 
     points = build_points(report, args.arm, label, run_id, end_wallclock)
     items = sorted({t.split("=", 1)[1] for p in points for t in p["tags"] if t.startswith("item=")})
