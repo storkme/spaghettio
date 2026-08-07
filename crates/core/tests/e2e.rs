@@ -1844,7 +1844,20 @@ fn tier4_advanced_circuit_partitioned() {
     // runs at 3.17x/4.67x their endpoint separation (13/11 excess tiles),
     // both well past the check's floors, not yet root-caused. Tolerated
     // explicitly rather than silently allowed.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 2), ("belt-detour", 2)]);
+    // 2026-08-07 fractional-duty floor (`physical_utilization`'s `plan_duty`
+    // min): 2 -> 3 input-rate-delivery. NOT a regression, and NOT a blanket
+    // re-bless — the two pre-existing warnings both got SMALLER deficits
+    // (0.3 -> 0.5 delivered at (15,23); demand 1.5 -> 1.2 at (15,32)) because
+    // honest upstream duty leaves more supply for the row tail. The third is
+    // newly surfaced: copper-cable plans 3.333 machines and the layout places
+    // 4, so its injection is now credited at 0.833 duty instead of a
+    // saturated 1.0, and an AC cable tap that was covered by the 20%
+    // over-credit no longer is (2.0/s delivered vs 3.0/s needed).
+    // HONESTY NOTE: that third warning is a candidate true positive of the
+    // #519 tail-starvation class, NOT a sim-verified one. It is pinned here
+    // so it stays visible; if a sim run shows this fixture at plan, it is a
+    // false positive and this line is the place to re-adjudicate.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 3), ("belt-detour", 2)]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
