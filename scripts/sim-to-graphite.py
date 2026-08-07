@@ -35,7 +35,15 @@ SAMPLE_INTERVAL_TICKS = 1200
 # Declared interval for EVERY series, live and batch alike. Metrictank buckets
 # by this; two writers disagreeing about it is an all-null bug.
 SAMPLE_INTERVAL_SECONDS = SAMPLE_INTERVAL_TICKS // 60
-SERIES = ("produced", "drained", "fed")
+# ONLY `produced` is a real per-sample curve. `drained`/`fed` are BROKEN at
+# source (review, #604, verified): scenario.rs stores a REFERENCE to
+# storage.drained_total / fed_total in each sample, the kit upkeep mutates
+# those tables every tick, and helpers.table_to_json serializes once at
+# finalize — so every sample reports the same FINAL value. Confirmed on a real
+# report: drained reads a flat 67008 from tick 0. Pushing them yields a
+# constant line and a constant-zero rate. Excluded until the scenario
+# snapshots (copies) them at sample time.
+SERIES = ("produced",)
 
 
 def load_token() -> str:

@@ -409,8 +409,8 @@ in the forensics doc.
 
 ## Shipping a run to Grafana (`scripts/sim-to-graphite.py`)
 
-`raw_result.samples` already carries **every planned item's** cumulative
-production, drain and feed, sampled every 1200 ticks by the scenario
+`raw_result.samples` carries **every planned item's** cumulative production,
+sampled every 1200 ticks by the scenario
 (`scenario.rs`, `storage.samples`). That is Factorio's own
 `get_item_production_statistics` — the same source graftorio reads — so no
 mod, no version bump, and nothing added to the measured environment.
@@ -455,6 +455,25 @@ timestamp is wall-clock, so the run reads left-to-right at the speed you are
 watching it. When the run finishes the wrapper also pushes the full
 `report.json`, so the run's history survives at sample fidelity rather than
 just the live windows.
+
+**Known-broken, exported only as `produced` (review, #604):** each sample
+stores a *reference* to `storage.drained_total` / `fed_total`, which the kit
+upkeep mutates every tick, and the result is serialized once at finalize — so
+`drained` and `fed` report the same FINAL value at every sample (verified: a
+flat 67008 from tick 0). They are excluded from the export until the scenario
+snapshots them at sample time. Only `produced` is a real curve.
+
+**Live resolution is coarse.** Points are snapped to the 20s interval
+boundary, but at `--speed 32` a 1200-tick window is ~0.6s of wall clock, so
+~30 windows collapse into one bucket and last-write-wins keeps one. The live
+view is therefore fine for watching the *level* settle and useless for
+resolving per-stage **start offsets** — the full ramp only arrives with the
+post-run backfill. Sub-second-cadence live streaming needs distinct
+timestamps per row, not this snapping.
+
+**`sim-live.sh` requires `<label>` to equal the manifest's own label**, since
+it locates the run's scratch dir by globbing on it. Mismatch means it cannot
+find the CSV and exits.
 
 Two things that are load-bearing and not obvious:
 
