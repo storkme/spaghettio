@@ -120,7 +120,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 | `shared-row-outflow-underclaim` | E | yes | RFC-062 Phase 0 observed a target export silently dropped with zero errors |
 | `record-effective-rows` | E | yes | RFC-065: machine footprints vs `effective_rows` bands, harm-calibrated |
 | `record-power-wires` | E | yes | RFC-065: stored wire endpoints must be in-bounds pole entities |
-| `connectivity-anomaly` | E | **not dispatched** | emitted by `connectivity::scan_graph_anomalies`, deliberately not wired into `validate()` in RFC-065 Phase 0 — a category that exists but reaches no consequence channel; consumed by tests and the C3 prefilter only |
+| `connectivity-anomaly` | E | **not dispatched** | emitted by `connectivity::scan_graph_anomalies`, deliberately not wired into `validate()` in RFC-065 Phase 0 — a category that exists but reaches no consequence channel; consumed by tests only. Its one candidate consumer (an anomaly-scan reject prefilter on the fold path) was built, measured, and **killed on a pre-registered criterion** in Phase 2b (0.83% reject volume vs a ≥30% bar — see `search_snake_fold_with_stats`'s doc comment). The C3 prefilter is `error_certain_regression`, which reads the derived graph directly, not these issues |
 
 ### Rate models (calibration status is the load-bearing column)
 
@@ -134,7 +134,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 | `inserter-item-throughput` | W | yes | never sim-anchored |
 | `row-output-lane-budget` | W | yes | never sim-anchored |
 | `row-input-belt-margin` | W | yes | deliberately conservative (both-lane ceiling); never sim-anchored |
-| `sushi-saturation` | E | yes | the only Error-severity rate model; reporting fixed in incident #5, model itself never sim-anchored |
+| `sushi-saturation` | E | yes | Error-severity despite never being sim-anchored (like `lane-throughput` above — the two rate models trusted with refusal power on modelling grounds alone); reporting fixed in incident #5 |
 
 ### Heuristics
 
@@ -175,11 +175,13 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    default pipeline — the check rewritten after the #520 0.50-ratio incident
    cannot block the style of layout that incident shipped.
 5. **`classify_errors` string drift**: it buckets `"underground-belt-sideload"`
-   as contamination, but the UG checks emit `"underground-belt"` — sideload
-   errors silently fall through to the starvation bucket. Consequence is
-   bounded (only the scoped Pooled merge-tap quality comparison), but it is
-   a live instance of category strings having no registry. This table is now
-   that registry.
+   as contamination and `"pipe-to-ground"` as structural, but neither exists
+   as a category — the UG checks emit `"underground-belt"`, and
+   `"pipe-to-ground"` appears in `validate/` only as an *entity name* — so
+   both classes silently fall through to the starvation bucket. Consequence
+   is bounded (only the scoped Pooled merge-tap quality comparison), but two
+   dead strings in one match arm is a live instance of category strings
+   having no registry. This table is now that registry.
 6. **Severity has no "uncalibrated" tier**, so calibration firewalls are
    implemented as silent exclusions inside `selection_warning_count`. The
    #519 firewall's written exit condition ("lift once sim-anchored") lived
