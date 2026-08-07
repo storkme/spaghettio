@@ -7,6 +7,50 @@ that localizes a bad result. Keep current as the harness changes.
 Setup, CLI usage, and the concurrency/lock rules live in
 [`sim-harness.md`](sim-harness.md).
 
+## The shape of a healthy stage: y = mx + c
+
+Owner observation, 2026-08-07. Cumulative production for any one machine
+row, plotted over time, should be close to **piecewise {flat, ramp,
+straight line}**:
+
+- **c / start offset** — the stage produces nothing until its inputs
+  arrive, so deeper stages start later. Not purely recipe depth: it is
+  belt transit plus buffer fill, so a stage far along a long bus starts
+  later than its depth alone implies.
+- **ramp** — belts filling and machines spinning up. Not instant.
+- **m / slope** — the steady-state rate. Set by machine count, quality,
+  modules, and effective duty. **This is the number the plan predicts.**
+
+Why this is worth more than the rate panel alone — three things fall out
+of it that a scalar cannot show:
+
+1. **Straightness is the starvation test.** A healthy stage's cumulative
+   curve is *straight* through the measurement window. A starved one is a
+   **staircase**: flat while it waits, steep when fed. It averages to a
+   perfectly plausible rate. The mean is the same; the shape is not. This
+   is the signature an eye catches and a number hides, and it is the class
+   that has repeatedly shipped here as "validator-clean but game-dead".
+
+2. **It gives a visual test for warmup adequacy.** We warm up specifically
+   to get past the ramp, and the default warmup is known to be too short
+   for deep chains — it "reads buffer fill as throughput"
+   (`status.md`). Today that is a judgement call. On this graph it is a
+   look: **if a stage is still on the curve during the measurement
+   window, the reported number is buffer fill, not throughput.**
+
+3. **Uniform slope-scaling vs. one shallow slope localizes the fault.**
+   If every stage's slope is scaled by the *same* factor, the constraint
+   is shared (input supply, power, a global cap) and no single stage is
+   guilty. That is exactly the PU signature recorded in `status.md`
+   (copper-cable .6874, copper-plate .6878, EC .6875, iron-plate .6874,
+   plastic .6875 — one factor across the whole chain). If instead **one**
+   stage is shallower than its neighbours, that stage is the bottleneck
+   and the ones downstream of it inherit its slope.
+
+The raw cumulative counters are pushed to Graphite alongside the derived
+rates precisely so this shape is inspectable — see the "Cumulative
+production per stage" panel on `/d/spaghettio-sim`.
+
 ## What each number is
 
 - **Target item rates** (`measured_produced_rate` / `delivered` for the

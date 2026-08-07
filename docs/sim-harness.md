@@ -119,7 +119,17 @@ Knobs (defaults in parentheses):
   `check`, and the web overlay consume — always pass it for anything you
   might want to keep.
 - `--warmup N` (derived from manifest dims) — override the warmup before
-  measurement starts. Use for **steady-state probes** on deep chains:
+  measurement starts. **Raise `--timeout-secs` whenever you raise this.**
+  The derived timeout is 4× the tick budget at the *requested* speed, but a
+  loaded box runs slower than asked, so a long warmup can be killed
+  mid-warmup — and the failure is quiet in the worst way: no verdict, no
+  `kit_errors`, an empty `timeseries.csv`, and (if you were watching from
+  outside) no Factorio process, which reads exactly like a completed run.
+  Measured 2026-08-07: `stress_electronic_circuit_30s_from_ore` at
+  `--warmup 432000 --speed 32` died at the derived 1095s having written
+  zero data rows. `--timeout-secs 3600` cleared it. Check for the
+  `timed out after Ns waiting for harness-result.json` line before
+  concluding anything about a run that produced no numbers. Use for **steady-state probes** on deep chains:
   the 2% stability windows cannot distinguish a slow buffer-fill drift
   from real convergence, so a run can "converge" while trunk buffers are
   still filling (intermediates at or above plan are the tell). One game
@@ -396,6 +406,101 @@ For the diagnostic reading of a flat-zero vs ramp-then-decay vs
 stable-below-plan series, see
 ["Reading time-series decay shapes"](sim-harness-forensics.md#reading-time-series-decay-shapes)
 in the forensics doc.
+
+## Shipping a run to Grafana (`scripts/sim-to-graphite.py`)
+
+`raw_result.samples` carries **every planned item's** cumulative production,
+sampled every 1200 ticks by the scenario
+(`scenario.rs`, `storage.samples`). That is Factorio's own
+`get_item_production_statistics` — the same source graftorio reads — so no
+mod, no version bump, and nothing added to the measured environment.
+
+```bash
+scripts/sim-to-graphite.py <report.json> --arm lift [--dry-run]
+```
+
+Pushes to Grafana Cloud Graphite; the token (needs `metrics:write`) comes
+from `$GRAFANA_GRAPHITE_TOKEN` or `~/.config/spaghettio/grafana-token`.
+Dashboard: `/d/spaghettio-sim`. It works on any report, so the existing
+`job2-sim-baselines` corpus can be backfilled without re-running anything.
+
+### Watching a run live (`scripts/sim-live.sh`)
+
+```bash
+scripts/sim-live.sh <label> <bp.txt> <manifest-real.json> -- --warmup 432000 --speed 32
+```
+
+Runs the fixture with `--timeseries`, locates the scratch dir (its suffix is
+random, so the CSV path is only knowable after launch), streams each
+checkpoint window to Grafana as it lands, and prints a dashboard link
+**pre-filtered to that fixture** with a live window and auto-refresh.
+
+The live stream carries more than the batch export: the scenario's CSV has a
+per-machine line with `crafts_delta` and `status`, so `spaghettio.sim.machines`
+gives a live count of machines by status — idle and starved machines visible
+as they happen, not inferred afterwards.
+
+**The warmup is included.** The scenario mirrors its 1200-tick `samples`
+into the CSV as `sample` rows from tick 0, so the live view covers the ramp
+— which is the half that matters most for shape: a stage's start offset
+(belt transit + buffer fill) is only visible there, and so is the answer to
+"was the warmup long enough". The checkpoint rows cannot cover it, because
+checkpoints exist to test convergence and by design do not open until warmup
+ends. Consumers should prefer `sample` rows and ignore the coarser
+checkpoint `item` rows when both are present, or the two write conflicting
+values for the same metric at nearly the same timestamp.
+
+Live rates still come from the **tick span** of each window; only the
+timestamp is wall-clock, so the run reads left-to-right at the speed you are
+watching it. When the run finishes the wrapper also pushes the full
+`report.json`, so the run's history survives at sample fidelity rather than
+just the live windows.
+
+**Known-broken, exported only as `produced` (review, #604):** each sample
+stores a *reference* to `storage.drained_total` / `fed_total`, which the kit
+upkeep mutates every tick, and the result is serialized once at finalize — so
+`drained` and `fed` report the same FINAL value at every sample (verified: a
+flat 67008 from tick 0). They are excluded from the export until the scenario
+snapshots them at sample time. Only `produced` is a real curve.
+
+**Live resolution is coarse.** Points are snapped to the 20s interval
+boundary, but at `--speed 32` a 1200-tick window is ~0.6s of wall clock, so
+~30 windows collapse into one bucket and last-write-wins keeps one. The live
+view is therefore fine for watching the *level* settle and useless for
+resolving per-stage **start offsets** — the full ramp only arrives with the
+post-run backfill. Sub-second-cadence live streaming needs distinct
+timestamps per row, not this snapping.
+
+**`sim-live.sh` requires `<label>` to equal the manifest's own label**, since
+it locates the run's scratch dir by globbing on it. Mismatch means it cannot
+find the CSV and exits.
+
+Two things that are load-bearing and not obvious:
+
+- **Rates are computed in the exporter, from the game-tick delta**, and
+  pushed as `spaghettio.sim.rate_*` alongside the raw counters. Graphite's
+  `perSecond()` returned **all-null** on this data: it infers the step from
+  wall-clock spacing, which is meaningless for a batch backfill whose
+  x-axis is game time. The exporter knows the true tick delta, so its rate
+  is both correct and directly comparable to `planned_rate`.
+- **Timestamps are snapped to the 20s interval boundary.** Metrictank
+  buckets by the declared interval; unaligned points store fine and read
+  back as nulls under any function needing consecutive samples.
+- **Grafana Cloud's Graphite ingest silently DROPS points more than about a
+  day old** — and still answers `200 {"published": N}`. Backfilling the
+  2026-08-01 corpus "succeeded" 54/54 and not one point was queryable. Use
+  `--anchor now` for anything historical: it lands the run's last sample at
+  the current time, so chronology across runs is lost but the shape and the
+  %-of-plan comparison — the things actually being read — are intact. Runs
+  stay distinguishable by their `fixture` / `run` tags.
+
+**All three of these failed the same way: HTTP 200 and empty panels.** When
+wiring a new series, verify a panel *returns data* before believing it.
+
+The panel that earns its keep is **% of plan per stage** — measured rate
+divided by the solver's planned rate, per item. A deep chain that
+under-delivers shows *which stage* falls behind and *when*, rather than
+just that the target came up short.
 
 ## Live progress telemetry (`run --timeseries` + `scripts/sim-watch.py`)
 

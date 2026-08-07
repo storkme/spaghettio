@@ -8,6 +8,147 @@ or reveals a new one. One residual remains: its **diagnosis** closed
 2026-08-06 (an instrument-parity gap, not a model defect), its **fix** is
 decided but unmerged.
 
+
+
+## 2026-08-07 — corpus-wide calibration: the meter is safe as a FLOOR
+
+Swept all 70 corpus layouts (35 fixtures × native/compact) with
+`sweep_corpus`; **41** have a sim baseline to compare against.
+
+**Distribution**: 25 pessimistic (meter < sim), 6 optimistic, 10 at ~0pp.
+Mean −1.27pp, median −0.3pp. **Every optimistic error is small — max
++1.3pp anywhere in the corpus** — while pessimistic errors run to −13.6pp.
+When the meter is wrong by a meaningful margin it is *always* wrong in the
+safe direction.
+
+**The gate question.** Classifying each row at-plan vs below-plan for both
+instruments, the dangerous quadrant (meter says AT plan, sim says BELOW) is
+**empty at every realistic tolerance** — 0 rows at 99%, 98%, 95% and 90%.
+It appears only at a literal bit-exact 100% cutoff, where its 4 hits are sim
+readings of 99.0–99.7% against a meter reading of exactly 100.0%, i.e. inside
+the same ~1pp band that agreeing fixtures show as noise.
+
+So: **"meter says below plan" ⇒ believe it** holds throughout, and is the
+property a gate needs. **"meter says at plan" ⇒ evidence of nothing** remains
+the correct caution: 3 of 23 meter-at-plan fixtures were softer sim passes
+(96–99.4% meter vs 99–102% sim). Never a real miss, but clearance semantics
+would overclaim precision the corpus doesn't support.
+
+**The −13.6pp outlier is the known item, not a new one.** Both
+`tier5_processing_unit_from_ore_am3` rows (−13.6 / −12.8pp) match this
+document's existing ≈−13% entry for the unmerged research-productivity axis.
+It is not a fluid gap: fluid-*ingredient* fixtures sit at −2.2 to +1.0pp.
+
+### Two things this does NOT establish
+
+1. **Fluid targets are untested.** All 4 fluid-target fixtures
+   (heavy-oil-cracking, sulfuric-acid, 2× AOP) have **no sim baseline** in
+   this corpus. The floor verdict is a **solid-target-only** result.
+2. **The tier2 entry above is a different layout, and flips direction.**
+   The corpus's `tier2_electronic_circuit` is the pre-lift zero-headroom
+   layout: meter 56.0% vs sim 57.7–58.1% — **pessimistic**, in line with
+   everything else. The 96%/90–91% figures recorded above are the *re-ranked
+   post-lift* layout, which is not in this corpus — and there the meter is
+   **optimistic by ~5–6pp**, which would be **four times the largest
+   optimistic error in the entire 41-row corpus**.
+
+   Those are not the same data point and must not be averaged. **Until this
+   is resolved, the floor property is established for the corpus and NOT for
+   post-lift layouts** — precisely the population a gate would run on.
+
+   **Warmup mismatch investigated and FALSIFIED (same day).** The obvious
+   suspect was that the meter reading came from `check_one.rs`'s hardcoded
+   108k-tick warmup against the sim's 432k, and that a short warmup reads
+   buffer fill as throughput — which inflates, i.e. the right direction. It
+   does not hold: the meter reads **96.0% at every warmup from 108k to 864k**,
+   an 8× range including the sim's own 432k, with zero movement and
+   `converged = true` throughout. The corpus was checked too — 11 of ~20
+   fixture families genuinely did run their sim baselines at 288k against the
+   meter's 108k, and re-running those across 108k–432k moved nothing by more
+   than **0.5pp** (against PU's 13.6pp gap). So the mismatch was real in the
+   setup and immaterial in the results; the 41-row calibration stands.
+
+   Two things worth keeping from that check:
+
+   - **The meter's own convergence floor is ~20–40k ticks**, characterised
+     here for the first time, measured down to warmup 0 on the deepest
+     fixture in the corpus (PU-from-ore, 6499 entities: 78.9% at 0 →
+     plateau by ~40k). The 108k both drivers already use carries a 3–5×
+     margin even there.
+   - **"The default warmup is too short" does NOT transfer to the meter.**
+     That caveat in `CLAUDE.md` / `status.md` is a property of headless
+     Factorio's own convergence needs — which is why the corpus carries
+     escalating per-fixture warmups — and assuming it applies to the meter
+     is a mistake worth not repeating.
+
+   So the residual is **genuine model-level disagreement**, and closing it
+   needs snapshot/trace-level work rather than more black-box comparison.
+
+## 2026-08-07 — tier2_electronic_circuit: meter 96%, sim 90–91% (open)
+
+First divergence recorded from the *plan* side rather than the sim side, and
+it is **under** the ±10pp bar, so it is a precision note rather than a defect
+report.
+
+| | copper-cable | electronic-circuit |
+|---|---|---|
+| planned | 30.0/s | 10.0/s |
+| meter | 28.8/s (96%) | 9.6/s (96%) |
+| sim | 27.0/s (90%) | 9.09/s (91%) |
+
+**The meter got the important part right**: it said *below plan* on both
+stages, which is the verdict that matters, and it said it in **19 seconds**
+against ~10 minutes for the headless run. The underlying cause is
+zero-headroom integral machine counts (`status.md`) — copper-cable plans at
+exactly 10.0 machines, so any duty loss becomes a permanent shortfall. The
+meter sees it because it models inserter swing and lost swings.
+
+It is **~5pp optimistic**, and that direction is the one that matters for
+any future use as a gate: a predictor that understates a deficit is safe as
+a **floor** ("meter says below plan" ⇒ believe it) and unsafe as clearance
+("meter says at plan" ⇒ not yet evidence).
+
+**A candidate hand-size discrepancy was raised here and is now RETRACTED
+(same day, investigated against primary prototype data).** It claimed the
+meter's `BULK_HAND_BY_LEVEL` was one research level behind, on the reasoning
+that at `inserter_capacity = 2` the game realizes `bulk_inserter_capacity_bonus
+= 3`, so the hand should be `base_hand_size() + bonus = 2 + 3 = 5` where the
+meter returns 4.
+
+**That reasoning was wrong, and the meter is correct at every level 0–7.**
+`base_hand_size()` *is* `hand_size(0)` — it already contains L0's bonus
+(1 raw prototype floor + 1 from the `bulk-inserter` tech = 2). Adding the
+force bonus on top double-counts that L0 increment. The true decomposition
+is `hand = 1 (raw prototype floor) + bonus`, giving `1 + 3 = 4` — exactly
+what `BULK_HAND_BY_LEVEL[2]` returns.
+
+Primary sources (Factorio 2.0.77 install, not the wiki and not our docs):
+
+- `data/base/prototypes/entity/entities.lua` — `bulk-inserter` sets
+  `bulk = true` and has **no** `stack_size_bonus`, so its raw floor is 1.
+- `data/base/prototypes/technology.lua` — the `inserter-capacity-bonus-N`
+  chain carries Wube's own `-- result of N` comments, and every one equals
+  `1 + cumulative_bonus`. Those reproduce `BULK_HAND_BY_LEVEL` and
+  `NON_BULK_HAND_BY_LEVEL` exactly at L0–L6.
+- `data/space-age/.../entities.lua` — `stack-inserter` is `bulk = true` with
+  a literal `stack_size_bonus = 4`, i.e. `5 + bulk_bonus`, which is exactly
+  the meter's `BULK_HAND_BY_LEVEL[level] + 4`.
+
+The L7 non-bulk value is a **deliberate** divergence, already documented in
+`entity_data.rs`: `transport-belt-capacity-2` is a separate Space-Age tech on
+a different branch that grants a further `+1` non-bulk, so a
+`research_all_technologies()` force reads 3 where the declared axis says 2.
+`scenario.rs` overrides the force bonuses by direct assignment specifically to
+keep that contamination out — the two agree by design.
+
+**Lesson worth keeping**: `base_hand_size()` reads like an additive constant
+and is actually `hand_size(0)`. Its doc comment says so; I misread it anyway.
+This is the second time this table has attracted a wrong "fix" (PR #458 was
+the first), which is why `entity_data.rs` says *transcribe, don't derive*.
+
+So the ~5pp optimism remains **entirely unexplained** — this ladder has no
+bearing on it in either direction.
+
 ## Corpus status (2026-08-06; Phase B landed 2026-08-03)
 
 `meter sweep: 70 layouts measured, 41 compared`. Every compared fixture is

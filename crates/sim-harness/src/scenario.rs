@@ -1454,9 +1454,28 @@ script.on_nth_tick(60, function(ev)
 
   if ev.tick % 1200 == 0 then
     local produced = {}
-    for _, item in ipairs(PLANNED_ITEMS) do produced[item] = produced_count(item) end
+    -- These samples run from tick 0, so they are the ONLY view of the warmup
+    -- ramp: the checkpoint rows below cannot open until warmup ends, by
+    -- design (they exist to test convergence, which is meaningless mid-ramp).
+    -- The ramp is where a stage's start offset lives — belt transit plus
+    -- buffer fill — and where "was the warmup long enough" is answerable at
+    -- all, so mirror them into the live CSV rather than only into the
+    -- end-of-run result. `sample` rows carry the CUMULATIVE count; consumers
+    -- derive rates from consecutive rows (docs/sim-harness-forensics.md).
+    local sample_csv = {}
+    for _, item in ipairs(PLANNED_ITEMS) do
+      local cur = produced_count(item)
+      produced[item] = cur
+      if WRITE_TIMESERIES_CSV then
+        table.insert(sample_csv,
+          table.concat({ev.tick, "sample", "", "", "", "", "", "", item, cur}, ","))
+      end
+    end
     table.insert(storage.samples, {tick = ev.tick, drained = storage.drained_total,
       produced = produced, fed = storage.fed_total})
+    if WRITE_TIMESERIES_CSV and #sample_csv > 0 then
+      helpers.write_file(TIMESERIES_CSV_FILE, table.concat(sample_csv, "\n") .. "\n", true)
+    end
   end
 
   -- Stability checkpoints. A window closes when it has ACCUMULATED
