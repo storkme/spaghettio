@@ -351,7 +351,9 @@ fn cmd_serve(args: &[String]) -> Result<(), String> {
     // they watched instead of nothing — see docs/sim-harness.md "Reading
     // the time-series".
     println!(
-        "timeseries: {} (CSV, appended each window until the run converges)",
+        "timeseries: {} (CSV, appended each window until the scenario \
+         finalizes — on convergence, or at the ceiling if it never \
+         converges; the factory keeps running either way)",
         run_dir
             .join("script-output")
             .join("timeseries.csv")

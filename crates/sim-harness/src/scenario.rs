@@ -1815,6 +1815,26 @@ mod tests {
              or KEEP_ALIVE lets it re-finalize at every window close"
         );
 
+        // The SEPARATION invariant, not just membership: no kit upkeep may
+        // appear below the measurement guard. Listing three statements
+        // above only pins the upkeep that exists today — a fourth
+        // mechanism added below the guard would re-introduce the
+        // starvation bug with this test still green (review finding, 3/3).
+        // Asserting the negative catches that case without needing to know
+        // what the mechanism is.
+        //
+        // NEW KIT UPKEEP GOES BETWEEN THE TWO GUARDS. If you are here
+        // because this assertion failed, that is why.
+        let below_measure_guard = &lua[measure_guard..];
+        for kit_marker in ["storage.eeis", "storage.feeds", "storage.drains"] {
+            assert!(
+                !below_measure_guard.contains(kit_marker),
+                "{kit_marker} appears below the measurement guard: kit upkeep \
+                 placed there is skipped once a served world converges, which \
+                 is exactly the bug this test exists to prevent"
+            );
+        }
+
         // A measurement run must still stop its kit at finalize.
         let measured = RunParams::defaults_for(&m, "t".into(), 32, None);
         assert!(!measured.keep_alive, "measurement runs must never keep-alive");

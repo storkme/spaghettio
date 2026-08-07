@@ -377,9 +377,20 @@ CONVERGENCE as well as at the tick ceiling, and it ends measurement — so
 the series freezes once rates stabilise, typically minutes in. What
 `serve` now guarantees is that the **factory keeps running** past that
 point (`RunParams::keep_alive`), so the world stays inspectable even
-though its time-series has stopped growing. If you need a longer series,
-raise `--warmup` so convergence is reached later, or take the measurement
-with `run --timeseries` instead.
+though its time-series has stopped growing.
+
+For a longer series the lever is **`--warmup`** (measurement opens later,
+so windows keep closing for longer before the stability test can trip) —
+in either mode. Switching to `run --timeseries` does NOT buy length by
+itself: serve already runs under a ~36M-tick ceiling while `run`'s
+default ceiling is far smaller, so a bare `run` gives you *less* unless
+you also raise `--ticks`.
+
+Post-finalize staleness applies to every artifact, not just the CSV:
+`sim-state.json` and `harness-result.json` are both written *by*
+`finalize` and then frozen, while under `keep_alive` the served world
+carries on diverging from them. Treat all three as a snapshot of the
+moment the run converged, never as live state.
 
 For the diagnostic reading of a flat-zero vs ramp-then-decay vs
 stable-below-plan series, see
