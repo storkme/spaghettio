@@ -309,10 +309,17 @@ pub fn solve_with_palette_exclusions_quality_and_modules(
 /// [`solve_with_palette_exclusions_quality_and_modules`], for callers that
 /// need N >= 1 simultaneous targets at this richness (palette, exclusions,
 /// quality, modules) rather than the bare `targets: &[(String, f64)]`
-/// entry points in `netflow.rs`. Single choke point for both the wasm
-/// `solve_multi` boundary and `crates/core/examples/sim_export.rs`'s
-/// `--multi` mode, so both get the same recipe-selection/quality/module
-/// behavior the scalar wasm `solve` already has — and, by the same
+/// entry points in `netflow.rs`. Choke point for the wasm `solve_multi`
+/// boundary, so it gets the same recipe-selection/quality/module
+/// behavior the scalar wasm `solve` already has.
+///
+/// NOTE `sim_export` no longer routes through here: it needs to declare a
+/// research-productivity axis this signature cannot carry, so it calls
+/// `netflow::solve_netflow_multi_with_options` directly with identical values
+/// for every other field. That makes two `NetflowOptions` construction sites
+/// where this was meant to be one — the honest fix is to give this wrapper
+/// the field and bring `sim_export` back, which is a follow-up rather than a
+/// silent divergence (PR #591 review) — and, by the same
 /// one-element-slice construction `netflow.rs`'s Phase 1 established, N=1
 /// here is bit-identical to [`solve_with_palette_exclusions_quality_and_modules`]
 /// (that function is now a thin `targets: &[(target_item.to_string(),

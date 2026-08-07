@@ -1721,12 +1721,17 @@ mod tests {
              {b} -> {o}, expected {}",
             b / 1.10
         );
-        // And an UNDECLARED stage must not move: only the boosted recipe's own
-        // machine count changes for a fixed output.
+        // An undeclared UPSTREAM stage shrinks too — it serves a target that
+        // now needs fewer crafts — so `<=` here would pass either way and
+        // assert nothing (PR #591 review). Pin the ratio instead: upstream
+        // demand falls by exactly the boosted stage's factor, no more.
         let (bc, oc) = (count(&base, "copper-cable"), count(&boosted, "copper-cable"));
+        assert!(bc > 0.0, "fixture must build copper-cable for this to mean anything");
         assert!(
-            oc <= bc + 1e-9,
-            "an undeclared upstream stage must not grow: {bc} -> {oc}"
+            (oc - bc / 1.10).abs() < 1e-6,
+            "an undeclared upstream stage must scale by the DOWNSTREAM bonus only: \
+             {bc} -> {oc}, expected {}",
+            bc / 1.10
         );
     }
 }
