@@ -1012,6 +1012,55 @@ timeout-ceiling bumps (~5 min/push, experiment already documented in
 `.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy
 tests (measure before adopting).
 
+**Clippy's test/example debt: measured 2026-08-06 — the deferral never sized
+it; it is 28 sites.** Not a newly-found gap — `ci.yml`'s clippy step carries
+the comment *"Lib-only on purpose: `--all-targets` trips pre-existing
+test/example debt"*, a deliberate deferral taken at the #434
+workspace-widening on 2026-07-24 (commit `b31c7bb0`, which wrote that comment
+in the same change). What is new here is the size and the proof that clearing
+it is behaviour-free.
+
+**28 warning sites (14 distinct file × lint pairs)** live in
+`crates/core/tests/*` and in `#[cfg(test)]` modules under `src/` — invisible
+to every gate we run. Measured by inventorying warnings *without* `-D`: with
+it, cargo aborts at the first failing unit, so a plain run reports a truncated
+subset, and two such runs stop at different points and are not comparable to
+each other. Identical inventories on `origin/main` `dbeed392` and on the
+RFC-064 productivity stack tip, `comm` empty in both directions —
+independently re-derived by a second agent via a different method
+(`--message-format=json`, dedup by file+line+lint). Pure backlog, nobody's
+regression.
+
+Composition: 6 `type_complexity` + 3 `too_many_arguments` (e2e helper
+signatures — type aliases or a test-scoped `#[allow]`), 5
+`doc_lazy_continuation`, 4 `field_reassign_with_default`, 2 `dead_code`, 2
+`unnecessary_sort_by`, and 6 singletons. Nothing architectural; the whole set
+is mechanical and behaviour-free. Three of the sites are #582's leavings — the
+unused `DICoupling` import at `objective.rs:486` (one of the singletons) and
+the dead `belt`/`inserter_at` helpers at 871/875 (both `dead_code` entries) —
+written by #569 and orphaned when #582 deleted the duplicate §(b)
+implementation.
+
+**One more gate shares the blind spot**, so the flag has to move in two places
+at once: `.githooks/pre-commit` runs `cargo clippy -p spaghettio_core` —
+core-only *and* lib-only, i.e. narrower than CI, so a hook-green commit can
+still fail CI. And one more **target** starts being covered when it moves:
+`crates/core/examples/sim_export.rs`, load-bearing wiring since #591, is
+unlinted today for the same reason (it contributes zero warnings, so it costs
+nothing to bring in).
+
+**Recommended: clear it in one mechanical pass, then flip `--all-targets` in
+`ci.yml` *and* the pre-commit hook.** An earlier draft here said "clean
+opportunistically as PRs touch those files"; the evidence in this very
+paragraph argues against it. That strategy has already been run and failed —
+`e2e.rs` and `layout.rs` are among the most-touched files in the repo and
+accumulated anyway — and the class regrows under the current regime, with the
+3 `objective.rs` sites above arriving in the week to 2026-08-06 out of
+careful, reviewed work. The
+backlog is 1-2 hours and cannot regress anything CI-visible, because CI cannot
+see any of it. The flag is the fix; the cleanup is a one-time toll, not a
+programme.
+
 ## Sim-harness measurement integrity (2026-07-22)
 
 The #357 investigation inverted itself: **every "clean-but-failing" sweep
