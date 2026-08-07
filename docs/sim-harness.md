@@ -216,6 +216,32 @@ Then in a Factorio client: **Multiplayer → Connect to address**.
 Knobs: `--port N` (**34197**, Factorio's default — fixed, not ephemeral,
 because a human has to type it), `--speed N` (**1**), `--warmup N`.
 
+### The world stays alive after it converges (fixed 2026-08-07)
+
+`serve` keeps the boundary kit — feed top-up, drain emptying, and
+electric-interface recharge — running after the scenario finalizes
+(`RunParams::keep_alive`). **Before this fix it did not**, and the
+consequence was severe enough to be worth knowing when reading older
+notes: the kit's upkeep is one `on_nth_tick(60)` handler gated on
+`storage.finalized`, and `finalize` fires on **convergence** as well as at
+the tick ceiling. `serve` pushed the ceiling out to ~a week of game time
+to stop the world dying mid-inspection, which covered only one of the two
+callers — so a served world self-finalized as soon as its rates
+stabilised, typically minutes in, and then had no input, no drain and no
+power. Anyone who joined after that was looking at a **stopped factory**
+while believing they were looking at the layout. It was found exactly that
+way: "the input chests are empty and I can't see much happening".
+
+Two consequences for reading evidence:
+
+- **Flow observations made in a served world before this fix are
+  unreliable** if they were made more than a few minutes in — belt
+  saturation, which machines are running, where items are backing up.
+  **Structural** observations (machine counts, topology, what feeds what)
+  are unaffected.
+- The time-series CSV still stops at finalize; only the factory keeps
+  running. See ["Reading the time-series"](#reading-the-time-series).
+
 ### Connecting: the three things that will bite you
 
 1. **The client version must match the server install exactly.** The
@@ -341,8 +367,19 @@ tick,kind,unit,name,x,y,crafts_delta,status,item,produced_delta
 `kind` distinguishes the two row shapes; filter on it before further
 processing (e.g. `awk -F, '$2=="machine"'`). This is the machine-readable
 record a maintainer eyeballing a live `serve` session at speed 10
-otherwise has none of — the CSV keeps growing as long as the server runs,
-independent of whether/when the scenario ever finalizes.
+otherwise has none of.
+
+**The CSV stops at finalize; the world does not** (corrected 2026-08-07 —
+this section previously claimed the CSV "keeps growing as long as the
+server runs, independent of whether/when the scenario ever finalizes",
+which was never true of the convergence path). `finalize` fires on
+CONVERGENCE as well as at the tick ceiling, and it ends measurement — so
+the series freezes once rates stabilise, typically minutes in. What
+`serve` now guarantees is that the **factory keeps running** past that
+point (`RunParams::keep_alive`), so the world stays inspectable even
+though its time-series has stopped growing. If you need a longer series,
+raise `--warmup` so convergence is reached later, or take the measurement
+with `run --timeseries` instead.
 
 For the diagnostic reading of a flat-zero vs ramp-then-decay vs
 stable-below-plan series, see

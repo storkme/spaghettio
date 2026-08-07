@@ -1361,8 +1361,11 @@ local function finalize(s, converged)
   -- `script.on_nth_tick(60, nil)` makes the server's handler set differ
   -- from what a freshly-loaded client registers, and Factorio refuses
   -- the join ("mod event handlers are not identical ... level"). The
-  -- handler's own `storage.finalized` guard makes it a no-op after
-  -- this point, which is multiplayer-safe.
+  -- handler's own finalize guards keep it multiplayer-safe: its
+  -- MEASUREMENT half is a no-op after this point unconditionally, and
+  -- its kit-upkeep half is a no-op too EXCEPT under KEEP_ALIVE, where
+  -- `serve` deliberately keeps feeding the factory so an inspected
+  -- world stays alive.
 end
 
 -- Boundary-kit upkeep: power, feed top-up, drain empty. Everything that
@@ -1410,10 +1413,14 @@ script.on_nth_tick(60, function(ev)
   -- Not merging this into the guard at the top of the handler: that one
   -- lets `serve` keep the factory fed after finalize, and if it also let
   -- the measurement half run on, the convergence test would keep passing
-  -- on a still-running world and call `finalize` again every 60 ticks —
-  -- rewriting the report, re-appending the dead-rig audit's kit_errors,
-  -- and reprinting HARNESS_DONE forever. Observed live on the first cut of
-  -- this fix (2026-08-07); the Lua-text unit test could not see it.
+  -- on a still-running world and call `finalize` again at every WINDOW
+  -- CLOSE — rewriting the report, re-appending the dead-rig audit's
+  -- kit_errors, and reprinting HARNESS_DONE. Measured on the first cut of
+  -- this fix (2026-08-07): 257 finalizes in one 400s serve at speed 32,
+  -- i.e. window cadence (~1 per 3100 ticks), NOT the handler's own 60-tick
+  -- cadence — the convergence test lives inside the window-close branch,
+  -- not at the top of the handler. The Lua-text unit test could not see
+  -- any of this; only a live server could.
   if storage.finalized then return end
 
   local s = game.get_surface("lab")
@@ -1763,10 +1770,49 @@ mod tests {
         );
         // ...and the upkeep guard must come FIRST: the other order would
         // return before the kit is fed, restoring the original bug.
+        let upkeep_guard = lua
+            .find("if storage.finalized and not KEEP_ALIVE then return end")
+            .expect("upkeep guard present");
+        let measure_guard = lua
+            .find("if storage.finalized then return end")
+            .expect("measurement guard present");
         assert!(
-            lua.find("if storage.finalized and not KEEP_ALIVE then return end")
-                < lua.find("if storage.finalized then return end"),
+            upkeep_guard < measure_guard,
             "kit upkeep must run before the measurement half returns"
+        );
+
+        // Pin the STRUCTURE, not just the two strings: string presence
+        // cannot tell this handler from a text-equivalent one that guards
+        // the wrong statements (review finding on this PR). Each half's
+        // real work must sit on the correct side of the two guards —
+        // power/feed/drain between them, the convergence test after.
+        // Search WITHIN the handler, not the whole script: `finalize` and
+        // the kit audit iterate `storage.feeds` too, so a bare
+        // `lua.find(..)` matches one of those earlier copies and the
+        // assertion silently checks the wrong statement. (Caught by this
+        // very test on first write — the same not-unique-string trap the
+        // rest of this fix kept hitting.)
+        let handler = &lua[upkeep_guard..];
+        let measure_rel = measure_guard - upkeep_guard;
+        for kit_stmt in [
+            "e.energy = 1e13",            // power upkeep
+            "for item, banks in pairs(storage.feeds) do", // feed top-up
+            "for item, chests in pairs(storage.drains) do", // drain empty
+        ] {
+            let at = handler
+                .find(kit_stmt)
+                .unwrap_or_else(|| panic!("{kit_stmt} missing from the upkeep handler"));
+            assert!(
+                at < measure_rel,
+                "{kit_stmt} must run under KEEP_ALIVE (before the measurement \
+                 guard), else a served world starves after convergence"
+            );
+        }
+        let convergence = lua.find("finalize(s, true)").expect("convergence finalize");
+        assert!(
+            convergence > measure_guard,
+            "the convergence test must sit AFTER the unconditional guard, \
+             or KEEP_ALIVE lets it re-finalize at every window close"
         );
 
         // A measurement run must still stop its kit at finalize.
