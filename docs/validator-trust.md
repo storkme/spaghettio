@@ -187,11 +187,26 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 
    So the category's **negative direction is not merely unanchored, it is
    contradicted**: it warns twice on a layout that measures 110% of plan.
-   Its sim anchor is one-directional (PU positive). Lifting it blanket-wise
-   trades a measured ~1.5× win on PU for a measured ~2× loss on
-   big-electric-pole, and additionally collapses RFC-059's teeth test (both
-   claim orders then produce the identical layout). **Fix the
-   false-positive calibration first, then re-try the lift.**
+   Its sim anchor is one-directional (PU positive).
+
+   **Root-caused and fixed the same day (#602).** The false positives were
+   not a calibration judgement call but a plain defect:
+   `physical_utilization` receives the band-resolved spec from
+   `effective_rows`, whose `count` is the count the row PLACED, so for a
+   sub-one-machine plan it reads 1 where the plan says 0.667 and the duty
+   scaling collapses to 1.0. big-electric-pole plans 0.667 machines, the bus
+   delivers exactly the planned 8.0/s, and the check demanded a saturated
+   machine's 12.0/s. With the floor restored the 1.10/s layout scores 0 and
+   the 0.51/s one keeps its real `inserter-item-throughput` warning and
+   scores 1 — the ranking is correct, and lift-on-top drift falls from 6
+   fixtures to 2.
+
+   **Lift status: unblocked again, pending #602 and two drift
+   adjudications** (`tier2_electronic_circuit` 1→0, the intended effect; and
+   `belt_detour_migration_differential_fast`'s geometry oracle). Parked on
+   `fix/lift-input-rate-delivery-exemption`. The category's negative
+   direction remains one-directionally anchored — that has not changed, and
+   is still the reason to re-measure rather than assume.
 3. **The sim/meter side has no validator visibility.** `Manifest` carries no
    issue state, so parity sweeps can quote a condemned layout as a parity
    number — which is precisely how 68.2% was first reported with no mention
