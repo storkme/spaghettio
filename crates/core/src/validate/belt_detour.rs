@@ -70,7 +70,9 @@
 //!   from measurement entirely);
 //! - (D4) io-untagged undergrounds are invisible (`NodeClass::Other`,
 //!   K65-1 posture: no role-guessing for hand-built entities; the dir map
-//!   walked them as plain tiles);
+//!   walked them as plain tiles). The deliberate trade: a detour spanning
+//!   an untagged segment in a hand-built blueprint may go unmeasured —
+//!   possible misses over false claims, never the reverse;
 //! - (D5) a UG entrance no longer phantom-feeds the surface tile directly
 //!   ahead of it (its items go underground, but its dir-map entry made
 //!   the tile-walk count it as a predecessor, cutting crossing lanes

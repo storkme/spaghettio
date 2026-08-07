@@ -1469,3 +1469,47 @@ Per `CLAUDE.md` § verification protocol:
   abort production validate() or admission loops. Double-derivation
   DECLINED as already-tracked (the once-per-validate hoist is the
   named next plumbing slice since the pick-up entry).
+- **2026-08-07 — CI surfaced what local verification could not: the
+  always-on differential exceeds nextest's 300s per-test timeout on
+  the 2-core runner; CHUNKED ×4 (modulo-striped, concurrent).** The
+  single-test form timed out at 300.018s with every gate passing
+  (1209/1210; the run log shows all three adjudicated verdicts and
+  zero invariant violations before the kill). Plain `cargo test`
+  enforces no per-test timeout, so three full local suite runs never
+  saw it — noted as a verification-gap lesson: CI's nextest profile
+  is a semantically different harness, not just a slower machine.
+  Modulo striping balances the heavy fixtures across chunks (two
+  chunks verified locally at ~51s each); nextest runs chunks
+  concurrently, so default-suite wall-clock improves over the
+  single-test form.
+- **2026-08-07 — PR #583 bot round 4 (union ×3; one 3/3 major, five
+  minors): one declined on a structural refutation, one refuted from
+  the oracle's own code, three repeats, one doc nit taken.**
+  (major, DECLINED) "Any transient fixture-build failure hard-fails
+  the whole suite via the corpus-shrink assert": every corpus
+  fixture also has its OWN e2e test in this same suite — a build
+  failure reddens the suite through that test regardless, so the
+  differential's hard-fail adds no marginal red-risk; and fixture
+  builds are deterministic under the CI-pinned zone cache (the
+  measurement protocol exists precisely to remove the environmental
+  nondeterminism the finding assumes). The few survey-only variant
+  configs without twin tests are pin-deterministic too. Silent
+  shrink stays disallowed. (minor, REFUTED) "The tile-walk only made
+  a splitter's ALIGNED-ahead tile an output-entry; perpendicular
+  receivers were measured through" — the oracle's own retained code
+  says otherwise: `splitter_output.insert(ahead)` is
+  orientation-blind (any belt tile ahead of a footprint tile,
+  aligned or perpendicular, became an entry), so the graph's
+  splitter-source Sideload ⇒ entry mapping reproduces it exactly on
+  the ahead tiles; the divergent receiver case is head-on
+  (conflict, D1, Error-class). Empirically corroborated by the
+  adversarial review's 60k-soup fuzz, which included
+  perpendicular-ahead splitter geometry in the divergence-free
+  population and found zero mismatches. (repeats ×3) Categorical
+  fold exemption (its "lacks a tracking reference" nit is factually
+  stale — `docs/snake-fold-followups.md` has carried the entry since
+  6b831d9), double derivation, and differential runtime cost all
+  carry standing dispositions; the chunking above further improves
+  the runtime one. (nit, ACCEPTED) D4's module doc now states the
+  trade explicitly: possible misses across untagged segments in
+  hand-built blueprints, never false claims.

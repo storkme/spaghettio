@@ -10891,13 +10891,25 @@ fn belt_detour_migration_differential_fast() {
 // continuous enforcement (they rebuild fixtures the suite already builds
 // elsewhere; zone-cache-pinned in CI per the measurement protocol) —
 // OWNER KNOB: if that cost outweighs the protection, re-add `#[ignore]`
-// and run it as a scheduled/manual gate; one line, deliberate.
-#[test]
-fn belt_detour_migration_differential() {
+// on the four chunk tests and run them as a scheduled/manual gate.
+//
+// CHUNKED ×4 because CI's nextest profile enforces a 300s per-test
+// timeout and the whole corpus took ~310s on the 2-core runner (the
+// single-test form timed out at 35/35 fixtures with every gate passing —
+// plain `cargo test` has no per-test timeout, so local runs could not
+// catch this). Modulo striping balances the heavy fixtures; the chunks
+// run concurrently under nextest, so wall-clock improves too.
+fn belt_detour_differential_chunk(chunk: usize, chunks: usize) {
     use spaghettio_core::validate::belt_detour::{measure_belt_runs, reference, BeltRun};
 
     let key = |r: &BeltRun| (r.entry, r.exit, r.actual_length, r.direct_distance);
-    let corpus_size = survey_fixtures().len();
+    let stripe: Vec<SurveyFixture> = survey_fixtures()
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| i % chunks == chunk)
+        .map(|(_, f)| f)
+        .collect();
+    let corpus_size = stripe.len();
     let mut built = 0usize;
     let mut fixtures_with_drift = 0usize;
     let mut total_old = 0usize;
@@ -10932,7 +10944,7 @@ fn belt_detour_migration_differential() {
     // is where a legitimate future drift surfaces for adjudication (with
     // the RFC-065 decision log's 2026-08-06 entries as the worked
     // precedent: four true positives surfaced, one artifact retired).
-    for f in survey_fixtures() {
+    for f in stripe {
         let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
         let excluded: FxHashSet<String> = f.excluded.iter().map(|s| s.to_string()).collect();
         let result = match f.variant {
@@ -11071,9 +11083,9 @@ fn belt_detour_migration_differential() {
     // count so extending the corpus needs no constant bump.
     assert_eq!(
         built, corpus_size,
-        "survey corpus shrank: {}/{corpus_size} fixtures built — a fixture failed to BUILD \
-         (see SKIP lines above; unrelated to belt-detour drift, but the gate must not \
-         silently narrow)",
+        "survey corpus shrank: {}/{corpus_size} fixtures built in this chunk — a fixture \
+         failed to BUILD (see SKIP lines above; unrelated to belt-detour drift, but the \
+         gate must not silently narrow)",
         built
     );
     assert!(
@@ -11081,6 +11093,26 @@ fn belt_detour_migration_differential() {
         "oracle-invariant violations:\n  {}",
         violations.join("\n  ")
     );
+}
+
+#[test]
+fn belt_detour_migration_differential_chunk_0() {
+    belt_detour_differential_chunk(0, 4);
+}
+
+#[test]
+fn belt_detour_migration_differential_chunk_1() {
+    belt_detour_differential_chunk(1, 4);
+}
+
+#[test]
+fn belt_detour_migration_differential_chunk_2() {
+    belt_detour_differential_chunk(2, 4);
+}
+
+#[test]
+fn belt_detour_migration_differential_chunk_3() {
+    belt_detour_differential_chunk(3, 4);
 }
 
 // Adjudication probe for the slice-2 verdict drifts (kept, per the repo's
