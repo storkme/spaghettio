@@ -219,6 +219,37 @@ pub struct RunParams {
     /// long/grinding run can be watched and scored live (is it ramping toward
     /// plan, or flat-zero and dead?) without waiting for finalize.
     pub write_timeseries: bool,
+    /// `serve` only: keep the boundary kit ALIVE after the scenario
+    /// finalizes, so an inspected world keeps running instead of dying
+    /// under the operator.
+    ///
+    /// Why this exists (2026-08-07, found by in-client observation): the
+    /// kit's feed top-up, drain empty, and electric-interface recharge all
+    /// live in one `on_nth_tick(60)` handler whose first line is
+    /// `if storage.finalized then return end`. `finalize()` has TWO
+    /// callers — the `END_TICK` ceiling and, far earlier, the
+    /// **convergence** test. `serve` pushes `end_tick` out to ~a week of
+    /// game time specifically so the world "does not finalize and stop
+    /// while being inspected", but that only guards the ceiling path: a
+    /// served world still self-finalized the moment its rates stabilized,
+    /// typically minutes in. Past that point the feed chests were never
+    /// refilled, the drains never emptied, and the power interfaces never
+    /// recharged — the factory starved and stopped, and an operator who
+    /// joined later was looking at a corpse while believing they were
+    /// looking at the layout. Reported as "the input chests are empty and
+    /// I can't see much happening".
+    ///
+    /// Deliberately a separate flag from [`RunParams::operator_qol`]:
+    /// that one changes force bonuses and map reveal (never safe for a
+    /// measurement), whereas this only decides whether the kit keeps
+    /// feeding after the report is written. Keeping them distinct means a
+    /// reader never has to wonder why map-reveal controls chest refills.
+    ///
+    /// **Never set for measurement runs.** There, finalize-stops-the-kit
+    /// is correct: the checkpoints are taken before finalize, and letting
+    /// the kit run on would keep mutating the world after the numbers it
+    /// reports were sampled.
+    pub keep_alive: bool,
 }
 
 impl RunParams {
@@ -252,6 +283,7 @@ impl RunParams {
             scenario_name,
             operator_qol: false,
             write_timeseries: false,
+            keep_alive: false,
         }
     }
 
@@ -265,6 +297,13 @@ impl RunParams {
     /// (`run --timeseries`). Independent of `operator_qol`.
     pub fn with_timeseries(mut self) -> RunParams {
         self.write_timeseries = true;
+        self
+    }
+
+    /// Keep the boundary kit feeding after finalize (`serve`). See
+    /// [`RunParams::keep_alive`] for why an inspected world needs this.
+    pub fn with_keep_alive(mut self) -> RunParams {
+        self.keep_alive = true;
         self
     }
 
@@ -707,6 +746,7 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
         "local WINDOW_TICK_CAP = {}",
         window_tick_cap(params.window_ticks)
     );
+    let _ = writeln!(out, "local KEEP_ALIVE = {}", params.keep_alive);
     let _ = writeln!(out, "local STABILITY_TOL = {STABILITY_TOLERANCE}");
     let _ = writeln!(out, "local STABILITY_WINDOWS = {STABILITY_WINDOWS}");
     let _ = writeln!(
@@ -1321,12 +1361,25 @@ local function finalize(s, converged)
   -- `script.on_nth_tick(60, nil)` makes the server's handler set differ
   -- from what a freshly-loaded client registers, and Factorio refuses
   -- the join ("mod event handlers are not identical ... level"). The
-  -- handler's own `storage.finalized` guard makes it a no-op after
-  -- this point, which is multiplayer-safe.
+  -- handler's own finalize guards keep it multiplayer-safe: its
+  -- MEASUREMENT half is a no-op after this point unconditionally, and
+  -- its kit-upkeep half is a no-op too EXCEPT under KEEP_ALIVE, where
+  -- `serve` deliberately keeps feeding the factory so an inspected
+  -- world stays alive.
 end
 
+-- Boundary-kit upkeep: power, feed top-up, drain empty. Everything that
+-- keeps the factory alive is in here, so whether this runs after finalize
+-- decides whether an inspected world stays a factory or becomes a corpse.
+--
+-- Under `serve` (KEEP_ALIVE) it keeps running: `finalize` fires on
+-- CONVERGENCE as well as at END_TICK, and serve's whole point is that a
+-- human can look at a live factory long after it has stabilized. Under a
+-- measurement run it must stop, because the report's numbers were sampled
+-- at the checkpoints and the kit must not keep mutating the world past the
+-- moment it was measured.
 script.on_nth_tick(60, function(ev)
-  if storage.finalized then return end
+  if storage.finalized and not KEEP_ALIVE then return end
   for _, e in ipairs(storage.eeis) do if e.valid then e.energy = 1e13 end end
   for item, banks in pairs(storage.feeds) do
     for _, bank in ipairs(banks) do
@@ -1352,6 +1405,23 @@ script.on_nth_tick(60, function(ev)
     end
     storage.drained_total[item] = (storage.drained_total[item] or 0) + got
   end
+
+  -- END OF KIT UPKEEP. Everything past here is MEASUREMENT — sampling,
+  -- checkpoint windows, the convergence test, and `finalize` itself — and
+  -- it must stop at finalize even under KEEP_ALIVE.
+  --
+  -- Not merging this into the guard at the top of the handler: that one
+  -- lets `serve` keep the factory fed after finalize, and if it also let
+  -- the measurement half run on, the convergence test would keep passing
+  -- on a still-running world and call `finalize` again at every WINDOW
+  -- CLOSE — rewriting the report, re-appending the dead-rig audit's
+  -- kit_errors, and reprinting HARNESS_DONE. Measured on the first cut of
+  -- this fix (2026-08-07): 257 finalizes in one 400s serve at speed 32,
+  -- i.e. window cadence (~1 per 3100 ticks), NOT the handler's own 60-tick
+  -- cadence — the convergence test lives inside the window-close branch,
+  -- not at the top of the handler. The Lua-text unit test could not see
+  -- any of this; only a live server could.
+  if storage.finalized then return end
 
   local s = game.get_surface("lab")
   local stats = game.forces.player.get_item_production_statistics(s)
@@ -1582,6 +1652,7 @@ mod tests {
             scenario_name: "t".into(),
             operator_qol: false,
             write_timeseries: false,
+            keep_alive: false,
         }
         .with_warmup(216_001);
         assert_eq!(p.warmup_ticks, 216_060);
@@ -1653,6 +1724,128 @@ mod tests {
         assert!(lua.contains(&format!("local STABILITY_WINDOWS = {STABILITY_WINDOWS}")));
         assert!(lua.contains("if n >= STABILITY_WINDOWS + 1 then"));
         assert!(lua.contains("(hi - lo) / lo <= STABILITY_TOL"));
+    }
+
+    /// An inspected world must keep being fed after it finalizes.
+    ///
+    /// The bug this pins (2026-08-07, found in-client): the kit's
+    /// feed/drain/power upkeep is one `on_nth_tick(60)` handler guarded by
+    /// `storage.finalized`, and `finalize` fires on CONVERGENCE as well as
+    /// at `END_TICK`. `serve` pushed `end_tick` out to ~a week to stop the
+    /// world dying mid-inspection, which guarded only the ceiling path —
+    /// so a served world still starved itself minutes in, and an operator
+    /// joining later saw empty feed chests and an idle factory.
+    ///
+    /// Asserted in BOTH directions deliberately: a keep-alive that also
+    /// leaked into measurement runs would let the kit keep mutating the
+    /// world after the checkpoints were sampled, which is a subtler and
+    /// worse bug than the one being fixed.
+    #[test]
+    fn serve_keeps_the_kit_alive_after_finalize_and_run_does_not() {
+        let m = fixture();
+
+        let served = RunParams::defaults_for(&m, "t".into(), 1, Some(36_000_000))
+            .with_operator_qol()
+            .with_keep_alive();
+        assert!(served.keep_alive);
+        let lua = build_control_lua(&m, "bp", &served);
+        assert!(lua.contains("local KEEP_ALIVE = true"));
+        assert!(
+            lua.contains("if storage.finalized and not KEEP_ALIVE then return end"),
+            "upkeep handler must consult KEEP_ALIVE, not `finalized` alone"
+        );
+        // The measurement half keeps an UNCONDITIONAL finalize guard: under
+        // KEEP_ALIVE the world runs on, so without it the convergence test
+        // re-fires every 60 ticks and calls `finalize` forever (observed
+        // live on this fix's first cut). Exactly one of each guard.
+        assert_eq!(
+            lua.matches("if storage.finalized and not KEEP_ALIVE then return end").count(),
+            1,
+            "kit-upkeep guard must appear exactly once"
+        );
+        assert_eq!(
+            lua.matches("if storage.finalized then return end").count(),
+            1,
+            "measurement half must keep exactly one unconditional finalize guard"
+        );
+        // ...and the upkeep guard must come FIRST: the other order would
+        // return before the kit is fed, restoring the original bug.
+        let upkeep_guard = lua
+            .find("if storage.finalized and not KEEP_ALIVE then return end")
+            .expect("upkeep guard present");
+        let measure_guard = lua
+            .find("if storage.finalized then return end")
+            .expect("measurement guard present");
+        assert!(
+            upkeep_guard < measure_guard,
+            "kit upkeep must run before the measurement half returns"
+        );
+
+        // Pin the STRUCTURE, not just the two strings: string presence
+        // cannot tell this handler from a text-equivalent one that guards
+        // the wrong statements (review finding on this PR). Each half's
+        // real work must sit on the correct side of the two guards —
+        // power/feed/drain between them, the convergence test after.
+        // Search WITHIN the handler, not the whole script: `finalize` and
+        // the kit audit iterate `storage.feeds` too, so a bare
+        // `lua.find(..)` matches one of those earlier copies and the
+        // assertion silently checks the wrong statement. (Caught by this
+        // very test on first write — the same not-unique-string trap the
+        // rest of this fix kept hitting.)
+        let handler = &lua[upkeep_guard..];
+        let measure_rel = measure_guard - upkeep_guard;
+        for kit_stmt in [
+            "e.energy = 1e13",            // power upkeep
+            "for item, banks in pairs(storage.feeds) do", // feed top-up
+            "for item, chests in pairs(storage.drains) do", // drain empty
+        ] {
+            let at = handler
+                .find(kit_stmt)
+                .unwrap_or_else(|| panic!("{kit_stmt} missing from the upkeep handler"));
+            assert!(
+                at < measure_rel,
+                "{kit_stmt} must run under KEEP_ALIVE (before the measurement \
+                 guard), else a served world starves after convergence"
+            );
+        }
+        let convergence = lua.find("finalize(s, true)").expect("convergence finalize");
+        assert!(
+            convergence > measure_guard,
+            "the convergence test must sit AFTER the unconditional guard, \
+             or KEEP_ALIVE lets it re-finalize at every window close"
+        );
+
+        // The SEPARATION invariant, not just membership: no kit upkeep may
+        // appear below the measurement guard. Listing three statements
+        // above only pins the upkeep that exists today — a fourth
+        // mechanism added below the guard would re-introduce the
+        // starvation bug with this test still green (review finding, 3/3).
+        // Asserting the negative catches that case without needing to know
+        // what the mechanism is.
+        //
+        // NEW KIT UPKEEP GOES BETWEEN THE TWO GUARDS. If you are here
+        // because this assertion failed, that is why.
+        let below_measure_guard = &lua[measure_guard..];
+        for kit_marker in ["storage.eeis", "storage.feeds", "storage.drains"] {
+            assert!(
+                !below_measure_guard.contains(kit_marker),
+                "{kit_marker} appears below the measurement guard: kit upkeep \
+                 placed there is skipped once a served world converges, which \
+                 is exactly the bug this test exists to prevent"
+            );
+        }
+
+        // A measurement run must still stop its kit at finalize.
+        let measured = RunParams::defaults_for(&m, "t".into(), 32, None);
+        assert!(!measured.keep_alive, "measurement runs must never keep-alive");
+        assert!(build_control_lua(&m, "bp", &measured).contains("local KEEP_ALIVE = false"));
+
+        // The ceiling is not, and never was, sufficient on its own — the
+        // convergence caller is what actually kills a served world.
+        assert!(
+            lua.contains("finalize(s, true)"),
+            "convergence finalize still present: keep-alive is the fix, not removing it"
+        );
     }
 
     /// The default wall-clock net must clear the run's own tick budget,
