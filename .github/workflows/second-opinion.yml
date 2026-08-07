@@ -159,6 +159,32 @@ jobs:
           # See the job-budget comment above: the merge can retry once, so the
           # worst case is 1800 + 1200 + build, not 1800 + 600.
           pass-timeout-seconds: "1800"
+          # Spend ceiling. The wall clock above bounds TIME, not money: a looping agent
+          # burns tokens at full rate for the whole 1800s and a longer timeout only
+          # raises the bill (#29 elsewhere: 12.6M tokens producing nothing, ended only by
+          # the clock). Until now nothing here bounded spend except the OpenRouter key's
+          # monthly cap — a blunt instrument that stops every review across every repo
+          # once tripped, which is what happened on 2026-08-06.
+          #
+          # 6M chosen from this repo's own measured spend (Loki, 12 posted reviews):
+          #   - biggest review 7.81M tokens at k=3 -> ~2.60M mean per pass
+          #   - measured intra-review spread, largest pass vs mean: 1.10x / 1.20x / 1.31x
+          #   - so the largest plausible LEGITIMATE pass is ~3.4M (2.60M x 1.31)
+          # 6M clears that by 1.8x, which matters because a killed legitimate pass posts
+          # no review and reds the check — reviewer malfunction reported as a verdict, the
+          # exact failure this repo already hit twice on timeouts. It still cuts an
+          # #29-class runaway at less than half its burn.
+          #
+          # Note it is a per-PASS ceiling and k=3, so the bound on a pathological review
+          # is 3x this: ~18M ~= $0.48 at the $0.027/M this repo actually pays (heavy cache
+          # reads make token counts much larger than cost would suggest). Typical reviews
+          # here cost $0.02-$0.17, so this only ever fires on an outlier.
+          #
+          # Deliberately NOT max-pass-cost-usd: that depends on a price lookup that can
+          # fail, and a failed lookup is left uncached, so a cost-only ceiling degrades to
+          # a no-op while stalling on the fetch. Tokens are read straight from the
+          # transcript. Revisit if per-pass events show a legitimate pass above ~4M.
+          max-pass-tokens: "6000000"
           # Persist per-pass pi session transcripts under the runner workspace so
           # the step below can upload them as an artifact. Lets us replay a
           # blocked/empty review pass (and read real token/cost usage) instead of
