@@ -397,6 +397,40 @@ stable-below-plan series, see
 ["Reading time-series decay shapes"](sim-harness-forensics.md#reading-time-series-decay-shapes)
 in the forensics doc.
 
+## Shipping a run to Grafana (`scripts/sim-to-graphite.py`)
+
+`raw_result.samples` already carries **every planned item's** cumulative
+production, drain and feed, sampled every 1200 ticks by the scenario
+(`scenario.rs`, `storage.samples`). That is Factorio's own
+`get_item_production_statistics` — the same source graftorio reads — so no
+mod, no version bump, and nothing added to the measured environment.
+
+```bash
+scripts/sim-to-graphite.py <report.json> --arm lift [--dry-run]
+```
+
+Pushes to Grafana Cloud Graphite; the token (needs `metrics:write`) comes
+from `$GRAFANA_GRAPHITE_TOKEN` or `~/.config/spaghettio/grafana-token`.
+Dashboard: `/d/spaghettio-sim`. It works on any report, so the existing
+`job2-sim-baselines` corpus can be backfilled without re-running anything.
+
+Two things that are load-bearing and not obvious:
+
+- **Rates are computed in the exporter, from the game-tick delta**, and
+  pushed as `spaghettio.sim.rate_*` alongside the raw counters. Graphite's
+  `perSecond()` returned **all-null** on this data: it infers the step from
+  wall-clock spacing, which is meaningless for a batch backfill whose
+  x-axis is game time. The exporter knows the true tick delta, so its rate
+  is both correct and directly comparable to `planned_rate`.
+- **Timestamps are snapped to the 20s interval boundary.** Metrictank
+  buckets by the declared interval; unaligned points store fine and read
+  back as nulls under any function needing consecutive samples.
+
+The panel that earns its keep is **% of plan per stage** — measured rate
+divided by the solver's planned rate, per item. A deep chain that
+under-delivers shows *which stage* falls behind and *when*, rather than
+just that the target came up short.
+
 ## Live progress telemetry (`run --timeseries` + `scripts/sim-watch.py`)
 
 `run` normally writes its per-window time-series only at finalize, into the
