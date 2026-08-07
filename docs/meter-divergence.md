@@ -8,6 +8,51 @@ or reveals a new one. One residual remains: its **diagnosis** closed
 2026-08-06 (an instrument-parity gap, not a model defect), its **fix** is
 decided but unmerged.
 
+
+## 2026-08-07 — tier2_electronic_circuit: meter 96%, sim 90–91% (open)
+
+First divergence recorded from the *plan* side rather than the sim side, and
+it is **under** the ±10pp bar, so it is a precision note rather than a defect
+report.
+
+| | copper-cable | electronic-circuit |
+|---|---|---|
+| planned | 30.0/s | 10.0/s |
+| meter | 28.8/s (96%) | 9.6/s (96%) |
+| sim | 27.0/s (90%) | 9.09/s (91%) |
+
+**The meter got the important part right**: it said *below plan* on both
+stages, which is the verdict that matters, and it said it in **19 seconds**
+against ~10 minutes for the headless run. The underlying cause is
+zero-headroom integral machine counts (`status.md`) — copper-cable plans at
+exactly 10.0 machines, so any duty loss becomes a permanent shortfall. The
+meter sees it because it models inserter swing and lost swings.
+
+It is **~5pp optimistic**, and that direction is the one that matters for
+any future use as a gate: a predictor that understates a deficit is safe as
+a **floor** ("meter says below plan" ⇒ believe it) and unsafe as clearance
+("meter says at plan" ⇒ not yet evidence).
+
+**Candidate contributor, NOT yet confirmed and NOT sufficient to explain the
+gap.** At the manifest's `inserter_capacity = 2` the sim reports realized
+bonuses `inserter_stack_size_bonus = 1`, `bulk_inserter_capacity_bonus = 3`:
+
+- non-bulk hand — meter `NON_BULK_HAND_BY_LEVEL[2] = 2`, game `1 + 1 = 2`. **Agrees.**
+- bulk hand — meter `BULK_HAND_BY_LEVEL[2] = 4`, game `2 + 3 = 5`. **Differs by one**;
+  the game's value matches the meter's *index 3*, i.e. the meter looks one
+  research level behind for bulk only.
+
+Two reasons this is filed as a question rather than a fix: the game's base
+bulk capacity (2) is taken from `entity_data.rs`'s own doc comment rather
+than measured, and the manifest's `inserter_capacity` may not mean "research
+level" in the sense the table indexes. Both are answerable from real
+prototype data via `check-data` — do that before touching the table, which
+`entity_data.rs` already warns was mis-transcribed once (PR #458).
+
+Note the direction: under-crediting bulk hands would make the meter
+**pessimistic**, and the observed error is **optimistic**. So even if
+confirmed, something else accounts for the 5pp.
+
 ## Corpus status (2026-08-06; Phase B landed 2026-08-03)
 
 `meter sweep: 70 layouts measured, 41 compared`. Every compared fixture is
