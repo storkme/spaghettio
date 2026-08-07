@@ -96,11 +96,12 @@ shortfall against the meter's own ceiling.
 ### Petroleum-gas under-delivery on `pu1-lift` — OPEN, found 2026-08-08
 The largest single divergence in the post-lift calibration sweep, and it is a
 fluid-distribution finding rather than a productivity one: **meter 77.81% of
-plan against a sim measuring 100.67%, −22.87pp**. That is 1.7× the worst
-pessimistic error anywhere in the 41-row Job-2 corpus, on a layout the sim says
-is fine — so it is a **false accusation**, the quadrant a blocking gate cares
-about, and it is not removed by re-declaring the research-productivity axis
-(`pu1-lift` already declares it and its sim run is kit-clean).
+plan against a sim delivering 102.01% — −24.21pp** (−22.87pp on produced, where
+the sim reads 100.67%). That is 1.8× the worst pessimistic error anywhere in the
+41-row Job-2 corpus, on a layout the sim says is fine — so it is a **false
+accusation**, the quadrant a blocking gate cares about, and it is not removed by
+re-declaring the research-productivity axis (`pu1-lift` already declares it and
+its sim run is kit-clean).
 
 Localised, with the two probes rather than by inference:
 
@@ -110,9 +111,13 @@ Localised, with the two probes rather than by inference:
   exactly as measured: AC machines hold `plastic-bar=0/2`, PU machines hold
   `advanced-circuit=0/2`, and every solid stage lands on the same ~77.8%.
 - `debug_fluid` — all five oil refineries are `Working`, **not** `FullOutput`,
-  with `fout=[("petroleum-gas", 0)]`. Producers unblocked and never backing up,
-  consumers starved: the limit is throughput **in the network between them**,
-  not production at the source.
+  with `fout=[("petroleum-gas", 0)]`, while the same consumers hold 1–3 units.
+  Producers unblocked and never backing up, consumers starved: the limit is
+  throughput **in the network between them**, not production at the source.
+  (The two probes read different buffer levels for the same machines because
+  they sample at different points — `attribute` warms 2 game-hours then measures
+  3, `debug_fluid` uses the 108k/216k window. Both are end-of-run snapshots of a
+  buffer that never fills; neither is a steady-state level.)
 
 **Deliberately not diagnosed further.** The chain throttled here
 (petroleum→plastic→AC→PU) is the same one Phase A throttled to ~20% and Phase B

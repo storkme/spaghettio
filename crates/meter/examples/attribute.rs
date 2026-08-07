@@ -53,8 +53,8 @@ fn main() {
     // this list — so the reader inferred "no solid shortage" from an absence
     // and had to reach the fluid explanation by elimination. That is the
     // failure mode `docs/validator-reporting.md` is about: the probe must emit
-    // a positive signal for the case it is meant to find. Found 2026-08-07
-    // while attributing pu1-lift's −22.9pp, whose whole chain hangs off two
+    // a positive signal for the case it is meant to find. Found 2026-08-08
+    // while attributing pu1-lift's −24.2pp, whose whole chain hangs off two
     // petroleum-starved plastic-bar machines that this list did not print.
     println!("\nstarved machines — what they hold vs what they need:");
     let mut shown = 0;

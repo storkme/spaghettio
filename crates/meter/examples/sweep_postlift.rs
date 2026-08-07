@@ -36,24 +36,64 @@ use spaghettio_meter::manifest::Manifest;
 /// checked the corpus at, kept identical so the two results are comparable.
 const THRESHOLDS: [f64; 4] = [90.0, 95.0, 98.0, 99.0];
 
+/// Which rate a row is being compared on.
+///
+/// Both are carried because they answer different questions and the answers
+/// differ. **Calibration** wants like-for-like: `sweep_corpus` compares
+/// `produced` for solid targets, and matching it keeps the two sweeps
+/// commensurable. **A gate** wants the number it would threshold on, and the
+/// sim harness verdicts a solid target on `measured_delivered_rate`
+/// (`crates/sim-harness/src/report.rs`, `verdict` for `!is_fluid_target`) — so
+/// classifying on `produced` would grade the meter against a quantity no gate
+/// consults. Reporting one and calling it "the" answer hides that seam; this
+/// driver reports both and lets them disagree in public.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Metric {
+    Produced,
+    Delivered,
+}
+
+impl Metric {
+    fn label(self) -> &'static str {
+        match self {
+            Metric::Produced => "produced",
+            Metric::Delivered => "delivered",
+        }
+    }
+}
+
 struct Row {
     fixture: String,
     item: String,
     is_target: bool,
     planned: f64,
-    meter: Option<f64>,
-    sim: Option<f64>,
+    meter_produced: Option<f64>,
+    meter_delivered: Option<f64>,
+    sim_produced: Option<f64>,
+    sim_delivered: Option<f64>,
 }
 
 impl Row {
-    fn meter_pct(&self) -> Option<f64> {
-        self.meter.map(|m| m / self.planned * 100.0)
+    fn meter(&self, m: Metric) -> Option<f64> {
+        match m {
+            Metric::Produced => self.meter_produced,
+            Metric::Delivered => self.meter_delivered,
+        }
     }
-    fn sim_pct(&self) -> Option<f64> {
-        self.sim.map(|s| s / self.planned * 100.0)
+    fn sim(&self, m: Metric) -> Option<f64> {
+        match m {
+            Metric::Produced => self.sim_produced,
+            Metric::Delivered => self.sim_delivered,
+        }
     }
-    fn delta_pp(&self) -> Option<f64> {
-        Some(self.meter_pct()? - self.sim_pct()?)
+    fn meter_pct(&self, m: Metric) -> Option<f64> {
+        self.meter(m).map(|v| v / self.planned * 100.0)
+    }
+    fn sim_pct(&self, m: Metric) -> Option<f64> {
+        self.sim(m).map(|v| v / self.planned * 100.0)
+    }
+    fn delta_pp(&self, m: Metric) -> Option<f64> {
+        Some(self.meter_pct(m)? - self.sim_pct(m)?)
     }
 }
 
@@ -94,6 +134,16 @@ fn main() {
             serde_json::from_str(&std::fs::read_to_string(&rp_path).unwrap()).unwrap();
         let rep = &report["report"];
 
+        // Schema check BEFORE the provenance gates. A report.json missing its
+        // `report` wrapper — schema drift, or a partial/corrupt write — makes
+        // every field below read as `Null`, and the convergence gate would then
+        // reject it as "did not converge": a malformed file masquerading as a
+        // legitimately non-converged run. Name the real reason instead.
+        if !rep.is_object() {
+            excluded.push((fixture, "report.json has no `report` object — unparseable".into()));
+            continue;
+        }
+
         // Provenance gates, in the order that makes a bad row cheapest to
         // reject. `kit_errors` first: it invalidates the run outright.
         let kit = rep["kit_errors"].as_array().cloned().unwrap_or_default();
@@ -129,7 +179,9 @@ fn main() {
         // is a property of headless Factorio rather than of this simulator.
         let meter = factory.measure(108_000, 216_000);
 
-        for item in rep["items"].as_array().cloned().unwrap_or_default() {
+        let items = rep["items"].as_array().cloned().unwrap_or_default();
+        let before = rows.len();
+        for item in items {
             let name = item["item"].as_str().unwrap_or("").to_string();
             let Some(planned) = item["planned_rate"].as_f64() else {
                 continue;
@@ -142,95 +194,136 @@ fn main() {
                 item: name.clone(),
                 is_target: item["is_target"].as_bool().unwrap_or(false),
                 planned,
-                meter: meter.produced_per_s.get(&name).copied(),
-                sim: item["measured_produced_rate"].as_f64(),
+                meter_produced: meter.produced_per_s.get(&name).copied(),
+                meter_delivered: meter.delivered_per_s.get(&name).copied(),
+                sim_produced: item["measured_produced_rate"].as_f64(),
+                sim_delivered: item["measured_delivered_rate"].as_f64(),
             });
+        }
+        // A kit-clean, converged report that yields no usable row would
+        // otherwise vanish from the table AND from the exclusion list — the
+        // silent drop this file's header warns against, arriving through the
+        // one door the `kit_errors` gate does not cover.
+        if rows.len() == before {
+            excluded.push((fixture, "report has no items with a non-zero planned_rate".into()));
         }
     }
 
-    // --- per-item table ---------------------------------------------------
-    println!(
-        "{:<30}{:<22}{:>10}{:>10}{:>10}{:>9}{:>9}{:>9}",
-        "fixture", "item", "plan", "meter", "sim", "meter%", "sim%", "Dpp"
-    );
-    println!("{}", "-".repeat(109));
     let f = |v: Option<f64>| v.map_or("n/a".into(), |x| format!("{x:.4}"));
     let p = |v: Option<f64>| v.map_or("n/a".into(), |x| format!("{x:.2}"));
+
+    // --- per-item table ---------------------------------------------------
+    // `tgt` is a declared column, not a bare marker appended past the last
+    // header field: an unlabelled 9th column on some rows only is exactly the
+    // kind of output a reader misreads.
+    println!(
+        "{:<30}{:<22}{:>10}{:>10}{:>10}{:>9}{:>9}{:>10}{:>6}",
+        "fixture", "item", "plan", "meter", "sim", "meter%", "sim%", "Dpp", "tgt"
+    );
+    println!("{}", "-".repeat(116));
     for r in &rows {
+        // The per-item table shows `produced` — the like-for-like quantity,
+        // matching `sweep_corpus`. The gate table below re-does the target
+        // rows on `delivered`.
         println!(
-            "{:<30}{:<22}{:>10.4}{:>10}{:>10}{:>9}{:>9}{:>9}{}",
+            "{:<30}{:<22}{:>10.4}{:>10}{:>10}{:>9}{:>9}{:>10}{:>6}",
             r.fixture,
             r.item,
             r.planned,
-            f(r.meter),
-            f(r.sim),
-            p(r.meter_pct()),
-            p(r.sim_pct()),
-            p(r.delta_pp()),
-            if r.is_target { " *" } else { "" },
+            f(r.meter(Metric::Produced)),
+            f(r.sim(Metric::Produced)),
+            p(r.meter_pct(Metric::Produced)),
+            p(r.sim_pct(Metric::Produced)),
+            r.delta_pp(Metric::Produced)
+                .map_or("n/a".into(), |x| format!("{x:+.2}")),
+            if r.is_target { "*" } else { "" },
         );
     }
 
-    // --- target-only summary ---------------------------------------------
-    let targets: Vec<&Row> = rows
-        .iter()
-        .filter(|r| r.is_target && r.delta_pp().is_some())
-        .collect();
-    println!("\n=== TARGET ITEMS ({} compared) ===", targets.len());
-    for r in &targets {
-        println!(
-            "{:<30}{:<22}{:>9.2}{:>9.2}{:>+9.2}",
-            r.fixture,
-            r.item,
-            r.meter_pct().unwrap(),
-            r.sim_pct().unwrap(),
-            r.delta_pp().unwrap()
-        );
-    }
-    if !targets.is_empty() {
-        let d: Vec<f64> = targets.iter().map(|r| r.delta_pp().unwrap()).collect();
-        let mean = d.iter().sum::<f64>() / d.len() as f64;
-        let worst_opt = d.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        let worst_pess = d.iter().cloned().fold(f64::INFINITY, f64::min);
-        println!(
-            "\nmean {mean:+.2}pp | worst optimistic {worst_opt:+.2}pp | worst pessimistic {worst_pess:+.2}pp"
-        );
-    }
+    // --- target summary + gate classification, on BOTH metrics -------------
+    let all_targets: Vec<&Row> = rows.iter().filter(|r| r.is_target).collect();
 
-    // --- the gate question ------------------------------------------------
-    //
-    // Two quadrants, and they are not the same risk:
-    //   MISSED DEFECT    meter says at-plan, sim says below  -> report-only
-    //                    is worth less than claimed (it stays silent on a
-    //                    real deficit).
-    //   FALSE ACCUSATION meter says below-plan, sim says at   -> a BLOCKING
-    //                    gate rejects a good layout.
-    println!("\n=== GATE CLASSIFICATION (target items) ===");
-    println!(
-        "{:>10}{:>18}{:>20}   offenders",
-        "threshold", "missed defects", "false accusations"
-    );
-    for t in THRESHOLDS {
-        let mut missed = Vec::new();
-        let mut false_acc = Vec::new();
+    for metric in [Metric::Produced, Metric::Delivered] {
+        let targets: Vec<&&Row> = all_targets
+            .iter()
+            .filter(|r| r.delta_pp(metric).is_some())
+            .collect();
+        // Never let the denominator shrink in silence. A target the meter did
+        // not produce, or one the sim reports no rate for, must be named --
+        // otherwise "1/6" is read as coverage that was never there.
+        let uncomparable: Vec<&&Row> = all_targets
+            .iter()
+            .filter(|r| r.delta_pp(metric).is_none())
+            .collect();
+
+        println!(
+            "\n=== TARGET ITEMS on {} ({} of {} comparable) ===",
+            metric.label(),
+            targets.len(),
+            all_targets.len()
+        );
         for r in &targets {
-            let (m, s) = (r.meter_pct().unwrap(), r.sim_pct().unwrap());
-            if m >= t && s < t {
-                missed.push(format!("MISS:{}", r.fixture));
-            }
-            if m < t && s >= t {
-                false_acc.push(format!("FALSE:{}", r.fixture));
-            }
+            println!(
+                "{:<30}{:<22}{:>9.2}{:>9.2}{:>+9.2}",
+                r.fixture,
+                r.item,
+                r.meter_pct(metric).unwrap(),
+                r.sim_pct(metric).unwrap(),
+                r.delta_pp(metric).unwrap()
+            );
         }
-        let mut names = missed.clone();
-        names.extend(false_acc.clone());
+        for r in &uncomparable {
+            println!(
+                "{:<30}{:<22}  NOT COMPARABLE (meter {}, sim {})",
+                r.fixture,
+                r.item,
+                f(r.meter(metric)),
+                f(r.sim(metric))
+            );
+        }
+        if !targets.is_empty() {
+            let d: Vec<f64> = targets.iter().map(|r| r.delta_pp(metric).unwrap()).collect();
+            let mean = d.iter().sum::<f64>() / d.len() as f64;
+            let worst_opt = d.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let worst_pess = d.iter().cloned().fold(f64::INFINITY, f64::min);
+            println!(
+                "mean {mean:+.2}pp | worst optimistic {worst_opt:+.2}pp | worst pessimistic {worst_pess:+.2}pp"
+            );
+        }
+
+        // Two quadrants, and they are not the same risk:
+        //   MISSED DEFECT    meter says at-plan, sim says below  -> report-only
+        //                    is worth less than claimed (it stays silent on a
+        //                    real deficit). This is the FLOOR property.
+        //   FALSE ACCUSATION meter says below-plan, sim says at   -> a BLOCKING
+        //                    gate rejects a good layout.
+        println!("\n--- gate classification on {} ---", metric.label());
         println!(
-            "{:>9.0}%{:>18}{:>20}   {}",
-            t,
-            format!("{}/{}", missed.len(), targets.len()),
-            format!("{}/{}", false_acc.len(), targets.len()),
-            names.join(" ")
+            "{:>10}{:>18}{:>20}   offenders",
+            "threshold", "missed defects", "false accusations"
         );
+        for t in THRESHOLDS {
+            let mut names = Vec::new();
+            let (mut missed, mut false_acc) = (0, 0);
+            for r in &targets {
+                let (m, s) = (r.meter_pct(metric).unwrap(), r.sim_pct(metric).unwrap());
+                if m >= t && s < t {
+                    missed += 1;
+                    names.push(format!("MISS:{}", r.fixture));
+                }
+                if m < t && s >= t {
+                    false_acc += 1;
+                    names.push(format!("FALSE:{}", r.fixture));
+                }
+            }
+            println!(
+                "{:>9.0}%{:>18}{:>20}   {}",
+                t,
+                format!("{}/{}", missed, targets.len()),
+                format!("{}/{}", false_acc, targets.len()),
+                names.join(" ")
+            );
+        }
     }
 
     if !excluded.is_empty() {
@@ -241,20 +334,34 @@ fn main() {
     }
 
     if let Some(out) = out {
-        let mut csv =
-            String::from("fixture,item,is_target,planned,meter,sim,meter_pct,sim_pct,delta_pp\n");
+        // Missing values are written as EMPTY fields, not the literal "n/a":
+        // the columns are numeric, and a float parser reading "n/a" either
+        // throws or -- worse -- coerces. The console table can afford a word;
+        // a CSV consumed by something else cannot.
+        let c = |v: Option<f64>| v.map_or(String::new(), |x| format!("{x:.4}"));
+        let cp = |v: Option<f64>| v.map_or(String::new(), |x| format!("{x:.2}"));
+        let mut csv = String::from(
+            "fixture,item,is_target,planned,\
+             meter_produced,sim_produced,meter_produced_pct,sim_produced_pct,delta_pp_produced,\
+             meter_delivered,sim_delivered,meter_delivered_pct,sim_delivered_pct,delta_pp_delivered\n",
+        );
         for r in &rows {
             csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 r.fixture,
                 r.item,
                 r.is_target,
                 r.planned,
-                f(r.meter),
-                f(r.sim),
-                p(r.meter_pct()),
-                p(r.sim_pct()),
-                p(r.delta_pp()),
+                c(r.meter(Metric::Produced)),
+                c(r.sim(Metric::Produced)),
+                cp(r.meter_pct(Metric::Produced)),
+                cp(r.sim_pct(Metric::Produced)),
+                cp(r.delta_pp(Metric::Produced)),
+                c(r.meter(Metric::Delivered)),
+                c(r.sim(Metric::Delivered)),
+                cp(r.meter_pct(Metric::Delivered)),
+                cp(r.sim_pct(Metric::Delivered)),
+                cp(r.delta_pp(Metric::Delivered)),
             ));
         }
         std::fs::write(&out, csv).unwrap();

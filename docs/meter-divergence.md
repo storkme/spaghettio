@@ -15,7 +15,7 @@ or reveals a new one.
    remains is that **the 2026-08-01 corpus predates the axis and declares
    none**, so this row still reads at the old value until the bank is
    re-exported or re-declared. Not a modelling mystery; a stale reference.
-2. `pu1-lift`, **−22.9pp**, found 2026-08-08 on the post-lift population and
+2. `pu1-lift`, **−24.2pp**, found 2026-08-08 on the post-lift population and
    **not** the same cause — that fixture declares the axis and its sim run is
    kit-clean. A petroleum-gas distribution shortfall inside the meter's own
    fluid network. See the 2026-08-08 section, which is the current head of this
@@ -53,16 +53,27 @@ fixtures with their reason rather than dropping them silently.
 
 ### The six rows
 
-| fixture | target | meter % | sim % | Δpp |
-|---|---|---|---:|---:|
-| `bigpole1-lift-v2` | big-electric-pole | 100.53 | 100.67 | **−0.14** |
-| `ac5-lift` | advanced-circuit | 99.23 | 99.67 | **−0.44** |
-| `stress_ec_30s_postlift` | electronic-circuit | 91.92 | 90.91 | **+1.01** |
-| `stress_ec_60s_red_postlift` | electronic-circuit | 87.90 | 89.83 | **−1.93** |
-| `tier2-ec10-lift` | electronic-circuit | 96.00 | 90.91 | **+5.09** |
-| `pu1-lift` | processing-unit | 77.81 | 100.67 | **−22.87** |
+**Measured on both rates, because they disagree.** `sweep_corpus` compares
+**produced** for solid targets, and matching it keeps the two sweeps
+commensurable. But the sim harness verdicts a solid target on **delivered**
+(`crates/sim-harness/src/report.rs`, `verdict` for `!is_fluid_target`), so a
+gate mirroring that verdict thresholds on delivered — grading the meter on
+produced would grade it against a number no gate consults. `sweep_postlift`
+emits both. **Delivered is the gate-relevant rate and is worse on every summary
+statistic**, so the conclusions below are stated on delivered, with produced
+kept as the calibration view.
 
-Mean −3.21pp. Worst optimistic **+5.09pp**, worst pessimistic **−22.87pp**.
+| fixture | target | meter % | sim % prod | Δpp prod | sim % deliv | **Δpp deliv** |
+|---|---|---|---:|---:|---:|---:|
+| `bigpole1-lift-v2` | big-electric-pole | 100.53 | 100.67 | −0.14 | 102.01 | **−1.49** |
+| `ac5-lift` | advanced-circuit | 99.22 | 99.67 | −0.44 | 99.67 | **−0.45** |
+| `stress_ec_30s_postlift` | electronic-circuit | 91.92 | 90.91 | +1.01 | 92.12 | **−0.20** |
+| `stress_ec_60s_red_postlift` | electronic-circuit | 87.90 | 89.83 | −1.93 | 90.67 | **−2.77** |
+| `tier2-ec10-lift` | electronic-circuit | 96.00 | 90.91 | +5.09 | 89.70 | **+6.30** |
+| `pu1-lift` | processing-unit | 77.81 | 100.67 | −22.87 | 102.01 | **−24.21** |
+
+On delivered: mean −3.80pp, worst optimistic **+6.30pp**, worst pessimistic
+**−24.21pp**. (On produced: −3.21 / +5.09 / −22.87pp.)
 
 ### Both corpus-wide bounds are broken by this population
 
@@ -70,35 +81,46 @@ The corpus's two load-bearing numbers were *"every optimistic error is ≤
 +1.3pp anywhere in the corpus"* and *"pessimistic errors run to −13.6pp"*.
 Post-lift:
 
-- **Optimism reaches +5.09pp — 3.9× the corpus maximum.** This is the tier2
-  divergence the 2026-08-07 section already flagged as unexplained (it recorded
-  meter 96% vs sim 90–91%); it **reproduces exactly** — 96.00 vs 90.91 — from
-  the banked blueprint. Warmup was falsified as its cause on 2026-08-07 (96.0%
-  flat from 108k to 864k) and nothing here changes that. Still unexplained.
-- **Pessimism reaches −22.87pp — 1.7× the corpus maximum**, on `pu1-lift`, a
-  layout the sim measures at **100.67% of plan**. This one is new (below).
+- **Optimism reaches +6.30pp on delivered — 4.8× the corpus maximum** (+5.09pp
+  on produced, still 3.9×). This is the tier2 divergence the 2026-08-07 section
+  already flagged as unexplained (it recorded meter 96% vs sim 90–91%); it
+  **reproduces exactly** — 96.00 vs 90.91 produced — from the banked blueprint.
+  Warmup was falsified as its cause on 2026-08-07 (96.0% flat from 108k to
+  864k) and nothing here changes that. Still unexplained.
+- **Pessimism reaches −24.21pp — 1.8× the corpus maximum**, on `pu1-lift`, a
+  layout the sim measures at **102.01% of plan**. This one is new (below).
 
 ### The gate verdict, stated as the two quadrants
 
-`sweep_postlift` classifies every target at each tolerance. Against the
-corpus's **0 missed defects in 41 rows at every threshold ≥90%**:
+`sweep_postlift` classifies every target at each tolerance, on the delivered
+rate the harness itself verdicts on. Against the corpus's **0 missed defects in
+41 rows at every threshold ≥90%**:
 
 | threshold | missed defects | false accusations |
 |---|---|---|
-| 90% | 0/6 | 1/6 (`pu1-lift`) |
+| **90%** | **1/6 (`tier2-ec10-lift`)** | 2/6 (`pu1-lift`, `stress_ec_60s_red`) |
 | **95%** | **1/6 (`tier2-ec10-lift`)** | 1/6 (`pu1-lift`) |
 | 98% | 0/6 | 1/6 (`pu1-lift`) |
 | 99% | 0/6 | 1/6 (`pu1-lift`) |
 
-- **Report-only.** At a 95% tolerance the meter reads 96.0% on `tier2-ec10-lift`
-  — at plan — where the sim reads 90.9%. That is the dangerous quadrant,
-  occupied on the *first* post-lift fixture, at the tolerance a gate is most
+- **Report-only.** At 90% *and* 95% the meter reads 96.0% on `tier2-ec10-lift`
+  — at plan — where the sim delivers 89.7%. That is the dangerous quadrant,
+  occupied on the *first* post-lift fixture, at both tolerances a gate is most
   likely to pick. It is empty at 98% and 99% only because the meter's 96.0% is
   itself below those cutoffs, which is luck about where one number fell, not a
   property. **"Meter says below plan ⇒ believe it" is not established here**,
   and neither is its converse.
+
+  **This is the row that retracts the floor claim, and it is independent of
+  `pu1-lift`.** The floor property is a statement about *missed defects* —
+  about the meter never being materially optimistic — so it is broken by tier2
+  and only by tier2. `pu1-lift`'s −24pp is pessimistic; it bears on blocking,
+  which the corpus had already ruled out. Fixing the petroleum-distribution
+  defect below would therefore remove the false accusation and **leave the
+  floor retraction standing**, because tier2's optimism has a different, still
+  unknown cause. The two findings must not be treated as one.
 - **Blocking.** `pu1-lift` is rejected at *every* tolerance from 90% up while
-  actually running at 100.67%. Blocking was already ruled out by the corpus's
+  actually delivering 102.01%. Blocking was already ruled out by the corpus's
   −13.6pp; this is worse and, importantly, **is not removed by the fix that
   removes the corpus outlier**.
 
@@ -108,7 +130,7 @@ must ship **without** the floor claim attached, because the floor claim is
 currently false on the population it would serve. That is a documentation
 constraint on how the gate's output is worded, not a reason to hold it.
 
-### `pu1-lift` −22.87pp: petroleum-gas distribution, not the productivity axis
+### `pu1-lift` −24.21pp: petroleum-gas distribution, not the productivity axis
 
 Ruled out first, by inspection rather than inference: `pu1-lift`'s manifest
 declares `{"plastic-bar": 0.1, "processing-unit": 0.1}`, matching the install's
@@ -134,11 +156,19 @@ plastic-bar's starvation propagates exactly as observed (AC machines hold
 `plastic-bar=0/2`, PU machines hold `advanced-circuit=0/2`).
 
 **Distribution, not production.** `debug_fluid` shows all five oil refineries
-in state `Working` — not `FullOutput` — with `fout=[("petroleum-gas", 0)]`,
-i.e. producing steadily and never backing up, while all three consumers sit at
-1–3 units against a per-craft need of 20–30. Producers unblocked and consumers
-starved is a throughput limit **in the network between them**, not a shortfall
-at the source.
+in state `Working` — not `FullOutput` — with `fout=[("petroleum-gas", 0)]`:
+producing steadily and never backing up, while the same three consumers hold
+**1–3 units** against a per-craft need of 20–30. Producers unblocked and
+consumers starved is a throughput limit **in the network between them**, not a
+shortfall at the source.
+
+*(The two probes report different buffer levels for the same machines — 10/20
+and 15/30 above, 1–3 here — because they sample at different points: `attribute`
+runs a 2-game-hour warmup then measures over 3, `debug_fluid` uses the
+108k/216k window. Both are instantaneous end-of-run snapshots of a buffer that
+never fills, so the levels differ while the finding — chronically short, never
+backed up — is the same. Neither is a steady-state fill level; do not read
+either as one.)*
 
 **Related but not identified as the same defect.** `meter-fluid-followups.md`
 records that Phase A's `tick_fluids` "delivered fluid one unit a tick and
