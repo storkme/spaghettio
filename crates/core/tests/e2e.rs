@@ -10832,15 +10832,14 @@ fn belt_detour_survey() {
 // RFC-065 Phase 1 slice 2 (2026-08-06): graph-derived `measure_belt_runs`
 // vs the retained tile-walk oracle (`belt_detour::reference`).
 //
-// The slice's written gate is VERDICT-identity on the corpus: the set of
-// runs clearing both calibrated floors must not move. Run-LIST drift is
-// legal and expected where D5 weave geometry heals the oracle's phantom
-// entrance-predecessor cuts (see the RFC decision log's slice-2 pick-up
-// entry) — the always-on full differential below enforces the adjudicated
-// drift table exactly; the fast gate additionally pins FULL run-list
-// identity (the pre-registered strength) on two cheap fixtures that carry
-// no D-class geometry today, a stronger per-fixture pin than the
-// verdict-table gate makes.
+// Run-LIST drift vs the oracle is legal and expected where D5 weave
+// geometry heals phantom entrance-predecessor cuts (see the RFC decision
+// log's slice-2 pick-up entry) — the always-on full differential below
+// enforces STRUCTURAL invariants of the oracle relationship (see its
+// comment for the gate-shape history across bot rounds 1-2); the fast
+// gate additionally pins FULL run-list identity on two cheap fixtures
+// that carry no D-class geometry today, the strongest per-fixture pin in
+// the file.
 // ---------------------------------------------------------------------------
 
 type DetourVerdict = ((i32, i32), (i32, i32), i64, i64);
@@ -10887,58 +10886,52 @@ fn belt_detour_migration_differential_fast() {
 }
 
 // Full-corpus differential — ALWAYS-ON since PR #583 bot round 1 (major,
-// 3/3): an `#[ignore]` gate never runs in CI, and the adjudicated-drift
-// table below is exactly the invariant that must not move silently. The
-// ~35 duplicate fixture builds this adds to the default suite are the
-// accepted cost of continuous enforcement (they rebuild fixtures the
-// suite already builds elsewhere; zone-cache-pinned in CI per the
-// measurement protocol).
+// 3/3: an `#[ignore]` gate never runs in CI). The ~35 duplicate fixture
+// builds this adds to the default suite are the accepted cost of
+// continuous enforcement (they rebuild fixtures the suite already builds
+// elsewhere; zone-cache-pinned in CI per the measurement protocol) —
+// OWNER KNOB: if that cost outweighs the protection, re-add `#[ignore]`
+// and run it as a scheduled/manual gate; one line, deliberate.
 #[test]
 fn belt_detour_migration_differential() {
     use spaghettio_core::validate::belt_detour::{measure_belt_runs, reference, BeltRun};
 
     let key = |r: &BeltRun| (r.entry, r.exit, r.actual_length, r.direct_distance);
+    let corpus_size = survey_fixtures().len();
     let mut built = 0usize;
     let mut fixtures_with_drift = 0usize;
     let mut total_old = 0usize;
     let mut total_new = 0usize;
-    let mut verdict_drift: Vec<(&str, DetourVerdict, &str)> = Vec::new();
+    let mut violations: Vec<String> = Vec::new();
 
-    // Adjudicated verdict drift (RFC-065 decision log, slice-2 corpus
-    // adjudication entry, 2026-08-06 — geometry eyeballed per case via
-    // the probe below before acceptance):
+    // GATE SHAPE (PR #583 bot rounds 1+2, both 3/3 majors, pulling
+    // opposite directions — round 1: an #[ignore] gate never runs; round
+    // 2: pinning the adjudicated drift as exact tile coordinates froze 35
+    // live fixtures against all future layout evolution). The synthesis:
+    // always-on, but asserting STRUCTURAL invariants of the
+    // oracle-vs-graph relationship that hold on engine-clean geometry no
+    // matter how fixture layouts evolve:
     //
-    // - Four only-new verdicts are TRUE POSITIVES the tile-walk's D5
-    //   phantom cuts split into sub-threshold fragments. Three are the
-    //   calibration doc's known AC last-segment loop family (drop routed
-    //   away from the destination trunk, wrapped back east right past
-    //   its own start; near-identical coordinates across fixtures, as
-    //   that doc already noted for the original 9). The kovarex one is
-    //   the U-235 catalyst return line measured whole for the first
-    //   time (55/22 = 2.5x; the fixture postdates the 2026-08-01
-    //   calibration survey).
-    // - The one only-old verdict was an ARTIFACT: a phantom-bounded
-    //   fragment (8,85)->(7,90) at 15/6 = 2.5x whose true journey
-    //   measures (8,85)->(7,95) at 20/11 = 1.82x — under the ratio
-    //   floor by the same rules that admitted it before.
+    //   1. the graph decomposition never produces MORE runs than the
+    //      tile-walk (on engine-clean geometry it only heals phantom
+    //      cuts; the splitting divergences D1/D2/D4 need Error-class or
+    //      hand-built geometry the engine never emits);
+    //   2. it never measures LESS total length (healing merges fragments
+    //      across span boundaries and absorbs orphaned tails);
+    //   3. every verdict GAINED vs the oracle is a healed fragment: an
+    //      oracle run at the same entry, strictly shorter, itself under
+    //      the floors (or itself a lost verdict — a reshaped run);
+    //   4. every verdict LOST vs the oracle is a retired phantom
+    //      fragment: a new run at the same entry, strictly longer,
+    //      under the floors (or itself gaining — reshaped).
     //
-    // Anything beyond this table is UNADJUDICATED drift and fails.
-    let expected_drift: Vec<(&str, DetourVerdict, &str)> = vec![
-        ("tier4_advanced_circuit_from_plates", ((11, 39), (11, 42), 14, 3), "only-new"),
-        ("tier4_advanced_circuit_from_ore_am2", ((8, 85), (7, 90), 15, 6), "only-old"),
-        ("tier_kovarex_self_loop", ((21, 14), (6, 7), 55, 22), "only-new"),
-        (
-            "stress_advanced_circuit_partitioned_5s_from_plates_partitioned",
-            ((13, 38), (14, 42), 24, 5),
-            "only-new",
-        ),
-        (
-            "stress_advanced_circuit_partitioned_4s_from_plates_pooled",
-            ((12, 39), (11, 42), 15, 4),
-            "only-new",
-        ),
-    ];
-
+    // A decomposition regression (spurious boundary, dropped tile,
+    // phantom verdict) violates one of these regardless of fixture
+    // geometry. Per-fixture verdict COUNTS are separately pinned by each
+    // fixture's own `assert_warnings_exactly` in this same suite — that
+    // is where a legitimate future drift surfaces for adjudication (with
+    // the RFC-065 decision log's 2026-08-06 entries as the worked
+    // precedent: four true positives surfaced, one artifact retired).
     for f in survey_fixtures() {
         let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
         let excluded: FxHashSet<String> = f.excluded.iter().map(|s| s.to_string()).collect();
@@ -10975,16 +10968,72 @@ fn belt_detour_migration_differential() {
         total_new += new.len();
         total_old += old.len();
 
-        // Verdict drift is collected across the WHOLE corpus and asserted
-        // at the end against the adjudicated table — a mid-loop assert
-        // would leave later fixtures unverified.
+        // Violations are collected across the WHOLE corpus and asserted
+        // at the end — a mid-loop assert would leave later fixtures
+        // unverified.
+        if new.len() > old.len() {
+            violations.push(format!(
+                "{}: graph decomposition produced MORE runs ({}) than the oracle ({}) — \
+                 on engine-clean geometry it can only heal cuts",
+                f.name,
+                new.len(),
+                old.len()
+            ));
+        }
+        let sum_len = |rs: &[BeltRun]| rs.iter().map(|r| r.actual_length).sum::<i64>();
+        if sum_len(&new) < sum_len(&old) {
+            violations.push(format!(
+                "{}: graph decomposition measured LESS total length ({}) than the oracle ({}) — \
+                 healing never loses measured tiles",
+                f.name,
+                sum_len(&new),
+                sum_len(&old)
+            ));
+        }
+        let fails_floors = |len: i64, dist: i64| {
+            use spaghettio_core::validate::belt_detour::{
+                DETOUR_EXCESS_TILES, DETOUR_RATIO_THRESHOLD,
+            };
+            (len as f64 / dist.max(1) as f64) < DETOUR_RATIO_THRESHOLD
+                || (len - dist) < DETOUR_EXCESS_TILES
+        };
         let vn = detour_verdicts(&new);
         let vo = detour_verdicts(&old);
-        for v in vn.iter().filter(|v| !vo.contains(v)) {
-            verdict_drift.push((f.name, *v, "only-new"));
+        let gained: Vec<_> = vn.iter().filter(|v| !vo.contains(v)).copied().collect();
+        let lost: Vec<_> = vo.iter().filter(|v| !vn.contains(v)).copied().collect();
+        for g in &gained {
+            eprintln!("VERDICT only-new: {} {g:?}", f.name);
+            let healed_fragment = old.iter().any(|r| {
+                r.entry == g.0
+                    && r.actual_length < g.2
+                    && (fails_floors(r.actual_length, r.direct_distance)
+                        || lost.iter().any(|l| l.0 == r.entry))
+            });
+            if !healed_fragment {
+                violations.push(format!(
+                    "{}: verdict {g:?} gained with NO healed sub-floor oracle fragment at its \
+                     entry — not a phantom-cut heal; decomposition regression or new \
+                     adjudication needed (RFC-065 log)",
+                    f.name
+                ));
+            }
         }
-        for v in vo.iter().filter(|v| !vn.contains(v)) {
-            verdict_drift.push((f.name, *v, "only-old"));
+        for l in &lost {
+            eprintln!("VERDICT only-old: {} {l:?}", f.name);
+            let retired_fragment = new.iter().any(|r| {
+                r.entry == l.0
+                    && r.actual_length > l.2
+                    && (fails_floors(r.actual_length, r.direct_distance)
+                        || gained.iter().any(|g| g.0 == r.entry))
+            });
+            if !retired_fragment {
+                violations.push(format!(
+                    "{}: verdict {l:?} lost with NO longer sub-floor replacement at its entry \
+                     — not a retired phantom fragment; decomposition regression or new \
+                     adjudication needed (RFC-065 log)",
+                    f.name
+                ));
+            }
         }
 
         let new_set: std::collections::BTreeSet<_> = new.iter().map(key).collect();
@@ -11015,23 +11064,22 @@ fn belt_detour_migration_differential() {
     eprintln!(
         "---\nfixtures built={built} with-drift={fixtures_with_drift} runs old={total_old} new={total_new}"
     );
-    for (name, v, side) in &verdict_drift {
-        eprintln!("VERDICT {side}: {name} {v:?}");
-    }
-    // No silent corpus shrinkage (bot round 1 on PR #583): a fixture that
-    // stops building must fail this gate, not narrow it.
-    assert_eq!(built, 35, "survey corpus shrank — fixtures failed to build");
-    // Set-style comparison (bot round 1): ordering here follows
-    // `survey_fixtures()` iteration order, which is not part of the
-    // contract — sort both sides so corpus reordering cannot produce a
-    // spurious ordering failure.
-    let mut got = verdict_drift;
-    let mut expected = expected_drift;
-    got.sort();
-    expected.sort();
+    // No silent corpus shrinkage (bot round 1 on PR #583), with the
+    // failure attributed correctly (round 2): a fixture that stops
+    // BUILDING is an unrelated break, not belt-detour drift — but it must
+    // still fail here rather than silently narrowing the gate. Dynamic
+    // count so extending the corpus needs no constant bump.
     assert_eq!(
-        got, expected,
-        "unadjudicated verdict drift — take it to the RFC-065 decision log before merge"
+        built, corpus_size,
+        "survey corpus shrank: {}/{corpus_size} fixtures built — a fixture failed to BUILD \
+         (see SKIP lines above; unrelated to belt-detour drift, but the gate must not \
+         silently narrow)",
+        built
+    );
+    assert!(
+        violations.is_empty(),
+        "oracle-invariant violations:\n  {}",
+        violations.join("\n  ")
     );
 }
 

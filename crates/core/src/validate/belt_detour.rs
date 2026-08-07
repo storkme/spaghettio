@@ -170,15 +170,20 @@ pub fn measure_belt_runs_on(layout: &LayoutResult, graph: &ConnectivityGraph) ->
                 if belt_like(e.src) && belt_like(e.dst) {
                     // A belt-like node emits at most one flow edge (one
                     // surface_flow call per belt/exit, one span per
-                    // entrance). Builder drift here would silently corrupt
-                    // run decomposition via last-write-wins, so the guard
-                    // is always-on, not debug-only (bot round 1 on
-                    // PR #583); it is one branch per edge, once per
-                    // validate, nowhere near a hot path.
-                    assert!(
-                        flow_out[e.src].is_none(),
-                        "derive_connectivity emitted two flow edges from one belt-like node"
-                    );
+                    // entrance). Guard shape (PR #583 bot rounds 1+2,
+                    // pulling opposite ways): loud in debug — every test
+                    // and CI run catches builder drift — but a
+                    // deterministic first-edge degrade in release, because
+                    // a report-only diagnostic must never abort production
+                    // `validate()` or the fold/cut admission loops that
+                    // call it per candidate.
+                    if flow_out[e.src].is_some() {
+                        debug_assert!(
+                            false,
+                            "derive_connectivity emitted two flow edges from one belt-like node"
+                        );
+                        continue;
+                    }
                     flow_out[e.src] = Some(e.dst);
                     in_flow[e.dst] += 1;
                 } else if graph.classes[e.src] == NodeClass::Splitter && belt_like(e.dst) {

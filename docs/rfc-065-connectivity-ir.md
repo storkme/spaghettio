@@ -1415,3 +1415,57 @@ Per `CLAUDE.md` § verification protocol:
   behavior (the assert message says exactly what to do), the two
   builds cost seconds, and its full run-list identity is a stronger
   per-fixture pin than the verdict-table gate makes — kept.
+- **2026-08-06 — PR #583 bot round 2 (union ×3; two 3/3 majors, five
+  minors): dispositions. The strongest round of the arc — its first
+  major correctly attacks round 1's own accepted fix, and the
+  synthesis is better than either round's ask.** (major 1, ACCEPTED
+  via redesign) Round 1 demanded the corpus differential be
+  always-on; round 2 shows the exact-tuple adjudication table that
+  came with it froze 35 live fixtures against ALL future layout
+  evolution — any routine placer tweak would hard-fail the default
+  suite demanding belt-detour adjudication from sessions that know
+  nothing of it. Both concerns are real. The gate now asserts
+  STRUCTURAL invariants of the oracle relationship instead of
+  coordinates: (1) the graph never produces more runs than the
+  tile-walk on engine-clean geometry, (2) never measures less total
+  length, (3) every gained verdict must be a healed sub-floor
+  fragment at the same entry, (4) every lost verdict a retired
+  phantom fragment at the same entry. Layout-evolution-proof, still
+  regression-detecting; per-fixture verdict counts stay pinned by
+  each fixture's own `assert_warnings_exactly` in the same suite —
+  the right adjudication channel. The exact five-tuple table
+  retires from code; THIS log's 2026-08-06 entries are its
+  permanent record. The ~35-build CI cost stands as round 1
+  accepted it, now with an explicit OWNER KNOB note in the test
+  (demote to `#[ignore]`+scheduled if cost outweighs protection —
+  one deliberate line). (major 2, gap ACCEPTED as tracked debt,
+  veto stance unchanged) Correct that RFC-064's objective transit
+  pricing has no wired call-site, so fold-introduced non-seam
+  detours are admitted un-priced today. Two corrections to its
+  framing: they are not INVISIBLE (belt-detour warnings appear on
+  the shipped layout's validate output — mil5's four seam verdicts
+  are disclosed above), and pre-slice there was neither pricing NOR
+  visibility (phantom cuts hid seam runs entirely), so the interim
+  state is strictly more honest than what it replaces. Named
+  followup added to `docs/snake-fold-followups.md` (wire the
+  objective transit term; then revisit seam-class calibration). The
+  categorical-veto refusal stands on the same 2026-08-01 ground as
+  before. (minors) Build-failure attribution ACCEPTED: the corpus
+  count is dynamic and the shrink assert names the failed-to-build
+  fixture as an unrelated break. Sub-threshold-drift blindness
+  PARTIALLY ADDRESSED: invariants (1)+(2) catch boundary-inflation
+  and length-loss classes; a full D-attribution decomposition
+  checker remains possible future strengthening; the fast gate's
+  two-fixture run-list identity stays the exact anchor. Stress
+  phrasing half REFUTED (a `max_warnings` ceiling is not an
+  exact-count pin, and the +1 sits under 58 exactly as recorded) /
+  goldens half ACCEPTED as PRE-EXISTING debt: `goldens/stress/*`
+  are stale since 2026-07-24 against #519 AND belt-detour and this
+  slice — env-gated so nothing trips today; named followup in
+  `docs/test-suite-followups.md` (re-bless deliberately, not
+  rubber-stamp). Flow-edge guard ACCEPTED as the rounds' synthesis:
+  loud `debug_assert` (every test/CI run) + deterministic
+  first-edge degrade in release — a report-only diagnostic must not
+  abort production validate() or admission loops. Double-derivation
+  DECLINED as already-tracked (the once-per-validate hoist is the
+  named next plumbing slice since the pick-up entry).
