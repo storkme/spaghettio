@@ -302,3 +302,22 @@ killer fired; being a global OOM it killed unrelated processes including the
 editor session, four times over. Both are bounded ranges now plus an
 entity-count backstop. Long probes are worth running under
 `systemd-run --user --scope -p MemoryMax=8G` regardless.
+
+## Fold transit pricing (open, 2026-08-06 — from PR #583 bot round 2)
+
+RFC-065 slice 2 excluded `belt-detour` from the fold admission gate
+(`GatePolicy::ReportOnly` — an uncalibrated survey diagnostic must not
+veto shipping layouts; see the RFC-065 decision log 2026-08-06 and the
+RFC-064 cross-entry). The designated compensating channel — RFC-064's
+objective consuming `measure_belt_runs` to PRICE fold transit cost
+(§ Metrics (b)) — has **no wired call-site yet**; fold ranking today is
+aspect+size only. Interim state, eyes open: a fold that badly re-routes
+belts is admitted un-priced, but NOT invisible — its belt-detour warnings
+appear on the shipped layout's validate output (mil5's triple fold
+carries 4 seam verdicts, disclosed in the RFC-065 log). Pre-slice there
+was neither pricing NOR visibility (the tile-walk's phantom cuts hid
+seam runs entirely), so this is strictly more honest than what it
+replaces. Pick-up: wire the objective's transit term for fold candidates
+(RFC-064 owns it), then decide whether seam-attributed detours deserve a
+separate calibration class (the catalyst-return question in the RFC-065
+log is the same family).

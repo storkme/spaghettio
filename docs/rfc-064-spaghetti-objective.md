@@ -1972,3 +1972,22 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   `UnreachableConsumerTerminal { terminal: (11, 3) }` — the precise false
   refusal the follow-up predicted, confirming both that the pin detects the
   defect and that the shipping code does not have it.
+- **2026-08-06 — Fold admission gate: `belt-detour` excluded as
+  ReportOnly (cross-entry from RFC-065 slice 2, which owns the full
+  trail).** RFC-065's graph-derived `measure_belt_runs` healed the
+  tile-walk's phantom run cuts, and snake-fold SEAM connectors —
+  which double back by design — started measuring whole and clearing
+  the detour floors. `search_snake_fold_with_stats`' `GateInstances`
+  policy then vetoed every multi-fold candidate on chain-mil5ore as
+  a belt-detour "regression": a survey-calibrated, report-only
+  diagnostic steering which layout ships, through the one channel
+  (`never_worse` admission) that lacked the exclusion
+  `selection_warning_count` has carried since 2026-08-01 — vacuously
+  ungated there until the measurement fix, so no previously-effective
+  behavior changes. The policy now carries
+  `belt-detour → GatePolicy::ReportOnly` (diff computed and recorded,
+  never a veto). Transit cost of folds stays this RFC's
+  objective-scoring concern — §Metrics (b)'s planned consumption of
+  `measure_belt_runs` (now graph-derived, seam runs measured
+  honestly) is the calibrated channel for charging fold seams, not
+  admission vetoes.

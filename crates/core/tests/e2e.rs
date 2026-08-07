@@ -1759,7 +1759,15 @@ fn tier4_advanced_circuit_from_plates() {
     assert_no_errors(&result);
     // RFC Phase 1: 14 inserter-bound machine-sides (advanced-circuit @1/s chain).
     // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row (copper-cable) ladder-sized; advanced-circuit triple_input_row + electronic-circuit dual_input_row are Phase 2/3 scope, residue remains (14 -> 6).
-    assert_warnings_exactly(&result, &[]);
+    // RFC-065 slice 2 (2026-08-06, decision-log adjudication): the graph
+    // decomposition heals a phantom D5 cut and surfaces the EC
+    // last-segment loop — drop (11,38) routes 5W, 3S, back E on the y=42
+    // trunk to its pickup: 14 tiles for a 3-tile separation (4.67x). A
+    // real detour of the known AC family, previously invisible because
+    // the copper-cable UG entrance at (6,38) phantom-fed the turn tile.
+    // Same family as the partitioned/pooled pins below; root-cause
+    // tracked in docs/status.md "Open tracking issues".
+    assert_warnings_exactly(&result, &[("belt-detour", 1)]);
     assert_produces(&result, "advanced-circuit", 1.0);
     assert_round_trip(&result);
 }
@@ -2266,7 +2274,12 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // issues"): one belt run at 2.5x/9 tiles excess, past the check's
     // floors, not yet root-caused. Tolerated explicitly rather than
     // silently allowed.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 11), ("belt-detour", 1)]);
+    // RFC-065 slice 2 (2026-08-06, decision-log adjudication): the old
+    // belt-detour verdict here was a phantom-BOUNDED fragment
+    // ((8,85)->(7,90) at 15/6 = 2.5x); measured whole, the true
+    // balancer-weave journey is 20/11 = 1.82x — under the ratio floor by
+    // the same rules that admitted the fragment. Artifact retired.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 11)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -2378,7 +2391,15 @@ fn tier_kovarex_self_loop() {
     // beyond any medium pole — the dormant SUBSTATION path fires for the first
     // time on the corpus: one substation's ±9 supply reaches down over the
     // recirc bank. 16 -> 0.
-    assert_warnings_exactly(&result, &[]);
+    //
+    // RFC-065 slice 2 (2026-08-06, decision-log adjudication): the U-235
+    // catalyst return line measures whole for the first time — 55 tiles
+    // for a 22-tile separation (2.5x, excess 33). The old walk's phantom
+    // cut left its worst fragment at 1.96x, knife-edge under the ratio
+    // floor (the quality-differential test's old comment recorded exactly
+    // that number). Correctly measured; whether catalyst returns deserve
+    // their own calibration class is noted follow-up work in the RFC log.
+    assert_warnings_exactly(&result, &[("belt-detour", 1)]);
     assert_produces(&result, "uranium-235", 0.1);
 
     let centrifuge_count = result
@@ -7573,16 +7594,27 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
         assert!(errors.is_empty(), "{label}: expected 0 errors, got {errors:?}");
     }
     // Both tiers are fully clean of everything but belt-detour (matches
-    // `tier_kovarex_self_loop`'s Normal pin) — the power arc introduces no
+    // `tier_kovarex_self_loop`'s pin) — the power arc introduces no
     // warnings at either tier.
-    assert!(normal_issues.is_empty(), "normal: expected 0 issues, got {normal_issues:?}");
+    //
+    // RFC-065 slice 2 (2026-08-06, decision-log adjudication): Normal's
+    // catalyst return line now measures whole — the survey-era "worst run
+    // 1.96x, just under the ratio floor" recorded below was the phantom-
+    // cut FRAGMENT of exactly this run; healed, it is 55/22 = 2.5x and
+    // fires, matching `tier_kovarex_self_loop`.
+    assert_eq!(
+        normal_issues.len(),
+        1,
+        "normal: expected exactly one issue, got {normal_issues:?}"
+    );
+    assert_eq!(normal_issues[0].category, "belt-detour", "normal: {:?}", normal_issues[0]);
     // 2026-08-01 belt-detour survey finding (docs/status.md "Open tracking
     // issues"): Legendary's quality-scaled machine footprint (fewer,
     // bigger centrifuges than Normal) shifts the recirc layout enough to
-    // newly clear the belt-detour floors — one run at 2.5x/25 tiles
-    // excess. Normal stays clean (matches `tier_kovarex_self_loop`, whose
-    // worst run in the corpus survey was 1.96x — just under the ratio
-    // floor). Not yet root-caused; tolerated explicitly.
+    // clear the belt-detour floors even under the old tile-walk — one run
+    // at 2.5x/25 tiles excess. (Normal's twin run was phantom-cut to
+    // 1.96x back then — see above.) Not yet root-caused; tolerated
+    // explicitly.
     assert_eq!(
         leg_issues.len(),
         1,
@@ -10794,4 +10826,405 @@ fn belt_detour_survey() {
     std::fs::write(&out_path, serde_json::to_string_pretty(&survey).unwrap())
         .expect("write survey.json");
     eprintln!("\nwrote {}", out_path.display());
+}
+
+// ---------------------------------------------------------------------------
+// RFC-065 Phase 1 slice 2 (2026-08-06): graph-derived `measure_belt_runs`
+// vs the retained tile-walk oracle (`belt_detour::reference`).
+//
+// Run-LIST drift vs the oracle is legal and expected where D5 weave
+// geometry heals phantom entrance-predecessor cuts (see the RFC decision
+// log's slice-2 pick-up entry) — the always-on full differential below
+// enforces STRUCTURAL invariants of the oracle relationship (see its
+// comment for the gate-shape history across bot rounds 1-2); the fast
+// gate additionally pins FULL run-list identity on two cheap fixtures
+// that carry no D-class geometry today, the strongest per-fixture pin in
+// the file.
+// ---------------------------------------------------------------------------
+
+type DetourVerdict = ((i32, i32), (i32, i32), i64, i64);
+
+fn detour_verdicts(
+    runs: &[spaghettio_core::validate::belt_detour::BeltRun],
+) -> Vec<DetourVerdict> {
+    use spaghettio_core::validate::belt_detour::{DETOUR_EXCESS_TILES, DETOUR_RATIO_THRESHOLD};
+    let mut v: Vec<_> = runs
+        .iter()
+        .filter(|r| r.efficiency() >= DETOUR_RATIO_THRESHOLD && r.excess() >= DETOUR_EXCESS_TILES)
+        .map(|r| (r.entry, r.exit, r.actual_length, r.direct_distance))
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn belt_detour_migration_differential_fast() {
+    use spaghettio_core::validate::belt_detour::{measure_belt_runs, reference};
+
+    for (name, item, rate, machine, inputs) in [
+        ("tier1_iron_gear_wheel", "iron-gear-wheel", 10.0, "assembling-machine-1", &["iron-plate"][..]),
+        (
+            "tier2_electronic_circuit",
+            "electronic-circuit",
+            10.0,
+            "assembling-machine-2",
+            &["iron-plate", "copper-plate"][..],
+        ),
+    ] {
+        let inputs: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let result =
+            run_e2e(name, item, rate, machine, None, &inputs).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let new = measure_belt_runs(&result.layout);
+        let old = reference::measure_belt_runs_tilewalk(&result.layout);
+        assert_eq!(
+            new, old,
+            "{name}: run decomposition drifted from the tile-walk oracle — if this fixture \
+             gained D-class geometry (belt_detour's module doc), check verdicts and \
+             adjudicate via belt_detour_migration_differential + the RFC-065 log"
+        );
+    }
+}
+
+// Full-corpus differential — ALWAYS-ON since PR #583 bot round 1 (major,
+// 3/3: an `#[ignore]` gate never runs in CI). The ~35 duplicate fixture
+// builds this adds to the default suite are the accepted cost of
+// continuous enforcement (they rebuild fixtures the suite already builds
+// elsewhere; zone-cache-pinned in CI per the measurement protocol) —
+// OWNER KNOB: if that cost outweighs the protection, re-add `#[ignore]`
+// on the four chunk tests and run them as a scheduled/manual gate.
+//
+// CHUNKED ×4 because CI's nextest profile enforces a 300s per-test
+// timeout and the whole corpus took ~310s on the 2-core runner (the
+// single-test form timed out at 35/35 fixtures with every gate passing —
+// plain `cargo test` has no per-test timeout, so local runs could not
+// catch this). Modulo striping balances the heavy fixtures; the chunks
+// run concurrently under nextest, so wall-clock improves too.
+fn belt_detour_differential_chunk(chunk: usize, chunks: usize) {
+    use spaghettio_core::validate::belt_detour::{measure_belt_runs, reference, BeltRun};
+
+    let key = |r: &BeltRun| (r.entry, r.exit, r.actual_length, r.direct_distance);
+    let stripe: Vec<SurveyFixture> = survey_fixtures()
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| i % chunks == chunk)
+        .map(|(_, f)| f)
+        .collect();
+    let corpus_size = stripe.len();
+    let mut built = 0usize;
+    let mut fixtures_with_drift = 0usize;
+    let mut total_old = 0usize;
+    let mut total_new = 0usize;
+    let mut violations: Vec<String> = Vec::new();
+
+    // GATE SHAPE (PR #583 bot rounds 1+2, both 3/3 majors, pulling
+    // opposite directions — round 1: an #[ignore] gate never runs; round
+    // 2: pinning the adjudicated drift as exact tile coordinates froze 35
+    // live fixtures against all future layout evolution). The synthesis:
+    // always-on, but asserting STRUCTURAL invariants of the
+    // oracle-vs-graph relationship that hold on engine-clean geometry no
+    // matter how fixture layouts evolve:
+    //
+    //   1. the graph decomposition never produces MORE runs than the
+    //      tile-walk (on engine-clean geometry it only heals phantom
+    //      cuts; the splitting divergences D1/D2/D4 need Error-class or
+    //      hand-built geometry the engine never emits);
+    //   2. it never measures LESS total length (healing merges fragments
+    //      across span boundaries and absorbs orphaned tails);
+    //   3. every verdict GAINED vs the oracle is a healed fragment: an
+    //      oracle run at the same entry, strictly shorter, itself under
+    //      the floors (or itself a lost verdict — a reshaped run);
+    //   4. every verdict LOST vs the oracle is a retired phantom
+    //      fragment: a new run at the same entry, strictly longer,
+    //      under the floors (or itself gaining — reshaped).
+    //
+    // A decomposition regression (spurious boundary, dropped tile,
+    // phantom verdict) violates one of these regardless of fixture
+    // geometry. Per-fixture verdict COUNTS are separately pinned by each
+    // fixture's own `assert_warnings_exactly` in this same suite — that
+    // is where a legitimate future drift surfaces for adjudication (with
+    // the RFC-065 decision log's 2026-08-06 entries as the worked
+    // precedent: four true positives surfaced, one artifact retired).
+    for f in stripe {
+        let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
+        let excluded: FxHashSet<String> = f.excluded.iter().map(|s| s.to_string()).collect();
+        let result = match f.variant {
+            SurveyVariant::Plain => run_e2e(f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs),
+            SurveyVariant::Strategy(strategy) => run_e2e_with_strategy(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, strategy,
+            ),
+            SurveyVariant::Excluded => run_e2e_with_exclusions(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, &excluded,
+            ),
+            SurveyVariant::ExcludedVoid => run_e2e_with_exclusions_and_surplus_policy(
+                f.name,
+                f.item,
+                f.rate,
+                f.machine,
+                f.belt_tier,
+                &inputs,
+                &excluded,
+                spaghettio_core::bus::layout::SurplusPolicy::Void,
+            ),
+        };
+        let result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIP {}: {e}", f.name);
+                continue;
+            }
+        };
+        built += 1;
+
+        let new = measure_belt_runs(&result.layout);
+        let old = reference::measure_belt_runs_tilewalk(&result.layout);
+        total_new += new.len();
+        total_old += old.len();
+
+        // Violations are collected across the WHOLE corpus and asserted
+        // at the end — a mid-loop assert would leave later fixtures
+        // unverified.
+        if new.len() > old.len() {
+            violations.push(format!(
+                "{}: graph decomposition produced MORE runs ({}) than the oracle ({}) — \
+                 on engine-clean geometry it can only heal cuts",
+                f.name,
+                new.len(),
+                old.len()
+            ));
+        }
+        let sum_len = |rs: &[BeltRun]| rs.iter().map(|r| r.actual_length).sum::<i64>();
+        if sum_len(&new) < sum_len(&old) {
+            violations.push(format!(
+                "{}: graph decomposition measured LESS total length ({}) than the oracle ({}) — \
+                 healing never loses measured tiles",
+                f.name,
+                sum_len(&new),
+                sum_len(&old)
+            ));
+        }
+        let fails_floors = |len: i64, dist: i64| {
+            use spaghettio_core::validate::belt_detour::{
+                DETOUR_EXCESS_TILES, DETOUR_RATIO_THRESHOLD,
+            };
+            (len as f64 / dist.max(1) as f64) < DETOUR_RATIO_THRESHOLD
+                || (len - dist) < DETOUR_EXCESS_TILES
+        };
+        let vn = detour_verdicts(&new);
+        let vo = detour_verdicts(&old);
+        let gained: Vec<_> = vn.iter().filter(|v| !vo.contains(v)).copied().collect();
+        let lost: Vec<_> = vo.iter().filter(|v| !vn.contains(v)).copied().collect();
+        for g in &gained {
+            eprintln!("VERDICT only-new: {} {g:?}", f.name);
+            let healed_fragment = old.iter().any(|r| {
+                r.entry == g.0
+                    && r.actual_length < g.2
+                    && (fails_floors(r.actual_length, r.direct_distance)
+                        || lost.iter().any(|l| l.0 == r.entry))
+            });
+            if !healed_fragment {
+                violations.push(format!(
+                    "{}: verdict {g:?} gained with NO healed sub-floor oracle fragment at its \
+                     entry — not a phantom-cut heal; decomposition regression or new \
+                     adjudication needed (RFC-065 log)",
+                    f.name
+                ));
+            }
+        }
+        for l in &lost {
+            eprintln!("VERDICT only-old: {} {l:?}", f.name);
+            let retired_fragment = new.iter().any(|r| {
+                r.entry == l.0
+                    && r.actual_length > l.2
+                    && (fails_floors(r.actual_length, r.direct_distance)
+                        || gained.iter().any(|g| g.0 == r.entry))
+            });
+            if !retired_fragment {
+                violations.push(format!(
+                    "{}: verdict {l:?} lost with NO longer sub-floor replacement at its entry \
+                     — not a retired phantom fragment; decomposition regression or new \
+                     adjudication needed (RFC-065 log)",
+                    f.name
+                ));
+            }
+        }
+
+        let new_set: std::collections::BTreeSet<_> = new.iter().map(key).collect();
+        let old_set: std::collections::BTreeSet<_> = old.iter().map(key).collect();
+        if new_set == old_set {
+            eprintln!("{:<70} identical ({} runs)", f.name, new.len());
+        } else {
+            fixtures_with_drift += 1;
+            let only_old: Vec<_> = old_set.difference(&new_set).collect();
+            let only_new: Vec<_> = new_set.difference(&old_set).collect();
+            eprintln!(
+                "{:<70} runs old={} new={} | only-old={} only-new={}",
+                f.name,
+                old.len(),
+                new.len(),
+                only_old.len(),
+                only_new.len()
+            );
+            for r in only_old.iter().take(6) {
+                eprintln!("    only-old {r:?}");
+            }
+            for r in only_new.iter().take(6) {
+                eprintln!("    only-new {r:?}");
+            }
+        }
+    }
+
+    eprintln!(
+        "---\nfixtures built={built} with-drift={fixtures_with_drift} runs old={total_old} new={total_new}"
+    );
+    // No silent corpus shrinkage (bot round 1 on PR #583), with the
+    // failure attributed correctly (round 2): a fixture that stops
+    // BUILDING is an unrelated break, not belt-detour drift — but it must
+    // still fail here rather than silently narrowing the gate. Dynamic
+    // count so extending the corpus needs no constant bump.
+    assert_eq!(
+        built, corpus_size,
+        "survey corpus shrank: {}/{corpus_size} fixtures built in this chunk — a fixture \
+         failed to BUILD (see SKIP lines above; unrelated to belt-detour drift, but the \
+         gate must not silently narrow)",
+        built
+    );
+    assert!(
+        violations.is_empty(),
+        "oracle-invariant violations:\n  {}",
+        violations.join("\n  ")
+    );
+}
+
+#[test]
+fn belt_detour_migration_differential_chunk_0() {
+    belt_detour_differential_chunk(0, 4);
+}
+
+#[test]
+fn belt_detour_migration_differential_chunk_1() {
+    belt_detour_differential_chunk(1, 4);
+}
+
+#[test]
+fn belt_detour_migration_differential_chunk_2() {
+    belt_detour_differential_chunk(2, 4);
+}
+
+#[test]
+fn belt_detour_migration_differential_chunk_3() {
+    belt_detour_differential_chunk(3, 4);
+}
+
+// Adjudication probe for the slice-2 verdict drifts (kept, per the repo's
+// probes-keep-results-re-checkable discipline): dumps the geometry around
+// each adjudicated run and walks its graph path — the instrument behind
+// the RFC-065 decision log's 2026-08-06 corpus-adjudication entry.
+#[test]
+#[ignore]
+fn belt_detour_adjudication_probe() {
+    use spaghettio_core::connectivity::{derive_connectivity, EdgeKind, NodeClass};
+    use spaghettio_core::validate::belt_detour::{measure_belt_runs, reference};
+
+    // (fixture name, walk start tile, dump region (x range, y range))
+    let cases: &[(&str, (i32, i32), (i32, i32), (i32, i32))] = &[
+        ("tier4_advanced_circuit_from_plates", (11, 39), (5, 18), (34, 46)),
+        ("tier4_advanced_circuit_from_ore_am2", (8, 85), (2, 16), (78, 96)),
+        ("tier_kovarex_self_loop", (21, 14), (2, 24), (2, 18)),
+        ("stress_advanced_circuit_partitioned_5s_from_plates_partitioned", (13, 38), (6, 20), (33, 46)),
+        ("stress_advanced_circuit_partitioned_4s_from_plates_pooled", (12, 39), (6, 20), (33, 46)),
+    ];
+
+    for &(name, start_tile, (x0, x1), (y0, y1)) in cases {
+        let f = survey_fixtures()
+            .into_iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("no survey fixture named {name}"));
+        let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
+        let excluded: FxHashSet<String> = f.excluded.iter().map(|s| s.to_string()).collect();
+        let result = match f.variant {
+            SurveyVariant::Plain => run_e2e(f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs),
+            SurveyVariant::Strategy(strategy) => run_e2e_with_strategy(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, strategy,
+            ),
+            SurveyVariant::Excluded => run_e2e_with_exclusions(
+                f.name, f.item, f.rate, f.machine, f.belt_tier, &inputs, &excluded,
+            ),
+            SurveyVariant::ExcludedVoid => run_e2e_with_exclusions_and_surplus_policy(
+                f.name,
+                f.item,
+                f.rate,
+                f.machine,
+                f.belt_tier,
+                &inputs,
+                &excluded,
+                spaghettio_core::bus::layout::SurplusPolicy::Void,
+            ),
+        };
+        let result = result.expect("build fixture");
+        let layout = &result.layout;
+
+        eprintln!("\n===== {name}: region x {x0}..={x1}, y {y0}..={y1} =====");
+        for e in &layout.entities {
+            if (x0..=x1).contains(&e.x) && (y0..=y1).contains(&e.y) && e.name != "medium-electric-pole"
+            {
+                eprintln!(
+                    "  ({:>3},{:>3}) {:<24} {:?} io={:?} carries={:?}",
+                    e.x, e.y, e.name, e.direction, e.io_type, e.carries
+                );
+            }
+        }
+
+        let g = derive_connectivity(layout);
+        let n = layout.entities.len();
+        let belt_like = |i: usize| {
+            matches!(
+                g.classes[i],
+                NodeClass::SurfaceBelt | NodeClass::UgEntrance | NodeClass::UgExit
+            )
+        };
+        let mut flow_out: Vec<Option<usize>> = vec![None; n];
+        for e in &g.edges {
+            if matches!(e.kind, EdgeKind::BeltFlow | EdgeKind::Sideload | EdgeKind::UgSpan)
+                && belt_like(e.src)
+                && belt_like(e.dst)
+            {
+                flow_out[e.src] = Some(e.dst);
+            }
+        }
+        let Some(start) = g.occupant(start_tile) else {
+            eprintln!("  (no entity at {start_tile:?})");
+            continue;
+        };
+        let mut cur = start;
+        let mut steps = 0;
+        eprintln!("--- graph walk from {start_tile:?} ---");
+        loop {
+            let e = &layout.entities[cur];
+            eprintln!("  ({:>3},{:>3}) {} {:?}", e.x, e.y, e.name, e.direction);
+            steps += 1;
+            if steps > 70 {
+                eprintln!("  ... (cap)");
+                break;
+            }
+            match flow_out[cur] {
+                Some(next) if next != start => cur = next,
+                _ => break,
+            }
+        }
+
+        let in_region =
+            |t: (i32, i32)| (x0..=x1).contains(&t.0) && (y0..=y1).contains(&t.1);
+        eprintln!("--- OLD runs intersecting region ---");
+        for r in reference::measure_belt_runs_tilewalk(layout) {
+            if in_region(r.entry) || in_region(r.exit) {
+                eprintln!("  {r:?}");
+            }
+        }
+        eprintln!("--- NEW runs intersecting region ---");
+        for r in measure_belt_runs(layout) {
+            if in_region(r.entry) || in_region(r.exit) {
+                eprintln!("  {r:?}");
+            }
+        }
+    }
 }

@@ -4895,7 +4895,22 @@ pub fn search_snake_fold_with_stats(
     // the fold (round-3 bot review, finding C). Count comparison is the
     // honest gate for a resynthesized category — same rationale as the
     // verdict's own whole-category degrade for unresolvable positions.
-    let policy = Policy::new(GatePolicy::GateInstances).with_override("power", GatePolicy::GateCount);
+    //
+    // `belt-detour` is ReportOnly here for the same reason it is excluded
+    // from `selection_warning_count` (see that function's 2026-08-01
+    // wiring note): a survey-calibrated diagnostic must not steer which
+    // layout ships. A snake fold's seam connectors double back BY DESIGN —
+    // measured whole (RFC-065 slice 2 healed the phantom cuts that used to
+    // fragment them below the floors), they read as detours, and gating
+    // them rejected every multi-fold candidate on chain-mil5ore. Transit
+    // cost of folds is RFC-064's objective-scoring channel, not an
+    // admission veto. Participation was vacuous before the measurement
+    // fix, so this override aligns the gate with the adjudicated principle
+    // without changing any previously-effective behavior (RFC-065 decision
+    // log, slice-2 fold-gate entry).
+    let policy = Policy::new(GatePolicy::GateInstances)
+        .with_override("power", GatePolicy::GateCount)
+        .with_override("belt-detour", GatePolicy::ReportOnly);
 
     let mut best: Option<(i64, Vec<i32>, LayoutResult, i32)> = None;
 

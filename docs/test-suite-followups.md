@@ -156,3 +156,17 @@ census datum most plausibly reflects that environment, not this host.
   independent verification — the redundancy is the point of the adversarial
   flow. Don't dedupe it.
 - **paths-filter short-circuit** already reduces docs-only pushes to 8 s.
+
+## Stale stress goldens (open, 2026-08-06 — from PR #583 bot round 2)
+
+`tests/goldens/stress/*.txt` were last blessed 2026-07-24 and predate
+both the #519 input-rate-delivery recalibration (2026-07-31) and the
+belt-detour check (2026-08-01) — several record `total warnings: 0` for
+fixtures that now legitimately warn (and RFC-065 slice 2's measurement
+fix adds belt-detour verdicts on the two AC partition configs). The
+golden flow is env-gated (`SPAGHETTIO_STRESS_GOLDEN=check|bless`, not in
+the default suite), so nothing trips today — but the next `check` run
+will diff against a month-stale world and mis-attribute the drift to
+whatever ran it. Pick-up: re-bless deliberately, adjudicating the
+accumulated drift against the owning decision logs (#519, belt-detour
+calibration, RFC-065 slice 2) rather than rubber-stamping.

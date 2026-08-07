@@ -1185,3 +1185,331 @@ Per `CLAUDE.md` § verification protocol:
   carries this grounding at each site so the subset misreading
   cannot recur. Tests + docs only, no behavior change — same
   envelope as the PR it reviews.
+- **2026-08-06 — PR #581 bot round 2 (union ×3, two minors, each 1/3
+  passes): dispositions, folded in from the #581 merge-commit record
+  per the deferral noted there.** (1) Reason-string arm pins called
+  brittle ("rephrasing fails the tests spuriously; a rename without
+  the substring would silently un-pin") — DECLINED, and the premise
+  is half wrong: `.is_some_and(contains)` fails LOUDLY in both drift
+  directions (a false predicate fails the assert; nothing is
+  silent), which is a pin doing its job, and the pattern matches the
+  reviewed classes-sibling. A `ConflictKind`-typed assertion needs
+  typed reasons from `error_certain_regression` — the natural
+  refinement if Phase 3 attribution work types them; out of envelope
+  for a tests+docs close-out. (2) The entrance-boundary fixture
+  called "physically unsatisfiable (belt over an underground
+  segment)" — REFUTED on game rules: surface tiles above a UG span
+  are open, and crossing them is the point of undergrounds
+  (mechanics doc U4; B12 belt weaving). The fixture is realizable,
+  and the round-1 arm pin separately proves the span survives the
+  overlaid belt (head-on arm fires, span arm does not).
+- **2026-08-06 — Phase 1 slice 2 pick-up: `belt_detour` consumes the
+  IR (the RFC's named first per-check migration candidate). Design
+  pre-registered before code, slice-1 discipline.**
+  `measure_belt_runs` decomposes runs from `derive_connectivity`'s
+  typed edges instead of five inline derivations (dir-map walk,
+  pairing, splitter-tile set, inserter anchors, predecessor scan):
+  forward step = the node's unique {BeltFlow, Sideload, UgSpan}
+  out-edge, distance = Manhattan between endpoint entities (1 for
+  surface flow, the span length underground); entry = InserterDrop
+  in-edge ∨ splitter-fed (SplitterOut, or Sideload from a Splitter
+  src) ∨ belt-src in-flow count ≠ 1; exit = InserterPickup ∨
+  SplitterIn out-edge ∨ no forward edge ∨ forward lands on an entry.
+  Five semantic tightenings ride the edge semantics, each pinned
+  with the old behavior asserted alongside for contrast. D1–D4 are
+  engine-unreachable or already Error-class geometry: (D1) runs
+  stop at head-ons (conflicts carry no flow edge; the tile-walk
+  walked through them — head-on layouts are `check_belt_junctions`
+  Errors regardless); (D2) nothing surface-feeds a UG exit (rear
+  feed stalls in game; the walk flowed into the exit and counted the
+  rear feeder as a merge); (D3) splitter anchors are
+  orientation-true (exit iff an actual SplitterIn edge; entry iff
+  actually splitter-fed, which still covers perpendicular receivers
+  via the splitter-src Sideload edge). The tile-walk marked ANY belt
+  ahead/behind a footprint tile — on a perpendicular belt passing
+  behind a splitter it cut the run and silently ORPHANED the
+  downstream tail from measurement entirely; the migration closes
+  that hole. (D4) io-untagged undergrounds are `Other` (K65-1
+  posture: no role-guessing for hand-built entities; the dir map
+  walked them as plain tiles). (D5) — found during implementation,
+  and unlike the others ENGINE-REACHABLE — a UG entrance "points at"
+  its ahead tile in the dir map but feeds it nothing (items go
+  underground); the tile-walk counted it as a predecessor anyway, so
+  on weave geometry (a crossing lane through the tile directly ahead
+  of an entrance — standard bus tap-off routing) the phantom
+  predecessor made that tile a 2-source "merge" and CUT the crossing
+  lane mid-run (or, with no real feeder, orphaned it from
+  measurement entirely). The graph has no such edge; crossing lanes
+  measure continuously. Consequence: run-list drift on the corpus is
+  EXPECTED wherever weaves cross entrance-ahead tiles — healed cuts,
+  strictly more-correct measurement — and the differential's job is
+  to quantify it and confirm the VERDICT set (the calibrated
+  warning tail) is unmoved; a verdict change comes back to this log
+  for adjudication before merge. Oracle: the tile-walk retained
+  verbatim as a `#[doc(hidden)] reference` module. Gates
+  pre-registered: D1–D4 divergence pins, a clean-geometry unit
+  differential, an in-suite two-fixture corpus differential
+  (run-list identity), and an `#[ignore]` full-survey differential
+  over the 35-fixture corpus asserting VERDICT-identity (the
+  slice's written gate) and reporting any run-list drift for
+  adjudication in this log before merge. RFC-064 blast radius:
+  none today — the Transit metric (§ Metrics (b)) is a future
+  consumer of these run-boundary rules with no wired call-site
+  (verified: `measure_belt_runs` callers are the check, its tests,
+  and the survey probe). Once-per-validate shared graph derivation
+  is deliberately NOT bundled — record-integrity and this check
+  each derive; hoisting is its own plumbing slice.
+- **2026-08-06 — Slice 2 corpus differential MEASURED: five verdict
+  drifts, all adjudicated (four true positives surfaced, one
+  artifact retired).** Full survey corpus, 35 fixtures, zone-cache
+  pinned. Run-list drift on 25 fixtures, every instance the D5
+  healed-cut shape: 5533 tile-walk runs vs 4913 graph runs — 620
+  phantom boundaries removed corpus-wide. Verdict drift on exactly
+  five runs, each geometry dumped and walked via the
+  `belt_detour_adjudication_probe` before acceptance:
+  (1) `tier4_advanced_circuit_from_plates` GAINS (11,39)→(11,42)
+  14/3 = 4.67×: the EC drop at (11,38) routes 5W, 3S, then back E
+  on the y=42 trunk to the pickup at (11,44) — a real doubled-back
+  last segment. The tile-walk never saw it because the copper-cable
+  UG entrance at (6,38) South phantom-fed the turn tile (6,39),
+  cutting the run at (7,39) into sub-threshold fragments. This is
+  the calibration doc's known AC family, surfaced at a fixture it
+  was invisible on. (2) `tier_kovarex_self_loop` GAINS
+  (21,14)→(6,7) 55/22 = 2.5×, excess 33: the U-235 catalyst return
+  line measured whole for the first time (old fragment: 51/26 =
+  1.96×, knife-edge under the floor purely by where the phantom cut
+  landed). Correctly measured and mechanically over the calibrated
+  tail floors; note the kovarex fixture postdates the 2026-08-01
+  calibration survey. CALIBRATION QUESTION NOTED, not decided here:
+  a self-loop return line is inherent loop topology, not a routing
+  mistake — whether the check should classify catalyst returns
+  separately is follow-up calibration work, out of this slice's
+  measurement-only scope. (3)+(4) the two stress AC partition
+  fixtures GAIN the same last-segment family ((13,38)→(14,42)
+  24/5 = 4.8×; (12,39)→(11,42) 15/4 = 3.75×), previously fragmented
+  by the identical weave cuts. (5) `tier4_advanced_circuit_from_ore_am2`
+  LOSES (8,85)→(7,90) 15/6 = 2.5×: a phantom-BOUNDED fragment —
+  the true journey (the balancer-weave snake to (7,95)) measures
+  20/11 = 1.82×, under the ratio floor by the same rules that
+  admitted the fragment. The old verdict was a measurement
+  artifact; retired. Selection blast radius: none —
+  `selection_warning_count` excludes `belt-detour` (its 2026-08-01
+  wiring note), so candidate ranking cannot flip; fold-admission
+  gates compare native-vs-candidate under ONE decomposition, so
+  only a changed delta could flip an admission — the full suite is
+  the empirical check. The differential's adjudicated-drift table
+  now encodes exactly these five; anything beyond it fails the
+  gate.
+- **2026-08-06 — Slice 2 second-order finding: the fold admission
+  gate was steering on `belt-detour`; excluded as ReportOnly (the
+  suite's empirical check earned its keep).** The full suite tripped
+  exactly one test: `mil5_multifold_holds_and_preserves_lanes` —
+  chain-mil5ore fell from a triple fold to a single fold. Cause: a
+  snake fold's seam connectors double back BY DESIGN; measured whole
+  (slice 2's healed cuts), they clear the detour floors, and the
+  fold gate's `GateInstances` treated the new instances as
+  regressions, vetoing every k≥2 candidate. That is a
+  survey-calibrated diagnostic silently changing which layout ships
+  — the precise failure `selection_warning_count`'s 2026-08-01
+  wiring note adjudicated against, except through the admission
+  channel that never got the exclusion (it was VACUOUS there until
+  the measurement fix: no seam run cleared the floors under the
+  tile-walk, so the gate's belt-detour participation had never
+  fired). Fix: `search_snake_fold_with_stats`' policy gains
+  `belt-detour → GatePolicy::ReportOnly` (diff computed and
+  recorded, never a veto), and the mil5 test's own count-based
+  never-regress profile exempts the category with the same
+  rationale. Transit cost of folds is RFC-064's objective-scoring
+  channel, not an admission veto; cross-entry recorded in RFC-064's
+  decision log (the gate is its machinery). With the exclusion the
+  triple fold returns ([138, 276, 414]) and the remaining fold
+  rejections are all `input-rate-delivery` (110), the calibrated
+  gate doing its actual job. `cell_composition` 25/25 green.
+- **2026-08-06 — Slice 2 full-suite results: four e2e warning pins
+  moved, all four the adjudicated fixtures; re-pinned with the
+  adjudication cited at each site.** 67/71 e2e green on first run;
+  the four failures were exactly `tier4_advanced_circuit_from_plates`
+  ({} → belt-detour 1), `tier_kovarex_self_loop` ({} →
+  belt-detour 1), `tier4_advanced_circuit_from_ore_am2` (belt-detour
+  1 → 0, the retired artifact), and
+  `quality_differential_kovarex_self_loop_normal_vs_legendary`
+  (Normal arm gains the same return-line run its own 2026-08-01
+  comment had recorded as "worst run 1.96x — just under the ratio
+  floor": that fragment WAS this run, phantom-cut; independent
+  corroboration of the adjudication from a comment written before
+  the migration existed). Stress AC partitioned/pooled pins at other
+  rates hold unchanged (their old verdicts were real detours the old
+  walk could already see; the two survey-config gains sit in
+  fixtures without exact-count e2e pins). Ladder + self-loop notes
+  synced in `docs/status.md`.
+- **2026-08-06 — Slice 2 session-side adversarial review (worktree
+  agent): APPROVE-WITH-NITS; every claim held under attack, three
+  nits fixed in the same commit, two observations recorded.**
+  Attacks run and survived: an equivalence audit over every
+  constructible edge-kind/class combination plus a 60,000-soup fuzz
+  differential (12,267 divergence-free soups, ZERO findings;
+  divergent soups all reduce to the five documented classes, some
+  compound — entrance-behind-splitter is D5+D3, splitter-into-exit-
+  rear is D2); all five pins re-derived by hand with their
+  game-rule bases checked against the mechanics doc (D4 correctly
+  framed as K65-1 policy, not game rule); the corpus differential
+  re-run reproducing 620 healed boundaries and the exact five-tuple
+  drift, with fragment arithmetic spot-checked (17+10=27 …); all
+  three geometry adjudications independently reproduced; the
+  fold-gate veto mechanism reproduced live (folded mil5 winner
+  carries 4 seam verdicts 211/66…210/65 vs 0 native under the new
+  measurement, 0 vs 0 under the oracle — the vacuity claim proven,
+  and independently corroborated by mil5's multi-fold assert having
+  been green on main); a channel sweep finding no other production
+  belt-detour steering (the only `never_worse` callers are the fold
+  gate and the caller-less `run_candidate_field`). Nits fixed:
+  (1) the module doc listed four tightenings — D5, the only
+  corpus-reachable one, was missing from the module-level list;
+  now five. (2) The adjudication probe claimed coverage of all five
+  drifts but carried four cases — the from-plates case is added
+  (the reviewer verified that adjudication independently via its
+  own probe; it is accurate). (3) The in-suite fast differential
+  asserted verdict-identity where the pre-registration recorded
+  run-list identity — strengthened to full run-list equality, which
+  both fixtures satisfy. Observations recorded, no action taken:
+  (a) the opt-in RFC-064 row-rotation spike fails closed on ANY
+  validation issue, belt-detour included — a non-default channel
+  outside "report-only", now named where the default-pipeline claim
+  is made; that spike's policy belongs to RFC-064. (b)
+  `run_candidate_field` has no production caller and its test
+  harness count-gates belt-detour via `Policy::fold()` — revisit if
+  it ever gains one.
+- **2026-08-06 — PR #583 bot round 1 (union ×3; two majors at 3/3,
+  six minors): dispositions — the strongest round of this arc, and
+  its first major is taken in full.** (major 1, ACCEPTED) The corpus
+  differential was `#[ignore]` — the RFC's own written gate never
+  ran in CI, leaving unpinned fixtures open to silent verdict drift
+  (a 1→0 over-merge would have passed). Promoted to always-on in the
+  default suite; the ~35 duplicate fixture builds are the accepted
+  cost of continuous enforcement, noted in the test comment for the
+  owner to demote deliberately if CI time matters more. (major 2,
+  DECLINED with rationale) "ReportOnly masks ALL fold-introduced
+  detours, not just seams" — factually true and BY DESIGN: the
+  2026-08-01 selection exclusion this mirrors is categorical, not
+  seam-scoped, because an uncalibrated survey-derived diagnostic must
+  not steer shipping layouts through ANY channel; fold transit
+  quality is priced by RFC-064's objective (aspect + rate-weighted
+  belt transit), which is the calibrated channel — a fold introducing
+  a genuine monster detour pays there, in score, where calibration
+  exists. Seam-vs-non-seam attribution is real future work and
+  belongs to the calibration follow-up already noted. (minor,
+  ACCEPTED ×4) verdict-drift comparison is now set-style (sorted both
+  sides); `built == 35` asserted so the corpus cannot silently
+  shrink; `measure_belt_runs_on` documents and asserts its
+  graph-belongs-to-layout contract on the classes-length signal; the
+  one-flow-edge-per-node invariant upgraded from `debug_assert` to an
+  always-on assert (one branch per edge, once per validate — silent
+  last-write-wins corruption is the never-degrade-silently failure
+  mode). (minor, DECLINED ×2) The kovarex pin "enforces calibration
+  debt": pins pin measured shipping reality — the run measures 2.5×
+  and the check fires; when a calibration slice reclassifies catalyst
+  returns, the pin changes WITH it, and the debt is tracked where
+  debt lives (this log), not by leaving the suite blind. The fast
+  gate's "poor cost/coverage + fails loudly on future weave
+  geometry": failing loudly on new D-class geometry is its designed
+  behavior (the assert message says exactly what to do), the two
+  builds cost seconds, and its full run-list identity is a stronger
+  per-fixture pin than the verdict-table gate makes — kept.
+- **2026-08-06 — PR #583 bot round 2 (union ×3; two 3/3 majors, five
+  minors): dispositions. The strongest round of the arc — its first
+  major correctly attacks round 1's own accepted fix, and the
+  synthesis is better than either round's ask.** (major 1, ACCEPTED
+  via redesign) Round 1 demanded the corpus differential be
+  always-on; round 2 shows the exact-tuple adjudication table that
+  came with it froze 35 live fixtures against ALL future layout
+  evolution — any routine placer tweak would hard-fail the default
+  suite demanding belt-detour adjudication from sessions that know
+  nothing of it. Both concerns are real. The gate now asserts
+  STRUCTURAL invariants of the oracle relationship instead of
+  coordinates: (1) the graph never produces more runs than the
+  tile-walk on engine-clean geometry, (2) never measures less total
+  length, (3) every gained verdict must be a healed sub-floor
+  fragment at the same entry, (4) every lost verdict a retired
+  phantom fragment at the same entry. Layout-evolution-proof, still
+  regression-detecting; per-fixture verdict counts stay pinned by
+  each fixture's own `assert_warnings_exactly` in the same suite —
+  the right adjudication channel. The exact five-tuple table
+  retires from code; THIS log's 2026-08-06 entries are its
+  permanent record. The ~35-build CI cost stands as round 1
+  accepted it, now with an explicit OWNER KNOB note in the test
+  (demote to `#[ignore]`+scheduled if cost outweighs protection —
+  one deliberate line). (major 2, gap ACCEPTED as tracked debt,
+  veto stance unchanged) Correct that RFC-064's objective transit
+  pricing has no wired call-site, so fold-introduced non-seam
+  detours are admitted un-priced today. Two corrections to its
+  framing: they are not INVISIBLE (belt-detour warnings appear on
+  the shipped layout's validate output — mil5's four seam verdicts
+  are disclosed above), and pre-slice there was neither pricing NOR
+  visibility (phantom cuts hid seam runs entirely), so the interim
+  state is strictly more honest than what it replaces. Named
+  followup added to `docs/snake-fold-followups.md` (wire the
+  objective transit term; then revisit seam-class calibration). The
+  categorical-veto refusal stands on the same 2026-08-01 ground as
+  before. (minors) Build-failure attribution ACCEPTED: the corpus
+  count is dynamic and the shrink assert names the failed-to-build
+  fixture as an unrelated break. Sub-threshold-drift blindness
+  PARTIALLY ADDRESSED: invariants (1)+(2) catch boundary-inflation
+  and length-loss classes; a full D-attribution decomposition
+  checker remains possible future strengthening; the fast gate's
+  two-fixture run-list identity stays the exact anchor. Stress
+  phrasing half REFUTED (a `max_warnings` ceiling is not an
+  exact-count pin, and the +1 sits under 58 exactly as recorded) /
+  goldens half ACCEPTED as PRE-EXISTING debt: `goldens/stress/*`
+  are stale since 2026-07-24 against #519 AND belt-detour and this
+  slice — env-gated so nothing trips today; named followup in
+  `docs/test-suite-followups.md` (re-bless deliberately, not
+  rubber-stamp). Flow-edge guard ACCEPTED as the rounds' synthesis:
+  loud `debug_assert` (every test/CI run) + deterministic
+  first-edge degrade in release — a report-only diagnostic must not
+  abort production validate() or admission loops. Double-derivation
+  DECLINED as already-tracked (the once-per-validate hoist is the
+  named next plumbing slice since the pick-up entry).
+- **2026-08-07 — CI surfaced what local verification could not: the
+  always-on differential exceeds nextest's 300s per-test timeout on
+  the 2-core runner; CHUNKED ×4 (modulo-striped, concurrent).** The
+  single-test form timed out at 300.018s with every gate passing
+  (1209/1210; the run log shows all three adjudicated verdicts and
+  zero invariant violations before the kill). Plain `cargo test`
+  enforces no per-test timeout, so three full local suite runs never
+  saw it — noted as a verification-gap lesson: CI's nextest profile
+  is a semantically different harness, not just a slower machine.
+  Modulo striping balances the heavy fixtures across chunks (two
+  chunks verified locally at ~51s each); nextest runs chunks
+  concurrently, so default-suite wall-clock improves over the
+  single-test form.
+- **2026-08-07 — PR #583 bot round 4 (union ×3; one 3/3 major, five
+  minors): one declined on a structural refutation, one refuted from
+  the oracle's own code, three repeats, one doc nit taken.**
+  (major, DECLINED) "Any transient fixture-build failure hard-fails
+  the whole suite via the corpus-shrink assert": every corpus
+  fixture also has its OWN e2e test in this same suite — a build
+  failure reddens the suite through that test regardless, so the
+  differential's hard-fail adds no marginal red-risk; and fixture
+  builds are deterministic under the CI-pinned zone cache (the
+  measurement protocol exists precisely to remove the environmental
+  nondeterminism the finding assumes). The few survey-only variant
+  configs without twin tests are pin-deterministic too. Silent
+  shrink stays disallowed. (minor, REFUTED) "The tile-walk only made
+  a splitter's ALIGNED-ahead tile an output-entry; perpendicular
+  receivers were measured through" — the oracle's own retained code
+  says otherwise: `splitter_output.insert(ahead)` is
+  orientation-blind (any belt tile ahead of a footprint tile,
+  aligned or perpendicular, became an entry), so the graph's
+  splitter-source Sideload ⇒ entry mapping reproduces it exactly on
+  the ahead tiles; the divergent receiver case is head-on
+  (conflict, D1, Error-class). Empirically corroborated by the
+  adversarial review's 60k-soup fuzz, which included
+  perpendicular-ahead splitter geometry in the divergence-free
+  population and found zero mismatches. (repeats ×3) Categorical
+  fold exemption (its "lacks a tracking reference" nit is factually
+  stale — `docs/snake-fold-followups.md` has carried the entry since
+  6b831d9), double derivation, and differential runtime cost all
+  carry standing dispositions; the chunking above further improves
+  the runtime one. (nit, ACCEPTED) D4's module doc now states the
+  trade explicitly: possible misses across untagged segments in
+  hand-built blueprints, never false claims.

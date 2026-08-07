@@ -4812,6 +4812,15 @@ fn mil5_multifold_holds_and_preserves_lanes() {
     let (base, got) = (profile(&compact), profile(folded));
     let regressed: Vec<String> = got
         .iter()
+        // `belt-detour` is report-only across the default pipeline
+        // (selection ranking, the fold admission gate — see
+        // `search_snake_fold_with_stats`' policy note; the opt-in
+        // RFC-064 row-rotation spike fails closed on any issue and is
+        // that RFC's concern): snake seams double back BY DESIGN, so the
+        // diagnostic counting them whole (RFC-065 slice 2 healed the
+        // phantom cuts that fragmented seam runs below its floors) is not
+        // a fold regression. Every other category stays gated here.
+        .filter(|(cat, _)| cat.as_str() != "belt-detour")
         .filter(|(cat, n)| base.get(*cat).copied().unwrap_or(0) < **n)
         .map(|(cat, n)| format!("{cat}: {} -> {n}", base.get(cat).copied().unwrap_or(0)))
         .collect();
