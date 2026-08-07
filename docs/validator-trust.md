@@ -170,10 +170,28 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    in-client; see the table row). The branch that lifts the exemption
    improves PU, EC@2/AM2, and tier2. It was held behind hole 1 — "trades a
    starvation warning for a physically impossible winner" — and **that
-   blocker is now void**: the winner it selects is not physically
-   impossible, it was only measured with the wrong instrument. Lifting the
-   exemption is unblocked; the remaining work is fixture-drift
-   adjudication, not a physical objection.
+   blocker is void**: the winner it selects is not physically impossible, it
+   was only measured with the wrong instrument.
+
+   **But the lift is still blocked, by a different and stronger objection
+   found 2026-08-07 while attempting it.** On `big-electric-pole@1`/am2 the
+   lift makes the default ship a layout **bit-identical** (same entity
+   fingerprint) to the one RFC-059 measured at **0.51/s against a planned
+   1.00/s** — replacing the 1127-entity layout measured at **1.10/s**. The
+   ranking inverts because `input-rate-delivery` fires **twice on the
+   1.10/s layout and zero times on the 0.51/s one**; the half-rate layout's
+   real defect is visible only as one `inserter-item-throughput` warning
+   ("steel-plate input inserters move 2.40/s but machine needs 5.00/s" — a
+   2.08× shortfall that predicts the measured half-rate almost exactly), so
+   with the lift the bad layout scores 1 and the good one scores 2.
+
+   So the category's **negative direction is not merely unanchored, it is
+   contradicted**: it warns twice on a layout that measures 110% of plan.
+   Its sim anchor is one-directional (PU positive). Lifting it blanket-wise
+   trades a measured ~1.5× win on PU for a measured ~2× loss on
+   big-electric-pole, and additionally collapses RFC-059's teeth test (both
+   claim orders then produce the identical layout). **Fix the
+   false-positive calibration first, then re-try the lift.**
 3. **The sim/meter side has no validator visibility.** `Manifest` carries no
    issue state, so parity sweeps can quote a condemned layout as a parity
    number — which is precisely how 68.2% was first reported with no mention
