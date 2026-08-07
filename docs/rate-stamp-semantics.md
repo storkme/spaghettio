@@ -32,7 +32,7 @@ docstring has always said what it is:
 ## Stamp-site census
 
 The handoff estimated 76 sites in three files. The real census is **89 sites
-in six files** — 87 that stamp a value plus 2 that only ever write `None` —
+across eight files** — 87 sites in the six files that stamp a value, plus 2 that only ever write `None` —
 and the two highest-volume ones are *mutation* sites the handoff's method
 would have missed entirely, because it enumerated struct literals only.
 
@@ -104,8 +104,14 @@ carries more than its belt's capacity by either model.
 - **The `stacking_ec_60s` / `stacking_fanin_wall_lift` audit is invalid.**
   All three fixtures carry it (the third,
   `stacking_fanin_wall_lift_ec6_yellow_legendary`, is the one #597 missed).
-- **The PU fix is unblocked.** The "physically impossible layout" that held
-  it is this comparison and nothing else.
+- **The PU fix's "physically impossible layout" objection is void** — it was
+  this comparison and nothing else. That is *not* the same as the lift being
+  ready: attempting it on 2026-08-07 surfaced a second, unrelated blocker
+  (`input-rate-delivery` false positives inverting candidate ranking on
+  `big-electric-pole@1`). Lift status is tracked in ONE place —
+  [`validator-trust.md`](validator-trust.md) hole 2. Do not restate it here
+  or in `status.md`; this document went out with three records saying
+  "unblocked" and two saying "blocked" and a reviewer had to catch it.
 - **#311 needs re-evidencing — which is NOT the same as "#311 is fiction".**
   Its *stamp-based* evidence is void: the tiles stamped 60/s carry 7.5–9.0/s
   by both lane models. But an independent measurement points the other way at
@@ -116,9 +122,13 @@ carries more than its belt's capacity by either model.
   never flags. **Do not close #311 on this document.** Re-argue it from a
   walked model or a sim; the open defect is already tracked in
   `rfc064-phase2-followups.md` §1.
-- **A stamp-based over-capacity check cannot be written.** The falsified
-  2026-08-07 check was not a near miss; the data does not support the
-  comparison at all. The per-tile question already has an owner —
+- **A stamp-based over-capacity check cannot be written.** This is the
+  strongest claim here and it rests on the *stamping code*, not on either
+  lane model: the number is an aggregate, so no threshold on it can mean
+  "this tile is over-committed". The weaker, model-dependent claim — that no
+  flagged tile is *actually* over capacity — rests on the two walkers, and
+  the S=1 arm of that is not settled (see below). The falsified 2026-08-07
+  check was not a near miss; the data does not support the comparison at all. The per-tile question already has an owner —
   `validate::check_lane_throughput`, which walks the belt graph seeded from
   machine specs and never reads the stamp.
 

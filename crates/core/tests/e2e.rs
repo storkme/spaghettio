@@ -1852,7 +1852,20 @@ fn tier4_advanced_circuit_partitioned() {
     // runs at 3.17x/4.67x their endpoint separation (13/11 excess tiles),
     // both well past the check's floors, not yet root-caused. Tolerated
     // explicitly rather than silently allowed.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 2), ("belt-detour", 2)]);
+    // 2026-08-07 fractional-duty floor (`physical_utilization`'s `plan_duty`
+    // min): 2 -> 3 input-rate-delivery. NOT a regression, and NOT a blanket
+    // re-bless — the two pre-existing warnings both got SMALLER deficits
+    // (0.3 -> 0.5 delivered at (15,23); demand 1.5 -> 1.2 at (15,32)) because
+    // honest upstream duty leaves more supply for the row tail. The third is
+    // newly surfaced: copper-cable plans 3.333 machines and the layout places
+    // 4, so its injection is now credited at 0.833 duty instead of a
+    // saturated 1.0, and an AC cable tap that was covered by the 20%
+    // over-credit no longer is (2.0/s delivered vs 3.0/s needed).
+    // HONESTY NOTE: that third warning is a candidate true positive of the
+    // #519 tail-starvation class, NOT a sim-verified one. It is pinned here
+    // so it stays visible; if a sim run shows this fixture at plan, it is a
+    // false positive and this line is the place to re-adjudicate.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 3), ("belt-detour", 2)]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
@@ -8176,6 +8189,20 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
         l.entities
             .iter()
             .filter_map(|e| {
+                // Scoped to COPPER-CABLE — this fixture's actual subject. The
+                // S=1 arm above refuses on "25/s cable > 15/s full yellow";
+                // RFC-047's claim is that stacking lifts exactly that wall
+                // (25/s fits one yellow belt stacked to 30/s). Scoping is
+                // needed for the same reason as the stacking_ec_60s probes
+                // (unscoped, "no family exceeds one belt" is a non-law — a
+                // bigger family legally runs as parallel belts), but scoping
+                // to the OUTPUT item here would make the assertion VACUOUS:
+                // EC is only 6/s, far under the 30/s stacked cap, so it could
+                // never fire. Caught in review of #601. The non-vacuity guard
+                // below is what stops that recurring silently.
+                if e.carries.as_deref() != Some("copper-cable") {
+                    return None;
+                }
                 let tier = if is_surface_belt(&e.name) {
                     e.name.as_str()
                 } else if is_ug_belt(&e.name) {
@@ -8214,6 +8241,25 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     .unwrap_or_else(|e| panic!("S=2 with DI Off must build via the stacked lift: {e}"));
     let over2b = family_over_one_belt(&l2_belts, 2);
     assert!(over2b.is_empty(), "DI-Off S=2 arm: family total above one stacked belt: {over2b:?}");
+    // NON-VACUITY: the probe above is scoped to copper-cable, so it is only
+    // meaningful if this arm actually puts rate-stamped cable on belts (which
+    // is the whole point of the DI-Off arm). Without this, a future change
+    // that takes cable off belts turns the assertion silently true —
+    // validator-reporting.md's recurring failure mode.
+    let cable_belt_tiles = l2_belts
+        .entities
+        .iter()
+        .filter(|e| {
+            e.carries.as_deref() == Some("copper-cable")
+                && e.rate.is_some()
+                && (is_surface_belt(&e.name) || is_ug_belt(&e.name) || is_splitter(&e.name))
+        })
+        .count();
+    assert!(
+        cable_belt_tiles > 0,
+        "DI-Off S=2 arm has no rate-stamped copper-cable belt tiles — the \
+         family_over_one_belt probe is vacuous; re-scope it consciously"
+    );
     assert!(
         l2_belts.entities.iter().any(|e| e.rate.is_some_and(|r| r > 15.0)),
         "no belt exceeds unstacked full-belt capacity on the DI-Off arm — vacuous lift"

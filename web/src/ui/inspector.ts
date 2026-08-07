@@ -382,11 +382,13 @@ export function createInspector(container: HTMLElement): InspectorControls {
     // and labelling it a bare "/s" is what made the number read as per-tile
     // throughput for years. See docs/rate-stamp-semantics.md.
     if (entity.rate != null) {
-      els.rateRow.textContent = `family ${entity.rate.toFixed(1)}/s`;
+      els.rateRow.textContent = `aggregate ${entity.rate.toFixed(1)}/s`;
       els.rateRow.title =
-        "Planned throughput for this tile's whole item family (the belt-tier " +
-        "selection figure) — NOT the flow through this tile. A family bigger " +
-        "than one belt runs as several parallel belts, each stamped this same total.";
+        "Planned family/row/lane aggregate (the belt-tier selection figure) — " +
+        "NOT the flow through this tile. Depending on which code stamped it this " +
+        "is a row block's share, a lane-family total, or a merger-cascade total, " +
+        "so it may be less than the item's overall rate as well as more than this " +
+        "tile carries. Parallel belts in one family are each stamped the same value.";
       els.rateRow.style.display = "";
     } else {
       els.rateRow.style.display = "none";
