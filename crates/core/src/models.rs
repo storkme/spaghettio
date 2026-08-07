@@ -249,9 +249,12 @@ pub struct PlacedEntity {
     ///
     /// **Never compare this to a belt's capacity.** Doing so is a category
     /// error; it has falsified one validator check and parked two pieces of
-    /// work. For per-tile flow use [`crate::validate::check_lane_throughput`],
-    /// which walks the belt graph from machine specs instead of trusting a
-    /// stamp. Full census and evidence: `docs/rate-stamp-semantics.md`.
+    /// work. For per-tile flow use
+    /// [`crate::validate::belt_structural::check_lane_throughput`] (the one
+    /// `validate()` dispatches — note a second, disagreeing implementation
+    /// lives in `validate::belt_flow`), which walks the belt graph from
+    /// machine specs instead of trusting a stamp. Full census and evidence:
+    /// `docs/rate-stamp-semantics.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<f64>,
     /// Modules/items inserted into this entity (e.g. speed modules in a beacon).

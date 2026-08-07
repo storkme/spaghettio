@@ -126,7 +126,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 
 | Category | Sev | Sel | Calibration status |
 |---|---|---|---|
-| `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. The "blind spot" recorded here until 2026-08-07 — zero errors on a stacking winner carrying 376 *stamped*-over-capacity tiles — **was not a blind spot**: those tiles carry 0.0–30.0/s against a 60/s cap, so zero was the right answer. This check is the only sound per-tile authority ([`rate-stamp-semantics.md`](rate-stamp-semantics.md)). Caveat: `validate/mod.rs:943` dispatches the `belt_structural` implementation, and the parallel `belt_flow` one disagrees on the S=1 ore belts — unexplained, worth a look |
+| `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. The "blind spot" recorded here until 2026-08-07 — zero errors on a stacking winner carrying 376 *stamped*-over-capacity tiles — **was not a blind spot**: those tiles carry 0.0–30.0/s against a 60/s cap, so zero was the right answer. This check — not the stamp — is where per-tile authority belongs ([`rate-stamp-semantics.md`](rate-stamp-semantics.md)), though which of its two implementations to believe is itself unsettled. Caveat: `validate/mod.rs:939` dispatches the `belt_structural` implementation, and the parallel `belt_flow` one disagrees on the S=1 ore belts — unexplained, worth a look |
 | `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor; it was blocked on hole 1, which **closed 2026-08-07 as a category error** — lifting it is now unblocked, pending fixture-drift adjudication only |
 | `belt-flow-path` | E spaghetti / **W bus** | yes | graph-flow walk; Warning under `LayoutStyle::Bus`, which every production call site passes (the enum's *derived default* is Spaghetti — don't confuse the two) — hole 4 |
 | `belt-flow-reachability` | E spaghetti / **W bus** | yes | the #520 check, rewritten per-tile after incident ten; still cannot block a Bus layout — hole 4 |
@@ -161,8 +161,10 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    `Severity::Error`, correctly, by walking the belt graph from machine
    specs — and the previous **"Next action: promote the audit into
    `validate/` as an Error"** is precisely the check that was written on
-   2026-08-07 and falsified within hours. **Do not do it.** The audit has
-   instead been retired from the three fixtures that carried it.
+   2026-08-07 and falsified within hours. **Do not do it.** What was retired from the three
+   fixtures that carried it is the audit's *physical interpretation*: the
+   probe itself is kept, reframed as the tier-selection statement it
+   actually makes.
 2. **`input-rate-delivery` is excluded from selection despite being
    anchored** (positive direction measured, negative direction confirmed
    in-client; see the table row). The branch that lifts the exemption

@@ -8,8 +8,8 @@ claims turned out to be wrong (noted inline). Do not act from this file.
 **The answer:** the number is *never* per-tile flow. At all 89 stamp sites it
 is a planned aggregate — row, lane-family, or merger-cascade total. So
 `rate > belt capacity` is a category error, the audit has zero true positives
-across the 684 tiles it flags, the guard has been retired from all three
-fixtures, `validator-trust.md`'s hole 1 is closed as a non-hole, and the PU
+across the 684 tiles it flags, the guard's physical interpretation has been retired from all three
+fixtures (the probe is kept, reframed as tier selection), `validator-trust.md`'s hole 1 is closed as a non-hole, and the PU
 fix is unblocked.
 
 **Two corrections to this brief.** (1) Its census — "76 stamp sites, 65

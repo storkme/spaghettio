@@ -32,9 +32,13 @@ docstring has always said what it is:
 ## Stamp-site census
 
 The handoff estimated 76 sites in three files. The real census is **89 sites
-in six files**, and the two highest-volume ones are *mutation* sites the
-handoff's method would have missed entirely — it enumerated struct literals
-only.
+in six files** — 87 that stamp a value plus 2 that only ever write `None` —
+and the two highest-volume ones are *mutation* sites the handoff's method
+would have missed entirely, because it enumerated struct literals only.
+
+(`templates.rs` is 64, not 65: a naive `rate: Some(` grep also matches the
+tail of `loop_priority_rate: Some(` at `templates.rs:4478`, which is a
+different field. Count on a word boundary.)
 
 | site | count | stamps | denotes |
 |---|---|---|---|
@@ -91,7 +95,9 @@ Three independent lines agree, and all three contradict the stamp:
 The sim measurements already in the handoff are the fourth line: the same
 S=2 layout the audit calls "3.00× over capacity" measured **96.0% of plan**.
 
-**The audit has zero true positives across all 684 flagged tiles.**
+**The audit has zero true positives.** Across the two S=1 arms that is 684
+tiles (291 + 393); counting the S=2 arm as well, 1060. Not one of them
+carries more than its belt's capacity by either model.
 
 ## Consequences
 
@@ -100,10 +106,16 @@ S=2 layout the audit calls "3.00× over capacity" measured **96.0% of plan**.
   `stacking_fanin_wall_lift_ec6_yellow_legendary`, is the one #597 missed).
 - **The PU fix is unblocked.** The "physically impossible layout" that held
   it is this comparison and nothing else.
-- **#311 needs re-evidencing.** Its "60/s stamped onto a 30/s belt" claim is
-  literally true and physically empty: the tiles stamped 60/s carry 7.5–9.0/s
-  by both lane models. Whatever remains of #311 must be re-argued from a
-  walked model or a sim, not from the stamp.
+- **#311 needs re-evidencing — which is NOT the same as "#311 is fiction".**
+  Its *stamp-based* evidence is void: the tiles stamped 60/s carry 7.5–9.0/s
+  by both lane models. But an independent measurement points the other way at
+  S=1 — `stress_electronic_circuit_60s_red_from_ore` sims at **~50% of plan**
+  (30.5/s measured against 60/s planned, `status.md`), and 30.5/s is
+  suspiciously close to exactly one red belt's 30/s. That is consistent with a
+  real high-rate bottleneck of the shape #311 describes, on tiles this audit
+  never flags. **Do not close #311 on this document.** Re-argue it from a
+  walked model or a sim; the open defect is already tracked in
+  `rfc064-phase2-followups.md` §1.
 - **A stamp-based over-capacity check cannot be written.** The falsified
   2026-08-07 check was not a near miss; the data does not support the
   comparison at all. The per-tile question already has an owner —
@@ -113,7 +125,7 @@ S=2 layout the audit calls "3.00× over capacity" measured **96.0% of plan**.
 ## Two things found on the way that are not the answer
 
 - **There are two parallel lane-rate models**, `belt_flow::compute_lane_rates`
-  and `belt_structural::compute_lane_rates`, and `validate/mod.rs:943`
+  and `belt_structural::compute_lane_rates`, and `validate/mod.rs:939`
   dispatches the **`belt_structural`** one. They disagree: on the S=1 arms
   `belt_flow` puts 36/s through ore belts with a 30/s cap (96–109 tiles),
   where `belt_structural` reports nothing over capacity. Only the dispatched
@@ -121,14 +133,32 @@ S=2 layout the audit calls "3.00× over capacity" measured **96.0% of plan**.
   The disagreement is unexplained and worth its own look — but note that
   quoting the non-dispatched model as "actual flow" is the same error class
   this document exists to close.
+
+  **The disagreement is unresolved and it matters.** `belt_structural`'s
+  global maximum lands exactly at capacity in every arm (30.00/s at S=1,
+  60.00/s at S=2) and never above, which is what either a correctly-sized
+  planner *or* a saturating model would produce — this document does not
+  establish which. The S=1 ~50%-of-plan sim measurement above is more
+  consistent with `belt_flow`'s reading than with `belt_structural`'s. So:
+  the S=2 conclusions here are corroborated by sim (96.0% of plan); **the
+  S=1 arm is not**, and the fixtures' `errors1.is_empty()` guarantee rests
+  on the unarbitrated model choice. Arbitrating the two models is the
+  highest-value follow-up this investigation produced.
 - **`crates/core/tests/e2e.rs:7783`'s claim that "the lane walker never
   visits merger tiles" is stale.** Both models returned entries for all 291
   merger tiles.
 
 ## Rules
 
-1. **Never compare `PlacedEntity::rate` to a belt's capacity.** It is an
-   aggregate over a family that may be realized as several parallel belts.
+1. **Never compare `PlacedEntity::rate` to a belt's capacity as a claim
+   about a tile.** It is an aggregate over a family that may be realized as
+   several parallel belts. The one sanctioned use of that arithmetic is as a
+   statement about **tier selection** — "this family does/doesn't fit on one
+   belt of the chosen tier" — which is what the reframed
+   `family_over_one_belt` probes in the `stacking_*` fixtures assert, and
+   they say so at the call site. Even then it is not a physical invariant: a
+   family exceeding one belt is perfectly legal when the planner realizes it
+   as parallel belts.
 2. **For per-tile flow, use `validate::check_lane_throughput`** (or
    `belt_structural::compute_lane_rates` directly). It walks the graph from
    machine specs; it does not trust the stamp.

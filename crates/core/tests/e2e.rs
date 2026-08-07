@@ -7841,7 +7841,11 @@ fn stacking_ec_60s_red_one_belt_headline() {
     // of their tier carries at stack size `s`. `PlacedEntity::rate` is a
     // row / lane-family / merger-cascade aggregate, so this says "the
     // family does not fit on a single belt", not "this tile is
-    // over-committed". docs/rate-stamp-semantics.md.
+    // over-committed". This is the ONE sanctioned use of rate-vs-capacity
+    // arithmetic (rate-stamp-semantics.md rule 1) — and it is not a physical
+    // invariant: a family exceeding one belt is legal when the planner
+    // realizes it as parallel belts, so scope it to the item the fixture is
+    // actually about. docs/rate-stamp-semantics.md.
     let family_over_one_belt = |l: &spaghettio_core::models::LayoutResult, s: u8| -> Vec<String> {
         l.entities
             .iter()
@@ -8146,8 +8150,10 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     // 2026-08-07, docs/rate-stamp-semantics.md): `PlacedEntity::rate` is a
     // family/row/cascade AGGREGATE at every stamp site, so this asserts
     // "no family total exceeds one stacked belt", not "no tile is
-    // over-committed". Per-tile physics is owned by check_lane_throughput,
-    // covered by the `errors.is_empty()` assertion above.
+    // over-committed" — the one sanctioned use of that arithmetic
+    // (rate-stamp-semantics.md rule 1), and not a physical invariant.
+    // Per-tile physics is owned by check_lane_throughput, covered by the
+    // `errors.is_empty()` assertion above.
     let family_over_one_belt = |l: &spaghettio_core::models::LayoutResult, s: u8| -> Vec<String> {
         l.entities
             .iter()
@@ -8458,8 +8464,10 @@ fn stacking_ec_60s_express_legendary_s2() {
     // TIER-SELECTION probe (NOT a per-tile physical audit — corrected
     // 2026-08-07, docs/rate-stamp-semantics.md): `PlacedEntity::rate` is a
     // family/row/cascade AGGREGATE, so this asserts "no family total
-    // exceeds one stacked belt". Per-tile physics is owned by
-    // check_lane_throughput, covered by `errors.is_empty()` above.
+    // exceeds one stacked belt" — the one sanctioned use of that
+    // arithmetic (rate-stamp-semantics.md rule 1), and not a physical
+    // invariant. Per-tile physics is owned by check_lane_throughput,
+    // covered by `errors.is_empty()` above.
     let mut over: Vec<String> = Vec::new();
     let mut max_seen = 0.0_f64;
     for e in &layout_result.entities {
