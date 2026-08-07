@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-BKH6a6f1.js","assets/webworkerAll-DJiiuUXB.js","assets/Filter-BvyN_MZ8.js","assets/WebGPURenderer-Cl_x4TjU.js","assets/BufferResource-B-5jXocO.js","assets/RenderTargetSystem-BhmaMwQf.js","assets/WebGLRenderer-DKbR7bQA.js","assets/CanvasRenderer-CVoYgXK8.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-DvA-A5DW.js","assets/webworkerAll-DoUW-tt8.js","assets/Filter-Mg_uh-0y.js","assets/WebGPURenderer-CQJ2uziq.js","assets/BufferResource-Wt28Tu__.js","assets/RenderTargetSystem-VnyUO5eV.js","assets/WebGLRenderer-nhFztP0A.js","assets/CanvasRenderer-DdjVo3oW.js"])))=>i.map(i=>d[i]);
 let jh, Sa, dr, zt, Dm, bn, Of, Ai, ps, Ns, ue, se, Kt, ai, Oh, vt, lt, pt, Ut, Er, S, ye, Ky, Hg, Ar, $g, Rn, kr, yr, $t, ud, Go, Dt, as, mi, It, Wp, Wm, Hs, Gd, pd, Ti, im, Qf, Sd, jm, gg, xg, Eg, Cg, Tg, Ol, or, wa, cd, ze, Ca, mg, yg, Sg, wg, Ep, Ag, Ie, Lh, Ge, vr, xl, qe, Ax, nf, _l, Yr, wl, sf, Nh, Mr, Zn, Lr, C1, ur, va, Lt, Et, ta, ds, Sn, Qo, Ui, Xt, Ke, Ud, jd, pi, Ve, v1, gx, ne, sx, re, Jt, Mt;
 let __tla = (async () => {
   (function() {
@@ -148,7 +148,7 @@ let __tla = (async () => {
     },
     test: () => true,
     load: async () => {
-      await Hn(() => import("./browserAll-BKH6a6f1.js"), __vite__mapDeps([0,1,2]));
+      await Hn(() => import("./browserAll-DvA-A5DW.js"), __vite__mapDeps([0,1,2]));
     }
   };
   fp = {
@@ -159,7 +159,7 @@ let __tla = (async () => {
     },
     test: () => typeof self < "u" && self.WorkerGlobalScope !== void 0,
     load: async () => {
-      await Hn(() => import("./webworkerAll-DJiiuUXB.js"), __vite__mapDeps([1,2]));
+      await Hn(() => import("./webworkerAll-DoUW-tt8.js"), __vite__mapDeps([1,2]));
     }
   };
   class ge {
@@ -5189,7 +5189,7 @@ ${n}`;
       const o = t[r];
       if (o === "webgpu" && await nm()) {
         const { WebGPURenderer: a } = await Hn(async () => {
-          const { WebGPURenderer: l } = await import("./WebGPURenderer-Cl_x4TjU.js");
+          const { WebGPURenderer: l } = await import("./WebGPURenderer-CQJ2uziq.js");
           return {
             WebGPURenderer: l
           };
@@ -5201,7 +5201,7 @@ ${n}`;
         break;
       } else if (o === "webgl" && em(n.failIfMajorPerformanceCaveat ?? ud.defaultOptions.failIfMajorPerformanceCaveat)) {
         const { WebGLRenderer: a } = await Hn(async () => {
-          const { WebGLRenderer: l } = await import("./WebGLRenderer-DKbR7bQA.js");
+          const { WebGLRenderer: l } = await import("./WebGLRenderer-nhFztP0A.js");
           return {
             WebGLRenderer: l
           };
@@ -5213,7 +5213,7 @@ ${n}`;
         break;
       } else if (o === "canvas") {
         const { CanvasRenderer: a } = await Hn(async () => {
-          const { CanvasRenderer: l } = await import("./CanvasRenderer-CVoYgXK8.js");
+          const { CanvasRenderer: l } = await import("./CanvasRenderer-DdjVo3oW.js");
           return {
             CanvasRenderer: l
           };
@@ -5523,7 +5523,7 @@ ${n}`;
       }
       const [l, { BitmapFont: c }] = await Promise.all([
         e.load(o),
-        Hn(() => import("./BitmapFont-DU8hnL3K.js"), [])
+        Hn(() => import("./BitmapFont-C7Vthwt0.js"), [])
       ]), h = o.map((u) => l[u.src]);
       return new c({
         data: s,
@@ -18388,7 +18388,7 @@ fn mainFragment(
   }
   async function qu() {
     if (Xe) return;
-    if (Xe = new Worker(new URL("/spaghettio/assets/engine.worker-nRLooYy-.js", import.meta.url), {
+    if (Xe = new Worker(new URL("/spaghettio/assets/engine.worker-xfl3oB-1.js", import.meta.url), {
       type: "module",
       name: "spaghettio-engine"
     }), Xe.onmessage = (e) => {
@@ -19624,7 +19624,7 @@ fn mainFragment(
     const w = new zt();
     v.addChild(w), v.fit(true, b * 1.15, x * 1.2), v.moveCenter(b / 2, x / 2);
     const { renderLayoutAnimated: C } = await Hn(async () => {
-      const { renderLayoutAnimated: A } = await import("./animated-5W51XaKk.js");
+      const { renderLayoutAnimated: A } = await import("./animated-BQ3X0YMY.js");
       return {
         renderLayoutAnimated: A
       };
@@ -22666,7 +22666,7 @@ ${L}` : ct, Le();
       for (const E of Re) E(N);
     }
     function _t(N, E) {
-      Ss(E.headerIcon, N.name), E.headerName.textContent = xe(N.name), E.header.style.display = "", N.direction && N.name !== "pipe" ? (E.dirRow.textContent = `${Hv[N.direction] ?? ""} ${N.direction}`, E.dirRow.style.display = "") : E.dirRow.style.display = "none", N.carries ? (Ss(E.carriesIcon, N.carries), E.carriesName.textContent = " " + xe(N.carries), E.carriesRow.style.display = "") : E.carriesRow.style.display = "none", N.rate != null ? (E.rateRow.textContent = `${N.rate.toFixed(1)}/s`, E.rateRow.style.display = "") : E.rateRow.style.display = "none", N.io_type ? (E.ioRow.textContent = `io: ${N.io_type}`, E.ioRow.style.display = "") : E.ioRow.style.display = "none";
+      Ss(E.headerIcon, N.name), E.headerName.textContent = xe(N.name), E.header.style.display = "", N.direction && N.name !== "pipe" ? (E.dirRow.textContent = `${Hv[N.direction] ?? ""} ${N.direction}`, E.dirRow.style.display = "") : E.dirRow.style.display = "none", N.carries ? (Ss(E.carriesIcon, N.carries), E.carriesName.textContent = " " + xe(N.carries), E.carriesRow.style.display = "") : E.carriesRow.style.display = "none", N.rate != null ? (E.rateRow.textContent = `aggregate ${N.rate.toFixed(1)}/s`, E.rateRow.title = "Planned family/row/lane aggregate (the belt-tier selection figure) \u2014 NOT the flow through this tile. Depending on which code stamped it this is a row block's share, a lane-family total, or a merger-cascade total, so it may be less than the item's overall rate as well as more than this tile carries. Parallel belts in one family are each stamped the same value.", E.rateRow.style.display = "") : E.rateRow.style.display = "none", N.io_type ? (E.ioRow.textContent = `io: ${N.io_type}`, E.ioRow.style.display = "") : E.ioRow.style.display = "none";
       let O = 0;
       if (N.recipe) {
         Ss(E.recipeIcon, N.recipe), E.recipeName.textContent = " " + xe(N.recipe), E.recipeRow.style.display = "";
@@ -23786,7 +23786,7 @@ ${L}` : ct, Le();
     const t = document.getElementById("app"), e = window.location.hash, s = new URLSearchParams(window.location.search);
     if (e.startsWith("#/balancers")) {
       const { renderBalancerShowcase: r } = await Hn(async () => {
-        const { renderBalancerShowcase: o } = await import("./balancers-zYbgrGQ-.js");
+        const { renderBalancerShowcase: o } = await import("./balancers-C-JaLdM4.js");
         return {
           renderBalancerShowcase: o
         };
