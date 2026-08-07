@@ -1087,10 +1087,24 @@ fn tier2_electronic_circuit() {
     // measured 102.0% of plan). RE-MEASURED 2026-08-07, caveat discharged:
     // this fixture ships a DIFFERENT layout now, and it sims at 9.09/s vs 10
     // planned — 91% of plan, up from the old winner's 58% (5.77/5.81 vs 10).
-    // Still a FAIL, with a UNIFORM ~10% residual across BOTH stages (cable
-    // 90.0%, EC 90.9%), which points at a shared constraint rather than one
-    // stage bottlenecking. Kit clean, converged, 8 checkpoints. Root cause
-    // not chased yet — see status.md.
+    // Still a FAIL, with a ~10% residual. It LOOKS uniform across both stages
+    // (cable 90.0%, EC 90.9%) but that is not two independent shortfalls:
+    // copper-cable plans at exactly 10.0 machines — zero headroom — so it
+    // cannot reach plan, and EC inherits it stoichiometrically (3 cable per
+    // EC; 27/3 = 9.0 vs 9.09 measured). One upstream stage propagating.
+    // Root-caused in status.md; do not re-derive the "shared constraint"
+    // reading from the uniform look alone.
+    // This fixture being warning-free is COUPLED to DETOUR_EXCESS_TILES: its
+    // one detour run has excess 7, a single tile under the floor of 8. Assert
+    // the floor, or lowering it turns this gate quiet instead of failing —
+    // the class docs/validator-reporting.md exists for (review, #605).
+    assert_eq!(
+        spaghettio_core::validate::belt_detour::DETOUR_EXCESS_TILES, 8,
+        "tier2's zero-warning assertion holds only because its detour run's \
+         excess (7) sits one tile under this floor. Changing it re-opens that \
+         assertion and the belt_detour_migration_differential_fast pin — \
+         adjudicate both, don't just re-bless."
+    );
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
@@ -7971,18 +7985,18 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
             // Selection-scoped warning count (#519): the engine's DI choice
-            // 2026-08-07: the exemption is LIFTED, so this pin now counts
-            // input-rate-delivery exactly as `selection_warning_count` does.
+            // 2026-08-07: calls the engine's canonical counter directly, so
+            // this gate cannot drift from what the engine enforces. It used
+            // to re-type the predicate with a stale input-rate-delivery
+            // exclusion — which is exactly how it stopped asserting the
+            // contract, and why re-typing is not allowed here (review, #605).
             // It used to exclude the category, with a comment saying giving
             // it flux teeth was the #519/#520 follow-up gated on
             // sim-anchoring — this IS that follow-up. Leaving the filter in
             // would mean the gate no longer asserts what the engine
             // enforces, and a regression in the flux channel would pass it
             // silently. Note `belt-detour` is still excluded engine-side.
-            issues
-                .iter()
-                .filter(|i| i.severity == Severity::Warning && i.category != "belt-detour")
-                .count(),
+            validate::selection_warning_count(&issues),
             l.warnings.len(),
         )
     };
@@ -8043,18 +8057,18 @@ fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
             // Selection-scoped warning count (#519): the engine's DI choice
-            // 2026-08-07: the exemption is LIFTED, so this pin now counts
-            // input-rate-delivery exactly as `selection_warning_count` does.
+            // 2026-08-07: calls the engine's canonical counter directly, so
+            // this gate cannot drift from what the engine enforces. It used
+            // to re-type the predicate with a stale input-rate-delivery
+            // exclusion — which is exactly how it stopped asserting the
+            // contract, and why re-typing is not allowed here (review, #605).
             // It used to exclude the category, with a comment saying giving
             // it flux teeth was the #519/#520 follow-up gated on
             // sim-anchoring — this IS that follow-up. Leaving the filter in
             // would mean the gate no longer asserts what the engine
             // enforces, and a regression in the flux channel would pass it
             // silently. Note `belt-detour` is still excluded engine-side.
-            issues
-                .iter()
-                .filter(|i| i.severity == Severity::Warning && i.category != "belt-detour")
-                .count(),
+            validate::selection_warning_count(&issues),
             l.warnings.len(),
         )
     };
@@ -9182,18 +9196,18 @@ fn di_change_surface_sweep() {
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
             // Selection-scoped warning count (#519): the engine's DI choice
-            // 2026-08-07: the exemption is LIFTED, so this pin now counts
-            // input-rate-delivery exactly as `selection_warning_count` does.
+            // 2026-08-07: calls the engine's canonical counter directly, so
+            // this gate cannot drift from what the engine enforces. It used
+            // to re-type the predicate with a stale input-rate-delivery
+            // exclusion — which is exactly how it stopped asserting the
+            // contract, and why re-typing is not allowed here (review, #605).
             // It used to exclude the category, with a comment saying giving
             // it flux teeth was the #519/#520 follow-up gated on
             // sim-anchoring — this IS that follow-up. Leaving the filter in
             // would mean the gate no longer asserts what the engine
             // enforces, and a regression in the flux channel would pass it
             // silently. Note `belt-detour` is still excluded engine-side.
-            issues
-                .iter()
-                .filter(|i| i.severity == Severity::Warning && i.category != "belt-detour")
-                .count(),
+            validate::selection_warning_count(&issues),
             l.warnings.len(),
         )
     };
