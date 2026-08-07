@@ -7850,6 +7850,16 @@ fn stacking_ec_60s_red_one_belt_headline() {
         l.entities
             .iter()
             .filter_map(|e| {
+                // Scoped to the HEADLINE item. RFC-046's claim is about the
+                // 60/s electronic-circuit family fitting one stacked belt;
+                // intermediate families (copper-cable at 90/s) legally exceed
+                // one belt and run as PARALLEL belts, so asserting over all
+                // items asserts a non-law. It held on main only by accident:
+                // attempting the input-rate-delivery lift re-ranks this config
+                // onto a winner that puts cable on belts, and it fires.
+                if e.carries.as_deref() != Some("electronic-circuit") {
+                    return None;
+                }
                 let tier = if is_surface_belt(&e.name) {
                     e.name.as_str()
                 } else if is_ug_belt(&e.name) {
@@ -8471,6 +8481,11 @@ fn stacking_ec_60s_express_legendary_s2() {
     let mut over: Vec<String> = Vec::new();
     let mut max_seen = 0.0_f64;
     for e in &layout_result.entities {
+        // Scoped to the headline item — see stacking_ec_60s_red_one_belt_headline.
+        // Intermediate families legally run as parallel belts.
+        if e.carries.as_deref() != Some("electronic-circuit") {
+            continue;
+        }
         let tier = if is_surface_belt(&e.name) {
             e.name.as_str()
         } else if is_ug_belt(&e.name) {
