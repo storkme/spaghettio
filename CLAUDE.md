@@ -188,7 +188,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 4. **Trace events are reliable signals** — `JunctionGrowthCapped`, `JunctionStrategyAttempt`, `GhostSpecFailed`, `CrossingZoneSkipped`, `BalancerStamped`, `TapBridgeUnbridgeable`, `LayoutRetried` are emitted by the pipeline and land in the snapshot's `trace.events`. Use them to confirm the specific failure mode before theorizing. (`RouteFailure` and `BridgeDropped` are declared in `trace.rs` but never emitted — don't wait for them.)
 5. **Don't trust an error-count drop alone** — if warnings go 5 → 0, ask *why*. Does the topology still make sense? Were belts actually re-routed, or did a check get silently skipped? Check the specific change caused the fix you wanted.
 6. **Clippy + WASM builds are checks, not nits** — a layout change that clippy-fails or breaks the WASM build is not done.
-7. **A check going quiet is not evidence the problem is fixed** — it is equally consistent with the check having stopped discriminating. Verify the specific invariant: instrument it and *count*, don't sample. When writing a check, emit one positioned issue per instance rather than a count inside a message — anything comparing issue counts by category cannot tell 2 from 218. This failure mode has recurred nine times; the rules and the evidence are in [`docs/validator-reporting.md`](docs/validator-reporting.md).
+7. **A check going quiet is not evidence the problem is fixed** — it is equally consistent with the check having stopped discriminating. Verify the specific invariant: instrument it and *count*, don't sample. When writing a check, emit one positioned issue per instance rather than a count inside a message — anything comparing issue counts by category cannot tell 2 from 218. This failure mode has recurred ten times; the rules and the evidence are in [`docs/validator-reporting.md`](docs/validator-reporting.md).
 
 ## Where to find X
 
@@ -200,7 +200,8 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 | Belt tier thresholds | `crates/core/src/common.rs` (`belt_entity_for_rate`, `ug_max_reach`) |
 | Entity sizes | `crates/core/src/common.rs` (`entity_size`) |
 | Validation checks | `crates/core/src/validate/` (40 checks, dispatched from `mod.rs`) |
-| How a check should report (and the nine times it didn't) | [`docs/validator-reporting.md`](docs/validator-reporting.md) |
+| How a check should report (and the ten times it didn't) | [`docs/validator-reporting.md`](docs/validator-reporting.md) |
+| What a check's report is worth (severity, selection participation, calibration receipts, known holes) | [`docs/validator-trust.md`](docs/validator-trust.md) — update it in the same PR as any severity/category/selection change |
 | Snapshot format | `crates/core/src/snapshot.rs` + [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md) |
 | Sim measurement semantics + forensics | [`docs/sim-harness-forensics.md`](docs/sim-harness-forensics.md) (what each spaghettio-sim number means, artifact classes, debug playbook) |
 | Belt lane physics | [`docs/factorio-mechanics.md`](docs/factorio-mechanics.md) |
