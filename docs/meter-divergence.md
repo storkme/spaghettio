@@ -52,13 +52,37 @@ It is not a fluid gap: fluid-*ingredient* fixtures sit at −2.2 to +1.0pp.
    **optimistic by ~5–6pp**, which would be **four times the largest
    optimistic error in the entire 41-row corpus**.
 
-   Those are not the same data point and must not be averaged. The
-   post-lift layout is either exercising something the meter over-credits,
-   or that single comparison is unsound. **Until that is resolved, the
-   floor property is established for the corpus and NOT for post-lift
-   layouts** — which is precisely the population a gate would run on.
-   This is the open question; resolving it needs a sim-baselined post-lift
-   corpus, not more analysis of the old one.
+   Those are not the same data point and must not be averaged. **Until this
+   is resolved, the floor property is established for the corpus and NOT for
+   post-lift layouts** — precisely the population a gate would run on.
+
+   **Warmup mismatch investigated and FALSIFIED (same day).** The obvious
+   suspect was that the meter reading came from `check_one.rs`'s hardcoded
+   108k-tick warmup against the sim's 432k, and that a short warmup reads
+   buffer fill as throughput — which inflates, i.e. the right direction. It
+   does not hold: the meter reads **96.0% at every warmup from 108k to 864k**,
+   an 8× range including the sim's own 432k, with zero movement and
+   `converged = true` throughout. The corpus was checked too — 11 of ~20
+   fixture families genuinely did run their sim baselines at 288k against the
+   meter's 108k, and re-running those across 108k–432k moved nothing by more
+   than **0.5pp** (against PU's 13.6pp gap). So the mismatch was real in the
+   setup and immaterial in the results; the 41-row calibration stands.
+
+   Two things worth keeping from that check:
+
+   - **The meter's own convergence floor is ~20–40k ticks**, characterised
+     here for the first time, measured down to warmup 0 on the deepest
+     fixture in the corpus (PU-from-ore, 6499 entities: 78.9% at 0 →
+     plateau by ~40k). The 108k both drivers already use carries a 3–5×
+     margin even there.
+   - **"The default warmup is too short" does NOT transfer to the meter.**
+     That caveat in `CLAUDE.md` / `status.md` is a property of headless
+     Factorio's own convergence needs — which is why the corpus carries
+     escalating per-fixture warmups — and assuming it applies to the meter
+     is a mistake worth not repeating.
+
+   So the residual is **genuine model-level disagreement**, and closing it
+   needs snapshot/trace-level work rather than more black-box comparison.
 
 ## 2026-08-07 — tier2_electronic_circuit: meter 96%, sim 90–91% (open)
 
