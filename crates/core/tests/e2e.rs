@@ -1080,7 +1080,15 @@ fn tier2_electronic_circuit() {
     // #519 re-bless: one tail-of-row deficit surfaced by the
     // consumption-decremented walker (the family ec15-from-plates
     // sim-measured at −3.6%).
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1)]);
+    // 2026-08-07 input-rate-delivery lift: that warning is GONE. Letting the
+    // category rank candidates makes the search prefer a layout without the
+    // tail-of-row deficit — the intended effect, in the direction the
+    // category's sim anchor supports (the warning-free re-ranked PU layout
+    // measured 102.0% of plan). CAVEAT, deliberately recorded: this fixture
+    // ships a DIFFERENT layout now, so its standing ~42%-below-plan sim
+    // baseline (5.77/5.81 vs 10, status.md) describes the OLD winner and is
+    // not evidence about this one. Re-measure before quoting it.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -7850,6 +7858,16 @@ fn stacking_ec_60s_red_one_belt_headline() {
         l.entities
             .iter()
             .filter_map(|e| {
+                // Scoped to the HEADLINE item. RFC-046's claim is about the
+                // 60/s electronic-circuit family fitting one stacked belt;
+                // intermediate families (copper-cable at 90/s) legally exceed
+                // one belt and run as PARALLEL belts, so asserting over all
+                // items asserts a non-law — which is exactly what broke when
+                // the input-rate-delivery lift re-ranked this config onto a
+                // winner that puts cable on belts.
+                if e.carries.as_deref() != Some("electronic-circuit") {
+                    return None;
+                }
                 let tier = if is_surface_belt(&e.name) {
                     e.name.as_str()
                 } else if is_ug_belt(&e.name) {
@@ -8471,6 +8489,11 @@ fn stacking_ec_60s_express_legendary_s2() {
     let mut over: Vec<String> = Vec::new();
     let mut max_seen = 0.0_f64;
     for e in &layout_result.entities {
+        // Scoped to the headline item — see stacking_ec_60s_red_one_belt_headline.
+        // Intermediate families legally run as parallel belts.
+        if e.carries.as_deref() != Some("electronic-circuit") {
+            continue;
+        }
         let tier = if is_surface_belt(&e.name) {
             e.name.as_str()
         } else if is_ug_belt(&e.name) {
