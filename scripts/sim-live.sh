@@ -61,14 +61,19 @@ cat <<EOF
 
 EOF
 
-wait $run_pid
-run_rc=$?
+# `set -e` would abort here on a nonzero run, skipping the report push and
+# losing the run's full-fidelity history. Capture the status instead (review,
+# #604) — a FAILING run's data is exactly what we most want to look at.
+run_rc=0
+wait $run_pid || run_rc=$?
 sleep 3           # let the follower drain the last window
 kill $follow_pid 2>/dev/null || true
 
 # The report carries the full per-item sample series; push it so the run's
 # history survives at full fidelity, not just the live windows.
 if [ -f "$out/$label-report.json" ]; then
+    # Same --label as the follower so the live windows and the full-fidelity
+    # backfill land on ONE series rather than two overlapping ones.
     python3 "$repo/scripts/sim-to-graphite.py" "$out/$label-report.json" \
         --label "$label" --arm "$ARM" --anchor now || true
 fi

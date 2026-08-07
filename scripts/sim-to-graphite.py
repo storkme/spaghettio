@@ -6,8 +6,12 @@ production every 1200 ticks (`storage.samples`, scenario.rs:1456) and emits
 it into `raw_result.samples`. That is the same data graftorio would give us —
 Factorio's own `get_item_production_statistics` — so no mod is involved.
 
-Counters are pushed CUMULATIVE; derive rates in Grafana with `perSecond()`.
-Pushing pre-computed rates would turn a dropped sample into a fake spike.
+Counters are pushed cumulative AND rates are pre-computed here as `rate_*`.
+Deriving rates in Grafana was the intent, but `perSecond()` returns all-null
+on this data — it infers the step from wall-clock spacing, which is
+meaningless for a backfill whose x-axis is game time. Rates are therefore
+computed from the authoritative game-tick delta. Do not "simplify" this back
+to perSecond(); that is the bug, not the fix.
 
 Usage:
     scripts/sim-to-graphite.py <report.json> [--arm lift] [--dry-run]
@@ -28,6 +32,9 @@ TOKEN_FILE = pathlib.Path.home() / ".config" / "spaghettio" / "grafana-token"
 TICKS_PER_SECOND = 60
 # scenario.rs samples on `ev.tick % 1200 == 0`
 SAMPLE_INTERVAL_TICKS = 1200
+# Declared interval for EVERY series, live and batch alike. Metrictank buckets
+# by this; two writers disagreeing about it is an all-null bug.
+SAMPLE_INTERVAL_SECONDS = SAMPLE_INTERVAL_TICKS // 60
 SERIES = ("produced", "drained", "fed")
 
 
@@ -56,7 +63,7 @@ def build_points(report: dict, arm: str, label: str, run_id: str, end_wallclock:
 
     samples = sorted(samples, key=lambda s: s.get("tick", 0))
     max_tick = max(s.get("tick", 0) for s in samples)
-    interval_s = SAMPLE_INTERVAL_TICKS // TICKS_PER_SECOND
+    interval_s = SAMPLE_INTERVAL_SECONDS
 
     # Anchor the LAST sample at the run's end wall-clock, walk backwards in
     # GAME seconds, and snap to `interval_s` boundaries. Metrictank buckets
@@ -156,7 +163,15 @@ def follow_csv(csv: pathlib.Path, arm: str, label: str, run_id: str, poll: float
     import time
 
     print(f"following {csv} (ctrl-c to stop)", flush=True)
+    # Same snapping and the same declared interval as the batch path. Getting
+    # this wrong was the original all-null bug; the live path reintroduced it
+    # (review, #604): unsnapped `now` with interval 10 puts ~3 consecutive
+    # game windows at speed 32 into one Metrictank bucket, so last-write-wins
+    # silently drops the ramp detail this feature exists to expose — and a
+    # later `--anchor now` backfill of the same run writes the same series
+    # under a different interval declaration.
     seen = 0
+    carry = ""
     prev_tick = {}
     prev_val = {}
     saw_sample = False
@@ -164,11 +179,18 @@ def follow_csv(csv: pathlib.Path, arm: str, label: str, run_id: str, poll: float
         if not csv.is_file():
             time.sleep(poll)
             continue
-        lines = csv.read_text(errors="replace").splitlines()
+        text = csv.read_text(errors="replace")
+        # A read landing mid-append leaves the last line truncated. Advancing
+        # `seen` past it would lose that sample permanently, so hold it back
+        # until the newline arrives (review, #604).
+        complete, _, carry = text.rpartition("\n")
+        lines = complete.split("\n") if complete else []
         if len(lines) <= seen:
             time.sleep(poll)
             continue
-        batch, now = [], int(time.time())
+        raw_now = int(time.time())
+        now = raw_now - (raw_now % SAMPLE_INTERVAL_SECONDS)
+        batch = []
         status_counts = {}
         for ln in lines[seen:]:
             f = ln.split(",")
@@ -193,13 +215,13 @@ def follow_csv(csv: pathlib.Path, arm: str, label: str, run_id: str, poll: float
                     continue
                 batch.append({
                     "name": "spaghettio.sim.rate_produced", "value": rate, "time": now,
-                    "interval": 10,
+                    "interval": SAMPLE_INTERVAL_SECONDS,
                     "tags": [f"item={item}", "series=rate_produced", f"fixture={label}",
                              f"arm={arm}", f"run={run_id}"],
                 })
                 batch.append({
                     "name": "spaghettio.sim.produced", "value": cur, "time": now,
-                    "interval": 10,
+                    "interval": SAMPLE_INTERVAL_SECONDS,
                     "tags": [f"item={item}", "series=produced", f"fixture={label}",
                              f"arm={arm}", f"run={run_id}"],
                 })
@@ -215,7 +237,7 @@ def follow_csv(csv: pathlib.Path, arm: str, label: str, run_id: str, poll: float
                 rate = delta / (span / TICKS_PER_SECOND)
                 batch.append({
                     "name": "spaghettio.sim.rate_produced", "value": rate, "time": now,
-                    "interval": 10,
+                    "interval": SAMPLE_INTERVAL_SECONDS,
                     "tags": [f"item={item}", "series=rate_produced", f"fixture={label}",
                              f"arm={arm}", f"run={run_id}"],
                 })
@@ -224,7 +246,7 @@ def follow_csv(csv: pathlib.Path, arm: str, label: str, run_id: str, poll: float
         for st, n in status_counts.items():
             batch.append({
                 "name": "spaghettio.sim.machines", "value": float(n), "time": now,
-                "interval": 10,
+                "interval": SAMPLE_INTERVAL_SECONDS,
                 "tags": [f"status={st}", "series=machines", f"fixture={label}",
                          f"arm={arm}", f"run={run_id}"],
             })
