@@ -102,6 +102,34 @@ jobs:
           loki-url: ${{ vars.LOKI_URL }}
           loki-user: ${{ vars.LOKI_USER }}
           loki-token: ${{ secrets.LOKI_TOKEN }}
+          # Tracing (second-opinion v1.8.0+): one OTLP trace per review, shaped
+          # review > pass > model turn / tool call > merge. The Loki events above say a
+          # review cost 7.8M tokens and took 13 minutes; they cannot say where either
+          # went, because a review is a tree — 3 passes, each a back-and-forth of turns
+          # and tool calls, then the union merge.
+          #
+          # Turned on here specifically, and not on the other two consumers, because this
+          # is where the money is: k=3 over 300k-char diffs makes it by far the most
+          # expensive of the three ($1.11 of $1.26 estate-wide so far), and the per-pass
+          # Loki events showed a single review issuing 204 tool calls across its passes.
+          # Which of those were worth issuing is a question only the trace can answer.
+          #
+          # Tool spans are reconstructed from pi's own JSONL session transcript after each
+          # pass — pi has no OTLP of its own, so there is nothing to configure on its side,
+          # and a transcript truncated by a killed pass just loses the inner spans rather
+          # than the whole trace. Complements session-dir below rather than replacing it:
+          # the artifact holds full fidelity (prompts, tool output), the trace holds shape
+          # and timing without a download.
+          #
+          # Same rules as the Loki block: endpoint and instance id are repo VARIABLES (an
+          # unset var expands to "" and disables tracing with no network call, so
+          # vars.OTLP_ENDPOINT is the kill switch); only the token is a secret, scoped to
+          # traces:write. NB otlp-user is the STACK id (1746138), which is NOT the same
+          # number as loki-user (1703925) — copying the Loki one here is the easy mistake
+          # and fails as a silent 401, since the exporter is fail-soft by design.
+          otlp-endpoint: ${{ vars.OTLP_ENDPOINT }}
+          otlp-user: ${{ vars.OTLP_USER }}
+          otlp-token: ${{ secrets.OTLP_TOKEN }}
           # DeepSeek V4 Flash (2026-07-31 release): 1M context, priced at
           # ~$0.14/M input. Pinned rather than left to the action's default
           # for the same reason claude-review pinned its model: review
