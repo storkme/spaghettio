@@ -8168,6 +8168,16 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
         l.entities
             .iter()
             .filter_map(|e| {
+                // Scoped to the headline item, same as the two stacking_ec_60s
+                // probes. Unscoped it asserts a non-law (a family bigger than
+                // one belt is legal when realized as parallel belts); it is not
+                // fragile at today's rates — the largest intermediate family
+                // fits under the stacked-yellow cap — but leaving it unscoped
+                // would contradict the rationale applied to its siblings and
+                // exposes it to the same drift.
+                if e.carries.as_deref() != Some("electronic-circuit") {
+                    return None;
+                }
                 let tier = if is_surface_belt(&e.name) {
                     e.name.as_str()
                 } else if is_ug_belt(&e.name) {

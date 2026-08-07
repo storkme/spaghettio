@@ -9,8 +9,10 @@ claims turned out to be wrong (noted inline). Do not act from this file.
 is a planned aggregate — row, lane-family, or merger-cascade total. So
 `rate > belt capacity` is a category error, the audit has zero true positives
 across the 684 tiles it flags, the guard's physical interpretation has been retired from all three
-fixtures (the probe is kept, reframed as tier selection), `validator-trust.md`'s hole 1 is closed as a non-hole, and the PU
-fix is unblocked.
+fixtures (the probe is kept, reframed as tier selection), `validator-trust.md`'s hole 1 is closed as a non-hole, and the PU fix's
+"physically impossible" objection is void — though the lift then hit a
+second, unrelated blocker, so its status lives in `validator-trust.md`
+hole 2 and nowhere else.
 
 **Two corrections to this brief.** (1) Its census — "76 stamp sites, 65
 `templates.rs` / 9 `output_merger.rs` / 2 `ghost_router.rs`" — misses the two
