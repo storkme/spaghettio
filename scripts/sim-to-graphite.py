@@ -158,6 +158,8 @@ def follow_csv(csv: pathlib.Path, arm: str, label: str, run_id: str, poll: float
     print(f"following {csv} (ctrl-c to stop)", flush=True)
     seen = 0
     prev_tick = {}
+    prev_val = {}
+    saw_sample = False
     while True:
         if not csv.is_file():
             time.sleep(poll)
@@ -176,7 +178,35 @@ def follow_csv(csv: pathlib.Path, arm: str, label: str, run_id: str, poll: float
                 tick = int(f[0])
             except ValueError:
                 continue
-            if f[1] == "item" and f[8]:
+            if f[1] == "sample" and f[8]:
+                # Cumulative counter, emitted from tick 0 — this is the only
+                # live view of the warmup ramp. Rate comes from consecutive
+                # rows' tick span, same as the batch path.
+                saw_sample = True
+                item, cur = f[8], float(f[9] or 0)
+                pv, pt = prev_val.get(item), prev_tick.get(item)
+                prev_val[item], prev_tick[item] = cur, tick
+                if pv is None or pt is None or tick <= pt:
+                    continue
+                rate = (cur - pv) / ((tick - pt) / TICKS_PER_SECOND)
+                if rate < 0:
+                    continue
+                batch.append({
+                    "name": "spaghettio.sim.rate_produced", "value": rate, "time": now,
+                    "interval": 10,
+                    "tags": [f"item={item}", "series=rate_produced", f"fixture={label}",
+                             f"arm={arm}", f"run={run_id}"],
+                })
+                batch.append({
+                    "name": "spaghettio.sim.produced", "value": cur, "time": now,
+                    "interval": 10,
+                    "tags": [f"item={item}", "series=produced", f"fixture={label}",
+                             f"arm={arm}", f"run={run_id}"],
+                })
+            elif f[1] == "item" and f[8] and not saw_sample:
+                # Fallback for scenarios predating the `sample` rows. Skipped
+                # once samples are seen, or the two would write conflicting
+                # values for the same metric at nearly the same timestamp.
                 item, delta = f[8], float(f[9] or 0)
                 span = tick - prev_tick.get(item, tick)
                 prev_tick[item] = tick

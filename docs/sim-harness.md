@@ -430,6 +430,16 @@ per-machine line with `crafts_delta` and `status`, so `spaghettio.sim.machines`
 gives a live count of machines by status — idle and starved machines visible
 as they happen, not inferred afterwards.
 
+**The warmup is included.** The scenario mirrors its 1200-tick `samples`
+into the CSV as `sample` rows from tick 0, so the live view covers the ramp
+— which is the half that matters most for shape: a stage's start offset
+(belt transit + buffer fill) is only visible there, and so is the answer to
+"was the warmup long enough". The checkpoint rows cannot cover it, because
+checkpoints exist to test convergence and by design do not open until warmup
+ends. Consumers should prefer `sample` rows and ignore the coarser
+checkpoint `item` rows when both are present, or the two write conflicting
+values for the same metric at nearly the same timestamp.
+
 Live rates still come from the **tick span** of each window; only the
 timestamp is wall-clock, so the run reads left-to-right at the speed you are
 watching it. When the run finishes the wrapper also pushes the full
