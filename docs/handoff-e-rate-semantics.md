@@ -7,8 +7,11 @@ claims turned out to be wrong (noted inline). Do not act from this file.
 
 **The answer:** the number is *never* per-tile flow. At all 89 stamp sites it
 is a planned aggregate — row, lane-family, or merger-cascade total. So
-`rate > belt capacity` is a category error, the audit has zero true positives
-across the 684 tiles it flags, the guard's physical interpretation has been retired from all three
+`rate > belt capacity` is a category error (that claim rests on the stamping
+code, not on either lane model), the audit has no true positives among the
+tiles it flags — 684 across the two S=1 arms, 1060 counting S=2 — though the
+S=1 arm of that sub-claim depends on an unarbitrated choice between the two
+lane models, the guard's physical interpretation has been retired from all three
 fixtures (the probe is kept, reframed as tier selection), `validator-trust.md`'s hole 1 is closed as a non-hole, and the PU fix's
 "physically impossible" objection is void — though the lift then hit a
 second, unrelated blocker, so its status lives in `validator-trust.md`
