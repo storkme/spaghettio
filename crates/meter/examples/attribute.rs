@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use spaghettio_meter::belt::ItemId;
 use spaghettio_meter::factory::Endpoint;
 use spaghettio_meter::{Factory, MachineState, Manifest};
 
@@ -46,14 +47,28 @@ fn main() {
         println!("{recipe:<28} {n:>5} {w:>8} {full:>7} {starved:>9}");
     }
 
+    // Both shortage states, and each row says which one it is. Reporting only
+    // `ItemIngredientShortage` here meant a fluid-starved stage showed a
+    // non-zero `starved` count in the census above and then never appeared in
+    // this list — so the reader inferred "no solid shortage" from an absence
+    // and had to reach the fluid explanation by elimination. That is the
+    // failure mode `docs/validator-reporting.md` is about: the probe must emit
+    // a positive signal for the case it is meant to find. Found 2026-08-07
+    // while attributing pu1-lift's −22.9pp, whose whole chain hangs off two
+    // petroleum-starved plastic-bar machines that this list did not print.
     println!("\nstarved machines — what they hold vs what they need:");
     let mut shown = 0;
     for m in &f.machines {
-        if m.state != MachineState::ItemIngredientShortage || shown >= 12 {
+        let kind = match m.state {
+            MachineState::ItemIngredientShortage => "item",
+            MachineState::FluidIngredientShortage => "fluid",
+            _ => continue,
+        };
+        if shown >= 12 {
             continue;
         }
         shown += 1;
-        let need: Vec<String> = m
+        let mut need: Vec<String> = m
             .ingredients
             .iter()
             .map(|(id, amt)| {
@@ -61,7 +76,16 @@ fn main() {
                 format!("{}={have}/{amt}", f.items.name(*id))
             })
             .collect();
-        println!("  {:<24} at {:?}  {}", m.recipe, m.pos, need.join(" "));
+        need.extend(m.fluid_needs.iter().map(|(id, amt)| {
+            let have = m.fluid_input.get(id).copied().unwrap_or(0);
+            format!("{}={have}/{amt} (fluid)", f.items.name(ItemId(*id)))
+        }));
+        println!(
+            "  [{kind:>5}] {:<24} at {:?}  {}",
+            m.recipe,
+            m.pos,
+            need.join(" ")
+        );
     }
 
     // --- what feeds the starved machines ---------------------------------

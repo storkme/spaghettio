@@ -3,10 +3,162 @@
 Running record of where the fast meter's `produced_per_s`/`delivered_per_s`
 diverges from the measured headless-Factorio sim by more than ±10pp, and why
 that divergence is believed to live (model gap vs. known-open-item). Updated
-when the corpus sweep (`crates/meter/examples/sweep_corpus.rs`) moves a number
-or reveals a new one. One residual remains: its **diagnosis** closed
-2026-08-06 (an instrument-parity gap, not a model defect), its **fix** is
-decided but unmerged.
+when either sweep — `crates/meter/examples/sweep_corpus.rs` (Job-2 bank) or
+`crates/meter/examples/sweep_postlift.rs` (post-lift layouts) — moves a number
+or reveals a new one.
+
+**Two open residuals, and they are different animals:**
+
+1. `tier5_processing_unit_from_ore_am3`, −13.6pp on the corpus. Diagnosis
+   closed 2026-08-06: a research-productivity parity gap. Its fix is **merged**
+   (#584 meter / #585 sim / #587 solver / #591 `sim_export` wiring) — what
+   remains is that **the 2026-08-01 corpus predates the axis and declares
+   none**, so this row still reads at the old value until the bank is
+   re-exported or re-declared. Not a modelling mystery; a stale reference.
+2. `pu1-lift`, **−22.9pp**, found 2026-08-08 on the post-lift population and
+   **not** the same cause — that fixture declares the axis and its sim run is
+   kit-clean. A petroleum-gas distribution shortfall inside the meter's own
+   fluid network. See the 2026-08-08 section, which is the current head of this
+   log.
+
+
+
+## 2026-08-08 — post-lift calibration: the FLOOR PROPERTY DOES NOT HOLD on the gate population
+
+**What this answers.** The 2026-08-07 section below established the meter as a
+safe floor across 41 corpus rows and then flagged, in its own "two things this
+does NOT establish", that the result was a property of *pre-lift* layouts and
+that a gate would run on *post-lift* ones. This is that measurement. **The
+caveat was right and the floor property does not survive it.**
+
+### Provenance
+
+Six post-lift fixtures, i.e. layouts selected by the ranking that #605 produced
+by lifting the `input-rate-delivery` exemption. Sim baselines are the runs made
+2026-08-07 on those exact blueprints — Factorio 2.0.77, `--speed 32`, **warmup
+432 000** on every one, all `converged: true` with ≥4 checkpoints and empty
+`kit_errors`/`fluid_errors`. Blueprints, manifests and reports are banked at
+`~/spaghettio-corpora/postlift-2026-08-07/` (recovered from session scratch
+before it aged out; the two stress-EC rows carry full `report.json`, the rest
+were re-joined from their live-run reports). Meter side: `sweep_postlift`, the
+same 108k/216k window `check_one` and `sweep_corpus` use.
+
+**One fixture is excluded and it is worth naming.** `bigpole1-lift` reports
+`kit_errors: ["research-productivity parity: 'steel-plate' realized 0.1 but the
+manifest declares 0"]` — the parity check working as designed. Its rates are
+inflated ~10% across the board (target 109.9% of plan) and are **not
+comparable**. `bigpole1-lift-v2` is the re-export that declares
+`steel-plate=0.1`, and it is the row used below. The sweep prints excluded
+fixtures with their reason rather than dropping them silently.
+
+### The six rows
+
+| fixture | target | meter % | sim % | Δpp |
+|---|---|---|---:|---:|
+| `bigpole1-lift-v2` | big-electric-pole | 100.53 | 100.67 | **−0.14** |
+| `ac5-lift` | advanced-circuit | 99.23 | 99.67 | **−0.44** |
+| `stress_ec_30s_postlift` | electronic-circuit | 91.92 | 90.91 | **+1.01** |
+| `stress_ec_60s_red_postlift` | electronic-circuit | 87.90 | 89.83 | **−1.93** |
+| `tier2-ec10-lift` | electronic-circuit | 96.00 | 90.91 | **+5.09** |
+| `pu1-lift` | processing-unit | 77.81 | 100.67 | **−22.87** |
+
+Mean −3.21pp. Worst optimistic **+5.09pp**, worst pessimistic **−22.87pp**.
+
+### Both corpus-wide bounds are broken by this population
+
+The corpus's two load-bearing numbers were *"every optimistic error is ≤
++1.3pp anywhere in the corpus"* and *"pessimistic errors run to −13.6pp"*.
+Post-lift:
+
+- **Optimism reaches +5.09pp — 3.9× the corpus maximum.** This is the tier2
+  divergence the 2026-08-07 section already flagged as unexplained (it recorded
+  meter 96% vs sim 90–91%); it **reproduces exactly** — 96.00 vs 90.91 — from
+  the banked blueprint. Warmup was falsified as its cause on 2026-08-07 (96.0%
+  flat from 108k to 864k) and nothing here changes that. Still unexplained.
+- **Pessimism reaches −22.87pp — 1.7× the corpus maximum**, on `pu1-lift`, a
+  layout the sim measures at **100.67% of plan**. This one is new (below).
+
+### The gate verdict, stated as the two quadrants
+
+`sweep_postlift` classifies every target at each tolerance. Against the
+corpus's **0 missed defects in 41 rows at every threshold ≥90%**:
+
+| threshold | missed defects | false accusations |
+|---|---|---|
+| 90% | 0/6 | 1/6 (`pu1-lift`) |
+| **95%** | **1/6 (`tier2-ec10-lift`)** | 1/6 (`pu1-lift`) |
+| 98% | 0/6 | 1/6 (`pu1-lift`) |
+| 99% | 0/6 | 1/6 (`pu1-lift`) |
+
+- **Report-only.** At a 95% tolerance the meter reads 96.0% on `tier2-ec10-lift`
+  — at plan — where the sim reads 90.9%. That is the dangerous quadrant,
+  occupied on the *first* post-lift fixture, at the tolerance a gate is most
+  likely to pick. It is empty at 98% and 99% only because the meter's 96.0% is
+  itself below those cutoffs, which is luck about where one number fell, not a
+  property. **"Meter says below plan ⇒ believe it" is not established here**,
+  and neither is its converse.
+- **Blocking.** `pu1-lift` is rejected at *every* tolerance from 90% up while
+  actually running at 100.67%. Blocking was already ruled out by the corpus's
+  −13.6pp; this is worse and, importantly, **is not removed by the fix that
+  removes the corpus outlier**.
+
+**Consequence for the trust ladder.** Report-only remains shippable — a
+report-only gate that misses is merely worth less, it blocks nobody — but it
+must ship **without** the floor claim attached, because the floor claim is
+currently false on the population it would serve. That is a documentation
+constraint on how the gate's output is worded, not a reason to hold it.
+
+### `pu1-lift` −22.87pp: petroleum-gas distribution, not the productivity axis
+
+Ruled out first, by inspection rather than inference: `pu1-lift`'s manifest
+declares `{"plastic-bar": 0.1, "processing-unit": 0.1}`, matching the install's
+realized force bonuses, and its sim run has **empty `kit_errors`** — the parity
+check would have failed the run otherwise. So the meter and the sim are
+modelling the same world, and the residual is not item 1's cause.
+
+The deficit is **uniform across every solid stage** — PU 77.81%, AC 77.79%,
+EC 77.79%, copper-cable 77.79%, copper-plate 77.75%, plastic-bar 77.81%,
+iron-plate 78.64% — against a sim measuring ~101% on all of them. A uniform
+ratio means one shared constraint, and `attribute` locates it in two machines:
+
+```
+plastic-bar          2 machines   0 working   2 starved
+sulfur               1 machine    0 working   1 starved
+  [fluid] plastic-bar  at (21, 28)  coal=14/1 petroleum-gas=10/20 (fluid)
+  [fluid] plastic-bar  at (24, 28)  coal=14/1 petroleum-gas=10/20 (fluid)
+  [fluid] sulfur       at (21,  6)  water=420/30 petroleum-gas=15/30 (fluid)
+```
+
+Coal and water are abundant; **petroleum-gas is the shortage**, and
+plastic-bar's starvation propagates exactly as observed (AC machines hold
+`plastic-bar=0/2`, PU machines hold `advanced-circuit=0/2`).
+
+**Distribution, not production.** `debug_fluid` shows all five oil refineries
+in state `Working` — not `FullOutput` — with `fout=[("petroleum-gas", 0)]`,
+i.e. producing steadily and never backing up, while all three consumers sit at
+1–3 units against a per-craft need of 20–30. Producers unblocked and consumers
+starved is a throughput limit **in the network between them**, not a shortfall
+at the source.
+
+**Related but not identified as the same defect.** `meter-fluid-followups.md`
+records that Phase A's `tick_fluids` "delivered fluid one unit a tick and
+throttled petroleum→plastic→AC→PU to ~20%", which Phase B's real pipe-network
+model replaced. The chain throttled here is the same one, at ~78% rather than
+~20%. Whether this is a Phase B residual on this topology, or something
+specific to this layout's pipe run, is **not established** — the probes above
+localise the shortage and separate distribution from production, and stop
+there.
+
+### Limits of this result
+
+Six rows, four fixture families (EC ×3 counting both stress variants,
+AC, PU, big-electric-pole), one machine tier per fixture, solid targets only.
+It is a sixth the size of the corpus sweep and inherits the corpus's
+fluid-target blind spot. What it is sufficient for is falsification: two
+corpus-wide bounds and the empty-quadrant result do not survive contact with
+the post-lift population, and that is enough to change what a gate may claim.
+It is **not** sufficient to characterise the post-lift error distribution —
+that needs the bank widened, which is the natural next increment.
 
 
 
@@ -20,6 +172,13 @@ Mean −1.27pp, median −0.3pp. **Every optimistic error is small — max
 +1.3pp anywhere in the corpus** — while pessimistic errors run to −13.6pp.
 When the meter is wrong by a meaningful margin it is *always* wrong in the
 safe direction.
+
+> **Superseded in scope by the 2026-08-08 section above, not retracted.**
+> Everything below is a correct statement about the **pre-lift Job-2 corpus**.
+> Its two headline bounds — the empty dangerous quadrant, and "every optimistic
+> error is ≤ +1.3pp" — are both **broken on post-lift layouts**, which is the
+> population a gate serves. Read the corpus numbers as calibration history, not
+> as a gate warrant.
 
 **The gate question.** Classifying each row at-plan vs below-plan for both
 instruments, the dangerous quadrant (meter says AT plan, sim says BELOW) is
@@ -55,6 +214,12 @@ It is not a fluid gap: fluid-*ingredient* fixtures sit at −2.2 to +1.0pp.
    Those are not the same data point and must not be averaged. **Until this
    is resolved, the floor property is established for the corpus and NOT for
    post-lift layouts** — precisely the population a gate would run on.
+
+   **RESOLVED 2026-08-08, against this section:** measured on six post-lift
+   layouts (section above). The tier2 reading reproduces exactly — meter 96.00%
+   vs sim 90.91%, **+5.09pp** — and at a 95% tolerance it *is* a missed defect,
+   so the dangerous quadrant is occupied on the post-lift population. The
+   caveat this bullet raised was correct; the floor property does not extend.
 
    **Warmup mismatch investigated and FALSIFIED (same day).** The obvious
    suspect was that the meter reading came from `check_one.rs`'s hardcoded
