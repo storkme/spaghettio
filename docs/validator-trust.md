@@ -211,6 +211,12 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    | `processing-unit@1/s` | 1.00/s | 1.01/s (+0.7%) | **1.02/s (+2.0%)** | PASS |
    | `big-electric-pole@1` (the regression canary) | 1.00/s | 1.01/s (+0.7%) | **1.02/s (+2.0%)** | PASS |
 
+   (`delivered` exceeding `produced` in those rows is not a contradiction:
+   `produced` is Factorio's own crafting statistic while `delivered` is what
+   drained from the collection chests, so buffered stock draining during the
+   window makes delivered run slightly ahead. Both converge over a long run;
+   flagged in review as looking impossible, so stated here.)
+
    PU was **68.2%** before, and the uniform per-stage shortfall is gone —
    all ten items land within ±1% of plan simultaneously, which is what
    removes the "right for the wrong reason" reading. Both runs kit-clean
@@ -221,8 +227,10 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    1.10/s refers to; the like-for-like guard there is the deterministic
    fingerprint assertion in `di_claim_order_default_is_downstream_...`.
    And `tier2_electronic_circuit` now ships a **different** layout, so its
-   standing ~42%-below-plan baseline describes the previous winner and
-   needs re-measuring before being quoted.
+   standing ~42%-below-plan baseline described the previous winner. It has
+   since been RE-MEASURED (same day): **9.09/s vs 10 planned = 91% of plan**,
+   up from 58%. Still a FAIL, with a uniform ~10% residual root-caused to
+   zero-headroom integral machine counts — see `status.md`.
 
    Drift was adjudicated, not re-blessed: 6 fixtures before #603, 2 after.
    `tier2_electronic_circuit` 1→0 warnings (the intended effect);

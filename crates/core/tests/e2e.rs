@@ -7971,16 +7971,17 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
             // Selection-scoped warning count (#519): the engine's DI choice
-            // deliberately excludes the new flux category (its counts did
-            // not exist when this contract was defined; the engine's
-            // selections stay bit-identical to pre-#519). This pin asserts
-            // the contract the engine ENFORCES; giving it flux teeth is
-            // the #519/#520 follow-up, gated on sim-anchoring the model.
+            // 2026-08-07: the exemption is LIFTED, so this pin now counts
+            // input-rate-delivery exactly as `selection_warning_count` does.
+            // It used to exclude the category, with a comment saying giving
+            // it flux teeth was the #519/#520 follow-up gated on
+            // sim-anchoring — this IS that follow-up. Leaving the filter in
+            // would mean the gate no longer asserts what the engine
+            // enforces, and a regression in the flux channel would pass it
+            // silently. Note `belt-detour` is still excluded engine-side.
             issues
                 .iter()
-                .filter(|i| {
-                    i.severity == Severity::Warning && i.category != "input-rate-delivery"
-                })
+                .filter(|i| i.severity == Severity::Warning && i.category != "belt-detour")
                 .count(),
             l.warnings.len(),
         )
@@ -8042,16 +8043,17 @@ fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
             // Selection-scoped warning count (#519): the engine's DI choice
-            // deliberately excludes the new flux category (its counts did
-            // not exist when this contract was defined; the engine's
-            // selections stay bit-identical to pre-#519). This pin asserts
-            // the contract the engine ENFORCES; giving it flux teeth is
-            // the #519/#520 follow-up, gated on sim-anchoring the model.
+            // 2026-08-07: the exemption is LIFTED, so this pin now counts
+            // input-rate-delivery exactly as `selection_warning_count` does.
+            // It used to exclude the category, with a comment saying giving
+            // it flux teeth was the #519/#520 follow-up gated on
+            // sim-anchoring — this IS that follow-up. Leaving the filter in
+            // would mean the gate no longer asserts what the engine
+            // enforces, and a regression in the flux channel would pass it
+            // silently. Note `belt-detour` is still excluded engine-side.
             issues
                 .iter()
-                .filter(|i| {
-                    i.severity == Severity::Warning && i.category != "input-rate-delivery"
-                })
+                .filter(|i| i.severity == Severity::Warning && i.category != "belt-detour")
                 .count(),
             l.warnings.len(),
         )
@@ -9180,16 +9182,17 @@ fn di_change_surface_sweep() {
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
             // Selection-scoped warning count (#519): the engine's DI choice
-            // deliberately excludes the new flux category (its counts did
-            // not exist when this contract was defined; the engine's
-            // selections stay bit-identical to pre-#519). This pin asserts
-            // the contract the engine ENFORCES; giving it flux teeth is
-            // the #519/#520 follow-up, gated on sim-anchoring the model.
+            // 2026-08-07: the exemption is LIFTED, so this pin now counts
+            // input-rate-delivery exactly as `selection_warning_count` does.
+            // It used to exclude the category, with a comment saying giving
+            // it flux teeth was the #519/#520 follow-up gated on
+            // sim-anchoring — this IS that follow-up. Leaving the filter in
+            // would mean the gate no longer asserts what the engine
+            // enforces, and a regression in the flux channel would pass it
+            // silently. Note `belt-detour` is still excluded engine-side.
             issues
                 .iter()
-                .filter(|i| {
-                    i.severity == Severity::Warning && i.category != "input-rate-delivery"
-                })
+                .filter(|i| i.severity == Severity::Warning && i.category != "belt-detour")
                 .count(),
             l.warnings.len(),
         )
@@ -11005,7 +11008,10 @@ fn belt_detour_migration_differential_fast() {
         // two decompositions have always differed. The copper-cable path runs
         // WEST along y=7, drops, and returns EAST along y=11: a genuine
         // doubling-back. `measure_belt_runs` reads it as ONE run (6,7)->(7,11)
-        // of 12 tiles for a 5-tile separation (2.4x — flagged as a detour);
+        // of 12 tiles for a 5-tile separation (2.4x ratio, but excess = 7,
+        // JUST UNDER the DETOUR_EXCESS_TILES floor of 8 — so it is NOT
+        // flagged, and tier2's zero-warning assertion is self-consistent
+        // only because of that. Lowering the floor breaks both);
         // the tile-walk oracle splits it at the turn into two 6-tile runs
         // (1.2x each — invisible). Neither is obviously "wrong": the two
         // disagree about what a *run* is across a reversal, which is a
