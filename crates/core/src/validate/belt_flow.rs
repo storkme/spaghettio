@@ -2342,7 +2342,7 @@ fn compute_lane_rates_impl(
         // scales demand, or a fast machine at fractional count overstates
         // the lane rate (e.g. a 0.06-count foundry pressing transport-belt
         // at 16/s nominal seeds 16/s onto a lane that actually carries 1/s).
-        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe, &per_row_count_recipes);
+        let utilization = physical_utilization(spec, fallback_spec, band, &machine_ys_by_recipe, &per_row_count_recipes);
         let rate = spec
             .outputs
             .iter()
@@ -2570,7 +2570,7 @@ fn compute_lane_rates_impl(
         // Same position-resolved attribution as the injection loop above —
         // see `super::resolve_row_spec`'s doc comment.
         let (spec, band) = super::resolve_row_spec_banded(layout, recipe, me.y, fallback_spec);
-        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe, &per_row_count_recipes);
+        let utilization = physical_utilization(spec, fallback_spec, band, &machine_ys_by_recipe, &per_row_count_recipes);
         let required = spec
             .inputs
             .iter()
@@ -3285,14 +3285,33 @@ fn lane_transfer(
 /// 85.71/86 regressed to 1.0). Recipes shared by multiple specs
 /// (voider/self-loop siblings) are excluded upstream and fall back to
 /// `utilization_for`.
+/// FRACTIONAL-DUTY FLOOR (2026-08-07). `spec` here is the *band-resolved*
+/// spec from `effective_rows`, whose count is the count the ROW PLACED — so
+/// for a sub-one-machine plan it reads 1 while the solver planned 0.667, and
+/// `spec.count / n` collapses to 1/1 = 1.0, silently discarding exactly the
+/// scaling this function exists to apply. `plan_spec` is the solver's spec,
+/// and `utilization_for(plan_spec)` is `count / ceil(count)` — the true duty
+/// whenever the row places `ceil(count)` machines, which is the normal case.
+/// Taking the min restores it and is a no-op for integral counts.
+///
+/// Measured: `big-electric-pole@1` on am2 plans 0.667 machines, the row
+/// places 1, and the bus correctly delivers 8.0/s of iron-stick (= 0.667 ×
+/// 12.0). Without the floor the check demanded a fully saturated machine's
+/// 12.0/s and fired two warnings on a layout the sim measures at **110% of
+/// plan** — false positives that inverted candidate ranking the moment
+/// `input-rate-delivery` was allowed to steer selection (it preferred a
+/// layout measured at 0.51/s against a 1.00/s plan). See
+/// `docs/validator-trust.md` hole 2.
 fn physical_utilization(
     spec: &crate::models::MachineSpec,
+    plan_spec: &crate::models::MachineSpec,
     band: Option<(i32, i32)>,
     machine_ys_by_recipe: &FxHashMap<&str, Vec<i32>>,
     per_row_count_recipes: &FxHashSet<&str>,
 ) -> f64 {
+    let plan_duty = utilization_for(plan_spec);
     let Some(ys) = machine_ys_by_recipe.get(spec.recipe.as_str()) else {
-        return utilization_for(spec);
+        return utilization_for(spec).min(plan_duty);
     };
     let n = match band {
         Some((y0, y1)) if per_row_count_recipes.contains(spec.recipe.as_str()) => {
@@ -3301,9 +3320,9 @@ fn physical_utilization(
         _ => ys.len(),
     };
     if n == 0 {
-        return utilization_for(spec);
+        return utilization_for(spec).min(plan_duty);
     }
-    (spec.count / n as f64).min(1.0)
+    (spec.count / n as f64).min(1.0).min(plan_duty)
 }
 
 /// A tile's outflow after its own input-inserter pickups take their share
@@ -3638,7 +3657,7 @@ pub fn check_input_rate_delivery(
         // strict — up to 10× for a fractional machine (sulfuric-acid at 5/s
         // wants 0.1 machines running at 10% speed), 1/16 for chain-replicated
         // rows (see `physical_utilization`).
-        let utilization = physical_utilization(spec, band, &machine_ys_by_recipe, &per_row_count_recipes);
+        let utilization = physical_utilization(spec, fallback_spec, band, &machine_ys_by_recipe, &per_row_count_recipes);
         let required_rate = spec
             .inputs
             .iter()
