@@ -205,14 +205,23 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// predicate; only `:selfloop:` and the tap tag identify a splitter branch.
 /// Warning count for CANDIDATE SELECTION (decomposition ranking, the
 /// never-worse channel contracts, the refusal tier). Excludes categories
-/// whose model is not yet calibrated enough to steer selection:
-/// `input-rate-delivery` gained real teeth from the #519 consumption
-/// decrement — honest REPORTING — but letting the new counts re-rank
-/// candidates flipped winners on configs where the audit then caught the
-/// new winner over-stamping physical capacity (stacking_ec_60s: a
-/// reporting recalibration must not silently change which layout ships).
-/// Lift the exemption deliberately once the flux model is sim-anchored
-/// (#519 follow-up), with the fixture drift adjudicated case by case.
+/// whose model is not yet calibrated enough to steer selection.
+///
+/// **`input-rate-delivery` is INCLUDED as of 2026-08-07.** It was excluded
+/// on the grounds that letting the #519-recalibrated counts re-rank
+/// candidates "flipped winners on configs where the audit then caught the
+/// new winner over-stamping physical capacity (stacking_ec_60s)". That
+/// objection was a category error and is void: the audit compared
+/// `PlacedEntity::rate` — a planned row/lane-family aggregate — against one
+/// belt's capacity, and the 376 tiles it condemned carry 0.0–30.0/s against
+/// a 60/s cap while the layout measures 96.0% of plan
+/// (`docs/rate-stamp-semantics.md`). Nothing was ever physically wrong with
+/// the winner the lift selects.
+///
+/// The category is sim-anchored in both directions: the re-ranked layout it
+/// picks for `processing-unit@1/s` measures **102.0% of plan** where the
+/// excluded ranking ships a starving factory (4 EC producers feeding 8
+/// consumers, owner-confirmed in-client). See `docs/validator-trust.md`.
 ///
 /// `belt-detour` (2026-08-01) is excluded for the identical reason on
 /// first principles, not just precedent: it is a brand-new category with
@@ -231,11 +240,7 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 pub(crate) fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
     issues
         .iter()
-        .filter(|i| {
-            i.severity == Severity::Warning
-                && i.category != "input-rate-delivery"
-                && i.category != "belt-detour"
-        })
+        .filter(|i| i.severity == Severity::Warning && i.category != "belt-detour")
         .count()
 }
 
