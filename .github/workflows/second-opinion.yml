@@ -19,13 +19,33 @@ on:
     # Until upstream grows one, re-review base-retargeted PRs session-side
     # (the stacked-PR retarget-to-main case is the one that occurs here).
 
-# One run per PR; a new push supersedes the old run's SHA, so cancelling is
-# safe. No `edited` trigger (unlike the parked claude-review workflow): this
-# reviewer files no description-scoped findings, so the event-class keying
-# saga (#521) does not apply here — a plain per-PR group is correct.
+# One concurrency group per PR; cancellation is CONDITIONAL on the event.
+# Only `synchronize` — the one trigger that means "a new head SHA exists" —
+# cancels the in-progress run: a superseded SHA's review is real money (this
+# action bills per review) and its check lands on a commit that can no longer
+# be merged, so cancelling there stays correct. Same-head re-events
+# (`reopened`, `ready_for_review`) must NOT cancel: an unconditional
+# cancel-in-progress let a close/reopen of #576 kill the in-progress run OF
+# THE SAME SHA ("Canceling since a higher priority waiting request for
+# second-opinion-576 exists", 2026-08-06), and a cancelled run leaves this
+# REQUIRED check with no successful conclusion — the PR is unmergeable until
+# someone overrides protection. Failure class 11 in docs/review-bot.md has
+# the forensics. Under the conditional, a same-head event queues behind the
+# running review (GitHub keeps one running + one pending per group) and is
+# near-free when its turn comes: the runner resolves the PR's head at
+# execution time and its per-SHA marker gate (`already_reviewed`, checked
+# before any model call) exits 0 green without spending.
+# NOT keyed on head.sha: that also fixes the same-SHA cancel, but it puts
+# each push in a fresh group, so a superseded run is never cancelled — the
+# exact spend the cancellation exists to stop. No `edited` trigger (unlike
+# the parked claude-review workflow): this reviewer files no
+# description-scoped findings, so the event-class keying saga (#521) does
+# not apply here — one group per PR remains correct.
 concurrency:
   group: second-opinion-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Evaluated on the NEWLY queued run: true only when that run carries a new
+  # head SHA worth yielding to.
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
 
 jobs:
   second-opinion:
@@ -69,6 +89,19 @@ jobs:
         uses: storkme/second-opinion@v1
         with:
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          # Runtime monitoring (second-opinion v1.7.0+): one JSON event per review
+          # pushed to the estate's Grafana Cloud Loki, so cost, duration and
+          # degraded-rate are visible without opening individual run logs. Highest
+          # value here of the three consumers, because k:3 below means three passes
+          # can degrade independently — the event carries pass_statuses (e.g.
+          # "ok,timeout,ok") plus passes_ok/passes_degraded, so a review that quietly
+          # became a union of 2 instead of 3 is greppable rather than invisible.
+          # URL and instance id are repo variables (an unset var expands to "" and
+          # disables metrics with no network call — vars.LOKI_URL is the kill
+          # switch); only the token is a secret, scoped to logs:write.
+          loki-url: ${{ vars.LOKI_URL }}
+          loki-user: ${{ vars.LOKI_USER }}
+          loki-token: ${{ secrets.LOKI_TOKEN }}
           # DeepSeek V4 Flash (2026-07-31 release): 1M context, priced at
           # ~$0.14/M input. Pinned rather than left to the action's default
           # for the same reason claude-review pinned its model: review

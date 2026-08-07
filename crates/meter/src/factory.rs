@@ -176,6 +176,14 @@ impl Factory {
                 size,
                 &mut items,
                 DEFAULT_BUFFER_CRAFTS,
+                // Declared, not inferred: absent from the manifest means no
+                // research productivity, which is what every manifest written
+                // before this axis existed says.
+                manifest
+                    .research_productivity
+                    .get(recipe)
+                    .copied()
+                    .unwrap_or(0.0),
             ) {
                 Some(m) => {
                     // Collect this machine's fluid ports, bound to the recipe's

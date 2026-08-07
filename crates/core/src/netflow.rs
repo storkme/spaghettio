@@ -75,7 +75,7 @@ const ACTIVE_TOL: f64 = 1e-9;
 /// docs/rfc-solver-net-flow.md decision log). Both default to `false`, so
 /// every existing caller (`solve_netflow`, both `solve_*` entry points in
 /// `solver.rs`) is behaviorally unchanged.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct NetflowOptions {
     /// Admit `category == "recycling"` (and `"recycling-or-hand-crafting"`
     /// — see the note on [`is_recycling_category`]) recipes as LP columns
@@ -109,6 +109,26 @@ pub struct NetflowOptions {
     /// legitimately flip free-mode recipe selection (accepted; RFC-044
     /// rev 2 decision log).
     pub module_policy: crate::module_policy::ModulePolicy,
+    /// Research-sourced productivity to plan at, per recipe (e.g.
+    /// `{"processing-unit": 0.10}`).
+    ///
+    /// A **declared axis**, carried on the manifest beside `stacking` and
+    /// `inserter_capacity` — see
+    /// [`crate::models::LayoutResult::research_productivity`]. Empty (the
+    /// default) is bit-identical to the pre-existing behaviour.
+    ///
+    /// Distinct from [`Self::module_policy`], which covers productivity from
+    /// *modules* and a machine's `base_effect`. Research productivity was
+    /// modelled nowhere: the sim runs `research_all_technologies()`, so it
+    /// planned against a world the solver did not know about. Concretely, on
+    /// `tier5_processing_unit_from_ore_am3` the sim carries +10% on
+    /// `processing-unit`, and planning without it over-provisions the AC stage
+    /// — measured at +19% more AC per PU craft than the recipe needs, which
+    /// then eats the EC that PU wanted. See `docs/meter-divergence.md`.
+    ///
+    /// Composed **additively** with module and base-effect productivity, which
+    /// is how Factorio composes them.
+    pub research_productivity: std::collections::BTreeMap<String, f64>,
 }
 
 /// True for both recycling-shaped categories in the bundled data.
@@ -426,7 +446,7 @@ pub fn solve_netflow_multi_with_options(
     // below inspects `r.machines` / `r.surplus_outputs` post-solve, never a
     // single `target_idx`, so this loop needed no changes to generalize.
     let mut extra_excluded: FxHashSet<String> = FxHashSet::default();
-    let mut attempt_options = *options;
+    let mut attempt_options = options.clone();
     let mut last_refusal: Option<SolverError> = None;
     // Eight acyclic-fallback exclusions plus at most one free-mode oil-path
     // exclusivity re-solve (#476).
@@ -748,8 +768,19 @@ fn solve_attempt(
         // catalyst-exempt portion BEFORE netting (site 1 of 3 — the raw
         // sign logic in `classify_self_loop` deliberately stays on raw
         // amounts).
-        let effects =
+        let mut effects =
             crate::module_policy::resolve_machine_modules(&options.module_policy, &machine, recipe);
+        // Research productivity stacks on top of module + base-effect
+        // productivity, additively, as Factorio composes them. Folding it into
+        // `effects` here means all three downstream result sites (candidate
+        // net, per-machine rates, self-loop rates) pick it up through the
+        // existing `prod_bonus` path rather than each growing its own copy —
+        // which is how this codebase ended up with two transit metrics.
+        effects.prod_bonus += options
+            .research_productivity
+            .get(recipe.name.as_str())
+            .copied()
+            .unwrap_or(0.0);
         let crafting_speed = crafting_speed * effects.speed_multiplier;
         let net = if effects.prod_bonus > 0.0 {
             let mut net_map: FxHashMap<usize, f64> = FxHashMap::default();
@@ -1637,6 +1668,70 @@ mod tests {
         assert!(
             couplings2.is_empty(),
             "EC as target must suppress the EC->AC coupling, got {couplings2:?}"
+        );
+    }
+
+    /// The declared research-productivity axis must actually reach the plan.
+    ///
+    /// Added because a local adversarial review found that NOTHING in the tree
+    /// set `NetflowOptions::research_productivity` — reverting the fold in
+    /// `solve_attempt` left all 1340 tests green. The PR body's own scaling
+    /// table was the shape of the missing pin, so this is that table as a
+    /// test.
+    ///
+    /// Asserts the *ratio*, not absolute machine counts, so it survives recipe
+    /// or palette data changes that shift the baseline. Productivity reduces
+    /// the crafts needed for a fixed output, so a stage carrying +10% must
+    /// need 1/1.1 of the machines it needed at none.
+    #[test]
+    fn declared_research_productivity_shrinks_the_plan() {
+        let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let solve = |rp: std::collections::BTreeMap<String, f64>| {
+            solve_netflow_with_options(
+                "advanced-circuit",
+                5.0,
+                &inputs,
+                &crate::recipe_db::MachinePalette::default(),
+                "assembling-machine-2",
+                &FxHashSet::default(),
+                RecipeScope::Free,
+                &CostTable::default(),
+                &NetflowOptions { research_productivity: rp, ..Default::default() },
+            )
+            .expect("solve should succeed")
+        };
+        let count = |r: &SolverResult, recipe: &str| {
+            r.machines.iter().find(|m| m.recipe == recipe).map(|m| m.count).unwrap_or(0.0)
+        };
+
+        let base = solve(Default::default());
+        let mut rp = std::collections::BTreeMap::new();
+        rp.insert("advanced-circuit".to_string(), 0.10);
+        let boosted = solve(rp);
+
+        let (b, o) = (count(&base, "advanced-circuit"), count(&boosted, "advanced-circuit"));
+        assert!(b > 0.0, "fixture must build advanced-circuit to be meaningful");
+        assert!(
+            (o - b / 1.10).abs() < 1e-6,
+            "declared +10% on advanced-circuit must need 1/1.1 of the machines: \
+             {b} -> {o}, expected {}",
+            b / 1.10
+        );
+        // An undeclared UPSTREAM stage shrinks too — it serves a target that
+        // now needs fewer crafts — so `<=` here would pass either way and
+        // assert nothing (PR #591 review). Pin the ratio instead: upstream
+        // demand falls by exactly the boosted stage's factor, no more.
+        let (bc, oc) = (count(&base, "copper-cable"), count(&boosted, "copper-cable"));
+        assert!(bc > 0.0, "fixture must build copper-cable for this to mean anything");
+        assert!(
+            (oc - bc / 1.10).abs() < 1e-6,
+            "an undeclared upstream stage must scale by the DOWNSTREAM bonus only: \
+             {bc} -> {oc}, expected {}",
+            bc / 1.10
         );
     }
 }

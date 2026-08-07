@@ -208,7 +208,7 @@ pub fn export_with_manifest(
         }
     }
 
-    let manifest = serde_json::json!({
+    let mut manifest = serde_json::json!({
         "label": label,
         "targets": solver
             .external_outputs
@@ -233,7 +233,19 @@ pub fn export_with_manifest(
         // 1..=4 representation consumed by the sim harness.
         "stacking": layout.stacking.clamp(1, 4),
         "inserter_capacity": layout.inserter_capacity,
+        // Declared research productivity, per recipe. Omitted entirely when
+        // empty so pre-existing manifests and their golden comparisons are
+        // untouched. The sim harness reads the realized bonus and compares
+        // against this (see its productivity-parity probe); the meter applies
+        // it. Without a declared value the two agree only by coincidence,
+        // which is how RFC-064 Phase 2 item 7 happened.
+        "research_productivity": layout.research_productivity,
     });
+    if layout.research_productivity.is_empty() {
+        if let Some(obj) = manifest.as_object_mut() {
+            obj.remove("research_productivity");
+        }
+    }
     (bp, manifest)
 }
 

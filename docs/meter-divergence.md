@@ -85,7 +85,15 @@ in-fixture AC reads −3.9%).
   reference actually does.
 
   One scoping fact found while writing this up, which widens the fix beyond the
-  meter: **the solver does not model research productivity either.**
+  meter: **the solver did not model research productivity either.**
+  *(Implemented 2026-08-06 — `netflow.rs` now folds a declared per-recipe
+  research bonus into `effects.prod_bonus` alongside module and base-effect
+  productivity. The three parts land as #584 meter / #585 sim / #587 solver.
+  Note the plan does NOT scale uniformly by 1/(1+bonus): a stage that carries
+  its own bonus AND serves reduced downstream demand compounds — plastic-bar
+  scales 1/1.21 on this fixture, basic-oil-processing 1/1.19. Correct
+  arithmetic; an earlier write-up of mine claimed "every stage scales by
+  exactly 1/1.1", which is only true of the boosted target stage.)*
   `netflow.rs` applies productivity from *modules* and a machine's
   `base_effect`, gated on the recipe's `allow_productivity`, and
   `ModulePolicyKind` defaults to `None`. Research-sourced productivity — the
@@ -148,7 +156,9 @@ in-fixture AC reads −3.9%).
   output) and the −3.9% EC deficit itself. The latter is where the **solver's**
   own blind spot to research productivity lands: `netflow.rs` models modules and
   `base_effect` only, so the plan is over-provisioned by the same factor. That
-  is the other half of the fix.
+  is the other half of the fix — **now implemented** (#587); what remains is
+  wiring a caller to declare a real value, which changes plans and is
+  deliberately separate.
 - **Superseded**: this bullet previously predicted the residual would fall to
   ≈−4.3%, "essentially the −3.9% EC deficit alone". The measurement above puts
   it at −6.9%: the prediction's *ceiling* was right to four figures, but it

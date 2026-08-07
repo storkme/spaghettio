@@ -185,6 +185,66 @@ pub fn effective_product_amount(amount: f64, ignored_by_productivity: f64, prod_
     (amount - ignored) * (1.0 + prod_bonus) + ignored
 }
 
+/// Parse `--research-productivity recipe=bonus,...` into the declared map.
+///
+/// Lifted out of the arg loop so it is testable: the first cut of this guard
+/// lived inline, shipped untested, and got its own motivating case wrong (see
+/// the range check below).
+///
+/// Bonuses are FRACTIONS — `0.10` is +10%.
+pub fn parse_declared_productivity(arg: &str) -> Result<std::collections::BTreeMap<String, f64>, String> {
+    let db = db();
+    let mut out = std::collections::BTreeMap::new();
+    for pair in arg.split(',').filter(|p| !p.trim().is_empty()) {
+        let (recipe, bonus) = pair
+            .split_once('=')
+            .ok_or_else(|| format!("--research-productivity wants recipe=bonus, got {pair:?}"))?;
+        let recipe = recipe.trim();
+        if recipe.is_empty() {
+            return Err(format!("--research-productivity has an empty recipe name in {pair:?}"));
+        }
+        // A typo'd recipe is silently inert: it rides the manifest, matches
+        // nothing, and costs a full export plus a sim warmup before anything
+        // notices. The lookup is free here.
+        if !db.recipes.contains_key(recipe) {
+            return Err(format!("--research-productivity: no such recipe {recipe:?}"));
+        }
+        let bonus: f64 = bonus
+            .trim()
+            .parse()
+            .map_err(|_| format!("--research-productivity bonus must be a number, got {bonus:?}"))?;
+        if !bonus.is_finite() || bonus < 0.0 {
+            return Err(format!("--research-productivity bonus must be finite and >= 0, got {bonus}"));
+        }
+        // Factorio's own `maximum_productivity` default is 3.0 (+300%). Above
+        // that is certainly a bare percentage typed as a fraction.
+        //
+        // The first version of this bound was `0.0..=10.0` INCLUSIVE, which
+        // accepted `=10` — the exact "typed 10 meaning 10%" input it was
+        // written to catch — and exported at +1000% with exit 0. A guard whose
+        // error message promises protection it does not deliver is worse than
+        // no guard, because it stops anyone looking.
+        if bonus > 3.0 {
+            return Err(format!(
+                "--research-productivity bonus is a FRACTION (0.10 = +10%), and {bonus} exceeds \
+                 Factorio's maximum_productivity default of 3.0 — did you mean {}?",
+                bonus / 100.0
+            ));
+        }
+        if bonus >= 1.0 {
+            eprintln!(
+                "warning: --research-productivity {recipe}={bonus} is +{}%. Reachable via deep \
+                 infinite research, but if you meant +{}%, pass {}.",
+                bonus * 100.0,
+                bonus,
+                bonus / 100.0
+            );
+        }
+        out.insert(recipe.to_string(), bonus);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,5 +519,55 @@ mod tests {
         assert_eq!(effective_product_amount(2.0, 2.0, 0.25), 2.0);
         // No-op path is bit-exact.
         assert_eq!(effective_product_amount(0.1, 0.07, 0.0).to_bits(), 0.1f64.to_bits());
+    }
+
+    /// The declared-axis parser, including the case its first version got
+    /// wrong.
+    ///
+    /// That version lived inline in `sim_export`, shipped with no tests, and
+    /// used an INCLUSIVE `0.0..=10.0` bound — so `=10`, the exact "typed 10
+    /// meaning 10%" input the guard existed to catch, was accepted and
+    /// exported at +1000% with exit 0. A guard whose message promises
+    /// protection it does not deliver is worse than none, because it stops
+    /// anyone looking. That is why this lives in the library now.
+    #[test]
+    fn declared_productivity_parser_rejects_a_bare_percentage() {
+        let err = parse_declared_productivity("processing-unit=10")
+            .expect_err("10 is a bare percentage, not a fraction");
+        assert!(err.contains("FRACTION"), "error should explain the unit: {err}");
+        assert!(err.contains("0.1"), "error should suggest the intended value: {err}");
+    }
+
+    #[test]
+    fn declared_productivity_parser_accepts_fractions_and_rejects_junk() {
+        let ok = parse_declared_productivity("processing-unit=0.10,plastic-bar=0.10")
+            .expect("well-formed input");
+        assert_eq!(ok.get("processing-unit"), Some(&0.10));
+        assert_eq!(ok.get("plastic-bar"), Some(&0.10));
+
+        // A typo'd recipe rides the manifest inert and costs a full export
+        // plus a sim warmup before anything notices. One lookup catches it.
+        assert!(parse_declared_productivity("procesing-unit=0.1").is_err(), "typo must be rejected");
+        assert!(parse_declared_productivity("=0.1").is_err(), "empty recipe must be rejected");
+        assert!(parse_declared_productivity("processing-unit").is_err(), "missing = must be rejected");
+        assert!(parse_declared_productivity("processing-unit=x").is_err(), "non-numeric must be rejected");
+        assert!(parse_declared_productivity("processing-unit=-0.1").is_err(), "negative must be rejected");
+        assert!(parse_declared_productivity("processing-unit=NaN").is_err(), "NaN must be rejected");
+
+        // Empty input is not an error — it is the default, and every caller
+        // that passes no flag must land here.
+        assert!(parse_declared_productivity("").expect("empty is valid").is_empty());
+    }
+
+    /// Above 1.0 is legitimately reachable via deep infinite research, so it
+    /// warns rather than refusing — but must still parse.
+    #[test]
+    fn declared_productivity_parser_allows_high_but_reachable_bonuses() {
+        let ok = parse_declared_productivity("processing-unit=1.5").expect("+150% is reachable");
+        assert_eq!(ok.get("processing-unit"), Some(&1.5));
+        assert!(
+            parse_declared_productivity("processing-unit=3.5").is_err(),
+            "above Factorio's maximum_productivity default of 3.0 must be refused"
+        );
     }
 }

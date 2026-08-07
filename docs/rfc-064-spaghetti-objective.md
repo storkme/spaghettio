@@ -322,11 +322,21 @@ consumer recipe, so this is equivalent to apportioning that rate evenly over
 its identical placed consumer terminals. Surface cardinal steps cost 1;
 underground-belt and pipe-to-ground jumps cost their physical tile span, not
 one entity. A solver-declared direct-insertion edge with no transport network
-uses the Phase-0 precedent of port-to-port Manhattan distance. Any other
-unreachable terminal makes the metric unmeasurable and the candidate
-inadmissible — never silently fall back to Manhattan for a broken routed
-edge. Fluid edges use the same construction at `fluid_weight = 0.5`, the
-value Phase 0 chose and recorded below.
+uses the Phase-0 precedent of port-to-port Manhattan distance. A **mixed**
+edge — a declared DI coupling the layout realizes with bridges while a
+transport network also carries part of the demand — folds each DI bridge
+into the same mean as one more consumer terminal whose distance is its
+port-to-port Manhattan span; the aggregate `planned_rate` stays and is
+apportioned evenly across belt terminals and bridges alike, and both pure
+cases above are the degenerate ends of this one rule (amended 2026-08-06 —
+originally unstated, and two independent implementations diverged from each
+other in the gap). A transport network participating in a mixed edge must
+still be well-formed: a missing or unreachable terminal refuses exactly as
+below, and DI bridges never repair it. Any other unreachable terminal makes
+the metric unmeasurable and the candidate inadmissible — never silently fall
+back to Manhattan for a broken routed edge. Fluid edges use the same
+construction at `fluid_weight = 0.5`, the value Phase 0 chose and recorded
+below.
 
 ```text
 Transit_score(L) = 1 - Transit(L) / Transit(native)
@@ -1446,7 +1456,12 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   true when `compatible` was made strict; the metric is now strict for both
   traversal and terminal discovery, and an unmeasurable edge refuses rather
   than reaching for a weaker match); and only a solver-declared DI edge with no transport
-  terminals may use its actual machine-to-machine inserter span. Every missing
+  terminals may use its actual machine-to-machine inserter span alone — a
+  declared DI edge that ALSO has a well-formed transport network folds each
+  bridge into the consumer-terminal mean at its Manhattan span (amended
+  2026-08-06; the freeze originally specified only the two pure cases, and the
+  implementation fell through to belt-only measurement at full aggregate
+  rate for the mixed one). Every missing
   or unreachable non-DI terminal is an error. Focused unit fixtures pin surface
   length, underground span length, fluid weighting, and DI fallback. The same
   instrument measured every native control successfully:
@@ -1882,6 +1897,81 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   into an unmeasurable edge; accepting them re-admits a smaller version of the
   contamination the guard exists to stop. The deciding evidence is a count of
   unstamped DI inserters in real layouts, which nobody has taken.
+
+- **2026-08-06 — mixed belt+DI edges: DECIDED, fold the bridges into the
+  consumer-terminal mean rather than refuse.** The open question left by the
+  unification entry above — `transit.rs`'s DI branch required
+  `sources.is_empty() && consumers.is_empty()`, so an edge both belt-fed and
+  DI-fed fell through to belt-only measurement at the full aggregate
+  `planned_rate` (over-charging path length and silently dropping the DI
+  consumers from `consumer_terminals`), and two independent implementations
+  diverged in this exact gap. The two candidate answers were (a) refuse the
+  mixed edge outright, or (b) apportion the rate across both halves. **(b)
+  wins, in the specific form: each DI bridge is one more consumer terminal
+  whose distance is its port-to-port Manhattan span, folded into §(b)'s
+  existing arithmetic mean with the aggregate rate retained.** Reasoning
+  against §(b)'s own text, not taste:
+  1. §(b) justifies its mean by the equivalence "apportioning that rate
+     evenly over its identical placed consumer terminals". A DI bridge IS a
+     consumer-input terminal, and the distance §(b) itself assigns DI is the
+     Phase-0 port-to-port Manhattan span — so folding bridges into the same
+     mean is not a third rule: the all-belt case and the all-DI case both
+     fall out of it as degenerate ends. It is the unique reading under which
+     §(b)'s two stated constructions are one construction.
+  2. Refusal (a) is scoped by §(b) to unmeasurability — "any **other**
+     unreachable terminal", "never silently fall back to Manhattan for a
+     **broken routed** edge". A mixed edge has no unreachable terminal and no
+     unmeasurable component; refusing it would make physically valid,
+     fully-routed candidates inadmissible for a spec-gap reason and would
+     systematically firewall DI-bearing candidate families out of scored
+     fields — a search bias, not a physical judgment.
+  3. The pre-fix fall-through violated §(b)'s equivalence in the other
+     direction: charging the full aggregate rate at the belt-only mean
+     apportions the DI machines' demand onto belt paths they do not use.
+  **Retained refusal, decided not inherited**: a transport network that
+  participates in a declared-DI edge must still be well-formed — producer
+  drops with no consumer pickup (or vice versa) refuse with the same
+  `Missing*Terminal` errors as a DI-free edge, because a half-formed network
+  is exactly §(b)'s broken routed edge and bridges must not paper over it.
+  Reporting: `EdgeTransit`/`EdgeMeasurement` gain `di_bridges` (0 belt-only,
+  bridge count otherwise) so a mixed measurement is visible as such instead
+  of blending into `consumer_terminals`; `direct_insertion` stays reserved
+  for the pure no-network case. Pinned by
+  `mixed_belt_and_di_edge_folds_bridges_into_the_consumer_mean`, whose
+  fixture makes all three behaviours distinct (belt terminal at Dijkstra 4,
+  bridge at Manhattan 2: mixed mean 3.0, pre-fix fall-through 4.0, pure-DI
+  2.0) so the primary assertion discriminates, and by
+  `di_bridges_do_not_repair_a_half_formed_belt_network` for the retained
+  refusal. Negative controls run and failed on their named assertions:
+  belt-only fall-through restored → the mixed test fails `path_length`
+  4.0 ≠ 3.0 (that test alone); pure-DI-when-consumers-missing → the refusal
+  test alone fails, showing the silently-measured DI edge. §(b)'s text and
+  the Phase-3 freeze paragraph amended in the same commit.
+
+- **2026-08-06 — the PTG-unidirectionality follow-up is FALSE against the
+  code; pinned instead of fixed.** Recorded twice above (bot rounds 2 and 4
+  on PR #575): "`find_ptg_pairs` maps input→output only while Factorio fluid
+  networks are bidirectional — a valid output→input traversal would be
+  falsely refused as `UnreachableConsumerTerminal`." Inspection: the claim
+  does not hold and never did. `find_ptg_pairs` has inserted BOTH directions
+  (`pairs.insert(a, b); pairs.insert(b, a)`) since its introduction
+  (cb4712ef, pre-dating `transit.rs` entirely), its doc comment says
+  "returns a bidirectional map", and `fluid_graph` adds the underground arc
+  from whichever end it iterates — so both PTG tiles are keys and the jump
+  is traversable both ways. What IS input→output-only is pair *formation*
+  (only `io_type: "input"` PTGs initiate the search for a matching output),
+  which is an internal-annotation convention shared with the fluid
+  validators, not a traversal constraint. Since the defect is one deliberate
+  edit away (dropping the reverse insert) and the decision log described it
+  twice, it is now pinned by
+  `fluid_transit_traverses_ptg_pairs_output_to_input`: producer on the
+  output-labelled side, consumer on the input-labelled side, so the routed
+  path crosses the pair in the allegedly-refused direction (3 surface + 6
+  underground + 1 surface = 10.0). Negative control: removing
+  `pairs.insert(b, a)` makes exactly that test fail with
+  `UnreachableConsumerTerminal { terminal: (11, 3) }` — the precise false
+  refusal the follow-up predicted, confirming both that the pin detects the
+  defect and that the shipping code does not have it.
 - **2026-08-06 — Fold admission gate: `belt-detour` excluded as
   ReportOnly (cross-entry from RFC-065 slice 2, which owns the full
   trail).** RFC-065's graph-derived `measure_belt_runs` healed the
