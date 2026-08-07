@@ -7862,9 +7862,9 @@ fn stacking_ec_60s_red_one_belt_headline() {
                 // 60/s electronic-circuit family fitting one stacked belt;
                 // intermediate families (copper-cable at 90/s) legally exceed
                 // one belt and run as PARALLEL belts, so asserting over all
-                // items asserts a non-law — which is exactly what broke when
-                // the input-rate-delivery lift re-ranked this config onto a
-                // winner that puts cable on belts.
+                // items asserts a non-law. It held on main only by accident:
+                // attempting the input-rate-delivery lift re-ranks this config
+                // onto a winner that puts cable on belts, and it fires.
                 if e.carries.as_deref() != Some("electronic-circuit") {
                     return None;
                 }
