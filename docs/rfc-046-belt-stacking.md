@@ -1,5 +1,15 @@
 # RFC-046: Belt stacking (Space Age stacked belts)
 
+> **Correction (2026-08-07, PR #601).** Where this RFC calls the fixtures'
+> probe a "direct per-tile capacity audit" / "audit of every rate-stamped
+> belt tile against stacked capacity", that reading is **retired**.
+> `PlacedEntity::rate` is a family/row/cascade AGGREGATE at every stamp
+> site, so the probe is a TIER-SELECTION check ("does this family fit one
+> belt of the chosen tier"), not a statement about any tile. The probes
+> still run and the RFC's stacking conclusions stand; only the physical
+> interpretation is wrong. Per-tile physics is `check_lane_throughput`.
+> See [`rate-stamp-semantics.md`](rate-stamp-semantics.md).
+
 Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-21;
 in-game anchor open, Phase 3 deferred).
 
@@ -230,7 +240,7 @@ degrade never, refuse honestly.
   `swings(quality) × stack_inserter_belt_hand(S)`; machine-drop sides
   unchanged.
 - #311's merger-tile blind spot is **out of scope and unchanged** —
-  the walker still doesn't visit merger tiles. The headline KC is
+  the walker still doesn't visit merger tiles. **[Corrected 2026-08-07: `PlacedEntity::rate` is an aggregate, so that probe is a TIER-SELECTION check, not a per-tile capacity audit; and both lane models DO return rates for merger tiles. See `rate-stamp-semantics.md`.]** The headline KC is
   therefore proven by snapshot decode, never by warning-count (kill
   criterion 2).
 
@@ -293,7 +303,7 @@ import; the in-game anchor (kill criterion 5) is the final word.
 2. **No blind-spot laundering.** The 60 EC/s one-stacked-belt headline
    counts as delivered **only** with direct evidence that every
    final-output tile's stamped rate ≤ its belt's physical cap × S. If
-   it "passes" only because #311's unvisited merger tiles hide the
+   it "passes" only because #311's unvisited merger tiles hide the **[Corrected 2026-08-07: `PlacedEntity::rate` is an aggregate, so that probe is a TIER-SELECTION check, not a per-tile capacity audit; and both lane models DO return rates for merger tiles. See `rate-stamp-semantics.md`.]**
    overload, the headline is NOT delivered and the RFC must say so.
    *(Delivered: `stacking_ec_60s_red_one_belt_headline` audits every
    rate-stamped belt tile in-test — and proves the audit's teeth by

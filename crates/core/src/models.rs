@@ -234,7 +234,27 @@ pub struct PlacedEntity {
     /// group for debugging/analysis.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub segment_id: Option<String>,
-    /// Throughput rate (items/s or fluid units/s) flowing through this entity.
+    /// Planned **aggregate** throughput (items/s or fluid units/s) of the
+    /// family this tile belongs to — a row total, a `BusLane` total, or a
+    /// merger-cascade total. It is the belt/pipe **tier-selection** figure,
+    /// stamped onto tiles as provenance and carried, not consumed: no
+    /// validator and no engine decision reads it back.
+    ///
+    /// **This is NOT the flow through this tile**, and the two differ by a
+    /// lot. A family whose total exceeds one belt is realized as several
+    /// parallel belts, and *every* tile in it is stamped the same total;
+    /// `output_merger` stamps the cascade total even onto pass-through belts
+    /// for columns that are not part of the merge. Measured on EC@60/s:
+    /// tiles stamped 90.0 carry 0.0–30.0, tiles stamped 60.0 carry 7.5–9.0.
+    ///
+    /// **Never compare this to a belt's capacity.** Doing so is a category
+    /// error; it has falsified one validator check and parked two pieces of
+    /// work. For per-tile flow use
+    /// [`crate::validate::belt_structural::check_lane_throughput`] (the one
+    /// `validate()` dispatches — note a second, disagreeing implementation
+    /// lives in `validate::belt_flow`), which walks the belt graph from
+    /// machine specs instead of trusting a stamp. Full census and evidence:
+    /// `docs/rate-stamp-semantics.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<f64>,
     /// Modules/items inserted into this entity (e.g. speed modules in a beacon).

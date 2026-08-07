@@ -126,8 +126,8 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 
 | Category | Sev | Sel | Calibration status |
 |---|---|---|---|
-| `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. **Known blind spot**: emitted zero errors on the 2026-08-07 stacking winner carrying 376 stamped-over-capacity tiles (hole 1) |
-| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor; lifting it is blocked on hole 1 only |
+| `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. The "blind spot" recorded here until 2026-08-07 — zero errors on a stacking winner carrying 376 *stamped*-over-capacity tiles — **was not a blind spot**: those tiles carry 0.0–30.0/s against a 60/s cap, so zero was the right answer. This check — not the stamp — is where per-tile authority belongs ([`rate-stamp-semantics.md`](rate-stamp-semantics.md)), though which of its two implementations to believe is itself unsettled. Caveat: `validate/mod.rs:939` dispatches the `belt_structural` implementation, and the parallel `belt_flow` one disagrees on the S=1 ore belts — unexplained, worth a look |
+| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor. **Lift status is tracked in hole 2 below and nowhere else** — do not restate it in this row |
 | `belt-flow-path` | E spaghetti / **W bus** | yes | graph-flow walk; Warning under `LayoutStyle::Bus`, which every production call site passes (the enum's *derived default* is Spaghetti — don't confuse the two) — hole 4 |
 | `belt-flow-reachability` | E spaghetti / **W bus** | yes | the #520 check, rewritten per-tile after incident ten; still cannot block a Bus layout — hole 4 |
 | `inserter-throughput` | W | yes | hand-capacity model; never sim-anchored |
@@ -144,23 +144,54 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 
 ## Known holes, ranked by measured cost
 
-1. **No validator check compares stamped/planned belt rates to physical
-   capacity** (the #311 class, parked in #527). The only detector is a
-   test-side audit closure inside the two `stacking_ec_60s` e2e fixtures.
-   Measured cost: a re-ranked candidate carrying 376 tiles at 90/s on
-   yellow belt (15/s nominal; the audit's cap is 30/s = the S=2 stacked
-   figure, in a fixture whose belt-tier ceiling is red) passed the
-   validator with **zero errors**
-   (2026-08-07, `fix/input-rate-delivery-counts-for-selection` adjudication).
-   **Next action:** promote the audit into `validate/` as an Error — it is a
-   physical law, the cheapest-possible check, and it unblocks hole 2.
-2. **`input-rate-delivery` is excluded from selection despite now being
+1. ~~**No validator check compares stamped/planned belt rates to physical
+   capacity**~~ — **CLOSED, NOT A HOLE (2026-08-07).** This entry asked for
+   a check that cannot exist. `PlacedEntity::rate` is a planned *aggregate*
+   (row / lane-family / merger-cascade total) at every one of its 89 stamp
+   sites; it is never per-tile flow, so comparing it to a belt's capacity is
+   a category error. The "376 tiles at 90/s" anchor cited here is the
+   artifact, not the evidence: those tiles carry 0.0–30.0/s by both lane
+   models against a 60/s cap, the same layout measures 96.0% of plan in the
+   sim, and the audit has **zero true positives** across all 684 tiles it
+   flags. Full census and evidence:
+   [`rate-stamp-semantics.md`](rate-stamp-semantics.md).
+
+   Two further claims in the original entry were also wrong: a check *does*
+   compare flow to capacity — `validate::check_lane_throughput`, at
+   `Severity::Error`, correctly, by walking the belt graph from machine
+   specs — and the previous **"Next action: promote the audit into
+   `validate/` as an Error"** is precisely the check that was written on
+   2026-08-07 and falsified within hours. **Do not do it.** What was retired from the three
+   fixtures that carried it is the audit's *physical interpretation*: the
+   probe itself is kept, reframed as the tier-selection statement it
+   actually makes.
+2. **`input-rate-delivery` is excluded from selection despite being
    anchored** (positive direction measured, negative direction confirmed
    in-client; see the table row). The branch that lifts the exemption
-   exists and improves PU, EC@2/AM2, and tier2 — but shipping it before
-   hole 1 trades a starvation warning for a physically impossible winner
-   (reproduced exactly as the exemption's doc comment predicted). Land 1,
-   then lift, then re-adjudicate the fixture drift.
+   improves PU, EC@2/AM2, and tier2. It was held behind hole 1 — "trades a
+   starvation warning for a physically impossible winner" — and **that
+   blocker is void**: the winner it selects is not physically impossible, it
+   was only measured with the wrong instrument.
+
+   **But the lift is still blocked, by a different and stronger objection
+   found 2026-08-07 while attempting it.** On `big-electric-pole@1`/am2 the
+   lift makes the default ship a layout **bit-identical** (same entity
+   fingerprint) to the one RFC-059 measured at **0.51/s against a planned
+   1.00/s** — replacing the 1127-entity layout measured at **1.10/s**. The
+   ranking inverts because `input-rate-delivery` fires **twice on the
+   1.10/s layout and zero times on the 0.51/s one**; the half-rate layout's
+   real defect is visible only as one `inserter-item-throughput` warning
+   ("steel-plate input inserters move 2.40/s but machine needs 5.00/s" — a
+   2.08× shortfall that predicts the measured half-rate almost exactly), so
+   with the lift the bad layout scores 1 and the good one scores 2.
+
+   So the category's **negative direction is not merely unanchored, it is
+   contradicted**: it warns twice on a layout that measures 110% of plan.
+   Its sim anchor is one-directional (PU positive). Lifting it blanket-wise
+   trades a measured ~1.5× win on PU for a measured ~2× loss on
+   big-electric-pole, and additionally collapses RFC-059's teeth test (both
+   claim orders then produce the identical layout). **Fix the
+   false-positive calibration first, then re-try the lift.**
 3. **The sim/meter side has no validator visibility.** `Manifest` carries no
    issue state, so parity sweeps can quote a condemned layout as a parity
    number — which is precisely how 68.2% was first reported with no mention
@@ -218,9 +249,13 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
   shortfall the warnings named, independent of the rate figure. A long
   re-run + #591 reconciliation would upgrade this to a fully measured
   two-sided anchor.
-- **2026-08-07 — over-capacity blind spot.** Same adjudication:
-  `stacking_ec_60s` fixtures' audit caught 376 stamped-over-cap tiles on a
-  validator-clean (0 errors) candidate. Anchor for hole 1.
+- ~~**2026-08-07 — over-capacity blind spot.**~~ **RETRACTED same day** —
+  this is not a receipt, it is the artifact. The `stacking_ec_60s` audit's
+  "376 stamped-over-cap tiles on a validator-clean candidate" compared an
+  aggregate stamp to one belt's capacity; those tiles carry 0.0–30.0/s
+  against a 60/s cap and the layout measures 96.0% of plan. The validator's
+  0 errors was the RIGHT answer, not a blind spot. Hole 1 is closed as a
+  non-hole; see [`rate-stamp-semantics.md`](rate-stamp-semantics.md).
 - **2026-07-31 — #520 (incident ten).** `small-electric-pole@5` DI layout,
   clean on every channel, measured **2.52/s vs 5.00 plan**; native 5.08/s.
   Falsified "clean means working"; produced the per-tile reachability
