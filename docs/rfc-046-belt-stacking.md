@@ -1,5 +1,15 @@
 # RFC-046: Belt stacking (Space Age stacked belts)
 
+> **Correction (2026-08-07, PR #601).** Where this RFC calls the fixtures'
+> probe a "direct per-tile capacity audit" / "audit of every rate-stamped
+> belt tile against stacked capacity", that reading is **retired**.
+> `PlacedEntity::rate` is a family/row/cascade AGGREGATE at every stamp
+> site, so the probe is a TIER-SELECTION check ("does this family fit one
+> belt of the chosen tier"), not a statement about any tile. The probes
+> still run and the RFC's stacking conclusions stand; only the physical
+> interpretation is wrong. Per-tile physics is `check_lane_throughput`.
+> See [`rate-stamp-semantics.md`](rate-stamp-semantics.md).
+
 Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-21;
 in-game anchor open, Phase 3 deferred).
 
