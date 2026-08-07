@@ -119,7 +119,17 @@ Knobs (defaults in parentheses):
   `check`, and the web overlay consume — always pass it for anything you
   might want to keep.
 - `--warmup N` (derived from manifest dims) — override the warmup before
-  measurement starts. Use for **steady-state probes** on deep chains:
+  measurement starts. **Raise `--timeout-secs` whenever you raise this.**
+  The derived timeout is 4× the tick budget at the *requested* speed, but a
+  loaded box runs slower than asked, so a long warmup can be killed
+  mid-warmup — and the failure is quiet in the worst way: no verdict, no
+  `kit_errors`, an empty `timeseries.csv`, and (if you were watching from
+  outside) no Factorio process, which reads exactly like a completed run.
+  Measured 2026-08-07: `stress_electronic_circuit_30s_from_ore` at
+  `--warmup 432000 --speed 32` died at the derived 1095s having written
+  zero data rows. `--timeout-secs 3600` cleared it. Check for the
+  `timed out after Ns waiting for harness-result.json` line before
+  concluding anything about a run that produced no numbers. Use for **steady-state probes** on deep chains:
   the 2% stability windows cannot distinguish a slow buffer-fill drift
   from real convergence, so a run can "converge" while trunk buffers are
   still filling (intermediates at or above plan are the tell). One game
