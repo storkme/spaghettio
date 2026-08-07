@@ -9,6 +9,57 @@ or reveals a new one. One residual remains: its **diagnosis** closed
 decided but unmerged.
 
 
+
+## 2026-08-07 — corpus-wide calibration: the meter is safe as a FLOOR
+
+Swept all 70 corpus layouts (35 fixtures × native/compact) with
+`sweep_corpus`; **41** have a sim baseline to compare against.
+
+**Distribution**: 25 pessimistic (meter < sim), 6 optimistic, 10 at ~0pp.
+Mean −1.27pp, median −0.3pp. **Every optimistic error is small — max
++1.3pp anywhere in the corpus** — while pessimistic errors run to −13.6pp.
+When the meter is wrong by a meaningful margin it is *always* wrong in the
+safe direction.
+
+**The gate question.** Classifying each row at-plan vs below-plan for both
+instruments, the dangerous quadrant (meter says AT plan, sim says BELOW) is
+**empty at every realistic tolerance** — 0 rows at 99%, 98%, 95% and 90%.
+It appears only at a literal bit-exact 100% cutoff, where its 4 hits are sim
+readings of 99.0–99.7% against a meter reading of exactly 100.0%, i.e. inside
+the same ~1pp band that agreeing fixtures show as noise.
+
+So: **"meter says below plan" ⇒ believe it** holds throughout, and is the
+property a gate needs. **"meter says at plan" ⇒ evidence of nothing** remains
+the correct caution: 3 of 23 meter-at-plan fixtures were softer sim passes
+(96–99.4% meter vs 99–102% sim). Never a real miss, but clearance semantics
+would overclaim precision the corpus doesn't support.
+
+**The −13.6pp outlier is the known item, not a new one.** Both
+`tier5_processing_unit_from_ore_am3` rows (−13.6 / −12.8pp) match this
+document's existing ≈−13% entry for the unmerged research-productivity axis.
+It is not a fluid gap: fluid-*ingredient* fixtures sit at −2.2 to +1.0pp.
+
+### Two things this does NOT establish
+
+1. **Fluid targets are untested.** All 4 fluid-target fixtures
+   (heavy-oil-cracking, sulfuric-acid, 2× AOP) have **no sim baseline** in
+   this corpus. The floor verdict is a **solid-target-only** result.
+2. **The tier2 entry above is a different layout, and flips direction.**
+   The corpus's `tier2_electronic_circuit` is the pre-lift zero-headroom
+   layout: meter 56.0% vs sim 57.7–58.1% — **pessimistic**, in line with
+   everything else. The 96%/90–91% figures recorded above are the *re-ranked
+   post-lift* layout, which is not in this corpus — and there the meter is
+   **optimistic by ~5–6pp**, which would be **four times the largest
+   optimistic error in the entire 41-row corpus**.
+
+   Those are not the same data point and must not be averaged. The
+   post-lift layout is either exercising something the meter over-credits,
+   or that single comparison is unsound. **Until that is resolved, the
+   floor property is established for the corpus and NOT for post-lift
+   layouts** — which is precisely the population a gate would run on.
+   This is the open question; resolving it needs a sim-baselined post-lift
+   corpus, not more analysis of the old one.
+
 ## 2026-08-07 — tier2_electronic_circuit: meter 96%, sim 90–91% (open)
 
 First divergence recorded from the *plan* side rather than the sim side, and
