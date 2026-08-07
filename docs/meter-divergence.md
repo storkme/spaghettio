@@ -33,25 +33,46 @@ any future use as a gate: a predictor that understates a deficit is safe as
 a **floor** ("meter says below plan" ⇒ believe it) and unsafe as clearance
 ("meter says at plan" ⇒ not yet evidence).
 
-**Candidate contributor, NOT yet confirmed and NOT sufficient to explain the
-gap.** At the manifest's `inserter_capacity = 2` the sim reports realized
-bonuses `inserter_stack_size_bonus = 1`, `bulk_inserter_capacity_bonus = 3`:
+**A candidate hand-size discrepancy was raised here and is now RETRACTED
+(same day, investigated against primary prototype data).** It claimed the
+meter's `BULK_HAND_BY_LEVEL` was one research level behind, on the reasoning
+that at `inserter_capacity = 2` the game realizes `bulk_inserter_capacity_bonus
+= 3`, so the hand should be `base_hand_size() + bonus = 2 + 3 = 5` where the
+meter returns 4.
 
-- non-bulk hand — meter `NON_BULK_HAND_BY_LEVEL[2] = 2`, game `1 + 1 = 2`. **Agrees.**
-- bulk hand — meter `BULK_HAND_BY_LEVEL[2] = 4`, game `2 + 3 = 5`. **Differs by one**;
-  the game's value matches the meter's *index 3*, i.e. the meter looks one
-  research level behind for bulk only.
+**That reasoning was wrong, and the meter is correct at every level 0–7.**
+`base_hand_size()` *is* `hand_size(0)` — it already contains L0's bonus
+(1 raw prototype floor + 1 from the `bulk-inserter` tech = 2). Adding the
+force bonus on top double-counts that L0 increment. The true decomposition
+is `hand = 1 (raw prototype floor) + bonus`, giving `1 + 3 = 4` — exactly
+what `BULK_HAND_BY_LEVEL[2]` returns.
 
-Two reasons this is filed as a question rather than a fix: the game's base
-bulk capacity (2) is taken from `entity_data.rs`'s own doc comment rather
-than measured, and the manifest's `inserter_capacity` may not mean "research
-level" in the sense the table indexes. Both are answerable from real
-prototype data via `check-data` — do that before touching the table, which
-`entity_data.rs` already warns was mis-transcribed once (PR #458).
+Primary sources (Factorio 2.0.77 install, not the wiki and not our docs):
 
-Note the direction: under-crediting bulk hands would make the meter
-**pessimistic**, and the observed error is **optimistic**. So even if
-confirmed, something else accounts for the 5pp.
+- `data/base/prototypes/entity/entities.lua` — `bulk-inserter` sets
+  `bulk = true` and has **no** `stack_size_bonus`, so its raw floor is 1.
+- `data/base/prototypes/technology.lua` — the `inserter-capacity-bonus-N`
+  chain carries Wube's own `-- result of N` comments, and every one equals
+  `1 + cumulative_bonus`. Those reproduce `BULK_HAND_BY_LEVEL` and
+  `NON_BULK_HAND_BY_LEVEL` exactly at L0–L6.
+- `data/space-age/.../entities.lua` — `stack-inserter` is `bulk = true` with
+  a literal `stack_size_bonus = 4`, i.e. `5 + bulk_bonus`, which is exactly
+  the meter's `BULK_HAND_BY_LEVEL[level] + 4`.
+
+The L7 non-bulk value is a **deliberate** divergence, already documented in
+`entity_data.rs`: `transport-belt-capacity-2` is a separate Space-Age tech on
+a different branch that grants a further `+1` non-bulk, so a
+`research_all_technologies()` force reads 3 where the declared axis says 2.
+`scenario.rs` overrides the force bonuses by direct assignment specifically to
+keep that contamination out — the two agree by design.
+
+**Lesson worth keeping**: `base_hand_size()` reads like an additive constant
+and is actually `hand_size(0)`. Its doc comment says so; I misread it anyway.
+This is the second time this table has attracted a wrong "fix" (PR #458 was
+the first), which is why `entity_data.rs` says *transcribe, don't derive*.
+
+So the ~5pp optimism remains **entirely unexplained** — this ladder has no
+bearing on it in either direction.
 
 ## Corpus status (2026-08-06; Phase B landed 2026-08-03)
 
