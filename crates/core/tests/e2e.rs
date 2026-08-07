@@ -1084,10 +1084,13 @@ fn tier2_electronic_circuit() {
     // category rank candidates makes the search prefer a layout without the
     // tail-of-row deficit — the intended effect, in the direction the
     // category's sim anchor supports (the warning-free re-ranked PU layout
-    // measured 102.0% of plan). CAVEAT, deliberately recorded: this fixture
-    // ships a DIFFERENT layout now, so its standing ~42%-below-plan sim
-    // baseline (5.77/5.81 vs 10, status.md) describes the OLD winner and is
-    // not evidence about this one. Re-measure before quoting it.
+    // measured 102.0% of plan). RE-MEASURED 2026-08-07, caveat discharged:
+    // this fixture ships a DIFFERENT layout now, and it sims at 9.09/s vs 10
+    // planned — 91% of plan, up from the old winner's 58% (5.77/5.81 vs 10).
+    // Still a FAIL, with a UNIFORM ~10% residual across BOTH stages (cable
+    // 90.0%, EC 90.9%), which points at a shared constraint rather than one
+    // stage bottlenecking. Kit clean, converged, 8 checkpoints. Root cause
+    // not chased yet — see status.md.
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
