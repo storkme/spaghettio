@@ -8513,6 +8513,7 @@ fn stacking_ec_60s_express_legendary_s2() {
     // covered by `errors.is_empty()` above.
     let mut over: Vec<String> = Vec::new();
     let mut max_seen = 0.0_f64;
+    let mut ec_belt_tiles = 0usize;
     for e in &layout_result.entities {
         // Scoped to the headline item — see stacking_ec_60s_red_one_belt_headline.
         // Intermediate families legally run as parallel belts.
@@ -8529,6 +8530,7 @@ fn stacking_ec_60s_express_legendary_s2() {
             continue;
         };
         let Some(rate) = e.rate else { continue };
+        ec_belt_tiles += 1;
         max_seen = max_seen.max(rate);
         let cap = belt_throughput_stacked(tier, 2);
         if rate > cap + 0.01 {
@@ -8539,6 +8541,15 @@ fn stacking_ec_60s_express_legendary_s2() {
         }
     }
     assert!(over.is_empty(), "family totals above one STACKED belt: {over:?}");
+    // NON-VACUITY: the loop above is scoped to electronic-circuit, so both
+    // `over` and the `max_seen` teeth below are meaningless unless EC actually
+    // reaches a rate-stamped belt. Mirrors the fanin fixture's guard; added
+    // after review caught the same gap there (#601).
+    assert!(
+        ec_belt_tiles > 0,
+        "no rate-stamped electronic-circuit belt tiles — the scoped probe and \
+         the max_seen teeth below are both vacuous; re-scope consciously"
+    );
     assert!(
         max_seen > 45.0,
         "no belt above unstacked express capacity (max {max_seen}) — stacked credit never engaged"
