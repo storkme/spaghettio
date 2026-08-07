@@ -871,6 +871,12 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
             .filter(|i| i.severity == crate::validate::Severity::Error)
             .count(),
         // Selection-scoped count (see `validate::selection_warning_count`).
+        // NOTE 2026-08-07: the `input-rate-delivery` exemption described
+        // below is LIFTED — that category now counts here. The paragraph
+        // that follows is kept as the record of WHY it was excluded and
+        // what it cost, not as a description of current behaviour.
+        // `belt-detour` remains excluded. Receipts: validator-trust.md
+        // hole 2.
         // Honest scope statement (review finding on #525 corrected an
         // earlier "bit-identical to pre-#519" overclaim here): the
         // category PRE-EXISTED with nonzero counts, so excluding it DOES

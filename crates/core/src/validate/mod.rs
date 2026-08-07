@@ -228,14 +228,16 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// comment), not physically-grounded the way an error is, so it stays
 /// report-only until a similar sim-anchoring case is made for letting it
 /// steer selection.
-pub(crate) fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
+/// Public so e2e never-worse gates assert against THE canonical definition
+/// rather than re-typing the predicate. Three of them had re-typed it, kept a
+/// stale `input-rate-delivery` exclusion after the engine dropped it, and
+/// thereby stopped asserting what the engine enforces — a flux-channel
+/// regression would have passed them silently (review, #605). One definition,
+/// one place to change it.
+pub fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
     issues
         .iter()
-        .filter(|i| {
-            i.severity == Severity::Warning
-                && i.category != "input-rate-delivery"
-                && i.category != "belt-detour"
-        })
+        .filter(|i| i.severity == Severity::Warning && i.category != "belt-detour")
         .count()
 }
 

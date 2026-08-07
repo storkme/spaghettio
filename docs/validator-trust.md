@@ -45,7 +45,7 @@ without comment.
 | # | Stage | What validation does there |
 |---|---|---|
 | C1 | e2e fixtures | fixtures that call `validate()` and unwrap fail on any Error; scoreboards count both severities |
-| C2 | candidate search (`bus/decomposition_search.rs`) | DI arm **refuses** any Error-carrying layout; `IssueCounts` (errors, selection-scoped warnings, `LayoutResult.warnings`) are component-wise never-worse **floors**; `selection_warning_count` ranks candidates by Warning count **minus exclusions** (`input-rate-delivery`, `belt-detour`); `score_layout` hard-gates `missing-balancer-template` |
+| C2 | candidate search (`bus/decomposition_search.rs`) | DI arm **refuses** any Error-carrying layout; `IssueCounts` (errors, selection-scoped warnings, `LayoutResult.warnings`) are component-wise never-worse **floors**; `selection_warning_count` ranks candidates by Warning count **minus exclusions** (`belt-detour` only, since `input-rate-delivery` was lifted 2026-08-07 — hole 2); `score_layout` hard-gates `missing-balancer-template` |
 | C3 | transactional transforms (`bus/compaction.rs`) | a cut/candidate that has (or adds) Errors is rejected; the pre-transform layout survives. RFC-065 adds a `connectivity::error_certain_regression` reject-fast prefilter ahead of the full validate |
 | C4 | web UI | issues render as markers; export button works regardless |
 | C5 | blueprint export | **no gate** — export never consults validation |
@@ -127,7 +127,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 | Category | Sev | Sel | Calibration status |
 |---|---|---|---|
 | `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. The "blind spot" recorded here until 2026-08-07 — zero errors on a stacking winner carrying 376 *stamped*-over-capacity tiles — **was not a blind spot**: those tiles carry 0.0–30.0/s against a 60/s cap, so zero was the right answer. This check — not the stamp — is where per-tile authority belongs ([`rate-stamp-semantics.md`](rate-stamp-semantics.md)), though which of its two implementations to believe is itself unsettled. Caveat: `validate/mod.rs:939` dispatches the `belt_structural` implementation, and the parallel `belt_flow` one disagrees on the S=1 ore belts — unexplained, worth a look |
-| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor. **Lift status is tracked in hole 2 below and nowhere else** — do not restate it in this row |
+| `input-rate-delivery` | W | **yes (lifted 2026-08-07)** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). **Lift receipts are in hole 2 below and nowhere else** — do not restate them in this row |
 | `belt-flow-path` | E spaghetti / **W bus** | yes | graph-flow walk; Warning under `LayoutStyle::Bus`, which every production call site passes (the enum's *derived default* is Spaghetti — don't confuse the two) — hole 4 |
 | `belt-flow-reachability` | E spaghetti / **W bus** | yes | the #520 check, rewritten per-tile after incident ten; still cannot block a Bus layout — hole 4 |
 | `inserter-throughput` | W | yes | hand-capacity model; never sim-anchored |
@@ -165,8 +165,8 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    fixtures that carried it is the audit's *physical interpretation*: the
    probe itself is kept, reframed as the tier-selection statement it
    actually makes.
-2. **`input-rate-delivery` is excluded from selection despite being
-   anchored** (positive direction measured, negative direction confirmed
+2. ~~**`input-rate-delivery` is excluded from selection despite being
+   anchored**~~ — **CLOSED 2026-08-07, the exemption is lifted.** (positive direction measured, negative direction confirmed
    in-client; see the table row). The branch that lifts the exemption
    improves PU, EC@2/AM2, and tier2. It was held behind hole 1 — "trades a
    starvation warning for a physically impossible winner" — and **that
@@ -201,12 +201,50 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    scores 1 — the ranking is correct, and lift-on-top drift falls from 6
    fixtures to 2.
 
-   **Lift status: unblocked again, pending #602 and two drift
-   adjudications** (`tier2_electronic_circuit` 1→0, the intended effect; and
-   `belt_detour_migration_differential_fast`'s geometry oracle). Parked on
-   `fix/lift-input-rate-delivery-exemption`. The category's negative
-   direction remains one-directionally anchored — that has not changed, and
-   is still the reason to re-measure rather than assume.
+   **LIFT LANDED (2026-08-07).** `input-rate-delivery` now counts in
+   `selection_warning_count`. The exemption's own stated exit condition —
+   "lift deliberately once the flux model is sim-anchored, with the fixture
+   drift adjudicated case by case" — is met, with receipts:
+
+   | fixture | planned | produced | delivered | verdict |
+   |---|---|---|---|---|
+   | `processing-unit@1/s` | 1.00/s | 1.01/s (+0.7%) | **1.02/s (+2.0%)** | PASS |
+   | `big-electric-pole@1` (the regression canary) | 1.00/s | 1.01/s (+0.7%) | **1.02/s (+2.0%)** | PASS |
+
+   (`delivered` exceeding `produced` in those rows is not a contradiction:
+   `produced` is Factorio's own crafting statistic while `delivered` is what
+   drained from the collection chests, so buffered stock draining during the
+   window makes delivered run slightly ahead. Both converge over a long run;
+   flagged in review as looking impossible, so stated here.)
+
+   PU was **68.2%** before, and the uniform per-stage shortfall is gone —
+   all ten items land within ±1% of plan simultaneously, which is what
+   removes the "right for the wrong reason" reading. Both runs kit-clean
+   and converged. Two caveats recorded honestly: the big-pole run declares
+   steel-plate productivity (which the install has researched and the first
+   attempt did not declare — the harness correctly refused that run as
+   `NO DATA`), so its plan differs from the 1127-entity layout RFC-059's
+   1.10/s refers to; the like-for-like guard there is the deterministic
+   fingerprint assertion in `di_claim_order_default_is_downstream_...`.
+   And `tier2_electronic_circuit` now ships a **different** layout, so its
+   standing ~42%-below-plan baseline described the previous winner. It has
+   since been RE-MEASURED (same day): **9.09/s vs 10 planned = 91% of plan**,
+   up from 58%. Still a FAIL, with a uniform ~10% residual root-caused to
+   zero-headroom integral machine counts — see `status.md`.
+
+   Drift was adjudicated, not re-blessed: 6 fixtures before #603, 2 after.
+   `tier2_electronic_circuit` 1→0 warnings (the intended effect);
+   `belt_detour_migration_differential_fast` turned out not to be lift
+   damage at all but a pre-existing disagreement between `measure_belt_runs`
+   and its tile-walk oracle about what a *run* is across a reversal, which
+   the lift merely exposed by changing which layout ships — pinned exactly,
+   so any other drift still fails.
+
+   The category's negative direction remains anchored only qualitatively;
+   that has not changed, and is still the reason to re-measure rather than
+   assume.
+
+
 3. **The sim/meter side has no validator visibility.** `Manifest` carries no
    issue state, so parity sweeps can quote a condemned layout as a parity
    number — which is precisely how 68.2% was first reported with no mention

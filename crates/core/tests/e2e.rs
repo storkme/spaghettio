@@ -1080,7 +1080,32 @@ fn tier2_electronic_circuit() {
     // #519 re-bless: one tail-of-row deficit surfaced by the
     // consumption-decremented walker (the family ec15-from-plates
     // sim-measured at −3.6%).
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1)]);
+    // 2026-08-07 input-rate-delivery lift: that warning is GONE. Letting the
+    // category rank candidates makes the search prefer a layout without the
+    // tail-of-row deficit — the intended effect, in the direction the
+    // category's sim anchor supports (the warning-free re-ranked PU layout
+    // measured 102.0% of plan). RE-MEASURED 2026-08-07, caveat discharged:
+    // this fixture ships a DIFFERENT layout now, and it sims at 9.09/s vs 10
+    // planned — 91% of plan, up from the old winner's 58% (5.77/5.81 vs 10).
+    // Still a FAIL, with a ~10% residual. It LOOKS uniform across both stages
+    // (cable 90.0%, EC 90.9%) but that is not two independent shortfalls:
+    // copper-cable plans at exactly 10.0 machines — zero headroom — so it
+    // cannot reach plan, and EC inherits it stoichiometrically (3 cable per
+    // EC; 27/3 = 9.0 vs 9.09 measured). One upstream stage propagating.
+    // Root-caused in status.md; do not re-derive the "shared constraint"
+    // reading from the uniform look alone.
+    // This fixture being warning-free is COUPLED to DETOUR_EXCESS_TILES: its
+    // one detour run has excess 7, a single tile under the floor of 8. Assert
+    // the floor, or lowering it turns this gate quiet instead of failing —
+    // the class docs/validator-reporting.md exists for (review, #605).
+    assert_eq!(
+        spaghettio_core::validate::belt_detour::DETOUR_EXCESS_TILES, 8,
+        "tier2's zero-warning assertion holds only because its detour run's \
+         excess (7) sits one tile under this floor. Changing it re-opens that \
+         assertion and the belt_detour_migration_differential_fast pin — \
+         adjudicate both, don't just re-bless."
+    );
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -7960,17 +7985,18 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
             // Selection-scoped warning count (#519): the engine's DI choice
-            // deliberately excludes the new flux category (its counts did
-            // not exist when this contract was defined; the engine's
-            // selections stay bit-identical to pre-#519). This pin asserts
-            // the contract the engine ENFORCES; giving it flux teeth is
-            // the #519/#520 follow-up, gated on sim-anchoring the model.
-            issues
-                .iter()
-                .filter(|i| {
-                    i.severity == Severity::Warning && i.category != "input-rate-delivery"
-                })
-                .count(),
+            // 2026-08-07: calls the engine's canonical counter directly, so
+            // this gate cannot drift from what the engine enforces. It used
+            // to re-type the predicate with a stale input-rate-delivery
+            // exclusion — which is exactly how it stopped asserting the
+            // contract, and why re-typing is not allowed here (review, #605).
+            // It used to exclude the category, with a comment saying giving
+            // it flux teeth was the #519/#520 follow-up gated on
+            // sim-anchoring — this IS that follow-up. Leaving the filter in
+            // would mean the gate no longer asserts what the engine
+            // enforces, and a regression in the flux channel would pass it
+            // silently. Note `belt-detour` is still excluded engine-side.
+            validate::selection_warning_count(&issues),
             l.warnings.len(),
         )
     };
@@ -8031,17 +8057,18 @@ fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
             // Selection-scoped warning count (#519): the engine's DI choice
-            // deliberately excludes the new flux category (its counts did
-            // not exist when this contract was defined; the engine's
-            // selections stay bit-identical to pre-#519). This pin asserts
-            // the contract the engine ENFORCES; giving it flux teeth is
-            // the #519/#520 follow-up, gated on sim-anchoring the model.
-            issues
-                .iter()
-                .filter(|i| {
-                    i.severity == Severity::Warning && i.category != "input-rate-delivery"
-                })
-                .count(),
+            // 2026-08-07: calls the engine's canonical counter directly, so
+            // this gate cannot drift from what the engine enforces. It used
+            // to re-type the predicate with a stale input-rate-delivery
+            // exclusion — which is exactly how it stopped asserting the
+            // contract, and why re-typing is not allowed here (review, #605).
+            // It used to exclude the category, with a comment saying giving
+            // it flux teeth was the #519/#520 follow-up gated on
+            // sim-anchoring — this IS that follow-up. Leaving the filter in
+            // would mean the gate no longer asserts what the engine
+            // enforces, and a regression in the flux channel would pass it
+            // silently. Note `belt-detour` is still excluded engine-side.
+            validate::selection_warning_count(&issues),
             l.warnings.len(),
         )
     };
@@ -9169,17 +9196,18 @@ fn di_change_surface_sweep() {
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
             // Selection-scoped warning count (#519): the engine's DI choice
-            // deliberately excludes the new flux category (its counts did
-            // not exist when this contract was defined; the engine's
-            // selections stay bit-identical to pre-#519). This pin asserts
-            // the contract the engine ENFORCES; giving it flux teeth is
-            // the #519/#520 follow-up, gated on sim-anchoring the model.
-            issues
-                .iter()
-                .filter(|i| {
-                    i.severity == Severity::Warning && i.category != "input-rate-delivery"
-                })
-                .count(),
+            // 2026-08-07: calls the engine's canonical counter directly, so
+            // this gate cannot drift from what the engine enforces. It used
+            // to re-type the predicate with a stale input-rate-delivery
+            // exclusion — which is exactly how it stopped asserting the
+            // contract, and why re-typing is not allowed here (review, #605).
+            // It used to exclude the category, with a comment saying giving
+            // it flux teeth was the #519/#520 follow-up gated on
+            // sim-anchoring — this IS that follow-up. Leaving the filter in
+            // would mean the gate no longer asserts what the engine
+            // enforces, and a regression in the flux channel would pass it
+            // silently. Note `belt-detour` is still excluded engine-side.
+            validate::selection_warning_count(&issues),
             l.warnings.len(),
         )
     };
@@ -10987,6 +11015,59 @@ fn belt_detour_migration_differential_fast() {
             run_e2e(name, item, rate, machine, None, &inputs).unwrap_or_else(|e| panic!("{name}: {e}"));
         let new = measure_belt_runs(&result.layout);
         let old = reference::measure_belt_runs_tilewalk(&result.layout);
+
+        // KNOWN, PINNED disagreement on tier2_electronic_circuit (2026-08-07,
+        // input-rate-delivery lift). The lift did not cause this — it changed
+        // which layout ships and thereby exposed a geometry class where the
+        // two decompositions have always differed. The copper-cable path runs
+        // WEST along y=7, drops, and returns EAST along y=11: a genuine
+        // doubling-back. `measure_belt_runs` reads it as ONE run (6,7)->(7,11)
+        // of 12 tiles for a 5-tile separation (2.4x ratio, but excess = 7,
+        // JUST UNDER the DETOUR_EXCESS_TILES floor of 8 — so it is NOT
+        // flagged, and tier2's zero-warning assertion is self-consistent
+        // only because of that. Lowering the floor breaks both);
+        // the tile-walk oracle splits it at the turn into two 6-tile runs
+        // (1.2x each — invisible). Neither is obviously "wrong": the two
+        // disagree about what a *run* is across a reversal, which is a
+        // definitional gap, not a coding bug.
+        //
+        // Pinned rather than re-blessed or skipped, so the guard keeps its
+        // teeth: any OTHER drift on this fixture still fails. belt-detour is
+        // report-only and excluded from selection, so no shipped decision
+        // rides on the answer today.
+        if name == "tier2_electronic_circuit" && new != old {
+            let only_new: Vec<_> = new.iter().filter(|r| !old.contains(r)).collect();
+            let only_old: Vec<_> = old.iter().filter(|r| !new.contains(r)).collect();
+            let fmt = |rs: &[&spaghettio_core::validate::belt_detour::BeltRun]| {
+                let mut v: Vec<String> = rs
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "{:?}->{:?} len={} direct={}",
+                            r.entry, r.exit, r.actual_length, r.direct_distance
+                        )
+                    })
+                    .collect();
+                v.sort();
+                v
+            };
+            assert_eq!(
+                (fmt(&only_new), fmt(&only_old)),
+                (
+                    vec!["(6, 7)->(7, 11) len=12 direct=5".to_string()],
+                    vec![
+                        "(3, 10)->(7, 11) len=6 direct=5".to_string(),
+                        "(6, 7)->(3, 9) len=6 direct=5".to_string(),
+                    ]
+                ),
+                "{name}: the decomposition disagreement changed shape. The single \
+                 known difference is the y=7/y=11 cable reversal; anything else means \
+                 real drift — adjudicate via belt_detour_migration_differential + the \
+                 RFC-065 log before touching this pin"
+            );
+            continue;
+        }
+
         assert_eq!(
             new, old,
             "{name}: run decomposition drifted from the tile-walk oracle — if this fixture \
