@@ -127,8 +127,8 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 | Category | Sev | Sel | Calibration status |
 |---|---|---|---|
 | `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. **Known blind spot**: emitted zero errors on the 2026-08-07 stacking winner carrying 376 stamped-over-capacity tiles (hole 1) |
-| `input-rate-delivery` | W | **excluded** | **sim-anchored both directions, 2026-08-07** (receipts below): flagged layout 68.2% of plan, warning-free re-ranked layout 102.0%. Exclusion predates the anchor; lifting it is blocked on hole 1 only |
-| `belt-flow-path` | E spaghetti / **W bus** | yes | graph-flow walk; Warning on the default (Bus) pipeline — hole 4 |
+| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor; lifting it is blocked on hole 1 only |
+| `belt-flow-path` | E spaghetti / **W bus** | yes | graph-flow walk; Warning under `LayoutStyle::Bus`, which every production call site passes (the enum's *derived default* is Spaghetti — don't confuse the two) — hole 4 |
 | `belt-flow-reachability` | E spaghetti / **W bus** | yes | the #520 check, rewritten per-tile after incident ten; still cannot block a Bus layout — hole 4 |
 | `inserter-throughput` | W | yes | hand-capacity model; never sim-anchored |
 | `inserter-item-throughput` | W | yes | never sim-anchored |
@@ -148,12 +148,15 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    capacity** (the #311 class, parked in #527). The only detector is a
    test-side audit closure inside the two `stacking_ec_60s` e2e fixtures.
    Measured cost: a re-ranked candidate carrying 376 tiles at 90/s on
-   30/s-cap yellow belt passed the validator with **zero errors**
+   yellow belt (15/s nominal; the audit's cap is 30/s = the S=2 stacked
+   figure, in a fixture whose belt-tier ceiling is red) passed the
+   validator with **zero errors**
    (2026-08-07, `fix/input-rate-delivery-counts-for-selection` adjudication).
    **Next action:** promote the audit into `validate/` as an Error — it is a
    physical law, the cheapest-possible check, and it unblocks hole 2.
 2. **`input-rate-delivery` is excluded from selection despite now being
-   sim-anchored in both directions.** The branch that lifts the exemption
+   anchored** (positive direction measured, negative direction confirmed
+   in-client; see the table row). The branch that lifts the exemption
    exists and improves PU, EC@2/AM2, and tier2 — but shipping it before
    hole 1 trades a starvation warning for a physically impossible winner
    (reproduced exactly as the exemption's doc comment predicted). Land 1,
@@ -171,17 +174,22 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    218) — and make the sweep/report print them next to every rate, flagging
    any "parity" number measured on a warned layout as measuring the layout,
    not the pipeline.
-4. **`belt-flow-path` / `belt-flow-reachability` are Warnings on Bus**, the
-   default pipeline — the check rewritten after the #520 0.50-ratio incident
+4. **`belt-flow-path` / `belt-flow-reachability` are Warnings under
+   `LayoutStyle::Bus`** — the style every production call site passes
+   (`LayoutStyle::default()` is Spaghetti, but nothing in production relies
+   on it) — so the check rewritten after the #520 0.50-ratio incident
    cannot block the style of layout that incident shipped.
-5. **`classify_errors` string drift**: it buckets `"underground-belt-sideload"`
-   as contamination and `"pipe-to-ground"` as structural, but neither exists
-   as a category — the UG checks emit `"underground-belt"`, and
-   `"pipe-to-ground"` appears in `validate/` only as an *entity name* — so
-   both classes silently fall through to the starvation bucket. Consequence
-   is bounded (only the scoped Pooled merge-tap quality comparison), but two
-   dead strings in one match arm is a live instance of category strings
-   having no registry. This table is now that registry.
+5. **`classify_errors` string drift**: two of its match strings are dead —
+   `"underground-belt-sideload"` (the UG checks emit `"underground-belt"`,
+   so sideload errors silently fall through to the starvation `_` arm
+   instead of contamination) and `"pipe-to-ground"` (only ever an *entity
+   name* in `validate/`, so it contributes nothing to the structural arm —
+   which stays live via `entity-overlap`; real pipe errors emit as
+   `pipe-isolation`/`fluid-network`/`fluid-connectivity` and land in
+   contamination correctly). Consequence is bounded (only the scoped Pooled
+   merge-tap quality comparison), but two dead strings in one match
+   expression is a live instance of category strings having no registry.
+   This table is now that registry.
 6. **Severity has no "uncalibrated" tier**, so calibration firewalls are
    implemented as silent exclusions inside `selection_warning_count`. The
    #519 firewall's written exit condition ("lift once sim-anchored") lived
@@ -194,13 +202,22 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 
 ## Receipts (sim anchors and falsifications)
 
-- **2026-08-07 — `input-rate-delivery`, two-sided anchor.** PU@1/s AM3
-  from-ore, research productivity +10% (PU, plastic). Flagged layout (three
-  warnings, 0.0/s EC to three named machines): **0.682/s vs 1.0 plan**
-  (converged at minimum checkpoint count; see rfc064-phase2-followups §9's
-  caveats). Re-ranked layout with the warnings selected away: **1.020/s
-  delivered (102.0%)**, converged, census 140 working / 4 full-output /
-  1 ingredient-short. The check discriminates in both directions.
+- **2026-08-07 — `input-rate-delivery` anchor.** PU@1/s AM3 from-ore,
+  research productivity +10% (PU, plastic). **Positive direction (sound):**
+  the re-ranked layout with the warnings selected away measured **1.020/s
+  delivered vs 1.0 plan (102.0%)**, converged over 4 checkpoints, kit
+  clean, census 140 working / 4 full-output / 1 ingredient-short.
+  **Negative direction (qualitative, rate provisional):** the flagged
+  layout (three warnings, 0.0/s EC to three named machines) measured
+  0.682/s — but that run converged at the *minimum* checkpoint count
+  (forensics class 5c: provisional until re-run longer) and is
+  unreconciled with #591's 90–98% note, so the 68.2% figure is not yet a
+  clean measurement. What anchors this direction instead is the owner's
+  in-client observation: the EC belt into the PU rows visibly starved,
+  4 producers of 2.5/s against 8 consumers of 2.5/s — the structural
+  shortfall the warnings named, independent of the rate figure. A long
+  re-run + #591 reconciliation would upgrade this to a fully measured
+  two-sided anchor.
 - **2026-08-07 — over-capacity blind spot.** Same adjudication:
   `stacking_ec_60s` fixtures' audit caught 376 stamped-over-cap tiles on a
   validator-clean (0 errors) candidate. Anchor for hole 1.
