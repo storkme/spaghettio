@@ -271,7 +271,11 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
 /// - A **fixed** port (34197, Factorio's default), because someone has to
 ///   type it into a client. `run` uses an ephemeral port for concurrency.
 /// - No tick ceiling: the scenario's end tick is pushed far out so the
-///   world does not finalize and stop while being inspected.
+///   world does not finalize and stop while being inspected. That alone is
+///   NOT sufficient — `finalize` also fires on convergence — so serve also
+///   sets [`scenario::RunParams::keep_alive`], which keeps the boundary
+///   kit feeding afterwards. Both are required; the ceiling was there
+///   first and silently did half the job (2026-08-07).
 /// - The scratch run dir is left in place for the same reason.
 ///
 /// The client's version must match the server's install exactly.
@@ -319,7 +323,12 @@ fn cmd_serve(args: &[String]) -> Result<(), String> {
         speed,
         Some(NO_CEILING),
     )
-    .with_operator_qol();
+    .with_operator_qol()
+    // NO_CEILING alone does not keep an inspected world alive: `finalize`
+    // also fires on convergence, minutes in, and that stops the kit's
+    // feed/drain/power upkeep. Without this the operator inspects a
+    // starved, stopped factory (2026-08-07).
+    .with_keep_alive();
     if let Some(w) = warmup {
         params = params.with_warmup(w);
     }
