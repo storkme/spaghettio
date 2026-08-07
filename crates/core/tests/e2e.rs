@@ -8168,14 +8168,18 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
         l.entities
             .iter()
             .filter_map(|e| {
-                // Scoped to the headline item, same as the two stacking_ec_60s
-                // probes. Unscoped it asserts a non-law (a family bigger than
-                // one belt is legal when realized as parallel belts); it is not
-                // fragile at today's rates — the largest intermediate family
-                // fits under the stacked-yellow cap — but leaving it unscoped
-                // would contradict the rationale applied to its siblings and
-                // exposes it to the same drift.
-                if e.carries.as_deref() != Some("electronic-circuit") {
+                // Scoped to COPPER-CABLE — this fixture's actual subject. The
+                // S=1 arm above refuses on "25/s cable > 15/s full yellow";
+                // RFC-047's claim is that stacking lifts exactly that wall
+                // (25/s fits one yellow belt stacked to 30/s). Scoping is
+                // needed for the same reason as the stacking_ec_60s probes
+                // (unscoped, "no family exceeds one belt" is a non-law — a
+                // bigger family legally runs as parallel belts), but scoping
+                // to the OUTPUT item here would make the assertion VACUOUS:
+                // EC is only 6/s, far under the 30/s stacked cap, so it could
+                // never fire. Caught in review of #601. The non-vacuity guard
+                // below is what stops that recurring silently.
+                if e.carries.as_deref() != Some("copper-cable") {
                     return None;
                 }
                 let tier = if is_surface_belt(&e.name) {
@@ -8216,6 +8220,25 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     .unwrap_or_else(|e| panic!("S=2 with DI Off must build via the stacked lift: {e}"));
     let over2b = family_over_one_belt(&l2_belts, 2);
     assert!(over2b.is_empty(), "DI-Off S=2 arm: family total above one stacked belt: {over2b:?}");
+    // NON-VACUITY: the probe above is scoped to copper-cable, so it is only
+    // meaningful if this arm actually puts rate-stamped cable on belts (which
+    // is the whole point of the DI-Off arm). Without this, a future change
+    // that takes cable off belts turns the assertion silently true —
+    // validator-reporting.md's recurring failure mode.
+    let cable_belt_tiles = l2_belts
+        .entities
+        .iter()
+        .filter(|e| {
+            e.carries.as_deref() == Some("copper-cable")
+                && e.rate.is_some()
+                && (is_surface_belt(&e.name) || is_ug_belt(&e.name) || is_splitter(&e.name))
+        })
+        .count();
+    assert!(
+        cable_belt_tiles > 0,
+        "DI-Off S=2 arm has no rate-stamped copper-cable belt tiles — the \
+         family_over_one_belt probe is vacuous; re-scope it consciously"
+    );
     assert!(
         l2_belts.entities.iter().any(|e| e.rate.is_some_and(|r| r > 15.0)),
         "no belt exceeds unstacked full-belt capacity on the DI-Off arm — vacuous lift"

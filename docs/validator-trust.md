@@ -127,7 +127,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 | Category | Sev | Sel | Calibration status |
 |---|---|---|---|
 | `lane-throughput` | E | yes | walked lane rates vs stacking-aware caps. Seeding deliberately uncapped so over-commit stays visible. The "blind spot" recorded here until 2026-08-07 — zero errors on a stacking winner carrying 376 *stamped*-over-capacity tiles — **was not a blind spot**: those tiles carry 0.0–30.0/s against a 60/s cap, so zero was the right answer. This check — not the stamp — is where per-tile authority belongs ([`rate-stamp-semantics.md`](rate-stamp-semantics.md)), though which of its two implementations to believe is itself unsettled. Caveat: `validate/mod.rs:939` dispatches the `belt_structural` implementation, and the parallel `belt_flow` one disagrees on the S=1 ore belts — unexplained, worth a look |
-| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor; it was blocked on hole 1, which **closed 2026-08-07 as a category error** — lifting it is now unblocked, pending fixture-drift adjudication only |
+| `input-rate-delivery` | W | **excluded** | **anchored 2026-08-07** (receipts below): positive direction sim-measured sound (warning-free re-ranked layout 102.0% of plan); negative direction confirmed qualitatively in-client (owner observed the flagged EC belt starving, 4 producers vs 8 consumers) — its 68.2% *rate figure* stays provisional (class-5c min-checkpoint run, unreconciled with #591's 90–98% note). Exclusion predates the anchor. **Lift status is tracked in hole 2 below and nowhere else** — do not restate it in this row |
 | `belt-flow-path` | E spaghetti / **W bus** | yes | graph-flow walk; Warning under `LayoutStyle::Bus`, which every production call site passes (the enum's *derived default* is Spaghetti — don't confuse the two) — hole 4 |
 | `belt-flow-reachability` | E spaghetti / **W bus** | yes | the #520 check, rewritten per-tile after incident ten; still cannot block a Bus layout — hole 4 |
 | `inserter-throughput` | W | yes | hand-capacity model; never sim-anchored |
@@ -249,9 +249,13 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
   shortfall the warnings named, independent of the rate figure. A long
   re-run + #591 reconciliation would upgrade this to a fully measured
   two-sided anchor.
-- **2026-08-07 — over-capacity blind spot.** Same adjudication:
-  `stacking_ec_60s` fixtures' audit caught 376 stamped-over-cap tiles on a
-  validator-clean (0 errors) candidate. Anchor for hole 1.
+- ~~**2026-08-07 — over-capacity blind spot.**~~ **RETRACTED same day** —
+  this is not a receipt, it is the artifact. The `stacking_ec_60s` audit's
+  "376 stamped-over-cap tiles on a validator-clean candidate" compared an
+  aggregate stamp to one belt's capacity; those tiles carry 0.0–30.0/s
+  against a 60/s cap and the layout measures 96.0% of plan. The validator's
+  0 errors was the RIGHT answer, not a blind spot. Hole 1 is closed as a
+  non-hole; see [`rate-stamp-semantics.md`](rate-stamp-semantics.md).
 - **2026-07-31 — #520 (incident ten).** `small-electric-pole@5` DI layout,
   clean on every channel, measured **2.52/s vs 5.00 plan**; native 5.08/s.
   Falsified "clean means working"; produced the per-tile reachability
