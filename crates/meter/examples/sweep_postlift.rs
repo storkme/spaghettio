@@ -60,8 +60,14 @@ const THRESHOLDS: [f64; 4] = [90.0, 95.0, 98.0, 99.0];
 const HARNESS_MIN_CHECKPOINTS: usize = 4;
 
 /// The warmup the 2026-08-07 bank was run at, and the figure both
-/// `meter-divergence.md` and `status.md` quote as a credential. Reported and
-/// flagged, not gated — same philosophy as the checkpoint count.
+/// `meter-divergence.md` and `status.md` quote as a credential.
+///
+/// **Gated**, unlike the checkpoint count. A short warmup makes a reading
+/// invalid rather than merely weak — `CLAUDE.md` says it reads buffer fill as
+/// throughput and must not be quoted — so a row below this is excluded, not
+/// annotated. The warmup column in the provenance table is therefore always
+/// `>= ` this value; it is printed so the credential is visible rather than
+/// taken on trust.
 const EXPECTED_WARMUP_TICKS: u64 = 432_000;
 
 /// Per-fixture sim provenance, kept so the strength of each row is visible
@@ -306,10 +312,13 @@ fn main() {
         // harness writes; `measurement.checkpoints` counts only those with a
         // usable triple, so a converged run whose first entry lacked one would
         // be wrongly called inconsistent if this compared the parsed number.
-        let raw_checkpoints = report["raw_result"]["checkpoints"]
+        let Some(raw_checkpoints) = report["raw_result"]["checkpoints"]
             .as_array()
             .map(|a| a.len())
-            .unwrap_or(checkpoints);
+        else {
+            excluded.push((fixture, "report has no `raw_result.checkpoints` array".into()));
+            continue;
+        };
         if raw_checkpoints < HARNESS_MIN_CHECKPOINTS {
             // Fewer checkpoints than the harness can emit for a converged run
             // means the report contradicts itself.
@@ -635,10 +644,6 @@ fn main() {
         .iter()
         .filter(|p| p.checkpoints <= HARNESS_MIN_CHECKPOINTS)
         .count();
-    let short_warmup = provenance
-        .iter()
-        .filter(|p| p.warmup_ticks < EXPECTED_WARMUP_TICKS)
-        .count();
     println!("\n=== SIM PROVENANCE ===");
     println!("  {:<30} {:>11}  {:>7}", "fixture", "checkpoints", "warmup");
     for p in &provenance {
@@ -647,21 +652,15 @@ fn main() {
         } else {
             ""
         };
-        let wu_flag = if p.warmup_ticks < EXPECTED_WARMUP_TICKS {
-            "  <- SHORT WARMUP: may read buffer fill as throughput; do not quote"
-        } else {
-            ""
-        };
         println!(
-            "  {:<30} {:>11}  {:>7}{cp_flag}{wu_flag}",
+            "  {:<30} {:>11}  {:>7}{cp_flag}",
             p.fixture, p.checkpoints, p.warmup_ticks
         );
     }
     println!(
         "  {at_min}/{} at/below the checkpoint minimum of {HARNESS_MIN_CHECKPOINTS} (NOT a filter — \
-         every converged run has >= {HARNESS_MIN_CHECKPOINTS} by construction); \
-         {short_warmup}/{} below the expected {EXPECTED_WARMUP_TICKS}-tick warmup.",
-        provenance.len(),
+         every converged run has >= {HARNESS_MIN_CHECKPOINTS} by construction). \
+         Warmup is gated at {EXPECTED_WARMUP_TICKS}, so every row shown cleared it.",
         provenance.len()
     );
 

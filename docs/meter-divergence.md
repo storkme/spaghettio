@@ -9,15 +9,16 @@ or reveals a new one.
 
 **Two open residuals, and they are different animals:**
 
-1. `tier5_processing_unit_from_ore_am3`, −13.6% on the corpus (sim-relative —
-   see the units note in the 2026-08-08 section; this log has historically
-   written `sweep_corpus`'s percentages as "pp"). Diagnosis
+1. `tier5_processing_unit_from_ore_am3`, −13.6% on the corpus (sim-relative,
+   **on produced** — see the units note in the 2026-08-08 section; this log has
+   historically written `sweep_corpus`'s percentages as "pp"). Diagnosis
    closed 2026-08-06: a research-productivity parity gap. Its fix is **merged**
    (#584 meter / #585 sim / #587 solver / #591 `sim_export` wiring) — what
    remains is that **the 2026-08-01 corpus predates the axis and declares
    none**, so this row still reads at the old value until the bank is
    re-exported or re-declared. Not a modelling mystery; a stale reference.
-2. `pu1-lift`, **−23.7% sim-relative / −24.2pp of plan**, found 2026-08-08 on the post-lift population and
+2. `pu1-lift`, **−22.7% sim-relative on produced** (the metric-matched figure
+   against item 1; −23.7% on delivered, −24.2pp of plan), found 2026-08-08 on the post-lift population and
    **not** the same cause — that fixture declares the axis and its sim run is
    kit-clean. A petroleum-gas distribution shortfall inside the meter's own
    fluid network. See the 2026-08-08 section, which is the current head of this
