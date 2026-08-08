@@ -118,7 +118,26 @@ fn main() {
     }
 
     // --- what feeds the starved machines ---------------------------------
-    println!("\ninput inserters of starved machines — pickup tile contents:");
+    //
+    // ITEM-starved machines only, and the heading says so. A fluid shortage
+    // arrives through the pipe network, not an inserter, so there is nothing
+    // for this block to show — but a reader who has just been handed a list of
+    // `[fluid]` machines above and then finds them absent here would read the
+    // silence as "nothing wrong with their supply". Naming the scope, and
+    // counting the machines this block deliberately does not cover, keeps the
+    // absence from being informative in the wrong direction.
+    let fluid_starved = f
+        .machines
+        .iter()
+        .filter(|m| m.state == MachineState::FluidIngredientShortage)
+        .count();
+    println!("\ninput inserters of ITEM-starved machines — pickup tile contents:");
+    if fluid_starved > 0 {
+        println!(
+            "  (note: {fluid_starved} fluid-starved machine(s) are NOT listed here — fluid arrives \
+             by pipe, not inserter. Use `debug_fluid` for those.)"
+        );
+    }
     let mut shown2 = 0;
     for (mi, m) in f.machines.iter().enumerate() {
         if m.state != MachineState::ItemIngredientShortage || shown2 >= 6 {

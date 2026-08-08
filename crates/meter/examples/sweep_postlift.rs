@@ -251,7 +251,12 @@ fn main() {
             ));
             continue;
         }
-        checkpoint_counts.push((fixture.clone(), checkpoints));
+        // Recorded, but only committed once the fixture actually contributes a
+        // row (below). Pushing here would let a fixture that passes every gate
+        // and then yields nothing still inflate the provenance denominator —
+        // the shrinking-denominator failure this file guards against, running
+        // in the opposite direction.
+        let pending_checkpoints = checkpoints;
 
         let bp = std::fs::read_to_string(&bp_path).unwrap();
         let manifest = match Manifest::from_path(&mf_path) {
@@ -306,6 +311,8 @@ fn main() {
         // one door the `kit_errors` gate does not cover.
         if added == 0 {
             excluded.push((fixture, "report has no items with a non-zero planned_rate".into()));
+        } else {
+            checkpoint_counts.push((fixture, pending_checkpoints));
         }
     }
 

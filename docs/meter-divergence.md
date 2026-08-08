@@ -129,8 +129,9 @@ On delivered: mean −3.80pp, worst optimistic **+6.30pp**, worst pessimistic
 
 *Summary statistics are computed from the unrounded rates, so recomputing them
 from the 2dp table can differ in the last digit — `pu1-lift` reads −24.20pp off
-the table against −24.21pp from the raw values. The CSV carries the full
-precision.*
+the table against −24.21pp from the raw values. The CSV does **not** resolve
+this either: it rounds rates to 4dp and percentages to 2dp, so it reproduces
+−24.20 as well. Only re-running the sweep gives the unrounded figure.*
 
 **Why `bigpole1-lift-v2` and `pu1-lift` show identical sim baselines** — asked
 by review, and worth answering in the doc because any reader will ask it. The
@@ -156,8 +157,19 @@ which is precisely not the case on a below-plan fixture.
 Planned-relative is the right unit for the gate classification below, because a
 gate thresholds *% of plan*. But **cross-sweep comparisons must be made in the
 corpus's units**, so `sweep_postlift` now prints both. The same six rows,
-sim-relative: mean −3.65%, worst optimistic **+7.03%**, worst pessimistic
-**−23.73%**.
+sim-relative:
+
+| | mean | worst optimistic | worst pessimistic |
+|---|---:|---:|---:|
+| **on produced** | −3.12% | **+5.60%** | **−22.71%** |
+| on delivered | −3.65% | +7.03% | −23.73% |
+
+**And the metric must match too.** `sweep_corpus` computes its bound on
+**produced** for solid targets, so the only like-for-like comparison against
+the corpus's +1.3% / −13.6% is the **produced** row above. Quoting the
+delivered +7.03% against a produced bound would commit the exact conflation
+this section warns about — an earlier revision of this doc did precisely that
+and claimed 5.4×.
 
 ### Both corpus-wide bounds are broken by this population
 
@@ -166,15 +178,16 @@ The corpus's two load-bearing numbers were *"every optimistic error is ≤
 both of which are, per the units note above, **sim-relative percentages**.
 Post-lift, quoted in those same units so the multipliers mean something:
 
-- **Optimism reaches +7.03% — 5.4× the corpus maximum** (+6.30pp
-  planned-relative). This is the tier2 divergence the 2026-08-07 section
-  already flagged as unexplained (it recorded meter 96% vs sim 90–91%); it
-  **reproduces exactly** — 96.00 vs 90.91 produced — from the banked blueprint.
-  Warmup was falsified as its cause on 2026-08-07 (96.0% flat from 108k to
-  864k) and nothing here changes that. Still unexplained.
-- **Pessimism reaches −23.73% — 1.7× the corpus maximum**, on `pu1-lift`, a
-  layout the sim measures at **102.01% of plan** (−24.21pp planned-relative).
-  This one is new (below).
+- **Optimism reaches +5.60% — 4.3× the corpus maximum** (produced, matching the
+  corpus's own metric; +7.03% on delivered, +6.30pp planned-relative). This is
+  the tier2 divergence the 2026-08-07 section already flagged as unexplained
+  (it recorded meter 96% vs sim 90–91%); it **reproduces exactly** — 96.00 vs
+  90.91 produced — from the banked blueprint. Warmup was falsified as its cause
+  on 2026-08-07 (96.0% flat from 108k to 864k) and nothing here changes that.
+  Still unexplained.
+- **Pessimism reaches −22.71% — 1.7× the corpus maximum** (produced; −23.73% on
+  delivered, −24.21pp planned-relative), on `pu1-lift`, a layout the sim
+  measures at **102.01% of plan**. This one is new (below).
 
 ### The gate verdict, stated as the two quadrants
 

@@ -103,6 +103,14 @@ accusation**, the quadrant a blocking gate cares about, and it is not removed by
 re-declaring the research-productivity axis (`pu1-lift` already declares it and
 its sim run is kit-clean).
 
+**Provenance qualifier on the reference.** `pu1-lift`'s sim run converged at the
+harness's *minimum* checkpoint count (4), which `sim-harness-forensics.md`
+class 5c says needs longer-warmup confirmation before it is trusted as the
+asymptote — so the 102.01% baseline is provisional in that specific sense. The
+*direction* is robust anyway: a −24pp gap does not survive any plausible
+class-5c correction, and the localisation below rests on the meter's own state,
+not on the sim's rate. But do not quote 102.01% as settled.
+
 Localised, with the two probes rather than by inference:
 
 - `attribute` — `plastic-bar` 0/2 working, `sulfur` 0/1 working, all three in
