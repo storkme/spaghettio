@@ -138,9 +138,15 @@ fn main() {
              by pipe, not inserter. Use `debug_fluid` for those.)"
         );
     }
+    const INSERTER_DETAIL_CAP: usize = 6;
     let mut shown2 = 0;
+    let mut hidden2 = 0;
     for (mi, m) in f.machines.iter().enumerate() {
-        if m.state != MachineState::ItemIngredientShortage || shown2 >= 6 {
+        if m.state != MachineState::ItemIngredientShortage {
+            continue;
+        }
+        if shown2 >= INSERTER_DETAIL_CAP {
+            hidden2 += 1;
             continue;
         }
         shown2 += 1;
@@ -180,6 +186,11 @@ fn main() {
                 w.core.kind, w.pos, w.core.starved_ticks, w.core.delivered
             );
         }
+    }
+    if hidden2 > 0 {
+        println!(
+            "  ... {hidden2} more item-starved machine(s) not shown (cap {INSERTER_DETAIL_CAP})"
+        );
     }
 
     // --- inserter wiring census ----------------------------------------

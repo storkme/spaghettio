@@ -248,6 +248,36 @@ straddle that cutoff between the reference instrument's own two columns:
 So do not lean on the 90% row at all. Only the 95% classification is
 metric-stable.
 
+**But "metric-stable" is not "threshold-robust", and the 95% row is not that.**
+These are two different axes and it is worth separating them, because an
+earlier revision of this section labelled only the 90% row knife-edge and so
+invited reading 95% as solid in a way it is not:
+
+- *Metric-stability* — does the classification survive swapping produced for
+  delivered? 95% yes, 90% no.
+- *Threshold-sensitivity* — does it survive moving the cutoff? **No.** The miss
+  exists because the meter's 96.0% sits above 95%. A gate at 97%, 98% or 99%
+  sees the meter read below plan and there is no miss at all in this bank.
+
+What the measurement actually establishes is the **underlying optimism** —
++5.09pp produced / +6.30pp delivered on `tier2-ec10-lift`, 4.3× the corpus
+maximum — which is a property of the meter on that layout and does not move
+with the cutoff. Whether that optimism *converts into a missed defect* depends
+on where the threshold falls between the two readings, and at 95% it does.
+
+That is still enough to retract the corpus claim, because the corpus claim was
+universal over thresholds ("0 rows at 99%, 98%, 95% and 90%") and a universal
+claim is refuted by one threshold. It is **not** enough to say a gate at 98%
+would miss anything in this bank — it would not. If the gate lands at 98% or
+99%, the honest statement is that this bank shows no misses there **and** that
+the meter is 4.3× more optimistic than the corpus bound on one of six layouts,
+which is a reason to distrust the margin rather than a demonstrated failure.
+
+One thing this is *not* uncertainty about: the meter's 96.0% itself. The meter
+is deterministic and warmup-invariant here — 96.0% flat across 108k→864k, an 8×
+range — so the reading is exact and reproducible. The uncertainty is entirely
+in whether it tracks reality, which is the thing being measured.
+
 - **Report-only.** At 90% *and* 95% the meter reads 96.0% on `tier2-ec10-lift`
   — at plan — where the sim delivers 89.7%. That is the dangerous quadrant,
   occupied on the *first* post-lift fixture, at both tolerances a gate is most
@@ -265,7 +295,11 @@ metric-stable.
   floor retraction standing**, because tier2's optimism has a different, still
   unknown cause. The two findings must not be treated as one.
 - **Blocking.** `pu1-lift` is rejected at *every* tolerance from 90% up while
-  actually delivering 102.01%. Blocking was already ruled out by the corpus's
+  actually delivering 102.01%. (That 102.01% is itself a class-5c reading — its
+  run converged at the harness minimum, see the provenance note — so treat the
+  *reference* as provisional; the −24pp gap is far too large for any plausible
+  correction to close, but "rejected at every tolerance" is stated against an
+  unconfirmed asymptote.) Blocking was already ruled out by the corpus's
   −13.6pp; this is worse and, importantly, **is not removed by the fix that
   removes the corpus outlier**.
 

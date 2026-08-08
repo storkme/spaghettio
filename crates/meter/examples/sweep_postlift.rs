@@ -203,6 +203,26 @@ fn main() {
             continue;
         }
 
+        // Bind the report to the directory it was filed under. Without this the
+        // sweep pairs bp.txt and report.json by folder alone, so a report
+        // copied into the wrong dir would attribute meter(layout A) to
+        // sim(layout B) — a confidently wrong calibration row, which is the one
+        // failure this whole exercise cannot afford.
+        //
+        // Honest about its limits: this catches a MISFILED report, not a STALE
+        // one. A bp.txt re-exported without a fresh sim run keeps a matching
+        // label and would still pass. Binding that properly needs a blueprint
+        // hash recorded at run time, which the harness does not emit today.
+        if let Some(label) = rep["label"].as_str() {
+            if label != fixture {
+                excluded.push((
+                    fixture.clone(),
+                    format!("report label {label:?} does not match directory {fixture:?}"),
+                ));
+                continue;
+            }
+        }
+
         // Provenance gates, in the order that makes a bad row cheapest to
         // reject. `kit_errors` first: it invalidates the run outright.
         //
@@ -255,12 +275,21 @@ fn main() {
             excluded.push((fixture, "report has no checkpoint count".into()));
             continue;
         };
-        if checkpoints < HARNESS_MIN_CHECKPOINTS {
-            // Below the harness's own convergence minimum while claiming
-            // `converged` means the two disagree; that is a broken report.
+        // Consistency check on the RAW count, reporting on the parsed one.
+        // `HARNESS_MIN_CHECKPOINTS` is a bound on how many checkpoints the
+        // harness writes; `measurement.checkpoints` counts only those with a
+        // usable triple, so a converged run whose first entry lacked one would
+        // be wrongly called inconsistent if this compared the parsed number.
+        let raw_checkpoints = report["raw_result"]["checkpoints"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(checkpoints);
+        if raw_checkpoints < HARNESS_MIN_CHECKPOINTS {
+            // Fewer checkpoints than the harness can emit for a converged run
+            // means the report contradicts itself.
             excluded.push((
                 fixture,
-                format!("{checkpoints} checkpoint(s) but converged=true — inconsistent report"),
+                format!("{raw_checkpoints} checkpoint(s) but converged=true — inconsistent report"),
             ));
             continue;
         }
