@@ -1461,6 +1461,17 @@ fn belt_in_lane_factor(
     if straight_fed {
         (BOTH_LANES, BeltInFeed::Straight)
     } else if drop_sides.len() >= 2 {
+        // KNOWN CROSS-CHECK INCONSISTENCY (#607). The output side classifies
+        // lanes by GEOMETRY (`row_lanes_loaded`: perpendicular tile spread =
+        // a midpoint bridge), so two hand-banks on one line read as ONE lane
+        // there and 0.95, while this branch reads them as two and credits
+        // 1.9. The shapes are not identical — that helper cannot see banks on
+        // OPPOSITE sides at all, which is arguably its limitation rather than
+        // this branch's error — but the two sides would disagree on the carry
+        // of a run fed this way. The engine emits no such geometry today (zero
+        // of eleven swept configs), so nothing is mis-ranked; both this 1.9 and
+        // the borrowed 0.95 want the same input-side calibration.
+        //
         // Two lanes, but NOT the bridged nominal. `BOTH_LANES = 2.0` mirrors
         // the output side's `ROW_LANE_FACTOR_BRIDGED`, which is sim-anchored
         // for a midpoint sideload bridge — a geometry that REDISTRIBUTES flow
