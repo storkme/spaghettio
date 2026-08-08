@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use spaghettio_meter::belt::ItemId;
 use spaghettio_meter::factory::Endpoint;
 use spaghettio_meter::{Factory, MachineState, Manifest};
 
@@ -46,14 +47,50 @@ fn main() {
         println!("{recipe:<28} {n:>5} {w:>8} {full:>7} {starved:>9}");
     }
 
+    // Both shortage states, and each row says which one it is. Reporting only
+    // `ItemIngredientShortage` here meant a fluid-starved stage showed a
+    // non-zero `starved` count in the census above and then never appeared in
+    // this list — so the reader inferred "no solid shortage" from an absence
+    // and had to reach the fluid explanation by elimination. That is the
+    // failure mode `docs/validator-reporting.md` is about: the probe must emit
+    // a positive signal for the case it is meant to find. Found 2026-08-08
+    // while attributing pu1-lift's −24.2pp, whose whole chain hangs off two
+    // petroleum-starved plastic-bar machines that this list did not print.
+    // Per-KIND caps, not one shared budget. A shared cap of 12 lets a fixture
+    // with 12+ solid-starved machines push every fluid-starved one off the
+    // list — recreating, through the back door, the exact "absence reads as no
+    // shortage" failure this block was changed to fix.
+    const PER_KIND_CAP: usize = 12;
     println!("\nstarved machines — what they hold vs what they need:");
-    let mut shown = 0;
+    let (mut shown_item, mut shown_fluid) = (0usize, 0usize);
+    let (mut hidden_item, mut hidden_fluid) = (0usize, 0usize);
     for m in &f.machines {
-        if m.state != MachineState::ItemIngredientShortage || shown >= 12 {
+        let kind = match m.state {
+            MachineState::ItemIngredientShortage => "item",
+            MachineState::FluidIngredientShortage => "fluid",
+            _ => continue,
+        };
+        let over = if kind == "item" {
+            shown_item += 1;
+            if shown_item > PER_KIND_CAP {
+                hidden_item += 1;
+                true
+            } else {
+                false
+            }
+        } else {
+            shown_fluid += 1;
+            if shown_fluid > PER_KIND_CAP {
+                hidden_fluid += 1;
+                true
+            } else {
+                false
+            }
+        };
+        if over {
             continue;
         }
-        shown += 1;
-        let need: Vec<String> = m
+        let mut need: Vec<String> = m
             .ingredients
             .iter()
             .map(|(id, amt)| {
@@ -61,14 +98,55 @@ fn main() {
                 format!("{}={have}/{amt}", f.items.name(*id))
             })
             .collect();
-        println!("  {:<24} at {:?}  {}", m.recipe, m.pos, need.join(" "));
+        need.extend(m.fluid_needs.iter().map(|(id, amt)| {
+            let have = m.fluid_input.get(id).copied().unwrap_or(0);
+            format!("{}={have}/{amt} (fluid)", f.items.name(ItemId(*id)))
+        }));
+        println!(
+            "  [{kind:>5}] {:<24} at {:?}  {}",
+            m.recipe,
+            m.pos,
+            need.join(" ")
+        );
+    }
+    // Truncation is stated, per kind. A capped list that does not say it was
+    // capped is a list the reader will treat as exhaustive.
+    if hidden_item > 0 || hidden_fluid > 0 {
+        println!(
+            "  ... {hidden_item} more item-starved and {hidden_fluid} more fluid-starved machine(s) not shown (cap {PER_KIND_CAP}/kind)"
+        );
     }
 
     // --- what feeds the starved machines ---------------------------------
-    println!("\ninput inserters of starved machines — pickup tile contents:");
+    //
+    // ITEM-starved machines only, and the heading says so. A fluid shortage
+    // arrives through the pipe network, not an inserter, so there is nothing
+    // for this block to show — but a reader who has just been handed a list of
+    // `[fluid]` machines above and then finds them absent here would read the
+    // silence as "nothing wrong with their supply". Naming the scope, and
+    // counting the machines this block deliberately does not cover, keeps the
+    // absence from being informative in the wrong direction.
+    let fluid_starved = f
+        .machines
+        .iter()
+        .filter(|m| m.state == MachineState::FluidIngredientShortage)
+        .count();
+    println!("\ninput inserters of ITEM-starved machines — pickup tile contents:");
+    if fluid_starved > 0 {
+        println!(
+            "  (note: {fluid_starved} fluid-starved machine(s) are NOT listed here — fluid arrives \
+             by pipe, not inserter. Use `debug_fluid` for those.)"
+        );
+    }
+    const INSERTER_DETAIL_CAP: usize = 6;
     let mut shown2 = 0;
+    let mut hidden2 = 0;
     for (mi, m) in f.machines.iter().enumerate() {
-        if m.state != MachineState::ItemIngredientShortage || shown2 >= 6 {
+        if m.state != MachineState::ItemIngredientShortage {
+            continue;
+        }
+        if shown2 >= INSERTER_DETAIL_CAP {
+            hidden2 += 1;
             continue;
         }
         shown2 += 1;
@@ -108,6 +186,11 @@ fn main() {
                 w.core.kind, w.pos, w.core.starved_ticks, w.core.delivered
             );
         }
+    }
+    if hidden2 > 0 {
+        println!(
+            "  ... {hidden2} more item-starved machine(s) not shown (cap {INSERTER_DETAIL_CAP})"
+        );
     }
 
     // --- inserter wiring census ----------------------------------------

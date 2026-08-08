@@ -93,6 +93,54 @@ shortfall against the meter's own ceiling.
 
 ## Next steps / open items (2026-08-06)
 
+### Petroleum-gas under-delivery on `pu1-lift` — OPEN, found 2026-08-08
+The largest single divergence in the post-lift calibration sweep, and it is a
+fluid-distribution finding rather than a productivity one: **meter 77.81% of
+plan against a sim delivering 102.01% — −24.21pp** (−22.87pp on produced, where
+the sim reads 100.67%). That is 1.7× the worst pessimistic error anywhere in the
+41-row Job-2 corpus (sim-relative: −23.73% against −13.6%), on a layout the sim says is fine — so it is a **false
+accusation**, the quadrant a blocking gate cares about, and it is not removed by
+re-declaring the research-productivity axis (`pu1-lift` already declares it and
+its sim run is kit-clean).
+
+**Provenance qualifier on the reference.** `pu1-lift`'s sim run converged at the
+harness's *minimum* checkpoint count (4), which `sim-harness-forensics.md`
+class 5c says needs longer-warmup confirmation before it is trusted as the
+asymptote — so the 102.01% baseline is provisional in that specific sense. The
+*direction* is robust anyway: a −24pp gap does not survive any plausible
+class-5c correction, and the localisation below rests on the meter's own state,
+not on the sim's rate. But do not quote 102.01% as settled.
+
+Localised, with the two probes rather than by inference:
+
+- `attribute` — `plastic-bar` 0/2 working, `sulfur` 0/1 working, all three in
+  `FluidIngredientShortage` holding **petroleum-gas 10/20 and 15/30** while
+  coal (14/1) and water (420/30) are abundant. The starvation propagates
+  exactly as measured: AC machines hold `plastic-bar=0/2`, PU machines hold
+  `advanced-circuit=0/2`, and every solid stage lands on the same ~77.8%.
+- `debug_fluid` — all five oil refineries are `Working`, **not** `FullOutput`,
+  with `fout=[("petroleum-gas", 0)]`, while the same consumers hold 1–3 units.
+  Producers unblocked and never backing up, consumers starved: the limit is
+  throughput **in the network between them**, not production at the source.
+  (The two probes read different buffer levels for the same machines because
+  they sample at very different points — `attribute` runs 7 200 warmup + 10 800
+  measured ticks, i.e. 2 and 3 game-MINUTES, while `debug_fluid` uses the
+  108k/216k window. Both are end-of-run snapshots of a buffer that never fills;
+  neither is a steady-state level. `attribute`'s 18 000-tick total is **below
+  the meter's own ~20–40k convergence floor**, so it is used here to LOCALISE
+  the shortage, not to measure a rate — the rate rests on the 108k/216k runs.)
+
+**Deliberately not diagnosed further.** The chain throttled here
+(petroleum→plastic→AC→PU) is the same one Phase A throttled to ~20% and Phase B
+was built to fix; this reads ~78%. Whether that makes it a Phase B residual on
+this topology, or something specific to this layout's pipe run, is **not
+established** — resist the resemblance until a probe says so. This entry
+records where the shortage is and that it is distribution rather than
+production; the next step is the network's per-tick throughput along that
+specific run. Numbers and full context:
+[`meter-divergence.md`](meter-divergence.md) §2026-08-08. Fixture is banked at
+`~/spaghettio-corpora/postlift-2026-08-07/pu1-lift/`.
+
 ### F5a stacked-PTG edge — FIXED
 A pipe-to-ground's surface mouth now only joins a regular pipe or a **back-facing**
 pipe-to-ground (F5b); a same-facing stacked PTG no longer merges the two lines.
