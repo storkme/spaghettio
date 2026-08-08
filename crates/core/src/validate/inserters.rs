@@ -1204,10 +1204,16 @@ pub fn check_row_input_belt_margin(
                         format!(
                             "{recipe} row input belt at ({ax},{ay}) carries {item} for \
                              {mcount} machine{plural} demanding {demand:.2}/s against a \
-                             {tier} {feed} carrying only {capacity:.2}/s — {diagnosis}; \
+                             {tier} {label} carrying only {capacity:.2}/s — {diagnosis}; \
                              {remedy}",
                             plural = if mcount == 1 { "" } else { "s" },
-                            // The two branches fail for DIFFERENT physical
+                            label = match feed {
+                                BeltInFeed::Straight => "fed straight (both lanes)",
+                                BeltInFeed::OneSideDrops => "fed by inserter drops (far lane only)",
+                                BeltInFeed::BothSideDrops =>
+                                    "fed by inserter drops from both sides (two hand-filled lanes)",
+                            },
+                            // The branches fail for DIFFERENT physical
                             // reasons and must not share a diagnosis. #448 is
                             // head-hogging along a belt that IS full; the
                             // inserter-fed case is a lane-loading ceiling —
@@ -1215,19 +1221,26 @@ pub fn check_row_input_belt_margin(
                             // every stage, explicitly not a tail-starvation
                             // shape. Naming the wrong mechanism sends the
                             // reader after the wrong fix.
-                            diagnosis = if lane_factor < 2.0 {
-                                "only one of the belt's two lanes is ever loaded, so the run \
-                                 cannot carry its own demand and EVERY consumer reads short \
-                                 (a uniform deficit, not tail starvation)"
-                            } else {
-                                "zero margin, so the head machines absorb the whole belt and \
-                                 the TAIL machine starves in a converged steady state (#448)"
+                            diagnosis = match feed {
+                                BeltInFeed::OneSideDrops =>
+                                    "only one of the belt's two lanes is ever loaded, so the \
+                                     run cannot carry its own demand and EVERY consumer reads \
+                                     short (a uniform deficit, not tail starvation)",
+                                BeltInFeed::BothSideDrops =>
+                                    "both lanes are hand-filled, which does not reach the \
+                                     nominal a redistributing feed would, so the run is over \
+                                     its realizable carry",
+                                BeltInFeed::Straight =>
+                                    "zero margin, so the head machines absorb the whole belt \
+                                     and the TAIL machine starves in a converged steady state \
+                                     (#448)",
                             },
-                            remedy = if lane_factor < 2.0 {
-                                "feed it straight (bus lane / tap) or add a midpoint sideload \
-                                 bridge to reach both lanes (#607)"
-                            } else {
-                                "widen the belt tier or split the row"
+                            remedy = match feed {
+                                BeltInFeed::OneSideDrops =>
+                                    "feed it straight (bus lane / tap) or add a midpoint \
+                                     sideload bridge to reach both lanes (#607)",
+                                BeltInFeed::BothSideDrops | BeltInFeed::Straight =>
+                                    "widen the belt tier or split the row",
                             },
                         ),
                         ax,
@@ -1354,10 +1367,20 @@ fn row_lanes_loaded(belts: &[&PlacedEntity]) -> u8 {
 /// A false positive here would re-rank candidates on a layout that is
 /// fine; a false negative merely preserves today's behaviour. Tighten
 /// with an entrance/exit distinction if a real fixture needs it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BeltInFeed {
+    /// A belt travelling into the run: both lanes load normally (B7).
+    Straight,
+    /// Inserter drops from one side only: far lane only (I5).
+    OneSideDrops,
+    /// Inserter drops from opposing sides: both lanes, but hand-filled.
+    BothSideDrops,
+}
+
 fn belt_in_lane_factor(
     layout: &LayoutResult,
     cluster: &[&PlacedEntity],
-) -> (f64, &'static str) {
+) -> (f64, BeltInFeed) {
     /// Both physical lanes, the historical assumption (a straight feed
     /// loads both). Matches `ROW_LANE_FACTOR_BRIDGED` on the output side.
     const BOTH_LANES: f64 = 2.0;
@@ -1436,7 +1459,7 @@ fn belt_in_lane_factor(
     }
 
     if straight_fed {
-        (BOTH_LANES, "fed straight (both lanes)")
+        (BOTH_LANES, BeltInFeed::Straight)
     } else if drop_sides.len() >= 2 {
         // Two lanes, but NOT the bridged nominal. `BOTH_LANES = 2.0` mirrors
         // the output side's `ROW_LANE_FACTOR_BRIDGED`, which is sim-anchored
@@ -1445,7 +1468,7 @@ fn belt_in_lane_factor(
         // each fills its own lane by hand and each realizes the same ~0.95 the
         // single-sided case does. So the honest ceiling is 2 × FAR_LANE_ONLY,
         // not the bridged 2.0.
-        (2.0 * FAR_LANE_ONLY, "fed by inserter drops from both sides (two lanes)")
+        (2.0 * FAR_LANE_ONLY, BeltInFeed::BothSideDrops)
     } else if inserter_fed {
         // One side, or head-on only. Excluding a zero-approach hand from
         // `drop_sides` must not also exclude it from being a FEED: a run
@@ -1453,11 +1476,11 @@ fn belt_in_lane_factor(
         // still single-lane. Keying the branch on `drop_sides.len() == 1`
         // sent that case to the both-lane fallback — a door the previous
         // commit opened while closing another.
-        (FAR_LANE_ONLY, "fed by inserter drops (far lane only)")
+        (FAR_LANE_ONLY, BeltInFeed::OneSideDrops)
     } else {
         // No detected feed at all — preserve the historical assumption
         // rather than warn on a run this function cannot explain.
-        (BOTH_LANES, "fed straight (both lanes)")
+        (BOTH_LANES, BeltInFeed::Straight)
     }
 }
 
@@ -3105,6 +3128,14 @@ mod tests {
         assert_eq!(warns.len(), 1, "14.5 exceeds two hand-filled lanes (14.25): {warns:?}");
         let detail = warns[0].detail.as_ref().expect("must carry IssueDetail");
         assert!((detail.delivered - 14.25).abs() < 1e-9, "2 × lane × 0.95: {detail:?}");
+        // The message must not describe this as single-lane, and must not
+        // prescribe a remedy that is already in place. Asserting only the
+        // number let exactly that contradiction ship.
+        let m = &warns[0].message;
+        assert!(m.contains("two hand-filled lanes"), "label: {m}");
+        assert!(m.contains("both lanes are hand-filled"), "diagnosis: {m}");
+        assert!(!m.contains("only one of the belt's two lanes"), "wrong diagnosis: {m}");
+        assert!(!m.contains("midpoint sideload bridge"), "wrong remedy: {m}");
     }
 
     #[test]

@@ -133,7 +133,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 | `inserter-throughput` | W | yes | hand-capacity model; never sim-anchored |
 | `inserter-item-throughput` | W | yes | never sim-anchored |
 | `row-output-lane-budget` | W | yes | never sim-anchored |
-| `row-input-belt-margin` | W | yes | deliberately conservative (both-lane ceiling); never sim-anchored |
+| `row-input-belt-margin` | W | yes | **capacity is now feed-dependent (2026-08-08, #607/#608)**: a straight-fed run keeps the both-lane ceiling; a run fed only by inserter drops is credited ONE lane × 0.95 (far-lane-only, I5), and one fed by opposing drop banks 2 × 0.95. **Selection-affecting and sim-anchored once**: the new warning flips `electronic-circuit@10/s from plates` off the di-bridge variant onto the bus-lane one, which measures **100.0% of plan** headless (PASS, converged, drift 0.0%) against the bridge's 90.9%. Known holes, all under-warn, tracked on #607: the 0.95 is borrowed from the belt-OUT calibration and never measured input-side; `straight_fed` ignores feed ANGLE, so a perpendicular sideload tap (B8, near lane only) is still credited both lanes; an untagged `carries` disables the item guards; `mcount < 2` is skipped although the mechanism is capacity-limited, not head-hogging |
 | `sushi-saturation` | E | yes | Error-severity despite never being sim-anchored (like `lane-throughput` above — the two rate models trusted with refusal power on modelling grounds alone); reporting fixed in incident #5 |
 
 ### Heuristics
