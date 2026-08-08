@@ -1204,14 +1204,28 @@ pub fn check_row_input_belt_margin(
                         format!(
                             "{recipe} row input belt at ({ax},{ay}) carries {item} for \
                              {mcount} machine{plural} demanding {demand:.2}/s against a \
-                             {tier} {feed} carrying only {capacity:.2}/s — zero margin, so the \
-                             head machines absorb the whole belt and the TAIL machine \
-                             starves in a converged steady state (#448); {remedy}",
+                             {tier} {feed} carrying only {capacity:.2}/s — {diagnosis}; \
+                             {remedy}",
                             plural = if mcount == 1 { "" } else { "s" },
+                            // The two branches fail for DIFFERENT physical
+                            // reasons and must not share a diagnosis. #448 is
+                            // head-hogging along a belt that IS full; the
+                            // inserter-fed case is a lane-loading ceiling —
+                            // #607 measured it as a UNIFORM shortfall across
+                            // every stage, explicitly not a tail-starvation
+                            // shape. Naming the wrong mechanism sends the
+                            // reader after the wrong fix.
+                            diagnosis = if lane_factor < 2.0 {
+                                "only one of the belt's two lanes is ever loaded, so the run \
+                                 cannot carry its own demand and EVERY consumer reads short \
+                                 (a uniform deficit, not tail starvation)"
+                            } else {
+                                "zero margin, so the head machines absorb the whole belt and \
+                                 the TAIL machine starves in a converged steady state (#448)"
+                            },
                             remedy = if lane_factor < 2.0 {
-                                "this belt is fed by inserter drops, which load the far lane \
-                                 only — feed it straight (bus lane / tap) or add a midpoint \
-                                 sideload bridge to reach both lanes (#607)"
+                                "feed it straight (bus lane / tap) or add a midpoint sideload \
+                                 bridge to reach both lanes (#607)"
                             } else {
                                 "widen the belt tier or split the row"
                             },
