@@ -33,14 +33,41 @@ does NOT establish", that the result was a property of *pre-lift* layouts and
 that a gate would run on *post-lift* ones. This is that measurement. **The
 caveat was right and the floor property does not survive it.**
 
+**On novelty, plainly:** the tier2 optimism was already known and already
+written down — the 2026-08-07 section records "meter 96% vs sim 90–91%" and
+calls it unexplained. What this section adds is not the observation but its
+*status*: measured from the banked blueprint, classified against gate
+tolerances on the metric the harness actually verdicts on, and set against the
+corpus bounds in the corpus's own units. So this is a **known caveat promoted
+to a falsification**, not a new discovery — and the retraction is warranted on
+exactly that basis, because the corpus claim was universal ("0 rows at 99%,
+98%, 95% and 90%") and one classified counterexample is what a universal claim
+costs.
+
 ### Provenance
 
 Six post-lift fixtures, i.e. layouts selected by the ranking that #605 produced
 by lifting the `input-rate-delivery` exemption. Sim baselines are the runs made
 2026-08-07 on those exact blueprints — Factorio 2.0.77, `--speed 32`, **warmup
-432 000** on every one, all `converged: true` with ≥4 checkpoints and empty
+432 000** on every one, all `converged: true` and empty
 `kit_errors`/`fluid_errors`. Meter side: `sweep_postlift`, the same 108k/216k
 window `check_one` and `sweep_corpus` use.
+
+**Checkpoint depth — a limitation, not a credential.** An earlier revision of
+this section cited "≥4 checkpoints" as provenance. That is meaningless: the
+harness's `MIN_CHECKPOINTS` *is* 4 (`scenario.rs`,
+`STABILITY_WINDOWS + 1`), so every `converged: true` run has 4 by
+construction. Stated properly, **5 of the 6 rows sit at exactly the minimum** —
+`ac5-lift`, `bigpole1-lift-v2`, `pu1-lift`, and both stress-EC rows — which is
+precisely the "converged at the minimum" case `sim-harness-forensics.md`
+class 5c says needs a longer-warmup confirmation before it is trusted as the
+asymptote. Those five are provisional in that specific sense.
+
+The exception matters: **`tier2-ec10-lift` has 8**, and it is the row the whole
+floor retraction rests on. So the load-bearing measurement is the
+best-provenanced one in the bank, while the rows carrying the class-5c caution
+are the supporting cast. `sweep_postlift` now prints the per-fixture count and
+flags the minimums instead of gating on a threshold that discriminates nothing.
 
 **All seven fixture dirs carry a banked `report.json`** (7/7), and
 `sweep_postlift` re-reads and re-vets every one — `kit_errors`, `converged`,
@@ -72,14 +99,17 @@ produced would grade it against a number no gate consults. `sweep_postlift`
 emits both, and the conclusions below are stated on delivered with produced
 kept as the calibration view.
 
-**The difference comes from the sim side, not the meter side.** The meter's own
-produced and delivered readings are identical to 2dp on **five of six** rows —
-`ac5-lift`'s 99.23 vs 99.22 is the only movement anywhere — so switching metric
-does not extract a new signal from the meter. What changes is the
-**reference**: the sim delivers 89.70% on `tier2-ec10-lift` where it produces
-90.91%, and 102.01% on `pu1-lift` where it produces 100.67%. So "delivered is
-worse" is a statement about which sim column the meter is being held against,
-not about the meter having a distinct delivered model.
+**The difference comes from the sim side, not the meter side.** What changes
+between the two metrics is the **reference**: the sim delivers 89.70% on
+`tier2-ec10-lift` where it produces 90.91%, and 102.01% on `pu1-lift` where it
+produces 100.67%. The meter's own two readings move by at most 0.01pp anywhere
+in the bank. So "delivered is worse" is a statement about which sim column the
+meter is held against, not about the meter having a distinct delivered model.
+
+*(The meter's produced≈delivered agreement is weak evidence on its own — for a
+target item the delivered figure largely mirrors crafts through the sink, so
+near-equality is close to definitional. It is quoted only to locate where the
+metric difference originates, not as a finding.)*
 
 All figures below are **% of plan**; the meter and sim columns are given
 separately per rate, because conflating them is how the first draft of this
@@ -96,6 +126,11 @@ section went wrong.
 
 On delivered: mean −3.80pp, worst optimistic **+6.30pp**, worst pessimistic
 **−24.21pp**. (On produced: −3.21 / +5.09 / −22.87pp.)
+
+*Summary statistics are computed from the unrounded rates, so recomputing them
+from the 2dp table can differ in the last digit — `pu1-lift` reads −24.20pp off
+the table against −24.21pp from the raw values. The CSV carries the full
+precision.*
 
 **Why `bigpole1-lift-v2` and `pu1-lift` show identical sim baselines** — asked
 by review, and worth answering in the doc because any reader will ask it. The
@@ -161,11 +196,19 @@ the table for where it *does* matter.
 
 **Which of these rows is robust, and which is knife-edge.** The **95%** miss
 holds on *both* metrics — meter 96.00 against sim 90.91 produced and 89.70
-delivered — and is the load-bearing one. The **90%** miss exists only on
-delivered and only by **0.30pp**: the sim delivers 89.70% there but produces
-90.91%, so on the produced column there is no 90% miss at all. Do not lean on
-the 90% row; the reference instrument's own two columns straddle that cutoff by
-1.2pp.
+delivered — and is the load-bearing one.
+
+**The entire 90% row is knife-edge, in both quadrants**, because two fixtures
+straddle that cutoff between the reference instrument's own two columns:
+
+- the miss (`tier2-ec10-lift`) exists only on delivered, by **0.30pp** — sim
+  delivers 89.70% but produces 90.91%;
+- one of the two false accusations (`stress_ec_60s_red`) likewise flips — sim
+  delivers 90.67% (so the meter's 87.90% reads as a false accusation) but
+  produces 89.83% (so it is a correct below-plan call).
+
+So do not lean on the 90% row at all. Only the 95% classification is
+metric-stable.
 
 - **Report-only.** At 90% *and* 95% the meter reads 96.0% on `tier2-ec10-lift`
   — at plan — where the sim delivers 89.7%. That is the dangerous quadrant,

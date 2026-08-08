@@ -36,11 +36,21 @@ use spaghettio_meter::manifest::Manifest;
 /// checked the corpus at, kept identical so the two results are comparable.
 const THRESHOLDS: [f64; 4] = [90.0, 95.0, 98.0, 99.0];
 
-/// Minimum sim checkpoints for a row to count. `converged: true` can be
-/// reached at the minimum checkpoint count, which `sim-harness-forensics.md`
-/// class 5c flags as needing a longer-warmup confirmation before it is treated
-/// as the asymptote. Every row in the 2026-08-07 bank has 4+.
-const MIN_CHECKPOINTS: usize = 4;
+/// The harness's own convergence minimum (`scenario.rs`:
+/// `MIN_CHECKPOINTS = STABILITY_WINDOWS + 1`). A row at exactly this count
+/// converged at the earliest opportunity, which `sim-harness-forensics.md`
+/// class 5c flags as needing longer-warmup confirmation before it is trusted
+/// as the asymptote.
+///
+/// **This is NOT a filter.** An earlier revision gated on `>= 4` and called it
+/// provenance — but every `converged: true` run has 4 by construction, so the
+/// gate rejected nothing the convergence check had not already caught: a check
+/// that reads as protection and discriminates nothing, which is the exact
+/// failure `docs/validator-reporting.md` catalogues. Raising it to 5 would be
+/// worse, silently deleting five of the six banked rows. So the count is
+/// **reported per fixture** and rows at the minimum are marked, leaving the
+/// judgement with the reader instead of hiding it behind a threshold.
+const HARNESS_MIN_CHECKPOINTS: usize = 4;
 
 /// Which rate a row is being compared on.
 ///
@@ -135,6 +145,7 @@ fn main() {
 
     let mut rows: Vec<Row> = Vec::new();
     let mut excluded: Vec<(String, String)> = Vec::new();
+    let mut checkpoint_counts: Vec<(String, usize)> = Vec::new();
 
     let mut fixtures: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("read {dir}: {e}"))
@@ -222,19 +233,25 @@ fn main() {
             excluded.push((fixture, "sim run did not converge".into()));
             continue;
         }
-        // `converged` alone can be true at the minimum checkpoint count, which
-        // `sim-harness-forensics.md` class 5c warns is not yet an asymptote.
-        let checkpoints = report["raw_result"]["checkpoints"]
+        // Reported, not gated — see HARNESS_MIN_CHECKPOINTS. A missing key is
+        // still rejected, because that is schema drift rather than a weak run.
+        let Some(checkpoints) = report["raw_result"]["checkpoints"]
             .as_array()
             .map(|a| a.len())
-            .unwrap_or(0);
-        if checkpoints < MIN_CHECKPOINTS {
+        else {
+            excluded.push((fixture, "report has no `raw_result.checkpoints`".into()));
+            continue;
+        };
+        if checkpoints < HARNESS_MIN_CHECKPOINTS {
+            // Below the harness's own convergence minimum while claiming
+            // `converged` means the two disagree; that is a broken report.
             excluded.push((
                 fixture,
-                format!("only {checkpoints} checkpoint(s), need >= {MIN_CHECKPOINTS}"),
+                format!("{checkpoints} checkpoint(s) but converged=true — inconsistent report"),
             ));
             continue;
         }
+        checkpoint_counts.push((fixture.clone(), checkpoints));
 
         let bp = std::fs::read_to_string(&bp_path).unwrap();
         let manifest = match Manifest::from_path(&mf_path) {
@@ -432,6 +449,29 @@ fn main() {
             );
         }
     }
+
+    // Provenance strength, stated rather than gated. A row at the harness
+    // minimum converged at the earliest opportunity and carries the class-5c
+    // caution; one well above it does not. This is the difference between
+    // "vetted" and "vetted, and here is how strongly".
+    let at_min = checkpoint_counts
+        .iter()
+        .filter(|(_, n)| *n == HARNESS_MIN_CHECKPOINTS)
+        .count();
+    println!("\n=== SIM PROVENANCE (checkpoints per fixture) ===");
+    for (fx, n) in &checkpoint_counts {
+        let flag = if *n == HARNESS_MIN_CHECKPOINTS {
+            "  <- AT harness minimum (forensics class 5c: confirm with a longer warmup)"
+        } else {
+            ""
+        };
+        println!("  {fx:<30} {n}{flag}");
+    }
+    println!(
+        "  {at_min}/{} at the minimum of {HARNESS_MIN_CHECKPOINTS}. This is NOT a filter — every \
+         converged run has >= {HARNESS_MIN_CHECKPOINTS} by construction.",
+        checkpoint_counts.len()
+    );
 
     if !excluded.is_empty() {
         println!("\n=== EXCLUDED ({}) ===", excluded.len());
