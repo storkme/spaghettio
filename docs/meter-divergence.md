@@ -53,17 +53,27 @@ by lifting the `input-rate-delivery` exemption. Sim baselines are the runs made
 `kit_errors`/`fluid_errors`. Meter side: `sweep_postlift`, the same 108k/216k
 window `check_one` and `sweep_corpus` use.
 
-Every one of those provenance claims is now **enforced by the tool rather than
-asserted here** — `kit_errors`, `fluid_errors`, `converged`, the checkpoint
-schema, the 432 000-tick warmup, and a `label`↔directory binding so a misfiled
-report cannot pair meter(layout A) with sim(layout B). The sweep prints the
-per-fixture provenance table it checked.
+These claims are now **checked by the tool rather than asserted here**, split
+by what the failure means:
+
+- **Gated** (a row that fails is excluded, with its reason printed) —
+  `kit_errors`, `fluid_errors`, `converged`, the report schema, a
+  `label`↔directory binding so a misfiled report cannot pair meter(layout A)
+  with sim(layout B), and the **432 000-tick warmup**. Warmup gates because a
+  short one makes the reading *invalid*: `CLAUDE.md` says it reads buffer fill
+  as throughput and must not be quoted.
+- **Reported, not gated** — checkpoint depth. That is a *strength* gradient
+  rather than a validity bar: a class-5c row is weak but real, and gating it
+  would either discriminate nothing (at ≥4) or delete five of six rows (at ≥5).
+
+The sweep prints the per-fixture provenance table it checked.
 
 **Checkpoint depth — a limitation, not a credential.** An earlier revision of
 this section cited "≥4 checkpoints" as provenance. That is meaningless: the
 harness's `MIN_CHECKPOINTS` *is* 4 (`scenario.rs`,
-`STABILITY_WINDOWS + 1`), so every `converged: true` run has 4 by
-construction. Stated properly, **5 of the 6 rows sit at exactly the minimum** —
+`STABILITY_WINDOWS + 1`), so every `converged: true` run has **at least** 4 by
+construction — runs continue to a tick ceiling, which is why `tier2-ec10-lift`
+has 8. Stated properly, **5 of the 6 rows sit at exactly the minimum** —
 `ac5-lift`, `bigpole1-lift-v2`, `pu1-lift`, and both stress-EC rows — which is
 precisely the "converged at the minimum" case `sim-harness-forensics.md`
 class 5c says needs a longer-warmup confirmation before it is trusted as the
@@ -145,10 +155,14 @@ columns.*
 twice in review, and the answer is structural rather than coincidental, so it
 belongs here.
 
-The harness closes a measurement window once **`WINDOW_ITEM_FLOOR = 300`**
-items have been produced (`scenario.rs`). So the numerator of a closed window
-is **always exactly 300 by construction** — never evidence of anything — and
-the reported rate is `300 / window_seconds` for the final window. Both runs'
+The harness closes a measurement window on whichever comes first: the
+**`WINDOW_ITEM_FLOOR = 300`** item count or a tick cap (`scenario.rs`; a
+tick-cap closure sets `short_sampled`). Both of these runs closed on the item
+floor with `short_sampled: false` and `window_items: 300`, so for **these**
+windows the numerator is 300 by construction — never evidence of anything — and
+the reported rate is `300 / window_seconds` for the final window. (It is not a
+universal: a tick-capped window carries a different numerator, and an item-floor
+closure only guarantees `>= 300` at the sampling cadence.) Both runs'
 final window closed at `window_ticks = 17880` (298 s), hence
 
 ```

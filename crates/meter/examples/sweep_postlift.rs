@@ -43,13 +43,20 @@ const THRESHOLDS: [f64; 4] = [90.0, 95.0, 98.0, 99.0];
 /// as the asymptote.
 ///
 /// **This is NOT a filter.** An earlier revision gated on `>= 4` and called it
-/// provenance — but every `converged: true` run has 4 by construction, so the
+/// provenance — but every `converged: true` run has at least 4 by construction
+/// (runs continue to a tick ceiling; tier2-ec10-lift has 8), so the
 /// gate rejected nothing the convergence check had not already caught: a check
 /// that reads as protection and discriminates nothing, which is the exact
 /// failure `docs/validator-reporting.md` catalogues. Raising it to 5 would be
 /// worse, silently deleting five of the six banked rows. So the count is
 /// **reported per fixture** and rows at the minimum are marked, leaving the
 /// judgement with the reader instead of hiding it behind a threshold.
+///
+/// **Drift point.** This mirrors a value that lives in another crate and is
+/// itself derived (`STABILITY_WINDOWS + 1`). If the harness raises
+/// `STABILITY_WINDOWS`, this silently desynchronises and the consistency check
+/// below starts rejecting legitimately-converged runs. It is not fixed "by
+/// construction" across versions — only within one.
 const HARNESS_MIN_CHECKPOINTS: usize = 4;
 
 /// The warmup the 2026-08-07 bank was run at, and the figure both
@@ -163,6 +170,7 @@ fn main() {
     let mut rows: Vec<Row> = Vec::new();
     let mut excluded: Vec<(String, String)> = Vec::new();
     let mut provenance: Vec<Provenance> = Vec::new();
+    let mut dropped: Vec<(String, Vec<String>)> = Vec::new();
 
     let mut fixtures: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("read {dir}: {e}"))
@@ -318,7 +326,26 @@ fn main() {
         // fill as throughput, so a short-warmup row would be exactly the class
         // that must not be quoted -- and it would otherwise pass every gate
         // here, since it can be kit-clean, converged and 4-checkpointed.
-        let pending_warmup = report["run_params"]["warmup_ticks"].as_u64().unwrap_or(0);
+        let Some(pending_warmup) = report["run_params"]["warmup_ticks"].as_u64() else {
+            excluded.push((fixture, "report has no `run_params.warmup_ticks` — cannot vet".into()));
+            continue;
+        };
+        // GATED, unlike the checkpoint count, and the distinction is
+        // deliberate: checkpoint depth is a strength gradient (a class-5c row
+        // is weak but real), whereas a short warmup makes the reading INVALID
+        // -- `CLAUDE.md` says such numbers read buffer fill as throughput and
+        // must not be quoted. A validity bar excludes; a strength gradient
+        // reports.
+        if pending_warmup < EXPECTED_WARMUP_TICKS {
+            excluded.push((
+                fixture,
+                format!(
+                    "warmup {pending_warmup} < {EXPECTED_WARMUP_TICKS} — reads buffer fill as \
+                     throughput, must not be quoted"
+                ),
+            ));
+            continue;
+        }
         // Recorded, but only committed once the fixture actually contributes a
         // row (below). Pushing here would let a fixture that passes every gate
         // and then yields nothing still inflate the provenance denominator —
@@ -357,6 +384,8 @@ fn main() {
         let meter = factory.measure(108_000, 216_000);
 
         let items = rep["items"].as_array().cloned().unwrap_or_default();
+        let mut bad_schema = false;
+        let mut dropped_items: Vec<String> = Vec::new();
         // Per-fixture counter rather than a `rows.len()` diff: the guard below
         // means "this fixture contributed nothing", and it should keep meaning
         // that if anything else ever touches `rows` in this loop.
@@ -366,23 +395,42 @@ fn main() {
             // lookup can never match, and it would still count toward `added`,
             // so the "no usable items" guard would not catch it either.
             let Some(name) = item["item"].as_str().filter(|s| !s.is_empty()) else {
+                dropped_items.push("<unnamed>".into());
                 continue;
             };
             let name = name.to_string();
+            // A malformed `is_target` defaulting to false would drop the target
+            // from the classification AND from the NOT-COMPARABLE list —
+            // vanishing without trace, and capable of turning "1/6 missed
+            // defects" into "0/5" with no warning. Absent is legitimately
+            // false; present-but-not-a-bool is schema drift and rejects.
+            let is_target = match &item["is_target"] {
+                serde_json::Value::Null => false,
+                serde_json::Value::Bool(b) => *b,
+                other => {
+                    excluded.push((
+                        fixture.clone(),
+                        format!("item {name:?} has non-bool `is_target`: {other}"),
+                    ));
+                    bad_schema = true;
+                    break;
+                }
+            };
+            // A bare `continue` here would let a fixture whose TARGET lacks a
+            // planned_rate still pass `added > 0` on its intermediates, and the
+            // target would vanish from the table unannounced.
             let Some(planned) = item["planned_rate"].as_f64() else {
+                dropped_items.push(format!("{name} (no planned_rate)"));
                 continue;
             };
             if planned == 0.0 {
+                dropped_items.push(format!("{name} (planned_rate = 0)"));
                 continue;
             }
             rows.push(Row {
                 fixture: fixture.clone(),
                 item: name.clone(),
-                // A malformed `is_target` defaulting to false would drop the
-                // target from the classification AND from the NOT-COMPARABLE
-                // list — vanishing without trace. Absent is legitimately false;
-                // present-but-not-a-bool is schema drift and is rejected below.
-                is_target: item["is_target"].as_bool().unwrap_or(false),
+                is_target,
                 planned,
                 checkpoints,
                 meter_produced: meter.produced_per_s.get(&name).copied(),
@@ -396,10 +444,19 @@ fn main() {
         // otherwise vanish from the table AND from the exclusion list — the
         // silent drop this file's header warns against, arriving through the
         // one door the `kit_errors` gate does not cover.
+        if bad_schema {
+            // Roll back this fixture's rows: a schema-drifted report must not
+            // contribute a partial set that reads as a complete one.
+            rows.truncate(rows.len() - added);
+            continue;
+        }
+        if !dropped_items.is_empty() {
+            dropped.push((fixture.clone(), dropped_items));
+        }
         if added == 0 {
             excluded.push((fixture, "report has no items with a non-zero planned_rate".into()));
         } else {
-                provenance.push(Provenance {
+            provenance.push(Provenance {
                 fixture: fixture.clone(),
                 checkpoints: pending_checkpoints,
                 warmup_ticks: pending_warmup,
@@ -440,7 +497,29 @@ fn main() {
     }
 
     // --- target summary + gate classification, on BOTH metrics -------------
+    // Counts TARGET ROWS, not distinct fixtures. Each banked fixture declares
+    // exactly one target today, so "N/6" reads as fixtures — but a multi-target
+    // report (RFC-062 `--multi`) would inflate both the denominator and the
+    // offender list without saying so. Flagged when it happens.
     let all_targets: Vec<&Row> = rows.iter().filter(|r| r.is_target).collect();
+    {
+        let mut seen = std::collections::BTreeMap::<&str, usize>::new();
+        for r in &all_targets {
+            *seen.entry(r.fixture.as_str()).or_default() += 1;
+        }
+        let multi: Vec<String> = seen
+            .iter()
+            .filter(|(_, n)| **n > 1)
+            .map(|(f, n)| format!("{f} ({n} targets)"))
+            .collect();
+        if !multi.is_empty() {
+            println!(
+                "\nNOTE: gate denominators count target ROWS, and these fixtures contribute more \
+                 than one: {}",
+                multi.join(", ")
+            );
+        }
+    }
 
     for metric in [Metric::Produced, Metric::Delivered] {
         let targets: Vec<&&Row> = all_targets
@@ -585,6 +664,13 @@ fn main() {
         provenance.len(),
         provenance.len()
     );
+
+    if !dropped.is_empty() {
+        println!("\n=== ITEMS DROPPED (fixture kept) ===");
+        for (fx, items) in &dropped {
+            println!("  {fx:<30} {}", items.join(", "));
+        }
+    }
 
     if !excluded.is_empty() {
         println!("\n=== EXCLUDED ({}) ===", excluded.len());
