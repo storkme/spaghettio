@@ -53,6 +53,12 @@ by lifting the `input-rate-delivery` exemption. Sim baselines are the runs made
 `kit_errors`/`fluid_errors`. Meter side: `sweep_postlift`, the same 108k/216k
 window `check_one` and `sweep_corpus` use.
 
+Every one of those provenance claims is now **enforced by the tool rather than
+asserted here** — `kit_errors`, `fluid_errors`, `converged`, the checkpoint
+schema, the 432 000-tick warmup, and a `label`↔directory binding so a misfiled
+report cannot pair meter(layout A) with sim(layout B). The sweep prints the
+per-fixture provenance table it checked.
+
 **Checkpoint depth — a limitation, not a credential.** An earlier revision of
 this section cited "≥4 checkpoints" as provenance. That is meaningless: the
 harness's `MIN_CHECKPOINTS` *is* 4 (`scenario.rs`,
@@ -69,9 +75,8 @@ best-provenanced one in the bank, while the rows carrying the class-5c caution
 are the supporting cast. `sweep_postlift` now prints the per-fixture count and
 flags the minimums instead of gating on a threshold that discriminates nothing.
 
-**All seven fixture dirs carry a banked `report.json`** (7/7), and
-`sweep_postlift` re-reads and re-vets every one — `kit_errors`, `converged`,
-and the schema — so no row here bypasses the tool's checks; the excluded
+**All seven fixture dirs carry a banked `report.json`** (7/7), and every one is
+re-vetted, so no row here bypasses the tool's checks; the excluded
 `bigpole1-lift` row is that vetting firing. The reports come from a mix of
 `sim-live.sh` and `run --out` invocations, which write the same schema and are
 vetted identically. The bank is a local, out-of-repo directory at
@@ -155,6 +160,16 @@ That is the whole of it: a forced numerator plus a shared final-window
 duration, which for two ~1/s factories both running at plan is unremarkable
 given tick granularity (the observed windows across these runs are 17820,
 17880, 17940 and 18060 ticks).
+
+**And why delivered (102.01%) exceeds produced (100.67%)** on the same target
+in the same window — which looks impossible and is worth pre-empting, since the
+blocking-quadrant claim leans on that 102.01%. Over a *window* you can deliver
+more than you produce if items already in flight reach the sink inside it. The
+cumulative counters show exactly that, and show it is an oscillating buffer
+rather than a drain: `pu1-lift`'s produced-minus-delivered backlog reads
+**17 → 13 → 17 → 13** across the four checkpoints. The final window happened to
+close on a 4-item fall, so it delivered 304 against 300 produced. Nothing is
+accumulating or draining away; the in-flight buffer is small and flat.
 
 **The runs are provably independent**, and the decisive evidence is the
 per-window series, which differ:

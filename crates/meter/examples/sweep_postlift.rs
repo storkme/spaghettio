@@ -52,6 +52,19 @@ const THRESHOLDS: [f64; 4] = [90.0, 95.0, 98.0, 99.0];
 /// judgement with the reader instead of hiding it behind a threshold.
 const HARNESS_MIN_CHECKPOINTS: usize = 4;
 
+/// The warmup the 2026-08-07 bank was run at, and the figure both
+/// `meter-divergence.md` and `status.md` quote as a credential. Reported and
+/// flagged, not gated — same philosophy as the checkpoint count.
+const EXPECTED_WARMUP_TICKS: u64 = 432_000;
+
+/// Per-fixture sim provenance, kept so the strength of each row is visible
+/// rather than asserted in prose.
+struct Provenance {
+    fixture: String,
+    checkpoints: usize,
+    warmup_ticks: u64,
+}
+
 /// Which rate a row is being compared on.
 ///
 /// Both are carried because they answer different questions and the answers
@@ -149,7 +162,7 @@ fn main() {
 
     let mut rows: Vec<Row> = Vec::new();
     let mut excluded: Vec<(String, String)> = Vec::new();
-    let mut checkpoint_counts: Vec<(String, usize)> = Vec::new();
+    let mut provenance: Vec<Provenance> = Vec::new();
 
     let mut fixtures: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("read {dir}: {e}"))
@@ -213,14 +226,19 @@ fn main() {
         // one. A bp.txt re-exported without a fresh sim run keeps a matching
         // label and would still pass. Binding that properly needs a blueprint
         // hash recorded at run time, which the harness does not emit today.
-        if let Some(label) = rep["label"].as_str() {
-            if label != fixture {
-                excluded.push((
-                    fixture.clone(),
-                    format!("report label {label:?} does not match directory {fixture:?}"),
-                ));
-                continue;
-            }
+        let Some(label) = rep["label"].as_str() else {
+            // Absent key rejects, like every sibling gate. An `if let Some`
+            // here would quietly downgrade this guard to a no-op on exactly
+            // the schema drift it exists to catch.
+            excluded.push((fixture, "report has no `label` — cannot bind to its directory".into()));
+            continue;
+        };
+        if label != fixture {
+            excluded.push((
+                fixture.clone(),
+                format!("report label {label:?} does not match directory {fixture:?}"),
+            ));
+            continue;
         }
 
         // Provenance gates, in the order that makes a bad row cheapest to
@@ -293,6 +311,14 @@ fn main() {
             ));
             continue;
         }
+        // The warmup the sim actually ran. Both `meter-divergence.md` and
+        // `status.md` quote "warmup 432 000 on every one" as a credential, and
+        // an unenforced credential drifts. `CLAUDE.md` is explicit that the
+        // dim-scaled default is too short for deep chains and reads buffer
+        // fill as throughput, so a short-warmup row would be exactly the class
+        // that must not be quoted -- and it would otherwise pass every gate
+        // here, since it can be kit-clean, converged and 4-checkpointed.
+        let pending_warmup = report["run_params"]["warmup_ticks"].as_u64().unwrap_or(0);
         // Recorded, but only committed once the fixture actually contributes a
         // row (below). Pushing here would let a fixture that passes every gate
         // and then yields nothing still inflate the provenance denominator —
@@ -336,7 +362,13 @@ fn main() {
         // that if anything else ever touches `rows` in this loop.
         let mut added = 0usize;
         for item in items {
-            let name = item["item"].as_str().unwrap_or("").to_string();
+            // Empty/absent name would push a plausible-looking row whose meter
+            // lookup can never match, and it would still count toward `added`,
+            // so the "no usable items" guard would not catch it either.
+            let Some(name) = item["item"].as_str().filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let name = name.to_string();
             let Some(planned) = item["planned_rate"].as_f64() else {
                 continue;
             };
@@ -346,6 +378,10 @@ fn main() {
             rows.push(Row {
                 fixture: fixture.clone(),
                 item: name.clone(),
+                // A malformed `is_target` defaulting to false would drop the
+                // target from the classification AND from the NOT-COMPARABLE
+                // list — vanishing without trace. Absent is legitimately false;
+                // present-but-not-a-bool is schema drift and is rejected below.
                 is_target: item["is_target"].as_bool().unwrap_or(false),
                 planned,
                 checkpoints,
@@ -363,7 +399,11 @@ fn main() {
         if added == 0 {
             excluded.push((fixture, "report has no items with a non-zero planned_rate".into()));
         } else {
-            checkpoint_counts.push((fixture, pending_checkpoints));
+                provenance.push(Provenance {
+                fixture: fixture.clone(),
+                checkpoints: pending_checkpoints,
+                warmup_ticks: pending_warmup,
+            });
         }
     }
 
@@ -512,23 +552,38 @@ fn main() {
     // minimum converged at the earliest opportunity and carries the class-5c
     // caution; one well above it does not. This is the difference between
     // "vetted" and "vetted, and here is how strongly".
-    let at_min = checkpoint_counts
+    let at_min = provenance
         .iter()
-        .filter(|(_, n)| *n == HARNESS_MIN_CHECKPOINTS)
+        .filter(|p| p.checkpoints <= HARNESS_MIN_CHECKPOINTS)
         .count();
-    println!("\n=== SIM PROVENANCE (checkpoints per fixture) ===");
-    for (fx, n) in &checkpoint_counts {
-        let flag = if *n == HARNESS_MIN_CHECKPOINTS {
-            "  <- AT harness minimum (forensics class 5c: confirm with a longer warmup)"
+    let short_warmup = provenance
+        .iter()
+        .filter(|p| p.warmup_ticks < EXPECTED_WARMUP_TICKS)
+        .count();
+    println!("\n=== SIM PROVENANCE ===");
+    println!("  {:<30} {:>11}  {:>7}", "fixture", "checkpoints", "warmup");
+    for p in &provenance {
+        let cp_flag = if p.checkpoints <= HARNESS_MIN_CHECKPOINTS {
+            "  <- checkpoints AT/below harness minimum (forensics class 5c)"
         } else {
             ""
         };
-        println!("  {fx:<30} {n}{flag}");
+        let wu_flag = if p.warmup_ticks < EXPECTED_WARMUP_TICKS {
+            "  <- SHORT WARMUP: may read buffer fill as throughput; do not quote"
+        } else {
+            ""
+        };
+        println!(
+            "  {:<30} {:>11}  {:>7}{cp_flag}{wu_flag}",
+            p.fixture, p.checkpoints, p.warmup_ticks
+        );
     }
     println!(
-        "  {at_min}/{} at the minimum of {HARNESS_MIN_CHECKPOINTS}. This is NOT a filter — every \
-         converged run has >= {HARNESS_MIN_CHECKPOINTS} by construction.",
-        checkpoint_counts.len()
+        "  {at_min}/{} at/below the checkpoint minimum of {HARNESS_MIN_CHECKPOINTS} (NOT a filter — \
+         every converged run has >= {HARNESS_MIN_CHECKPOINTS} by construction); \
+         {short_warmup}/{} below the expected {EXPECTED_WARMUP_TICKS}-tick warmup.",
+        provenance.len(),
+        provenance.len()
     );
 
     if !excluded.is_empty() {
