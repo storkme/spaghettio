@@ -83,6 +83,10 @@ struct Row {
     item: String,
     is_target: bool,
     planned: f64,
+    /// Sim checkpoint depth for this fixture's run. Carried onto the row so
+    /// the provenance distribution is reproducible from the CSV alone rather
+    /// than only from stdout.
+    checkpoints: usize,
     meter_produced: Option<f64>,
     meter_delivered: Option<f64>,
     sim_produced: Option<f64>,
@@ -235,11 +239,20 @@ fn main() {
         }
         // Reported, not gated — see HARNESS_MIN_CHECKPOINTS. A missing key is
         // still rejected, because that is schema drift rather than a weak run.
-        let Some(checkpoints) = report["raw_result"]["checkpoints"]
-            .as_array()
-            .map(|a| a.len())
+        //
+        // Prefer `report.measurement.checkpoints`, the harness's OWN parsed
+        // count (`checkpoint_series.len()` — entries with a usable
+        // tick/produced/delivered triple). Counting `raw_result.checkpoints`
+        // instead counts unparsed entries too, so a malformed one would
+        // overstate convergence depth — and this number is exactly what marks
+        // a row "at the harness minimum" vs "best-provenanced", which the
+        // divergence log's conclusions lean on.
+        let Some(checkpoints) = rep["measurement"]["checkpoints"]
+            .as_u64()
+            .map(|n| n as usize)
+            .or_else(|| report["raw_result"]["checkpoints"].as_array().map(|a| a.len()))
         else {
-            excluded.push((fixture, "report has no `raw_result.checkpoints`".into()));
+            excluded.push((fixture, "report has no checkpoint count".into()));
             continue;
         };
         if checkpoints < HARNESS_MIN_CHECKPOINTS {
@@ -258,7 +271,15 @@ fn main() {
         // in the opposite direction.
         let pending_checkpoints = checkpoints;
 
-        let bp = std::fs::read_to_string(&bp_path).unwrap();
+        // Same rule as report.json: one unreadable file costs its own row, not
+        // the run. `exists()` above only proves the path is there.
+        let bp = match std::fs::read_to_string(&bp_path) {
+            Ok(s) => s,
+            Err(e) => {
+                excluded.push((fixture, format!("bp.txt unreadable: {e}")));
+                continue;
+            }
+        };
         let manifest = match Manifest::from_path(&mf_path) {
             Ok(m) => m,
             Err(e) => {
@@ -298,6 +319,7 @@ fn main() {
                 item: name.clone(),
                 is_target: item["is_target"].as_bool().unwrap_or(false),
                 planned,
+                checkpoints,
                 meter_produced: meter.produced_per_s.get(&name).copied(),
                 meter_delivered: meter.delivered_per_s.get(&name).copied(),
                 sim_produced: item["measured_produced_rate"].as_f64(),
@@ -499,17 +521,18 @@ fn main() {
         // leave the doc's headline multipliers unreproducible from the
         // machine-readable artifact.
         let mut csv = String::from(
-            "fixture,item,is_target,planned,\
+            "fixture,item,is_target,planned,sim_checkpoints,\
              meter_produced,sim_produced,meter_produced_pct,sim_produced_pct,delta_pp_produced,delta_vs_sim_pct_produced,\
              meter_delivered,sim_delivered,meter_delivered_pct,sim_delivered_pct,delta_pp_delivered,delta_vs_sim_pct_delivered\n",
         );
         for r in &rows {
             csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 r.fixture,
                 r.item,
                 r.is_target,
                 r.planned,
+                r.checkpoints,
                 c(r.meter(Metric::Produced)),
                 c(r.sim(Metric::Produced)),
                 cp(r.meter_pct(Metric::Produced)),

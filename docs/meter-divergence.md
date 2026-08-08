@@ -128,22 +128,47 @@ On delivered: mean −3.80pp, worst optimistic **+6.30pp**, worst pessimistic
 **−24.21pp**. (On produced: −3.21 / +5.09 / −22.87pp.)
 
 *Summary statistics are computed from the unrounded rates, so recomputing them
-from the 2dp table can differ in the last digit — `pu1-lift` reads −24.20pp off
-the table against −24.21pp from the raw values. The CSV does **not** resolve
-this either: it rounds rates to 4dp and percentages to 2dp, so it reproduces
-−24.20 as well. Only re-running the sweep gives the unrounded figure.*
+from the 2dp table can differ in the last digit — `pu1-lift` reads −24.20pp if
+you subtract the table's rounded percentages, against −24.21pp from the raw
+values. **The CSV's `delta_pp_*` columns carry the correct −24.21**, because
+they are computed from the unrounded rates and only then rounded; it is
+re-deriving the delta from the CSV's own 4dp rate columns that reproduces the
+−24.20 artifact. Take deltas from the delta columns, not by subtracting rate
+columns.*
 
-**Why `bigpole1-lift-v2` and `pu1-lift` show identical sim baselines** — asked
-by review, and worth answering in the doc because any reader will ask it. The
-two are **integer quantization**, not a duplicated report: both targets are
-planned at 1.0/s and both runs measured over the same 298 s window, so
-`300/298 = 1.00671140939597…` produced and `304/298 = 1.02013422818792…`
-delivered are what "at plan" *has* to look like at these counts. The runs are
-provably distinct — different scenarios
-(`…-bigpole1-lift-v2-1786128688` vs `…-pu1-lift-1786126106`), 1058 vs 2516
-entities, 6 vs 10 items, different `final_tick`, different file hashes. The
-coincidence is real and shallow: at a 1/s target over a 5-minute window there
-are only so many integers available.
+**Why `bigpole1-lift-v2` and `pu1-lift` show identical sim baselines.** Raised
+twice in review, and the answer is structural rather than coincidental, so it
+belongs here.
+
+The harness closes a measurement window once **`WINDOW_ITEM_FLOOR = 300`**
+items have been produced (`scenario.rs`). So the numerator of a closed window
+is **always exactly 300 by construction** — never evidence of anything — and
+the reported rate is `300 / window_seconds` for the final window. Both runs'
+final window closed at `window_ticks = 17880` (298 s), hence
+
+```
+produced  300 / 298 s = 1.0067114093959733   <- both, exactly
+delivered 304 / 298 s = 1.0201342281879195   <- both, exactly
+```
+
+That is the whole of it: a forced numerator plus a shared final-window
+duration, which for two ~1/s factories both running at plan is unremarkable
+given tick granularity (the observed windows across these runs are 17820,
+17880, 17940 and 18060 ticks).
+
+**The runs are provably independent**, and the decisive evidence is the
+per-window series, which differ:
+
+| fixture | `window_rates` |
+|---|---|
+| `bigpole1-lift-v2` | 1.0067, 1.0033, **1.0067** |
+| `pu1-lift` | 0.9967, 1.0101, **1.0067** |
+
+Only the last entry — the reported one — coincides. Everything else about the
+two reports differs as well: scenarios `…-bigpole1-lift-v2-1786128688` vs
+`…-pu1-lift-1786126106`, 1058 vs 2516 entities, 6 vs 10 items, different
+`final_tick`, different file hashes, and different raw counters (7114→8014 vs
+6873→7773).
 
 ### ⚠ Units: this sweep and `sweep_corpus` do not report the same quantity
 
