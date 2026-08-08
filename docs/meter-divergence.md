@@ -9,13 +9,15 @@ or reveals a new one.
 
 **Two open residuals, and they are different animals:**
 
-1. `tier5_processing_unit_from_ore_am3`, −13.6pp on the corpus. Diagnosis
+1. `tier5_processing_unit_from_ore_am3`, −13.6% on the corpus (sim-relative —
+   see the units note in the 2026-08-08 section; this log has historically
+   written `sweep_corpus`'s percentages as "pp"). Diagnosis
    closed 2026-08-06: a research-productivity parity gap. Its fix is **merged**
    (#584 meter / #585 sim / #587 solver / #591 `sim_export` wiring) — what
    remains is that **the 2026-08-01 corpus predates the axis and declares
    none**, so this row still reads at the old value until the bank is
    re-exported or re-declared. Not a modelling mystery; a stale reference.
-2. `pu1-lift`, **−24.2pp**, found 2026-08-08 on the post-lift population and
+2. `pu1-lift`, **−23.7% sim-relative / −24.2pp of plan**, found 2026-08-08 on the post-lift population and
    **not** the same cause — that fixture declares the axis and its sim run is
    kit-clean. A petroleum-gas distribution shortfall inside the meter's own
    fluid network. See the 2026-08-08 section, which is the current head of this
@@ -67,9 +69,17 @@ commensurable. But the sim harness verdicts a solid target on **delivered**
 (`crates/sim-harness/src/report.rs`, `verdict` for `!is_fluid_target`), so a
 gate mirroring that verdict thresholds on delivered — grading the meter on
 produced would grade it against a number no gate consults. `sweep_postlift`
-emits both. **Delivered is the gate-relevant rate and is worse on every summary
-statistic**, so the conclusions below are stated on delivered, with produced
+emits both, and the conclusions below are stated on delivered with produced
 kept as the calibration view.
+
+**The difference comes from the sim side, not the meter side.** The meter's own
+produced and delivered readings are identical to 2dp on all six rows (99.23 vs
+99.22 on `ac5-lift` is the only movement at all), so switching metric does not
+extract a new signal from the meter. What changes is the **reference**: the sim
+delivers 89.70% on `tier2-ec10-lift` where it produces 90.91%, and 102.01% on
+`pu1-lift` where it produces 100.67%. So "delivered is worse" is a statement
+about which sim column the meter is being held against, not about the meter
+having a distinct delivered model.
 
 All figures below are **% of plan**; the meter and sim columns are given
 separately per rate, because conflating them is how the first draft of this
@@ -86,6 +96,18 @@ section went wrong.
 
 On delivered: mean −3.80pp, worst optimistic **+6.30pp**, worst pessimistic
 **−24.21pp**. (On produced: −3.21 / +5.09 / −22.87pp.)
+
+**Why `bigpole1-lift-v2` and `pu1-lift` show identical sim baselines** — asked
+by review, and worth answering in the doc because any reader will ask it. The
+two are **integer quantization**, not a duplicated report: both targets are
+planned at 1.0/s and both runs measured over the same 298 s window, so
+`300/298 = 1.00671140939597…` produced and `304/298 = 1.02013422818792…`
+delivered are what "at plan" *has* to look like at these counts. The runs are
+provably distinct — different scenarios
+(`…-bigpole1-lift-v2-1786128688` vs `…-pu1-lift-1786126106`), 1058 vs 2516
+entities, 6 vs 10 items, different `final_tick`, different file hashes. The
+coincidence is real and shallow: at a 1/s target over a 5-minute window there
+are only so many integers available.
 
 ### ⚠ Units: this sweep and `sweep_corpus` do not report the same quantity
 
@@ -105,11 +127,9 @@ sim-relative: mean −3.65%, worst optimistic **+7.03%**, worst pessimistic
 ### Both corpus-wide bounds are broken by this population
 
 The corpus's two load-bearing numbers were *"every optimistic error is ≤
-+1.3pp anywhere in the corpus"* and *"pessimistic errors run to −13.6pp"*.
-Post-lift:
-
-Quoted in the corpus's own sim-relative units, so the multipliers mean
-something:
++1.3pp anywhere in the corpus"* and *"pessimistic errors run to −13.6pp"* —
+both of which are, per the units note above, **sim-relative percentages**.
+Post-lift, quoted in those same units so the multipliers mean something:
 
 - **Optimism reaches +7.03% — 5.4× the corpus maximum** (+6.30pp
   planned-relative). This is the tier2 divergence the 2026-08-07 section

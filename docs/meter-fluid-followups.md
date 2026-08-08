@@ -97,8 +97,8 @@ shortfall against the meter's own ceiling.
 The largest single divergence in the post-lift calibration sweep, and it is a
 fluid-distribution finding rather than a productivity one: **meter 77.81% of
 plan against a sim delivering 102.01% — −24.21pp** (−22.87pp on produced, where
-the sim reads 100.67%). That is 1.8× the worst pessimistic error anywhere in the
-41-row Job-2 corpus, on a layout the sim says is fine — so it is a **false
+the sim reads 100.67%). That is 1.7× the worst pessimistic error anywhere in the
+41-row Job-2 corpus (sim-relative: −23.73% against −13.6%), on a layout the sim says is fine — so it is a **false
 accusation**, the quadrant a blocking gate cares about, and it is not removed by
 re-declaring the research-productivity axis (`pu1-lift` already declares it and
 its sim run is kit-clean).

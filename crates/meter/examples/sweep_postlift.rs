@@ -342,8 +342,17 @@ fn main() {
                 let emean = e.iter().sum::<f64>() / e.len() as f64;
                 let eopt = e.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                 let epess = e.iter().cloned().fold(f64::INFINITY, f64::min);
+                // Sim-relative is undefined at sim == 0, so its denominator can
+                // be smaller than the planned-relative one. Say so rather than
+                // letting the two summaries silently describe different sets.
+                let dropped = targets.len() - e.len();
+                let note = if dropped > 0 {
+                    format!("   [{dropped} row(s) omitted: sim rate is 0]")
+                } else {
+                    String::new()
+                };
                 println!(
-                    "sim-relative     : mean {emean:+.2}% | worst optimistic {eopt:+.2}% | worst pessimistic {epess:+.2}%   <- sweep_corpus units"
+                    "sim-relative     : mean {emean:+.2}% | worst optimistic {eopt:+.2}% | worst pessimistic {epess:+.2}%   <- sweep_corpus units{note}"
                 );
             }
         }
