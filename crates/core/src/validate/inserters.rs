@@ -1035,13 +1035,19 @@ pub fn check_row_output_lane_budget(
 /// **Demand** is `super::resolve_row_spec` + `utilization_for` per
 /// attributed machine — the same pair `check_input_rate_delivery` uses, so
 /// the number this check prints is the same number the rest of the
-/// validator reasons with. **Capacity** is the belt's full both-lane
-/// stacked nominal (`2 × lane_capacity_stacked`, per-item stacking via
-/// `StackingCtx` exactly as `check_lane_throughput` derives it): a bus tap
-/// feeds an input belt straight, loading both lanes, and inserters pick
-/// from both — so the generous both-lane figure is the honest ceiling
-/// here, and using it keeps the check silent on anything but a genuinely
-/// saturated belt.
+/// validator reasons with.
+///
+/// **Capacity** is per-item stacking-aware (`lane_capacity_stacked` via
+/// `StackingCtx`, exactly as `check_lane_throughput` derives it) times a
+/// lane factor chosen by [`belt_in_lane_factor`] from how the run is FED.
+/// This paragraph used to assert the both-lane nominal unconditionally, on
+/// the premise that "a bus tap feeds an input belt straight, loading both
+/// lanes". That premise holds for a tap and fails for a run fed only by
+/// inserter drops, which load the far lane alone — #607, where the
+/// resulting 2× over-credit kept this check silent on a layout delivering
+/// 90.9% of plan. Straight-fed and both-sides-fed runs still get the
+/// generous both-lane figure, so the check stays silent on anything but a
+/// genuinely saturated belt.
 ///
 /// Severity is Warning: the layout is physically valid and mostly works —
 /// it just cannot reach its planned rate.
@@ -1341,13 +1347,35 @@ fn belt_in_lane_factor(
     const FAR_LANE_ONLY: f64 = 0.95;
 
     let tiles: FxHashSet<(i32, i32)> = cluster.iter().map(|e| (e.x, e.y)).collect();
+    let item = cluster.iter().find_map(|e| e.carries.as_deref());
+
+    // The run's own axis, so an inserter's approach side can be read off the
+    // perpendicular. Same majority-direction rule `row_lanes_loaded` uses.
+    let (mut horiz, mut vert) = (0usize, 0usize);
+    for e in cluster {
+        match e.direction {
+            EntityDirection::East | EntityDirection::West => horiz += 1,
+            EntityDirection::North | EntityDirection::South => vert += 1,
+        }
+    }
+    let horizontal = horiz >= vert;
 
     let mut straight_fed = false;
-    let mut inserter_fed = false;
+    let mut drop_sides: FxHashSet<i32> = FxHashSet::default();
     for e in &layout.entities {
         if is_surface_belt(&e.name) || is_ug_belt(&e.name) || is_splitter(&e.name) {
             if tiles.contains(&(e.x, e.y)) {
                 continue; // part of the run itself
+            }
+            // A belt only feeds this run if it could be carrying this run's
+            // item. Without this an unrelated parallel line whose head
+            // happens to abut the run re-credits both lanes and re-arms the
+            // #607 false negative. `carries: None` still counts — untagged
+            // router/crossing tiles are legitimate feeds.
+            if let (Some(want), Some(got)) = (item, e.carries.as_deref()) {
+                if want != got {
+                    continue;
+                }
             }
             let (dx, dy) = dir_to_vec(e.direction);
             if tiles.contains(&(e.x + dx, e.y + dy)) {
@@ -1357,14 +1385,25 @@ fn belt_in_lane_factor(
             let (dx, dy) = dir_to_vec(e.direction);
             let r = inserter_reach(&e.name);
             if tiles.contains(&(e.x + dx * r, e.y + dy * r)) {
-                inserter_fed = true;
+                // Which side of the run the hand comes from. Inserters on
+                // OPPOSITE sides fill opposite lanes, so a run fed from both
+                // sides genuinely loads both — crediting it one lane would
+                // over-warn.
+                let approach = if horizontal { dy } else { dx };
+                drop_sides.insert(approach.signum());
             }
         }
     }
 
-    if !straight_fed && inserter_fed {
+    if straight_fed {
+        (BOTH_LANES, "fed straight (both lanes)")
+    } else if drop_sides.len() >= 2 {
+        (BOTH_LANES, "fed by inserter drops from both sides (both lanes)")
+    } else if drop_sides.len() == 1 {
         (FAR_LANE_ONLY, "fed by inserter drops (far lane only)")
     } else {
+        // No detected feed at all — preserve the historical assumption
+        // rather than warn on a run this function cannot explain.
         (BOTH_LANES, "fed straight (both lanes)")
     }
 }
@@ -2874,6 +2913,115 @@ mod tests {
         let sr = row_input_spec("test-widget", "test-input", 2.0, 6.0);
         let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
         entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        assert!(input_margin_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    /// Long-handed inserters dropping onto a belt-in run from ONE side —
+    /// the `stamp_di_bridge` shape. Nothing else feeds the run.
+    fn bridge_drops_onto(item: &str, belt_y: i32, from_y: i32, count: i32) -> Vec<PlacedEntity> {
+        // reach 2, facing South, so drop lands on `belt_y` from `from_y`.
+        assert_eq!(belt_y - from_y, 2, "long-handed reach is exactly 2");
+        (0..count)
+            .map(|i| PlacedEntity {
+                name: "long-handed-inserter".into(),
+                x: i * 4,
+                y: from_y,
+                direction: EntityDirection::South,
+                carries: Some(item.into()),
+                segment_id: Some(format!("di-bridge:{item}:test-widget")),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn row_input_margin_inserter_fed_run_credits_one_lane() {
+        // #607. Six machines demanding 12.0/s — comfortably under yellow's
+        // 15.0/s both-lane nominal, so the pre-fix check was SILENT (see
+        // `row_input_margin_silent_with_real_margin`, same numbers). The
+        // run is fed only by inserter drops, which load the far lane only,
+        // so the real ceiling is 7.5 × 0.95 = 7.125/s and it must warn.
+        let sr = row_input_spec("test-widget", "test-input", 2.0, 6.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        entities.extend(bridge_drops_onto("test-input", 0, -2, 6));
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        let warns = input_margin_warnings(&issues);
+        assert_eq!(warns.len(), 1, "inserter-fed run must warn: {warns:?}");
+        assert!(
+            warns[0].message.contains("fed by inserter drops (far lane only)"),
+            "message must name the feed: {:?}",
+            warns[0]
+        );
+        let detail = warns[0].detail.as_ref().expect("must carry IssueDetail");
+        assert!((detail.needed - 12.0).abs() < 1e-9, "{detail:?}");
+        assert!((detail.delivered - 7.125).abs() < 1e-9, "one lane × 0.95: {detail:?}");
+    }
+
+    #[test]
+    fn row_input_margin_straight_fed_run_still_credits_both_lanes() {
+        // Same demand and same run, but with a belt travelling INTO it (a
+        // bus tap). Both lanes load, so 12.0 < 15.0 and it stays silent —
+        // this is the regression guard for the `BOTH_LANES` branch.
+        let sr = row_input_spec("test-widget", "test-input", 2.0, 6.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        entities.push(PlacedEntity {
+            name: "transport-belt".into(),
+            x: -1,
+            y: 0,
+            direction: EntityDirection::East, // head tile is (0,0), in the run
+            carries: Some("test-input".into()),
+            ..Default::default()
+        });
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        assert!(input_margin_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn row_input_margin_unrelated_parallel_belt_does_not_re_credit_both_lanes() {
+        // The false-negative door: a neighbouring line carrying a DIFFERENT
+        // item whose head abuts the run must not re-classify it as straight
+        // fed. Same inserter-fed run as above, so it must still warn.
+        let sr = row_input_spec("test-widget", "test-input", 2.0, 6.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        entities.extend(bridge_drops_onto("test-input", 0, -2, 6));
+        entities.push(PlacedEntity {
+            name: "transport-belt".into(),
+            x: -1,
+            y: 0,
+            direction: EntityDirection::East,
+            carries: Some("some-other-item".into()),
+            ..Default::default()
+        });
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        let warns = input_margin_warnings(&issues);
+        assert_eq!(warns.len(), 1, "an unrelated item's belt is not a feed: {warns:?}");
+    }
+
+    #[test]
+    fn row_input_margin_drops_from_both_sides_credit_both_lanes() {
+        // Inserters on OPPOSITE sides of the run fill opposite lanes, so
+        // this is genuinely two-lane and must not warn at 12.0 < 15.0.
+        let sr = row_input_spec("test-widget", "test-input", 2.0, 6.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        entities.extend(bridge_drops_onto("test-input", 0, -2, 6));
+        // ... plus a North-facing bank reaching up from below.
+        entities.extend((0..6).map(|i| PlacedEntity {
+            name: "long-handed-inserter".into(),
+            x: i * 4 + 1,
+            y: 2,
+            direction: EntityDirection::North,
+            carries: Some("test-input".into()),
+            ..Default::default()
+        }));
         let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
         let issues = check_row_input_belt_margin(&lr, Some(&sr));
         assert!(input_margin_warnings(&issues).is_empty(), "{issues:?}");
