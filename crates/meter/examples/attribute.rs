@@ -56,18 +56,40 @@ fn main() {
     // a positive signal for the case it is meant to find. Found 2026-08-08
     // while attributing pu1-lift's −24.2pp, whose whole chain hangs off two
     // petroleum-starved plastic-bar machines that this list did not print.
+    // Per-KIND caps, not one shared budget. A shared cap of 12 lets a fixture
+    // with 12+ solid-starved machines push every fluid-starved one off the
+    // list — recreating, through the back door, the exact "absence reads as no
+    // shortage" failure this block was changed to fix.
+    const PER_KIND_CAP: usize = 12;
     println!("\nstarved machines — what they hold vs what they need:");
-    let mut shown = 0;
+    let (mut shown_item, mut shown_fluid) = (0usize, 0usize);
+    let (mut hidden_item, mut hidden_fluid) = (0usize, 0usize);
     for m in &f.machines {
         let kind = match m.state {
             MachineState::ItemIngredientShortage => "item",
             MachineState::FluidIngredientShortage => "fluid",
             _ => continue,
         };
-        if shown >= 12 {
+        let over = if kind == "item" {
+            shown_item += 1;
+            if shown_item > PER_KIND_CAP {
+                hidden_item += 1;
+                true
+            } else {
+                false
+            }
+        } else {
+            shown_fluid += 1;
+            if shown_fluid > PER_KIND_CAP {
+                hidden_fluid += 1;
+                true
+            } else {
+                false
+            }
+        };
+        if over {
             continue;
         }
-        shown += 1;
         let mut need: Vec<String> = m
             .ingredients
             .iter()
@@ -85,6 +107,13 @@ fn main() {
             m.recipe,
             m.pos,
             need.join(" ")
+        );
+    }
+    // Truncation is stated, per kind. A capped list that does not say it was
+    // capped is a list the reader will treat as exhaustive.
+    if hidden_item > 0 || hidden_fluid > 0 {
+        println!(
+            "  ... {hidden_item} more item-starved and {hidden_fluid} more fluid-starved machine(s) not shown (cap {PER_KIND_CAP}/kind)"
         );
     }
 

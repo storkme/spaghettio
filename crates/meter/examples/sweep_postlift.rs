@@ -36,6 +36,12 @@ use spaghettio_meter::manifest::Manifest;
 /// checked the corpus at, kept identical so the two results are comparable.
 const THRESHOLDS: [f64; 4] = [90.0, 95.0, 98.0, 99.0];
 
+/// Minimum sim checkpoints for a row to count. `converged: true` can be
+/// reached at the minimum checkpoint count, which `sim-harness-forensics.md`
+/// class 5c flags as needing a longer-warmup confirmation before it is treated
+/// as the asymptote. Every row in the 2026-08-07 bank has 4+.
+const MIN_CHECKPOINTS: usize = 4;
+
 /// Which rate a row is being compared on.
 ///
 /// Both are carried because they answer different questions and the answers
@@ -184,14 +190,49 @@ fn main() {
 
         // Provenance gates, in the order that makes a bad row cheapest to
         // reject. `kit_errors` first: it invalidates the run outright.
-        let kit = rep["kit_errors"].as_array().cloned().unwrap_or_default();
+        //
+        // A MISSING or non-array key is rejected, not defaulted to empty. The
+        // permissive reading is the inverse silent drop: a schema-drifted
+        // report would silently *gain* coverage by looking clean.
+        let Some(kit) = rep["kit_errors"].as_array() else {
+            excluded.push((fixture, "report has no `kit_errors` array — cannot vet".into()));
+            continue;
+        };
         if !kit.is_empty() {
             let first = kit[0].as_str().unwrap_or("").to_string();
             excluded.push((fixture, format!("kit_errors ({}): {first}", kit.len())));
             continue;
         }
+        // Same treatment for fluids. The provenance claim in
+        // `meter-divergence.md` says these rows are fluid-clean; a claim no
+        // code enforces is a claim that drifts.
+        let fluid_len = match &rep["fluid_errors"] {
+            serde_json::Value::Array(a) => a.len(),
+            serde_json::Value::Object(o) => o.len(),
+            _ => {
+                excluded.push((fixture, "report has no `fluid_errors` — cannot vet".into()));
+                continue;
+            }
+        };
+        if fluid_len > 0 {
+            excluded.push((fixture, format!("fluid_errors ({fluid_len})")));
+            continue;
+        }
         if rep["converged"].as_bool() != Some(true) {
             excluded.push((fixture, "sim run did not converge".into()));
+            continue;
+        }
+        // `converged` alone can be true at the minimum checkpoint count, which
+        // `sim-harness-forensics.md` class 5c warns is not yet an asymptote.
+        let checkpoints = report["raw_result"]["checkpoints"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0);
+        if checkpoints < MIN_CHECKPOINTS {
+            excluded.push((
+                fixture,
+                format!("only {checkpoints} checkpoint(s), need >= {MIN_CHECKPOINTS}"),
+            ));
             continue;
         }
 
@@ -406,14 +447,18 @@ fn main() {
         // a CSV consumed by something else cannot.
         let c = |v: Option<f64>| v.map_or(String::new(), |x| format!("{x:.4}"));
         let cp = |v: Option<f64>| v.map_or(String::new(), |x| format!("{x:.2}"));
+        // Both units per metric. The sim-relative columns are the ONLY ones
+        // comparable against `sweep_corpus`'s bounds, so omitting them would
+        // leave the doc's headline multipliers unreproducible from the
+        // machine-readable artifact.
         let mut csv = String::from(
             "fixture,item,is_target,planned,\
-             meter_produced,sim_produced,meter_produced_pct,sim_produced_pct,delta_pp_produced,\
-             meter_delivered,sim_delivered,meter_delivered_pct,sim_delivered_pct,delta_pp_delivered\n",
+             meter_produced,sim_produced,meter_produced_pct,sim_produced_pct,delta_pp_produced,delta_vs_sim_pct_produced,\
+             meter_delivered,sim_delivered,meter_delivered_pct,sim_delivered_pct,delta_pp_delivered,delta_vs_sim_pct_delivered\n",
         );
         for r in &rows {
             csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 r.fixture,
                 r.item,
                 r.is_target,
@@ -423,11 +468,13 @@ fn main() {
                 cp(r.meter_pct(Metric::Produced)),
                 cp(r.sim_pct(Metric::Produced)),
                 cp(r.delta_pp(Metric::Produced)),
+                cp(r.delta_vs_sim_pct(Metric::Produced)),
                 c(r.meter(Metric::Delivered)),
                 c(r.sim(Metric::Delivered)),
                 cp(r.meter_pct(Metric::Delivered)),
                 cp(r.sim_pct(Metric::Delivered)),
                 cp(r.delta_pp(Metric::Delivered)),
+                cp(r.delta_vs_sim_pct(Metric::Delivered)),
             ));
         }
         std::fs::write(&out, csv).unwrap();

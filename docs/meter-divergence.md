@@ -73,13 +73,13 @@ emits both, and the conclusions below are stated on delivered with produced
 kept as the calibration view.
 
 **The difference comes from the sim side, not the meter side.** The meter's own
-produced and delivered readings are identical to 2dp on all six rows (99.23 vs
-99.22 on `ac5-lift` is the only movement at all), so switching metric does not
-extract a new signal from the meter. What changes is the **reference**: the sim
-delivers 89.70% on `tier2-ec10-lift` where it produces 90.91%, and 102.01% on
-`pu1-lift` where it produces 100.67%. So "delivered is worse" is a statement
-about which sim column the meter is being held against, not about the meter
-having a distinct delivered model.
+produced and delivered readings are identical to 2dp on **five of six** rows —
+`ac5-lift`'s 99.23 vs 99.22 is the only movement anywhere — so switching metric
+does not extract a new signal from the meter. What changes is the
+**reference**: the sim delivers 89.70% on `tier2-ec10-lift` where it produces
+90.91%, and 102.01% on `pu1-lift` where it produces 100.67%. So "delivered is
+worse" is a statement about which sim column the meter is being held against,
+not about the meter having a distinct delivered model.
 
 All figures below are **% of plan**; the meter and sim columns are given
 separately per rate, because conflating them is how the first draft of this
@@ -145,7 +145,12 @@ Post-lift, quoted in those same units so the multipliers mean something:
 
 `sweep_postlift` classifies every target at each tolerance, on the delivered
 rate the harness itself verdicts on. Against the corpus's **0 missed defects in
-41 rows at every threshold ≥90%**:
+41 rows at every threshold ≥90%** — noting that the corpus figure was computed
+on **produced** (`sweep_corpus` compares produced for solid targets), so
+"1-in-6 vs 0-in-41" is not literally apples-to-apples. **The retraction does
+not depend on that seam**: on produced, tier2 reads meter 96.00 vs sim 90.91,
+which is still a missed defect at 95%. See the metric-sensitivity note below
+the table for where it *does* matter.
 
 | threshold | missed defects | false accusations |
 |---|---|---|
@@ -153,6 +158,14 @@ rate the harness itself verdicts on. Against the corpus's **0 missed defects in
 | **95%** | **1/6 (`tier2-ec10-lift`)** | 1/6 (`pu1-lift`) |
 | 98% | 0/6 | 1/6 (`pu1-lift`) |
 | 99% | 0/6 | 1/6 (`pu1-lift`) |
+
+**Which of these rows is robust, and which is knife-edge.** The **95%** miss
+holds on *both* metrics — meter 96.00 against sim 90.91 produced and 89.70
+delivered — and is the load-bearing one. The **90%** miss exists only on
+delivered and only by **0.30pp**: the sim delivers 89.70% there but produces
+90.91%, so on the produced column there is no 90% miss at all. Do not lean on
+the 90% row; the reference instrument's own two columns straddle that cutoff by
+1.2pp.
 
 - **Report-only.** At 90% *and* 95% the meter reads 96.0% on `tier2-ec10-lift`
   — at plan — where the sim delivers 89.7%. That is the dangerous quadrant,
@@ -223,12 +236,22 @@ consumers starved is a throughput limit **in the network between them**, not a
 shortfall at the source.
 
 *(The two probes report different buffer levels for the same machines — 10/20
-and 15/30 above, 1–3 here — because they sample at different points: `attribute`
-runs a 2-game-hour warmup then measures over 3, `debug_fluid` uses the
-108k/216k window. Both are instantaneous end-of-run snapshots of a buffer that
-never fills, so the levels differ while the finding — chronically short, never
-backed up — is the same. Neither is a steady-state fill level; do not read
-either as one.)*
+and 15/30 above, 1–3 here — because they sample at very different points.
+`attribute` runs `run_for(60*60*2)` then `run_for(60*60*3)`: **7 200 warmup +
+10 800 measured ticks, i.e. 2 and 3 game-MINUTES**, 18 000 ticks all told.
+`debug_fluid` uses the 108k/216k window. Both are instantaneous end-of-run
+snapshots of a buffer that never fills, so the levels differ while the finding
+— chronically short, never backed up — is the same.*
+
+***And note what that arithmetic means: `attribute`'s whole run is 18 000 ticks,
+which is BELOW the meter's own ~20–40k convergence floor recorded in the
+2026-08-07 section.*** *So `attribute` is a **localisation** probe here — which
+machines are in which state, and what they are short of — and its rates are not
+to be quoted. The rate claim rests on `sweep_postlift`/`debug_fluid` at
+108k/216k, which is 6× the floor and which independently shows the same three
+machines short of the same fluid. An earlier revision of this note described
+`attribute`'s window as "2 game-hours then 3", overstating it 60×; caught in
+review of this PR.)*
 
 **Related but not identified as the same defect.** `meter-fluid-followups.md`
 records that Phase A's `tick_fluids` "delivered fluid one unit a tick and

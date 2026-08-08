@@ -115,9 +115,12 @@ Localised, with the two probes rather than by inference:
   Producers unblocked and never backing up, consumers starved: the limit is
   throughput **in the network between them**, not production at the source.
   (The two probes read different buffer levels for the same machines because
-  they sample at different points — `attribute` warms 2 game-hours then measures
-  3, `debug_fluid` uses the 108k/216k window. Both are end-of-run snapshots of a
-  buffer that never fills; neither is a steady-state level.)
+  they sample at very different points — `attribute` runs 7 200 warmup + 10 800
+  measured ticks, i.e. 2 and 3 game-MINUTES, while `debug_fluid` uses the
+  108k/216k window. Both are end-of-run snapshots of a buffer that never fills;
+  neither is a steady-state level. `attribute`'s 18 000-tick total is **below
+  the meter's own ~20–40k convergence floor**, so it is used here to LOCALISE
+  the shortage, not to measure a rate — the rate rests on the 108k/216k runs.)
 
 **Deliberately not diagnosed further.** The chain throttled here
 (petroleum→plastic→AC→PU) is the same one Phase A throttled to ~20% and Phase B
