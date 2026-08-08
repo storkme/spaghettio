@@ -1405,8 +1405,16 @@ fn belt_in_lane_factor(
                 // OPPOSITE sides fill opposite lanes, so a run fed from both
                 // sides genuinely loads both — crediting it one lane would
                 // over-warn.
-                let approach = if horizontal { dy } else { dx };
-                drop_sides.insert(approach.signum());
+                // A head-on (inline) hand has zero perpendicular component —
+                // it feeds along the run's axis, not from a side, so it
+                // occupies no lane of its own. Counting it as a distinct
+                // "side" would pair with one genuine side feed to reach
+                // len() == 2 and re-credit both lanes to a single-lane run.
+                // Head-of-line bridge geometry is not exotic, so exclude it.
+                let approach = (if horizontal { dy } else { dx }).signum();
+                if approach != 0 {
+                    drop_sides.insert(approach);
+                }
             }
         }
     }
