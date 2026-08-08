@@ -92,8 +92,30 @@ impl Row {
     fn sim_pct(&self, m: Metric) -> Option<f64> {
         self.sim(m).map(|v| v / self.planned * 100.0)
     }
+    /// Planned-relative: `(meter - sim) / planned * 100`, i.e. the gap in
+    /// **percentage points of plan**. This is the unit a gate reasons in,
+    /// because a gate thresholds "% of plan" — so the classification below
+    /// must use it.
     fn delta_pp(&self, m: Metric) -> Option<f64> {
         Some(self.meter_pct(m)? - self.sim_pct(m)?)
+    }
+
+    /// Sim-relative: `(meter - sim) / sim * 100`, i.e. the meter's **percent
+    /// error against its reference**.
+    ///
+    /// Carried because this — NOT `delta_pp` — is what `sweep_corpus` reports,
+    /// and the corpus's headline bounds ("every optimistic error is <= +1.3",
+    /// "pessimistic errors run to -13.6") are in these units despite the log
+    /// calling them "pp". The two agree only where sim ~= plan, which is
+    /// exactly where a below-plan fixture is not. Comparing a planned-relative
+    /// number against those bounds silently mixes units; both are emitted here
+    /// so a cross-sweep claim can be made in the corpus's own terms.
+    fn delta_vs_sim_pct(&self, m: Metric) -> Option<f64> {
+        let (meter, sim) = (self.meter(m)?, self.sim(m)?);
+        if sim == 0.0 {
+            return None;
+        }
+        Some((meter - sim) / sim * 100.0)
     }
 }
 
@@ -130,8 +152,24 @@ fn main() {
             continue;
         }
 
-        let report: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&rp_path).unwrap()).unwrap();
+        // A corrupt or truncated report must cost its own row, not the run.
+        // Panicking here means one bad file — sorted early — takes down a whole
+        // calibration sweep, which is the same "silent" failure wearing a
+        // louder coat: the other fixtures never get measured at all.
+        let raw = match std::fs::read_to_string(&rp_path) {
+            Ok(s) => s,
+            Err(e) => {
+                excluded.push((fixture, format!("report.json unreadable: {e}")));
+                continue;
+            }
+        };
+        let report: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                excluded.push((fixture, format!("report.json is not valid JSON: {e}")));
+                continue;
+            }
+        };
         let rep = &report["report"];
 
         // Schema check BEFORE the provenance gates. A report.json missing its
@@ -180,7 +218,10 @@ fn main() {
         let meter = factory.measure(108_000, 216_000);
 
         let items = rep["items"].as_array().cloned().unwrap_or_default();
-        let before = rows.len();
+        // Per-fixture counter rather than a `rows.len()` diff: the guard below
+        // means "this fixture contributed nothing", and it should keep meaning
+        // that if anything else ever touches `rows` in this loop.
+        let mut added = 0usize;
         for item in items {
             let name = item["item"].as_str().unwrap_or("").to_string();
             let Some(planned) = item["planned_rate"].as_f64() else {
@@ -199,12 +240,13 @@ fn main() {
                 sim_produced: item["measured_produced_rate"].as_f64(),
                 sim_delivered: item["measured_delivered_rate"].as_f64(),
             });
+            added += 1;
         }
         // A kit-clean, converged report that yields no usable row would
         // otherwise vanish from the table AND from the exclusion list — the
         // silent drop this file's header warns against, arriving through the
         // one door the `kit_errors` gate does not cover.
-        if rows.len() == before {
+        if added == 0 {
             excluded.push((fixture, "report has no items with a non-zero planned_rate".into()));
         }
     }
@@ -216,9 +258,10 @@ fn main() {
     // `tgt` is a declared column, not a bare marker appended past the last
     // header field: an unlabelled 9th column on some rows only is exactly the
     // kind of output a reader misreads.
+    println!("--- per-item table (PRODUCED rate; delivered is in the target sections below) ---");
     println!(
         "{:<30}{:<22}{:>10}{:>10}{:>10}{:>9}{:>9}{:>10}{:>6}",
-        "fixture", "item", "plan", "meter", "sim", "meter%", "sim%", "Dpp", "tgt"
+        "fixture", "item", "plan", "meter_prod", "sim_prod", "meter%", "sim%", "Dpp", "tgt"
     );
     println!("{}", "-".repeat(116));
     for r in &rows {
@@ -287,8 +330,22 @@ fn main() {
             let worst_opt = d.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
             let worst_pess = d.iter().cloned().fold(f64::INFINITY, f64::min);
             println!(
-                "mean {mean:+.2}pp | worst optimistic {worst_opt:+.2}pp | worst pessimistic {worst_pess:+.2}pp"
+                "planned-relative : mean {mean:+.2}pp | worst optimistic {worst_opt:+.2}pp | worst pessimistic {worst_pess:+.2}pp"
             );
+            // Same rows in sweep_corpus's units, so the corpus bounds can be
+            // quoted against these without mixing denominators.
+            let e: Vec<f64> = targets
+                .iter()
+                .filter_map(|r| r.delta_vs_sim_pct(metric))
+                .collect();
+            if !e.is_empty() {
+                let emean = e.iter().sum::<f64>() / e.len() as f64;
+                let eopt = e.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let epess = e.iter().cloned().fold(f64::INFINITY, f64::min);
+                println!(
+                    "sim-relative     : mean {emean:+.2}% | worst optimistic {eopt:+.2}% | worst pessimistic {epess:+.2}%   <- sweep_corpus units"
+                );
+            }
         }
 
         // Two quadrants, and they are not the same risk:

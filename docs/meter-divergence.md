@@ -37,11 +37,19 @@ Six post-lift fixtures, i.e. layouts selected by the ranking that #605 produced
 by lifting the `input-rate-delivery` exemption. Sim baselines are the runs made
 2026-08-07 on those exact blueprints — Factorio 2.0.77, `--speed 32`, **warmup
 432 000** on every one, all `converged: true` with ≥4 checkpoints and empty
-`kit_errors`/`fluid_errors`. Blueprints, manifests and reports are banked at
-`~/spaghettio-corpora/postlift-2026-08-07/` (recovered from session scratch
-before it aged out; the two stress-EC rows carry full `report.json`, the rest
-were re-joined from their live-run reports). Meter side: `sweep_postlift`, the
-same 108k/216k window `check_one` and `sweep_corpus` use.
+`kit_errors`/`fluid_errors`. Meter side: `sweep_postlift`, the same 108k/216k
+window `check_one` and `sweep_corpus` use.
+
+**All seven fixture dirs carry a banked `report.json`** (7/7), and
+`sweep_postlift` re-reads and re-vets every one — `kit_errors`, `converged`,
+and the schema — so no row here bypasses the tool's checks; the excluded
+`bigpole1-lift` row is that vetting firing. The reports come from a mix of
+`sim-live.sh` and `run --out` invocations, which write the same schema and are
+vetted identically. The bank is a local, out-of-repo directory at
+`~/spaghettio-corpora/postlift-2026-08-07/`, recovered from session scratch
+before it aged out — like the Job-2 corpus it sits beside, it is **not
+version-controlled**, so reproducing this on another machine means rebuilding
+the bank from `sim_export` plus fresh sim runs.
 
 **One fixture is excluded and it is worth naming.** `bigpole1-lift` reports
 `kit_errors: ["research-productivity parity: 'steel-plate' realized 0.1 but the
@@ -63,17 +71,36 @@ emits both. **Delivered is the gate-relevant rate and is worse on every summary
 statistic**, so the conclusions below are stated on delivered, with produced
 kept as the calibration view.
 
-| fixture | target | meter % | sim % prod | Δpp prod | sim % deliv | **Δpp deliv** |
-|---|---|---|---:|---:|---:|---:|
-| `bigpole1-lift-v2` | big-electric-pole | 100.53 | 100.67 | −0.14 | 102.01 | **−1.49** |
-| `ac5-lift` | advanced-circuit | 99.22 | 99.67 | −0.44 | 99.67 | **−0.45** |
-| `stress_ec_30s_postlift` | electronic-circuit | 91.92 | 90.91 | +1.01 | 92.12 | **−0.20** |
-| `stress_ec_60s_red_postlift` | electronic-circuit | 87.90 | 89.83 | −1.93 | 90.67 | **−2.77** |
-| `tier2-ec10-lift` | electronic-circuit | 96.00 | 90.91 | +5.09 | 89.70 | **+6.30** |
-| `pu1-lift` | processing-unit | 77.81 | 100.67 | −22.87 | 102.01 | **−24.21** |
+All figures below are **% of plan**; the meter and sim columns are given
+separately per rate, because conflating them is how the first draft of this
+section went wrong.
+
+| fixture | target | meter prod | sim prod | Δpp prod | meter deliv | sim deliv | **Δpp deliv** |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `bigpole1-lift-v2` | big-electric-pole | 100.53 | 100.67 | −0.14 | 100.53 | 102.01 | **−1.49** |
+| `ac5-lift` | advanced-circuit | 99.23 | 99.67 | −0.44 | 99.22 | 99.67 | **−0.45** |
+| `stress_ec_30s_postlift` | electronic-circuit | 91.92 | 90.91 | +1.01 | 91.92 | 92.12 | **−0.20** |
+| `stress_ec_60s_red_postlift` | electronic-circuit | 87.90 | 89.83 | −1.93 | 87.90 | 90.67 | **−2.77** |
+| `tier2-ec10-lift` | electronic-circuit | 96.00 | 90.91 | +5.09 | 96.00 | 89.70 | **+6.30** |
+| `pu1-lift` | processing-unit | 77.81 | 100.67 | −22.87 | 77.81 | 102.01 | **−24.21** |
 
 On delivered: mean −3.80pp, worst optimistic **+6.30pp**, worst pessimistic
 **−24.21pp**. (On produced: −3.21 / +5.09 / −22.87pp.)
+
+### ⚠ Units: this sweep and `sweep_corpus` do not report the same quantity
+
+`sweep_postlift` reports **planned-relative percentage points**,
+`(meter − sim) / planned × 100`. `sweep_corpus` reports **sim-relative percent
+error**, `(meter − sim) / sim × 100` (`sweep_corpus.rs`, the `delta` binding) —
+so the corpus's headline bounds are percentages of the sim reading, despite
+this log having always called them "pp". The two agree only where sim ≈ plan,
+which is precisely not the case on a below-plan fixture.
+
+Planned-relative is the right unit for the gate classification below, because a
+gate thresholds *% of plan*. But **cross-sweep comparisons must be made in the
+corpus's units**, so `sweep_postlift` now prints both. The same six rows,
+sim-relative: mean −3.65%, worst optimistic **+7.03%**, worst pessimistic
+**−23.73%**.
 
 ### Both corpus-wide bounds are broken by this population
 
@@ -81,14 +108,18 @@ The corpus's two load-bearing numbers were *"every optimistic error is ≤
 +1.3pp anywhere in the corpus"* and *"pessimistic errors run to −13.6pp"*.
 Post-lift:
 
-- **Optimism reaches +6.30pp on delivered — 4.8× the corpus maximum** (+5.09pp
-  on produced, still 3.9×). This is the tier2 divergence the 2026-08-07 section
+Quoted in the corpus's own sim-relative units, so the multipliers mean
+something:
+
+- **Optimism reaches +7.03% — 5.4× the corpus maximum** (+6.30pp
+  planned-relative). This is the tier2 divergence the 2026-08-07 section
   already flagged as unexplained (it recorded meter 96% vs sim 90–91%); it
   **reproduces exactly** — 96.00 vs 90.91 produced — from the banked blueprint.
   Warmup was falsified as its cause on 2026-08-07 (96.0% flat from 108k to
   864k) and nothing here changes that. Still unexplained.
-- **Pessimism reaches −24.21pp — 1.8× the corpus maximum**, on `pu1-lift`, a
-  layout the sim measures at **102.01% of plan**. This one is new (below).
+- **Pessimism reaches −23.73% — 1.7× the corpus maximum**, on `pu1-lift`, a
+  layout the sim measures at **102.01% of plan** (−24.21pp planned-relative).
+  This one is new (below).
 
 ### The gate verdict, stated as the two quadrants
 
@@ -127,8 +158,17 @@ rate the harness itself verdicts on. Against the corpus's **0 missed defects in
 **Consequence for the trust ladder.** Report-only remains shippable — a
 report-only gate that misses is merely worth less, it blocks nobody — but it
 must ship **without** the floor claim attached, because the floor claim is
-currently false on the population it would serve. That is a documentation
+**not established** on the population it would serve. That is a documentation
 constraint on how the gate's output is worded, not a reason to hold it.
+
+**How strong is this?** One fixture, `tier2-ec10-lift`, produces the missed
+defect. That is enough to remove the *warrant* — a property asserted as
+universal over a population fails on one counterexample, and the corpus claim
+was explicitly "0 rows at 99%, 98%, 95% and 90%". It is **not** enough to
+estimate a miss *rate*: "1 in 6" is a sample of six, and quoting it as a
+frequency would overclaim in the opposite direction. The honest statement is
+that the meter is **not known to be a floor** post-lift, not that it fails at
+any particular rate. Widening the bank is what would turn one into the other.
 
 ### `pu1-lift` −24.21pp: petroleum-gas distribution, not the productivity axis
 
