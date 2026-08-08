@@ -1367,6 +1367,7 @@ fn belt_in_lane_factor(
     let horizontal = horiz >= vert;
 
     let mut straight_fed = false;
+    let mut inserter_fed = false;
     let mut drop_sides: FxHashSet<i32> = FxHashSet::default();
     for e in &layout.entities {
         if is_surface_belt(&e.name) || is_ug_belt(&e.name) || is_splitter(&e.name) {
@@ -1411,6 +1412,7 @@ fn belt_in_lane_factor(
                 // "side" would pair with one genuine side feed to reach
                 // len() == 2 and re-credit both lanes to a single-lane run.
                 // Head-of-line bridge geometry is not exotic, so exclude it.
+                inserter_fed = true;
                 let approach = (if horizontal { dy } else { dx }).signum();
                 if approach != 0 {
                     drop_sides.insert(approach);
@@ -1423,7 +1425,13 @@ fn belt_in_lane_factor(
         (BOTH_LANES, "fed straight (both lanes)")
     } else if drop_sides.len() >= 2 {
         (BOTH_LANES, "fed by inserter drops from both sides (both lanes)")
-    } else if drop_sides.len() == 1 {
+    } else if inserter_fed {
+        // One side, or head-on only. Excluding a zero-approach hand from
+        // `drop_sides` must not also exclude it from being a FEED: a run
+        // whose only source is an inline bank is still inserter-fed and
+        // still single-lane. Keying the branch on `drop_sides.len() == 1`
+        // sent that case to the both-lane fallback — a door the previous
+        // commit opened while closing another.
         (FAR_LANE_ONLY, "fed by inserter drops (far lane only)")
     } else {
         // No detected feed at all — preserve the historical assumption
@@ -3049,6 +3057,35 @@ mod tests {
         let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
         let issues = check_row_input_belt_margin(&lr, Some(&sr));
         assert!(input_margin_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn row_input_margin_head_on_only_feed_is_still_single_lane() {
+        // Regression guard: excluding a zero-approach (inline) hand from
+        // `drop_sides` must not also exclude it from counting as a FEED.
+        // A run whose only source is a head-on bank is still inserter-fed
+        // and still single-lane, so it must warn at 12.0 vs 7.125.
+        let sr = row_input_spec("test-widget", "test-input", 2.0, 6.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        // East-facing, reach 2, sitting ON the run's axis (y == belt y).
+        entities.push(PlacedEntity {
+            name: "long-handed-inserter".into(),
+            x: -2,
+            y: 0,
+            direction: EntityDirection::East,
+            carries: Some("test-input".into()),
+            ..Default::default()
+        });
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        let warns = input_margin_warnings(&issues);
+        assert_eq!(warns.len(), 1, "head-on-only feed is still single-lane: {warns:?}");
+        assert!(
+            warns[0].message.contains("far lane only"),
+            "must be classified inserter-fed: {:?}",
+            warns[0]
+        );
     }
 
     #[test]
