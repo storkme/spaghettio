@@ -1328,6 +1328,12 @@ fn row_lanes_loaded(belts: &[&PlacedEntity]) -> u8 {
 /// lane reads `0/4` along the entire run while the far lane saturates at
 /// `4/4`, and the layout delivers 90.9% of plan while validating clean.
 ///
+/// **Known scope limit:** both item guards key on the run's own `carries`
+/// tag. A `belt-in` run stamped WITHOUT one disables them, and any abutting
+/// belt or hand then counts as a feed. Every template-stamped run sets
+/// `carries`, so engine output is covered — but the guard's efficacy depends
+/// on a field it cannot verify, and the failure direction is under-warn.
+///
 /// **Deliberately biased to under-warn.** Anything that looks like a
 /// straight feed — including an underground *entrance* pointing into the
 /// run, which does not actually deliver there — is credited both lanes.
@@ -1382,6 +1388,16 @@ fn belt_in_lane_factor(
                 straight_fed = true;
             }
         } else if is_inserter(&e.name) {
+            // Same item guard as the belt branch above. Without it a stray
+            // hand from the far side — carrying anything at all — flips
+            // `drop_sides.len() >= 2` and re-credits both lanes to a run
+            // that is genuinely single-lane fed, re-arming #607 through the
+            // door this function exists to close.
+            if let (Some(want), Some(got)) = (item, e.carries.as_deref()) {
+                if want != got {
+                    continue;
+                }
+            }
             let (dx, dy) = dir_to_vec(e.direction);
             let r = inserter_reach(&e.name);
             if tiles.contains(&(e.x + dx * r, e.y + dy * r)) {
