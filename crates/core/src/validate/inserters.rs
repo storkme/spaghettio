@@ -1178,10 +1178,16 @@ pub fn check_row_input_belt_margin(
                 continue;
             }
             let tier = row_belt_tier(&belts);
-            // Both physical lanes: a bus tap feeds an input belt straight
-            // (loading both lanes) and inserters pick from both.
+            // How the cluster is FED decides how many lanes it can load.
+            // A straight belt feed (bus tap, or a belt continuing into
+            // this run) loads both lanes; a cluster whose only source is
+            // inserter drops gets the far lane ONLY (I5) — the same
+            // physics `check_row_output_lane_budget` already models on
+            // the output side, applied here for the first time.
+            let (lane_factor, feed) = belt_in_lane_factor(layout, cluster);
             let capacity =
-                crate::common::lane_capacity_stacked(tier, stacking_ctx.for_item(item)) * 2.0;
+                crate::common::lane_capacity_stacked(tier, stacking_ctx.for_item(item))
+                    * lane_factor;
 
             if demand >= capacity - EPSILON {
                 let (ax, ay) = belts.iter().map(|e| (e.x, e.y)).min().unwrap();
@@ -1192,11 +1198,17 @@ pub fn check_row_input_belt_margin(
                         format!(
                             "{recipe} row input belt at ({ax},{ay}) carries {item} for \
                              {mcount} machine{plural} demanding {demand:.2}/s against a \
-                             {tier} carrying only {capacity:.2}/s — zero margin, so the \
+                             {tier} {feed} carrying only {capacity:.2}/s — zero margin, so the \
                              head machines absorb the whole belt and the TAIL machine \
-                             starves in a converged steady state (#448); widen the belt \
-                             tier or split the row",
+                             starves in a converged steady state (#448); {remedy}",
                             plural = if mcount == 1 { "" } else { "s" },
+                            remedy = if lane_factor < 2.0 {
+                                "this belt is fed by inserter drops, which load the far lane \
+                                 only — feed it straight (bus lane / tap) or add a midpoint \
+                                 sideload bridge to reach both lanes (#607)"
+                            } else {
+                                "widen the belt tier or split the row"
+                            },
                         ),
                         ax,
                         ay,
@@ -1283,6 +1295,77 @@ fn row_lanes_loaded(belts: &[&PlacedEntity]) -> u8 {
         2
     } else {
         1
+    }
+}
+
+/// How many physical lanes a row's INPUT belt run can actually load,
+/// decided by how the run is fed, plus a short label for the message.
+///
+/// The input side cannot reuse [`row_lanes_loaded`]: that infers a
+/// midpoint sideload bridge from tiles spread perpendicular to the row
+/// axis, and every input run is a single line whether it is tap-fed or
+/// bridge-fed — the geometry does not discriminate. What does is the
+/// FEED:
+///
+/// - **Straight feed** — a belt (surface or underground) travelling into
+///   this run from outside it: a bus tap terminating into the belt, or a
+///   belt continuing into it. Items arrive on both lanes, and inserters
+///   pick from both, so the honest ceiling is the full both-lane nominal.
+/// - **Inserter drops only** — every item arrives by inserter hand, which
+///   lands on the **far lane** (I5). The near lane stays empty for the
+///   whole run, so only one lane's capacity is reachable.
+///
+/// This is the same physics [`check_row_output_lane_budget`] models on a
+/// row's belt-OUT; #607 found it unmodelled on the belt-IN, where
+/// `placer::stamp_di_bridge` feeds a consumer's input belt entirely by
+/// inserter drop. Measured on `tier2_electronic_circuit @10/s`: the near
+/// lane reads `0/4` along the entire run while the far lane saturates at
+/// `4/4`, and the layout delivers 90.9% of plan while validating clean.
+///
+/// **Deliberately biased to under-warn.** Anything that looks like a
+/// straight feed — including an underground *entrance* pointing into the
+/// run, which does not actually deliver there — is credited both lanes.
+/// A false positive here would re-rank candidates on a layout that is
+/// fine; a false negative merely preserves today's behaviour. Tighten
+/// with an entrance/exit distinction if a real fixture needs it.
+fn belt_in_lane_factor(
+    layout: &LayoutResult,
+    cluster: &[&PlacedEntity],
+) -> (f64, &'static str) {
+    /// Both physical lanes, the historical assumption (a straight feed
+    /// loads both). Matches `ROW_LANE_FACTOR_BRIDGED` on the output side.
+    const BOTH_LANES: f64 = 2.0;
+    /// Far lane only, times the measured realization factor #385/#431
+    /// calibrated for inserter-drop delivery. Matches
+    /// `ROW_LANE_FACTOR_UNBRIDGED`.
+    const FAR_LANE_ONLY: f64 = 0.95;
+
+    let tiles: FxHashSet<(i32, i32)> = cluster.iter().map(|e| (e.x, e.y)).collect();
+
+    let mut straight_fed = false;
+    let mut inserter_fed = false;
+    for e in &layout.entities {
+        if is_surface_belt(&e.name) || is_ug_belt(&e.name) || is_splitter(&e.name) {
+            if tiles.contains(&(e.x, e.y)) {
+                continue; // part of the run itself
+            }
+            let (dx, dy) = dir_to_vec(e.direction);
+            if tiles.contains(&(e.x + dx, e.y + dy)) {
+                straight_fed = true;
+            }
+        } else if is_inserter(&e.name) {
+            let (dx, dy) = dir_to_vec(e.direction);
+            let r = inserter_reach(&e.name);
+            if tiles.contains(&(e.x + dx * r, e.y + dy * r)) {
+                inserter_fed = true;
+            }
+        }
+    }
+
+    if !straight_fed && inserter_fed {
+        (FAR_LANE_ONLY, "fed by inserter drops (far lane only)")
+    } else {
+        (BOTH_LANES, "fed straight (both lanes)")
     }
 }
 
