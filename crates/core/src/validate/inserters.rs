@@ -1438,7 +1438,14 @@ fn belt_in_lane_factor(
     if straight_fed {
         (BOTH_LANES, "fed straight (both lanes)")
     } else if drop_sides.len() >= 2 {
-        (BOTH_LANES, "fed by inserter drops from both sides (both lanes)")
+        // Two lanes, but NOT the bridged nominal. `BOTH_LANES = 2.0` mirrors
+        // the output side's `ROW_LANE_FACTOR_BRIDGED`, which is sim-anchored
+        // for a midpoint sideload bridge — a geometry that REDISTRIBUTES flow
+        // across the belt. Two independent inserter banks do not redistribute:
+        // each fills its own lane by hand and each realizes the same ~0.95 the
+        // single-sided case does. So the honest ceiling is 2 × FAR_LANE_ONLY,
+        // not the bridged 2.0.
+        (2.0 * FAR_LANE_ONLY, "fed by inserter drops from both sides (two lanes)")
     } else if inserter_fed {
         // One side, or head-on only. Excluding a zero-approach hand from
         // `drop_sides` must not also exclude it from being a FEED: a run
@@ -3054,7 +3061,9 @@ mod tests {
     #[test]
     fn row_input_margin_drops_from_both_sides_credit_both_lanes() {
         // Inserters on OPPOSITE sides of the run fill opposite lanes, so
-        // this is genuinely two-lane and must not warn at 12.0 < 15.0.
+        // this is genuinely two-lane and must not warn at 12.0 < 14.25
+        // (2 × 7.5 × 0.95 — two hand-filled lanes, NOT the bridged 15.0,
+        // because independent banks do not redistribute across the belt).
         let sr = row_input_spec("test-widget", "test-input", 2.0, 6.0);
         let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
         entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
@@ -3071,6 +3080,31 @@ mod tests {
         let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
         let issues = check_row_input_belt_margin(&lr, Some(&sr));
         assert!(input_margin_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn row_input_margin_both_sides_uses_two_hand_lanes_not_the_bridged_nominal() {
+        // 14.5/s sits between 2 × 7.5 × 0.95 = 14.25 (two hand-filled lanes)
+        // and the bridged 15.0. Crediting the bridged nominal would keep this
+        // silent; two independent banks do not redistribute, so it must warn.
+        let sr = row_input_spec("test-widget", "test-input", 14.5 / 6.0, 6.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        entities.extend(bridge_drops_onto("test-input", 0, -2, 6));
+        entities.extend((0..6).map(|i| PlacedEntity {
+            name: "long-handed-inserter".into(),
+            x: i * 4 + 1,
+            y: 2,
+            direction: EntityDirection::North,
+            carries: Some("test-input".into()),
+            ..Default::default()
+        }));
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        let warns = input_margin_warnings(&issues);
+        assert_eq!(warns.len(), 1, "14.5 exceeds two hand-filled lanes (14.25): {warns:?}");
+        let detail = warns[0].detail.as_ref().expect("must carry IssueDetail");
+        assert!((detail.delivered - 14.25).abs() < 1e-9, "2 × lane × 0.95: {detail:?}");
     }
 
     #[test]
