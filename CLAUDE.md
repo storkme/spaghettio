@@ -59,8 +59,10 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   the multiple concurrent Claude sessions that share this repo.
 - **Keep a PR under ~400 added lines.** This is the strongest predictor of
   rework we have measured: over 2026-07-12 → 08-09, rework per 100 added lines
-  ran 1.4 (<100 adds) · 3.2 (100–400) · 8.5 (400–1k) · **10.5 (>1k)**, and the
-  32% of PRs above 400 adds produced **93% of all rework**
+  ran 1.4 (<100 adds) · 3.2 (100–400) · **8.5 (400–1k)** — a 6–8× rise that
+  holds under both per-PR and pooled averaging — and the 32% of PRs above 400
+  adds produced **93% of all rework**. Above 1k the rate is at least as bad,
+  though the two statistics disagree on how much
   ([audit](docs/pr-churn-audit-2026-08.md)). The mechanism is claim surface
   area, not carelessness — a big PR asserts more independently-falsifiable
   things (several sim numbers, several fixtures, several corpus percentages)

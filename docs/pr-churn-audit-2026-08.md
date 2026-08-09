@@ -23,14 +23,31 @@ before the numbers below were trustworthy (see [Method](#method)).
 
 ### Rework per 100 added lines, by PR size
 
-| Bucket | n | Rate | Pooled |
+| Bucket | n | Mean of per-PR rates | Pooled (Σrework/Σadds) |
 |---|---:|---:|---:|
 | <100 adds | 42 | 1.4 | 1.1 |
 | 100–400 | 82 | 3.2 | 3.0 |
 | 400–1k | 41 | 8.5 | 8.3 |
 | **>1k** | 29 | **10.5** | 6.9 |
 
-Monotonic, 7.5× spread. This is the finding the norm rests on.
+**What is robust:** the rate rises steeply and monotonically across the first
+three buckets under *both* statistics — roughly 6–8× from <100 to 400–1k. That
+alone carries the norm, whose threshold is 400.
+
+**What is not:** the top bucket disagrees between the two columns (mean 10.5,
+pooled 6.9). Pooled weights by PR size, so a handful of very large PRs with
+proportionally little rework dominate that cell. Do not claim the relationship
+is monotonic across all four buckets on this data — it is only monotonic on the
+per-PR mean. The safe reading is that >1k is *at least as bad* as 400–1k, not
+demonstrably worse.
+
+> **Denominators.** These buckets cover the 194 PRs that merged 2026-07-20 →
+> 08-09 with more than 20 added lines. That is narrower than the 218 merged
+> since 07-12 in the headline table: `review_rounds.tsv` (the per-PR
+> commits/comments/latency pull) starts at 07-20 and covers 217 PRs, and 23 of
+> those fall below the 20-add floor used to keep tiny PRs from producing
+> meaningless per-line ratios. The "32% of PRs ≥400 adds" figure is 70/217 from
+> the unfiltered set. Reconcile before quoting any of these against each other.
 
 ## What was refuted
 
@@ -158,9 +175,17 @@ Ranked by expected value, not yet actioned:
    is a threshold effect on one day (Jul 22 carries 31% of all reworked lines;
    dropping it collapses the day-level correlation from 0.318 to 0.145), and
    Jul 31 at 34 open PRs was calm.
-5. **Stale doctrine.** `CLAUDE.md:23` still says the workflow is to "hit the
-   web app to eyeball the layout", contradicting the verification protocol at
-   :186 which says the eyeball was never a good substitute; the PR template
-   carried the same stale checkbox. The `validate/` submodule list names a
-   non-existent `underground.rs` and omits `belt_detour.rs` / `sushi.rs`; the
-   crate list omits `meter` and `sim-harness`.
+5. **Stale doctrine.** `CLAUDE.md`'s "Primary workflow" bullet still says to
+   "hit the web app to eyeball the layout", contradicting step 2 of
+   [Verification protocol for layout engine changes](../CLAUDE.md#verification-protocol-for-layout-engine-changes),
+   which says the eyeball "was never a good substitute". The PR template's
+   Verification block carries the same stale checkbox — **this PR edits that
+   template to add the size bullet and deliberately leaves the checkbox alone**,
+   to keep the change-size commit reviewable in isolation; it is not an
+   oversight. The `validate/` submodule list names a non-existent
+   `underground.rs` and omits `belt_detour.rs` / `sushi.rs`; the crate list
+   omits `meter` and `sim-harness`.
+
+   (Anchors here are section links, not line numbers, because this PR's own
+   insertion shifted the protocol text by ~16 lines — a line-number citation
+   would have been stale in the commit that added it.)
