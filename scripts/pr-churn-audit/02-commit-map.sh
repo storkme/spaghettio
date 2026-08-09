@@ -109,7 +109,12 @@ while IFS=$'\t' read -r pr sha; do
     # True merge commit: the PR's work is the second-parent branch.
     base="${sha}^1"
     while read -r bsha; do
-      printf '%s\t%s\n' "$bsha" "$pr" >> "$WORK/.c2p.raw"; CLAIMED[$bsha]=$pr
+      # First claim wins here too — a branch that contains another PR's
+      # commits (branched off it) must not re-claim them, or CLAIMED's
+      # in-walk stops would disagree with the final first-claim dedup.
+      if [ -z "${CLAIMED[$bsha]:-}" ]; then
+        printf '%s\t%s\n' "$bsha" "$pr" >> "$WORK/.c2p.raw"; CLAIMED[$bsha]=$pr
+      fi
     done < <(git rev-list "${sha}^1..${sha}^2"; echo "$sha")
   else
     cap="${NCOM[$pr]:-1}"; [ "$cap" -lt 1 ] && cap=1
@@ -171,7 +176,7 @@ while IFS=$'\t' read -r pr sha; do
     git rev-parse -q --verify "$base" >/dev/null 2>&1 || base="${sha}^1"
   fi
   printf '%s\t%s\n' "$pr" "$base" >> "$WORK/pr_base.tsv"
-done < <(jq -r '[.[]|select(.mergeCommit!=null)]|sort_by(.mergedAt)|.[]|"\(.number)\t\(.mergeCommit.oid)"' \
+done < <(jq -r '[.[]|select(.mergeCommit!=null)]|sort_by(.mergedAt,.number)|.[]|"\(.number)\t\(.mergeCommit.oid)"' \
            "$WORK/prs_merged.json")
 
 # First claim wins, deterministically: rows append in MERGE order and the

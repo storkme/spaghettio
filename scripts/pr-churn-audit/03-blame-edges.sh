@@ -53,7 +53,7 @@ out="$WORK/rework_edges.tsv"; : > "$out"
 fails="$WORK/blame_failures.txt"; : > "$fails"
 
 jq -r --arg s "$SINCE" --arg u "$UNTIL_TS" '[.[]|select(.mergedAt>$s and .mergedAt<$u and .mergeCommit!=null)]
-  | sort_by(.mergedAt) | .[] | "\(.number)\t\(.mergeCommit.oid)\t\(.mergedAt)"' \
+  | sort_by(.mergedAt,.number) | .[] | "\(.number)\t\(.mergeCommit.oid)\t\(.mergedAt)"' \
   "$WORK/prs_merged.json" |
 while IFS=$'\t' read -r pr sha mdate; do
   base="${BASE[$pr]:-}"

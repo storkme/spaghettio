@@ -185,8 +185,9 @@ boundary walk now validates a trailing `(#N)` against the merged-PR list —
 defect 2's issue-ref regex had re-entered through the walk and truncated the
 range of #317, the very PR defect 1 was measured on. Isolated, that fix moved
 almost nothing (edges 1,999 → 2,005). Second, the diff now passes `-w` to
-match the blame's `-w`, so whitespace-only churn no longer counts as rework —
-and that is what moved the numbers: the 400–1k bucket drops 6.1 → 4.7,
+match the blame's `-w`, so whitespace-only modifications no longer count as
+rework (deleting a whole whitespace-only line still counts, consistent with
+the deletions asymmetry) — and that is what moved the numbers: the 400–1k bucket drops 6.1 → 4.7,
 meaning roughly a quarter of that bucket's previously-counted rework was
 whitespace-only lines. (The edge *row* count still rises 2,005 → 2,022 under
 `-w`: rows are hunk-grained, and a block whose interior lines changed only in
