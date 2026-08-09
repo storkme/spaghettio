@@ -61,10 +61,10 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   *rework* we have measured. Across the 197 PRs merged **2026-07-20 → 08-09**
   with >20 added lines, rework per 100 added lines ran 1.6 (<100 adds) · 2.6
   (100–400) · **6.1 (400–1k)** — a ~4× rise holding under both per-PR and
-  pooled averaging — and PRs ≥400 adds, 32% of them, accounted for **90% of
-  all rework**. Above 1k it stops rising (6.0 mean / 3.8 pooled), so 400 is the
-  threshold: it is where the climb happens, not merely where two statistics
-  agree. Denominators and caveats:
+  pooled averaging — and PRs ≥400 adds, 36% of that population, accounted for **90% of
+  all rework**. Above 1k it stops rising (6.0 mean / 3.8 pooled) — but that step
+  is confounded by right-censoring, so read 400 as "where the climb is measured
+  to happen", not as a ceiling. Denominators and caveats:
   [audit](docs/pr-churn-audit-2026-08.md).
   - Read "rework" literally — a later PR rewriting an earlier one's lines. A
     sampled split puts it at ~57% planned iteration / 23% genuine correction /

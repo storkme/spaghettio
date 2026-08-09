@@ -78,14 +78,27 @@ while IFS=$'\t' read -r pr sha; do
       git rev-parse "$cand" | sed "s/\$/\t$pr/" >> "$WORK/.c2p.raw"
       depth=$((depth+1))
     done
-    # Walked the full branch length without meeting another PR's boundary. That
-    # is correct for a rebase-merge, but it is ALSO what a squash-merge sitting
-    # on an UNLABELLED commit looks like — and in that case the range is
-    # over-wide, exactly the v2 defect. The heuristic cannot tell them apart, so
-    # count these and report rather than assume the benign reading.
+    # The loop bound stops at depth-1, so the cap-th ancestor was never
+    # inspected. Look at it now — that is what distinguishes the two cases:
+    #
+    #   sha~cap announces ANOTHER PR  -> clean rebase-merge sitting exactly on
+    #                                    the previous PR's boundary. Expected.
+    #   sha~cap announces nothing     -> genuinely ambiguous: either a rebase
+    #                                    onto an unlabelled commit, or a squash
+    #                                    whose range is now over-wide (the v2
+    #                                    defect). Flag it.
+    #
+    # Without this check the marker fired for every clean multi-commit rebase —
+    # i.e. the dominant case — which made it useless for spotting the harmful
+    # one. A warning that fires on everything is a warning about nothing.
     if [ "$hit_boundary" -eq 0 ] && [ "$depth" -gt 1 ]; then
-      caphits=$((caphits+1))
-      printf '%s\tcap-exhausted\tdepth=%s\n' "$pr" "$depth" >> "$WORK/range_unverified.txt"
+      capsubj=$(git log -1 --format='%s' "${sha}~${depth}" 2>/dev/null || echo "")
+      capowner=$(boundary_pr "$capsubj")
+      if [ -z "$capowner" ] || [ "$capowner" = "$pr" ]; then
+        caphits=$((caphits+1))
+        printf '%s\tambiguous-base\tdepth=%s\tbase_subject=%s\n' \
+          "$pr" "$depth" "${capsubj:0:60}" >> "$WORK/range_unverified.txt"
+      fi
     fi
     base="${sha}~${depth}"
     git rev-parse -q --verify "$base" >/dev/null 2>&1 || base="${sha}^1"
@@ -103,8 +116,11 @@ echo "commit2pr       : $(wc -l < "$WORK/commit2pr.tsv")"
 echo "walks truncated at another PR's boundary: $overwalks"
 echo "  (each of these would have been an over-wide range under a bare sha~N)"
 if [ "$caphits" -gt 0 ]; then
-  echo "NOTE: $caphits multi-commit PR(s) walked their full branch length without"
-  echo "      meeting another PR's boundary — correct for a rebase-merge, but"
-  echo "      indistinguishable from a squash landing on an unlabelled commit."
-  echo "      Listed in $WORK/range_unverified.txt; spot-check if a figure surprises you."
+  echo "NOTE: $caphits PR(s) resolved to a base that announces no other PR, so the"
+  echo "      range could not be confirmed as ending at the previous PR's boundary."
+  echo "      Either a rebase onto an unlabelled commit (harmless) or a squash whose"
+  echo "      range is over-wide (the v2 defect). Listed with their base subject in"
+  echo "      $WORK/range_unverified.txt — spot-check before quoting affected PRs."
+else
+  echo "every multi-commit range ended on another PR's boundary (none ambiguous)"
 fi

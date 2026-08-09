@@ -18,6 +18,21 @@ WORK="${WORK:-./audit-work}"
 awk -F'\t' '{t[$2]+=$5} END{for(k in t) print k"\t"t[k]}' "$WORK/rework_edges.tsv" \
   > "$WORK/reworked_totals.tsv"
 
+# Population reconciliation FIRST, and asserted. Every denominator dispute in
+# this pipeline's review history came from a number hand-copied into prose and
+# then not updated with its siblings. Print them together so they cannot drift,
+# and fail loudly if the bucket rows do not sum to the population they cite.
+echo "=== population (cite these, do not hand-derive them)"
+awk -F'\t' 'NR>1 {tot++; if($6>20) pop++; if($6>=400) big++}
+  END{
+    printf "  review_rounds rows (unfiltered) : %d\n", tot
+    printf "  bucket population (>20 adds)    : %d\n", pop
+    printf "  of those, >=400 adds            : %d  (%.0f%% of the bucket population)\n", big, 100*big/pop
+    printf "  NB %d/%d = %.0f%% is the UNFILTERED share — quoting it against the\n", big, tot, 100*big/tot
+    printf "     bucket population is the mixed-denominator trap. Pick one base.\n"
+  }' "$WORK/review_rounds.tsv"
+
+echo
 echo "=== rework age distribution (all edges)"
 awk -F'\t' '{print $4}' "$WORK/rework_edges.tsv" | sort -n | awk '
   {a[NR]=$1} END{printf "  n=%d  p50=%s  p75=%s  p90=%s\n", NR, a[int(NR*.5)], a[int(NR*.75)], a[int(NR*.9)]}'
@@ -52,6 +67,12 @@ awk -F'\t' -v T="$WORK/reworked_totals.tsv" '
     printf "  %-11s %4s %14s %10s\n","bucket","n","mean-of-rates","pooled"
     for(i=1;i<=nb;i++) print rows[i]
   }' "$WORK/review_rounds.tsv"
+
+# Assertion: the four bucket rows must account for exactly the population.
+awk -F'\t' 'NR>1 && $6>20 {n++} END{exit (n>0 ? 0 : 1)}' "$WORK/review_rounds.tsv" || {
+  echo "ERROR: bucket population is empty — review_rounds.tsv missing or unfiltered." >&2; exit 3; }
+sum=$(awk -F'\t' 'NR>1 && $6>20 {n++} END{print n+0}' "$WORK/review_rounds.tsv")
+echo "  (rows above sum to $sum, the bucket population)"
 
 echo
 echo "=== share of all rework, by originating PR size"
