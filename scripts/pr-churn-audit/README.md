@@ -72,10 +72,10 @@ cannot distinguish them. That error mis-attributed **35% of commits** (322 of
 
 | Measure | v1 (narrow + regex) | v2 (wide) | v3 (current) |
 |---|---:|---:|---:|
-| Edges | 1,639 | 3,114 | 1,841 |
-| Median lag | 1d | 2d | 1d |
-| Within 3 days | 61% | 57% | 65% |
-| Rate 400–1k | 6.3 | 8.5 | 6.3 |
+| Edges | 1,639 | 3,114 | 1,999 |
+| Median lag | 1d | 2d | 2d |
+| Within 3 days | 61% | 57% | 60% |
+| Rate 400–1k | 6.3 | 8.5 | 6.1 |
 | Rate >1k | 5.7 | 10.5 | 6.0 |
 | Large-PR share | 89.7% | 93.2% | 90.1% |
 
@@ -87,9 +87,30 @@ adds — is present in all three; only its magnitude moved.
 ## Reading the output
 
 `04-analyze.sh` prints **both** averaging methods per size bucket. They agree
-across the first three, which is why the norm's threshold is 400. They disagree
-in *direction* on the top bucket — mean rises to 10.5, pooled falls to 6.9 —
-so `>1k` is unresolved on this data and neither figure should be quoted alone.
+across the first three, which is why the norm's threshold is 400 — and they
+agree on the top bucket too: both **fall** past 1k (mean 6.1 → 6.0, pooled
+6.1 → 3.8). So >1k is not worse than 400–1k, plausibly a floor effect. (An
+earlier version had the mean rising to 10.5 against a pooled 6.9 and called the
+bucket unresolved; that was the over-wide-range artifact, not a real
+divergence.)
+
+### What the rate actually measures
+
+`reworked_totals` is keyed by the **reworked** PR — column 2 of
+`rework_edges.tsv` — and divided by *that* PR's own additions. So the figure is
+**"how much of what this PR wrote did not survive"**, not "how much rewriting
+this PR did". That is the reading the norm needs: it claims a large PR's own
+code gets rewritten more per line.
+
+Two consequences that are correct but look like bugs at a glance:
+
+- An in-window PR that rewrites lots of *old* code scores 0 in its own bucket.
+  It is a reworker, not reworked, and the metric is not about reworkers.
+- Edges whose reworked PR predates `BUCKET_SINCE` appear in the edge total but
+  in no bucket, because that PR is not in the bucket population.
+
+If you want the other reading — rework *caused* per PR — key on column 1
+instead. It is a different question and the norm does not rest on it.
 
 Buckets cover PRs with more than 20 added lines merged from the start of
 `review_rounds.tsv`'s coverage; the share-of-rework figure uses the unfiltered

@@ -2,9 +2,16 @@
 # Stage 4: the numbers CLAUDE.md's change-size norm rests on.
 #
 # Prints BOTH averaging methods for the size buckets. They agree across the
-# first three buckets (which is why the norm's threshold is 400) and disagree
-# in direction on the top one — mean rises 8.5 -> 10.5, pooled FALLS 8.3 -> 6.9.
-# Do not quote one without the other.
+# first three (which is why the norm's threshold is 400) and also on the top
+# one, where both FALL past 1k (mean 6.1 -> 6.0, pooled 6.1 -> 3.8). Quote both
+# anyway: an earlier over-wide-range artifact made them appear to diverge there,
+# and printing one alone is how that went unnoticed.
+#
+# `reworked_totals` is keyed by the REWORKED pr (column 2) and divided by that
+# PR's own additions: the figure is "how much of what this PR wrote did not
+# survive", NOT "how much rewriting this PR did". A PR that rewrites lots of old
+# code therefore scores 0 in its own bucket, which is correct — see the README's
+# "What the rate actually measures".
 set -euo pipefail
 WORK="${WORK:-./audit-work}"
 
