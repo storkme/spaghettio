@@ -121,56 +121,46 @@ struct BlueprintWrapper<'a> {
     blueprint: Blueprint<'a>,
 }
 
-/// [`export_with_manifest`], validating under an explicit layout style.
+/// [`export_with_manifest`] for a caller that has **already validated**, and
+/// the only variant that attaches a `validator` block.
 ///
-/// The plain [`export_with_manifest`] delegates here with
-/// [`LayoutStyle::Bus`]. That is not `LayoutStyle::default()` (Spaghetti) —
-/// it is chosen because every producer of a manifest is a bus-pipeline
-/// layout, and `validator-trust.md` records Bus as "the style every
-/// production call site passes". Pass the style explicitly if you are
-/// exporting something else; getting it wrong silently changes which checks
-/// are Errors.
-pub fn export_with_manifest_styled(
-    layout: &LayoutResult,
-    solver: &crate::models::SolverResult,
-    label: &str,
-    style: crate::validate::LayoutStyle,
-) -> (String, serde_json::Value) {
-    // `validate()` emits a terminal `ValidationCompleted` trace event. Doing
-    // that as a side effect of *exporting* would leak an extra event into any
-    // live trace stream and skew the snapshot debugger's error counts — the
-    // same hazard `decomposition_search.rs` guards for its per-candidate
-    // validations (#396, blocking finding). Discard whatever this call
-    // emitted, using the codebase's existing peek/truncate pattern.
-    let mark = crate::trace::peek_events_len();
-    let issues = match crate::validate::validate(layout, Some(solver), style) {
-        // Both arms carry the full issue list; `Err` only means at least one
-        // Error-severity issue is present, and we want warnings either way.
-        Ok(issues) => issues,
-        Err(e) => e.issues,
-    };
-    crate::trace::truncate_events(mark);
-
-    export_with_manifest_validated(layout, solver, label, &issues)
-}
-
-/// `export_with_manifest` for a caller that has **already validated**.
+/// Export deliberately does **not** validate on your behalf. Three reasons,
+/// each learned the hard way in review of this change:
 ///
-/// Prefer this wherever an issue list is in hand: it is the only variant that
-/// does not run the ~40-check validator, which on a 14k-entity mega-chain
-/// fixture is not free. [`export_with_manifest`] and
-/// [`export_with_manifest_styled`] both end up here after computing `issues`
-/// themselves.
+/// - **Cost.** `validate()` is ~40 checks; on a 14k-entity mega-chain that is
+///   not free, and a dozen artifact-producing call sites would have started
+///   paying for it silently.
+/// - **Trace side effects.** `validate()` emits a terminal
+///   `ValidationCompleted` event. Emitting it from *export* leaks an event
+///   into any live stream and skews the snapshot debugger's per-layout error
+///   counts — the hazard `decomposition_search.rs` guards for (#396).
+/// - **Style.** `validate()` behaves differently under
+///   [`LayoutStyle`](crate::validate::LayoutStyle): `check_belt_network_topology`
+///   is Spaghetti-only, and the fluid-port and belt-flow checks branch on it.
+///   Export cannot know the right style — `LayoutResult` does not record one —
+///   so picking a default here would silently mislabel non-bus layouts.
 ///
-/// `issues` must come from validating **this** layout — nothing checks that,
-/// and a mismatched list would put a confident, wrong `validator` block into
-/// an artifact the sim harness then reports as fact.
+/// A manifest exported without this variant simply carries no `validator`
+/// key, which the sim harness renders as `unknown` — honest, and distinct
+/// from `clean`.
+///
+/// `issues` must come from validating **this** layout. A `debug_assert`
+/// catches the crudest mismatch (positioned issues outside the layout's
+/// bbox), but it is not a proof: a stale list from a same-shaped layout would
+/// pass, and would put a confident, wrong block into an artifact the sim
+/// harness reports as fact.
 pub fn export_with_manifest_validated(
     layout: &LayoutResult,
     solver: &crate::models::SolverResult,
     label: &str,
     issues: &[crate::validate::ValidationIssue],
 ) -> (String, serde_json::Value) {
+    debug_assert!(
+        issues_plausibly_describe(layout, issues),
+        "validator issues do not describe this layout (positioned issue \
+         outside its bbox) — passing a stale list writes a confident, wrong \
+         validator block into the manifest"
+    );
     let (bp, mut manifest) = export_with_manifest_inner(layout, solver, label);
     let summary = crate::validate::ValidatorSummary::from_issues(issues, layout.warnings.len());
     if let Some(obj) = manifest.as_object_mut() {
@@ -182,24 +172,49 @@ pub fn export_with_manifest_validated(
     (bp, manifest)
 }
 
+/// Cheap sanity check that an issue list could plausibly have come from this
+/// layout: every positioned issue lands inside the layout's entity bbox.
+/// Catches the "wrong layout entirely" mistake, not a subtle one.
+fn issues_plausibly_describe(
+    layout: &LayoutResult,
+    issues: &[crate::validate::ValidationIssue],
+) -> bool {
+    if layout.entities.is_empty() {
+        return true;
+    }
+    let min_x = layout.entities.iter().map(|e| e.x).min().unwrap_or(0);
+    let max_x = layout.entities.iter().map(|e| e.x).max().unwrap_or(0);
+    let min_y = layout.entities.iter().map(|e| e.y).min().unwrap_or(0);
+    let max_y = layout.entities.iter().map(|e| e.y).max().unwrap_or(0);
+    // Generous margin: checks legitimately flag tiles just outside the
+    // entity hull (a belt's intended continuation, a missing pole slot).
+    const SLACK: i32 = 8;
+    issues.iter().all(|i| match (i.x, i.y) {
+        (Some(x), Some(y)) => {
+            x >= min_x - SLACK && x <= max_x + SLACK && y >= min_y - SLACK && y <= max_y + SLACK
+        }
+        _ => true,
+    })
+}
+
 /// [`export`] plus the RFC-050 verification manifest: everything the
 /// simulation harness needs to feed, drain, and judge the factory —
 /// boundary records (engine-emitted, never reconstructed from the
 /// artifact), per-item planned rates from the solver, the layout bbox
-/// origin for world-offset anchoring, surplus exits for fluid voiding, and
-/// the layout's validator state. Returns `(blueprint_string, manifest_json)`.
+/// origin for world-offset anchoring, and surplus exits for fluid
+/// voiding. Returns `(blueprint_string, manifest_json)`.
 ///
-/// Validates under [`LayoutStyle`](crate::validate::LayoutStyle)`::Bus` and
-/// embeds a per-category `validator` summary — see
-/// [`export_with_manifest_styled`] for why Bus, and
-/// [`ValidatorSummary`](crate::validate::ValidatorSummary) for why the counts
-/// are per-category rather than totals.
+/// **Pure export — this does not validate.** The manifest therefore carries
+/// no `validator` key, and the sim harness renders that as `unknown` rather
+/// than `clean`. To attach validator state, validate first and call
+/// [`export_with_manifest_validated`]; that function's docs explain why
+/// export refuses to validate on your behalf.
 pub fn export_with_manifest(
     layout: &LayoutResult,
     solver: &crate::models::SolverResult,
     label: &str,
 ) -> (String, serde_json::Value) {
-    export_with_manifest_styled(layout, solver, label, crate::validate::LayoutStyle::Bus)
+    export_with_manifest_inner(layout, solver, label)
 }
 
 fn export_with_manifest_inner(
@@ -648,7 +663,14 @@ mod tests {
             },
         )
         .expect("layout");
-        let (_bp, manifest) = export_with_manifest(&layout, &solved, "gear-validator");
+        let issues =
+            match crate::validate::validate(&layout, Some(&solved), crate::validate::LayoutStyle::Bus)
+            {
+                Ok(i) => i,
+                Err(e) => e.issues,
+            };
+        let (_bp, manifest) =
+            export_with_manifest_validated(&layout, &solved, "gear-validator", &issues);
 
         let v = &manifest["validator"];
         assert!(!v.is_null(), "validator object must be present: {manifest}");
@@ -664,19 +686,9 @@ mod tests {
         }
         assert_eq!(v["errors"].as_u64().unwrap(), cat_errors);
         assert_eq!(v["warnings"].as_u64().unwrap(), cat_warnings);
-        assert_eq!(
-            v["layout_warnings"].as_u64().unwrap(),
-            layout.warnings.len() as u64
-        );
 
-        // Cross-check against a direct validate() of the same layout under
-        // the same style, so the manifest can't drift from the validator.
-        let issues =
-            match crate::validate::validate(&layout, Some(&solved), crate::validate::LayoutStyle::Bus)
-            {
-                Ok(i) => i,
-                Err(e) => e.issues,
-            };
+        // Cross-check the manifest JSON against a summary built independently
+        // from the same issue list, so the serialization can't drift.
         let direct = crate::validate::ValidatorSummary::from_issues(&issues, layout.warnings.len());
         assert_eq!(v["errors"].as_u64().unwrap() as usize, direct.errors);
         assert_eq!(v["warnings"].as_u64().unwrap() as usize, direct.warnings);
@@ -725,15 +737,50 @@ mod tests {
         )
         .expect("layout");
 
+        let issues =
+            match crate::validate::validate(&layout, Some(&solved), crate::validate::LayoutStyle::Bus)
+            {
+                Ok(i) => i,
+                Err(e) => e.issues,
+            };
+
+        let sink_hits = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let counter = sink_hits.clone();
+        let _sink = crate::trace::set_sink(Box::new(move |_| counter.set(counter.get() + 1)));
         let _guard = crate::trace::start_trace();
         let before = crate::trace::peek_events_len();
+
         let _ = export_with_manifest(&layout, &solved, "trace-check");
+        let _ = export_with_manifest_validated(&layout, &solved, "trace-check-v", &issues);
+
         let after = crate::trace::peek_events_len();
+
+        // Positive control: prove the sink is actually wired before trusting
+        // a zero from it. An unwired sink also reports zero, and "the check
+        // was silent" is not the same as "nothing happened".
+        crate::trace::emit(crate::trace::TraceEvent::ValidationCompleted {
+            error_count: 0,
+            warning_count: 0,
+            issues: Vec::new(),
+        });
+        assert_eq!(
+            sink_hits.get(),
+            1,
+            "sink is not wired — the zero-assertion below would be vacuous"
+        );
+
         assert_eq!(
             before, after,
-            "exporting must not leave ValidationCompleted (or any) events in \
-             the stream — the snapshot debugger reports per-layout error \
-             counts from these"
+            "export must not add COLLECTOR events — the snapshot debugger \
+             reports per-layout error counts from these"
+        );
+        assert_eq!(
+            sink_hits.get(),
+            1,
+            "export must not fire events at a streaming SINK; the only hit \
+             should be the positive control above. An earlier revision \
+             guarded only the collector via truncate_events and claimed full \
+             coverage"
         );
     }
 
