@@ -821,8 +821,16 @@ fn validator_line(report: &Report) -> String {
                 .to_string()
         }
         Some(v) => {
+            // `top_categories` is legitimately empty when the only entries are
+            // pipeline-stamped layout warnings — there is no validator
+            // category to name. Printing the separator unconditionally gave a
+            // dangling `"2L — "`.
             let cats = v.top_categories(4);
-            format!("{} — {}", v.badge(), cats.join(", "))
+            if cats.is_empty() {
+                v.badge()
+            } else {
+                format!("{} — {}", v.badge(), cats.join(", "))
+            }
         }
     }
 }
@@ -1450,6 +1458,33 @@ mod tests {
     /// This is the 2026-08-07 PU@1/s shape exactly: a layout carrying
     /// input-rate-delivery warnings that named the starving machines, whose
     /// measured rate was reported with no mention of them.
+    /// Regression for the dangling separator: a layout whose only entries
+    /// are pipeline-stamped warnings has no validator category to name.
+    #[test]
+    fn layout_warnings_only_renders_without_a_dangling_separator() {
+        let v = crate::manifest::ValidatorSummary {
+            errors: 0,
+            warnings: 0,
+            layout_warnings: 2,
+            by_category: Default::default(),
+        };
+        let r = report_with_validator(Some(v));
+        let line = validator_line(&r);
+        assert_eq!(line, "2L", "got: {line:?}");
+        assert!(!line.contains('—'), "no separator without categories: {line}");
+        assert_eq!(
+            r.validator_standing,
+            crate::manifest::MeasurementStanding::Warned
+        );
+        // ...and the banner must not blame the validator for a pipeline
+        // warning the validator never emitted (#462).
+        let caveat = r.validator_standing.caveat().expect("warned");
+        assert!(
+            !caveat.contains("validator warnings"),
+            "misattributes the source: {caveat}"
+        );
+    }
+
     #[test]
     fn errors_are_reported_as_condemned_not_merely_warned() {
         let v = crate::manifest::ValidatorSummary {

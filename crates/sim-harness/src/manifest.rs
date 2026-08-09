@@ -235,6 +235,10 @@ impl ValidatorSummary {
 
     /// Categories with at least one issue, worst-first, for the report's
     /// one-line explanation of *what* was flagged.
+    ///
+    /// Can legitimately be empty even when the summary is not clean: a layout
+    /// carrying only pipeline-stamped `layout_warnings` has no validator
+    /// category to name. Callers must not print a separator unconditionally.
     pub fn top_categories(&self, limit: usize) -> Vec<String> {
         let mut v: Vec<(&String, &CategoryCount)> = self.by_category.iter().collect();
         v.sort_by(|a, b| {
@@ -286,9 +290,14 @@ impl MeasurementStanding {
     pub fn caveat(self) -> Option<&'static str> {
         match self {
             MeasurementStanding::Unflagged => None,
+            // Deliberately says "warnings", not "validator warnings": this
+            // state is also reached by a layout whose only entries are
+            // pipeline-stamped `layout_warnings`, which are explicitly NOT
+            // validator output (#462). Naming the wrong source would send a
+            // reader to the wrong place.
             MeasurementStanding::Warned => Some(
-                "measured on a layout carrying validator warnings — \
-                 this measures the layout, not the pipeline",
+                "measured on a layout carrying warnings (validator and/or \
+                 pipeline) — this measures the layout, not the pipeline",
             ),
             MeasurementStanding::Condemned => Some(
                 "measured on a layout carrying validator ERRORS — \
