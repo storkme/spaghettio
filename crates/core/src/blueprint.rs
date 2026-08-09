@@ -121,13 +121,60 @@ struct BlueprintWrapper<'a> {
     blueprint: Blueprint<'a>,
 }
 
+/// [`export_with_manifest`], validating under an explicit layout style.
+///
+/// The plain [`export_with_manifest`] delegates here with
+/// [`LayoutStyle::Bus`]. That is not `LayoutStyle::default()` (Spaghetti) —
+/// it is chosen because every producer of a manifest is a bus-pipeline
+/// layout, and `validator-trust.md` records Bus as "the style every
+/// production call site passes". Pass the style explicitly if you are
+/// exporting something else; getting it wrong silently changes which checks
+/// are Errors.
+pub fn export_with_manifest_styled(
+    layout: &LayoutResult,
+    solver: &crate::models::SolverResult,
+    label: &str,
+    style: crate::validate::LayoutStyle,
+) -> (String, serde_json::Value) {
+    let (bp, mut manifest) = export_with_manifest_inner(layout, solver, label);
+
+    // Both arms carry the full issue list; `Err` only means at least one
+    // Error-severity issue is present, and we want warnings either way.
+    let issues = match crate::validate::validate(layout, Some(solver), style) {
+        Ok(issues) => issues,
+        Err(e) => e.issues,
+    };
+    let summary = crate::validate::ValidatorSummary::from_issues(&issues, layout.warnings.len());
+    if let Some(obj) = manifest.as_object_mut() {
+        obj.insert(
+            "validator".to_string(),
+            serde_json::to_value(&summary).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    (bp, manifest)
+}
+
 /// [`export`] plus the RFC-050 verification manifest: everything the
 /// simulation harness needs to feed, drain, and judge the factory —
 /// boundary records (engine-emitted, never reconstructed from the
 /// artifact), per-item planned rates from the solver, the layout bbox
-/// origin for world-offset anchoring, and surplus exits for fluid
-/// voiding. Returns `(blueprint_string, manifest_json)`.
+/// origin for world-offset anchoring, surplus exits for fluid voiding, and
+/// the layout's validator state. Returns `(blueprint_string, manifest_json)`.
+///
+/// Validates under [`LayoutStyle`](crate::validate::LayoutStyle)`::Bus` and
+/// embeds a per-category `validator` summary — see
+/// [`export_with_manifest_styled`] for why Bus, and
+/// [`ValidatorSummary`](crate::validate::ValidatorSummary) for why the counts
+/// are per-category rather than totals.
 pub fn export_with_manifest(
+    layout: &LayoutResult,
+    solver: &crate::models::SolverResult,
+    label: &str,
+) -> (String, serde_json::Value) {
+    export_with_manifest_styled(layout, solver, label, crate::validate::LayoutStyle::Bus)
+}
+
+fn export_with_manifest_inner(
     layout: &LayoutResult,
     solver: &crate::models::SolverResult,
     label: &str,
@@ -553,6 +600,86 @@ mod tests {
             !surplus_items.contains(&"electronic-circuit"),
             "electronic-circuit must not remain in surplus_exits after promotion: {surplus_items:?}"
         );
+    }
+
+    /// `validator-trust.md` hole 3: the manifest must carry the validator
+    /// state of the exact layout it describes, per-category. Before this,
+    /// the sim/meter side had no visibility at all and a parity sweep could
+    /// quote a condemned layout as a parity number.
+    #[test]
+    fn manifest_carries_per_category_validator_state() {
+        use rustc_hash::FxHashSet;
+        let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
+        let solved = crate::solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-3")
+            .expect("solve");
+        let layout = crate::bus::layout::build_bus_layout(
+            &solved,
+            crate::bus::layout::LayoutOptions {
+                max_belt_tier: Some("transport-belt".into()),
+                ..Default::default()
+            },
+        )
+        .expect("layout");
+        let (_bp, manifest) = export_with_manifest(&layout, &solved, "gear-validator");
+
+        let v = &manifest["validator"];
+        assert!(!v.is_null(), "validator object must be present: {manifest}");
+
+        // Totals must reconcile against the per-category breakdown. A bare
+        // total cannot tell 2 from 218, which is why by_category exists —
+        // this asserts the two agree rather than trusting either alone.
+        let cats = v["by_category"].as_object().expect("by_category object");
+        let (mut cat_errors, mut cat_warnings) = (0u64, 0u64);
+        for c in cats.values() {
+            cat_errors += c["errors"].as_u64().unwrap();
+            cat_warnings += c["warnings"].as_u64().unwrap();
+        }
+        assert_eq!(v["errors"].as_u64().unwrap(), cat_errors);
+        assert_eq!(v["warnings"].as_u64().unwrap(), cat_warnings);
+        assert_eq!(
+            v["layout_warnings"].as_u64().unwrap(),
+            layout.warnings.len() as u64
+        );
+
+        // Cross-check against a direct validate() of the same layout under
+        // the same style, so the manifest can't drift from the validator.
+        let issues =
+            match crate::validate::validate(&layout, Some(&solved), crate::validate::LayoutStyle::Bus)
+            {
+                Ok(i) => i,
+                Err(e) => e.issues,
+            };
+        let direct = crate::validate::ValidatorSummary::from_issues(&issues, layout.warnings.len());
+        assert_eq!(v["errors"].as_u64().unwrap() as usize, direct.errors);
+        assert_eq!(v["warnings"].as_u64().unwrap() as usize, direct.warnings);
+    }
+
+    /// The summary must distinguish categories, not just count. Guards the
+    /// `validator-reporting.md` rule directly at the type level.
+    #[test]
+    fn validator_summary_keeps_categories_apart() {
+        use crate::validate::{Severity, ValidationIssue, ValidatorSummary};
+        let issues = vec![
+            ValidationIssue::new(Severity::Warning, "input-rate-delivery", "a"),
+            ValidationIssue::new(Severity::Warning, "input-rate-delivery", "b"),
+            ValidationIssue::new(Severity::Error, "entity-overlap", "c"),
+        ];
+        let s = ValidatorSummary::from_issues(&issues, 1);
+        assert_eq!(s.errors, 1);
+        assert_eq!(s.warnings, 2);
+        assert_eq!(s.layout_warnings, 1);
+        assert_eq!(s.by_category["input-rate-delivery"].warnings, 2);
+        assert_eq!(s.by_category["entity-overlap"].errors, 1);
+        assert!(!s.is_clean());
+        assert_eq!(s.badge(), "1E/2W/1L");
+
+        // Nothing reported at all, and no pipeline warnings, is the only
+        // state that reads clean.
+        let empty = ValidatorSummary::from_issues(&[], 0);
+        assert!(empty.is_clean());
+        assert_eq!(empty.badge(), "clean");
+        // ...but a layout warning alone is not clean.
+        assert!(!ValidatorSummary::from_issues(&[], 1).is_clean());
     }
 
     #[test]

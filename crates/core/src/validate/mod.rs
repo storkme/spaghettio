@@ -160,6 +160,111 @@ impl ValidationError {
     }
 }
 
+/// Per-category validator state, sized to travel in an artifact (the RFC-050
+/// manifest) rather than to be read on a terminal.
+///
+/// **Per-category, not totals, deliberately.** `validator-reporting.md`'s
+/// standing rule is that anything comparing issue counts by category cannot
+/// tell 2 from 218; a bare `errors: 7` in the manifest would reproduce exactly
+/// the failure that doc exists to stop. `by_category` is the payload;
+/// `errors`/`warnings` are conveniences derived from it.
+///
+/// This closes hole 3 in `validator-trust.md`: the sim/meter side previously
+/// had *no* validator visibility, so a parity sweep could quote a condemned
+/// layout as a parity number — which is how the 2026-08-07 PU@1/s run
+/// reported 68.2% of plan without mentioning the three `input-rate-delivery`
+/// warnings that named the starving machines.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidatorSummary {
+    /// Total error-severity issues.
+    pub errors: usize,
+    /// Total warning-severity issues.
+    pub warnings: usize,
+    /// `category -> (errors, warnings)`, ordered for stable serialization so
+    /// golden manifests don't churn on map iteration order.
+    pub by_category: std::collections::BTreeMap<String, CategoryCount>,
+    /// Pipeline-stamped strings from `LayoutResult::warnings`, which
+    /// `validate()` never sees. Counted separately because reading only the
+    /// validator has already produced one false "0 errors 0 warnings" claim
+    /// (#462) — a manifest that omitted these would repeat it.
+    pub layout_warnings: usize,
+}
+
+/// Error/warning counts for one validator category.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CategoryCount {
+    pub errors: usize,
+    pub warnings: usize,
+}
+
+impl ValidatorSummary {
+    /// Build a summary from a validator issue list plus the layout's own
+    /// pipeline-stamped warnings.
+    ///
+    /// Takes the issues rather than running `validate()` so that a caller
+    /// which has already validated does not pay for it twice, and so that
+    /// the `Err(ValidationError)` arm — which still carries the full issue
+    /// list — summarizes identically to the `Ok` arm.
+    pub fn from_issues(issues: &[ValidationIssue], layout_warnings: usize) -> Self {
+        let mut by_category: std::collections::BTreeMap<String, CategoryCount> = Default::default();
+        let (mut errors, mut warnings) = (0usize, 0usize);
+        for issue in issues {
+            let slot = by_category.entry(issue.category.clone()).or_default();
+            match issue.severity {
+                Severity::Error => {
+                    slot.errors += 1;
+                    errors += 1;
+                }
+                Severity::Warning => {
+                    slot.warnings += 1;
+                    warnings += 1;
+                }
+            }
+        }
+        Self {
+            errors,
+            warnings,
+            by_category,
+            layout_warnings,
+        }
+    }
+
+    /// True when nothing at all was reported — no validator issues and no
+    /// pipeline warnings.
+    ///
+    /// Note what this does *and does not* mean. It is the absence of a
+    /// report, not evidence of correctness: of the ~40 checks only a handful
+    /// carry real refusal power, and each of those is documented "never
+    /// sim-anchored" in `validator-trust.md`. A clean summary beside an
+    /// at-plan rate means the two agree; it does not make either one true.
+    pub fn is_clean(&self) -> bool {
+        self.errors == 0 && self.warnings == 0 && self.layout_warnings == 0
+    }
+
+    /// Compact one-line rendering for report tables, e.g. `2E/5W` or
+    /// `clean`. `+3L` suffixes pipeline-stamped layout warnings.
+    pub fn badge(&self) -> String {
+        if self.is_clean() {
+            return "clean".to_string();
+        }
+        let mut parts = Vec::new();
+        if self.errors > 0 {
+            parts.push(format!("{}E", self.errors));
+        }
+        if self.warnings > 0 {
+            parts.push(format!("{}W", self.warnings));
+        }
+        if self.layout_warnings > 0 {
+            parts.push(format!("{}L", self.layout_warnings));
+        }
+        parts.join("/")
+    }
+}
+
 fn format_errors(issues: &[ValidationIssue]) -> String {
     issues
         .iter()
