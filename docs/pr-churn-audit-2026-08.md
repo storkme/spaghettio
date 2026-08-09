@@ -165,7 +165,7 @@ end-to-end from scratch rather than from any surviving intermediate. (An
 earlier draft of v3 quoted 1,841 edges and 1.6/2.7/6.3; those came from
 reusing a `prs_merged.json` capped at 300 PRs, which silently dropped blame
 hits whose target PR fell outside the cap. Raising the cap is why the edge
-count rose and the age tail lengthened (p90 9 → 80 days): rework of older PRs
+count rose and the age tail lengthened (p90 9 → 81 days): rework of older PRs
 was previously invisible, not absent.)
 
 **v4 is v3 plus two fixes caught in this PR's own review.** First, the
@@ -176,7 +176,10 @@ almost nothing (edges 1,999 → 2,005). Second, the diff now passes `-w` to
 match the blame's `-w`, so whitespace-only churn no longer counts as rework —
 and that is what moved the numbers: the 400–1k bucket drops 6.1 → 4.7,
 meaning roughly a quarter of that bucket's previously-counted rework was
-whitespace-only lines.
+whitespace-only lines. (The edge *row* count still rises 2,005 → 2,022 under
+`-w`: rows are hunk-grained, and a block whose interior lines changed only in
+whitespace splits into several smaller hunks even as the counted lines fall —
+large-bucket rework lines drop 4,885 → 4,332.)
 
 **v2 was the outlier, and v2 is what was originally published here.** Replacing
 `sha^1..sha` with a bare `sha~N..sha` fixed a too-narrow range by introducing a
@@ -201,11 +204,12 @@ telling you it is unmeasured, not what its value is.
 - **Rework ≠ defect.** A sampled classification of 85 PR-pairs splits edges
   ~57% planned iteration / 23% genuine correction / 20% collision. Absolute
   edge counts overstate churn; the size finding is ratio-based and survives.
-- **Lag figures are edge-weighted.** The median/percentile lag and "within 3
-  days" are computed over (hunk × origin-commit) rows, each counting once
-  regardless of how many lines it carries; the edge total and bucket rates are
-  line-based. The two weightings answer slightly different questions and have
-  not been cross-checked against each other.
+- **Lag figures and the edge count are edge-weighted.** The median/percentile
+  lag, "within 3 days" and the headline edge count are computed over
+  (hunk × origin-commit) rows, each counting once regardless of how many lines
+  it carries; only the bucket rates and the large-PR share are line-weighted.
+  The two weightings answer slightly different questions and have not been
+  cross-checked against each other.
 - **Size and difficulty are confounded.** Large PRs may be large because the
   work is harder. Per-line normalization controls for volume, not difficulty.
 - **One signal is unresolved.** The rate at which the owner pushes back *in

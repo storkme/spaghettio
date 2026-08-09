@@ -54,15 +54,17 @@ while read -r n; do ISPR[$n]=1; done < <(jq -r '.[].number' "$WORK/prs_merged.js
 
 # Which PR does a commit's own subject announce, if any? Empty = not a boundary.
 # A trailing `(#N)` where N is not a known merged PR is an issue ref, not a
-# boundary — announce the rejection on fd 3 so the caller can count it.
+# boundary — announce the rejection on fd 3 so the caller can count it, unless
+# the caller passes `quiet` (the cap-ancestor confirmation probes commits that
+# were never walk candidates; logging those would inflate the skips count).
 boundary_pr() {
-  local subj="$1"
+  local subj="$1" mode="${2:-log}"
   if [[ "$subj" =~ ^Merge\ pull\ request\ \#([0-9]+) ]]; then
     echo "${BASH_REMATCH[1]}"
   elif [[ "$subj" =~ \(#([0-9]+)\)[[:space:]]*$ ]]; then
     if [ -n "${ISPR[${BASH_REMATCH[1]}]:-}" ]; then
       echo "${BASH_REMATCH[1]}"
-    else
+    elif [ "$mode" != quiet ]; then
       echo "issue-ref (#${BASH_REMATCH[1]}) not a merged PR: ${subj:0:60}" >&3
     fi
   fi
@@ -74,6 +76,16 @@ boundary_pr() {
 exec 3> "$WORK/issue_ref_skips.txt"
 overwalks=0
 caphits=0
+claimstops=0
+
+# Commits already assigned to a processed PR. PRs are processed in MERGE order
+# (sort_by(.mergedAt), not number), so by the time a PR's walk runs, every PR
+# merged before it has claimed its own commits — and a walk that reaches one of
+# them has walked out of its own range. Subject parsing alone cannot catch
+# this: a squash-merged PR sitting on an *unlabelled* rebase-merged PR absorbs
+# those commits without ever meeting a labelled boundary, and the cap-ancestor
+# check below only inspects the endpoint, not what was absorbed on the way.
+declare -A CLAIMED
 
 while IFS=$'\t' read -r pr sha; do
   git cat-file -e "${sha}^{commit}" 2>/dev/null || continue
@@ -82,23 +94,28 @@ while IFS=$'\t' read -r pr sha; do
   if [ "$np" -ge 3 ]; then
     # True merge commit: the PR's work is the second-parent branch.
     base="${sha}^1"
-    git rev-list "${sha}^1..${sha}^2" | sed "s/\$/\t$pr/" >> "$WORK/.c2p.raw"
-    echo "$sha" | sed "s/\$/\t$pr/" >> "$WORK/.c2p.raw"
+    while read -r bsha; do
+      printf '%s\t%s\n' "$bsha" "$pr" >> "$WORK/.c2p.raw"; CLAIMED[$bsha]=$pr
+    done < <(git rev-list "${sha}^1..${sha}^2"; echo "$sha")
   else
     cap="${NCOM[$pr]:-1}"; [ "$cap" -lt 1 ] && cap=1
     depth=1
     hit_boundary=0
-    echo "$sha" | sed "s/\$/\t$pr/" >> "$WORK/.c2p.raw"
+    printf '%s\t%s\n' "$sha" "$pr" >> "$WORK/.c2p.raw"; CLAIMED[$sha]=$pr
     while [ "$depth" -lt "$cap" ]; do
-      cand="${sha}~${depth}"
-      git rev-parse -q --verify "$cand" >/dev/null 2>&1 || break
-      csubj=$(git log -1 --format='%s' "$cand")
+      csha=$(git rev-parse -q --verify "${sha}~${depth}" 2>/dev/null) || break
+      # Already another PR's commit? Then the walk has left its own range —
+      # stop regardless of what the subject says.
+      if [ -n "${CLAIMED[$csha]:-}" ] && [ "${CLAIMED[$csha]}" != "$pr" ]; then
+        claimstops=$((claimstops+1)); hit_boundary=1; break
+      fi
+      csubj=$(git log -1 --format='%s' "$csha")
       owner=$(boundary_pr "$csubj")
       # Stop before absorbing a commit that announces a different PR.
       if [ -n "$owner" ] && [ "$owner" != "$pr" ]; then
         overwalks=$((overwalks+1)); hit_boundary=1; break
       fi
-      git rev-parse "$cand" | sed "s/\$/\t$pr/" >> "$WORK/.c2p.raw"
+      printf '%s\t%s\n' "$csha" "$pr" >> "$WORK/.c2p.raw"; CLAIMED[$csha]=$pr
       depth=$((depth+1))
     done
     # The loop bound stops at depth-1, so the cap-th ancestor was never
@@ -116,7 +133,7 @@ while IFS=$'\t' read -r pr sha; do
     # one. A warning that fires on everything is a warning about nothing.
     if [ "$hit_boundary" -eq 0 ] && [ "$depth" -gt 1 ]; then
       capsubj=$(git log -1 --format='%s' "${sha}~${depth}" 2>/dev/null || echo "")
-      capowner=$(boundary_pr "$capsubj")
+      capowner=$(boundary_pr "$capsubj" quiet)
       if [ -z "$capowner" ] || [ "$capowner" = "$pr" ]; then
         caphits=$((caphits+1))
         printf '%s\tambiguous-base\tdepth=%s\tbase_subject=%s\n' \
@@ -127,7 +144,7 @@ while IFS=$'\t' read -r pr sha; do
     git rev-parse -q --verify "$base" >/dev/null 2>&1 || base="${sha}^1"
   fi
   printf '%s\t%s\n' "$pr" "$base" >> "$WORK/pr_base.tsv"
-done < <(jq -r '[.[]|select(.mergeCommit!=null)]|sort_by(.number)|.[]|"\(.number)\t\(.mergeCommit.oid)"' \
+done < <(jq -r '[.[]|select(.mergeCommit!=null)]|sort_by(.mergedAt)|.[]|"\(.number)\t\(.mergeCommit.oid)"' \
            "$WORK/prs_merged.json")
 
 sort -k1,1 -k2,2n "$WORK/.c2p.raw" | awk -F'\t' '{m[$1]=$2} END{for(k in m) print k"\t"m[k]}' \
@@ -139,6 +156,9 @@ echo "pr_base entries : $(wc -l < "$WORK/pr_base.tsv")"
 echo "commit2pr       : $(wc -l < "$WORK/commit2pr.tsv")"
 echo "walks truncated at another PR's boundary: $overwalks"
 echo "  (each of these would have been an over-wide range under a bare sha~N)"
+echo "walks truncated at a commit another PR already claimed: $claimstops"
+echo "  (subject parsing alone would have absorbed these — the squash-over-"
+echo "   unlabelled-rebase case no boundary regex can see)"
 skips=$(wc -l < "$WORK/issue_ref_skips.txt")
 if [ "$skips" -gt 0 ]; then
   echo "trailing (#N) refs rejected as issue refs, walk continued: $skips"

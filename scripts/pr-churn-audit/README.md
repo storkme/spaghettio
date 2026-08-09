@@ -21,7 +21,9 @@ bash scripts/pr-churn-audit/probe-v2-defect.sh "$WORK"   # re-derives the "50 of
 ```
 
 Needs `gh` (authenticated), `jq`, **GNU coreutils and GNU grep**, and a full
-clone — stage 3 blames history, so a shallow checkout silently produces nothing.
+clone — stage 3 blames history, so on a shallow checkout the bases don't
+resolve; every affected PR lands in `blame_failures.txt` and the INCOMPLETE
+warning fires rather than quoting a truncated dataset.
 
 The GNU requirement is not cosmetic and stage 3 now refuses to start without
 it: BSD `date` makes `epoch()` return 0, so every age becomes 0 and the age
@@ -77,7 +79,14 @@ The qualifier is mistake 3 applied to this walk: the trailing form is the same
 regex that cannot distinguish PR refs from issue refs, so stopping at an
 intermediate commit whose subject merely ends in an issue ref would silently
 re-introduce the too-narrow defect. Candidates that fail the lookup are walked
-through, not stopped at, and logged to `issue_ref_skips.txt`. The walk is
+through, not stopped at, and logged to `issue_ref_skips.txt`.
+
+Subjects alone are still not enough: a squash-merged PR sitting on an
+*unlabelled* rebase-merged PR would absorb that PR's commits without ever
+meeting a labelled boundary, and no endpoint check can see what was absorbed
+on the way. So PRs are processed in **merge order** and the walk also stops at
+any commit **already claimed** by a previously-processed PR's range — the
+subject-blind backstop for exactly that case. With both stops, the walk is
 strategy-agnostic: for a squash it stops at depth 1, for a rebase it stops at
 the previous PR's boundary, and true merge commits take `sha^1..sha^2`. The
 resolved base is written once to `pr_base.tsv` and stage 3 consumes it rather
@@ -183,10 +192,11 @@ diffs whole blocks as deletions while the blame attributes those lines to
 their *original* authors — a large fake rework spike against old PRs for a
 semantic no-op.
 
-**The age distribution is edge-weighted, not line-weighted.** Each
-(hunk × origin-commit) row counts once in the lag percentiles regardless of
-its `lines` column, while the edge total and the bucket rates are line-based.
-A 40-line deletion and a 1-line edit pull equally on "median lag / within 3
+**The age distribution and edge count are edge-weighted, not line-weighted.**
+Each (hunk × origin-commit) row counts once in the lag percentiles and once in
+the headline edge count, regardless of its `lines` column; only the bucket
+rates and the large-PR share are line-weighted (they sum that column). A
+40-line deletion and a 1-line edit pull equally on "median lag / within 3
 days"; nothing here says lag would look the same weighted per-line.
 
 **The boundary walk is a heuristic, not a proof.** Stage 2 stops at the first
