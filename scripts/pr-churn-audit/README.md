@@ -18,6 +18,7 @@ bash scripts/pr-churn-audit/02-commit-map.sh   # commit -> PR map            (~1
 bash scripts/pr-churn-audit/03-blame-edges.sh  # rework edges via git blame  (~10 min)
 bash scripts/pr-churn-audit/04-analyze.sh      # the headline numbers
 bash scripts/pr-churn-audit/probe-v2-defect.sh "$WORK"   # re-derives the "50 of 221" range-defect figure
+bash scripts/pr-churn-audit/probe-exposure.sh "$WORK"    # exposure-per-bucket (censoring confound check)
 ```
 
 Needs `gh` (authenticated), `jq`, **GNU coreutils and GNU grep**, and a full
