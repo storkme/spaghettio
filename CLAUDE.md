@@ -58,16 +58,24 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   PR to get code onto `main`. Besides review, this serializes `main` across
   the multiple concurrent Claude sessions that share this repo.
 - **Keep a PR under ~400 added lines.** This is the strongest predictor of
-  rework we have measured: over 2026-07-12 → 08-09, rework per 100 added lines
-  ran 1.4 (<100 adds) · 3.2 (100–400) · **8.5 (400–1k)** — a 6–8× rise that
-  holds under both per-PR and pooled averaging — and the 32% of PRs above 400
-  adds produced **93% of all rework**. Above 1k the rate is at least as bad,
-  though the two statistics disagree on how much
-  ([audit](docs/pr-churn-audit-2026-08.md)). The mechanism is claim surface
-  area, not carelessness — a big PR asserts more independently-falsifiable
-  things (several sim numbers, several fixtures, several corpus percentages)
-  than its verification actually covers, so one of them is wrong and a
-  different instrument finds it days later.
+  *rework* we have measured. Across the 194 PRs merged **2026-07-20 → 08-09**
+  with >20 added lines, rework per 100 added lines ran 1.4 (<100 adds) · 3.2
+  (100–400) · **8.5 (400–1k)** — a 6–8× rise holding under both per-PR and
+  pooled averaging — and PRs ≥400 adds, 32% of them, accounted for **93% of
+  all rework**. Above 1k is unresolved: the two statistics disagree in
+  *direction* there, so 400 is the threshold precisely because that is where
+  they agree. Denominators and caveats:
+  [audit](docs/pr-churn-audit-2026-08.md).
+  - Read "rework" literally — a later PR rewriting an earlier one's lines. A
+    sampled split puts it at ~57% planned iteration / 23% genuine correction /
+    20% collision, so this is **not** a defect rate and a big PR is not
+    presumed wrong. The norm is about how much work you commit to one shape
+    before anything downstream can disagree with it.
+  - The mechanism is claim surface area, not carelessness — review on big PRs
+    is heavy. A large PR asserts more independently-falsifiable things
+    (several sim numbers, several fixtures, several corpus percentages) than
+    its verification actually covers, so one of them is wrong and a different
+    instrument finds it days later.
   - Above ~400 added lines, **say in the PR body why it could not be split**.
     "It's one RFC phase" is not a reason; phases are splittable into
     scaffolding / behaviour / fixtures / docs.

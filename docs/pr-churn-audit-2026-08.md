@@ -1,8 +1,11 @@
 # PR churn audit — 2026-07-12 → 2026-08-09
 
-**Status:** closed 2026-08-09. Backs the change-size norm in
-[`CLAUDE.md`](../CLAUDE.md#workflow-branches-review-merging). Numbers here are
-the durable record; re-measure before citing them outside this window.
+**Status:** closed 2026-08-09. **Reference, not a note** — `CLAUDE.md`'s
+change-size norm cites this file as its evidence, so it is load-bearing and
+outside the "archive or delete freely" contract that the docs taxonomy gives
+session notes. If the norm goes, this can go with it; not before. Numbers here
+are scoped to the window in the title — re-measure before citing them outside
+it.
 
 Motivating question from the owner: PR churn feels like it's rising — is the
 model getting worse, or is the code getting harder to work in?
@@ -34,12 +37,14 @@ before the numbers below were trustworthy (see [Method](#method)).
 three buckets under *both* statistics — roughly 6–8× from <100 to 400–1k. That
 alone carries the norm, whose threshold is 400.
 
-**What is not:** the top bucket disagrees between the two columns (mean 10.5,
-pooled 6.9). Pooled weights by PR size, so a handful of very large PRs with
-proportionally little rework dominate that cell. Do not claim the relationship
-is monotonic across all four buckets on this data — it is only monotonic on the
-per-PR mean. The safe reading is that >1k is *at least as bad* as 400–1k, not
-demonstrably worse.
+**What is not:** the two statistics disagree on the 400–1k → >1k step in
+*direction*, not merely magnitude. The per-PR mean rises (8.5 → 10.5); pooled
+**falls** (8.3 → 6.9), because pooling weights by PR size and a few very large
+PRs with proportionally little rework dominate that cell. So: do not claim
+monotonicity across all four buckets, and do not claim >1k is worse than
+400–1k, or even "at least as bad" — one of the two statistics says it is
+better. The >1k bucket is **unresolved on this data**; the norm's threshold is
+400 precisely because that is where both statistics agree.
 
 > **Denominators.** These buckets cover the 194 PRs that merged 2026-07-20 →
 > 08-09 with more than 20 added lines. That is narrower than the 218 merged
@@ -134,9 +139,11 @@ Effect of correcting both:
 | Rate >1k adds | 5.7 | **10.5** |
 | Large-PR share | 89.7% | 93.2% |
 
-The size finding strengthened and became monotonic — v1's dip in the top
-bucket was the artifact, not a floor effect. The fix-chain finding shrank by a
-third.
+The size finding strengthened across the buckets where it is load-bearing.
+v1's per-PR-mean dip in the top bucket was an artifact of the truncation, not
+the floor effect I first claimed — but correcting it made only the *mean*
+monotonic, not the pooled figure, which still falls in the top bucket. The
+fix-chain finding shrank by a third.
 
 ### Caveats
 
@@ -169,8 +176,9 @@ Ranked by expected value, not yet actioned:
    "never sim-anchored".
 3. **Review-bot reliability.** The single most systemic complaint in the
    conversation record — 8 distinct sessions, more than any other theme —
-   plus 9 of 13 closed-unmerged PRs are skip-guard duplicates or stacked-PR
-   orphans, meaning ~4% of the "232 PRs" figure is the same work re-counted.
+   plus 9 of the 13 closed-unmerged PRs are skip-guard duplicates or
+   stacked-PR orphans, meaning ~4% of the "232 PRs" figure is the same work
+   re-counted. (232 = 218 merged + 13 closed + 1 open.)
 4. **Turnaround guardrail on large PRs**, not a concurrency cap. Concurrency
    is a threshold effect on one day (Jul 22 carries 31% of all reworked lines;
    dropping it collapses the day-level correlation from 0.318 to 0.145), and
