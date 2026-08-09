@@ -17,6 +17,7 @@ bash scripts/pr-churn-audit/01-fetch.sh        # PR corpus + commit counts   (~5
 bash scripts/pr-churn-audit/02-commit-map.sh   # commit -> PR map            (~1 min)
 bash scripts/pr-churn-audit/03-blame-edges.sh  # rework edges via git blame  (~10 min)
 bash scripts/pr-churn-audit/04-analyze.sh      # the headline numbers
+bash scripts/pr-churn-audit/probe-v2-defect.sh "$WORK"   # re-derives the "50 of 221" range-defect figure
 ```
 
 Needs `gh` (authenticated), `jq`, **GNU coreutils and GNU grep**, and a full
@@ -64,16 +65,23 @@ reports the PR *branch's* commit count, but the number of commits that reach
 main depends on the merge strategy, and **this repo uses all three**. A
 squash-merged PR contributes exactly one commit while `gh` still reports N, so
 `sha~N` walks N−1 commits back into *earlier* PRs; stage 3 then blames a range
-spanning other people's work. Measured: **48 of 218 in-window PRs (22%)**, and
-size-correlated (17% of PRs under 400 adds, 34% of those over) — i.e. skewed in
-the same direction as the size finding it feeds.
+spanning other people's work. Measured, and re-derivable with
+`probe-v2-defect.sh`: **50 of 221 in-window PRs (22%)**, size-correlated (17%
+of PRs under 400 adds, 33% of those over) — i.e. skewed in the same direction
+as the size finding it feeds.
 
 Stage 2 therefore resolves each range by walking back from the merge commit and
-**stopping at the first commit that announces a different PR** (`Merge pull
-request #N`, or a trailing `(#N)`). That is strategy-agnostic: for a squash it
-stops at depth 1, for a rebase it stops at the previous PR's boundary, and true
-merge commits take `sha^1..sha^2`. The resolved base is written once to
-`pr_base.tsv` and stage 3 consumes it rather than re-deriving.
+**stopping at the first commit that announces a different PR** — `Merge pull
+request #N`, or a trailing `(#N)` **that resolves to a known merged-PR number**.
+The qualifier is mistake 3 applied to this walk: the trailing form is the same
+regex that cannot distinguish PR refs from issue refs, so stopping at an
+intermediate commit whose subject merely ends in an issue ref would silently
+re-introduce the too-narrow defect. Candidates that fail the lookup are walked
+through, not stopped at, and logged to `issue_ref_skips.txt`. The walk is
+strategy-agnostic: for a squash it stops at depth 1, for a rebase it stops at
+the previous PR's boundary, and true merge commits take `sha^1..sha^2`. The
+resolved base is written once to `pr_base.tsv` and stage 3 consumes it rather
+than re-deriving.
 
 **3. The commit → PR map.** Parsing `(#N)` out of commit subjects does not work
 here, because this project writes *issue* references into subjects and a regex
@@ -82,29 +90,33 @@ cannot distinguish them. That error mis-attributed **35% of commits** (322 of
 
 ### What each version produced
 
-| Measure | v1 (narrow + regex) | v2 (wide) | v3 (current) |
-|---|---:|---:|---:|
-| Edges | 1,639 | 3,114 | 1,999 |
-| Median lag | 1d | 2d | 2d |
-| Within 3 days | 61% | 57% | 60% |
-| Rate 400–1k | 6.3 | 8.5 | 6.1 |
-| Rate >1k | 5.7 | 10.5 | 6.0 |
-| Large-PR share | 89.7% | 93.2% | 90.1% |
+| Measure | v1 (narrow + regex) | v2 (wide) | v3 (walk) | v4 (current) |
+|---|---:|---:|---:|---:|
+| Edges | 1,639 | 3,114 | 1,999 | 2,022 |
+| Median lag | 1d | 2d | 2d | 1d |
+| Within 3 days | 61% | 57% | 60% | 61% |
+| Rate 400–1k | 6.3 | 8.5 | 6.1 | 4.7 |
+| Rate >1k | 5.7 | 10.5 | 6.0 | 5.7 |
+| Large-PR share | 89.7% | 93.2% | 90.1% | 89.3% |
 
-v2 is the one that was published, and it is the outlier. v3 lands almost
-exactly on v1, whose two errors had partially cancelled. The finding the norm
-rests on — a ~4× climb from <100 to 400–1k, and ~90% of rework from PRs ≥400
-adds — is present in all three; only its magnitude moved.
+v2 is the one that was originally published, and it is the outlier. v3 lands
+almost exactly on v1, whose two errors had partially cancelled. v4 is v3 plus
+two review-caught fixes: the issue-ref boundary validation (negligible —
+edges 1,999 → 2,005) and the paired `-w` (the real mover — 400–1k drops
+6.1 → 4.7, i.e. roughly a quarter of that bucket's counted rework was
+whitespace-only lines). The finding the norm rests on — the climb from <100
+to 400–1k and ~90% of rework from PRs ≥400 adds — is present in all four;
+its magnitude has moved with every correction, and the top bucket's
+*direction* has never once been stable across versions.
 
 ## Reading the output
 
 `04-analyze.sh` prints **both** averaging methods per size bucket. They agree
 across the first three, which is why the norm's threshold is 400 — and they
-agree on the top bucket too: both **fall** past 1k (mean 6.1 → 6.0, pooled
-6.1 → 3.8). So >1k is not worse than 400–1k, plausibly a floor effect. (An
-earlier version had the mean rising to 10.5 against a pooled 6.9 and called the
-bucket unresolved; that was the over-wide-range artifact, not a real
-divergence.)
+**disagree in direction** on the top one (mean 4.7 → 5.7, pooled 4.6 → 3.6).
+Do not quote either alone there: across v1→v4 the top bucket has fallen,
+climbed, fallen and split, and it is right-censored besides (the audit doc's
+"Denominators" and censoring notes). Treat >1k as unmeasured.
 
 ### What the rate actually measures
 
@@ -125,9 +137,14 @@ If you want the other reading — rework *caused* per PR — key on column 1
 instead. It is a different question and the norm does not rest on it.
 
 Buckets cover PRs with more than 20 added lines merged from the start of
-`review_rounds.tsv`'s coverage; the share-of-rework figure uses the unfiltered
-set. These denominators differ, and the audit doc's "Denominators" note explains
-why. Reconcile before quoting them against each other.
+`review_rounds.tsv`'s coverage. The share-of-rework figure is printed under
+**both** denominators — the bucket population and the unfiltered set — because
+the "36% of the population produced ~90% of rework" sentence needs its
+numerator and denominator drawn from the same base, and an earlier revision
+quoted the 36% against one and the 90% against the other. Note also that
+either share counts only rework of code written by PRs inside
+`review_rounds.tsv`'s window: rework of older code is in the edge total but in
+neither share.
 
 ### Scope of "reproduces exactly"
 
@@ -159,6 +176,18 @@ question is "how much of what this PR wrote did not survive" — but it means a
 PR that deletes a stale subsystem inflates the rework attributed to whoever
 wrote it. Keep it in mind when a single old PR shows a surprisingly large
 reworked total.
+
+**Whitespace-only churn is not counted.** Both the diff and the blame pass
+`-w`, deliberately paired: with `-w` on blame alone, a reformat-only sweep
+diffs whole blocks as deletions while the blame attributes those lines to
+their *original* authors — a large fake rework spike against old PRs for a
+semantic no-op.
+
+**The age distribution is edge-weighted, not line-weighted.** Each
+(hunk × origin-commit) row counts once in the lag percentiles regardless of
+its `lines` column, while the edge total and the bucket rates are line-based.
+A 40-line deletion and a 1-line edit pull equally on "median lag / within 3
+days"; nothing here says lag would look the same weighted per-line.
 
 **The boundary walk is a heuristic, not a proof.** Stage 2 stops at the first
 ancestor whose subject announces another PR, then checks whether the resolved
