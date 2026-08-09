@@ -14,6 +14,9 @@ RFC or closes an issue, link it.
 
 - **In:** what's included
 - **Out:** what was deliberately not done (and why, if non-obvious)
+- **Size:** if this adds more than ~400 lines, why it couldn't be split.
+  (Excludes generated/vendored/fixture files. See the change-size norm in
+  [`CLAUDE.md`](../CLAUDE.md#workflow-branches-review-merging).)
 
 ## Verification
 
