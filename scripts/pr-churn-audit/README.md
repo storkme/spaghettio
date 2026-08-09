@@ -118,3 +118,19 @@ sampled classification put that at roughly **57% planned iteration / 23%
 genuine correction / 20% collision** — so it is *not* a defect rate, and no
 script here separates those. The ratios the norm rests on survive the
 distinction; absolute counts do not.
+
+**Deletions count as rework; additions do not.** Stage 3 blames the *old* side
+of each hunk, so removing 40 of an earlier PR's lines scores 40 edges against
+it, while adding 40 new lines scores none. That asymmetry is deliberate — the
+question is "how much of what this PR wrote did not survive" — but it means a
+PR that deletes a stale subsystem inflates the rework attributed to whoever
+wrote it. Keep it in mind when a single old PR shows a surprisingly large
+reworked total.
+
+**The boundary walk is a heuristic, not a proof.** Stage 2 stops at the first
+ancestor whose subject announces another PR. If a previous PR ended in an
+*unlabelled* commit the walk can overrun into it, which is the v2 defect
+returning. Those cases cannot be distinguished from a legitimate rebase-merge,
+so stage 2 counts them and writes them to `range_unverified.txt` rather than
+assuming the benign reading. A non-empty file is not necessarily wrong — but it
+is the first place to look if a figure surprises you.
