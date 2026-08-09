@@ -286,7 +286,13 @@ fn main() {
         .filter(|i| i.severity == Severity::Warning)
         .count();
 
-    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&layout, &solved, &label);
+    // Pass the issues from just above so the manifest records this layout's
+    // validator state — this generator's whole output is sim fixtures, which
+    // is exactly where a rate must not be read without it.
+    // `export_with_manifest` is a pure export and emits no `validator` key.
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest_validated(
+        &layout, &solved, &label, &issues,
+    );
     let dir = format!("{out}/{label}");
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
         eprintln!("cannot create {dir}: {e}");

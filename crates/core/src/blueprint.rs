@@ -121,13 +121,84 @@ struct BlueprintWrapper<'a> {
     blueprint: Blueprint<'a>,
 }
 
+/// [`export_with_manifest`] for a caller that has **already validated**, and
+/// the only variant that attaches a `validator` block.
+///
+/// Export deliberately does **not** validate on your behalf. Three reasons,
+/// each learned the hard way in review of this change:
+///
+/// - **Cost.** `validate()` is ~40 checks; on a 14k-entity mega-chain that is
+///   not free, and a dozen artifact-producing call sites would have started
+///   paying for it silently.
+/// - **Trace side effects.** `validate()` emits a terminal
+///   `ValidationCompleted` event. Emitting it from *export* leaks an event
+///   into any live stream and skews the snapshot debugger's per-layout error
+///   counts — the hazard `decomposition_search.rs` guards for (#396).
+/// - **Style.** `validate()` behaves differently under
+///   [`LayoutStyle`](crate::validate::LayoutStyle): `check_belt_network_topology`
+///   is Spaghetti-only, and the fluid-port and belt-flow checks branch on it.
+///   Export cannot know the right style — `LayoutResult` does not record one —
+///   so picking a default here would silently mislabel non-bus layouts.
+///
+/// A manifest exported without this variant carries no `validator` key at
+/// all, which is deliberately distinct from carrying an empty/clean one.
+///
+/// **No consumer reads this key yet.** As of this commit the block is
+/// write-only in-tree: `crates/sim-harness` and `crates/meter` both model the
+/// manifest without it. Rendering absence as `unknown` rather than `clean` is
+/// the *contract this key is designed for*, not behaviour that exists — the
+/// consumer half is a separate change. Do not read the paragraph above as a
+/// description of what the harness does today.
+///
+/// **`issues` must come from validating this exact layout, and nothing
+/// checks that.** An earlier revision had a bbox `debug_assert` here; it was
+/// removed because it compiled out of release, could not catch the realistic
+/// mistake (a stale list from a same-shaped layout passes it), and could
+/// panic on legitimately-distant issue positions such as `belt-detour`. The
+/// obligation is the caller's. A mismatched list writes a confident, wrong
+/// block into an artifact a downstream consumer will report as fact.
+pub fn export_with_manifest_validated(
+    layout: &LayoutResult,
+    solver: &crate::models::SolverResult,
+    label: &str,
+    issues: &[crate::validate::ValidationIssue],
+) -> (String, serde_json::Value) {
+    let (bp, mut manifest) = export_with_manifest_inner(layout, solver, label);
+    let summary = crate::validate::ValidatorSummary::from_issues(issues, layout.warnings.len());
+    if let Some(obj) = manifest.as_object_mut() {
+        // Not `unwrap_or(Null)`: a null `validator` key is neither "absent"
+        // (unknown) nor a summary, so it would break the very absent-vs-clean
+        // contract this block exists to establish. The struct is plain
+        // Serialize, so this cannot fail today; if it ever can, fail loudly.
+        obj.insert(
+            "validator".to_string(),
+            serde_json::to_value(&summary).expect("ValidatorSummary is plain Serialize"),
+        );
+    }
+    (bp, manifest)
+}
+
 /// [`export`] plus the RFC-050 verification manifest: everything the
 /// simulation harness needs to feed, drain, and judge the factory —
 /// boundary records (engine-emitted, never reconstructed from the
 /// artifact), per-item planned rates from the solver, the layout bbox
 /// origin for world-offset anchoring, and surplus exits for fluid
 /// voiding. Returns `(blueprint_string, manifest_json)`.
+///
+/// **Pure export — this does not validate.** The manifest therefore carries
+/// no `validator` key. To attach validator state, validate first and call
+/// [`export_with_manifest_validated`]; that function's docs explain why
+/// export refuses to validate on your behalf, and note that no consumer
+/// reads the key yet.
 pub fn export_with_manifest(
+    layout: &LayoutResult,
+    solver: &crate::models::SolverResult,
+    label: &str,
+) -> (String, serde_json::Value) {
+    export_with_manifest_inner(layout, solver, label)
+}
+
+fn export_with_manifest_inner(
     layout: &LayoutResult,
     solver: &crate::models::SolverResult,
     label: &str,
@@ -553,6 +624,173 @@ mod tests {
             !surplus_items.contains(&"electronic-circuit"),
             "electronic-circuit must not remain in surplus_exits after promotion: {surplus_items:?}"
         );
+    }
+
+    /// `validator-trust.md` hole 3: the manifest must carry the validator
+    /// state of the exact layout it describes, per-category. Before this,
+    /// the sim/meter side had no visibility at all and a parity sweep could
+    /// quote a condemned layout as a parity number.
+    #[test]
+    fn manifest_carries_per_category_validator_state() {
+        use rustc_hash::FxHashSet;
+        let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
+        let solved = crate::solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-3")
+            .expect("solve");
+        let layout = crate::bus::layout::build_bus_layout(
+            &solved,
+            crate::bus::layout::LayoutOptions {
+                max_belt_tier: Some("transport-belt".into()),
+                ..Default::default()
+            },
+        )
+        .expect("layout");
+        let issues =
+            match crate::validate::validate(&layout, Some(&solved), crate::validate::LayoutStyle::Bus)
+            {
+                Ok(i) => i,
+                Err(e) => e.issues,
+            };
+        let (_bp, manifest) =
+            export_with_manifest_validated(&layout, &solved, "gear-validator", &issues);
+
+        let v = &manifest["validator"];
+        assert!(!v.is_null(), "validator object must be present: {manifest}");
+
+        // Totals must reconcile against the per-category breakdown. A bare
+        // total cannot tell 2 from 218, which is why by_category exists —
+        // this asserts the two agree rather than trusting either alone.
+        let cats = v["by_category"].as_object().expect("by_category object");
+        let (mut cat_errors, mut cat_warnings) = (0u64, 0u64);
+        for c in cats.values() {
+            cat_errors += c["errors"].as_u64().unwrap();
+            cat_warnings += c["warnings"].as_u64().unwrap();
+        }
+        assert_eq!(v["errors"].as_u64().unwrap(), cat_errors);
+        assert_eq!(v["warnings"].as_u64().unwrap(), cat_warnings);
+
+        // Cross-check the manifest JSON against a summary built independently
+        // from the same issue list, so the serialization can't drift.
+        let direct = crate::validate::ValidatorSummary::from_issues(&issues, layout.warnings.len());
+        assert_eq!(v["errors"].as_u64().unwrap() as usize, direct.errors);
+        assert_eq!(v["warnings"].as_u64().unwrap() as usize, direct.warnings);
+
+        // The reconciliation above passes trivially if the fixture happens to
+        // validate clean (0 == 0 everywhere), which would let a
+        // category-attribution bug through unnoticed. This fixture does not
+        // validate clean, and the map itself is compared key-for-key.
+        assert!(
+            !direct.by_category.is_empty(),
+            "gear@10 is expected to carry issues; if it ever validates clean \
+             this test stops discriminating and must be re-pointed"
+        );
+        let manifest_cats: std::collections::BTreeMap<String, (u64, u64)> = cats
+            .iter()
+            .map(|(k, c)| {
+                (
+                    k.clone(),
+                    (c["errors"].as_u64().unwrap(), c["warnings"].as_u64().unwrap()),
+                )
+            })
+            .collect();
+        let direct_cats: std::collections::BTreeMap<String, (u64, u64)> = direct
+            .by_category
+            .iter()
+            .map(|(k, c)| (k.clone(), (c.errors as u64, c.warnings as u64)))
+            .collect();
+        assert_eq!(manifest_cats, direct_cats, "per-category attribution drift");
+    }
+
+    /// `export_with_manifest_validated` must not run the validator, and must
+    /// not perturb a live trace stream. The styled/plain variants do validate
+    /// internally, so they discard their own emission (#396's hazard).
+    #[test]
+    fn export_does_not_leak_validation_trace_events() {
+        use rustc_hash::FxHashSet;
+        let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
+        let solved = crate::solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-3")
+            .expect("solve");
+        let layout = crate::bus::layout::build_bus_layout(
+            &solved,
+            crate::bus::layout::LayoutOptions {
+                max_belt_tier: Some("transport-belt".into()),
+                ..Default::default()
+            },
+        )
+        .expect("layout");
+
+        let issues =
+            match crate::validate::validate(&layout, Some(&solved), crate::validate::LayoutStyle::Bus)
+            {
+                Ok(i) => i,
+                Err(e) => e.issues,
+            };
+
+        let sink_hits = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let counter = sink_hits.clone();
+        let _sink = crate::trace::set_sink(Box::new(move |_| counter.set(counter.get() + 1)));
+        let _guard = crate::trace::start_trace();
+        let before = crate::trace::peek_events_len();
+
+        let _ = export_with_manifest(&layout, &solved, "trace-check");
+        let _ = export_with_manifest_validated(&layout, &solved, "trace-check-v", &issues);
+
+        let after = crate::trace::peek_events_len();
+
+        // Positive control: prove the sink is actually wired before trusting
+        // a zero from it. An unwired sink also reports zero, and "the check
+        // was silent" is not the same as "nothing happened".
+        crate::trace::emit(crate::trace::TraceEvent::ValidationCompleted {
+            error_count: 0,
+            warning_count: 0,
+            issues: Vec::new(),
+        });
+        assert_eq!(
+            sink_hits.get(),
+            1,
+            "sink is not wired — the zero-assertion below would be vacuous"
+        );
+
+        assert_eq!(
+            before, after,
+            "export must not add COLLECTOR events — the snapshot debugger \
+             reports per-layout error counts from these"
+        );
+        assert_eq!(
+            sink_hits.get(),
+            1,
+            "export must not fire events at a streaming SINK; the only hit \
+             should be the positive control above. An earlier revision \
+             guarded only the collector via truncate_events and claimed full \
+             coverage"
+        );
+    }
+
+    /// The summary must distinguish categories, not just count. Guards the
+    /// `validator-reporting.md` rule directly at the type level.
+    #[test]
+    fn validator_summary_keeps_categories_apart() {
+        use crate::validate::{Severity, ValidationIssue, ValidatorSummary};
+        let issues = vec![
+            ValidationIssue::new(Severity::Warning, "input-rate-delivery", "a"),
+            ValidationIssue::new(Severity::Warning, "input-rate-delivery", "b"),
+            ValidationIssue::new(Severity::Error, "entity-overlap", "c"),
+        ];
+        let s = ValidatorSummary::from_issues(&issues, 1);
+        assert_eq!(s.errors, 1);
+        assert_eq!(s.warnings, 2);
+        assert_eq!(s.layout_warnings, 1);
+        assert_eq!(s.by_category["input-rate-delivery"].warnings, 2);
+        assert_eq!(s.by_category["entity-overlap"].errors, 1);
+        assert!(!s.is_clean());
+        assert_eq!(s.badge(), "1E/2W/1L");
+
+        // Nothing reported at all, and no pipeline warnings, is the only
+        // state that reads clean.
+        let empty = ValidatorSummary::from_issues(&[], 0);
+        assert!(empty.is_clean());
+        assert_eq!(empty.badge(), "clean");
+        // ...but a layout warning alone is not clean.
+        assert!(!ValidatorSummary::from_issues(&[], 1).is_clean());
     }
 
     #[test]
