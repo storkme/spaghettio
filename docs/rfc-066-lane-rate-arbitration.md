@@ -152,14 +152,27 @@ dropped.
    `ghost:flow:...:ret`) reaches **5730/s and 5735/s** on a yellow belt, against
    the convergence pass's own documented invariant that splitters damp cycle gain
    by 0.5 per pass. Bounded by `budget = 3 * segment_count`
-   (`belt_flow.rs:2610`) — large-but-finite, not divergent. Observed on
+   (`belt_flow.rs:2610`) — large-but-finite, not divergent. Read that local name
+   with care: `segment_count` is `belt_dir_map.len()`, a **belt-tile** count, and
+   the comment above it (`belt_flow.rs:2596-2609`) contrasts exactly this — a
+   futile `3 × distinct-segment-ids` against the workable `3 × belt_tiles`. The
+   name is a wart in the source; this RFC quotes it verbatim rather than silently
+   correcting it. Observed on
    `logistic-science-pack@5/s` / am2 / yellow / `di=Forced`, tiles (44,30) and
    (45,30), which carry segments `di-row:copper-cable:electronic-circuit` and
-   `ghost:flow:electronic-circuit:3:ret:30`. Reproduce by calling
-   `belt_flow::compute_lane_rates` on that layout and reading those two tiles;
-   the probe used is local-only, since `crates/core/examples/` is gitignored.
-   **Measured share: 32 of 1,563 over-cap readings (2.0%).** Fixing this alone
-   does *not* shrink the blast radius.
+   `ghost:flow:electronic-circuit:3:ret:30`. Reproduce with
+   `cargo run --manifest-path crates/core/Cargo.toml --example probe_walker_shape
+   --release -- sci2`, committed alongside this RFC.
+   **Measured share: 32 of 1,563 over-cap readings (2.0%)** — and that is a
+   **lower bound**: the triage's conservation ceiling uses `count.ceil()`, which
+   over-estimates supply and so under-counts what it can prove impossible. The
+   remaining 1,531 are **unclassified**, not confirmed-real: 598 are merely *not
+   provably impossible* (a lane carrying 90% of the factory's entire output of an
+   item clears that bar) and 933 sit on tiles with no `carries` attribution. So
+   fixing the cycle bug alone does not shrink the blast radius, and the blast
+   radius itself is **unknown** rather than known-large. That is the argument for
+   Phase 2's shadow mode: it is how the number gets established, not a mitigation
+   for one already measured.
 2. **Cap-side splitter mapping.** Above. Fixed by harvest.
 3. **Untagged `carries`.** 933 of 1,563 over-cap readings sit on tiles with no
    `carries` attribution, so neither the item guard nor the triage can classify
@@ -282,7 +295,7 @@ reasoning the `sim_export.rs` exception records:
 |---|---|
 | 58% tile-slot disagreement; the 112,407 blind tiles and their segment breakdown; 5-of-504 vs 176-of-504 | `probe_walkers.rs` |
 | 2.0% impossible / 598 plausible / 933 unclassifiable over-cap triage | `probe_overcap_triage.rs` |
-| 2,898 layouts, 1,149,278 belt-in tiles, zero B8 (the result that rescoped #609) | `probe_b8_modes.rs` |
+| 2,898 layouts, 1,155,086 belt-in tiles, zero B8 (the result that rescoped #609) | `probe_b8_modes.rs` |
 | the 5730/5735 cycle runaway on `sci2` | `probe_walker_shape.rs` |
 
 Run as `cargo run --manifest-path crates/core/Cargo.toml --example <name>
@@ -309,7 +322,7 @@ has them. An earlier draft of this RFC quoted a figure produced that way.
 
 - *2026-08-09 — opened. Grew out of #609, which was rescoped away from "one
   lane-loading model called by every check" after that issue's lead justification
-  was measured and found to have zero population (2,898 layouts, 1,149,278
+  was measured and found to have zero population (2,898 layouts, 1,155,086
   belt-in tiles, no perpendicular feeds of any kind). Evidence in #609.*
 - *2026-08-09 — owner call: **fix the winner and keep only the winner**; do not
   retain the loser as a differential oracle (RFC-065 pattern explicitly
@@ -370,3 +383,36 @@ has them. An earlier draft of this RFC quoted a figure produced that way.
   cited `crates/core/src/validate/e2e.rs`, which does not exist. Committing the
   probes required making them clippy-clean — `-D warnings` is a gate once they are
   tracked, and they were not.*
+- *2026-08-09 — fourth review pass on #615 found three MAJOR defects, two of them
+  in `probe_b8_modes.rs` itself — the instrument behind the zero-B8 result that
+  rescoped #609. It did not register a splitter's **second tile**, so a run head
+  fed straight through that tile read as having no straight feeder and a real B8
+  would have been downgraded to a benign B11 turn; and its run scan was filtered
+  to `is_surface_belt`, so **underground belt-in tiles were never examined** at
+  all, while the quoted tile count was presented as the whole population. Both
+  defects bias toward UNDER-counting B8, i.e. toward the answer the probe
+  reported. Third: the RFC still described the runaway probe as "local-only, since
+  `crates/core/examples/` is gitignored" in the same commit that committed and
+  whitelisted it, 120 lines above a table telling the reader to run it.*
+- *2026-08-09 — probe corrected (splitter second tiles registered, UG run tiles
+  scanned, B8 count now requires an item match, U7 UG-input feeds split out, and
+  multi-perpendicular tiles no longer hidden in the benign bucket) and the sweep
+  **re-run in full**. Result unchanged: 2,898 layouts, **1,155,086** belt-in run
+  tiles (up from 1,149,278 — the difference is the UG coverage that was missing),
+  **zero B8, zero B10, zero B11, zero U7, zero item-mismatch, zero
+  uncategorised**. The rescope of #609 stands, now on an instrument whose two
+  under-counting defects have been removed. Independently corroborated by the
+  repo owner from design knowledge: the engine terminates taps along the run axis
+  and does not side-feed a row input belt.*
+- *2026-08-09 — self-audit of the two remaining probes, prompted by the above
+  rather than by a reviewer. `probe_walkers.rs` is sound: its blind-tile count
+  compares the two rate maps directly with no classification step to get wrong,
+  and an independent agent reproduced it (112,405 vs 112,407). `probe_overcap_triage.rs`
+  is structurally sound but its OUTPUT was over-read here: its conservation
+  ceiling uses `count.ceil()`, an over-estimate, so **2.0% is a lower bound on
+  artifacts**; and "plausible" only ever meant *not provably impossible*, not
+  *confirmed real*. The honest split is 32 provably impossible and 1,531
+  unclassified. The staged rollout is therefore justified because the blast radius
+  is **unknown**, not because it is known to be large — which is a better reason
+  for shadow mode, not a worse one. Corrected in §"Known artifact classes" and the
+  Phase 2 rationale.*

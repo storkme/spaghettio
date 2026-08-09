@@ -79,6 +79,9 @@ fn main() {
     let mut b8_item_matched = 0usize;
     let mut b10 = 0usize;
     let mut b11_turn = 0usize;
+    let mut u7_into_ug_input = 0usize;
+    let mut b8_item_mismatch = 0usize;
+    let mut perp_multi = 0usize;
     let mut examples: Vec<String> = Vec::new();
 
     for (tier, cases) in [("A", &tier_a[..]), ("B", &tier_b[..])] {
@@ -152,7 +155,11 @@ fn main() {
                     .iter()
                     .filter(|e| {
                         e.segment_id.as_deref().is_some_and(|s| s.contains(":belt-in:"))
-                            && is_surface_belt(&e.name)
+                            // Surface belts AND underground tiles. A UG *output*
+                            // can be sideloaded into under normal B8 rules (U10);
+                            // scanning only surface tiles silently excludes
+                            // undergrounded stretches of a run from the question.
+                            && (is_surface_belt(&e.name) || is_ug_belt(&e.name))
                     })
                     .collect();
 
@@ -188,12 +195,20 @@ fn main() {
                     if perps.is_empty() {
                         continue;
                     }
-                    if straight {
+                    // A perpendicular feed onto a UG *input* is U7 (FAR lane),
+                    // not B8 (near lane) — an inverted rule, so it must not be
+                    // pooled with the B8 count either way.
+                    if is_ug_belt(&t.name) && t.io_type.as_deref() == Some("input") {
+                        u7_into_ug_input += 1;
+                        continue;
+                    }
+                    // Require the ITEM MATCH for the headline count. Without it a
+                    // perpendicular belt of an unrelated item crossing beside a
+                    // straight feeder scores as a B8 defect that isn't one.
+                    if straight && straight_im && perps_im > 0 {
                         b8 += 1;
                         n_b8 += 1;
-                        if straight_im && perps_im > 0 {
-                            b8_item_matched += 1;
-                        }
+                        b8_item_matched += 1;
                         if examples.len() < 25 {
                             examples.push(format!(
                                 "{name} belt={} di={di:?} strat={strategy:?} rl={row_layout:?} mt={merge_tap} cc={cell_composition:?} st={stacking} tile=({},{}) seg={}",
@@ -201,12 +216,21 @@ fn main() {
                                 t.segment_id.as_deref().unwrap_or("-")
                             ));
                         }
+                    } else if straight {
+                        // perp + straight, but the items differ — not a defect,
+                        // recorded so it cannot hide inside the benign bucket.
+                        b8_item_mismatch += 1;
                     } else if perps.len() >= 2
                         && perps.iter().any(|a| perps.iter().any(|b| a.0 == -b.0 && a.1 == -b.1))
                     {
                         b10 += 1;
-                    } else {
+                    } else if perps.len() == 1 {
                         b11_turn += 1;
+                    } else {
+                        // >=2 perpendicular feeders, none opposing. Not a turn and
+                        // not B10; previously swept into `b11_turn` and labelled
+                        // benign without justification.
+                        perp_multi += 1;
                     }
                 }
             }
@@ -221,6 +245,9 @@ fn main() {
     println!("  B8 sideload into a belt-in tile (perp + straight):  {b8}   [item-matched: {b8_item_matched}]");
     println!("  B10 opposing double sideload (both lanes):          {b10}");
     println!("  B11 turn, sole perpendicular (both lanes, benign):  {b11_turn}");
+    println!("  U7 perpendicular onto a UG INPUT (far lane, inverted): {u7_into_ug_input}");
+    println!("  perp + straight but ITEM MISMATCH (not a defect):      {b8_item_mismatch}");
+    println!("  >=2 perpendicular, none opposing (uncategorised):      {perp_multi}");
     if b8 == 0 {
         println!("\nNO TRUE B8 SIDELOAD into any belt-in run, across every layout mode swept.");
     } else {
