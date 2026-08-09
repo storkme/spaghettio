@@ -5,7 +5,11 @@ change-size norm cites this file as its evidence, so it is load-bearing and
 outside the "archive or delete freely" contract that the docs taxonomy gives
 session notes. If the norm goes, this can go with it; not before. Numbers here
 are scoped to the window in the title — re-measure before citing them outside
-it.
+it, using the checked-in pipeline at
+[`scripts/pr-churn-audit/`](../scripts/pr-churn-audit/README.md). That pipeline
+reproduces every figure below exactly; its README documents the two measurement
+defects (truncated diff range, issue-numbers-read-as-PR-numbers) that made the
+first version of these numbers wrong.
 
 Motivating question from the owner: PR churn feels like it's rising — is the
 model getting worse, or is the code getting harder to work in?
