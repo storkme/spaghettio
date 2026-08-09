@@ -194,6 +194,15 @@ pub struct Report {
     /// older reports and `baseline.rs`'s targeted-field reads are
     /// unaffected.
     pub timeseries: Vec<TimeseriesPoint>,
+    /// Validator state of the layout these rates were measured on, carried
+    /// through from the manifest (`validator-trust.md` hole 3). `None` means
+    /// the manifest predates the field — **not** that the layout was clean.
+    pub validator: Option<crate::manifest::ValidatorSummary>,
+    /// How the rates above should be read given that state. Recorded in the
+    /// JSON as well as printed, so downstream consumers (`bless`/`check`,
+    /// sweeps) can refuse to treat a condemned run as a pipeline result
+    /// without re-parsing prose.
+    pub validator_standing: crate::manifest::MeasurementStanding,
 }
 
 fn get_u64(v: &serde_json::Value, key: &str) -> u64 {
@@ -530,6 +539,8 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
 
     Report {
         label: manifest.label.clone(),
+        validator: manifest.validator.clone(),
+        validator_standing: crate::manifest::MeasurementStanding::of(manifest.validator.as_ref()),
         items,
         import_rc: get_i64(result, "import_rc"),
         ghosts: get_u64(result, "ghosts"),
@@ -792,6 +803,38 @@ fn productivity_parity_lines(
     out
 }
 
+/// One-line validator summary for the report header.
+///
+/// Renders `?` for an absent summary rather than anything that could read as
+/// an all-clear: a manifest predating the field tells us nothing about the
+/// layout, and treating that silence as clearance is the exact failure
+/// `validator-reporting.md` catalogues.
+fn validator_line(report: &Report) -> String {
+    match &report.validator {
+        None => "? (manifest predates the validator field — state unknown, NOT clean)".to_string(),
+        Some(v) if v.is_clean() => {
+            // Deliberately not "PASS". Of ~40 checks only a handful carry
+            // refusal power and each is documented "never sim-anchored"
+            // (`validator-trust.md`), so silence here means the validator
+            // and the sim agree, not that either is right.
+            "clean (no issues reported — note validator silence is not proof of correctness)"
+                .to_string()
+        }
+        Some(v) => {
+            // `top_categories` is legitimately empty when the only entries are
+            // pipeline-stamped layout warnings — there is no validator
+            // category to name. Printing the separator unconditionally gave a
+            // dangling `"2L — "`.
+            let cats = v.top_categories(4);
+            if cats.is_empty() {
+                v.badge()
+            } else {
+                format!("{} — {}", v.badge(), cats.join(", "))
+            }
+        }
+    }
+}
+
 pub fn print_human(report: &Report) {
     println!("=== spaghettio-sim report: {} ===", report.label);
     println!(
@@ -819,6 +862,7 @@ pub fn print_human(report: &Report) {
         report.inserter_stack_size_bonus,
         report.bulk_inserter_capacity_bonus
     );
+    println!("validator: {}", validator_line(report));
     for line in productivity_parity_lines(
         &report.productivity_force,
         &report.productivity_entity,
@@ -850,6 +894,9 @@ pub fn print_human(report: &Report) {
         }
     }
     println!();
+    if let Some(caveat) = report.validator_standing.caveat() {
+        println!("!! {}", caveat.to_uppercase());
+    }
     println!(
         "{:<28} {:>10} {:>12} {:>10} {:>12} {:>10} {:>8}",
         "item", "planned/s", "produced/s", "d%", "delivered/s", "d%", "verdict"
@@ -1335,5 +1382,133 @@ mod tests {
         let result = serde_json::json!({"checkpoints": [], "samples": []});
         let report = compute(&m, &result);
         assert!(report.timeseries.is_empty());
+    }
+
+    fn report_with_validator(v: Option<crate::manifest::ValidatorSummary>) -> Report {
+        let mut m = fixture_manifest();
+        m.validator = v;
+        compute(&m, &serde_json::json!({"checkpoints": [], "samples": []}))
+    }
+
+    /// The whole point of hole 3: a rate must never be printed without the
+    /// validator state of the layout it was measured on. These assert the
+    /// rendered text, not just the struct — a field nobody reads is what
+    /// RFC-050 Phase 0 already shipped once.
+    #[test]
+    fn absent_validator_renders_as_unknown_never_as_clean() {
+        let r = report_with_validator(None);
+        let line = validator_line(&r);
+        assert!(line.contains('?'), "got: {line}");
+        assert!(
+            line.to_lowercase().contains("not clean"),
+            "absence must be spelled out as not-clean, got: {line}"
+        );
+        assert_eq!(
+            r.validator_standing,
+            crate::manifest::MeasurementStanding::Unknown
+        );
+        assert!(r.validator_standing.caveat().is_some());
+    }
+
+    #[test]
+    fn clean_validator_renders_without_claiming_correctness() {
+        let r = report_with_validator(Some(Default::default()));
+        let line = validator_line(&r);
+        assert!(line.starts_with("clean"), "got: {line}");
+        // Silence is not proof — of ~40 checks only a handful gate, and each
+        // is documented "never sim-anchored". The line must say so.
+        assert!(line.contains("not proof"), "got: {line}");
+        assert!(
+            r.validator_standing.caveat().is_none(),
+            "an unflagged run needs no banner"
+        );
+    }
+
+    #[test]
+    fn warned_validator_names_its_categories_and_flags_the_rates() {
+        let v = crate::manifest::ValidatorSummary {
+            errors: 0,
+            warnings: 3,
+            layout_warnings: 0,
+            by_category: std::collections::BTreeMap::from([(
+                "input-rate-delivery".to_string(),
+                crate::manifest::CategoryCount {
+                    errors: 0,
+                    warnings: 3,
+                },
+            )]),
+        };
+        let r = report_with_validator(Some(v));
+        let line = validator_line(&r);
+        // Per-category, not a bare total: a reader must be able to tell
+        // which check fired and how many times.
+        assert!(line.contains("input-rate-delivery"), "got: {line}");
+        assert!(line.contains("3W"), "got: {line}");
+        assert_eq!(
+            r.validator_standing,
+            crate::manifest::MeasurementStanding::Warned
+        );
+        let caveat = r.validator_standing.caveat().expect("warned needs a caveat");
+        assert!(
+            caveat.contains("measures the layout, not the pipeline"),
+            "got: {caveat}"
+        );
+    }
+
+    /// This is the 2026-08-07 PU@1/s shape exactly: a layout carrying
+    /// input-rate-delivery warnings that named the starving machines, whose
+    /// measured rate was reported with no mention of them.
+    /// Regression for the dangling separator: a layout whose only entries
+    /// are pipeline-stamped warnings has no validator category to name.
+    #[test]
+    fn layout_warnings_only_renders_without_a_dangling_separator() {
+        let v = crate::manifest::ValidatorSummary {
+            errors: 0,
+            warnings: 0,
+            layout_warnings: 2,
+            by_category: Default::default(),
+        };
+        let r = report_with_validator(Some(v));
+        let line = validator_line(&r);
+        assert_eq!(line, "2L", "got: {line:?}");
+        assert!(!line.contains('—'), "no separator without categories: {line}");
+        assert_eq!(
+            r.validator_standing,
+            crate::manifest::MeasurementStanding::Warned
+        );
+        // ...and the banner must not blame the validator for a pipeline
+        // warning the validator never emitted (#462).
+        let caveat = r.validator_standing.caveat().expect("warned");
+        assert!(
+            !caveat.contains("validator warnings"),
+            "misattributes the source: {caveat}"
+        );
+    }
+
+    #[test]
+    fn errors_are_reported_as_condemned_not_merely_warned() {
+        let v = crate::manifest::ValidatorSummary {
+            errors: 2,
+            warnings: 1,
+            layout_warnings: 0,
+            by_category: std::collections::BTreeMap::from([(
+                "entity-overlap".to_string(),
+                crate::manifest::CategoryCount {
+                    errors: 2,
+                    warnings: 1,
+                },
+            )]),
+        };
+        let r = report_with_validator(Some(v));
+        assert_eq!(
+            r.validator_standing,
+            crate::manifest::MeasurementStanding::Condemned
+        );
+        assert!(r
+            .validator_standing
+            .caveat()
+            .expect("condemned needs a caveat")
+            .contains("ERRORS"));
+        assert!(validator_line(&r).contains("2E/1W"));
     }
 }

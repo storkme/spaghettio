@@ -49,7 +49,7 @@ without comment.
 | C3 | transactional transforms (`bus/compaction.rs`) | a cut/candidate that has (or adds) Errors is rejected; the pre-transform layout survives. RFC-065 adds a `connectivity::error_certain_regression` reject-fast prefilter ahead of the full validate |
 | C4 | web UI | issues render as markers; export button works regardless |
 | C5 | blueprint export | **no gate** — export never consults validation |
-| C6 | sim / meter harness | **no gate, no visibility** — the manifest (`crates/sim-harness/src/manifest.rs::Manifest`) carries geometry, rates, boundaries, and the declared axes, but no issue state at all |
+| C6 | sim / meter harness | **no gate, but visibility since 2026-08-09** — the manifest carries a per-category `validator` block and the report prints it beside every rate, tagging the run `unflagged`/`warned`/`condemned`/`unknown` (hole 3). Still no *gate*: a condemned layout is flagged loudly, not refused |
 
 Second issue channel: `LayoutResult.warnings` — strings stamped by the layout
 pipeline itself (e.g. "No N→M balancer template"), never seen by `validate()`.
@@ -245,19 +245,30 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    assume.
 
 
-3. **The sim/meter side has no validator visibility.** `Manifest` carries no
-   issue state, so parity sweeps can quote a condemned layout as a parity
-   number — which is precisely how 68.2% was first reported with no mention
-   of the three warnings that explained it. This is a **recorded RFC-050
-   Phase 0 deferral**, not an unnoticed gap: the RFC's Design section
-   promises `validator_errors`/`validator_warnings` in the manifest, and
-   `crates/sim-harness/src/manifest.rs`'s module doc documents that Phase 0
-   shipped without them (resolved as optional/absent-tolerant). **Next
-   action:** emit the fields the RFC already promised — per-category counts,
-   not just totals (`validator-reporting.md` rule: totals can't tell 2 from
-   218) — and make the sweep/report print them next to every rate, flagging
-   any "parity" number measured on a warned layout as measuring the layout,
-   not the pipeline.
+3. ~~**The sim/meter side has no validator visibility.**~~ **CLOSED
+   2026-08-09.** `Manifest` carried no issue state, so parity sweeps could
+   quote a condemned layout as a parity number — precisely how 68.2% was
+   first reported with no mention of the three warnings that explained it.
+   Delivered as the RFC-050 Design section originally promised, with one
+   change: **per-category counts, not two totals**, because totals can't
+   tell 2 from 218 (`validator-reporting.md`).
+   - `export_with_manifest` emits a `validator` object: `errors`,
+     `warnings`, `layout_warnings` (pipeline-stamped `LayoutResult::warnings`,
+     which `validate()` never sees — counted apart because reading only the
+     validator produced a false "0 errors 0 warnings" claim in #462), and
+     `by_category`.
+   - `spaghettio-sim` prints it in the report header and, when the layout was
+     flagged, a banner immediately above the rate table: *"measured on a
+     layout carrying validator warnings — this measures the layout, not the
+     pipeline."*
+   - A manifest predating the field renders `?`, never "clean".
+     `MeasurementStanding::Unknown` is a distinct state from `Unflagged`, and
+     it is pinned by a test — conflating absence with clearance is the
+     failure this whole page exists to stop.
+   - **Still not a gate.** Nothing refuses to sim or export a condemned
+     layout; C5 remains open. Making export refuse is a separate decision
+     with real consequences for the candidate search, and should be taken
+     deliberately rather than as a side effect of adding visibility.
 4. **`belt-flow-path` / `belt-flow-reachability` are Warnings under
    `LayoutStyle::Bus`** — the style every production call site passes
    (`LayoutStyle::default()` is Spaghetti, but nothing in production relies
