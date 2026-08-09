@@ -30,10 +30,21 @@ mkdir -p "$WORK"
 echo "fetching merged PRs from $REPO..."
 # --limit well above the window's size: at 300 a later re-run could silently
 # drop the OLDEST in-window PRs, moving numerator and denominator together with
-# no warning.
+# no warning. That cap bug already shipped one wrong edge count (see the audit
+# doc's v3 note), so hitting the limit is an ERROR, not a nit: the oldest PRs
+# are the likeliest blame TARGETS, and losing them sheds edges silently.
 gh pr list --repo "$REPO" --state merged --limit 1000 \
   --json number,title,mergedAt,mergeCommit,headRefName,additions,deletions,changedFiles \
   > "$WORK/prs_merged.json"
+npr=$(jq 'length' "$WORK/prs_merged.json")
+if [ "$npr" -ge 1000 ]; then
+  echo "ERROR: gh pr list returned $npr rows — the --limit cap is hit and the" >&2
+  echo "       OLDEST merged PRs are silently missing. Raise the limit before" >&2
+  echo "       trusting any number downstream (stage 2's PR set and stage 3's" >&2
+  echo "       commit->PR map both derive from this file)." >&2
+  exit 2
+fi
+echo "  $npr merged PRs fetched (cap 1000 not hit)"
 echo "  $(jq --arg s "$SINCE" --arg u "$UNTIL_TS" '[.[]|select(.mergedAt>$s and .mergedAt<$u)]|length' "$WORK/prs_merged.json") merged in $SINCE..$UNTIL_TS"
 
 echo "fetching per-PR commit counts (slow — one API call per PR)..."

@@ -61,7 +61,18 @@ while IFS=$'\t' read -r pr sha mdate; do
   git rev-parse -q --verify "$base" >/dev/null 2>&1 || {
     printf '%s\t(base unresolvable)\t%s\n' "$pr" "$base" >> "$fails"; continue; }
 
-  git diff --unified=0 --no-color "$base" "$sha" -- 'crates/*.rs' 'web/src/*.ts' 2>/dev/null |
+  # Capture the diff and CHECK it. Piped straight into awk, a failed diff
+  # (missing object -> exit 128) reads as empty input: the PR contributes zero
+  # edges, lands in no failure file, and the "INCOMPLETE" warning stays quiet —
+  # the silent-truncation class this script exists to ban.
+  # -w matches blame's -w below: whitespace-only churn is not rework. Without
+  # it a rustfmt-style sweep diffs whole blocks as deletions while -w blame
+  # attributes those lines to their ORIGINAL authors — a fake rework spike
+  # against old PRs for a semantic no-op.
+  if ! git diff --unified=0 --no-color -w "$base" "$sha" -- 'crates/*.rs' 'web/src/*.ts' \
+       > "$WORK/.diff.tmp" 2>/dev/null; then
+    printf '%s\t(git diff failed)\t%s..%s\n' "$pr" "$base" "$sha" >> "$fails"; continue
+  fi
   awk '
     /^--- a\// { f=substr($0,7); next }
     /^\+\+\+ /  { next }
@@ -69,7 +80,7 @@ while IFS=$'\t' read -r pr sha mdate; do
       match($0, /-[0-9]+(,[0-9]+)?/); spec=substr($0,RSTART+1,RLENGTH-1)
       split(spec,a,","); st=a[1]; cn=(length(a)>1?a[2]:1)
       if (cn>0 && f!="") print f "\t" st "\t" cn
-    }' |
+    }' "$WORK/.diff.tmp" |
   while IFS=$'\t' read -r f st cn; do
     en=$((st+cn-1))
     blame=$(git blame -w --line-porcelain -L "${st},${en}" "$base" -- "$f" 2>/dev/null) || {
@@ -86,6 +97,7 @@ while IFS=$'\t' read -r pr sha mdate; do
       done
   done
 done
+rm -f "$WORK/.diff.tmp"
 nf=$(wc -l < "$fails")
 echo "rework edges: $(wc -l < "$out")"
 # Loud, not silent: a truncated dataset that reports itself is recoverable; one

@@ -17,16 +17,27 @@
 #   rebase  -> N commits on main. `sha~N` is correct.
 #   merge   -> a 2-parent commit; the PR's work is sha^1..sha^2.
 #
-# Measured on this corpus: trusting `sha~N` blindly gave a wrong range for
-# **48 of 218 in-window PRs (22%)**, and the error was size-correlated (17% of
-# PRs under 400 adds, 34% of those over) — i.e. biased in the same direction as
-# the size finding the audit publishes. Do not reintroduce it.
+# Measured on this corpus (probe-v2-defect.sh): trusting `sha~N` blindly gives
+# a wrong range for **50 of 221 in-window PRs (22%)**, and the error is
+# size-correlated (17% of PRs under 400 adds, 33% of those over) — i.e. biased
+# in the same direction as the size finding the audit publishes. Do not
+# reintroduce it.
 #
 # The fix: walk back from the merge commit but STOP at the first commit that
 # belongs to a different PR. A boundary commit is one whose subject announces a
 # PR — either `Merge pull request #N` or a trailing `(#N)`. For a squash merge
 # the very next commit back is another PR's boundary, so the walk stops at
 # depth 1, which is correct.
+#
+# But a trailing `(#N)` is exactly the regex that mistake 3 (see README) says
+# cannot distinguish PR refs from ISSUE refs — this project writes issue
+# numbers into subjects, and that error once mis-attributed 35% of commits. An
+# intermediate commit of a rebase-merged PR whose subject happens to end in
+# `(#<issue>)` would read as another PR's boundary and silently truncate the
+# range (the v1 too-narrow defect, returning). So a trailing `(#N)` only counts
+# as a boundary if N is an actual merged-PR number from prs_merged.json; the
+# `Merge pull request #N` form needs no such check because nothing writes issue
+# refs in that shape. Rejected candidates are logged, not silently skipped.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 WORK="${WORK:-./audit-work}"
@@ -36,19 +47,31 @@ cd "$REPO_DIR"
 declare -A NCOM
 while IFS=$'\t' read -r pr c; do NCOM[$pr]=$c; done < "$WORK/pr_commits.tsv"
 
+# Known merged-PR numbers: the referee for the ambiguous `(#N)` form. Complete
+# as long as stage 1's --limit was not hit, which stage 1 now checks.
+declare -A ISPR
+while read -r n; do ISPR[$n]=1; done < <(jq -r '.[].number' "$WORK/prs_merged.json")
+
 # Which PR does a commit's own subject announce, if any? Empty = not a boundary.
+# A trailing `(#N)` where N is not a known merged PR is an issue ref, not a
+# boundary — announce the rejection on fd 3 so the caller can count it.
 boundary_pr() {
   local subj="$1"
   if [[ "$subj" =~ ^Merge\ pull\ request\ \#([0-9]+) ]]; then
     echo "${BASH_REMATCH[1]}"
   elif [[ "$subj" =~ \(#([0-9]+)\)[[:space:]]*$ ]]; then
-    echo "${BASH_REMATCH[1]}"
+    if [ -n "${ISPR[${BASH_REMATCH[1]}]:-}" ]; then
+      echo "${BASH_REMATCH[1]}"
+    else
+      echo "issue-ref (#${BASH_REMATCH[1]}) not a merged PR: ${subj:0:60}" >&3
+    fi
   fi
 }
 
 : > "$WORK/pr_base.tsv"
 : > "$WORK/.c2p.raw"
 : > "$WORK/range_unverified.txt"
+exec 3> "$WORK/issue_ref_skips.txt"
 overwalks=0
 caphits=0
 
@@ -111,10 +134,17 @@ sort -k1,1 -k2,2n "$WORK/.c2p.raw" | awk -F'\t' '{m[$1]=$2} END{for(k in m) prin
   > "$WORK/commit2pr.tsv"
 rm -f "$WORK/.c2p.raw"
 
+exec 3>&-
 echo "pr_base entries : $(wc -l < "$WORK/pr_base.tsv")"
 echo "commit2pr       : $(wc -l < "$WORK/commit2pr.tsv")"
 echo "walks truncated at another PR's boundary: $overwalks"
 echo "  (each of these would have been an over-wide range under a bare sha~N)"
+skips=$(wc -l < "$WORK/issue_ref_skips.txt")
+if [ "$skips" -gt 0 ]; then
+  echo "trailing (#N) refs rejected as issue refs, walk continued: $skips"
+  echo "  (each would have silently truncated a range if trusted as a boundary;"
+  echo "   listed in $WORK/issue_ref_skips.txt)"
+fi
 if [ "$caphits" -gt 0 ]; then
   echo "NOTE: $caphits PR(s) resolved to a base that announces no other PR, so the"
   echo "      range could not be confirmed as ending at the previous PR's boundary."

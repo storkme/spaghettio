@@ -10,9 +10,9 @@ it, using the checked-in pipeline at
 reproduces the **blame-edge, age and size-bucket** figures exactly — the ones
 the norm rests on. It does not regenerate the hand-classified parts (corrective
 rate, latency bands, the within-PR complexity control, concurrency); those live
-only in this doc. Its README also records the two measurement defects
-(truncated diff range, issue-numbers-read-as-PR-numbers) that made the first
-version of these numbers wrong.
+only in this doc. Its README also records the measurement defects — a
+truncated diff range, an over-wide one, issue numbers read as PR numbers —
+that made earlier versions of these numbers wrong.
 
 Motivating question from the owner: PR churn feels like it's rising — is the
 model getting worse, or is the code getting harder to work in?
@@ -25,10 +25,10 @@ before the numbers below were trustworthy (see [Method](#method)).
 
 | Measure | Value |
 |---|---|
-| PRs opened / merged | 232 / 218 |
-| Blame-paired rework edges | 1,999 |
-| Median rework lag | 2 days (60% within 3) |
-| Share of rework from PRs ≥400 added lines | **90.1%** (from 36% of the bucket population) |
+| PRs opened / merged | 237 / 221 |
+| Blame-paired rework edges | 2,022 |
+| Median rework lag | 1 day (61% within 3) |
+| Share of the bucket population's rework from PRs ≥400 added lines | **89.3%** (from 36% of that population) |
 | Corrective-PR rate | flat 20–30% since April; 12% in Aug wk0 |
 
 ### Rework per 100 added lines, by PR size
@@ -36,26 +36,28 @@ before the numbers below were trustworthy (see [Method](#method)).
 | Bucket | n | Mean of per-PR rates | Pooled (Σrework/Σadds) |
 |---|---:|---:|---:|
 | <100 adds | 42 | 1.6 | 2.1 |
-| 100–400 | 84 | 2.6 | 2.5 |
-| 400–1k | 42 | 6.1 | 6.1 |
-| **>1k** | 29 | 6.0 | 3.8 |
+| 100–400 | 84 | 2.5 | 2.4 |
+| 400–1k | 42 | 4.7 | 4.6 |
+| **>1k** | 29 | 5.7 | 3.6 |
 
 **What is robust:** the rate rises across the first three buckets under *both*
-statistics — roughly 4× from <100 to 400–1k (1.6→6.1 mean, 2.1→6.1 pooled).
-That carries the norm, whose threshold is 400.
+statistics — ≈3× from <100 to 400–1k on the per-PR mean (1.6→4.7), ≈2×
+pooled (2.1→4.6). That carries the norm, whose threshold is 400.
 
-**What is not:** the climb does not continue past 1k. Both statistics fall
-across the 400–1k → >1k step (mean 6.1 → 6.0, pooled 6.1 → 3.8), so >1k is
-**not** measured as worse than 400–1k.
+**What is not:** the >1k step. The two statistics disagree in *direction*
+there (mean 4.7 → 5.7, pooled 4.6 → 3.6), and the bucket has flipped under
+every measurement correction so far (fell in v1, climbed in v2, fell in v3,
+splits in v4 — see [Method](#method)).
 
-Do not read that as a ceiling. The step is **confounded by right-censoring**:
+Do not read any of that as a ceiling. The step is **confounded by
+right-censoring**:
 an edge exists only when the *reworker* is inside the window, so a PR merged
 near 08-09 accrues almost no rework regardless of its size, and stage 4 divides
 that near-zero by its full additions. Any bucket whose PRs cluster late is
 deflated. The floor-effect reading (largest PRs are often standalone new
 subsystems with less existing code to collide with) is plausible but this
 pipeline cannot distinguish it from truncation — only the left-censoring was
-previously acknowledged. Treat >1k as unmeasured, not as flat.
+previously acknowledged. Treat >1k as unmeasured, in either direction.
 
 > **Denominators.** `04-analyze.sh` prints these; do not hand-derive them.
 > The per-PR pull (`review_rounds.tsv`) covers **220** PRs merged 2026-07-20 →
@@ -146,47 +148,64 @@ commit mapped back to its PR.
    Rebuilt from authoritative per-PR commit ranges: **35% of commits (322 of
    907) had been mis-attributed**.
 
-Effect of correcting both:
+Effect of correcting both, and of the two later review-caught fixes (v4):
 
-| Measure | v1 | v2 | **v3 (current)** |
-|---|---:|---:|---:|
-| Edges | 1,639 | 3,114 | **1,999** |
-| Median lag | 1d | 2d | **2d** |
-| Within 3 days | 61% | 57% | **60%** |
-| Rate <100 adds | 1.6 | 1.4 | **1.6** |
-| Rate 400–1k | 6.3 | 8.5 | **6.1** |
-| Rate >1k adds | 5.7 | 10.5 | **6.0** |
-| Large-PR share | 89.7% | 93.2% | **90.1%** |
+| Measure | v1 | v2 | v3 | **v4 (current)** |
+|---|---:|---:|---:|---:|
+| Edges | 1,639 | 3,114 | 1,999 | **2,022** |
+| Median lag | 1d | 2d | 2d | **1d** |
+| Within 3 days | 61% | 57% | 60% | **61%** |
+| Rate <100 adds | 1.6 | 1.4 | 1.6 | **1.6** |
+| Rate 400–1k | 6.3 | 8.5 | 6.1 | **4.7** |
+| Rate >1k adds | 5.7 | 10.5 | 6.0 | **5.7** |
+| Large-PR share | 89.7% | 93.2% | 90.1% | **89.3%** |
 
-These v3 figures are the **checked-in pipeline's own output**, regenerated
-end-to-end from scratch rather than from any surviving intermediate. An earlier
-draft of v3 quoted 1,841 edges and 1.6/2.7/6.3; those came from reusing a
-`prs_merged.json` capped at 300 PRs, which silently dropped blame hits whose
-target PR fell outside the cap. Raising the cap resolves those, which is why the
-edge count rises and the age tail lengthens (p90 9 → 80 days): rework of older
-PRs was previously invisible, not absent.
+These v4 figures are the **checked-in pipeline's own output**, regenerated
+end-to-end from scratch rather than from any surviving intermediate. (An
+earlier draft of v3 quoted 1,841 edges and 1.6/2.7/6.3; those came from
+reusing a `prs_merged.json` capped at 300 PRs, which silently dropped blame
+hits whose target PR fell outside the cap. Raising the cap is why the edge
+count rose and the age tail lengthened (p90 9 → 80 days): rework of older PRs
+was previously invisible, not absent.)
+
+**v4 is v3 plus two fixes caught in this PR's own review.** First, the
+boundary walk now validates a trailing `(#N)` against the merged-PR list —
+defect 2's issue-ref regex had re-entered through the walk and truncated the
+range of #317, the very PR defect 1 was measured on. Isolated, that fix moved
+almost nothing (edges 1,999 → 2,005). Second, the diff now passes `-w` to
+match the blame's `-w`, so whitespace-only churn no longer counts as rework —
+and that is what moved the numbers: the 400–1k bucket drops 6.1 → 4.7,
+meaning roughly a quarter of that bucket's previously-counted rework was
+whitespace-only lines.
 
 **v2 was the outlier, and v2 is what was originally published here.** Replacing
 `sha^1..sha` with a bare `sha~N..sha` fixed a too-narrow range by introducing a
 too-wide one: `gh` reports the PR *branch's* commit count, but a squash-merged
 PR contributes only one commit to main, so `sha~N` walks N−1 commits back into
-earlier PRs. Measured: **48 of 218 in-window PRs (22%)**, and size-correlated
-(17% under 400 adds, 34% over) — biased in the same direction as the finding.
+earlier PRs. Measured (`probe-v2-defect.sh`): **50 of 221 in-window PRs
+(22%)**, and size-correlated (17% under 400 adds, 33% over) — biased in the
+same direction as the finding.
 v3 resolves each range by walking back only until it meets a commit announcing
 a different PR, which handles squash, rebase and merge commits alike. It lands
 almost exactly on v1, whose two errors had partially cancelled.
 
-The size finding survives all three versions: the ~4× climb from <100 to
-400–1k, and large PRs producing ~90% of rework, are present in v1 and v3 and
-exaggerated in v2. What did *not* survive is v2's claim that the top bucket
-keeps climbing — under v3 it falls, and the floor-effect reading I originally
-gave in v1 (and then retracted) turns out to have been right.
+The size finding survives all four versions: the climb from <100 to 400–1k,
+and large PRs producing ~90% of rework, are present in every one and
+exaggerated in v2. What survives *no* pair of versions is the top bucket: it
+falls in v1, climbs in v2, falls in v3, and splits in v4 (mean up, pooled
+down). A bucket that changes direction under every measurement correction is
+telling you it is unmeasured, not what its value is.
 
 ### Caveats
 
 - **Rework ≠ defect.** A sampled classification of 85 PR-pairs splits edges
   ~57% planned iteration / 23% genuine correction / 20% collision. Absolute
   edge counts overstate churn; the size finding is ratio-based and survives.
+- **Lag figures are edge-weighted.** The median/percentile lag and "within 3
+  days" are computed over (hunk × origin-commit) rows, each counting once
+  regardless of how many lines it carries; the edge total and bucket rates are
+  line-based. The two weightings answer slightly different questions and have
+  not been cross-checked against each other.
 - **Size and difficulty are confounded.** Large PRs may be large because the
   work is harder. Per-line normalization controls for volume, not difficulty.
 - **One signal is unresolved.** The rate at which the owner pushes back *in
@@ -214,8 +233,10 @@ Ranked by expected value, not yet actioned:
 3. **Review-bot reliability.** The single most systemic complaint in the
    conversation record — 8 distinct sessions, more than any other theme —
    plus 9 of the 13 closed-unmerged PRs are skip-guard duplicates or
-   stacked-PR orphans, meaning ~4% of the "232 PRs" figure is the same work
-   re-counted. (232 = 218 merged + 13 closed + 1 open.)
+   stacked-PR orphans, meaning ~4% of the "237 PRs" figure is the same work
+   re-counted. (237 = 221 merged + 13 closed-unmerged + 3 open at close-out;
+   the merged count is stage 1's, the other two are `gh pr list` snapshots
+   taken 2026-08-09.)
 4. **Turnaround guardrail on large PRs**, not a concurrency cap. Concurrency
    is a threshold effect on one day (Jul 22 carries 31% of all reworked lines;
    dropping it collapses the day-level correlation from 0.318 to 0.145), and

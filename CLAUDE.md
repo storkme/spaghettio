@@ -59,11 +59,12 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   the multiple concurrent Claude sessions that share this repo.
 - **Keep a PR under ~400 added lines.** This is the strongest predictor of
   *rework* we have measured. Across the 197 PRs merged **2026-07-20 → 08-09**
-  with >20 added lines, rework per 100 added lines ran 1.6 (<100 adds) · 2.6
-  (100–400) · **6.1 (400–1k)** — a ~4× rise holding under both per-PR and
-  pooled averaging — and PRs ≥400 adds, 36% of that population, accounted for **90% of
-  all rework**. Above 1k it stops rising (6.0 mean / 3.8 pooled) — but that step
-  is confounded by right-censoring, so read 400 as "where the climb is measured
+  with >20 added lines, rework per 100 added lines climbed with size under
+  both averagings — per-PR mean 1.6 (<100 adds) · 2.5 (100–400) · **4.7
+  (400–1k)**, pooled 2.1 · 2.4 · **4.6** (≈3× and ≈2×) — and PRs ≥400 adds,
+  36% of that population, accounted for **89% of its rework**. Above 1k the
+  two averagings disagree in direction (mean 5.7, pooled 3.6) and the step is
+  confounded by right-censoring, so read 400 as "where the climb is measured
   to happen", not as a ceiling. Denominators and caveats:
   [audit](docs/pr-churn-audit-2026-08.md).
   - Read "rework" literally — a later PR rewriting an earlier one's lines. A

@@ -2,10 +2,10 @@
 # Stage 4: the numbers CLAUDE.md's change-size norm rests on.
 #
 # Prints BOTH averaging methods for the size buckets. They agree across the
-# first three (which is why the norm's threshold is 400) and also on the top
-# one, where both FALL past 1k (mean 6.1 -> 6.0, pooled 6.1 -> 3.8). Quote both
-# anyway: an earlier over-wide-range artifact made them appear to diverge there,
-# and printing one alone is how that went unnoticed.
+# first three (which is why the norm's threshold is 400) and DISAGREE in
+# direction on the top one — the top bucket has flipped in every version of
+# this dataset and is right-censored besides, so neither figure may be quoted
+# alone there. Printing one alone is how that went unnoticed the first time.
 #
 # `reworked_totals` is keyed by the REWORKED pr (column 2) and divided by that
 # PR's own additions: the figure is "how much of what this PR wrote did not
@@ -18,19 +18,25 @@ WORK="${WORK:-./audit-work}"
 awk -F'\t' '{t[$2]+=$5} END{for(k in t) print k"\t"t[k]}' "$WORK/rework_edges.tsv" \
   > "$WORK/reworked_totals.tsv"
 
-# Population reconciliation FIRST, and asserted. Every denominator dispute in
+# Population reconciliation FIRST, computed ONCE. Every denominator dispute in
 # this pipeline's review history came from a number hand-copied into prose and
-# then not updated with its siblings. Print them together so they cannot drift,
-# and fail loudly if the bucket rows do not sum to the population they cite.
+# then not updated with its siblings. These three variables are the only place
+# the populations are derived; the bucket table asserts against $pop below, so
+# an edit that changes one filter and not the other fails the run instead of
+# shipping a table that disagrees with its own caption.
+tot=$(awk -F'\t' 'NR>1{n++}          END{print n+0}' "$WORK/review_rounds.tsv")
+pop=$(awk -F'\t' 'NR>1 && $6>20{n++} END{print n+0}' "$WORK/review_rounds.tsv")
+big=$(awk -F'\t' 'NR>1 && $6>=400{n++} END{print n+0}' "$WORK/review_rounds.tsv")
+[ "$pop" -gt 0 ] || {
+  echo "ERROR: bucket population is empty — review_rounds.tsv missing or unfiltered." >&2; exit 3; }
 echo "=== population (cite these, do not hand-derive them)"
-awk -F'\t' 'NR>1 {tot++; if($6>20) pop++; if($6>=400) big++}
-  END{
+awk -v tot="$tot" -v pop="$pop" -v big="$big" 'BEGIN{
     printf "  review_rounds rows (unfiltered) : %d\n", tot
     printf "  bucket population (>20 adds)    : %d\n", pop
     printf "  of those, >=400 adds            : %d  (%.0f%% of the bucket population)\n", big, 100*big/pop
     printf "  NB %d/%d = %.0f%% is the UNFILTERED share — quoting it against the\n", big, tot, 100*big/tot
     printf "     bucket population is the mixed-denominator trap. Pick one base.\n"
-  }' "$WORK/review_rounds.tsv"
+  }'
 
 echo
 echo "=== rework age distribution (all edges)"
@@ -46,7 +52,7 @@ echo "    NOTE the numerator is Rust/TS rework only (crates/*.rs, web/src/*.ts),
 echo "    while the denominator is GitHub's TOTAL additions across all files."
 echo "    Consistent across buckets, so the comparison holds — but it is not"
 echo "    literally 'per 100 added lines'."
-awk -F'\t' -v T="$WORK/reworked_totals.tsv" '
+awk -F'\t' -v T="$WORK/reworked_totals.tsv" -v POP="$pop" '
   BEGIN{ while((getline l < T)>0){ split(l,p,"\t"); rw[p[1]]=p[2] } }
   FNR>1 && $6>20 {
     adds=$6+0; r=(rw[$1]+0); rate=100*r/adds
@@ -61,25 +67,33 @@ awk -F'\t' -v T="$WORK/reworked_totals.tsv" '
     # sorted the header too — it begins with "b", so it landed BELOW the four
     # numbered rows it labels. That shipped once and was caught in review after
     # I had already quoted the output as verification.
-    nb=0
-    for(b in n) rows[++nb]=sprintf("  %-11s %4d %14.1f %10.1f", b, n[b], s[b]/n[b], 100*tr[b]/ta[b])
+    nb=0; sum=0
+    for(b in n){ rows[++nb]=sprintf("  %-11s %4d %14.1f %10.1f", b, n[b], s[b]/n[b], 100*tr[b]/ta[b]); sum+=n[b] }
     for(i=1;i<nb;i++) for(j=i+1;j<=nb;j++) if(rows[j]<rows[i]){t=rows[i];rows[i]=rows[j];rows[j]=t}
     printf "  %-11s %4s %14s %10s\n","bucket","n","mean-of-rates","pooled"
     for(i=1;i<=nb;i++) print rows[i]
+    # Assert, not narrate: the rows must sum to the population the caption
+    # cites. Guards the drift where someone edits one filter and not the other.
+    if (sum != POP) {
+      printf "ERROR: bucket rows sum to %d but the stated population is %d\n", sum, POP > "/dev/stderr"
+      exit 3
+    }
+    printf "  (rows above sum to %d, the bucket population)\n", sum
   }' "$WORK/review_rounds.tsv"
 
-# Assertion: the four bucket rows must account for exactly the population.
-awk -F'\t' 'NR>1 && $6>20 {n++} END{exit (n>0 ? 0 : 1)}' "$WORK/review_rounds.tsv" || {
-  echo "ERROR: bucket population is empty — review_rounds.tsv missing or unfiltered." >&2; exit 3; }
-sum=$(awk -F'\t' 'NR>1 && $6>20 {n++} END{print n+0}' "$WORK/review_rounds.tsv")
-echo "  (rows above sum to $sum, the bucket population)"
-
 echo
-echo "=== share of all rework, by originating PR size"
+echo "=== share of rework, by originating PR size"
+echo "    Both denominators, because prose keeps mixing them. The numerator is"
+echo "    identical (every >=400-add PR clears the >20 floor); only the base"
+echo "    changes. NB either way the denominator counts only rework of PRs in"
+echo "    review_rounds.tsv (merged from BUCKET_SINCE) — rework of code written"
+echo "    before that window is in the edge total but in neither share."
 awk -F'\t' -v T="$WORK/reworked_totals.tsv" '
   BEGIN{ while((getline l < T)>0){ split(l,p,"\t"); rw[p[1]]=p[2] } }
-  FNR>1 { r=(rw[$1]+0); if($6+0<400){sm+=r; sn++} else {lg+=r; ln++} }
-  END{ g=sm+lg
-       printf "  large (>=400 adds): PRs=%d  lines=%d  %.1f%%\n", ln, lg, 100*lg/g
-       printf "  small (<400 adds) : PRs=%d  lines=%d  %.1f%%\n", sn, sm, 100*sm/g }' \
+  FNR>1 { r=(rw[$1]+0); g+=r
+          if($6+0>=400){lg+=r; ln++}
+          if($6+0>20){ gp+=r; if($6+0>=400) np++ } }
+  END{ printf "  large (>=400 adds): PRs=%d  lines=%d\n", ln, lg
+       printf "    of the bucket population(>20 adds) rework: %.1f%%\n", 100*lg/gp
+       printf "    of all review_rounds rework (unfiltered) : %.1f%%\n", 100*lg/g }' \
   "$WORK/review_rounds.tsv"
