@@ -7,7 +7,7 @@
 The repo carries two independent Python→Rust ports of the same belt-graph
 lane-rate walk, `belt_flow::compute_lane_rates_impl` and
 `belt_structural::compute_lane_rates`. They disagree on **58% of tile slots**, and
-`validate/mod.rs:941-942` dispatches two adjacent checks that each believe a
+`validate/mod.rs:1079-1080` dispatches two adjacent checks that each believe a
 different one. The dispatched `lane-throughput` — `Severity::Error`, and
 selection-participating — reads ~0.0/s on 112,407 tiles where the other model sees
 real flow, because its walker never seeds external inputs. It fires on 5 of 504
@@ -32,12 +32,12 @@ Reproducible today, with numbers rather than reasoning. Across 504 layouts
 |---|---|
 | tile slots where the two walkers disagree >0.01/s | **134,702 / 233,441 (58%)** |
 | tiles where the DISPATCHED model reads ~0.0/s and the other sees flow | **112,407** |
-| — by segment | 57,649 `row:`, 28,859 `trunk:`, 10,588 `ghost:`, 5,661 `di-row:`, 3,959 `crossing:` |
+| — by segment (all, sums to the total) | 57,649 `row:`, 28,859 `trunk:`, 10,588 `ghost:`, 5,661 `di-row:`, 3,959 `crossing:`, 2,452 `feed:`, 1,981 `balancer:`, 872 `corr:`, 327 untagged, 59 `tapoff:` |
 | `lane-throughput` firings, dispatched model | **5 of 504 layouts** |
 | same check under the other model | **176 of 504 layouts** |
 
 **Why the dispatched model reads zero.** `belt_flow::compute_lane_rates_impl`
-seeds graph-source belts carrying external inputs (`belt_flow.rs:2639-2688`), and
+seeds graph-source belts carrying external inputs (`belt_flow.rs:2623-2688`), and
 says why in its own comment:
 
 > *"without this seeding, rate propagation starts at 0 and every downstream
@@ -48,18 +48,27 @@ says why in its own comment:
 and no external-input onramp. An unseeded graph *source* propagates zeros to
 everything downstream of it, which is every segment category on the input side.
 
-**This is a named, parked suspect, not a new discovery.**
-`docs/handoff-meter-as-gate-2026-08-07.md` §2d already identifies it, then parks
-it: `belt_flow`'s over-cap prediction implied a ~17% throttle where the fixture
-measured ~50%, the wrong order of magnitude to be the cause. §2e then undercuts
-that reasoning — post-lift those fixtures measure **~90–92%**, an ~8–10%
-shortfall, *"now the same order as that prediction"* — and concludes it is
-*"worth re-examining alongside §2b rather than staying parked"*.
-`docs/rate-stamp-semantics.md` independently reached "arbitrate them" as the
-highest-value follow-up.
+**This is a named suspect for a measured deficit, not a new discovery.**
+Both halves are recorded in committed docs:
 
-So: a measured, unexplained ~10% deficit, with a suspect shelved on reasoning that
-no longer holds.
+- `docs/status.md` (stress-EC entry): the two stress fixtures re-measured
+  post-lift land at **92.1%** and **90.7%** delivered, and *"a real ~8-10%
+  residual remains on both"*. `tier2_electronic_circuit` went 58% → 91% with a
+  residual that is *uniform* across both stages (copper-cable 90.0%, EC 90.9%) —
+  by the `sim-harness-forensics.md` reading, a SHARED constraint rather than one
+  stage bottlenecking.
+- `docs/rate-stamp-semantics.md` §"the disagreement is unresolved and it matters"
+  independently identifies the same two-walker split, notes the dispatched model
+  *"reports 0 tiles over capacity in every arm"* where `belt_flow` flags the S=1
+  arms, and concludes that **arbitrating the two models** is the follow-up.
+  (That doc cites the dispatch at `validate/mod.rs:939`; at this RFC's base the
+  line is 1079 — the code moved, the claim did not.)
+
+So: a measured, unexplained ~8–10% residual, with a named suspect that no one has
+arbitrated. A local, uncommitted session handoff
+(`handoff-meter-as-gate-2026-08-07.md`) also covers this ground and is where I
+first read it, but it is **not in the repo** — nothing in this RFC depends on it,
+and the two committed sources above carry the argument.
 
 ## Design
 
@@ -126,8 +135,12 @@ dropped.
    `ghost:flow:...:ret`) reaches **5730/s and 5735/s** on a yellow belt, against
    the convergence pass's own documented invariant that splitters damp cycle gain
    by 0.5 per pass. Bounded by `budget = 3 * segment_count`
-   (`belt_flow.rs:2610`) — large-but-finite, not divergent. Repro:
-   `probe_walker_shape.rs -- sci2`, tiles (44,30)/(45,30).
+   (`belt_flow.rs:2610`) — large-but-finite, not divergent. Observed on
+   `logistic-science-pack@5/s` / am2 / yellow / `di=Forced`, tiles (44,30) and
+   (45,30), which carry segments `di-row:copper-cable:electronic-circuit` and
+   `ghost:flow:electronic-circuit:3:ret:30`. Reproduce by calling
+   `belt_flow::compute_lane_rates` on that layout and reading those two tiles;
+   the probe used is local-only, since `crates/core/examples/` is gitignored.
    **Measured share: 32 of 1,563 over-cap readings (2.0%).** Fixing this alone
    does *not* shrink the blast radius.
 2. **Cap-side splitter mapping.** Above. Fixed by harvest.
@@ -142,9 +155,23 @@ dropped.
   splitter tier mapping in `check_lane_throughput`.
 - `crates/core/src/validate/belt_structural.rs` — delete `compute_lane_rates`,
   `classify_belt_feeders`, `FeedType`, `check_lane_throughput`, and their tests.
-- `crates/core/src/validate/mod.rs` — dispatch `belt_flow::check_lane_throughput`.
+- `crates/core/src/validate/mod.rs` — dispatch `belt_flow::check_lane_throughput`
+  (currently line 1079).
 - `crates/core/src/bus/template_validate.rs` — unchanged (already on `belt_flow`).
 - New: a shadow-mode divergence log, removed before final landing.
+
+**Other consumers the delete breaks** — enumerated because "delete the loser"
+reads as a two-file change and is not:
+
+- `crates/core/tests/e2e.rs:3071` — the stress scoreboard registers
+  `("lane_throughput", … belt_structural::check_lane_throughput …)`. It must be
+  re-pointed, **and its baselines re-blessed**: the flip moves this scoreboard from
+  the model that fires on 5 of 504 layouts to the one that fires on 176. Treat any
+  scoreboard delta as expected-but-must-be-explained, per
+  `SPAGHETTIO_STRESS_GOLDEN=check/bless`.
+- Rustdoc cross-references at `crates/core/src/models.rs:253` and
+  `crates/core/src/validate/inserters.rs:976` both name
+  `belt_structural::check_lane_throughput` and would dangle.
 
 ### Alternatives considered and rejected
 
@@ -189,7 +216,11 @@ quiet is not evidence the problem is fixed."* Since this RFC's whole subject is 
 check that went quiet, every claim below is a count, not a sample.
 
 1. **Full e2e suite green** — `cargo test --manifest-path crates/core/Cargo.toml`.
-   Counts quoted from one clean invocation, never summed across runs.
+   Counts quoted from one clean invocation, never summed across runs. The stress
+   scoreboard needs an explicit re-bless at the flip (Phase 3), not a silent one:
+   the `lane_throughput` row is expected to move from the 5-of-504 model to the
+   176-of-504 model, and every delta should be attributable to a divergence
+   already triaged in Phase 2's shadow log.
 2. **Per-lane oracle anchor (Phase 0)** — the #607 fixture, meter per-lane
    crossings vs the known sim per-lane state.
 3. **Arbitration table** — for each corpus fixture, both walkers' per-lane
@@ -237,3 +268,18 @@ check that went quiet, every claim below is a count, not a sample.
 - *2026-08-09 — same measurement surfaced the cap-side splitter-mapping defect in
   `belt_flow::check_lane_throughput`, i.e. the winner is not strictly better than
   the loser. Added "harvest before delete" to the design.*
+- *2026-08-09 — review pass (#615, `second-opinion`) landed five findings, all
+  valid, all fixed in the same PR. The material one: the original draft rested its
+  "named, parked suspect" argument on `handoff-meter-as-gate-2026-08-07.md`, which
+  is **not committed** — an untracked local file. Re-pointed to `docs/status.md`
+  (post-lift 92.1% / 90.7%, "a real ~8-10% residual remains on both") and
+  `docs/rate-stamp-semantics.md` (same two-walker split, same "arbitrate them"
+  conclusion), so nothing load-bearing depends on an unreadable source. Also fixed:
+  a stale `mod.rs:941-942` dispatch citation (correct line is 1079 — the original
+  was read from a shared checkout that was both behind `origin/main` and carrying
+  another session's staged edit to that file, which is exactly the "docs from the
+  PR base, not the live checkout" trap); the segment breakdown not summing to its
+  own total (top-5 presented as if complete — now all ten, summing to 112,407); an
+  unreproducible repro pointing at a gitignored probe; and the delete plan omitting
+  `e2e.rs:3071` plus two rustdoc cross-refs, and the scoreboard re-bless the flip
+  requires.*
