@@ -48,27 +48,42 @@ says why in its own comment:
 and no external-input onramp. An unseeded graph *source* propagates zeros to
 everything downstream of it, which is every segment category on the input side.
 
-**This is a named suspect for a measured deficit, not a new discovery.**
-Both halves are recorded in committed docs:
+**The primary justification stands alone and does not depend on any deficit.**
+An `Error`-severity, selection-participating check is running on one of two
+models that have never been arbitrated, and that model reads ~0.0/s across
+roughly half the belt graph. `docs/rate-stamp-semantics.md` §"the disagreement is
+unresolved and it matters" reaches the same place independently: it identifies the
+same split, notes the dispatched model *"reports 0 tiles over capacity in every
+arm"* where `belt_flow` flags the S=1 arms, and names **arbitrating the two
+models** as the follow-up. (That doc cites the dispatch at `validate/mod.rs:939`;
+at this RFC's base the line is 1079 — the code moved, the claim did not.)
 
-- `docs/status.md` (stress-EC entry): the two stress fixtures re-measured
-  post-lift land at **92.1%** and **90.7%** delivered, and *"a real ~8-10%
-  residual remains on both"*. `tier2_electronic_circuit` went 58% → 91% with a
-  residual that is *uniform* across both stages (copper-cable 90.0%, EC 90.9%) —
-  by the `sim-harness-forensics.md` reading, a SHARED constraint rather than one
-  stage bottlenecking.
-- `docs/rate-stamp-semantics.md` §"the disagreement is unresolved and it matters"
-  independently identifies the same two-walker split, notes the dispatched model
-  *"reports 0 tiles over capacity in every arm"* where `belt_flow` flags the S=1
-  arms, and concludes that **arbitrating the two models** is the follow-up.
-  (That doc cites the dispatch at `validate/mod.rs:939`; at this RFC's base the
-  line is 1079 — the code moved, the claim did not.)
+**Secondary, and deliberately stated weakly: the open residual.** `docs/status.md`
+records the two stress-EC fixtures re-measured post-lift at **92.1%** and
+**90.7%** delivered, with *"a real ~8-10% residual remains on both"*, root cause
+not chased. That residual is **not** claimed here as caused by the walker split —
+`status.md` currently attributes it to zero-headroom integral machine counts (all
+four of those stages are exactly zero-headroom), which is a competing explanation
+this RFC does not displace. The third kill criterion exists precisely to settle
+that: if both walkers predict those fixtures equally badly, the deficit is
+elsewhere and this work is orthogonal to it.
 
-So: a measured, unexplained ~8–10% residual, with a named suspect that no one has
-arbitrated. A local, uncommitted session handoff
-(`handoff-meter-as-gate-2026-08-07.md`) also covers this ground and is where I
-first read it, but it is **not in the repo** — nothing in this RFC depends on it,
-and the two committed sources above carry the argument.
+**Explicitly NOT cited as motivation: `tier2_electronic_circuit`.** Its ~9–10%
+was root-caused in `status.md` (2026-08-08, #607/#608) to the `di-bridge`
+belt→belt transfer bank loading one lane only — ~21.4/s against 30/s of demand —
+and once #608 credited that belt honestly, selection ships the bus-lane variant,
+which measures **100.0% of plan** headless against the bridge's 90.9%. That entry
+carries an explicit *"do not cite the paragraph below for this fixture"*. It is a
+**solved** case.
+
+It is worth keeping for a different reason, though: it is direct evidence **for
+the oracle**. The meter caught that defect — nine of ten copper-cable machines
+saturated, the stage able to make plan, the binding constraint elsewhere — which
+is exactly the per-lane discrimination Phase 0 needs it to have.
+
+A local, uncommitted session handoff (`handoff-meter-as-gate-2026-08-07.md`)
+covers similar ground and is where I first read the framing, but it is **not in
+the repo** and nothing here depends on it.
 
 ## Design
 
@@ -171,7 +186,11 @@ reads as a two-file change and is not:
   `SPAGHETTIO_STRESS_GOLDEN=check/bless`.
 - Rustdoc cross-references at `crates/core/src/models.rs:253` and
   `crates/core/src/validate/inserters.rs:976` both name
-  `belt_structural::check_lane_throughput` and would dangle.
+  `belt_structural::check_lane_throughput` as intra-doc links and would dangle.
+- `crates/core/src/validate/mod.rs:432` — the `resolve_row_spec` doc comment
+  lists `belt_structural::compute_lane_rates` among the checks sharing it. This
+  one is a **plain-backtick** reference, not an intra-doc link, so rustdoc will
+  NOT flag it: it rots silently and must be cleaned by hand.
 
 ### Alternatives considered and rejected
 
@@ -283,3 +302,20 @@ check that went quiet, every claim below is a count, not a sample.
   unreproducible repro pointing at a gitignored probe; and the delete plan omitting
   `e2e.rs:3071` plus two rustdoc cross-refs, and the scoreboard re-bless the flip
   requires.*
+- *2026-08-09 — second review pass on #615 landed two more findings, both valid.
+  The substantive one: the motivation cited `tier2_electronic_circuit`'s ~9-10%
+  residual as an unexplained shared constraint, but `docs/status.md` marks that
+  attribution **superseded** (2026-08-08, #607/#608) — root-caused to the
+  `di-bridge` single-lane transfer bank, and the re-ranked layout now measures
+  100.0% of plan. The entry carries an explicit "do not cite the paragraph below
+  for this fixture", which this RFC did. Restructured the motivation as a result:
+  the primary justification (an Error-severity selection-participating check
+  running on an unarbitrated model that reads ~0.0/s across half the graph) stands
+  alone and needs no deficit at all; the stress-EC residual is demoted to
+  secondary and explicitly NOT claimed as caused by the walker split, since
+  `status.md` attributes it to zero-headroom and this RFC does not displace that.
+  tier2 is retained only as evidence FOR the oracle — the meter caught that
+  defect, which is the per-lane discrimination Phase 0 depends on. Second finding:
+  added `validate/mod.rs:432` to the consumers the delete breaks; unlike the two
+  intra-doc links, it is a plain-backtick doc-comment reference that rustdoc will
+  not flag, so it would rot silently.*
