@@ -57,6 +57,22 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   explicitly agreed for the task at hand. Work on a feature branch and open a
   PR to get code onto `main`. Besides review, this serializes `main` across
   the multiple concurrent Claude sessions that share this repo.
+- **Keep a PR under ~400 added lines.** This is the strongest predictor of
+  rework we have measured: over 2026-07-12 → 08-09, rework per 100 added lines
+  ran 1.4 (<100 adds) · 3.2 (100–400) · 8.5 (400–1k) · **10.5 (>1k)**, and the
+  32% of PRs above 400 adds produced **93% of all rework**
+  ([audit](docs/pr-churn-audit-2026-08.md)). The mechanism is claim surface
+  area, not carelessness — a big PR asserts more independently-falsifiable
+  things (several sim numbers, several fixtures, several corpus percentages)
+  than its verification actually covers, so one of them is wrong and a
+  different instrument finds it days later.
+  - Above ~400 added lines, **say in the PR body why it could not be split**.
+    "It's one RFC phase" is not a reason; phases are splittable into
+    scaffolding / behaviour / fixtures / docs.
+  - Generated, vendored, and pure-fixture files don't count toward the ceiling.
+  - This is a norm, not a gate — nothing blocks on it. It exists so that
+    "should I split this?" is a question you answer before opening the PR
+    rather than one nobody asks.
 - **Adversarial review before anything is commit-ready** — code *and*
   documentation. Preferred: the CI review bot —
   [`.github/workflows/second-opinion.yml`](.github/workflows/second-opinion.yml)
