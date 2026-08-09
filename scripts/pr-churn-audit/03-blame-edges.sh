@@ -46,7 +46,10 @@ while IFS=$'\t' read -r pr d; do PRDATE[$pr]=$d; done < <(
 declare -A BASE
 while IFS=$'\t' read -r pr b; do BASE[$pr]=$b; done < "$WORK/pr_base.tsv"
 
-epoch() { date -u -d "$1" +%s 2>/dev/null || echo 0; }
+# Empty on failure — callers CHECK and record, never default. The old
+# `|| echo 0` fallback would count an unparseable date as same-day rework
+# (age passes the -lt 0 guard at exactly 0) — silent corruption.
+epoch() { date -u -d "$1" +%s 2>/dev/null; }
 out="$WORK/rework_edges.tsv"; : > "$out"
 fails="$WORK/blame_failures.txt"; : > "$fails"
 
@@ -60,6 +63,9 @@ while IFS=$'\t' read -r pr sha mdate; do
   fi
   git rev-parse -q --verify "$base" >/dev/null 2>&1 || {
     printf '%s\t(base unresolvable)\t%s\n' "$pr" "$base" >> "$fails"; continue; }
+  me=$(epoch "$mdate")
+  [ -z "$me" ] && {
+    printf '%s\t(unparseable mergedAt)\t%s\n' "$pr" "$mdate" >> "$fails"; continue; }
 
   # Capture the diff and CHECK it. Piped straight into awk, a failed diff
   # (missing object -> exit 128) reads as empty input: the PR contributes zero
@@ -88,10 +94,17 @@ while IFS=$'\t' read -r pr sha mdate; do
     printf '%s' "$blame" |
       grep -oP '^[0-9a-f]{40}(?= )' | sort | uniq -c |
       while read -r nl bsha; do
+        # Not in the map = not introduced by any fetched merged PR (direct
+        # pushes, pre-PR history). Out of scope by design, not a failure —
+        # and stage 1 hard-errors if its fetch cap truncated the PR list, so
+        # "unmapped because the PR fell off the end" cannot happen silently.
         opr="${C2P[$bsha]:-}"; [ -z "$opr" ] && continue
         [ "$opr" = "$pr" ] && continue
         od="${PRDATE[$opr]:-}"; [ -z "$od" ] && continue
-        age=$(( ( $(epoch "$mdate") - $(epoch "$od") ) / 86400 ))
+        oe=$(epoch "$od")
+        [ -z "$oe" ] && {
+          printf '%s\t(unparseable origin date)\t%s\n' "$pr" "$od" >> "$fails"; continue; }
+        age=$(( (me - oe) / 86400 ))
         [ "$age" -lt 0 ] && continue
         printf '%s\t%s\t%s\t%s\t%s\n' "$pr" "$opr" "$f" "$age" "$nl" >> "$out"
       done

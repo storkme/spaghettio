@@ -14,11 +14,13 @@ cd "$(git rev-parse --show-toplevel)"
 declare -A NCOM BASE
 while IFS=$'\t' read -r pr c; do NCOM[$pr]=$c; done < "$WORK/pr_commits.tsv"
 while IFS=$'\t' read -r pr b; do BASE[$pr]=$b; done < "$WORK/pr_base.tsv"
-tot=0; wrong=0; small=0; wrong_small=0; big=0; wrong_big=0
+tot=0; wrong=0; small=0; wrong_small=0; big=0; wrong_big=0; skipped=0
 while IFS=$'\t' read -r pr sha adds; do
-  resolved="${BASE[$pr]:-}"; [ -z "$resolved" ] && continue
+  resolved="${BASE[$pr]:-}"
+  [ -z "$resolved" ] && { skipped=$((skipped+1)); continue; }
+  np=$(git rev-list --parents -n1 "$sha" 2>/dev/null | wc -w) || np=0
+  [ "$np" -eq 0 ] && { skipped=$((skipped+1)); continue; }
   tot=$((tot+1))
-  np=$(git rev-list --parents -n1 "$sha" 2>/dev/null | wc -w)
   if [ "$np" -ge 3 ]; then v2base="${sha}^1"
   else cap="${NCOM[$pr]:-1}"; [ "$cap" -lt 1 ] && cap=1; v2base="${sha}~${cap}"; fi
   v2=$(git rev-parse -q --verify "$v2base" 2>/dev/null || echo MISSING)
@@ -32,3 +34,10 @@ done < <(jq -r --arg s "$SINCE" --arg u "$UNTIL_TS" \
 echo "v2 range wrong: $wrong / $tot in-window PRs ($(( 100*wrong/tot ))%)"
 echo "  <400 adds : $wrong_small/$small ($(( 100*wrong_small/small ))%)"
 echo "  >=400 adds: $wrong_big/$big ($(( 100*wrong_big/big ))%)"
+echo "  (a disagreement rate between v2's heuristic and stage 2's resolution —"
+echo "   the walk is the better-validated heuristic, not ground truth)"
+if [ "$skipped" -gt 0 ]; then
+  echo "WARNING: $skipped in-window PR(s) skipped (no stage-2 base, or object"
+  echo "         unreadable) — they are missing from BOTH numerator and"
+  echo "         denominator above. Fix stage 2 coverage before quoting this."
+fi

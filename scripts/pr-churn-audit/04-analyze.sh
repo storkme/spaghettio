@@ -41,7 +41,10 @@ awk -v tot="$tot" -v pop="$pop" -v big="$big" 'BEGIN{
 echo
 echo "=== rework age distribution (all edges)"
 awk -F'\t' '{print $4}' "$WORK/rework_edges.tsv" | sort -n | awk '
-  {a[NR]=$1} END{printf "  n=%d  p50=%s  p75=%s  p90=%s\n", NR, a[int(NR*.5)], a[int(NR*.75)], a[int(NR*.9)]}'
+  # Nearest-rank percentiles: index = ceil(N*p). The tempting int(N*p)
+  # undershoots by one rank whenever N*p is fractional (N=7, p50 -> a[3]).
+  function nr(p,  i){ i=int(NR*p); if (i < NR*p) i++; return a[i] }
+  {a[NR]=$1} END{printf "  n=%d  p50=%s  p75=%s  p90=%s\n", NR, nr(.5), nr(.75), nr(.9)}'
 awk -F'\t' '{n++; if($4<=3)c++} END{printf "  within 3 days: %d/%d = %d%%\n", c, n, 100*c/n}' \
   "$WORK/rework_edges.tsv"
 
