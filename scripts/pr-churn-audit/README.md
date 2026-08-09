@@ -30,10 +30,22 @@ front.
 
 **Two windows, deliberately.** `SINCE..UNTIL` bounds the corpus (edges, ages);
 `BUCKET_SINCE..UNTIL` bounds the per-PR review pull the size buckets divide by.
-They differ because the two datasets were collected at different points in the
-session — 218 merged PRs in the corpus, 217 in the bucket pull, 194 after the
->20-adds floor. Do not quote a bucket `n` against a corpus `n` without
-reconciling them; that is the mixed-denominator trap the audit doc warns about.
+They differ because the bucket data starts later.
+
+**Do not hand-derive the denominators — stage 4 prints them**, together and
+with the trap named:
+
+```
+review_rounds rows (unfiltered) : 220
+bucket population (>20 adds)    : 197
+of those, >=400 adds            : 71  (36% of the bucket population)
+NB 71/220 = 32% is the UNFILTERED share
+```
+
+Quoting 32% against 197 mixes the two. Every denominator dispute in this
+pipeline's review history — and there were several — came from one number being
+copied into prose and not updated alongside its siblings. Transcribe the block
+above; do not recompute it.
 
 ## Three mistakes this pipeline exists to not repeat
 
@@ -149,9 +161,15 @@ wrote it. Keep it in mind when a single old PR shows a surprisingly large
 reworked total.
 
 **The boundary walk is a heuristic, not a proof.** Stage 2 stops at the first
-ancestor whose subject announces another PR. If a previous PR ended in an
-*unlabelled* commit the walk can overrun into it, which is the v2 defect
-returning. Those cases cannot be distinguished from a legitimate rebase-merge,
-so stage 2 counts them and writes them to `range_unverified.txt` rather than
-assuming the benign reading. A non-empty file is not necessarily wrong — but it
-is the first place to look if a figure surprises you.
+ancestor whose subject announces another PR, then checks whether the resolved
+base *itself* announces one. If it does, the range ended cleanly on the previous
+PR's boundary. If it doesn't, the case is genuinely ambiguous — either a rebase
+onto an unlabelled commit (harmless) or a squash whose range is now over-wide
+(the v2 defect) — and it is written to `range_unverified.txt` with its base
+subject.
+
+That final check matters: without it the marker fired for *every* clean
+multi-commit rebase, i.e. the dominant case, which made it useless for spotting
+the harmful one. A warning that fires on everything is a warning about nothing.
+On the current corpus 11 PRs are ambiguous, all numbered 144–306 — none inside
+the audit window, so the published figures are unaffected.

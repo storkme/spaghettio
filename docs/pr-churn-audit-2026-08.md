@@ -28,7 +28,7 @@ before the numbers below were trustworthy (see [Method](#method)).
 | PRs opened / merged | 232 / 218 |
 | Blame-paired rework edges | 1,999 |
 | Median rework lag | 2 days (60% within 3) |
-| Share of rework from PRs ≥400 added lines | **90.1%** (from 32% of PRs) |
+| Share of rework from PRs ≥400 added lines | **90.1%** (from 36% of the bucket population) |
 | Corrective-PR rate | flat 20–30% since April; 12% in Aug wk0 |
 
 ### Rework per 100 added lines, by PR size
@@ -46,18 +46,28 @@ That carries the norm, whose threshold is 400.
 
 **What is not:** the climb does not continue past 1k. Both statistics fall
 across the 400–1k → >1k step (mean 6.1 → 6.0, pooled 6.1 → 3.8), so >1k is
-**not** worse than 400–1k on this data — plausibly a floor effect, since the
-largest PRs are often standalone new subsystems with less existing code to
-collide with. The norm's threshold is 400 because that is where the rise
-happens.
+**not** measured as worse than 400–1k.
 
-> **Denominators.** These buckets cover the 194 PRs that merged 2026-07-20 →
-> 08-09 with more than 20 added lines. That is narrower than the 218 merged
-> since 07-12 in the headline table: `review_rounds.tsv` (the per-PR
-> commits/comments/latency pull) starts at 07-20 and covers 217 PRs, and 23 of
-> those fall below the 20-add floor used to keep tiny PRs from producing
-> meaningless per-line ratios. The "32% of PRs ≥400 adds" figure is 70/217 from
-> the unfiltered set. Reconcile before quoting any of these against each other.
+Do not read that as a ceiling. The step is **confounded by right-censoring**:
+an edge exists only when the *reworker* is inside the window, so a PR merged
+near 08-09 accrues almost no rework regardless of its size, and stage 4 divides
+that near-zero by its full additions. Any bucket whose PRs cluster late is
+deflated. The floor-effect reading (largest PRs are often standalone new
+subsystems with less existing code to collide with) is plausible but this
+pipeline cannot distinguish it from truncation — only the left-censoring was
+previously acknowledged. Treat >1k as unmeasured, not as flat.
+
+> **Denominators.** `04-analyze.sh` prints these; do not hand-derive them.
+> The per-PR pull (`review_rounds.tsv`) covers **220** PRs merged 2026-07-20 →
+> 08-09; **197** of those clear the >20-add floor and form the bucket
+> population; **71** of the 197 are ≥400 adds — **36%** of the bucket
+> population, or 32% of the unfiltered 220.
+>
+> Quoting 32% against 197 is the mixed-denominator trap, and an earlier revision
+> of this very doc did exactly that. Stage 4 now prints all four figures
+> together and names the trap, because every denominator dispute in this
+> pipeline's review history came from one number being hand-copied into prose
+> and not updated with its siblings.
 
 ## What was refuted
 
@@ -70,7 +80,10 @@ happens.
   and other files in the *same commit* — holding author, session, review and
   size constant — old files churned at **3.30** per 100 adds vs **6.87** for
   the rest, and churned higher in only 3 of 36 pairs. Pooled: 2.48 vs 4.62.
-  Independently confirmed by size-bucketing all 217 PRs by complexity-touch:
+  Independently confirmed by size-bucketing by complexity-touch (run on the
+  earlier 217-row per-PR pull, not the current 220 — that control has not been
+  re-derived against the corrected pipeline, and its conclusion is directional
+  rather than exact):
   the complex-touch group is at or below the other in every powered cell.
   Real code-quality problems exist (`route_bus_ghost` is a 3,875-line function
   whose rework arrives at 12–97 days, the classic long-lag signature) but they
