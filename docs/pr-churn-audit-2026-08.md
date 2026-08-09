@@ -26,8 +26,8 @@ before the numbers below were trustworthy (see [Method](#method)).
 | Measure | Value |
 |---|---|
 | PRs opened / merged | 232 / 218 |
-| Blame-paired rework edges | 1,841 |
-| Median rework lag | 1 day (65% within 3) |
+| Blame-paired rework edges | 1,999 |
+| Median rework lag | 2 days (60% within 3) |
 | Share of rework from PRs ≥400 added lines | **90.1%** (from 32% of PRs) |
 | Corrective-PR rate | flat 20–30% since April; 12% in Aug wk0 |
 
@@ -36,16 +36,16 @@ before the numbers below were trustworthy (see [Method](#method)).
 | Bucket | n | Mean of per-PR rates | Pooled (Σrework/Σadds) |
 |---|---:|---:|---:|
 | <100 adds | 42 | 1.6 | 2.1 |
-| 100–400 | 82 | 2.7 | 2.5 |
-| 400–1k | 41 | 6.3 | 6.2 |
+| 100–400 | 84 | 2.6 | 2.5 |
+| 400–1k | 42 | 6.1 | 6.1 |
 | **>1k** | 29 | 6.0 | 3.8 |
 
 **What is robust:** the rate rises across the first three buckets under *both*
-statistics — roughly 4× from <100 to 400–1k (1.6→6.3 mean, 2.1→6.2 pooled).
+statistics — roughly 4× from <100 to 400–1k (1.6→6.1 mean, 2.1→6.1 pooled).
 That carries the norm, whose threshold is 400.
 
 **What is not:** the climb does not continue past 1k. Both statistics fall
-across the 400–1k → >1k step (mean 6.3 → 6.0, pooled 6.2 → 3.8), so >1k is
+across the 400–1k → >1k step (mean 6.1 → 6.0, pooled 6.1 → 3.8), so >1k is
 **not** worse than 400–1k on this data — plausibly a floor effect, since the
 largest PRs are often standalone new subsystems with less existing code to
 collide with. The norm's threshold is 400 because that is where the rise
@@ -137,13 +137,21 @@ Effect of correcting both:
 
 | Measure | v1 | v2 | **v3 (current)** |
 |---|---:|---:|---:|
-| Edges | 1,639 | 3,114 | **1,841** |
-| Median lag | 1d | 2d | **1d** |
-| Within 3 days | 61% | 57% | **65%** |
+| Edges | 1,639 | 3,114 | **1,999** |
+| Median lag | 1d | 2d | **2d** |
+| Within 3 days | 61% | 57% | **60%** |
 | Rate <100 adds | 1.6 | 1.4 | **1.6** |
-| Rate 400–1k | 6.3 | 8.5 | **6.3** |
+| Rate 400–1k | 6.3 | 8.5 | **6.1** |
 | Rate >1k adds | 5.7 | 10.5 | **6.0** |
 | Large-PR share | 89.7% | 93.2% | **90.1%** |
+
+These v3 figures are the **checked-in pipeline's own output**, regenerated
+end-to-end from scratch rather than from any surviving intermediate. An earlier
+draft of v3 quoted 1,841 edges and 1.6/2.7/6.3; those came from reusing a
+`prs_merged.json` capped at 300 PRs, which silently dropped blame hits whose
+target PR fell outside the cap. Raising the cap resolves those, which is why the
+edge count rises and the age tail lengthens (p90 9 → 80 days): rework of older
+PRs was previously invisible, not absent.
 
 **v2 was the outlier, and v2 is what was originally published here.** Replacing
 `sha^1..sha` with a bare `sha~N..sha` fixed a too-narrow range by introducing a

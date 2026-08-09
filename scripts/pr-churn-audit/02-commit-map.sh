@@ -48,7 +48,9 @@ boundary_pr() {
 
 : > "$WORK/pr_base.tsv"
 : > "$WORK/.c2p.raw"
+: > "$WORK/range_unverified.txt"
 overwalks=0
+caphits=0
 
 while IFS=$'\t' read -r pr sha; do
   git cat-file -e "${sha}^{commit}" 2>/dev/null || continue
@@ -62,6 +64,7 @@ while IFS=$'\t' read -r pr sha; do
   else
     cap="${NCOM[$pr]:-1}"; [ "$cap" -lt 1 ] && cap=1
     depth=1
+    hit_boundary=0
     echo "$sha" | sed "s/\$/\t$pr/" >> "$WORK/.c2p.raw"
     while [ "$depth" -lt "$cap" ]; do
       cand="${sha}~${depth}"
@@ -70,11 +73,20 @@ while IFS=$'\t' read -r pr sha; do
       owner=$(boundary_pr "$csubj")
       # Stop before absorbing a commit that announces a different PR.
       if [ -n "$owner" ] && [ "$owner" != "$pr" ]; then
-        overwalks=$((overwalks+1)); break
+        overwalks=$((overwalks+1)); hit_boundary=1; break
       fi
       git rev-parse "$cand" | sed "s/\$/\t$pr/" >> "$WORK/.c2p.raw"
       depth=$((depth+1))
     done
+    # Walked the full branch length without meeting another PR's boundary. That
+    # is correct for a rebase-merge, but it is ALSO what a squash-merge sitting
+    # on an UNLABELLED commit looks like — and in that case the range is
+    # over-wide, exactly the v2 defect. The heuristic cannot tell them apart, so
+    # count these and report rather than assume the benign reading.
+    if [ "$hit_boundary" -eq 0 ] && [ "$depth" -gt 1 ]; then
+      caphits=$((caphits+1))
+      printf '%s\tcap-exhausted\tdepth=%s\n' "$pr" "$depth" >> "$WORK/range_unverified.txt"
+    fi
     base="${sha}~${depth}"
     git rev-parse -q --verify "$base" >/dev/null 2>&1 || base="${sha}^1"
   fi
@@ -90,3 +102,9 @@ echo "pr_base entries : $(wc -l < "$WORK/pr_base.tsv")"
 echo "commit2pr       : $(wc -l < "$WORK/commit2pr.tsv")"
 echo "walks truncated at another PR's boundary: $overwalks"
 echo "  (each of these would have been an over-wide range under a bare sha~N)"
+if [ "$caphits" -gt 0 ]; then
+  echo "NOTE: $caphits multi-commit PR(s) walked their full branch length without"
+  echo "      meeting another PR's boundary — correct for a rebase-merge, but"
+  echo "      indistinguishable from a squash landing on an unlabelled commit."
+  echo "      Listed in $WORK/range_unverified.txt; spot-check if a figure surprises you."
+fi
