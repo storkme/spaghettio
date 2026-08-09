@@ -169,11 +169,15 @@ impl ValidationError {
 /// the failure that doc exists to stop. `by_category` is the payload;
 /// `errors`/`warnings` are conveniences derived from it.
 ///
-/// This closes hole 3 in `validator-trust.md`: the sim/meter side previously
-/// had *no* validator visibility, so a parity sweep could quote a condemned
-/// layout as a parity number — which is how the 2026-08-07 PU@1/s run
-/// reported 68.2% of plan without mentioning the three `input-rate-delivery`
-/// warnings that named the starving machines.
+/// This is the **producer half** of hole 3 in `validator-trust.md`. The
+/// sim/meter side has *no* validator visibility, so a parity sweep can quote
+/// a condemned layout as a parity number — which is how the 2026-08-07
+/// PU@1/s run reported 68.2% of plan without mentioning the three
+/// `input-rate-delivery` warnings that named the starving machines.
+///
+/// Emitting this summary is a prerequisite for closing that hole, not the
+/// closure: as of this commit nothing in-tree reads it. `crates/sim-harness`
+/// and `crates/meter` both model the manifest without a `validator` field.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -243,10 +247,20 @@ impl ValidatorSummary {
     /// Two sharp edges, both deliberate:
     ///
     /// - **`layout_warnings` and `warnings` can double-count one defect.** A
-    ///   missing balancer template, for instance, surfaces as both a
-    ///   pipeline-stamped string and a validator issue. They are counted
-    ///   separately because neither channel subsumes the other, not because
-    ///   they are disjoint — do not add them and call the sum "defects".
+    ///   missing balancer template is the concrete case: it surfaces both as
+    ///   a pipeline-stamped string and as a validator `Warning`, so a layout
+    ///   with one such defect reports `1W/1L`. They are counted separately
+    ///   because neither channel subsumes the other, not because they are
+    ///   disjoint — **never sum `errors + warnings + layout_warnings` and
+    ///   call it a defect count.**
+    /// - **This is not the engine's selection count.** `selection_warning_count`
+    ///   — what `decomposition_search` ranks on and the e2e scoreboards
+    ///   report — *excludes* `belt-detour`, which the engine treats as
+    ///   report-only. `ValidatorSummary` includes every category, so a
+    ///   belt-detour-only layout is `is_clean() == false` here while the
+    ///   engine considers it unremarkable. Two definitions of "warning"
+    ///   coexist on purpose: selection needs the filtered one, an artifact
+    ///   record needs the complete one. Don't compare them directly.
     /// - **Informational pipeline strings make this false.** A layout whose
     ///   only entry is something like "fold search skipped" is reported as
     ///   not-clean. That is the conservative direction on purpose: the cost

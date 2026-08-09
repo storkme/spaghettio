@@ -286,9 +286,10 @@ fn main() {
         .filter(|i| i.severity == Severity::Warning)
         .count();
 
-    // Reuse the issues from just above — `export_with_manifest` would
-    // otherwise re-run the full validator for the same answer, which on the
-    // large fixtures this generator exists to produce is a real cost.
+    // Pass the issues from just above so the manifest records this layout's
+    // validator state — this generator's whole output is sim fixtures, which
+    // is exactly where a rate must not be read without it.
+    // `export_with_manifest` is a pure export and emits no `validator` key.
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest_validated(
         &layout, &solved, &label, &issues,
     );

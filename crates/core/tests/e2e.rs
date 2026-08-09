@@ -9031,6 +9031,10 @@ fn di_cell_kc3_export() {
         }
     }
 
+    // Deliberately the pure export: this probe dumps artifacts for eyeballing
+    // a DI-cell shape, never for a sim parity run, so it has no validator
+    // state to record and does not validate. Its manifest carries no
+    // `validator` key — read as "unknown", which is accurate here.
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "di-cell-kc3");
     let tag = if di { "di_cell_kc3" } else { "di_cell_kc3_control" };
     std::fs::write(format!("/tmp/{tag}.bp"), &bp).expect("write bp");
@@ -9631,9 +9635,9 @@ fn rfc060_sim_export() {
             };
             let errs = issues.iter().filter(|i| i.severity == Severity::Error).count();
             let warns = issues.iter().filter(|i| i.severity == Severity::Warning).count();
-            // Reuse the issues computed just above rather than letting export
-            // re-run the whole validator — on a mega-chain fixture that is a
-            // second pass over 14k+ entities for an identical answer.
+            // Pass the issues computed just above so the manifest records
+            // this layout's validator state. `export_with_manifest` is a pure
+            // export and would emit no `validator` key at all.
             let (bp, manifest) =
                 blueprint::export_with_manifest_validated(&lay, &solved, &label, &issues);
             std::fs::write(format!("{out}/{label}.bp"), &bp).expect("write bp");

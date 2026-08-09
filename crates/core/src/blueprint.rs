@@ -140,61 +140,42 @@ struct BlueprintWrapper<'a> {
 ///   Export cannot know the right style — `LayoutResult` does not record one —
 ///   so picking a default here would silently mislabel non-bus layouts.
 ///
-/// A manifest exported without this variant simply carries no `validator`
-/// key, which the sim harness renders as `unknown` — honest, and distinct
-/// from `clean`.
+/// A manifest exported without this variant carries no `validator` key at
+/// all, which is deliberately distinct from carrying an empty/clean one.
 ///
-/// `issues` must come from validating **this** layout. A `debug_assert`
-/// catches the crudest mismatch (positioned issues outside the layout's
-/// bbox), but it is not a proof: a stale list from a same-shaped layout would
-/// pass, and would put a confident, wrong block into an artifact the sim
-/// harness reports as fact.
+/// **No consumer reads this key yet.** As of this commit the block is
+/// write-only in-tree: `crates/sim-harness` and `crates/meter` both model the
+/// manifest without it. Rendering absence as `unknown` rather than `clean` is
+/// the *contract this key is designed for*, not behaviour that exists — the
+/// consumer half is a separate change. Do not read the paragraph above as a
+/// description of what the harness does today.
+///
+/// **`issues` must come from validating this exact layout, and nothing
+/// checks that.** An earlier revision had a bbox `debug_assert` here; it was
+/// removed because it compiled out of release, could not catch the realistic
+/// mistake (a stale list from a same-shaped layout passes it), and could
+/// panic on legitimately-distant issue positions such as `belt-detour`. The
+/// obligation is the caller's. A mismatched list writes a confident, wrong
+/// block into an artifact a downstream consumer will report as fact.
 pub fn export_with_manifest_validated(
     layout: &LayoutResult,
     solver: &crate::models::SolverResult,
     label: &str,
     issues: &[crate::validate::ValidationIssue],
 ) -> (String, serde_json::Value) {
-    debug_assert!(
-        issues_plausibly_describe(layout, issues),
-        "validator issues do not describe this layout (positioned issue \
-         outside its bbox) — passing a stale list writes a confident, wrong \
-         validator block into the manifest"
-    );
     let (bp, mut manifest) = export_with_manifest_inner(layout, solver, label);
     let summary = crate::validate::ValidatorSummary::from_issues(issues, layout.warnings.len());
     if let Some(obj) = manifest.as_object_mut() {
+        // Not `unwrap_or(Null)`: a null `validator` key is neither "absent"
+        // (unknown) nor a summary, so it would break the very absent-vs-clean
+        // contract this block exists to establish. The struct is plain
+        // Serialize, so this cannot fail today; if it ever can, fail loudly.
         obj.insert(
             "validator".to_string(),
-            serde_json::to_value(&summary).unwrap_or(serde_json::Value::Null),
+            serde_json::to_value(&summary).expect("ValidatorSummary is plain Serialize"),
         );
     }
     (bp, manifest)
-}
-
-/// Cheap sanity check that an issue list could plausibly have come from this
-/// layout: every positioned issue lands inside the layout's entity bbox.
-/// Catches the "wrong layout entirely" mistake, not a subtle one.
-fn issues_plausibly_describe(
-    layout: &LayoutResult,
-    issues: &[crate::validate::ValidationIssue],
-) -> bool {
-    if layout.entities.is_empty() {
-        return true;
-    }
-    let min_x = layout.entities.iter().map(|e| e.x).min().unwrap_or(0);
-    let max_x = layout.entities.iter().map(|e| e.x).max().unwrap_or(0);
-    let min_y = layout.entities.iter().map(|e| e.y).min().unwrap_or(0);
-    let max_y = layout.entities.iter().map(|e| e.y).max().unwrap_or(0);
-    // Generous margin: checks legitimately flag tiles just outside the
-    // entity hull (a belt's intended continuation, a missing pole slot).
-    const SLACK: i32 = 8;
-    issues.iter().all(|i| match (i.x, i.y) {
-        (Some(x), Some(y)) => {
-            x >= min_x - SLACK && x <= max_x + SLACK && y >= min_y - SLACK && y <= max_y + SLACK
-        }
-        _ => true,
-    })
 }
 
 /// [`export`] plus the RFC-050 verification manifest: everything the
@@ -205,10 +186,10 @@ fn issues_plausibly_describe(
 /// voiding. Returns `(blueprint_string, manifest_json)`.
 ///
 /// **Pure export — this does not validate.** The manifest therefore carries
-/// no `validator` key, and the sim harness renders that as `unknown` rather
-/// than `clean`. To attach validator state, validate first and call
+/// no `validator` key. To attach validator state, validate first and call
 /// [`export_with_manifest_validated`]; that function's docs explain why
-/// export refuses to validate on your behalf.
+/// export refuses to validate on your behalf, and note that no consumer
+/// reads the key yet.
 pub fn export_with_manifest(
     layout: &LayoutResult,
     solver: &crate::models::SolverResult,
