@@ -8,8 +8,7 @@
 # Run AFTER stages 1-2:  probe-v2-defect.sh "$WORK"
 set -euo pipefail
 WORK="${1:-${WORK:-./audit-work}}"
-SINCE="${SINCE:-2026-07-12}"
-UNTIL="${UNTIL:-2026-08-09}"; UNTIL_TS="${UNTIL}T23:59:59Z"
+. "$(dirname "$0")/window.env"
 cd "$(git rev-parse --show-toplevel)"
 declare -A NCOM BASE
 while IFS=$'\t' read -r pr c; do NCOM[$pr]=$c; done < "$WORK/pr_commits.tsv"
@@ -31,9 +30,14 @@ while IFS=$'\t' read -r pr sha adds; do
 done < <(jq -r --arg s "$SINCE" --arg u "$UNTIL_TS" \
   '[.[]|select(.mergedAt>$s and .mergedAt<$u and .mergeCommit!=null)]
    |.[]|"\(.number)\t\(.mergeCommit.oid)\t\(.additions)"' "$WORK/prs_merged.json")
-echo "v2 range wrong: $wrong / $tot in-window PRs ($(( 100*wrong/tot ))%)"
-echo "  <400 adds : $wrong_small/$small ($(( 100*wrong_small/small ))%)"
-echo "  >=400 adds: $wrong_big/$big ($(( 100*wrong_big/big ))%)"
+# awk, not $((...)): integer division floors 22.6% to 22%, and an empty size
+# class would make it a fatal divide-by-zero under set -e.
+awk -v w="$wrong" -v t="$tot" -v ws="$wrong_small" -v s="$small" \
+    -v wb="$wrong_big" -v b="$big" 'BEGIN{
+  printf "v2 range wrong: %d / %d in-window PRs (%.1f%%)\n", w, t, (t?100*w/t:0)
+  printf "  <400 adds : %d/%d (%.1f%%)\n", ws, s, (s?100*ws/s:0)
+  printf "  >=400 adds: %d/%d (%.1f%%)\n", wb, b, (b?100*wb/b:0)
+}'
 echo "  (a disagreement rate between v2's heuristic and stage 2's resolution —"
 echo "   the walk is the better-validated heuristic, not ground truth)"
 if [ "$skipped" -gt 0 ]; then
