@@ -309,6 +309,52 @@ informational — a two-sided tolerance would spuriously fail honest
 layouts. The run also dumps `sim-state.json` (belt contents, machine
 status), included in `--out`.
 
+### The `validator:` line — read this before the rates
+
+Every report header now carries the validator state of the exact layout
+that was measured (`validator-trust.md` hole 3, closed 2026-08-09):
+
+```
+validator: 3W — input-rate-delivery×3
+```
+
+and, when the layout was flagged, a banner immediately above the rate table:
+
+```
+!! MEASURED ON A LAYOUT CARRYING VALIDATOR WARNINGS — THIS MEASURES THE
+   LAYOUT, NOT THE PIPELINE
+```
+
+That distinction is the whole point. **A number measured on a layout the
+validator has already condemned is a fact about that layout, not evidence
+about the pipeline that produced it.** On 2026-08-07 a PU@1/s fixture was
+reported at 68.2% of plan while carrying three `input-rate-delivery`
+warnings naming the exact starving machines — the validator had localised
+the defect before the sim ran, and nothing printed it.
+
+Four states, recorded in the JSON as `validator_standing`:
+
+| State | Meaning |
+|---|---|
+| `unflagged` | Validator reported nothing |
+| `warned` | Warnings present — the rate describes this layout |
+| `condemned` | Errors present — arguably should not have been simmed |
+| `unknown` | Manifest predates the field — **not** the same as clean |
+
+Two things it does **not** mean:
+
+- **`unflagged` is not clearance.** Of ~40 checks only a handful carry
+  refusal power, and each is documented "never sim-anchored" in
+  `validator-trust.md`. A clean line beside an at-plan rate means the two
+  instruments agree, not that either is right.
+- **It is not a gate.** Nothing refuses to run a condemned layout. If you
+  want a parity number from a flagged fixture you can still have one — you
+  just can't get it without being told what you are measuring.
+
+Counts are per-category rather than totals because a total cannot tell 2
+from 218 (`validator-reporting.md`). `3W` with `input-rate-delivery×3`
+tells you which check fired and how often; `warnings: 3` would not.
+
 **Web overlay (RFC-050 Phase 4):** load the `--out` file via the sim
 report panel in the web app to get the verdict banner plus a `sim-state`
 entity overlay tinting machines/belts/inserters by their simulated state

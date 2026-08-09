@@ -19,14 +19,17 @@
 //!   `dims`, `entities`, `stacking`, `inserter_capacity` are all emitted
 //!   verbatim by the `serde_json::json!` call in `export_with_manifest`.
 //! - The RFC's Design section says the manifest carries "validator
-//!   error/warning counts at export time" — the actual Phase 0 commit's
-//!   `export_with_manifest` does NOT include such fields. Resolved as: treat
-//!   them as optional/absent-tolerant (`validator_errors`/
-//!   `validator_warnings` are not modeled at all here; nothing in Phase 0/1
-//!   reads them). If a later Phase 0 revision adds them before merge, this
-//!   module only needs a new optional field, not a rewrite.
+//!   error/warning counts at export time". Phase 0 shipped without them and
+//!   this module resolved that as optional/absent-tolerant. **Delivered
+//!   2026-08-09** (`validator-trust.md` hole 3): `export_with_manifest` now
+//!   emits a `validator` object, modeled here as `Option<ValidatorSummary>`.
+//!   It is per-category rather than the flat `validator_errors`/
+//!   `validator_warnings` the RFC prose named, because a bare total cannot
+//!   tell 2 from 218 (`validator-reporting.md`). The field stays optional so
+//!   manifests written before it keep parsing — and `None` renders as `?`,
+//!   never as clean.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Factorio's 4-way direction constants (the engine only ever emits one of
@@ -161,6 +164,142 @@ pub struct Manifest {
     /// a different world — which is exactly what RFC-064 Phase 2 item 7 was.
     #[serde(default)]
     pub research_productivity: std::collections::BTreeMap<String, f64>,
+    /// Validator state of the exact layout this manifest describes, as of
+    /// export. Closes hole 3 in `docs/validator-trust.md`.
+    ///
+    /// `Option`, and absent-tolerant, because manifests written before this
+    /// field existed must keep parsing — a pre-existing `.json` on disk is
+    /// how most sim fixtures are replayed. **`None` means "this manifest
+    /// predates the field", which is not the same as "clean"**; the report
+    /// renders it as `?`, never as an all-clear. Distinguishing those two is
+    /// the entire point — reading absence as clearance is the failure mode
+    /// `validator-reporting.md` catalogues.
+    #[serde(default)]
+    pub validator: Option<ValidatorSummary>,
+}
+
+/// Mirror of `spaghettio_core::validate::ValidatorSummary`.
+///
+/// Hand-mirrored rather than imported: this crate deliberately does not
+/// depend on `spaghettio_core` (RFC-050 constraint, "consumes the manifest
+/// schema only"), the same reason every other type in this module is a
+/// mirror.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ValidatorSummary {
+    #[serde(default)]
+    pub errors: usize,
+    #[serde(default)]
+    pub warnings: usize,
+    /// `category -> {errors, warnings}`. Per-category rather than totals
+    /// because a bare total cannot tell 2 from 218 — see
+    /// `docs/validator-reporting.md`.
+    #[serde(default)]
+    pub by_category: BTreeMap<String, CategoryCount>,
+    /// Pipeline-stamped `LayoutResult::warnings`, which the validator never
+    /// sees. Counted apart because reading only the validator has already
+    /// produced one false "0 errors 0 warnings" claim.
+    #[serde(default)]
+    pub layout_warnings: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CategoryCount {
+    #[serde(default)]
+    pub errors: usize,
+    #[serde(default)]
+    pub warnings: usize,
+}
+
+impl ValidatorSummary {
+    pub fn is_clean(&self) -> bool {
+        self.errors == 0 && self.warnings == 0 && self.layout_warnings == 0
+    }
+
+    /// Compact badge for report tables: `clean`, or e.g. `2E/5W/1L`.
+    pub fn badge(&self) -> String {
+        if self.is_clean() {
+            return "clean".to_string();
+        }
+        let mut parts = Vec::new();
+        if self.errors > 0 {
+            parts.push(format!("{}E", self.errors));
+        }
+        if self.warnings > 0 {
+            parts.push(format!("{}W", self.warnings));
+        }
+        if self.layout_warnings > 0 {
+            parts.push(format!("{}L", self.layout_warnings));
+        }
+        parts.join("/")
+    }
+
+    /// Categories with at least one issue, worst-first, for the report's
+    /// one-line explanation of *what* was flagged.
+    pub fn top_categories(&self, limit: usize) -> Vec<String> {
+        let mut v: Vec<(&String, &CategoryCount)> = self.by_category.iter().collect();
+        v.sort_by(|a, b| {
+            (b.1.errors, b.1.warnings)
+                .cmp(&(a.1.errors, a.1.warnings))
+                .then(a.0.cmp(b.0))
+        });
+        v.into_iter()
+            .take(limit)
+            .map(|(k, c)| {
+                let n = c.errors + c.warnings;
+                format!("{k}×{n}")
+            })
+            .collect()
+    }
+}
+
+/// How a measured rate should be read given the validator state of the
+/// layout it was measured on.
+///
+/// The distinction the 2026-08-07 PU@1/s incident lacked: a number measured
+/// on a layout the validator has already condemned is a fact about *that
+/// layout*, not evidence about the pipeline that produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MeasurementStanding {
+    /// Validator was silent. The number measures the pipeline — subject to
+    /// the standing caveat that validator silence is not proof of anything.
+    Unflagged,
+    /// The layout carried warnings. The number measures this layout.
+    Warned,
+    /// The layout carried errors. It should arguably not have been simmed.
+    Condemned,
+    /// The manifest predates the validator field — standing is unknown.
+    Unknown,
+}
+
+impl MeasurementStanding {
+    pub fn of(summary: Option<&ValidatorSummary>) -> MeasurementStanding {
+        match summary {
+            None => MeasurementStanding::Unknown,
+            Some(s) if s.errors > 0 => MeasurementStanding::Condemned,
+            Some(s) if !s.is_clean() => MeasurementStanding::Warned,
+            Some(_) => MeasurementStanding::Unflagged,
+        }
+    }
+
+    /// One-line caveat to print beside a rate, or `None` when unflagged.
+    pub fn caveat(self) -> Option<&'static str> {
+        match self {
+            MeasurementStanding::Unflagged => None,
+            MeasurementStanding::Warned => Some(
+                "measured on a layout carrying validator warnings — \
+                 this measures the layout, not the pipeline",
+            ),
+            MeasurementStanding::Condemned => Some(
+                "measured on a layout carrying validator ERRORS — \
+                 this measures the layout, not the pipeline",
+            ),
+            MeasurementStanding::Unknown => Some(
+                "manifest predates the validator field — validator state \
+                 unknown, not clean",
+            ),
+        }
+    }
 }
 
 impl Manifest {
@@ -245,5 +384,114 @@ mod tests {
     fn no_fluid_boundary_in_gear_fixture() {
         let m = Manifest::from_str(fixture_json()).expect("parse");
         assert!(!m.has_fluid_boundary());
+    }
+
+    /// The load-bearing distinction. A manifest written before the validator
+    /// field existed must NOT read as clean — that conflation is how a
+    /// condemned layout gets quoted as a parity number.
+    #[test]
+    fn absent_validator_is_unknown_not_clean() {
+        let m = Manifest::from_str(fixture_json()).expect("parse");
+        assert!(m.validator.is_none(), "gear fixture predates the field");
+        let standing = MeasurementStanding::of(m.validator.as_ref());
+        assert_eq!(standing, MeasurementStanding::Unknown);
+        assert_ne!(standing, MeasurementStanding::Unflagged);
+        assert!(
+            standing.caveat().is_some(),
+            "an unknown-state run must still print a caveat"
+        );
+    }
+
+    #[test]
+    fn standing_separates_clean_warned_and_condemned() {
+        let clean = ValidatorSummary::default();
+        assert_eq!(
+            MeasurementStanding::of(Some(&clean)),
+            MeasurementStanding::Unflagged
+        );
+        assert!(MeasurementStanding::of(Some(&clean)).caveat().is_none());
+
+        let warned = ValidatorSummary {
+            warnings: 3,
+            ..Default::default()
+        };
+        assert_eq!(
+            MeasurementStanding::of(Some(&warned)),
+            MeasurementStanding::Warned
+        );
+
+        let condemned = ValidatorSummary {
+            errors: 1,
+            warnings: 3,
+            ..Default::default()
+        };
+        assert_eq!(
+            MeasurementStanding::of(Some(&condemned)),
+            MeasurementStanding::Condemned
+        );
+
+        // A layout with only pipeline-stamped warnings is still not clean —
+        // reading the validator alone produced a false "0 errors 0 warnings"
+        // claim once already (#462).
+        let layout_only = ValidatorSummary {
+            layout_warnings: 2,
+            ..Default::default()
+        };
+        assert!(!layout_only.is_clean());
+        assert_eq!(
+            MeasurementStanding::of(Some(&layout_only)),
+            MeasurementStanding::Warned
+        );
+    }
+
+    #[test]
+    fn badge_and_categories_are_per_category_not_totals() {
+        let v = ValidatorSummary {
+            errors: 1,
+            warnings: 5,
+            layout_warnings: 2,
+            by_category: BTreeMap::from([
+                (
+                    "input-rate-delivery".to_string(),
+                    CategoryCount {
+                        errors: 0,
+                        warnings: 4,
+                    },
+                ),
+                (
+                    "entity-overlap".to_string(),
+                    CategoryCount {
+                        errors: 1,
+                        warnings: 1,
+                    },
+                ),
+            ]),
+        };
+        assert_eq!(v.badge(), "1E/5W/2L");
+        // Errors sort ahead of warnings, so the overlap error leads even
+        // though input-rate-delivery has more total issues. A reader needs
+        // to know 4 delivery warnings is not 1 — the whole reason this is
+        // per-category (`validator-reporting.md`).
+        let cats = v.top_categories(4);
+        assert_eq!(cats, vec!["entity-overlap×2", "input-rate-delivery×4"]);
+    }
+
+    #[test]
+    fn validator_object_parses_when_present() {
+        let json = r#"{
+            "label": "t", "bbox_min": [0,0], "dims": [4,4],
+            "validator": {
+              "errors": 2, "warnings": 1, "layout_warnings": 0,
+              "by_category": { "pipe-isolation": {"errors": 2, "warnings": 1} }
+            }
+        }"#;
+        let m = Manifest::from_str(json).expect("parse");
+        let v = m.validator.expect("validator present");
+        assert_eq!(v.errors, 2);
+        assert_eq!(v.by_category["pipe-isolation"].errors, 2);
+        assert_eq!(
+            MeasurementStanding::of(Some(&v)),
+            MeasurementStanding::Condemned
+        );
     }
 }
