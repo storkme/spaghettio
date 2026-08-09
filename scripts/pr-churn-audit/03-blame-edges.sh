@@ -22,7 +22,9 @@ set -uo pipefail
 WORK="${WORK:-./audit-work}"
 REPO_DIR="${REPO_DIR:-$(git rev-parse --show-toplevel)}"
 SINCE="${SINCE:-2026-07-12}"
-UNTIL="${UNTIL:-2026-08-09}"
+# End-of-day, not the bare date: "2026-08-09T00:00:00Z" < "2026-08-09" is FALSE
+# lexicographically, so a bare bound silently drops the entire closing day.
+UNTIL="${UNTIL:-2026-08-09}"; UNTIL_TS="${UNTIL}T23:59:59Z"
 
 # GNU coreutils / GNU grep required — see README. Fail loudly here rather than
 # producing a plausible-looking but wrong dataset: BSD `date` makes every age 0,
@@ -38,26 +40,26 @@ while IFS=$'\t' read -r sha pr; do C2P[$sha]=$pr; done < "$WORK/commit2pr.tsv"
 declare -A PRDATE
 while IFS=$'\t' read -r pr d; do PRDATE[$pr]=$d; done < <(
   jq -r '.[]|"\(.number)\t\(.mergedAt)"' "$WORK/prs_merged.json")
-declare -A NCOM
-while IFS=$'\t' read -r pr c; do NCOM[$pr]=$c; done < "$WORK/pr_commits.tsv"
+# Ranges come from stage 2, which resolves them properly and is the single
+# source of truth. Recomputing sha~N here is what produced an over-wide range
+# for 22% of PRs — see 02-commit-map.sh's header for the measurement.
+declare -A BASE
+while IFS=$'\t' read -r pr b; do BASE[$pr]=$b; done < "$WORK/pr_base.tsv"
 
 epoch() { date -u -d "$1" +%s 2>/dev/null || echo 0; }
 out="$WORK/rework_edges.tsv"; : > "$out"
 fails="$WORK/blame_failures.txt"; : > "$fails"
 
-jq -r --arg s "$SINCE" --arg u "$UNTIL" '[.[]|select(.mergedAt>$s and .mergedAt<$u and .mergeCommit!=null)]
+jq -r --arg s "$SINCE" --arg u "$UNTIL_TS" '[.[]|select(.mergedAt>$s and .mergedAt<$u and .mergeCommit!=null)]
   | sort_by(.mergedAt) | .[] | "\(.number)\t\(.mergeCommit.oid)\t\(.mergedAt)"' \
   "$WORK/prs_merged.json" |
 while IFS=$'\t' read -r pr sha mdate; do
-  np=$(git rev-list --parents -n1 "$sha" 2>/dev/null | wc -w)
-  if [ "$np" -ge 3 ]; then
-    base="${sha}^1"
-  else
-    n="${NCOM[$pr]:-1}"; [ "$n" -lt 1 ] && n=1
-    base="${sha}~${n}"
+  base="${BASE[$pr]:-}"
+  if [ -z "$base" ]; then
+    printf '%s\t(no base from stage 2)\t-\n' "$pr" >> "$fails"; continue
   fi
-  git rev-parse -q --verify "$base" >/dev/null 2>&1 || base="${sha}^1"
-  git rev-parse -q --verify "$base" >/dev/null 2>&1 || continue
+  git rev-parse -q --verify "$base" >/dev/null 2>&1 || {
+    printf '%s\t(base unresolvable)\t%s\n' "$pr" "$base" >> "$fails"; continue; }
 
   git diff --unified=0 --no-color "$base" "$sha" -- 'crates/*.rs' 'web/src/*.ts' 2>/dev/null |
   awk '

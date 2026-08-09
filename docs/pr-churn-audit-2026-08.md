@@ -26,32 +26,30 @@ before the numbers below were trustworthy (see [Method](#method)).
 | Measure | Value |
 |---|---|
 | PRs opened / merged | 232 / 218 |
-| Blame-paired rework edges | 3,114 |
-| Median rework lag | 2 days (57% within 3) |
-| Share of rework from PRs ≥400 added lines | **93.2%** (from 32% of PRs) |
+| Blame-paired rework edges | 1,841 |
+| Median rework lag | 1 day (65% within 3) |
+| Share of rework from PRs ≥400 added lines | **90.1%** (from 32% of PRs) |
 | Corrective-PR rate | flat 20–30% since April; 12% in Aug wk0 |
 
 ### Rework per 100 added lines, by PR size
 
 | Bucket | n | Mean of per-PR rates | Pooled (Σrework/Σadds) |
 |---|---:|---:|---:|
-| <100 adds | 42 | 1.4 | 1.1 |
-| 100–400 | 82 | 3.2 | 3.0 |
-| 400–1k | 41 | 8.5 | 8.3 |
-| **>1k** | 29 | **10.5** | 6.9 |
+| <100 adds | 42 | 1.6 | 2.1 |
+| 100–400 | 82 | 2.7 | 2.5 |
+| 400–1k | 41 | 6.3 | 6.2 |
+| **>1k** | 29 | 6.0 | 3.8 |
 
-**What is robust:** the rate rises steeply and monotonically across the first
-three buckets under *both* statistics — roughly 6–8× from <100 to 400–1k. That
-alone carries the norm, whose threshold is 400.
+**What is robust:** the rate rises across the first three buckets under *both*
+statistics — roughly 4× from <100 to 400–1k (1.6→6.3 mean, 2.1→6.2 pooled).
+That carries the norm, whose threshold is 400.
 
-**What is not:** the two statistics disagree on the 400–1k → >1k step in
-*direction*, not merely magnitude. The per-PR mean rises (8.5 → 10.5); pooled
-**falls** (8.3 → 6.9), because pooling weights by PR size and a few very large
-PRs with proportionally little rework dominate that cell. So: do not claim
-monotonicity across all four buckets, and do not claim >1k is worse than
-400–1k, or even "at least as bad" — one of the two statistics says it is
-better. The >1k bucket is **unresolved on this data**; the norm's threshold is
-400 precisely because that is where both statistics agree.
+**What is not:** the climb does not continue past 1k. Both statistics fall
+across the 400–1k → >1k step (mean 6.3 → 6.0, pooled 6.2 → 3.8), so >1k is
+**not** worse than 400–1k on this data — plausibly a floor effect, since the
+largest PRs are often standalone new subsystems with less existing code to
+collide with. The norm's threshold is 400 because that is where the rise
+happens.
 
 > **Denominators.** These buckets cover the 194 PRs that merged 2026-07-20 →
 > 08-09 with more than 20 added lines. That is narrower than the 218 merged
@@ -137,20 +135,31 @@ commit mapped back to its PR.
 
 Effect of correcting both:
 
-| Measure | v1 | v2 |
-|---|---:|---:|
-| Edges | 1,639 | 3,114 |
-| Median lag | 1d | 2d |
-| Within 3 days | 61% | 57% |
-| Chain-interior share | 61% | 38% |
-| Rate >1k adds | 5.7 | **10.5** |
-| Large-PR share | 89.7% | 93.2% |
+| Measure | v1 | v2 | **v3 (current)** |
+|---|---:|---:|---:|
+| Edges | 1,639 | 3,114 | **1,841** |
+| Median lag | 1d | 2d | **1d** |
+| Within 3 days | 61% | 57% | **65%** |
+| Rate <100 adds | 1.6 | 1.4 | **1.6** |
+| Rate 400–1k | 6.3 | 8.5 | **6.3** |
+| Rate >1k adds | 5.7 | 10.5 | **6.0** |
+| Large-PR share | 89.7% | 93.2% | **90.1%** |
 
-The size finding strengthened across the buckets where it is load-bearing.
-v1's per-PR-mean dip in the top bucket was an artifact of the truncation, not
-the floor effect I first claimed — but correcting it made only the *mean*
-monotonic, not the pooled figure, which still falls in the top bucket. The
-fix-chain finding shrank by a third.
+**v2 was the outlier, and v2 is what was originally published here.** Replacing
+`sha^1..sha` with a bare `sha~N..sha` fixed a too-narrow range by introducing a
+too-wide one: `gh` reports the PR *branch's* commit count, but a squash-merged
+PR contributes only one commit to main, so `sha~N` walks N−1 commits back into
+earlier PRs. Measured: **48 of 218 in-window PRs (22%)**, and size-correlated
+(17% under 400 adds, 34% over) — biased in the same direction as the finding.
+v3 resolves each range by walking back only until it meets a commit announcing
+a different PR, which handles squash, rebase and merge commits alike. It lands
+almost exactly on v1, whose two errors had partially cancelled.
+
+The size finding survives all three versions: the ~4× climb from <100 to
+400–1k, and large PRs producing ~90% of rework, are present in v1 and v3 and
+exaggerated in v2. What did *not* survive is v2's claim that the top bucket
+keeps climbing — under v3 it falls, and the floor-effect reading I originally
+gave in v1 (and then retracted) turns out to have been right.
 
 ### Caveats
 
