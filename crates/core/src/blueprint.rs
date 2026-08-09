@@ -136,15 +136,43 @@ pub fn export_with_manifest_styled(
     label: &str,
     style: crate::validate::LayoutStyle,
 ) -> (String, serde_json::Value) {
-    let (bp, mut manifest) = export_with_manifest_inner(layout, solver, label);
-
-    // Both arms carry the full issue list; `Err` only means at least one
-    // Error-severity issue is present, and we want warnings either way.
+    // `validate()` emits a terminal `ValidationCompleted` trace event. Doing
+    // that as a side effect of *exporting* would leak an extra event into any
+    // live trace stream and skew the snapshot debugger's error counts — the
+    // same hazard `decomposition_search.rs` guards for its per-candidate
+    // validations (#396, blocking finding). Discard whatever this call
+    // emitted, using the codebase's existing peek/truncate pattern.
+    let mark = crate::trace::peek_events_len();
     let issues = match crate::validate::validate(layout, Some(solver), style) {
+        // Both arms carry the full issue list; `Err` only means at least one
+        // Error-severity issue is present, and we want warnings either way.
         Ok(issues) => issues,
         Err(e) => e.issues,
     };
-    let summary = crate::validate::ValidatorSummary::from_issues(&issues, layout.warnings.len());
+    crate::trace::truncate_events(mark);
+
+    export_with_manifest_validated(layout, solver, label, &issues)
+}
+
+/// `export_with_manifest` for a caller that has **already validated**.
+///
+/// Prefer this wherever an issue list is in hand: it is the only variant that
+/// does not run the ~40-check validator, which on a 14k-entity mega-chain
+/// fixture is not free. [`export_with_manifest`] and
+/// [`export_with_manifest_styled`] both end up here after computing `issues`
+/// themselves.
+///
+/// `issues` must come from validating **this** layout — nothing checks that,
+/// and a mismatched list would put a confident, wrong `validator` block into
+/// an artifact the sim harness then reports as fact.
+pub fn export_with_manifest_validated(
+    layout: &LayoutResult,
+    solver: &crate::models::SolverResult,
+    label: &str,
+    issues: &[crate::validate::ValidationIssue],
+) -> (String, serde_json::Value) {
+    let (bp, mut manifest) = export_with_manifest_inner(layout, solver, label);
+    let summary = crate::validate::ValidatorSummary::from_issues(issues, layout.warnings.len());
     if let Some(obj) = manifest.as_object_mut() {
         obj.insert(
             "validator".to_string(),
@@ -652,6 +680,61 @@ mod tests {
         let direct = crate::validate::ValidatorSummary::from_issues(&issues, layout.warnings.len());
         assert_eq!(v["errors"].as_u64().unwrap() as usize, direct.errors);
         assert_eq!(v["warnings"].as_u64().unwrap() as usize, direct.warnings);
+
+        // The reconciliation above passes trivially if the fixture happens to
+        // validate clean (0 == 0 everywhere), which would let a
+        // category-attribution bug through unnoticed. This fixture does not
+        // validate clean, and the map itself is compared key-for-key.
+        assert!(
+            !direct.by_category.is_empty(),
+            "gear@10 is expected to carry issues; if it ever validates clean \
+             this test stops discriminating and must be re-pointed"
+        );
+        let manifest_cats: std::collections::BTreeMap<String, (u64, u64)> = cats
+            .iter()
+            .map(|(k, c)| {
+                (
+                    k.clone(),
+                    (c["errors"].as_u64().unwrap(), c["warnings"].as_u64().unwrap()),
+                )
+            })
+            .collect();
+        let direct_cats: std::collections::BTreeMap<String, (u64, u64)> = direct
+            .by_category
+            .iter()
+            .map(|(k, c)| (k.clone(), (c.errors as u64, c.warnings as u64)))
+            .collect();
+        assert_eq!(manifest_cats, direct_cats, "per-category attribution drift");
+    }
+
+    /// `export_with_manifest_validated` must not run the validator, and must
+    /// not perturb a live trace stream. The styled/plain variants do validate
+    /// internally, so they discard their own emission (#396's hazard).
+    #[test]
+    fn export_does_not_leak_validation_trace_events() {
+        use rustc_hash::FxHashSet;
+        let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
+        let solved = crate::solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-3")
+            .expect("solve");
+        let layout = crate::bus::layout::build_bus_layout(
+            &solved,
+            crate::bus::layout::LayoutOptions {
+                max_belt_tier: Some("transport-belt".into()),
+                ..Default::default()
+            },
+        )
+        .expect("layout");
+
+        let _guard = crate::trace::start_trace();
+        let before = crate::trace::peek_events_len();
+        let _ = export_with_manifest(&layout, &solved, "trace-check");
+        let after = crate::trace::peek_events_len();
+        assert_eq!(
+            before, after,
+            "exporting must not leave ValidationCompleted (or any) events in \
+             the stream — the snapshot debugger reports per-layout error \
+             counts from these"
+        );
     }
 
     /// The summary must distinguish categories, not just count. Guards the

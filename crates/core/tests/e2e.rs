@@ -9631,7 +9631,11 @@ fn rfc060_sim_export() {
             };
             let errs = issues.iter().filter(|i| i.severity == Severity::Error).count();
             let warns = issues.iter().filter(|i| i.severity == Severity::Warning).count();
-            let (bp, manifest) = blueprint::export_with_manifest(&lay, &solved, &label);
+            // Reuse the issues computed just above rather than letting export
+            // re-run the whole validator — on a mega-chain fixture that is a
+            // second pass over 14k+ entities for an identical answer.
+            let (bp, manifest) =
+                blueprint::export_with_manifest_validated(&lay, &solved, &label, &issues);
             std::fs::write(format!("{out}/{label}.bp"), &bp).expect("write bp");
             std::fs::write(
                 format!("{out}/{label}.manifest.json"),

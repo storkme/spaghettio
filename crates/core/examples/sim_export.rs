@@ -286,7 +286,12 @@ fn main() {
         .filter(|i| i.severity == Severity::Warning)
         .count();
 
-    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&layout, &solved, &label);
+    // Reuse the issues from just above — `export_with_manifest` would
+    // otherwise re-run the full validator for the same answer, which on the
+    // large fixtures this generator exists to produce is a real cost.
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest_validated(
+        &layout, &solved, &label, &issues,
+    );
     let dir = format!("{out}/{label}");
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
         eprintln!("cannot create {dir}: {e}");

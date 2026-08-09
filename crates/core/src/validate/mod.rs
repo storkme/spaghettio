@@ -205,10 +205,14 @@ impl ValidatorSummary {
     /// Build a summary from a validator issue list plus the layout's own
     /// pipeline-stamped warnings.
     ///
-    /// Takes the issues rather than running `validate()` so that a caller
-    /// which has already validated does not pay for it twice, and so that
-    /// the `Err(ValidationError)` arm — which still carries the full issue
-    /// list — summarizes identically to the `Ok` arm.
+    /// Takes the issues rather than running `validate()` so the
+    /// `Err(ValidationError)` arm — which still carries the full issue list
+    /// — summarizes identically to the `Ok` arm.
+    ///
+    /// To actually avoid validating twice, the caller must reach for
+    /// `blueprint::export_with_manifest_validated`, which is the only export
+    /// variant that does not validate internally. Passing an issue list
+    /// *here* saves nothing on its own.
     pub fn from_issues(issues: &[ValidationIssue], layout_warnings: usize) -> Self {
         let mut by_category: std::collections::BTreeMap<String, CategoryCount> = Default::default();
         let (mut errors, mut warnings) = (0usize, 0usize);
@@ -236,6 +240,20 @@ impl ValidatorSummary {
     /// True when nothing at all was reported — no validator issues and no
     /// pipeline warnings.
     ///
+    /// Two sharp edges, both deliberate:
+    ///
+    /// - **`layout_warnings` and `warnings` can double-count one defect.** A
+    ///   missing balancer template, for instance, surfaces as both a
+    ///   pipeline-stamped string and a validator issue. They are counted
+    ///   separately because neither channel subsumes the other, not because
+    ///   they are disjoint — do not add them and call the sum "defects".
+    /// - **Informational pipeline strings make this false.** A layout whose
+    ///   only entry is something like "fold search skipped" is reported as
+    ///   not-clean. That is the conservative direction on purpose: the cost
+    ///   of a spurious flag is a reader looking, and the cost of a missed one
+    ///   is #462 — a false "0 errors 0 warnings" on a layout that had a
+    ///   pipeline warning all along.
+    ///
     /// Note what this does *and does not* mean. It is the absence of a
     /// report, not evidence of correctness: of the ~40 checks only a handful
     /// carry real refusal power, and each of those is documented "never
@@ -245,8 +263,9 @@ impl ValidatorSummary {
         self.errors == 0 && self.warnings == 0 && self.layout_warnings == 0
     }
 
-    /// Compact one-line rendering for report tables, e.g. `2E/5W` or
-    /// `clean`. `+3L` suffixes pipeline-stamped layout warnings.
+    /// Compact one-line rendering for report tables: `clean`, or the
+    /// non-zero counts joined with `/` — `2E/5W`, `1E/2W/1L`, `3L`. The `L`
+    /// part is pipeline-stamped layout warnings.
     pub fn badge(&self) -> String {
         if self.is_clean() {
             return "clean".to_string();
