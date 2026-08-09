@@ -19,7 +19,11 @@ awk -F'\t' '{n++; if($4<=3)c++} END{printf "  within 3 days: %d/%d = %d%%\n", c,
 
 echo
 echo "=== rework per 100 added lines, by PR size"
-echo "    (buckets cover PRs with >20 adds; see the denominators note in the doc)"
+echo "    buckets cover PRs with >20 adds, merged from BUCKET_SINCE (see 01-fetch.sh)"
+echo "    NOTE the numerator is Rust/TS rework only (crates/*.rs, web/src/*.ts),"
+echo "    while the denominator is GitHub's TOTAL additions across all files."
+echo "    Consistent across buckets, so the comparison holds — but it is not"
+echo "    literally 'per 100 added lines'."
 awk -F'\t' -v T="$WORK/reworked_totals.tsv" '
   BEGIN{ while((getline l < T)>0){ split(l,p,"\t"); rw[p[1]]=p[2] } }
   FNR>1 && $6>20 {
@@ -31,9 +35,16 @@ awk -F'\t' -v T="$WORK/reworked_totals.tsv" '
     n[b]++; s[b]+=rate; tr[b]+=r; ta[b]+=adds
   }
   END{
+    # Sort the bucket rows INSIDE awk. Piping the whole block through `sort`
+    # sorted the header too — it begins with "b", so it landed BELOW the four
+    # numbered rows it labels. That shipped once and was caught in review after
+    # I had already quoted the output as verification.
+    nb=0
+    for(b in n) rows[++nb]=sprintf("  %-11s %4d %14.1f %10.1f", b, n[b], s[b]/n[b], 100*tr[b]/ta[b])
+    for(i=1;i<nb;i++) for(j=i+1;j<=nb;j++) if(rows[j]<rows[i]){t=rows[i];rows[i]=rows[j];rows[j]=t}
     printf "  %-11s %4s %14s %10s\n","bucket","n","mean-of-rates","pooled"
-    for(b in n) printf "  %-11s %4d %14.1f %10.1f\n", b, n[b], s[b]/n[b], 100*tr[b]/ta[b]
-  }' "$WORK/review_rounds.tsv" | sort
+    for(i=1;i<=nb;i++) print rows[i]
+  }' "$WORK/review_rounds.tsv"
 
 echo
 echo "=== share of all rework, by originating PR size"

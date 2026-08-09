@@ -12,10 +12,25 @@
 # exactly where the headline finding lives.
 #
 # Slow: one `git blame` per changed hunk. Budget ~10 min for ~220 PRs.
-set -euo pipefail
+# NOTE: deliberately NOT `set -e`. A single `git blame` failure (exit 128 on an
+# out-of-range -L, a missing object, a transient error) would otherwise abort
+# the whole stage mid-corpus and leave rework_edges.tsv SILENTLY SHORT — every
+# PR after the failing hunk dropped with no indication. For a script whose
+# entire purpose is re-derivable numbers, a silent truncation is the worst
+# available failure. Per-hunk failures are counted and reported instead.
+set -uo pipefail
 WORK="${WORK:-./audit-work}"
 REPO_DIR="${REPO_DIR:-$(git rev-parse --show-toplevel)}"
 SINCE="${SINCE:-2026-07-12}"
+UNTIL="${UNTIL:-2026-08-09}"
+
+# GNU coreutils / GNU grep required — see README. Fail loudly here rather than
+# producing a plausible-looking but wrong dataset: BSD `date` makes every age 0,
+# and `grep -P` errors drop every edge.
+date -u -d "2026-01-01" +%s >/dev/null 2>&1 || {
+  echo "ERROR: GNU date required (BSD date makes every age 0, silently)." >&2; exit 2; }
+echo x | grep -qoP 'x' 2>/dev/null || {
+  echo "ERROR: GNU grep with -P required (otherwise every edge is dropped)." >&2; exit 2; }
 cd "$REPO_DIR"
 
 declare -A C2P
@@ -28,8 +43,9 @@ while IFS=$'\t' read -r pr c; do NCOM[$pr]=$c; done < "$WORK/pr_commits.tsv"
 
 epoch() { date -u -d "$1" +%s 2>/dev/null || echo 0; }
 out="$WORK/rework_edges.tsv"; : > "$out"
+fails="$WORK/blame_failures.txt"; : > "$fails"
 
-jq -r --arg s "$SINCE" '[.[]|select(.mergedAt>$s and .mergeCommit!=null)]
+jq -r --arg s "$SINCE" --arg u "$UNTIL" '[.[]|select(.mergedAt>$s and .mergedAt<$u and .mergeCommit!=null)]
   | sort_by(.mergedAt) | .[] | "\(.number)\t\(.mergeCommit.oid)\t\(.mergedAt)"' \
   "$WORK/prs_merged.json" |
 while IFS=$'\t' read -r pr sha mdate; do
@@ -54,7 +70,9 @@ while IFS=$'\t' read -r pr sha mdate; do
     }' |
   while IFS=$'\t' read -r f st cn; do
     en=$((st+cn-1))
-    git blame -w --line-porcelain -L "${st},${en}" "$base" -- "$f" 2>/dev/null |
+    blame=$(git blame -w --line-porcelain -L "${st},${en}" "$base" -- "$f" 2>/dev/null) || {
+      printf '%s\t%s\t%s,%s\n' "$pr" "$f" "$st" "$en" >> "$fails"; continue; }
+    printf '%s' "$blame" |
       grep -oP '^[0-9a-f]{40}(?= )' | sort | uniq -c |
       while read -r nl bsha; do
         opr="${C2P[$bsha]:-}"; [ -z "$opr" ] && continue
@@ -66,4 +84,11 @@ while IFS=$'\t' read -r pr sha mdate; do
       done
   done
 done
+nf=$(wc -l < "$fails")
 echo "rework edges: $(wc -l < "$out")"
+# Loud, not silent: a truncated dataset that reports itself is recoverable; one
+# that doesn't is how the first version of this audit shipped wrong numbers.
+if [ "$nf" -gt 0 ]; then
+  echo "WARNING: $nf hunk(s) failed to blame — dataset is INCOMPLETE."
+  echo "         see $fails ; do not quote these figures until it is empty."
+fi
