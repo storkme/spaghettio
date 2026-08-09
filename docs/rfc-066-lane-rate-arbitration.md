@@ -53,8 +53,9 @@ An `Error`-severity, selection-participating check is running on one of two
 models that have never been arbitrated, and that model reads ~0.0/s across
 roughly half the belt graph. `docs/rate-stamp-semantics.md` §"the disagreement is
 unresolved and it matters" reaches the same place independently: it identifies the
-same split, notes the dispatched model *"reports 0 tiles over capacity in every
-arm"* where `belt_flow` flags the S=1 arms, and names **arbitrating the two
+same split, notes at its point 3 that the dispatched model *"reports **0** tiles
+over capacity in every arm at every stack size"* where `belt_flow` flags the S=1
+arms, and names **arbitrating the two
 models** as the follow-up. (That doc cites the dispatch at `validate/mod.rs:939`;
 at this RFC's base the line is 1079 — the code moved, the claim did not.)
 
@@ -66,7 +67,8 @@ not chased. That residual is **not** claimed here as caused by the walker split 
 four of those stages are exactly zero-headroom), which is a competing explanation
 this RFC does not displace. The third kill criterion exists precisely to settle
 that: if both walkers predict those fixtures equally badly, the deficit is
-elsewhere and this work is orthogonal to it.
+elsewhere (`docs/status.md`, the zero-headroom integral-machine-count entry) and
+this work is orthogonal to it.
 
 **Explicitly NOT cited as motivation: `tier2_electronic_circuit`.** Its ~9–10%
 was root-caused in `status.md` (2026-08-08, #607/#608) to the `di-bridge`
@@ -191,6 +193,17 @@ reads as a two-file change and is not:
   lists `belt_structural::compute_lane_rates` among the checks sharing it. This
   one is a **plain-backtick** reference, not an intra-doc link, so rustdoc will
   NOT flag it: it rots silently and must be cleaned by hand.
+- `crates/core/src/validate/inserters.rs:978-982` — **already stale today, and it
+  contradicts this RFC.** The prose says `belt_flow::check_input_rate_delivery`'s
+  *"lane-rate propagation never subtracts what upstream machines on the same belt
+  have already consumed"*. True before #519; `belt_flow.rs:2512` now documents the
+  forward consumption decrement, one of the three features this RFC credits
+  `belt_flow` with. Whoever re-points line 976 must rewrite this paragraph, or a
+  reader checking the source finds the repo contradicting the RFC's premise.
+- `crates/core/src/validate/inserters.rs:1041` — an unqualified
+  `check_lane_throughput` backtick. It will not dangle (a function of that name
+  survives in `belt_flow`), but its referent silently changes, so the surrounding
+  claim needs re-reading rather than a mechanical rename.
 
 ### Alternatives considered and rejected
 
@@ -208,13 +221,17 @@ reads as a two-file change and is not:
 
 - **Kill if Phase 0 cannot anchor the meter's per-lane readings.** If the meter's
   per-lane crossing counts cannot be reconciled with a sim observation on the #607
-  fixture (where per-lane state is known: near lane 0/4, far lane 4/4), there is no
-  oracle and the rest of this RFC is unfounded. Stop and write up the gap rather
+  fixture — whose per-lane state is recorded in committed source at
+  `crates/core/src/validate/inserters.rs:1355-1356`: *"the near lane reads `0/4`
+  along the entire run while the far lane saturates at `4/4`, and the layout
+  delivers 90.9% of plan while validating clean"* — there is no oracle and the
+  rest of this RFC is unfounded. Stop and write up the gap rather
   than falling back to walker-vs-walker.
 - **Kill if the oracle cannot separate the two models.** If, on the arbitration
   corpus, both walkers' per-lane predictions are equally far from the meter's, the
-  deficit is elsewhere (§2b zero-headroom) and unifying the walkers is orthogonal
-  to it. Say so and stop rather than widening scope.
+  deficit is elsewhere — `docs/status.md`'s zero-headroom integral-machine-count
+  entry is the standing competing explanation — and unifying the walkers is
+  orthogonal to it. Say so and stop rather than widening scope.
 - **Kill if the fixed winner changes no candidate selection AND surfaces no new
   true positive** on the corpus. Then this is a tidy-up, not a correctness fix:
   descope to a straight deduplication with no behavioural claim, and drop the
@@ -254,6 +271,25 @@ check that went quiet, every claim below is a count, not a sample.
    kit-clean, drift ~0. Deep chains get a long `--warmup` (`docs/status.md`
    §"Default warmup is too short for deep chains").
 7. **Clippy + WASM build** — checks, not nits.
+
+**Reproducing the numbers in this RFC.** Every corpus aggregate above comes from a
+probe committed alongside it, so a later implementer can re-run them and detect
+corpus drift before building the arbitration table. `crates/core/examples/` is
+gitignored by default; these four are whitelisted explicitly, on the same
+reasoning the `sim_export.rs` exception records:
+
+| figure | probe |
+|---|---|
+| 58% tile-slot disagreement; the 112,407 blind tiles and their segment breakdown; 5-of-504 vs 176-of-504 | `probe_walkers.rs` |
+| 2.0% impossible / 598 plausible / 933 unclassifiable over-cap triage | `probe_overcap_triage.rs` |
+| 2,898 layouts, 1,149,278 belt-in tiles, zero B8 (the result that rescoped #609) | `probe_b8_modes.rs` |
+| the 5730/5735 cycle runaway on `sci2` | `probe_walker_shape.rs` |
+
+Run as `cargo run --manifest-path crates/core/Cargo.toml --example <name>
+--release`. Note `probe_walkers.rs` reads issues out of `validate()`'s **`Err`**
+variant deliberately — that call returns `Err` *carrying* the issues whenever any
+fire, so the natural `unwrap_or(0)` reports zero findings for every layout that
+has them. An earlier draft of this RFC quoted a figure produced that way.
 
 ## Phasing
 
@@ -319,3 +355,18 @@ check that went quiet, every claim below is a count, not a sample.
   added `validate/mod.rs:432` to the consumers the delete breaks; unlike the two
   intra-doc links, it is a plain-backtick doc-comment reference that rustdoc will
   not flag, so it would rot silently.*
+- *2026-08-09 — third review pass on #615: six findings, three upheld, three
+  rejected on inspection. **Upheld:** (a) the corpus aggregates had no
+  reproduction path — the four generating probes are now committed with
+  `.gitignore` exceptions, closing the same "unverifiable source" class the first
+  two passes hit; (b) `inserters.rs:978-982` is stale TODAY and contradicts this
+  RFC, claiming `belt_flow` "never subtracts what upstream machines have already
+  consumed" when `belt_flow.rs:2512` documents the #519 decrement this RFC credits
+  it with; (c) a dangling "§2b" cross-reference inherited from the uncommitted
+  handoff, re-pointed at `status.md`. **Rejected:** the #607 per-lane anchor was
+  called uncommitted, but it is in tracked source at `inserters.rs:1355-1356` (now
+  cited rather than asserted); a quote was called a paraphrase, but it is verbatim
+  from `rate-stamp-semantics.md`'s point 3 (line reference added); and one finding
+  cited `crates/core/src/validate/e2e.rs`, which does not exist. Committing the
+  probes required making them clippy-clean — `-D warnings` is a gate once they are
+  tracked, and they were not.*
