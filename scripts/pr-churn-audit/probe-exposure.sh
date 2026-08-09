@@ -9,11 +9,19 @@
 set -euo pipefail
 WORK="${1:-${WORK:-./audit-work}}"
 . "$(dirname "$0")/window.env"
+# Same GNU guard as stage 3: this probe can run right after stage 1, which
+# performs no such check, and a BSD `date -d` would either abort or silently
+# compute a wrong END — feeding a wrong exposure table into the doc.
+date -u -d "2026-01-01" +%s >/dev/null 2>&1 || {
+  echo "ERROR: GNU date required (BSD date breaks -d parsing)." >&2; exit 2; }
 END=$(date -u -d "$UNTIL_TS" +%s)
+dropped=0
 jq -r '.[]|"\(.number)\t\(.mergedAt)"' "$WORK/prs_merged.json" | sort > "$WORK/.pr_dates"
 awk -F'\t' 'NR>1 && $6>20 {print $1"\t"$6}' "$WORK/review_rounds.tsv" | sort > "$WORK/.pr_adds"
 join -t $'\t' "$WORK/.pr_adds" "$WORK/.pr_dates" | while IFS=$'\t' read -r pr adds md; do
-  e=$(date -u -d "$md" +%s) || continue
+  if ! e=$(date -u -d "$md" +%s 2>/dev/null); then
+    echo "DROPPED: PR $pr has unparseable mergedAt '$md'" >&2; continue
+  fi
   printf '%s\t%s\n' "$adds" "$(( (END - e) / 86400 ))"
 done | awk -F'\t' '
   {
@@ -31,7 +39,12 @@ done | awk -F'\t' '
       cnt=n[b]
       for(i=1;i<=cnt;i++) for(j=i+1;j<=cnt;j++)
         if(d[b,j]<d[b,i]){t=d[b,i];d[b,i]=d[b,j];d[b,j]=t}
-      rows[++nb]=sprintf("  %-11s %4d %18.1f %8d", b, cnt, s[b]/cnt, d[b,int((cnt+1)/2)])
+      # Textbook median: mean of the two middles for even n. The lower-middle
+      # shortcut was off by up to a day on three of these four buckets, and
+      # the doc quotes these values.
+      if (cnt % 2) med = d[b,(cnt+1)/2]
+      else         med = (d[b,cnt/2] + d[b,cnt/2+1]) / 2
+      rows[++nb]=sprintf("  %-11s %4d %18.1f %8.1f", b, cnt, s[b]/cnt, med)
     }
     for(i=1;i<nb;i++) for(j=i+1;j<=nb;j++) if(rows[j]<rows[i]){t=rows[i];rows[i]=rows[j];rows[j]=t}
     printf "  %-11s %4s %18s %8s\n","bucket","n","mean-exposure-days","median"

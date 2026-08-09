@@ -187,11 +187,14 @@ PR that deletes a stale subsystem inflates the rework attributed to whoever
 wrote it. Keep it in mind when a single old PR shows a surprisingly large
 reworked total.
 
-**Whitespace-only churn is not counted.** Both the diff and the blame pass
-`-w`, deliberately paired: with `-w` on blame alone, a reformat-only sweep
-diffs whole blocks as deletions while the blame attributes those lines to
-their *original* authors — a large fake rework spike against old PRs for a
-semantic no-op.
+**Whitespace-only *modifications* are not counted.** Both the diff and the
+blame pass `-w`, deliberately paired: with `-w` on blame alone, a
+reformat-only sweep diffs whole blocks as deletions while the blame
+attributes those lines to their *original* authors — a large fake rework
+spike against old PRs for a semantic no-op. One edge stays counted,
+verified deliberately: *deleting* a line whose entire content is whitespace
+still emits a hunk under `-w` and is blamed — consistent with the
+deletions-count asymmetry above.
 
 **The age distribution and edge count are edge-weighted, not line-weighted.**
 Each (hunk × origin-commit) row counts once in the lag percentiles and once in
@@ -221,8 +224,14 @@ the published figures are unaffected. The flags are deliberately narrow: an
 earlier marker fired for every clean multi-commit rebase, the dominant case,
 and a warning that fires on everything is a warning about nothing.
 
-One residual no flag can catch: a commit subject ending in `(#N)` where N is a
-*merged PR's number* being used as an issue reference. At depth 1 that reads
-as a clean squash boundary and silently truncates the range; deeper in, it at
-least lands in boundary-stop-after-absorbing. Subjects cannot disambiguate
-that collision — the ISPR lookup narrows the issue-ref hole to exactly it.
+Two residuals no flag can catch. First: a commit subject ending in `(#N)`
+where N is a *merged PR's number* being used as an issue reference. At depth 1
+that reads as a clean squash boundary and silently truncates the range; deeper
+in, it at least lands in boundary-stop-after-absorbing. Subjects cannot
+disambiguate that collision — the ISPR lookup narrows the issue-ref hole to
+exactly it. Second: a walk that runs out of cap exactly on a *labelled* older
+boundary after absorbing anonymous commits. That signature is identical to
+every clean multi-commit rebase — flagging it would flag the dominant case,
+the round-5 lesson — so a squash PR whose gh count exactly spans a foreign
+anonymous block ending on a labelled boundary passes unflagged. Both residuals
+require data subjects cannot provide (the PR branch's own commit list).

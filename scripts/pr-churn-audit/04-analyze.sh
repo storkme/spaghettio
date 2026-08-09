@@ -20,6 +20,21 @@ WORK="${WORK:-./audit-work}"
 [ -s "$WORK/rework_edges.tsv" ] || {
   echo "ERROR: $WORK/rework_edges.tsv is missing or empty — run stage 3 first." >&2; exit 3; }
 
+# Enforce the completeness contract AT THE QUOTING POINT. Stages 1 and 3 warn
+# about their own failures in their own terminal output, but this is the stage
+# whose output gets transcribed into docs — a partial dataset must not produce
+# complete-looking numbers from a clean run here.
+for f in fetch_failures.txt blame_failures.txt; do
+  [ -s "$WORK/$f" ] && {
+    echo "ERROR: $WORK/$f is non-empty — the dataset is INCOMPLETE (see the" >&2
+    echo "       stage that wrote it). Refusing to print quotable numbers." >&2
+    exit 3; }
+done
+if [ -s "$WORK/range_unverified.txt" ]; then
+  echo "NOTE: $(wc -l < "$WORK/range_unverified.txt") flagged range(s) in range_unverified.txt —"
+  echo "      not fatal, but spot-check before quoting figures involving those PRs."
+fi
+
 awk -F'\t' '{t[$2]+=$5} END{for(k in t) print k"\t"t[k]}' "$WORK/rework_edges.tsv" \
   > "$WORK/reworked_totals.tsv"
 
