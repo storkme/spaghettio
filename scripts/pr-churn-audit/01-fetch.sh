@@ -7,24 +7,11 @@
 set -euo pipefail
 WORK="${WORK:-./audit-work}"
 REPO="${REPO:-storkme/spaghettio}"
-# TWO windows, deliberately, because the published figures use two.
-#   SINCE..UNTIL       the corpus: blame edges, age distribution, edge count.
-#   BUCKET_SINCE..UNTIL the per-PR review/latency pull the size buckets divide by.
-# They differ because the bucket data was collected later in the session, from
-# 07-20. Quoting a bucket count against the corpus count without reconciling
-# them is the mixed-denominator trap the audit doc warns about.
-SINCE="${SINCE:-2026-07-12}"
-BUCKET_SINCE="${BUCKET_SINCE:-2026-07-20}"
-# UNTIL is load-bearing for reproducibility: without it, `gh pr list` keeps
-# pulling PRs merged after the study and every n drifts upward over time.
-UNTIL="${UNTIL:-2026-08-09}"
-# End-of-day, NOT the bare date. mergedAt always carries a time, and
-# "2026-08-09T09:49:40Z" < "2026-08-09" is FALSE lexicographically — a bare
-# bound silently drops every PR merged on the closing day. Stage 3 uses the
-# same expansion; if these two ever disagree the corpus and the bucket
-# denominator cover different windows, which is the mixed-denominator trap
-# this pipeline exists to document.
-UNTIL_TS="${UNTIL}T23:59:59Z"
+# Window bounds live in window.env — one file, sourced by every consumer, so a
+# partial edit cannot put the corpus and the bucket denominators on different
+# windows. UNTIL is load-bearing for reproducibility: without it, `gh pr list`
+# keeps pulling PRs merged after the study and every n drifts upward forever.
+. "$(dirname "$0")/window.env"
 mkdir -p "$WORK"
 
 echo "fetching merged PRs from $REPO..."
@@ -34,7 +21,7 @@ echo "fetching merged PRs from $REPO..."
 # doc's v3 note), so hitting the limit is an ERROR, not a nit: the oldest PRs
 # are the likeliest blame TARGETS, and losing them sheds edges silently.
 gh pr list --repo "$REPO" --state merged --limit 1000 \
-  --json number,title,mergedAt,mergeCommit,headRefName,additions,deletions,changedFiles \
+  --json number,title,mergedAt,mergeCommit,additions,deletions,changedFiles \
   > "$WORK/prs_merged.json"
 npr=$(jq 'length' "$WORK/prs_merged.json")
 if [ "$npr" -ge 1000 ]; then

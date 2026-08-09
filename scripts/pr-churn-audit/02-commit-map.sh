@@ -18,8 +18,8 @@
 #   merge   -> a 2-parent commit; the PR's work is sha^1..sha^2.
 #
 # Measured on this corpus (probe-v2-defect.sh): trusting `sha~N` blindly gives
-# a wrong range for **50 of 221 in-window PRs (22%)**, and the error is
-# size-correlated (17% of PRs under 400 adds, 33% of those over) — i.e. biased
+# a wrong range for **50 of 221 in-window PRs (22.6%)**, and the error is
+# size-correlated (17.4% of PRs under 400 adds, 33.3% of those over) — biased
 # in the same direction as the size finding the audit publishes. Do not
 # reintroduce it.
 #
@@ -43,6 +43,15 @@ set -euo pipefail
 WORK="${WORK:-./audit-work}"
 REPO_DIR="${REPO_DIR:-$(git rev-parse --show-toplevel)}"
 cd "$REPO_DIR"
+
+# Cross-stage guard: stage 1's failures degrade THIS stage (a missing commit
+# count silently becomes a 1-commit range — the truncated-range defect), and a
+# stage-scoped warning is easy to miss on a partial re-run days later.
+if [ -s "$WORK/fetch_failures.txt" ]; then
+  echo "WARNING: stage 1 recorded $(wc -l < "$WORK/fetch_failures.txt") fetch failure(s)."
+  echo "         A missing commit count becomes a 1-commit range HERE. Re-run"
+  echo "         stage 1 until fetch_failures.txt is empty before trusting this."
+fi
 
 declare -A NCOM
 while IFS=$'\t' read -r pr c; do NCOM[$pr]=$c; done < "$WORK/pr_commits.tsv"
@@ -77,6 +86,7 @@ exec 3> "$WORK/issue_ref_skips.txt"
 overwalks=0
 caphits=0
 claimstops=0
+earlystops=0
 
 # Commits already assigned to a processed PR. PRs are processed in MERGE order
 # (sort_by(.mergedAt), not number), so by the time a PR's walk runs, every PR
@@ -89,7 +99,11 @@ declare -A CLAIMED
 
 while IFS=$'\t' read -r pr sha; do
   git cat-file -e "${sha}^{commit}" 2>/dev/null || continue
-  np=$(git rev-list --parents -n1 "$sha" | wc -w)
+  np=$(git rev-list --parents -n1 "$sha" 2>/dev/null | wc -w) || np=0
+  if [ "$np" -eq 0 ]; then
+    printf '%s\tunreadable-merge-commit\t%s\n' "$pr" "$sha" >> "$WORK/range_unverified.txt"
+    continue
+  fi
 
   if [ "$np" -ge 3 ]; then
     # True merge commit: the PR's work is the second-parent branch.
@@ -118,6 +132,19 @@ while IFS=$'\t' read -r pr sha; do
       printf '%s\t%s\n' "$csha" "$pr" >> "$WORK/.c2p.raw"; CLAIMED[$csha]=$pr
       depth=$((depth+1))
     done
+    # A boundary stop at depth > 1 means the walk ABSORBED depth-1 anonymous
+    # commits (unlabelled, unclaimed) before meeting the boundary. For a
+    # rebase-merged PR those are its own commits (gh's count overestimated);
+    # for a squash-merged PR they are foreign — e.g. a direct push to main —
+    # and the range is over-wide with the push's rework misattributed to this
+    # PR. Indistinguishable from subjects alone, so FLAG it; the earlier code
+    # ran its ambiguity check only on the hit_boundary=0 path, which let this
+    # exact case pass as clean (round-8 review, 3/3 passes).
+    if [ "$hit_boundary" -eq 1 ] && [ "$depth" -gt 1 ]; then
+      earlystops=$((earlystops+1))
+      printf '%s\tboundary-stop-after-absorbing\tabsorbed=%s\tcap=%s\n' \
+        "$pr" "$((depth-1))" "$cap" >> "$WORK/range_unverified.txt"
+    fi
     # The loop bound stops at depth-1, so the cap-th ancestor was never
     # inspected. Look at it now — that is what distinguishes the two cases:
     #
@@ -147,7 +174,12 @@ while IFS=$'\t' read -r pr sha; do
 done < <(jq -r '[.[]|select(.mergeCommit!=null)]|sort_by(.mergedAt)|.[]|"\(.number)\t\(.mergeCommit.oid)"' \
            "$WORK/prs_merged.json")
 
-sort -k1,1 -k2,2n "$WORK/.c2p.raw" | awk -F'\t' '{m[$1]=$2} END{for(k in m) print k"\t"m[k]}' \
+# First claim wins, deterministically: rows append in MERGE order and the
+# CLAIMED array already stops later walks at a claimed commit, so keeping the
+# first occurrence matches the walk's own semantics. (The old
+# sort|last-write dedup kept the highest PR number instead — a second,
+# unrelated tie-break that disagreed with CLAIMED on any overlap.)
+awk -F'\t' '!($1 in m){m[$1]=$2} END{for(k in m) print k"\t"m[k]}' "$WORK/.c2p.raw" \
   > "$WORK/commit2pr.tsv"
 rm -f "$WORK/.c2p.raw"
 
@@ -164,6 +196,11 @@ if [ "$skips" -gt 0 ]; then
   echo "trailing (#N) refs rejected as issue refs, walk continued: $skips"
   echo "  (each would have silently truncated a range if trusted as a boundary;"
   echo "   listed in $WORK/issue_ref_skips.txt)"
+fi
+if [ "$earlystops" -gt 0 ]; then
+  echo "boundary stops that first absorbed anonymous commits: $earlystops"
+  echo "  (rebase-with-overcounted-cap or squash-over-direct-push — cannot tell"
+  echo "   which from subjects; flagged in range_unverified.txt, spot-check them)"
 fi
 if [ "$caphits" -gt 0 ]; then
   echo "NOTE: $caphits PR(s) resolved to a base that announces no other PR, so the"

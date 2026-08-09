@@ -21,10 +21,9 @@
 set -uo pipefail
 WORK="${WORK:-./audit-work}"
 REPO_DIR="${REPO_DIR:-$(git rev-parse --show-toplevel)}"
-SINCE="${SINCE:-2026-07-12}"
-# End-of-day, not the bare date: "2026-08-09T00:00:00Z" < "2026-08-09" is FALSE
-# lexicographically, so a bare bound silently drops the entire closing day.
-UNTIL="${UNTIL:-2026-08-09}"; UNTIL_TS="${UNTIL}T23:59:59Z"
+# Window bounds come from window.env — the single source of truth shared with
+# stage 1 and the probe (see that file for why UNTIL_TS is end-of-day).
+. "$(dirname "$0")/window.env"
 
 # GNU coreutils / GNU grep required — see README. Fail loudly here rather than
 # producing a plausible-looking but wrong dataset: BSD `date` makes every age 0,

@@ -15,6 +15,11 @@
 set -euo pipefail
 WORK="${WORK:-./audit-work}"
 
+# An empty edge file would make every figure below 0/0 — gawk prints nan/inf
+# and exits 0, the quiet-garbage mode this pipeline bans. Refuse instead.
+[ -s "$WORK/rework_edges.tsv" ] || {
+  echo "ERROR: $WORK/rework_edges.tsv is missing or empty — run stage 3 first." >&2; exit 3; }
+
 awk -F'\t' '{t[$2]+=$5} END{for(k in t) print k"\t"t[k]}' "$WORK/rework_edges.tsv" \
   > "$WORK/reworked_totals.tsv"
 
@@ -45,7 +50,11 @@ awk -F'\t' '{print $4}' "$WORK/rework_edges.tsv" | sort -n | awk '
   # undershoots by one rank whenever N*p is fractional (N=7, p50 -> a[3]).
   function nr(p,  i){ i=int(NR*p); if (i < NR*p) i++; return a[i] }
   {a[NR]=$1} END{printf "  n=%d  p50=%s  p75=%s  p90=%s\n", NR, nr(.5), nr(.75), nr(.9)}'
-awk -F'\t' '{n++; if($4<=3)c++} END{printf "  within 3 days: %d/%d = %d%%\n", c, n, 100*c/n}' \
+# "under 4 days", because age is FLOORED to whole days: floor(age)<=3 covers
+# [0,4) days. The old "within 3 days" label promised [0,3] while measuring
+# [0,4) — same number, honest name. The comparator is deliberately unchanged
+# so the figure stays comparable across every version of this dataset.
+awk -F'\t' '{n++; if($4<=3)c++} END{printf "  under 4 days: %d/%d = %d%%\n", c, n, 100*c/n}' \
   "$WORK/rework_edges.tsv"
 
 echo
@@ -95,8 +104,12 @@ awk -F'\t' -v T="$WORK/reworked_totals.tsv" '
   BEGIN{ while((getline l < T)>0){ split(l,p,"\t"); rw[p[1]]=p[2] } }
   FNR>1 { r=(rw[$1]+0); g+=r
           if($6+0>=400){lg+=r; ln++}
-          if($6+0>20){ gp+=r; if($6+0>=400) np++ } }
-  END{ printf "  large (>=400 adds): PRs=%d  lines=%d\n", ln, lg
+          if($6+0>20) gp+=r }
+  END{ if (g==0 || gp==0) {
+         print "ERROR: zero total rework in a denominator — refusing to print shares." > "/dev/stderr"
+         exit 3
+       }
+       printf "  large (>=400 adds): PRs=%d  lines=%d\n", ln, lg
        printf "    of the bucket population(>20 adds) rework: %.1f%%\n", 100*lg/gp
        printf "    of all review_rounds rework (unfiltered) : %.1f%%\n", 100*lg/g }' \
   "$WORK/review_rounds.tsv"

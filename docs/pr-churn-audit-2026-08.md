@@ -27,7 +27,7 @@ before the numbers below were trustworthy (see [Method](#method)).
 |---|---|
 | PRs opened / merged | 237 / 221 |
 | Blame-paired rework edges | 2,022 |
-| Median rework lag | 1 day (61% within 3) |
+| Median rework lag | 1 day (61% under 4 days) |
 | Share of the bucket population's rework from PRs ≥400 added lines | **89.3%** (from 36% of that population) |
 | Corrective-PR rate | flat 20–30% since April; 12% in Aug wk0 |
 
@@ -154,11 +154,15 @@ Effect of correcting both, and of the two later review-caught fixes (v4):
 |---|---:|---:|---:|---:|
 | Edges | 1,639 | 3,114 | 1,999 | **2,022** |
 | Median lag | 1d | 2d | 2d | **1d** |
-| Within 3 days | 61% | 57% | 60% | **61%** |
+| Under 4 days¹ | 61% | 57% | 60% | **61%** |
 | Rate <100 adds | 1.6 | 1.4 | 1.6 | **1.6** |
 | Rate 400–1k | 6.3 | 8.5 | 6.1 | **4.7** |
 | Rate >1k adds | 5.7 | 10.5 | 6.0 | **5.7** |
 | Large-PR share | 89.7% | 93.2% | 90.1% | **89.3%** |
+
+¹ Formerly labelled "within 3 days". Ages floor to whole days, so the
+comparator (floor ≤ 3) covers [0,4) days; the label now says so. The
+comparator itself never changed, so the row is comparable across versions.
 
 These v4 figures are the **checked-in pipeline's own output**, regenerated
 end-to-end from scratch rather than from any surviving intermediate. (An
@@ -186,8 +190,8 @@ large-bucket rework lines drop 4,885 → 4,332.)
 too-wide one: `gh` reports the PR *branch's* commit count, but a squash-merged
 PR contributes only one commit to main, so `sha~N` walks N−1 commits back into
 earlier PRs. Measured (`probe-v2-defect.sh`): **50 of 221 in-window PRs
-(22%)**, and size-correlated (17% under 400 adds, 33% over) — biased in the
-same direction as the finding.
+(22.6%)**, and size-correlated (17.4% under 400 adds, 33.3% over) — biased in
+the same direction as the finding.
 v3 resolves each range by walking back only until it meets a commit announcing
 a different PR, which handles squash, rebase and merge commits alike. It lands
 almost exactly on v1, whose two errors had partially cancelled.
@@ -205,7 +209,7 @@ telling you it is unmeasured, not what its value is.
   ~57% planned iteration / 23% genuine correction / 20% collision. Absolute
   edge counts overstate churn; the size finding is ratio-based and survives.
 - **Lag figures and the edge count are edge-weighted.** The median/percentile
-  lag, "within 3 days" and the headline edge count are computed over
+  lag, "under 4 days" and the headline edge count are computed over
   (hunk × origin-commit) rows, each counting once regardless of how many lines
   it carries; only the bucket rates and the large-PR share are line-weighted.
   The two weightings answer slightly different questions and have not been

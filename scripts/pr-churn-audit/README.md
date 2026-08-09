@@ -68,9 +68,9 @@ main depends on the merge strategy, and **this repo uses all three**. A
 squash-merged PR contributes exactly one commit while `gh` still reports N, so
 `sha~N` walks N−1 commits back into *earlier* PRs; stage 3 then blames a range
 spanning other people's work. Measured, and re-derivable with
-`probe-v2-defect.sh`: **50 of 221 in-window PRs (22%)**, size-correlated (17%
-of PRs under 400 adds, 33% of those over) — i.e. skewed in the same direction
-as the size finding it feeds.
+`probe-v2-defect.sh`: **50 of 221 in-window PRs (22.6%)**, size-correlated
+(17.4% of PRs under 400 adds, 33.3% of those over) — i.e. skewed in the same
+direction as the size finding it feeds.
 
 Stage 2 therefore resolves each range by walking back from the merge commit and
 **stopping at the first commit that announces a different PR** — `Merge pull
@@ -103,7 +103,7 @@ cannot distinguish them. That error mis-attributed **35% of commits** (322 of
 |---|---:|---:|---:|---:|
 | Edges | 1,639 | 3,114 | 1,999 | 2,022 |
 | Median lag | 1d | 2d | 2d | 1d |
-| Within 3 days | 61% | 57% | 60% | 61% |
+| Under 4 days (floored ages ≤3) | 61% | 57% | 60% | 61% |
 | Rate 400–1k | 6.3 | 8.5 | 6.1 | 4.7 |
 | Rate >1k | 5.7 | 10.5 | 6.0 | 5.7 |
 | Large-PR share | 89.7% | 93.2% | 90.1% | 89.3% |
@@ -196,19 +196,32 @@ semantic no-op.
 Each (hunk × origin-commit) row counts once in the lag percentiles and once in
 the headline edge count, regardless of its `lines` column; only the bucket
 rates and the large-PR share are line-weighted (they sum that column). A
-40-line deletion and a 1-line edit pull equally on "median lag / within 3
+40-line deletion and a 1-line edit pull equally on "median lag / under 4
 days"; nothing here says lag would look the same weighted per-line.
 
-**The boundary walk is a heuristic, not a proof.** Stage 2 stops at the first
-ancestor whose subject announces another PR, then checks whether the resolved
-base *itself* announces one. If it does, the range ended cleanly on the previous
-PR's boundary. If it doesn't, the case is genuinely ambiguous — either a rebase
-onto an unlabelled commit (harmless) or a squash whose range is now over-wide
-(the v2 defect) — and it is written to `range_unverified.txt` with its base
-subject.
+**The boundary walk is a heuristic, not a proof.** Three flag classes land in
+`range_unverified.txt`, all meaning "spot-check before quoting affected PRs":
 
-That final check matters: without it the marker fired for *every* clean
-multi-commit rebase, i.e. the dominant case, which made it useless for spotting
-the harmful one. A warning that fires on everything is a warning about nothing.
-On the current corpus 11 PRs are ambiguous, all numbered 144–306 — none inside
-the audit window, so the published figures are unaffected.
+- **ambiguous-base** — the walk ran to its cap and the resolved base announces
+  no other PR: either a rebase onto an unlabelled commit (harmless) or a
+  squash whose range is over-wide (the v2 defect). 11 on the current corpus.
+- **boundary-stop-after-absorbing** — the walk absorbed anonymous commits and
+  *then* hit a boundary: either a rebase whose `gh` count overestimated
+  (harmless) or a squash sitting on a direct push to main, whose range is
+  over-wide and whose absorbed commits' rework is misattributed. 4 on the
+  current corpus. The round-8 review caught that the previous revision ran its
+  ambiguity check only on walks that reached the cap, so this class passed as
+  clean with no marker at all.
+- **unreadable-merge-commit** — the merge commit's parents could not be read
+  (partial clone); the PR is skipped and recorded rather than guessed at.
+
+All 15 flagged PRs are numbered 144–306 — none inside the audit window, so
+the published figures are unaffected. The flags are deliberately narrow: an
+earlier marker fired for every clean multi-commit rebase, the dominant case,
+and a warning that fires on everything is a warning about nothing.
+
+One residual no flag can catch: a commit subject ending in `(#N)` where N is a
+*merged PR's number* being used as an issue reference. At depth 1 that reads
+as a clean squash boundary and silently truncates the range; deeper in, it at
+least lands in boundary-stop-after-absorbing. Subjects cannot disambiguate
+that collision — the ISPR lookup narrows the issue-ref hole to exactly it.
