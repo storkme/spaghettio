@@ -10,15 +10,30 @@ folklore.
 
 ```bash
 export WORK=/tmp/audit-work          # scratch dir (default ./audit-work)
-export SINCE=2026-07-12              # window start
+export SINCE=2026-07-12              # corpus window start
+export BUCKET_SINCE=2026-07-20       # size-bucket window start (see below)
+export UNTIL=2026-08-09              # window end — omit it and n drifts forever
 bash scripts/pr-churn-audit/01-fetch.sh        # PR corpus + commit counts   (~5 min, API-bound)
 bash scripts/pr-churn-audit/02-commit-map.sh   # commit -> PR map            (~1 min)
 bash scripts/pr-churn-audit/03-blame-edges.sh  # rework edges via git blame  (~10 min)
 bash scripts/pr-churn-audit/04-analyze.sh      # the headline numbers
 ```
 
-Needs `gh` (authenticated), `jq`, and a full clone — stage 3 blames history, so
-a shallow checkout silently produces nothing.
+Needs `gh` (authenticated), `jq`, **GNU coreutils and GNU grep**, and a full
+clone — stage 3 blames history, so a shallow checkout silently produces nothing.
+
+The GNU requirement is not cosmetic and stage 3 now refuses to start without
+it: BSD `date` makes `epoch()` return 0, so every age becomes 0 and the age
+distribution collapses to a plausible-looking lie; BSD `grep` has no `-P`, so
+every edge is dropped. Both fail quietly, which is why they are checked up
+front.
+
+**Two windows, deliberately.** `SINCE..UNTIL` bounds the corpus (edges, ages);
+`BUCKET_SINCE..UNTIL` bounds the per-PR review pull the size buckets divide by.
+They differ because the two datasets were collected at different points in the
+session — 218 merged PRs in the corpus, 217 in the bucket pull, 194 after the
+>20-adds floor. Do not quote a bucket `n` against a corpus `n` without
+reconciling them; that is the mixed-denominator trap the audit doc warns about.
 
 ## Two mistakes this pipeline exists to not repeat
 
@@ -54,7 +69,22 @@ Buckets cover PRs with more than 20 added lines merged from the start of
 set. These denominators differ, and the audit doc's "Denominators" note explains
 why. Reconcile before quoting them against each other.
 
-## What is not here
+### Scope of "reproduces exactly"
+
+These scripts regenerate the **blame-edge, age-distribution and size-bucket**
+figures — the ones CLAUDE.md's norm rests on. They do **not** regenerate the
+rest of the audit: the corrective-PR rate, the merge-latency bands, the
+within-PR complexity control, the day-level concurrency correlation, and the
+warm-review scoring were all hand-classified or one-off, and are recorded in
+the docs rather than automated. Treat "reproduces every figure" as scoped to
+what stage 4 prints.
+
+Also note the numerator/denominator scope mismatch stage 4 now prints: rework
+is blamed only over `crates/*.rs` and `web/src/*.ts`, while `adds` is GitHub's
+total additions across all files. The ratio is consistent across buckets so the
+comparison holds, but it is not literally "per 100 added lines".
+
+# What is not here
 
 The blame-edge dataset counts a later PR rewriting an earlier PR's lines. A
 sampled classification put that at roughly **57% planned iteration / 23%

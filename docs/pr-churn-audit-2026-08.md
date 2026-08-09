@@ -7,9 +7,12 @@ session notes. If the norm goes, this can go with it; not before. Numbers here
 are scoped to the window in the title — re-measure before citing them outside
 it, using the checked-in pipeline at
 [`scripts/pr-churn-audit/`](../scripts/pr-churn-audit/README.md). That pipeline
-reproduces every figure below exactly; its README documents the two measurement
-defects (truncated diff range, issue-numbers-read-as-PR-numbers) that made the
-first version of these numbers wrong.
+reproduces the **blame-edge, age and size-bucket** figures exactly — the ones
+the norm rests on. It does not regenerate the hand-classified parts (corrective
+rate, latency bands, the within-PR complexity control, concurrency); those live
+only in this doc. Its README also records the two measurement defects
+(truncated diff range, issue-numbers-read-as-PR-numbers) that made the first
+version of these numbers wrong.
 
 Motivating question from the owner: PR churn feels like it's rising — is the
 model getting worse, or is the code getting harder to work in?
