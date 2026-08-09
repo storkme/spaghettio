@@ -35,27 +35,54 @@ session — 218 merged PRs in the corpus, 217 in the bucket pull, 194 after the
 >20-adds floor. Do not quote a bucket `n` against a corpus `n` without
 reconciling them; that is the mixed-denominator trap the audit doc warns about.
 
-## Two mistakes this pipeline exists to not repeat
+## Three mistakes this pipeline exists to not repeat
 
-Both were made in the first version of the audit, both changed the answer, and
-both were caught by someone else rather than by the author.
+All three were made while producing these numbers, all three changed the
+answer, and every one was caught by a reviewer rather than by the author.
 
-**The diff range.** This repo *rebase-merges* multi-commit PRs, so a PR's
-recorded `mergeCommit` is only its **last** commit. Diffing `sha^1..sha` sees a
+**1. The diff range, too narrow.** A PR's recorded `mergeCommit` is only its
+**last** commit when the PR was rebase-merged. Diffing `sha^1..sha` then sees a
 fraction of the change — measured on #317, 18 lines of one docs file out of 281
-additions across 3 commits. It is worst where it matters most: PRs above 1k
-additions average **13.6 commits** against 1.5 below 100. Stage 3 therefore
-uses `sha~N..sha`, with `sha^1..sha^2` for true merge commits.
+additions across 3 commits. Worst where it matters: PRs above 1k additions
+average **13.6 commits** against 1.5 below 100.
 
-**The commit → PR map.** Parsing `(#N)` out of commit subjects does not work
+**2. The diff range, too wide.** The obvious fix — `sha~N..sha`, with N from
+`gh pr view --json commits` — is also wrong, and this is the subtle one. `gh`
+reports the PR *branch's* commit count, but the number of commits that reach
+main depends on the merge strategy, and **this repo uses all three**. A
+squash-merged PR contributes exactly one commit while `gh` still reports N, so
+`sha~N` walks N−1 commits back into *earlier* PRs; stage 3 then blames a range
+spanning other people's work. Measured: **48 of 218 in-window PRs (22%)**, and
+size-correlated (17% of PRs under 400 adds, 34% of those over) — i.e. skewed in
+the same direction as the size finding it feeds.
+
+Stage 2 therefore resolves each range by walking back from the merge commit and
+**stopping at the first commit that announces a different PR** (`Merge pull
+request #N`, or a trailing `(#N)`). That is strategy-agnostic: for a squash it
+stops at depth 1, for a rebase it stops at the previous PR's boundary, and true
+merge commits take `sha^1..sha^2`. The resolved base is written once to
+`pr_base.tsv` and stage 3 consumes it rather than re-deriving.
+
+**3. The commit → PR map.** Parsing `(#N)` out of commit subjects does not work
 here, because this project writes *issue* references into subjects and a regex
 cannot distinguish them. That error mis-attributed **35% of commits** (322 of
-907). Stage 2 derives the map from authoritative per-PR commit ranges instead.
+907). Stage 2 derives the map from the resolved ranges instead.
 
-Correcting both roughly doubled the edge count (1,639 → 3,114), moved the median
-rework lag from 1 day to 2, and turned the size relationship from
-1.6/2.7/6.3/**5.7** into 1.4/3.2/8.5/**10.5** — the dip in the top bucket had
-been an artifact of the truncation, not a floor effect.
+### What each version produced
+
+| Measure | v1 (narrow + regex) | v2 (wide) | v3 (current) |
+|---|---:|---:|---:|
+| Edges | 1,639 | 3,114 | 1,841 |
+| Median lag | 1d | 2d | 1d |
+| Within 3 days | 61% | 57% | 65% |
+| Rate 400–1k | 6.3 | 8.5 | 6.3 |
+| Rate >1k | 5.7 | 10.5 | 6.0 |
+| Large-PR share | 89.7% | 93.2% | 90.1% |
+
+v2 is the one that was published, and it is the outlier. v3 lands almost
+exactly on v1, whose two errors had partially cancelled. The finding the norm
+rests on — a ~4× climb from <100 to 400–1k, and ~90% of rework from PRs ≥400
+adds — is present in all three; only its magnitude moved.
 
 ## Reading the output
 
