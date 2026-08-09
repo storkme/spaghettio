@@ -32,9 +32,13 @@ fn main() {
 
     let mut f_tot: Vec<f64> = flow.values().map(|v| v[0] + v[1]).collect();
     let mut s_tot: Vec<f64> = strct.values().map(|v| v.0 + v.1).collect();
-    f_tot.sort_by(|a, b| b.partial_cmp(a).unwrap());
-    s_tot.sort_by(|a, b| b.partial_cmp(a).unwrap());
+    f_tot.sort_by(|a, b| b.total_cmp(a));
+    s_tot.sort_by(|a, b| b.total_cmp(a));
     let sum = |v: &[f64]| v.iter().sum::<f64>();
+    if f_tot.is_empty() || s_tot.is_empty() {
+        println!("=== {which}: one or both lane-rate maps are EMPTY — nothing to compare ===");
+        return;
+    }
     println!("=== {which}: {} tiles(flow) {} tiles(struct) ===", flow.len(), strct.len());
     println!("belt_flow   total={:.0} max={:.1} top10={:?}", sum(&f_tot), f_tot[0],
         f_tot.iter().take(10).map(|x| (x * 10.0).round() / 10.0).collect::<Vec<_>>());
@@ -48,7 +52,8 @@ fn main() {
         let d = (f[0] - s[0]).abs().max((f[1] - s[1]).abs());
         rows.push((k, f, s, d));
     }
-    rows.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap());
+    // `total_cmp`, not `partial_cmp().unwrap()`: a NaN lane rate would panic.
+    rows.sort_by(|a, b| b.3.total_cmp(&a.3));
     println!("\n--- top 20 divergences ---");
     for (k, f, s, d) in rows.iter().take(20) {
         println!(

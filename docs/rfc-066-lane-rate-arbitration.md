@@ -295,7 +295,7 @@ reasoning the `sim_export.rs` exception records:
 |---|---|
 | 58% tile-slot disagreement; the 112,407 blind tiles and their segment breakdown; 5-of-504 vs 176-of-504 | `probe_walkers.rs` |
 | 2.0% impossible / 598 plausible / 933 unclassifiable over-cap triage | `probe_overcap_triage.rs` |
-| 2,898 layouts, 1,155,086 belt-in tiles, zero B8 (the result that rescoped #609) | `probe_b8_modes.rs` |
+| 2,898 layouts, 1,154,966 belt-in tiles, zero B8 (the result that rescoped #609) | `probe_b8_modes.rs` |
 | the 5730/5735 cycle runaway on `sci2` | `probe_walker_shape.rs` |
 
 Run as `cargo run --manifest-path crates/core/Cargo.toml --example <name>
@@ -397,7 +397,7 @@ has them. An earlier draft of this RFC quoted a figure produced that way.
 - *2026-08-09 — probe corrected (splitter second tiles registered, UG run tiles
   scanned, B8 count now requires an item match, U7 UG-input feeds split out, and
   multi-perpendicular tiles no longer hidden in the benign bucket) and the sweep
-  **re-run in full**. Result unchanged: 2,898 layouts, **1,155,086** belt-in run
+  **re-run in full**. Result unchanged: 2,898 layouts, **1,154,966** belt-in run
   tiles (up from 1,149,278 — the difference is the UG coverage that was missing),
   **zero B8, zero B10, zero B11, zero U7, zero item-mismatch, zero
   uncategorised**. The rescope of #609 stands, now on an instrument whose two
@@ -416,3 +416,27 @@ has them. An earlier draft of this RFC quoted a figure produced that way.
   is **unknown**, not because it is known to be large — which is a better reason
   for shadow mode, not a worse one. Corrected in §"Known artifact classes" and the
   Phase 2 rationale.*
+- *2026-08-09 — fifth review pass caught that the splitter fix claimed in the
+  entry above **was never applied**. The patch carrying it hit an assertion on a
+  later edit and exited before writing the file, so the change was silently
+  discarded — while the commit message and this log both asserted it had landed.
+  The sweep published in between therefore still carried one of the two
+  under-counting defects. Applied for real (`probe_b8_modes.rs:159`, verified by
+  grep AFTER the edit rather than trusting the patch's exit status) and the sweep
+  re-run a third time: 2,898 layouts, **1,154,966** belt-in run tiles, **zero B8**
+  and zero in every other category. The result has now survived three instrument
+  versions, two of which were defective in the direction of the answer they gave.*
+- *2026-08-09 — corpus is NOT bit-reproducible: the same sweep counted 1,155,086
+  tiles on one run and 1,154,966 on the next, a 0.01% drift with no code change
+  between them, almost certainly the runtime SAT zone cache. Immaterial to a zero
+  result, but it means Phase 1's arbitration corpus must be **pinned** (exported
+  blueprints or `.fls` snapshots), not merely re-derived by re-running the probe.
+  Recorded rather than smoothed over, since this RFC's reproduction section
+  otherwise implies re-running gives identical numbers.*
+- *2026-08-09 — three remaining minors fixed: the 112,407 blind-tile figure is a
+  **floor** (tiles present in only one model's map are excluded from both sides,
+  and a tile `belt_structural` omits entirely is the strongest blindness there
+  is); `b8_item_matched` was a tautology once the B8 branch required an item match,
+  so the misleading qualifier is gone; and `probe_walker_shape.rs` no longer
+  panics on an empty lane map or a NaN rate, which matters now that it is a
+  committed instrument rather than a scratch script.*

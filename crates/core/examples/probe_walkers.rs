@@ -123,6 +123,11 @@ fn main() {
                                     let d = (f[0] - s[0]).abs().max((f[1] - s[1]).abs());
                                     let (ft, st) = (f[0] + f[1], s[0] + s[1]);
                                     // Which model reads ZERO where the other sees flow?
+                                    // NOTE: this is a FLOOR. It only counts tiles
+                                    // BOTH maps contain. A tile one model omits
+                                    // entirely (see `tiles_only_flow`) is arguably
+                                    // the strongest blindness there is, and is
+                                    // excluded from this count.
                                     if st <= 0.01 && ft > 0.1 {
                                         *blind_struct.entry(seg.clone()).or_default() += 1;
                                     } else if ft <= 0.01 && st > 0.1 {

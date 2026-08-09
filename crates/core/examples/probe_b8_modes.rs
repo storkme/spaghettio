@@ -23,7 +23,9 @@
 use spaghettio_core::bus::di_cell::DirectInsertion;
 use spaghettio_core::bus::cells::CellComposition;
 use spaghettio_core::bus::layout::{LayoutOptions, LayoutStrategy, RowLayout};
-use spaghettio_core::common::{dir_to_vec, is_splitter, is_surface_belt, is_ug_belt};
+use spaghettio_core::common::{
+    dir_to_vec, is_splitter, is_surface_belt, is_ug_belt, splitter_second_tile,
+};
 use spaghettio_core::models::EntityDirection;
 use spaghettio_core::{bus::layout, solver};
 use std::collections::HashMap;
@@ -76,7 +78,6 @@ fn main() {
     let mut layouts = 0usize;
     let mut run_tiles = 0usize;
     let mut b8 = 0usize;
-    let mut b8_item_matched = 0usize;
     let mut b10 = 0usize;
     let mut b11_turn = 0usize;
     let mut u7_into_ug_input = 0usize;
@@ -147,6 +148,17 @@ fn main() {
                     if is_surface_belt(&e.name) || is_ug_belt(&e.name) || is_splitter(&e.name) {
                         dir_of.insert((e.x, e.y), e.direction);
                         carries_of.insert((e.x, e.y), e.carries.clone());
+                        // A splitter occupies TWO tiles. Registering only the
+                        // origin makes the second invisible, so a run tile fed
+                        // straight THROUGH it reads as having no straight feeder
+                        // — which collapses a genuine B8 sideload into the benign
+                        // B11-turn bucket. Under-counts precisely what this probe
+                        // exists to find.
+                        if is_splitter(&e.name) {
+                            let second = splitter_second_tile(e);
+                            dir_of.insert(second, e.direction);
+                            carries_of.insert(second, e.carries.clone());
+                        }
                     }
                 }
                 // the belt-in run tiles
@@ -208,7 +220,6 @@ fn main() {
                     if straight && straight_im && perps_im > 0 {
                         b8 += 1;
                         n_b8 += 1;
-                        b8_item_matched += 1;
                         if examples.len() < 25 {
                             examples.push(format!(
                                 "{name} belt={} di={di:?} strat={strategy:?} rl={row_layout:?} mt={merge_tap} cc={cell_composition:?} st={stacking} tile=({},{}) seg={}",
@@ -242,7 +253,11 @@ fn main() {
     }
 
     println!("\n===== {layouts} layouts, {run_tiles} belt-in run tiles =====");
-    println!("  B8 sideload into a belt-in tile (perp + straight):  {b8}   [item-matched: {b8_item_matched}]");
+    // No "[item-matched: N]" qualifier: the B8 branch REQUIRES the item match,
+    // so a separate count would always equal `b8` and imply a non-matched B8
+    // category that cannot exist. Item-mismatched perp+straight is reported on
+    // its own line below.
+    println!("  B8 sideload into a belt-in tile (perp + straight):  {b8}");
     println!("  B10 opposing double sideload (both lanes):          {b10}");
     println!("  B11 turn, sole perpendicular (both lanes, benign):  {b11_turn}");
     println!("  U7 perpendicular onto a UG INPUT (far lane, inverted): {u7_into_ug_input}");
