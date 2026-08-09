@@ -74,8 +74,8 @@ while IFS=$'\t' read -r pr sha mdate; do
   # it a rustfmt-style sweep diffs whole blocks as deletions while -w blame
   # attributes those lines to their ORIGINAL authors — a fake rework spike
   # against old PRs for a semantic no-op.
-  if ! git diff --unified=0 --no-color -w "$base" "$sha" -- 'crates/*.rs' 'web/src/*.ts' \
-       > "$WORK/.diff.tmp" 2>/dev/null; then
+  if ! git -c diff.renames=true diff --unified=0 --no-color -w "$base" "$sha" \
+       -- 'crates/*.rs' 'web/src/*.ts' > "$WORK/.diff.tmp" 2>/dev/null; then
     printf '%s\t(git diff failed)\t%s..%s\n' "$pr" "$base" "$sha" >> "$fails"; continue
   fi
   awk '

@@ -15,7 +15,6 @@ WORK="${1:-${WORK:-./audit-work}}"
 date -u -d "2026-01-01" +%s >/dev/null 2>&1 || {
   echo "ERROR: GNU date required (BSD date breaks -d parsing)." >&2; exit 2; }
 END=$(date -u -d "$UNTIL_TS" +%s)
-dropped=0
 jq -r '.[]|"\(.number)\t\(.mergedAt)"' "$WORK/prs_merged.json" | sort > "$WORK/.pr_dates"
 awk -F'\t' 'NR>1 && $6>20 {print $1"\t"$6}' "$WORK/review_rounds.tsv" | sort > "$WORK/.pr_adds"
 join -t $'\t' "$WORK/.pr_adds" "$WORK/.pr_dates" | while IFS=$'\t' read -r pr adds md; do

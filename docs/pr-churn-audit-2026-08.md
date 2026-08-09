@@ -63,9 +63,10 @@ The same confound was checked against the *climb* and measured dead
 (`probe-exposure.sh`): mean exposure — days between merge and window end — is
 flat across the buckets, **11.2 / 12.2 / 12.1 / 11.4 days** (<100 → >1k,
 medians 11/14/14/10). An 8% exposure difference cannot manufacture a ~3× rate
-difference, so the <100 → 400–1k climb is not an exposure-time artifact; the
->1k bucket sitting *lowest* is consistent with, and small relative to, the
-censoring caveat above.
+difference, so the <100 → 400–1k climb is not an exposure-time artifact. For
+the >1k bucket the support is weaker and median-only: its *median* exposure
+sits lowest (10 days) while its mean is second-lowest by 0.2 days — weakly
+consistent with the censoring caveat above, and small either way.
 
 > **Denominators.** `04-analyze.sh` prints these; do not hand-derive them.
 > The per-PR pull (`review_rounds.tsv`) covers **220** PRs merged 2026-07-20 →
