@@ -67,6 +67,9 @@ web/src/wasm-pkg/
 !/crates/core/examples/probe_overcap_triage.rs
 !/crates/core/examples/probe_b8_modes.rs
 !/crates/core/examples/probe_walker_shape.rs
+# ...and the Phase-0 probes for the cell-interface DB investigation
+# (RFC-067): they produce the quoted census numbers, same reasoning again.
+!/crates/core/examples/probe_motif_census.rs
 
 # not sure what this is even lol
 *:Zone.Identifier
