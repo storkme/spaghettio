@@ -89,11 +89,15 @@ fn main() {
     // the right filter: it catches a producer's drop tile and a consumer's
     // pickup tile as well as belt->belt.
     let mut printed = 0usize;
+    let mut machine_taps = 0usize;
     for (w, (d0, s0)) in f.inserters.iter().zip(&base) {
         if !(touches_item(&w.pickup) || touches_item(&w.drop)) {
             continue;
         }
         printed += 1;
+        if matches!(w.pickup, Endpoint::Machine(_)) || matches!(w.drop, Endpoint::Machine(_)) {
+            machine_taps += 1;
+        }
         let ep = |e: &Endpoint| match e {
             Endpoint::Belt(t) => format!("belt{:?}", f.net.tiles[*t].pos),
             Endpoint::Machine(i) => {
@@ -114,14 +118,21 @@ fn main() {
     // Non-vacuity guard. Lesson 6 of the handoff note committed alongside this
     // file: "a check that stops discriminating is worse than one that fails",
     // and any scoping change needs a guard asserting the probe still has
-    // something to inspect. Both this section and `item_tiles` are scoped, and
-    // an empty scope here looks identical to a healthy factory with nothing to
-    // report.
+    // something to inspect. Every section below the machines listing is scoped
+    // to ITEM via `item_tiles`, and an empty scope looks identical to a healthy
+    // factory with nothing to report.
+    //
+    // Three failure levels, not two. The partial case is the dangerous one:
+    // `item_tiles` is a single end-of-window sample, and a tap tile that
+    // happens to be empty at that instant drops out silently while other tiles
+    // keep the set non-empty — so an entire tap population can vanish with the
+    // output still looking complete.
     if item_tiles.is_empty() {
         eprintln!(
-            "\n!! VACUOUS: no belt tile held {ITEM} at sample time, so every {ITEM}-scoped \
-             section above is empty by construction, not by finding. Wrong fixture, wrong \
-             item, or a window that ended mid-gap."
+            "\n!! VACUOUS: no belt tile held {ITEM} at sample time. Every {ITEM}-scoped \
+             section (the inserter list and both occupancy blocks — NOT the machines \
+             listing, which is unscoped) is empty by construction, not by finding. Wrong \
+             fixture, wrong item, or a window that ended mid-gap."
         );
     } else if printed == 0 {
         eprintln!(
@@ -129,6 +140,15 @@ fn main() {
              Nothing was filtered out — there is genuinely nothing to report, which for \
              this probe is itself the finding.",
             item_tiles.len()
+        );
+    } else if machine_taps == 0 {
+        eprintln!(
+            "\n!! PARTIALLY VACUOUS: {printed} inserters touch {ITEM}, but NONE has a \
+             machine endpoint — no producer or consumer tap was found, only belt->belt \
+             transfers. Since selection here rests on one end-of-window sample of \
+             `item_tiles`, the likeliest cause is tap tiles being momentarily empty \
+             rather than the taps not existing. Re-run before concluding anything about \
+             saturation."
         );
     }
 
@@ -156,7 +176,7 @@ fn main() {
         }
     }
 
-    println!("\nbelt tiles carrying {ITEM} (occ/8):");
+    println!("\nbelt tiles carrying {ITEM}:");
     let mut sorted = item_tiles.clone();
     sorted.sort_by_key(|&i| (f.net.tiles[i].pos.1, f.net.tiles[i].pos.0));
     for i in sorted {
@@ -170,6 +190,12 @@ fn main() {
                 }
             }
         }
-        println!("  {:?} occ {}/8  {:?}", t.pos, t.occupancy(), names);
+        // Denominator derived, not hardcoded. This printed `occ/8`, right only
+        // because SLOTS_PER_TILE is 4 and there are two lanes — while the
+        // per-lane block above already derived its own from `slots.len()`. The
+        // same quantity, computed two ways in one file, is how a constant
+        // change silently desyncs one of them.
+        let cap: usize = t.lanes.iter().map(|l| l.slots_debug().len()).sum();
+        println!("  {:?} occ {}/{cap}  {:?}", t.pos, t.occupancy(), names);
     }
 }
