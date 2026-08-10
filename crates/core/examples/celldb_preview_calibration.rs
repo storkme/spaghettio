@@ -57,6 +57,11 @@ fn main() {
     for F(item, rate, machine, belt, inputs, excluded) in corpus() {
         let input_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let excl: FxHashSet<String> = excluded.iter().map(|s| s.to_string()).collect();
+        // Solve refusals are EXCLUDED, deliberately asymmetric with layout
+        // failures (which count as 100% error): a refused solve has no
+        // ground truth to compare against and the preview never ran —
+        // there is no estimate to score. A failed LAYOUT had a valid
+        // demand the preview claimed to estimate.
         let Ok(sr) = solver::solve_with_exclusions(item, rate, &input_set, machine, &excl)
         else {
             continue;
