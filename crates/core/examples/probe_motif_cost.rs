@@ -8,12 +8,12 @@
 //! recipe; `di-row:{a}:{b}` attributes to the fused pair (reported
 //! separately — the census's edge motifs predicted these).
 //!
-//! Probe 3 — FABRIC SHARE: the pre-registered RFC-057 kill criterion. Every
+//! Probe 3 — FABRIC SHARE: this Phase-0's pre-registered kill criterion (the RFC-057 lesson). Every
 //! placed entity is classified interior / fabric / infra / other:
 //!   interior: segment `row:*` or `di-row:*` (machines, feed belts,
 //!             inserters, row pipes)
 //!   fabric:   segment `trunk:*`, `tap*`, `ghost:*`, `balancer:*`
-//!             (the inter-row transport the RFC-057 corpse warns about)
+//!             (the inter-row transport RFC-057 measured as fatal to dense repacking)
 //!   infra:    electric poles (placed last, never router obstacles)
 //!   other:    anything else — PRINTED PER NAME, never silently pooled
 //! Area is entity footprint tiles (`common::entity_size`), so overlapping
@@ -52,13 +52,34 @@ fn class_of(seg: Option<&str>, name: &str) -> &'static str {
         {
             "fabric"
         }
-        Some(s) if s.starts_with("row:") || s.starts_with("di-row:") => "interior",
+        // DI fused-cell entities (di-cell:* machines/inserters, di-bridge:*
+        // long-handed bridges) are production interior — direct insertion
+        // IS the interior mechanism. Without these arms a DI-winning layout
+        // would classify them as `other` (round-4 review; DI is Candidate
+        // by default, so this can fire on other corpora even though the
+        // current run had zero).
+        Some(s)
+            if s.starts_with("row:")
+                || s.starts_with("di-row:")
+                || s.starts_with("di-cell:")
+                || s.starts_with("di-bridge:") =>
+        {
+            "interior"
+        }
         Some(s)
             if s.starts_with("trunk:")
                 || s.starts_with("tap")
                 || s.starts_with("ghost:")
-                || s.starts_with("balancer:") =>
+                || s.starts_with("balancer:")
+                || s.starts_with("merger:")
+                || s.starts_with("crossing:")
+                || s.starts_with("junction:")
+                || s.starts_with("feed:") =>
         {
+            // merger/crossing/junction/feed are segment-BEARING fabric; they
+            // previously fell into the segmentless-stamp bucket, which made
+            // that label overclaim (round-4 review). Fabric either way —
+            // the share was right, the attribution label was not.
             "fabric"
         }
         // Segmentless transport is stamped fabric, not a mystery: balancer
@@ -174,7 +195,11 @@ fn main() {
         println!(
             "ERROR: {other_total:.0} tiles classified OTHER — share denominators exclude"
         );
-        println!("       them; fix the classifier before quoting ANY figure below.");
+        println!("       them; fix the classifier. REFUSING to print quotable figures.");
+        // Actually refuse. The first version printed this banner and then
+        // fell through to the headline anyway — a guard that narrates
+        // instead of guarding (round-4 review, 3/3).
+        std::process::exit(2);
     }
     if per_layout.is_empty() {
         println!("no layouts built — nothing to summarize");
