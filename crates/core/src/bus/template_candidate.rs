@@ -96,7 +96,12 @@ impl DecompositionCandidate for TemplateCandidate {
         let mut machines: Vec<(i32, i32, i32)> = Vec::new();
         let mut inserters: Vec<(i32, i32)> = Vec::new();
         for e in &entities {
-            let (w, h) = entity_size(&e.name);
+            // Direction-aware, matching the store's own invariant pass —
+            // entity_size is direction-blind and the two diverging meant
+            // check_entry could certify geometry this stamp then broke
+            // (round-3 review on this PR).
+            let (w, h) = crate::common::oriented_entity_dims(&e.name, e.direction);
+            let (w, h) = (w as u32, h as u32);
             for dx in 0..w as i32 {
                 for dy in 0..h as i32 {
                     occupied.insert((e.x + dx, e.y + dy));
@@ -119,13 +124,24 @@ impl DecompositionCandidate for TemplateCandidate {
                 inserters.push((e.x, e.y));
             }
         }
-        let (poles, _) = layout::place_poles(
+        let (poles, uncovered) = layout::place_poles(
             &machines,
             &inserters,
             &occupied,
             &[],
             QualityTier::Normal,
         );
+        // place_poles never errors — it RETURNS the inserters it could not
+        // cover, and discarding that set shipped underpowered fragments
+        // surfaced only as a validation warning nothing asserted on
+        // (round-3 review). An uncoverable fragment is a refusal.
+        if !uncovered.is_empty() {
+            return Err(format!(
+                "pole placement left {} inserter(s) uncovered at {:?}",
+                uncovered.len(),
+                &uncovered[..uncovered.len().min(4)]
+            ));
+        }
         entities.extend(poles);
 
         let width = entities

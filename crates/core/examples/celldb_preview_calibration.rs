@@ -64,7 +64,12 @@ fn main() {
         let p = preview_boxes(&sr, belt);
         let opts = LayoutOptions { max_belt_tier: belt.map(|s| s.to_string()), ..Default::default() };
         let Ok(l) = layout::build_bus_layout(&sr, opts) else {
-            println!("{item}@{rate}: layout failed, preview {}x{}", p.width, p.height);
+            // A fixture whose realization fails is a MAXIMAL preview error,
+            // not a skip — dropping it excluded exactly the hardest cases
+            // from the K67-2 median and biased the gate toward PASS
+            // (round-3 review on this PR).
+            println!("{item}@{rate}: layout failed — counted as 100% error");
+            errs.push(1.0);
             continue;
         };
         let pa = (p.width as f64) * (p.height as f64);

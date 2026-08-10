@@ -14,7 +14,7 @@
 //! dependency order beside a trunk column whose width scales with the
 //! number of distinct bussed items.
 use crate::celldb::{self, Motif};
-use crate::common::{belt_entity_for_rate, belt_throughput, entity_size};
+use crate::common::{belt_throughput, entity_size};
 use crate::models::SolverResult;
 use serde::{Deserialize, Serialize};
 
@@ -74,21 +74,23 @@ pub fn preview_boxes(sr: &SolverResult, max_belt_tier: Option<&str>) -> PreviewL
             *item_rates.entry(o.item.as_str()).or_default() += o.rate;
         }
     }
-    // Lane math mirrors the PLANNER'S OWN CONSTANT: a bus lane carries one
-    // item at HALF belt throughput (LANE_CAPACITY_TABLE,
-    // lane_planner.rs:20-24) — dividing by full throughput undercounted
-    // lanes ~2x on saturated fixtures (round-2 review on this PR).
+    // Lane math mirrors split_overflowing_lanes: ONE GLOBAL lane capacity
+    // from the max belt tier (uncapped -> the top table entry), applied to
+    // every item regardless of its own rate. Round 2 fixed full-vs-half
+    // throughput; round 3 caught that per-item tier selection was still
+    // wrong (an uncapped 20/s item gets one express lane, not two
+    // yellow-ish ones). The engine's rule, not an approximation of it.
+    let lane_cap = {
+        let tier = max_belt_tier.unwrap_or("express-transport-belt");
+        crate::bus::lane_planner::LANE_CAPACITY_TABLE
+            .iter()
+            .find(|(n, _)| *n == tier)
+            .map(|(_, c)| *c)
+            .unwrap_or_else(|| belt_throughput(tier) / 2.0)
+    };
     let lanes: i32 = item_rates
         .values()
-        .map(|r| {
-            let tier = belt_entity_for_rate(*r, max_belt_tier);
-            let lane_cap = crate::bus::lane_planner::LANE_CAPACITY_TABLE
-                .iter()
-                .find(|(n, _)| *n == tier)
-                .map(|(_, c)| *c)
-                .unwrap_or_else(|| belt_throughput(tier) / 2.0);
-            (r / lane_cap).ceil().max(1.0) as i32
-        })
+        .map(|r| (r / lane_cap).ceil().max(1.0) as i32)
         .sum();
     let trunk_w = 2 + lanes;
 
