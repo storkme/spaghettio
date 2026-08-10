@@ -65,8 +65,12 @@ awk -F'\t' '
   # NB awk single-space split strips leading whitespace, so the leading " "
   # in the accumulators does NOT produce a phantom empty element (round-2
   # review claimed it did; refuted empirically — split(" 5 10") is [5,10]).
+  # +0 coercion: split() yields STRINGS, and gawk compares strings
+  # lexicographically ("12.3" < "9.5") — without the coercion the medians
+  # are corrupted on any sample crossing a digit-count boundary (round-5
+  # review; the published figures were re-verified after this fix).
   function med(s,  a,m){ m=split(s,a," ")
-    for(i=1;i<m;i++)for(j=i+1;j<=m;j++)if(a[j]<a[i]){t=a[i];a[i]=a[j];a[j]=t}
+    for(i=1;i<m;i++)for(j=i+1;j<=m;j++)if(a[j]+0<a[i]+0){t=a[i];a[i]=a[j];a[j]=t}
     return (m%2) ? a[(m+1)/2] : (a[m/2]+a[m/2+1])/2 }
   END{
     for (k in n) {

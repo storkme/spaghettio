@@ -74,7 +74,9 @@ fn class_of(seg: Option<&str>, name: &str) -> &'static str {
                 || s.starts_with("merger:")
                 || s.starts_with("crossing:")
                 || s.starts_with("junction:")
-                || s.starts_with("feed:") =>
+                || s.starts_with("feed:")
+                || s.starts_with("feeder:")
+                || s.starts_with("fan") =>
         {
             // merger/crossing/junction/feed are segment-BEARING fabric; they
             // previously fell into the segmentless-stamp bucket, which made
@@ -150,9 +152,18 @@ fn main() {
                 "interior" => {
                     cls[0] += a;
                     // Attribute to the recipe parsed from the segment id.
+                    // ALL di-* families attribute as fused pairs: di-cell's
+                    // parts[1] is an ITEM name that would collide with a
+                    // real recipe motif (round-5 review, 3/3 — DI is
+                    // Candidate by default, so this is one corpus-growth
+                    // step from firing, not hypothetical forcing).
                     if let Some(s) = seg {
                         let parts: Vec<&str> = s.split(':').collect();
-                        let m = if s.starts_with("di-row:") && parts.len() >= 3 {
+                        let m = if (s.starts_with("di-row:")
+                            || s.starts_with("di-cell:")
+                            || s.starts_with("di-bridge:"))
+                            && parts.len() >= 3
+                        {
                             format!("di:{}+{}", parts[1], parts[2])
                         } else {
                             parts.get(1).unwrap_or(&"?").to_string()
@@ -196,6 +207,12 @@ fn main() {
             "ERROR: {other_total:.0} tiles classified OTHER — share denominators exclude"
         );
         println!("       them; fix the classifier. REFUSING to print quotable figures.");
+        // Print the offending names BEFORE refusing — the exit made the
+        // diagnostic below unreachable (round-5 review), which defeated
+        // its purpose: the fix always starts from these names.
+        for (n, c) in &other_names {
+            println!("  {c:>5}  {n}");
+        }
         // Actually refuse. The first version printed this banner and then
         // fell through to the headline anyway — a guard that narrates
         // instead of guarding (round-4 review, 3/3).
