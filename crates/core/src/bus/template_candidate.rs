@@ -52,13 +52,35 @@ impl DecompositionCandidate for TemplateCandidate {
             .map(belt_throughput)
             .unwrap_or(f64::INFINITY);
 
+        // Map every transport prototype to its SURFACE tier before the cap
+        // test: belt_throughput returns the yellow default for names it
+        // does not know (UGs, splitters), which would pass an express-UG
+        // entry under a yellow cap — silently violating the hard-constraint
+        // contract (round-1 review on this PR). Unknown names REFUSE.
+        let surface_tier_rate = |name: &str| -> Option<f64> {
+            let surface = if let Some(base) = name.strip_suffix("-underground-belt") {
+                format!("{base}-transport-belt")
+            } else if name == "underground-belt" {
+                "transport-belt".to_string()
+            } else if let Some(base) = name.strip_suffix("-splitter") {
+                format!("{base}-transport-belt")
+            } else if name == "splitter" {
+                "transport-belt".to_string()
+            } else {
+                name.to_string()
+            };
+            crate::common::BELT_TIERS
+                .iter()
+                .find(|(n, _)| *n == surface)
+                .map(|(_, r)| *r)
+        };
         let entry = celldb::query_unit(&m.recipe, &m.entity, need, None)
             .into_iter()
             .find(|e| {
                 DerivedConstraints::of(e)
                     .belt_tiers
                     .iter()
-                    .all(|b| belt_throughput(b) <= cap_rate)
+                    .all(|b| surface_tier_rate(b).is_some_and(|r| r <= cap_rate))
             })
             .ok_or_else(|| {
                 format!(
@@ -81,7 +103,11 @@ impl DecompositionCandidate for TemplateCandidate {
                 }
             }
             if is_machine_entity(&e.name) {
-                machines.push((e.x, e.y, w as i32));
+                // place_poles' tuple is (center_x, top_y, HEIGHT) — mirror
+                // layout.rs:1209 exactly. Passing (x, y, width) was silent
+                // on the all-square current seeds and wrong for any
+                // non-square machine (round-1 review on this PR).
+                machines.push((e.x + w as i32 / 2, e.y, h as i32));
             } else if is_inserter(&e.name) {
                 inserters.push((e.x, e.y));
             }
