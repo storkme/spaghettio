@@ -134,22 +134,24 @@ fn extract(
                 .map(|t| (t.x, t.y))
                 .collect(),
         };
-        if candidates.len() != 1 {
-            println!(
-                "PORT-WARN {recipe}: {kind}:{item} has {} candidate tiles {:?} — picking min",
-                candidates.len(),
-                candidates
-            );
-        }
-        let Some(&(dx, dy)) = candidates.iter().min() else {
+        // Multiple candidates are not ambiguity — a split row has one entry
+        // per half, and each is a genuine boundary port that composition
+        // must feed. Emit them all; only ZERO candidates is a defect worth
+        // a warning (and an escape hatch under K67-1).
+        if candidates.is_empty() {
+            println!("PORT-WARN {recipe}: {kind}:{item} has no candidate tiles");
             continue;
-        };
+        }
         let pk = match kind.as_str() {
             "belt-in" => PortKind::BeltIn,
             "belt-out" => PortKind::BeltOut,
             _ => PortKind::PipeIn,
         };
-        ports.push(Port { dx, dy, kind: pk, item: item.clone() });
+        let mut sorted = candidates.clone();
+        sorted.sort();
+        for (dx, dy) in sorted {
+            ports.push(Port { dx, dy, kind: pk, item: item.clone() });
+        }
     }
 
     Some(CellEntry {
