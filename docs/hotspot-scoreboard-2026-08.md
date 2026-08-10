@@ -14,8 +14,10 @@ Corpus: the celldb Phase-0 demand corpus (`crates/core/examples/celldb/corpus.rs
 include!d — cannot drift from the census/cost probes). Engine at
 `16cb2926` (main, 2026-08-10). 29 layouts built, 0 failed, 0 tiles
 unclassified; class totals are asserted equal to the occupied-tile union
-per layout (so overlapping footprints cannot silently inflate shares),
-and the whitespace decomposition is asserted equal to bbox − occupied.
+per layout, so overlapping footprints cannot silently inflate shares.
+(The whitespace-kind split has no equivalent assertion — its sum equals
+bbox − occupied by construction — so the kind assignment is guarded by
+the definitions and the `HOTSPOT_PROFILE` eyes-on check, not an assert.)
 
 ## The question
 
@@ -118,8 +120,9 @@ gates (`candidate_runner`). Top of the pooled table:
 `advanced-circuit` is the first donor worth acquiring: the largest
 absolute prize and double the per-machine overhead of the smelters. Full
 table (19 motifs) in the probe output. Total pooled cell overhead is
-28,235 tiles — about a fifth of the ragged void, which calibrates how
-much a perfect donor program can move the headline number.
+28,235 tiles — about a quarter of the ragged void (28,235 vs 102,668),
+which calibrates how much a perfect donor program can move the headline
+number.
 
 ## Fabric by kind
 
@@ -128,10 +131,15 @@ balancers 5.7%, row-trunk 3.7%, taps/feeds/cell-export <0.1% each — of a
 fabric total that is only 8.8% of bbox. No fabric class is a first-order
 area target on this corpus. (An earlier cut reported 6 tiles of
 "balancer stamps"; the strict classifier revealed them as the RFC-051
-composed-cell export drain, `out:*` — the segment-blind belt fallback had
-absorbed an unlisted prefix, the exact trap the cost probe's round-4
-review named. The fallback is now `segment_id: None`-only and unknown
-prefixes refuse the run.)
+composed-cell export drain, `out:*` — the segment-blind belt fallback
+had absorbed an unlisted prefix. This probe's fallback is now
+`segment_id: None`-only, unknown prefixes refuse the run, and the other
+reachable candidate-path prefixes — `corr:`, `cc:*`, `mergetree:` — are
+pre-classified as fabric, all zero-tile on this corpus. Note the
+divergence: `probe_motif_cost` still carries the segment-blind fallback,
+so its `fabric-stamp` figure absorbs these same 6 tiles; the fabric
+*share* it publishes is unaffected since both labels are fabric, but
+this probe is the strict classifier of the two.)
 
 ## What this changes
 

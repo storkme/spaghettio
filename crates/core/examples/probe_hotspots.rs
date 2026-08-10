@@ -1,9 +1,9 @@
 //! Hotspot probe (RFC-067 follow-up): WHERE does layout area actually go,
 //! and which motifs/fabric classes hold the biggest reclaimable prize?
 //!
-//! Same demand corpus as the Phase-0 probes (include!d, cannot drift), same
-//! segment-id attribution rules as probe_motif_cost — but a different
-//! question. The cost probe measured interior-vs-fabric *shares*; this one
+//! Same demand corpus as the Phase-0 probes (include!d, cannot drift),
+//! attribution rules derived from probe_motif_cost's (stricter here — see
+//! class_of) — but a different question. The cost probe measured interior-vs-fabric *shares*; this one
 //! builds the ranked target list for donor ingestion (the K67-3 reopening
 //! path: the DB only pays if it holds cells the engine cannot produce, so
 //! which cell is worth hand-crafting first?).
@@ -38,9 +38,12 @@ use std::collections::BTreeMap;
 
 include!("celldb/corpus.rs");
 
-/// Attribution: identical decision tree to probe_motif_cost::class_of
-/// (round-3/4 review lessons baked in), refined to return the fabric KIND
-/// instead of pooling everything into one "fabric" bucket.
+/// Attribution: derived from probe_motif_cost::class_of (its round-3/4
+/// review lessons baked in), refined two ways: fabric is returned BY KIND
+/// instead of pooled, and the belt fallback is stricter — unknown segment
+/// prefixes refuse the run here where the cost probe silently pools them
+/// as fabric-stamp. The interior/fabric boundary is identical; the two
+/// classifiers are NOT otherwise interchangeable.
 fn class_of(seg: Option<&str>, name: &str) -> &'static str {
     if name.contains("electric-pole") || name == "substation" {
         return "infra";
@@ -78,12 +81,27 @@ fn class_of(seg: Option<&str>, name: &str) -> &'static str {
         // Previously absorbed as fab:stamp by the segment-blind belt
         // fallback; surfaced the moment that arm went None-only.
         Some(s) if s.starts_with("out:") => "fab:out",
+        // The rest of the reachable candidate-path prefixes, classified
+        // NOW rather than left to a future refusal (round-2 review, 2/2:
+        // strict refusal is only as good as its enumeration, and these
+        // come from the same default-Candidate paths that produced out:).
+        // All zero-tile on the current corpus. corr: = inter-cell
+        // producer→consumer routing (chain.rs:1327/1415); cc:a/b{k}/m{k}:
+        // = a multi-output cell's merge cascade, stamped OUTSIDE the cell
+        // proper (chain.rs:1496-1519); mergetree: = stamped lane-family
+        // merge tree (balancer.rs:430). Inter-cell/merge transport =
+        // fabric.
+        Some(s) if s.starts_with("corr:") => "fab:corr",
+        Some(s) if s.starts_with("cc:") => "fab:cell-merge",
+        Some(s) if s.starts_with("mergetree:") => "fab:mergetree",
         // Segmentless transport = balancer-library stamps (segment_id: None
         // by construction, balancer_library.rs:84). None-only on purpose: a
-        // belt under an UNRECOGNIZED prefix must fall to "other" and refuse,
-        // not be silently absorbed as a stamp (review finding — the same
-        // trap probe_motif_cost's round-4 fixed; inactive prefixes like
-        // `cc:b:`/`corridor:` exist in-tree and would otherwise mislabel).
+        // belt under an UNRECOGNIZED prefix must fall to "other" and
+        // refuse, not be silently absorbed as a stamp. NB this is where
+        // the two classifiers deliberately diverge: probe_motif_cost still
+        // carries the segment-blind belt fallback (any prefix → its
+        // fabric-stamp), so its stamp figure absorbs what this probe
+        // refuses — this probe is the strict one.
         None if name.contains("transport-belt")
             || name.contains("underground-belt")
             || name.contains("splitter") =>
@@ -287,6 +305,12 @@ fn main() {
                 }
             }
         }
+        // Regression net only, NOT a kind-assignment guard: each scanline
+        // branch assigns exactly its empty tiles, so this identity holds
+        // by construction today and can only fail if a future edit breaks
+        // the branch accounting. A void assigned to the WRONG kind passes
+        // it unchanged (round-2 review) — the kind split is guarded by
+        // the definitions above and the HOTSPOT_PROFILE eyes-on check.
         assert!(
             (w_stripe + w_gutter + w_ragged + w_ug + w_hole - white).abs() < 0.5,
             "whitespace decomposition must reconcile"
