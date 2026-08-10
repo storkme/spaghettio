@@ -3494,7 +3494,7 @@
         "interior_tiles": 817,
         "entity_count": 433
       },
-      "provenance": "engine@3ec12291 fixture=electronic-circuit@20",
+      "provenance": "engine@d2a93e71 fixture=electronic-circuit@20",
       "sim_anchor": "unanchored"
     },
     {
@@ -5838,7 +5838,7 @@
         "interior_tiles": 545,
         "entity_count": 289
       },
-      "provenance": "engine@3ec12291 fixture=electronic-circuit@20",
+      "provenance": "engine@d2a93e71 fixture=electronic-circuit@20",
       "sim_anchor": "unanchored"
     },
     {
@@ -7338,7 +7338,7 @@
         "interior_tiles": 342,
         "entity_count": 182
       },
-      "provenance": "engine@3ec12291 fixture=electronic-circuit@20",
+      "provenance": "engine@d2a93e71 fixture=electronic-circuit@20",
       "sim_anchor": "unanchored"
     },
     {
@@ -8866,7 +8866,7 @@
         "interior_tiles": 296,
         "entity_count": 184
       },
-      "provenance": "engine@3ec12291 fixture=electronic-circuit@20",
+      "provenance": "engine@d2a93e71 fixture=electronic-circuit@20",
       "sim_anchor": "unanchored"
     },
     {
@@ -13302,7 +13302,7 @@
         "interior_tiles": 805,
         "entity_count": 549
       },
-      "provenance": "engine@3ec12291 fixture=advanced-circuit@4",
+      "provenance": "engine@d2a93e71 fixture=advanced-circuit@4",
       "sim_anchor": "unanchored"
     }
   ]
