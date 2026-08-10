@@ -1,6 +1,9 @@
 # RFC-066: Arbitrate the two lane-rate walkers against the meter
 
-**Status: proposed 2026-08-09.** Tracking issue: #609. No code written.
+**Status: proposed 2026-08-09.** Tracking issue: #609. No *engine* code written —
+no phase has started. The four `crates/core/examples/probe_*.rs` binaries listed
+in the verification plan are committed evidence instruments and touch nothing the
+engine dispatches.
 
 ## Summary
 
@@ -87,9 +90,11 @@ the oracle**. The meter caught that defect — nine of ten copper-cable machines
 saturated, the stage able to make plan, the binding constraint elsewhere — which
 is exactly the per-lane discrimination Phase 0 needs it to have.
 
-A local, uncommitted session handoff (`handoff-meter-as-gate-2026-08-07.md`)
-covers similar ground and is where I first read the framing, but it is **not in
-the repo** and nothing here depends on it.
+A session handoff ([`handoff-meter-as-gate-2026-08-07.md`](handoff-meter-as-gate-2026-08-07.md))
+covers similar ground and is where I first read the framing. It was untracked
+when this RFC was reviewed — see the 2026-08-09 decision-log entry — and was
+committed afterwards. Nothing here depends on it, and that has not changed: it
+is a session note, not a source.
 
 ## Design
 
@@ -372,7 +377,10 @@ has them. An earlier draft of this RFC quoted a figure produced that way.
 - *2026-08-09 — review pass (#615, `second-opinion`) landed five findings, all
   valid, all fixed in the same PR. The material one: the original draft rested its
   "named, parked suspect" argument on `handoff-meter-as-gate-2026-08-07.md`, which
-  is **not committed** — an untracked local file. Re-pointed to `docs/status.md`
+  is **not committed** — an untracked local file. [**Annotation 2026-08-10 (#622):**
+  that file has since been committed to `docs/`, so it is readable now. The finding
+  and the re-pointing below both stand — the argument should not have rested on it
+  either way, and nothing was reverted.] Re-pointed to `docs/status.md`
   (post-lift 92.1% / 90.7%, "a real ~8-10% residual remains on both") and
   `docs/rate-stamp-semantics.md` (same two-walker split, same "arbitrate them"
   conclusion), so nothing load-bearing depends on an unreadable source. Also fixed:
