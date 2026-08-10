@@ -9,7 +9,7 @@ leave) and a **derived constraint vector** (what the implementation needs to
 be legal). Three consumers were designed; the kill criteria adjudicated two of
 them out (see the decision log — this Summary records outcomes, not the
 original promise): the **interface-first preview** module exists but its
-consumer is **KILLED per K67-2** (six calibration runs, min–max 31.5–33.1% vs a 30% bar); **template candidates** exist inert in the candidate harness and are
+consumer is **KILLED per K67-2** (seven calibration runs, min–max 31.5–33.1% vs a 30% bar); **template candidates** exist inert in the candidate harness and are
 **PARKED per K67-3** (NULL on all three realizable motifs — engine-derived
 seeds tie the engine); the **standing regression corpus** is the surviving
 consumer, delivered as the store's every-entry drift test. Evidence that this pays lives in the
@@ -102,7 +102,7 @@ by the seeding tool, not typed by hand.**
    group sized from the store's entry, ports on the contract edges. The
    core function and calibration instrument exist (#621); the wasm/web
    consumer described by the original design was never built and MUST NOT
-   be without a decision-log amendment — six calibration runs landed min–max 31.5–33.1% against the 30% bar (decision log).
+   be without a decision-log amendment — seven calibration runs landed min–max 31.5–33.1% against the 30% bar (decision log).
 2. **Template candidates (Phase 3) — PARKED per K67-3, harness landed
    inert:** for motifs with store entries, a candidate that stamps the
    stored fragment instead of running row placement. Competes under the existing candidate scoring;
@@ -213,7 +213,7 @@ ordering is a deliberate trade recorded here, not an oversight.
   applies to the amended contract only, and the original trip is not
   erased by it.*
 - *2026-08-10 — **K67-2 adjudicated FAIL**: median |total-area error|
-  32.3% vs the 30% bar (n=29, `celldb_preview_calibration`; SIXTH adjudication RUN. Count accounting, explicit because the kill-clause math depends on it: six runs = one initial + three estimator levers (fabric allowance; uniform Phase-0 factor after a banded variant measured worse; lane-count physics) + two instrument corrections from review (belt-tier default artifact; lane math onto the planner's half-throughput constant). The sequence ran 31.9/33.1/32.6/31.5/32.7/32.3 — every run within 31.5–33.1%, so the criterion's kill clause — "if recalibration cannot reach 30%, kill the preview consumer" — FIRED, and this log records the kill: **the preview CONSUMER is KILLED per K67-2's letter** — no discretion clause exists and none is invented here. The module and calibration instrument remain as the measured baseline; any future consumer requires an explicit decision-log amendment reopening the criterion, which the owner can always make — by amendment, not by this log hedging). Three
+  32.3% vs the 30% bar (n=29, `celldb_preview_calibration`; SEVENTH adjudication RUN. Count accounting, explicit because the kill-clause math depends on it: seven runs = one initial + three estimator levers (fabric allowance; uniform Phase-0 factor after a banded variant measured worse; lane-count physics) + three instrument corrections from review (belt-tier default artifact; lane math onto the planner's half-throughput constant; fluid lanes, which removed a PASS-direction bias). The sequence ran 31.9/33.1/32.6/31.5/32.7/32.3/33.1 — every run within 31.5–33.1%, so the criterion's kill clause — "if recalibration cannot reach 30%, kill the preview consumer" — FIRED, and this log records the kill: **the preview CONSUMER is KILLED per K67-2's letter** — no discretion clause exists and none is invented here. The module and calibration instrument remain as the measured baseline; any future consumer requires an explicit decision-log amendment reopening the criterion, which the owner can always make — by amendment, not by this log hedging). Three
   principled levers tried — fabric allowance, uniform Phase-0 non-interior
   factor (banded variant measured WORSE than uniform), lane-count physics
   (`ceil(rate/belt capacity)` trunk lanes). Residual error is structural:
