@@ -25,6 +25,9 @@
 //! Layout options: engine defaults + the fixture's belt tier — deliberately
 //! the vanilla path (no DI forcing, no cell composition), because the
 //! question is what the DEFAULT pipeline spends, not what a tuned one can.
+//! NB "engine defaults" includes the default inserter tier (L2), which is
+//! NOT the survey harness's inserter_capacity: 0 — this probe measures the
+//! default pipeline on the survey's demand, not the survey runs themselves.
 use rustc_hash::FxHashSet;
 use spaghettio_core::bus::layout::{self, LayoutOptions};
 use spaghettio_core::common::entity_size;

@@ -13,7 +13,7 @@
 # is a snippet or a mall cell, not an array baseline. Both thresholds are
 # printed with the output so they cannot drift silently from prose.
 set -euo pipefail
-OUT="${OUT:-./celldb-phase0-work}"
+OUT="${OUT:-./target/celldb-phase0-work}"
 J="$OUT/community.jsonl"
 [ -s "$J" ] || { echo "ERROR: $J missing/empty — run mine-community.sh first." >&2; exit 2; }
 
