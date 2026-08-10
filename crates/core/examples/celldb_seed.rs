@@ -19,33 +19,29 @@ use spaghettio_core::celldb::{extract_unit, CellDb, CellEntry, Motif};
 use spaghettio_core::solver;
 
 fn main() {
-    let sha = std::env::var("SEED_SHA").unwrap_or_else(|_| "worktree".into());
+    // Provenance SHA: explicit SEED_SHA, else the actual HEAD — committing
+    // "engine@worktree" identified no real commit, defeating the very
+    // attributability provenance exists for (round-2 review, 3/3). A dirty
+    // tree is marked as such.
+    let sha = std::env::var("SEED_SHA").unwrap_or_else(|_| {
+        let head = std::process::Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "unknown".into());
+        let dirty = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .output()
+            .ok()
+            .is_some_and(|o| !o.stdout.is_empty());
+        if dirty { format!("{head}-dirty") } else { head }
+    });
     let mut entries: Vec<CellEntry> = Vec::new();
 
-    let sources: Vec<(&str, f64, &str, Vec<&str>, Vec<(&str, &str)>)> = vec![
-        (
-            "electronic-circuit",
-            20.0,
-            "assembling-machine-2",
-            vec!["iron-ore", "copper-ore"],
-            vec![
-                ("copper-plate", "electric-furnace"),
-                ("iron-plate", "electric-furnace"),
-                ("copper-cable", "assembling-machine-2"),
-                ("electronic-circuit", "assembling-machine-2"),
-            ],
-        ),
-        (
-            "advanced-circuit",
-            4.0,
-            "assembling-machine-2",
-            vec!["iron-plate", "copper-plate", "plastic-bar"],
-            vec![("advanced-circuit", "assembling-machine-2")],
-        ),
-    ];
-
     let mut total_warnings = 0usize;
-    for (item, rate, machine, inputs, targets) in sources {
+    for (item, rate, machine, inputs, targets) in spaghettio_core::celldb::seed_sources() {
         let input_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve(item, rate, &input_set, machine).expect("seed fixture must solve");
         let l = layout::build_bus_layout(&sr, LayoutOptions::default())
@@ -74,11 +70,20 @@ fn main() {
         }
     }
 
+    // K67-1 enforced at the tool, not narrated: a degraded seed must not
+    // ship (round-2 review — the gate was announced but the tool wrote and
+    // exited 0 regardless).
+    if total_warnings > 0 {
+        eprintln!(
+            "ERROR: {total_warnings} extraction warning(s) — refusing to write a degraded store."
+        );
+        std::process::exit(2);
+    }
     let db = CellDb { version: 1, entries };
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/data/celldb.json");
     std::fs::write(path, serde_json::to_string_pretty(&db).unwrap()).unwrap();
     println!(
-        "wrote {} entries to {path}  (escape hatches: {total_warnings} — K67-1 trips above 1)",
+        "wrote {} entries to {path}  (escape hatches: 0 — K67-1 clean)",
         db.entries.len()
     );
 }

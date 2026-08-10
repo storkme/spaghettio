@@ -86,6 +86,10 @@ pub struct DerivedConstraints {
     /// this set: filter with `is_satisfied_by`.
     pub vocabulary: BTreeSet<String>,
     /// Belt tiers used (prototype names of surface/UG belts and splitters).
+    /// Not consumed by `query_unit` here — its consumer is the template
+    /// candidate's hard belt-cap filter (RFC-067 P3, the stacked PR), which
+    /// maps these to surface tiers and refuses unknown names. Kept on this
+    /// type because deriving it belongs with the vocabulary derivation.
     pub belt_tiers: BTreeSet<String>,
 }
 
@@ -148,6 +152,34 @@ pub fn query_unit<'a>(
         (c, e.metrics.interior_tiles)
     });
     hits
+}
+
+/// The seed source fixtures — the single authority consumed by BOTH the
+/// seed tool and the drift regression test, so the test's coverage cannot
+/// diverge from what the tool seeds (round-2 review: only 1 of 5 entries
+/// was drift-protected when the lists lived apart).
+pub fn seed_sources() -> Vec<(&'static str, f64, &'static str, Vec<&'static str>, Vec<(&'static str, &'static str)>)> {
+    vec![
+        (
+            "electronic-circuit",
+            20.0,
+            "assembling-machine-2",
+            vec!["iron-ore", "copper-ore"],
+            vec![
+                ("copper-plate", "electric-furnace"),
+                ("iron-plate", "electric-furnace"),
+                ("copper-cable", "assembling-machine-2"),
+                ("electronic-circuit", "assembling-machine-2"),
+            ],
+        ),
+        (
+            "advanced-circuit",
+            4.0,
+            "assembling-machine-2",
+            vec!["iron-plate", "copper-plate", "plastic-bar"],
+            vec![("advanced-circuit", "assembling-machine-2")],
+        ),
+    ]
 }
 
 /// Extract a unit-motif fragment from a laid-out entity list: the recipe's
@@ -465,37 +497,56 @@ mod tests {
         }
     }
 
-    /// The drift test the round-1 review asked for: stored-vs-CURRENT-ENGINE,
-    /// not stored-vs-stored. Rebuilds one seed source fixture, re-extracts,
-    /// and diffs against the committed entry — an engine change that moves
-    /// the fragment now fails here instead of sailing through.
+    /// The drift test: stored-vs-CURRENT-ENGINE for EVERY seeded entry, over
+    /// the same `seed_sources()` the tool consumes, with ELEMENT-WISE
+    /// geometry comparison (serialized fragments) — aggregate comparisons
+    /// pass a relocated belt or swapped inserter clean, and a
+    /// one-fixture test left 4 of 5 entries unprotected (round-2 review,
+    /// both 3/3).
     #[test]
-    fn stored_entry_matches_fresh_engine_extraction() {
+    fn every_stored_entry_matches_fresh_engine_extraction() {
         use crate::bus::layout::{self, LayoutOptions};
-        let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "plastic-bar"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let sr = crate::solver::solve("advanced-circuit", 4.0, &inputs, "assembling-machine-2")
-            .expect("seed source solves");
-        let l = layout::build_bus_layout(&sr, LayoutOptions::default())
-            .expect("seed source lays out");
-        let (fresh, warnings) =
-            extract_unit(&l.entities, "advanced-circuit", "assembling-machine-2", "test");
-        assert!(warnings.is_empty(), "escape hatches on re-extraction: {warnings:?}");
-        let fresh = fresh.expect("extraction succeeds");
-        let stored = celldb()
-            .entries
-            .iter()
-            .find(|e| matches!(&e.motif, Motif::Unit { recipe, .. } if recipe == "advanced-circuit"))
-            .expect("advanced-circuit entry is seeded");
-        assert_eq!(stored.motif, fresh.motif, "motif drifted from engine output");
-        assert_eq!(stored.metrics, fresh.metrics, "metrics drifted from engine output");
-        assert_eq!(stored.ports, fresh.ports, "ports drifted from engine output");
+        let mut checked = 0usize;
+        for (item, rate, machine, inputs, targets) in seed_sources() {
+            let input_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+            let sr = crate::solver::solve(item, rate, &input_set, machine)
+                .expect("seed source solves");
+            let l = layout::build_bus_layout(&sr, LayoutOptions::default())
+                .expect("seed source lays out");
+            for (recipe, target_machine) in targets {
+                let (fresh, warnings) =
+                    extract_unit(&l.entities, recipe, target_machine, "test");
+                assert!(
+                    warnings.is_empty(),
+                    "escape hatches re-extracting {recipe}: {warnings:?}"
+                );
+                let fresh = fresh.expect("extraction succeeds");
+                let stored = celldb()
+                    .entries
+                    .iter()
+                    .find(|e| {
+                        matches!(&e.motif, Motif::Unit { recipe: r, machine: m, .. }
+                                 if r == recipe && m == target_machine)
+                    })
+                    .unwrap_or_else(|| panic!("{recipe} entry is seeded"));
+                assert_eq!(stored.motif, fresh.motif, "{recipe}: motif drifted");
+                assert_eq!(stored.metrics, fresh.metrics, "{recipe}: metrics drifted");
+                assert_eq!(stored.ports, fresh.ports, "{recipe}: ports drifted");
+                // Element-wise geometry: both fragments are sorted by
+                // (y, x, name) at extraction, so serialized equality is
+                // positional equality of every entity field.
+                assert_eq!(
+                    serde_json::to_string(&stored.entities).unwrap(),
+                    serde_json::to_string(&fresh.entities).unwrap(),
+                    "{recipe}: fragment geometry drifted from engine output"
+                );
+                checked += 1;
+            }
+        }
         assert_eq!(
-            stored.entities.len(),
-            fresh.entities.len(),
-            "entity roster drifted from engine output"
+            checked,
+            celldb().entries.len(),
+            "every stored entry must be drift-checked (seed_sources out of sync?)"
         );
     }
 
