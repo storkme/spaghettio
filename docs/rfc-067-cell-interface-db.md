@@ -14,7 +14,7 @@ entry is sim-anchorable, so "did this engine change regress the top motifs"
 becomes a check instead of a hope). Evidence that this pays lives in the
 Phase-0 scoreboard ([`celldb-phase0-scoreboard.md`](celldb-phase0-scoreboard.md)):
 demand is power-law concentrated (top 5 motifs = 87.7% of machine mass),
-interiors dominate layout area at low/mid rates (fabric median 17.8%), and
+interiors dominate layout area at low/mid rates (fabric median 18.3%), and
 the community corpus corroborates both the demand distribution and the
 supply of donor implementations.
 
@@ -27,7 +27,7 @@ checked-in probes):
 - Top 5 unit motifs carry **87.7%** of machine mass; top 12 carry 97.5%.
 - The same top 5 are ~89% of attributed interior area (17.0–25.1
   tiles/machine).
-- Fabric (trunks, taps, ghost routes, balancer stamps) is a **median 17.8%**
+- Fabric (trunks, taps, ghost routes, balancer stamps) is a **median 18.3%**
   of interior+fabric area — cached-interior improvements have headroom at
   low/mid rates. Above ~20/s on low belt tiers fabric approaches parity
   (max 55.1%), so that regime's lever is fabric motifs, not interiors.
