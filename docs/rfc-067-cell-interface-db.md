@@ -66,8 +66,12 @@ fragment origin) plus a declared port list:
 
 ```
 port := { tile: (dx, dy), kind: belt-in | belt-out | pipe-in | pipe-out,
-          item: <name>, lane_share: full | half }
+          item: <name> }
 ```
+
+A `(kind, item)` pair may declare **multiple ports** — split rows have one
+entry per half, and composition must feed all of them (amended during
+seeding; see the decision log).
 
 v1 constrains geometry to the bus row conventions the engine already emits
 (inputs arrive on one long edge, outputs leave on the other; fluid ports at
@@ -179,3 +183,31 @@ by the seeding tool, not typed by hand.**
 - *2026-08-10 — the "win is composition, not density" reframing (community
   density already engine-ballpark) is recorded here so Phase-3 expectations
   stay honest: K67-3 exists because a null result is genuinely possible.*
+- *2026-08-10 — port contract v1 AMENDED during seeding: a (kind, item)
+  pair maps to MULTIPLE ports. Split rows have one entry point per half;
+  the seed tool's first run surfaced this as 5 PORT-WARNs, and min-picking
+  one port would starve the other half under composition. With the
+  amendment, **K67-1 adjudicated CLEAN: zero escape hatches** across the
+  top-5 engine seeds.*
+- *2026-08-10 — **K67-2 adjudicated FAIL**: median |total-area error|
+  32.6% vs the 30% bar (n=29, `celldb_preview_calibration`). Three
+  principled levers tried — fabric allowance, uniform Phase-0 non-interior
+  factor (banded variant measured WORSE than uniform), lane-count physics
+  (`ceil(rate/belt capacity)` trunk lanes). Residual error is structural:
+  bbox dead space and balancer explosions are not predictable from solver
+  output at this granularity. Preview ships DISABLED per the criterion —
+  module and instrument land, no wasm/web consumer. Remaining levers for a
+  reopening attempt: per-machine-class fallback factors; balancer cost
+  modeled from lane count; predicting the placer's row-split widths (at
+  which point the preview has become the placer — the likely kill line).*
+- *2026-08-10 — **K67-3 adjudicated NULL** on the harness fixtures
+  (`tests/celldb_template.rs` prints the data): iron-plate template passes
+  never-worse but loses the ranking (32-furnace entry stamped for a
+  16-furnace need — ar_score −1.31); copper-cable inadmissible (20-machine
+  entry for a 4-machine need, +3.3% entities). No template wins. Root
+  cause structural and predicted by the density reality check:
+  engine-derived seeds cannot beat the engine that produced them, and
+  single-count entries oversize for smaller demands. **Phase 3 PARKED per
+  K67-3**; the reopening path is count-matched seed ladders and
+  community/hand donors with inferred ports — both explicitly future
+  work.*
