@@ -14,7 +14,7 @@
 //! dependency order beside a trunk column whose width scales with the
 //! number of distinct bussed items.
 use crate::celldb::{self, Motif};
-use crate::common::{belt_throughput, entity_size};
+use crate::common::{belt_entity_for_rate, belt_throughput, entity_size};
 use crate::models::SolverResult;
 use serde::{Deserialize, Serialize};
 
@@ -60,7 +60,11 @@ pub fn preview_boxes(sr: &SolverResult, max_belt_tier: Option<&str>) -> PreviewL
     // the balancers the engine will stamp to split them — approximated by
     // the same count). This is what the first calibration rounds missed
     // hardest: the belt-saturated fixtures need 3 lanes per item on yellow.
-    let cap = belt_throughput(max_belt_tier.unwrap_or("transport-belt"));
+    // Tier per item MIRRORS THE ENGINE: belt_entity_for_rate picks the tier
+    // the trunk planner would, and None means UNCAPPED (express when the
+    // rate demands), never "yellow". The first version defaulted None to
+    // yellow — so the K67-2 calibration was scoring a tier disagreement,
+    // not the estimator; the review's one 3/3 finding on this PR.
     let mut item_rates: std::collections::BTreeMap<&str, f64> = Default::default();
     for f in sr.external_inputs.iter().filter(|f| !f.is_fluid) {
         *item_rates.entry(f.item.as_str()).or_default() += f.rate;
@@ -70,7 +74,13 @@ pub fn preview_boxes(sr: &SolverResult, max_belt_tier: Option<&str>) -> PreviewL
             *item_rates.entry(o.item.as_str()).or_default() += o.rate;
         }
     }
-    let lanes: i32 = item_rates.values().map(|r| (r / cap).ceil().max(1.0) as i32).sum();
+    let lanes: i32 = item_rates
+        .values()
+        .map(|r| {
+            let tier = belt_entity_for_rate(*r, max_belt_tier);
+            (r / belt_throughput(tier)).ceil().max(1.0) as i32
+        })
+        .sum();
     let trunk_w = 2 + lanes;
 
     let mut boxes = Vec::new();
