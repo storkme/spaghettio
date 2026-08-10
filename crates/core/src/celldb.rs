@@ -16,7 +16,7 @@
 //! `recipes.json` / balancer-library pattern: versioned, diffable, no
 //! infrastructure.
 
-use crate::common::{entity_size, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt};
+use crate::common::{is_machine_entity, is_splitter, is_surface_belt, is_ug_belt, oriented_entity_dims};
 use crate::models::PlacedEntity;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -225,6 +225,14 @@ pub fn extract_unit(
             // Counts stored, rates derived — enforced at extraction: rate
             // stamps are fixture-specific flow aggregates and committing
             // them is the stale-declared-data failure the schema bans.
+            // Field taxonomy, decided not improvised (round-3 review):
+            // STRIPPED = per-run measurements (rate). STRUCTURAL, kept =
+            // io_type (UG halves), filters/priorities (splitter function),
+            // carries (port-check referee), items/quality — module and
+            // quality configs are part of the IMPLEMENTATION (they change
+            // derived rates via the solver, not stored ones). v1 seeds are
+            // bare-machine Normal; a moduled seed is a different entry, not
+            // a stripped one.
             e.rate = None;
             e
         })
@@ -240,9 +248,9 @@ pub fn extract_unit(
     let mut tiles = 0u32;
     let (mut max_x, mut max_y) = (0, 0);
     for e in &frag {
-        let (w, h) = entity_size(&e.name);
-        for dx in 0..w as i32 {
-            for dy in 0..h as i32 {
+        let (w, h) = oriented_entity_dims(&e.name, e.direction);
+        for dx in 0..w {
+            for dy in 0..h {
                 occupied.insert((e.x + dx, e.y + dy));
                 max_x = max_x.max(e.x + dx);
                 max_y = max_y.max(e.y + dy);
@@ -253,19 +261,44 @@ pub fn extract_unit(
 
     let mut ports: Vec<Port> = Vec::new();
     let mut seg_items: Vec<(String, String)> = Vec::new();
+    // Segment kinds that are structure, not ports. Anything outside this
+    // set AND outside the port kinds below warns — a new engine segment
+    // kind must be classified deliberately, never silently skipped
+    // (round-3 review: fluid-out fell through both lists with no port and
+    // no warning, the exact degraded-store case K67-1 exists to block).
+    const STRUCTURAL_KINDS: &[&str] = &[
+        "machine",
+        "inserter-in",
+        "inserter-out",
+        "trunk",
+        "trunk-dive",
+        "current-feed",
+    ];
     for e in &frag {
         if let Some(s) = e.segment_id.as_deref() {
             let parts: Vec<&str> = s.split(':').collect();
-            if parts.len() >= 4 && (parts[2] == "belt-in" || parts[2] == "fluid-in") {
-                let key = (parts[2].to_string(), parts[3].to_string());
+            let kind = parts.get(2).copied().unwrap_or("");
+            if parts.len() >= 4
+                && (kind == "belt-in" || kind == "fluid-in" || kind == "fluid-out")
+            {
+                let key = (kind.to_string(), parts[3].to_string());
                 if !seg_items.contains(&key) {
                     seg_items.push(key);
                 }
-            } else if parts.len() >= 3 && parts[2] == "belt-out" {
+            } else if parts.len() >= 3 && kind == "belt-out" {
+                // 3-part belt-out defaults its item to the recipe name —
+                // correct for every current row template (the product IS
+                // the recipe item); check_entry's carries-vs-item port
+                // check catches a future mislabel on tagged belts.
                 let item = parts.get(3).unwrap_or(&recipe).to_string();
                 let key = ("belt-out".to_string(), item);
                 if !seg_items.contains(&key) {
                     seg_items.push(key);
+                }
+            } else if !STRUCTURAL_KINDS.contains(&kind) {
+                let w = format!("unhandled segment kind '{kind}' in {s}");
+                if !warnings.contains(&w) {
+                    warnings.push(w);
                 }
             }
         }
@@ -316,7 +349,12 @@ pub fn extract_unit(
         let pk = match kind.as_str() {
             "belt-in" => PortKind::BeltIn,
             "belt-out" => PortKind::BeltOut,
-            _ => PortKind::PipeIn,
+            "fluid-in" => PortKind::PipeIn,
+            "fluid-out" => PortKind::PipeOut,
+            other => {
+                warnings.push(format!("no PortKind mapping for segment kind '{other}'"));
+                continue;
+            }
         };
         let mut sorted = candidates.clone();
         sorted.sort();
@@ -359,9 +397,9 @@ pub fn check_entry(entry: &CellEntry) -> Vec<String> {
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
     let mut tiles = 0u32;
     for e in &entry.entities {
-        let (w, h) = entity_size(&e.name);
-        for dx in 0..w as i32 {
-            for dy in 0..h as i32 {
+        let (w, h) = oriented_entity_dims(&e.name, e.direction);
+        for dx in 0..w {
+            for dy in 0..h {
                 let t = (e.x + dx, e.y + dy);
                 if !occupied.insert(t) {
                     issues.push(format!("overlap at {t:?} ({})", e.name));
@@ -430,8 +468,8 @@ pub fn check_entry(entry: &CellEntry) -> Vec<String> {
         // A port must be a real transport tile carrying the declared item —
         // an unoccupied or wrong-item port composes into a dead feed.
         let holder = entry.entities.iter().find(|e| {
-            let (w, h) = entity_size(&e.name);
-            p.dx >= e.x && p.dx < e.x + w as i32 && p.dy >= e.y && p.dy < e.y + h as i32
+            let (w, h) = oriented_entity_dims(&e.name, e.direction);
+            p.dx >= e.x && p.dx < e.x + w && p.dy >= e.y && p.dy < e.y + h
         });
         match holder {
             None => issues.push(format!("port at ({},{}) is an empty tile", p.dx, p.dy)),
@@ -543,10 +581,18 @@ mod tests {
                 checked += 1;
             }
         }
+        // Scope: ENGINE-seeded entries only. community:/hand entries are
+        // first-class per the provenance taxonomy and cannot be reproduced
+        // from seed_sources by definition (round-3 review — the unscoped
+        // assert would have banned them).
+        let engine_entries = celldb()
+            .entries
+            .iter()
+            .filter(|e| e.provenance.starts_with("engine@"))
+            .count();
         assert_eq!(
-            checked,
-            celldb().entries.len(),
-            "every stored entry must be drift-checked (seed_sources out of sync?)"
+            checked, engine_entries,
+            "every ENGINE-seeded entry must be drift-checked (seed_sources out of sync?)"
         );
     }
 
