@@ -190,7 +190,7 @@ by the seeding tool, not typed by hand.**
   amendment, **K67-1 adjudicated CLEAN: zero escape hatches** across the
   top-5 engine seeds.*
 - *2026-08-10 — **K67-2 adjudicated FAIL**: median |total-area error|
-  31.5% vs the 30% bar (n=29, `celldb_preview_calibration`; fourth adjudication — the first three ran 31.9/33.1/32.6, and a round-1 review catch removed a belt-tier default artifact from the instrument before the final one). Three
+  32.7% vs the 30% bar (n=29, `celldb_preview_calibration`; FIFTH adjudication — the sequence ran 31.9/33.1/32.6/31.5/32.7 as review catches removed a belt-tier default artifact and then corrected lane math to the planner's half-throughput constant. Five principled attempts all land in the 31-33% band, so the criterion's kill clause — "if recalibration cannot reach 30%, kill the preview consumer" — is now LIVE; the module and instrument stay as the baseline either way, and the disabled-vs-killed disposition is the RFC owner's call). Three
   principled levers tried — fabric allowance, uniform Phase-0 non-interior
   factor (banded variant measured WORSE than uniform), lane-count physics
   (`ceil(rate/belt capacity)` trunk lanes). Residual error is structural:
