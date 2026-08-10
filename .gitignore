@@ -74,6 +74,11 @@ web/src/wasm-pkg/
 !/crates/core/examples/probe_motif_cost.rs
 !/crates/core/examples/celldb
 !/crates/core/examples/celldb/corpus.rs
+# ...and the RFC-067 celldb tools: the seed tool regenerates the embedded
+# store (a tracked artifact must have a tracked producer), and the
+# calibration probe is K67-2's instrument — its verdict gates the preview.
+!/crates/core/examples/celldb_seed.rs
+!/crates/core/examples/celldb_preview_calibration.rs
 
 # not sure what this is even lol
 *:Zone.Identifier
