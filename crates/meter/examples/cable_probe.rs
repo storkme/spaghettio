@@ -2,6 +2,11 @@
 //!
 //! Usage: `cable_probe [label] [warmup_ticks] [measure_ticks]`
 //!
+//! Membership of the ITEM-scoped sections is sampled at several spaced instants
+//! and unioned; the per-tile occupancy NUMBERS are still instantaneous, read at
+//! window end. A tile can therefore be listed at 0/4 — that is the union
+//! working, not a contradiction.
+//!
 //! Defaults match `check_one.rs`'s calibrated window (108k warmup / 216k
 //! measure). The short windows this probe originally shipped with (7.2k/10.8k)
 //! read buffer fill as throughput on multi-stage chains — the same trap
@@ -40,9 +45,33 @@ fn main() {
         .map(|w| (w.core.delivered, w.core.starved_ticks))
         .collect();
 
-    f.run_for(measure);
+    // Membership is sampled at SAMPLES spaced instants across the window and
+    // UNIONED, not read once at the end. A single end-of-window sample is what
+    // made every earlier version of this probe under-select: a tile is only
+    // "carrying ITEM" if an item happens to occupy a slot at the instant we
+    // look, and on a tight chain with low belt residency — the zero-headroom
+    // population this probe exists to study — a producer's drop tile is empty
+    // most ticks by design. Sampling once there drops real taps and reports the
+    // remainder as if complete.
+    const SAMPLES: usize = 8;
+    let chunk = (measure / SAMPLES as u64).max(1);
+    let mut seen: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut ticked = 0u64;
+    for k in 0..SAMPLES {
+        let run = if k == SAMPLES - 1 { measure.saturating_sub(ticked) } else { chunk };
+        f.run_for(run);
+        ticked += run;
+        for (i, t) in f.net.tiles.iter().enumerate() {
+            let holds = t.lanes.iter().any(|lane| {
+                lane.slots_debug().iter().flatten().any(|it| f.items.name(*it) == ITEM)
+            });
+            if holds {
+                seen.insert(i);
+            }
+        }
+    }
 
-    println!("window: {warmup} warmup + {measure} measured ticks");
+    println!("window: {warmup} warmup + {ticked} measured ticks ({SAMPLES} membership samples)");
 
     // machines by recipe, with crafts. `crafts` is a window total; `state` is
     // a single instantaneous sample taken at window end, NOT a window
@@ -55,25 +84,20 @@ fn main() {
         println!("  {:<20} at {:?}  {:?}  crafts={}", mc.recipe, mc.pos, mc.state, mc.crafts);
     }
 
-    // Tiles holding the item at end of window. Used both to report occupancy
-    // and to decide which inserters are worth printing. Caveat: a belt that is
-    // genuinely empty at this instant drops out, so this under-selects rather
-    // than over-selects — fine for "who can reach it", wrong for a census.
-    let item_tiles: Vec<usize> = f
-        .net
-        .tiles
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| {
-            t.lanes.iter().any(|lane| {
-                lane.slots_debug().iter().flatten().any(|it| f.items.name(*it) == ITEM)
-            })
-        })
-        .map(|(i, _)| i)
-        .collect();
+    // Every tile that held ITEM at ANY of the sampled instants. Still a lower
+    // bound — a tile empty at all eight would drop out — but no longer a
+    // single-instant artifact. Two things to keep straight when reading the
+    // output below: MEMBERSHIP is unioned across the window, while the
+    // occupancy NUMBERS printed per tile are instantaneous, read at the end.
+    // So a tile can appear in the list at 0/4 on both lanes; that is the
+    // sampling working, not a contradiction.
+    let item_tiles: Vec<usize> = seen.iter().copied().collect();
 
+    // Membership test against the set, not a linear scan of the Vec — the
+    // union is larger than the old single sample and this is inside a loop
+    // over every inserter.
     let touches_item = |e: &Endpoint| match e {
-        Endpoint::Belt(t) => item_tiles.contains(t),
+        Endpoint::Belt(t) => seen.contains(t),
         _ => false,
     };
 
@@ -89,14 +113,22 @@ fn main() {
     // the right filter: it catches a producer's drop tile and a consumer's
     // pickup tile as well as belt->belt.
     let mut printed = 0usize;
-    let mut machine_taps = 0usize;
+    // Counted as two classes, not one. A combined `machine_taps` counter is
+    // satisfied by EITHER class surviving, so producer taps could vanish
+    // entirely while consumer taps kept the count positive and no guard fired
+    // — losing exactly the producer-saturation signal this probe is for.
+    let mut producer_taps = 0usize; // machine -> belt
+    let mut consumer_taps = 0usize; // belt -> machine
     for (w, (d0, s0)) in f.inserters.iter().zip(&base) {
         if !(touches_item(&w.pickup) || touches_item(&w.drop)) {
             continue;
         }
         printed += 1;
-        if matches!(w.pickup, Endpoint::Machine(_)) || matches!(w.drop, Endpoint::Machine(_)) {
-            machine_taps += 1;
+        if matches!(w.pickup, Endpoint::Machine(_)) && touches_item(&w.drop) {
+            producer_taps += 1;
+        }
+        if matches!(w.drop, Endpoint::Machine(_)) && touches_item(&w.pickup) {
+            consumer_taps += 1;
         }
         let ep = |e: &Endpoint| match e {
             Endpoint::Belt(t) => format!("belt{:?}", f.net.tiles[*t].pos),
@@ -122,11 +154,12 @@ fn main() {
     // to ITEM via `item_tiles`, and an empty scope looks identical to a healthy
     // factory with nothing to report.
     //
-    // Three failure levels, not two. The partial case is the dangerous one:
-    // `item_tiles` is a single end-of-window sample, and a tap tile that
-    // happens to be empty at that instant drops out silently while other tiles
-    // keep the set non-empty — so an entire tap population can vanish with the
-    // output still looking complete.
+    // Four failure levels. The partial ones are the dangerous ones, and they
+    // are named separately because a single combined counter hides them: with
+    // membership derived from belt contents, a whole tap CLASS can drop out
+    // while the other keeps any combined count positive, leaving output that
+    // looks complete. Union sampling above makes this much less likely; it
+    // does not make it impossible, so the guard still checks.
     if item_tiles.is_empty() {
         eprintln!(
             "\n!! VACUOUS: no belt tile held {ITEM} at sample time. Every {ITEM}-scoped \
@@ -141,15 +174,23 @@ fn main() {
              this probe is itself the finding.",
             item_tiles.len()
         );
-    } else if machine_taps == 0 {
-        eprintln!(
-            "\n!! PARTIALLY VACUOUS: {printed} inserters touch {ITEM}, but NONE has a \
-             machine endpoint — no producer or consumer tap was found, only belt->belt \
-             transfers. Since selection here rests on one end-of-window sample of \
-             `item_tiles`, the likeliest cause is tap tiles being momentarily empty \
-             rather than the taps not existing. Re-run before concluding anything about \
-             saturation."
-        );
+    } else {
+        if producer_taps == 0 {
+            eprintln!(
+                "\n!! PARTIALLY VACUOUS: {printed} inserters touch {ITEM} but NONE is a \
+                 producer tap (machine -> {ITEM} belt). Producer-side saturation is this \
+                 probe's headline output, so treat it as absent, not as zero. Either no \
+                 machine produces {ITEM} in this fixture, or every producer drop tile was \
+                 empty at all {SAMPLES} samples."
+            );
+        }
+        if consumer_taps == 0 {
+            eprintln!(
+                "\n!! PARTIALLY VACUOUS: {printed} inserters touch {ITEM} but NONE is a \
+                 consumer tap ({ITEM} belt -> machine). Nothing downstream is reading this \
+                 belt, which is either the finding or a sampling miss."
+            );
+        }
     }
 
     // Per-lane occupancy along each row that carries the item. Rows are
