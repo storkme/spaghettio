@@ -88,6 +88,20 @@ seconds** where the headless sim takes 10–20 minutes. It would have caught
 
 ### 2a. The meter's post-lift optimism — unexplained
 
+> **Correction, 2026-08-10 (at commit time).** Partly superseded. The *deficit*
+> this section is measured against was root-caused on 2026-08-08 by #607/#608 —
+> `docs/status.md` §1015 records it as the `di-bridge` belt→belt transfer bank
+> loading one lane only (~21.4/s against 30/s of demand), and marks the
+> zero-headroom attribution **falsified for this fixture** with an explicit
+> "do not cite". Post-#608 selection ships the bus-lane variant, which measures
+> **100.0% of plan** headless. The *meter-vs-sim divergence* below is not
+> superseded and has since become its own record:
+> [`meter-divergence.md`](meter-divergence.md) §2026-08-08 is the current head,
+> and its conclusion is stronger than "unexplained" — **the floor property does
+> not hold on the gate population**, which is why the fast meter can refute but
+> never clear. Read this section for its falsification of the warmup suspect;
+> go there for the calibration.
+
 On the **post-lift** `tier2_electronic_circuit` layout the meter reads
 **96%** where the sim reads **90–91%** — optimistic by ~5–6pp, which is **4×
 the largest optimistic error in the whole corpus**. The corpus's own tier2

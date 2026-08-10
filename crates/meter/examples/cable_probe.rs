@@ -44,8 +44,11 @@ fn main() {
 
     println!("window: {warmup} warmup + {measure} measured ticks");
 
-    // machines by recipe, with crafts
-    println!("\nmachines (recipe, pos, state, crafts over window):");
+    // machines by recipe, with crafts. `crafts` is a window total; `state` is
+    // a single instantaneous sample taken at window end, NOT a window
+    // aggregate — a machine that worked throughout can print `ItemShortage`
+    // because of where the last tick fell. Read them differently.
+    println!("\nmachines (recipe, pos, state AT END OF WINDOW, crafts over window):");
     let mut ms: Vec<_> = f.machines.iter().collect();
     ms.sort_by_key(|m| (m.recipe.clone(), m.pos.0, m.pos.1));
     for mc in &ms {
@@ -75,15 +78,22 @@ fn main() {
     };
 
     println!(
-        "\n{ITEM} belt<->belt inserters (machine->belt = producer tap, belt->machine = consumer tap):"
+        "\n{ITEM} inserters (machine->belt = producer tap, belt->machine = consumer tap, belt->belt = transfer):"
     );
     println!("  counters are window-scoped (warmup subtracted)");
+    // No `belt_to_belt` predicate here, deliberately. The original probe
+    // required BOTH endpoints to be `Endpoint::Belt`, which excludes exactly
+    // the two things the header names — a producer tap is Machine->Belt and a
+    // consumer tap is Belt->Machine, so both were silently dropped and the
+    // section reported only bus transfer inserters. `touches_item` alone is
+    // the right filter: it catches a producer's drop tile and a consumer's
+    // pickup tile as well as belt->belt.
+    let mut printed = 0usize;
     for (w, (d0, s0)) in f.inserters.iter().zip(&base) {
-        let belt_to_belt =
-            matches!(w.pickup, Endpoint::Belt(_)) && matches!(w.drop, Endpoint::Belt(_));
-        if !belt_to_belt || !(touches_item(&w.pickup) || touches_item(&w.drop)) {
+        if !(touches_item(&w.pickup) || touches_item(&w.drop)) {
             continue;
         }
+        printed += 1;
         let ep = |e: &Endpoint| match e {
             Endpoint::Belt(t) => format!("belt{:?}", f.net.tiles[*t].pos),
             Endpoint::Machine(i) => {
@@ -99,6 +109,26 @@ fn main() {
             ep(&w.drop),
             w.core.delivered.saturating_sub(*d0),
             w.core.starved_ticks.saturating_sub(*s0),
+        );
+    }
+    // Non-vacuity guard. Lesson 6 of the handoff note committed alongside this
+    // file: "a check that stops discriminating is worse than one that fails",
+    // and any scoping change needs a guard asserting the probe still has
+    // something to inspect. Both this section and `item_tiles` are scoped, and
+    // an empty scope here looks identical to a healthy factory with nothing to
+    // report.
+    if item_tiles.is_empty() {
+        eprintln!(
+            "\n!! VACUOUS: no belt tile held {ITEM} at sample time, so every {ITEM}-scoped \
+             section above is empty by construction, not by finding. Wrong fixture, wrong \
+             item, or a window that ended mid-gap."
+        );
+    } else if printed == 0 {
+        eprintln!(
+            "\n!! VACUOUS: {} tiles hold {ITEM} but no inserter touches any of them. \
+             Nothing was filtered out — there is genuinely nothing to report, which for \
+             this probe is itself the finding.",
+            item_tiles.len()
         );
     }
 
