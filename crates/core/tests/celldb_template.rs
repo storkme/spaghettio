@@ -61,13 +61,14 @@ fn run_fixture(item: &str, entry_count: u32, machine: &str, inputs: &[&str]) {
         .expect("template outcome recorded");
     match entry {
         CandidateOutcome::Refused { reason, .. } => {
-            // Scope refusals (no matching entry) are expected; measurement
-            // refusals from the runner ("transit is not measurable", etc.)
-            // are DATA for K67-3, not test failures — panicking on them
-            // hid outcomes (round-2 review). Only a stamping panic-class
-            // reason (overlap/pole failure text) would indicate a bug, and
-            // those surface as produce() errors with their own text.
-            println!("K67-3 data: {item}@{rate}: REFUSED: {reason}");
+            // These fixtures are demand-matched to seeded entries — a
+            // refusal here is a REGRESSION, not data: the entry exists,
+            // the count matches, so produce() must reach evaluation. A
+            // harness that println!s every outcome and passes is the
+            // check-going-quiet failure validator-reporting.md documents
+            // (round-5 review, 2/2). Scope refusals remain legitimate only
+            // in the multi-group test below.
+            panic!("demand-matched {item} (count={entry_count}) refused: {reason}");
         }
         CandidateOutcome::Evaluated(ev) => {
             println!(
