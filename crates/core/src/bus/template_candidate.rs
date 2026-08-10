@@ -21,8 +21,8 @@
 
 use super::decomposition_search::DecompositionCandidate;
 use super::layout::{self, LayoutOptions};
-use crate::celldb::{self, DerivedConstraints};
-use crate::common::{belt_throughput, entity_size, is_inserter, is_machine_entity, QualityTier};
+use crate::celldb::{self, DerivedConstraints, Motif};
+use crate::common::{belt_throughput, is_inserter, is_machine_entity, QualityTier};
 use crate::models::{LayoutResult, SolverResult};
 use rustc_hash::FxHashSet;
 
@@ -88,6 +88,21 @@ impl DecompositionCandidate for TemplateCandidate {
                     m.recipe, m.entity
                 )
             })?;
+        // v1 stamps EXACT-count matches only. A count>need entry would
+        // silently overproduce and the measured verdicts would score
+        // overproduction, not fragment quality — the demand-matched
+        // harness lesson, enforced in the producer itself (round-4
+        // review). Count ladders relax this when Phase 3 reopens.
+        let entry_count = match &entry.motif {
+            Motif::Unit { count, .. } => *count,
+            Motif::Fused { count_a, count_b, .. } => count_a + count_b,
+        };
+        if entry_count != need {
+            return Err(format!(
+                "smallest entry has {entry_count} machines for a {need}-machine demand; \
+                 v1 refuses inexact stamps (count ladders are the reopening path)"
+            ));
+        }
 
         // Stamp the fragment, then place poles exactly the way the shipping
         // pipeline does — poles LAST, never obstacles (layout.rs invariant).
@@ -144,14 +159,17 @@ impl DecompositionCandidate for TemplateCandidate {
         }
         entities.extend(poles);
 
+        // Same direction-aware dims as the occupancy pass — a rotated
+        // non-square machine must not report a smaller bbox than it stamps
+        // (round-4 review).
         let width = entities
             .iter()
-            .map(|e| e.x + entity_size(&e.name).0 as i32)
+            .map(|e| e.x + crate::common::oriented_entity_dims(&e.name, e.direction).0)
             .max()
             .unwrap_or(0);
         let height = entities
             .iter()
-            .map(|e| e.y + entity_size(&e.name).1 as i32)
+            .map(|e| e.y + crate::common::oriented_entity_dims(&e.name, e.direction).1)
             .max()
             .unwrap_or(0);
 
