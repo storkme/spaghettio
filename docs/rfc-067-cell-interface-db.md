@@ -105,7 +105,9 @@ by the seeding tool, not typed by hand.**
    **never-worse by the validator is the admission floor, the meter refutes
    cheaply, and selection stays firewalled until sim-anchored** — the
    standing #519/#520 discipline, inherited verbatim. Ships inert
-   (candidate mode off by default), like DI and HorizontalStack did.
+   (candidate mode off by default), the way DI (RFC-053) did —
+   HorizontalStack is the *scoring* precedent, not the rollout one: it
+   shipped default-on.
 3. **Regression corpus:** a check that re-derives metrics for every entry
    and diffs against the recorded ones; a drift is a loud failure naming
    the entry.
@@ -123,10 +125,12 @@ by the seeding tool, not typed by hand.**
 
 ## Kill criteria
 
-- **K67-1 (contract expressiveness):** if engine-generated seeds for the
-  top-5 motifs cannot be expressed under port-contract v1 without more than
-  one per-entry escape hatch across the set, the contract is wrong — stop
-  and redesign before any consumer ships.
+- **K67-1 (contract expressiveness):** if expressing the top-5 engine-
+  generated seeds under port-contract v1 requires **more than one escape
+  hatch in total across all five entries** (an escape hatch = any
+  per-entry special case, ambiguity override, or PORT-WARN the seed tool
+  emits that has to be resolved by hand), the contract is wrong — stop and
+  redesign before any consumer ships.
 - **K67-2 (preview honesty):** if the preview's total-area estimate is off
   by more than 30% median against realized layouts on the survey corpus,
   the preview ships disabled until recalibrated; if recalibration cannot
