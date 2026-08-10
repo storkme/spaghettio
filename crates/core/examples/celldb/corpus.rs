@@ -9,6 +9,13 @@
 // escalates to the tier the rate demands, matching e2e's belt_tier:None
 // semantics; it does NOT mean yellow), inputs, excluded recipes.
 // Module assumption: bare machines (matches the fixtures).
+//
+// Dedupe keys DIFFER by probe, deliberately: the census merges entries
+// differing only by belt tier (solver-identical => one demand
+// observation); the cost probe keys on belt too (its output depends on
+// it). If this corpus ever gains two entries differing only by belt, the
+// probes' entry counts will diverge BY DESIGN — update the scoreboard's
+// paired counts note when that happens.
 
 pub struct F(
     pub &'static str,

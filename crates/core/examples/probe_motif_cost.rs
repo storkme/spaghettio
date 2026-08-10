@@ -38,6 +38,20 @@ fn class_of(seg: Option<&str>, name: &str) -> &'static str {
         return "infra";
     }
     match seg {
+        // RFC-061 per-block trunk columns live under the row: prefix but
+        // are INTER-ROW transport — `row:{r}:trunk:*`, `row:{r}:trunk-dive:*`,
+        // `row:{r}:current-feed:*` (templates.rs:1180-1183). Counting them
+        // as interior understated fabric exactly in the belt-saturated
+        // regime where the verdict is closest (round-3 review, the one
+        // finding that touched the published conclusion).
+        Some(s)
+            if s.starts_with("row:")
+                && s.split(':').nth(2).is_some_and(|k| {
+                    k == "trunk" || k == "trunk-dive" || k == "current-feed"
+                }) =>
+        {
+            "fabric"
+        }
         Some(s) if s.starts_with("row:") || s.starts_with("di-row:") => "interior",
         Some(s)
             if s.starts_with("trunk:")
@@ -49,7 +63,9 @@ fn class_of(seg: Option<&str>, name: &str) -> &'static str {
         }
         // Segmentless transport is stamped fabric, not a mystery: balancer
         // stamps carry segment_id: None by construction
-        // (balancer_library.rs:84), and merge-tap stamps likewise. Counted
+        // (balancer_library.rs:84). (Merge-tap branches are NOT segmentless
+        // — they emit tap-prefixed ids, ghost_router.rs, and classify as
+        // fabric above; an earlier comment here claimed otherwise.) Counted
         // as its own class so the attribution stays visible, but it is
         // fabric for the share headline.
         _ if name.contains("transport-belt")
@@ -137,15 +153,33 @@ fn main() {
             }
         }
         per_layout.push((format!("{item}@{rate}"), *rate, cls));
-        let tot: f64 = cls.iter().sum();
+        // Percentages on the SAME base the headline medians use
+        // (interior+fabric; infra excluded) — the row dump and the quoted
+        // medians must reconcile without a footnote (round-3 review).
+        let ifab = cls[0] + cls[1] + cls[2];
         let fab = cls[1] + cls[2];
         println!(
-            "{item}@{rate:<6} interior {:>5.0} ({:>4.1}%)  fabric {:>5.0} ({:>4.1}%, stamps {:>4.0})  infra {:>4.0}  other {:>4.0}",
-            cls[0], 100.0 * cls[0] / tot, fab, 100.0 * fab / tot, cls[2], cls[3], cls[4],
+            "{item}@{rate:<6} interior {:>5.0} ({:>4.1}%)  fabric {:>5.0} ({:>4.1}%, stamps {:>4.0})  infra {:>4.0}  other {:>4.0}   [% of interior+fabric]",
+            cls[0], 100.0 * cls[0] / ifab, fab, 100.0 * fab / ifab, cls[2], cls[3], cls[4],
         );
     }
 
     println!("\n===== {built} layouts built, {failed} failed =====");
+
+    // "Zero unexplained tiles" is ENFORCED, not asserted in prose: any
+    // OTHER tile falls outside every share denominator, so a non-empty
+    // bucket poisons the headline silently (round-3 review). Refuse.
+    let other_total: f64 = per_layout.iter().map(|(_, _, c)| c[4]).sum();
+    if other_total > 0.0 {
+        println!(
+            "ERROR: {other_total:.0} tiles classified OTHER — share denominators exclude"
+        );
+        println!("       them; fix the classifier before quoting ANY figure below.");
+    }
+    if per_layout.is_empty() {
+        println!("no layouts built — nothing to summarize");
+        return;
+    }
 
     // Probe 3 headline: fabric share of the transport-relevant area
     // (interior + fabric incl. stamps; infra excluded from both sides,

@@ -31,16 +31,23 @@ Interior tiles attributed by segment id (`row:*`, `di-row:*`):
 | copper-cable | 8,390 | 489 | 17.2 |
 | electronic-circuit | 6,437 | 275 | 23.4 |
 
-Top 5 ≈ 89% of attributed interior area — the scoreboard mirrors the census.
+Top 5 ≈ 89% of attributed interior area — the scoreboard mirrors the
+census. (Attribution keys on recipe alone while the census keys on
+(recipe, machine); the join coincides because the top motifs are
+machine-uniform in this corpus — a qualification, not an identity.)
 
 ## 3. Fabric share (the pre-registered RFC-057 kill criterion)
 
-Fabric = `trunk/tap/ghost/balancer` segments **plus segmentless stamped
-transport** (balancer stamps carry `segment_id: None` by construction —
-`balancer_library.rs:84`; classification left zero unexplained tiles).
+Fabric = `trunk/tap/ghost/balancer` segments, **RFC-061 per-block trunk
+columns** (`row:*:trunk/trunk-dive/current-feed` — under the row prefix
+but inter-row transport; a round-3 review catch worth ~0.5pp), **plus
+segmentless stamped transport** (balancer stamps carry `segment_id: None`
+by construction — `balancer_library.rs:84`). Zero unexplained tiles is
+ENFORCED: any `other` tile makes the probe refuse to print quotable
+figures.
 
-Share of interior+fabric area: **median 17.8%** (min 1.8%, max 55.1%).
-By target rate: <5/s → 18.3% · 5–20/s → 11.4% · **≥20/s → 29.3% median,
+Share of interior+fabric area: **median 18.3%** (min 1.8%, max 55.1%).
+By target rate: <5/s → 17.2% · 5–20/s → 11.4% · **≥20/s → 30.0% median,
 55.1% max** (the >50% cases are ec@35/40 on yellow — belt-saturated,
 balancer-heavy).
 
@@ -51,7 +58,12 @@ fabric-motif library (balancer-library generalization), not neater
 interiors. Consistent with the 2026-07-24 strategy call ("bus stays
 low-rate winner; high rates via composition").
 
-## 4. Community mining (169 files → 6,087 records)
+## 4. Community mining (169 files → 6,087 records; corpus manifest-verified)
+
+The 172-file corpus is an external download (factorioprints JSON exports),
+not vendored; `corpus-manifest.tsv` pins every file by SHA256 and
+`mine-community.sh` refuses to mine a corpus that does not match — the
+sim-harness pattern (external artifact, tracked verification).
 
 Independent demand signal agrees at the head (iron-plate #1,
 advanced-circuit #2, copper-cable #3, copper-plate #5, electronic-circuit
