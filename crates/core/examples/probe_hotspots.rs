@@ -25,6 +25,9 @@
 //!
 //! Layout options: engine defaults + the fixture's belt tier — the vanilla
 //! path, same rationale as probe_motif_cost.
+//!
+//! Citable output + prior-adjudication map (read before proposing a fix
+//! for the void this measures): docs/hotspot-scoreboard-2026-08.md.
 use rustc_hash::FxHashSet;
 use spaghettio_core::bus::layout::{self, LayoutOptions};
 use spaghettio_core::common::{is_machine_entity, oriented_entity_dims};
