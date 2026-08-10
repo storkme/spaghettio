@@ -79,6 +79,9 @@ web/src/wasm-pkg/
 # calibration probe is K67-2's instrument — its verdict gates the preview.
 !/crates/core/examples/celldb_seed.rs
 !/crates/core/examples/celldb_preview_calibration.rs
+# ...and the hotspot probe (RFC-067 follow-up): produces the area-budget /
+# whitespace-decomposition numbers; same tracked-producer reasoning.
+!/crates/core/examples/probe_hotspots.rs
 
 # not sure what this is even lol
 *:Zone.Identifier
