@@ -44,6 +44,16 @@ impl DecompositionCandidate for TemplateCandidate {
                 solver_result.machines.len()
             ));
         }
+        // Refuse-by-name for options the stamp cannot honor — the
+        // build_bus_layout convention (its stacking refusal), never silent
+        // degradation (round-5 review). A stored fragment IS its inserters
+        // and belts; options that would change them cannot apply to a stamp.
+        if opts.stacking > 1 {
+            return Err("celldb-template cannot honor stacking > 1 (fragment is pre-built)".into());
+        }
+        if opts.quality != QualityTier::Normal {
+            return Err("celldb-template v1 stamps Normal-quality fragments only".into());
+        }
         let m = &solver_result.machines[0];
         let need = m.count.ceil().max(1.0) as u32;
         let cap_rate = opts
@@ -93,10 +103,13 @@ impl DecompositionCandidate for TemplateCandidate {
         // overproduction, not fragment quality — the demand-matched
         // harness lesson, enforced in the producer itself (round-4
         // review). Count ladders relax this when Phase 3 reopens.
-        let entry_count = match &entry.motif {
-            Motif::Unit { count, .. } => *count,
-            Motif::Fused { count_a, count_b, .. } => count_a + count_b,
+        // Unit is the only reachable arm: query_unit filters Fused out
+        // before returning (a Fused match arm here would be dead code
+        // reading as unbuilt support — round-5 review).
+        let Motif::Unit { count: entry_count, .. } = &entry.motif else {
+            return Err("query_unit returned a non-unit motif (unreachable)".into());
         };
+        let entry_count = *entry_count;
         if entry_count != need {
             return Err(format!(
                 "smallest entry has {entry_count} machines for a {need}-machine demand; \

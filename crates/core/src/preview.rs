@@ -104,11 +104,12 @@ pub fn preview_boxes(sr: &SolverResult, max_belt_tier: Option<&str>) -> PreviewL
             // Scale the entry's real geometry by machine count: keep its
             // per-machine tile cost and its height (rows grow horizontally
             // in the engine), derive width.
-            let entry_count = match &e.motif {
-                Motif::Unit { count, .. } => *count,
-                Motif::Fused { count_a, count_b, .. } => count_a + count_b,
-            }
-            .max(1);
+            // Unit is the only motif query_unit returns — a Fused arm here
+            // would be dead code implying unbuilt support (round-5 review).
+            let Motif::Unit { count: entry_count, .. } = &e.motif else {
+                unreachable!("query_unit filters Fused motifs");
+            };
+            let entry_count = (*entry_count).max(1);
             let tiles =
                 e.metrics.interior_tiles as f64 * (count as f64 / entry_count as f64);
             let h = e.metrics.bbox_h;
