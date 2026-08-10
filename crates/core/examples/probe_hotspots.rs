@@ -15,7 +15,9 @@
 //!                balancer, merger, crossing, junction, feed, row-trunk,
 //!                segmentless stamps)
 //!   infra      — electric poles
-//!   whitespace — bbox minus occupied (measured nowhere else in the repo)
+//!   whitespace — bbox minus occupied (measured nowhere else in the repo),
+//!                decomposed per scanline into stripe / gutter / ragged /
+//!                ug-shadow / hole (definitions at the decomposition site)
 //!
 //! "Prize" columns rank, they do not promise: overhead = attributed
 //! interior tiles − machine tiles. A real cell still needs belts and
@@ -70,9 +72,19 @@ fn class_of(seg: Option<&str>, name: &str) -> &'static str {
         Some(s) if s.starts_with("junction:") => "fab:junction",
         Some(s) if s.starts_with("feed:") || s.starts_with("feeder:") => "fab:feed",
         Some(s) if s.starts_with("fan") => "fab:fan",
+        // Cell-composition export drain (cells/chain.rs `out:{seg}` — the
+        // RFC-051 candidate path, which can win corpus layouts): the
+        // final-product run to the drain row. Export transport = fabric.
+        // Previously absorbed as fab:stamp by the segment-blind belt
+        // fallback; surfaced the moment that arm went None-only.
+        Some(s) if s.starts_with("out:") => "fab:out",
         // Segmentless transport = balancer-library stamps (segment_id: None
-        // by construction, balancer_library.rs:84).
-        _ if name.contains("transport-belt")
+        // by construction, balancer_library.rs:84). None-only on purpose: a
+        // belt under an UNRECOGNIZED prefix must fall to "other" and refuse,
+        // not be silently absorbed as a stamp (review finding — the same
+        // trap probe_motif_cost's round-4 fixed; inactive prefixes like
+        // `cc:b:`/`corridor:` exist in-tree and would otherwise mislabel).
+        None if name.contains("transport-belt")
             || name.contains("underground-belt")
             || name.contains("splitter") =>
         {
@@ -120,10 +132,14 @@ fn main() {
     let mut motif: BTreeMap<String, MotifAgg> = BTreeMap::new();
     let mut fabric_kind: BTreeMap<&'static str, f64> = BTreeMap::new();
     let mut other_names: BTreeMap<String, usize> = BTreeMap::new();
-    // name, bbox, machines, overhead, fabric, infra, whitespace, [stripe, ragged, hole]
-    let mut per_layout: Vec<(String, f64, f64, f64, f64, f64, f64, [f64; 3])> = Vec::new();
+    // name, bbox, machines, overhead, fabric, infra, whitespace,
+    // [stripe, gutter, ragged, ug, hole]
+    let mut per_layout: Vec<(String, f64, f64, f64, f64, f64, f64, [f64; 5])> = Vec::new();
     let (mut built, mut failed) = (0usize, 0usize);
     let mut other_total = 0f64;
+    // ug-shadow's denominator, printed so a 0.0% share is checkable
+    // against "how many shadow tiles exist at all" rather than mysterious.
+    let (mut ug_all, mut ug_empty) = (0usize, 0usize);
 
     for F(item, rate, machine, belt, inputs, excluded) in &corpus {
         // Belt tier changes the layout — it MUST be in the dedupe key
@@ -158,14 +174,19 @@ fn main() {
         // celldb::extract_unit) so whitespace is bbox − occupied, not a
         // sum-of-footprints guess.
         let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+        let mut interior_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
         let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
         let mut cls: BTreeMap<&'static str, f64> = BTreeMap::new();
         let mut layout_motifs: FxHashSet<String> = FxHashSet::default();
         for e in &l.entities {
             let (w, h) = oriented_entity_dims(&e.name, e.direction);
+            let is_interior = class_of(e.segment_id.as_deref(), &e.name) == "interior";
             for dx in 0..w {
                 for dy in 0..h {
                     occupied.insert((e.x + dx, e.y + dy));
+                    if is_interior {
+                        interior_tiles.insert((e.x + dx, e.y + dy));
+                    }
                 }
             }
             min_x = min_x.min(e.x);
@@ -187,7 +208,9 @@ fn main() {
                     layout_motifs.insert(motif_key(s));
                 }
             } else if c == "other" {
-                *other_names.entry(e.name.clone()).or_default() += 1;
+                *other_names
+                    .entry(format!("{} seg={:?}", e.name, e.segment_id))
+                    .or_default() += 1;
                 other_total += a;
             } else if c != "infra" {
                 *fabric_kind.entry(c).or_default() += a;
@@ -199,26 +222,73 @@ fn main() {
 
         let bbox = ((max_x - min_x + 1) as f64) * ((max_y - min_y + 1) as f64);
         let white = bbox - occupied.len() as f64;
-        // Decompose whitespace by scanline — the three kinds imply three
-        // different fixes, so pooling them would hide which one applies:
-        //   stripe — fully-empty horizontal scanline (vertical squeeze)
-        //   ragged — outside a scanline's occupied x-span (row folding)
-        //   hole   — inside the span but unoccupied (in-row packing)
-        let (mut w_stripe, mut w_ragged, mut w_hole) = (0f64, 0f64, 0f64);
+        // The doc's reconciliation claim is enforced here, not narrated:
+        // class totals must equal the occupied-tile union exactly, or an
+        // entity overlap is silently inflating every published share
+        // (review finding, 3/3 — the assertion the doc cited did not
+        // previously cover the classes).
+        let class_sum: f64 = cls.values().sum();
+        assert!(
+            (class_sum - occupied.len() as f64).abs() < 0.5,
+            "class totals ({class_sum}) != occupied union ({}) — overlapping footprints",
+            occupied.len()
+        );
+        // UG hidden segments: the tiles between a paired entrance/exit are
+        // NOT placeable in Factorio, so an empty tile there is not a
+        // packable hole. Counted as their own kind (review finding).
+        let mut ug_shadow: FxHashSet<(i32, i32)> = FxHashSet::default();
+        for (a, b) in spaghettio_core::connectivity::build_ug_pairs(&l.entities) {
+            if a.1 == b.1 {
+                for x in a.0.min(b.0) + 1..a.0.max(b.0) {
+                    ug_shadow.insert((x, a.1));
+                }
+            } else if a.0 == b.0 {
+                for y in a.1.min(b.1) + 1..a.1.max(b.1) {
+                    ug_shadow.insert((a.0, y));
+                }
+            }
+        }
+        ug_all += ug_shadow.len();
+        ug_empty += ug_shadow.iter().filter(|t| !occupied.contains(*t)).count();
+        // Decompose whitespace by scanline — distinct kinds imply distinct
+        // fixes, so pooling them would hide which one applies:
+        //   stripe — fully-empty scanline (vertical squeeze)
+        //   gutter — scanline occupied ONLY by fabric/infra, no interior
+        //            (inter-band corridor; a trunk-only line is this, not
+        //            ragged — review finding, 2/3)
+        //   ragged — outside an interior-bearing scanline's occupied span
+        //            (row-width variance)
+        //   ug     — inside the span, empty, under a UG hidden segment
+        //            (not placeable — not a packable hole)
+        //   hole   — inside the span, empty, placeable. Approximation
+        //            disclosed in the doc: the single-span model folds
+        //            gaps between same-line clusters into this kind.
+        let (mut w_stripe, mut w_gutter, mut w_ragged, mut w_ug, mut w_hole) =
+            (0f64, 0f64, 0f64, 0f64, 0f64);
         let bw = (max_x - min_x + 1) as f64;
         for y in min_y..=max_y {
             let xs: Vec<i32> = (min_x..=max_x).filter(|x| occupied.contains(&(*x, y))).collect();
-            match (xs.first(), xs.last()) {
-                (Some(lo), Some(hi)) => {
-                    let span = (hi - lo + 1) as f64;
-                    w_ragged += bw - span;
-                    w_hole += span - xs.len() as f64;
+            let (Some(&lo), Some(&hi)) = (xs.first(), xs.last()) else {
+                w_stripe += bw;
+                continue;
+            };
+            if !(min_x..=max_x).any(|x| interior_tiles.contains(&(x, y))) {
+                w_gutter += bw - xs.len() as f64;
+                continue;
+            }
+            w_ragged += bw - (hi - lo + 1) as f64;
+            for x in lo..=hi {
+                if !occupied.contains(&(x, y)) {
+                    if ug_shadow.contains(&(x, y)) {
+                        w_ug += 1.0;
+                    } else {
+                        w_hole += 1.0;
+                    }
                 }
-                _ => w_stripe += bw,
             }
         }
         assert!(
-            (w_stripe + w_ragged + w_hole - white).abs() < 0.5,
+            (w_stripe + w_gutter + w_ragged + w_ug + w_hole - white).abs() < 0.5,
             "whitespace decomposition must reconcile"
         );
         // HOTSPOT_PROFILE=item@rate — eyes-on check for the ragged claim:
@@ -270,7 +340,7 @@ fn main() {
             fab,
             infra,
             white,
-            [w_stripe, w_ragged, w_hole],
+            [w_stripe, w_gutter, w_ragged, w_ug, w_hole],
         ));
         println!(
             "{item}@{rate:<6} bbox {bbox:>6.0}  machines {:>4.1}%  overhead {:>4.1}%  fabric {:>4.1}%  infra {:>3.1}%  whitespace {:>4.1}%",
@@ -311,14 +381,23 @@ fn main() {
     println!("whitespace {tw:>8.0}  ({:>4.1}%)", 100.0 * tw / tb);
     let mut wsh: Vec<f64> = per_layout.iter().map(|r| 100.0 * r.6 / r.1).collect();
     println!("whitespace share per layout: median {:.1}%", median(&mut wsh));
-    let (ts, tr, th) = per_layout.iter().fold((0.0, 0.0, 0.0), |a, r| {
-        (a.0 + r.7[0], a.1 + r.7[1], a.2 + r.7[2])
+    let kinds = per_layout.iter().fold([0.0f64; 5], |mut a, r| {
+        for (acc, v) in a.iter_mut().zip(r.7.iter()) {
+            *acc += v;
+        }
+        a
     });
     println!(
-        "whitespace kind (pooled): stripe {:.1}%  ragged {:.1}%  hole {:.1}%   [of whitespace]",
-        100.0 * ts / tw,
-        100.0 * tr / tw,
-        100.0 * th / tw
+        "whitespace kind (pooled): stripe {:.1}%  gutter {:.1}%  ragged {:.1}%  ug-shadow {:.1}%  hole {:.1}%   [of whitespace]",
+        100.0 * kinds[0] / tw,
+        100.0 * kinds[1] / tw,
+        100.0 * kinds[2] / tw,
+        100.0 * kinds[3] / tw,
+        100.0 * kinds[4] / tw
+    );
+    println!(
+        "ug hidden-segment tiles: {ug_all} total, {ug_empty} unoccupied ({:.0} counted ug-shadow in interior spans; the rest lie in gutter/outside-span lines)",
+        kinds[3]
     );
 
     // ---- Hotspot table 1: per-motif prize (pooled) ----
@@ -329,14 +408,17 @@ fn main() {
             .partial_cmp(&(a.1.tiles - a.1.machine_tiles))
             .unwrap()
     });
+    // "mach-tiles" not "machines": the column is the FOOTPRINT in tiles;
+    // the entity count only appears via ovh/m (review finding — a reader
+    // comparing 4,500 against ovh/m 16.1 would misread it as a count).
     println!(
-        "{:<34} {:>8} {:>9} {:>9} {:>7} {:>8} {:>8}",
-        "motif", "tiles", "machines", "overhead", "ovh/m", "ovh%", "layouts"
+        "{:<34} {:>8} {:>10} {:>9} {:>7} {:>8} {:>8}",
+        "motif", "tiles", "mach-tiles", "overhead", "ovh/m", "ovh%", "layouts"
     );
     for (m, a) in rows {
         let ovh = a.tiles - a.machine_tiles;
         println!(
-            "{m:<34} {:>8.0} {:>9.0} {:>9.0} {:>7.1} {:>7.1}% {:>8}",
+            "{m:<34} {:>8.0} {:>10.0} {:>9.0} {:>7.1} {:>7.1}% {:>8}",
             a.tiles,
             a.machine_tiles,
             ovh,
