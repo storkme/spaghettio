@@ -31,47 +31,8 @@ use rustc_hash::FxHashSet;
 use spaghettio_core::solver;
 use std::collections::BTreeMap;
 
-struct F(
-    &'static str,                // item
-    f64,                         // rate
-    &'static str,                // machine
-    &'static [&'static str],     // inputs
-    &'static [&'static str],     // excluded recipes
-);
-
-fn corpus() -> Vec<F> {
-    vec![
-        F("iron-gear-wheel", 10.0, "assembling-machine-1", &["iron-plate"], &[]),
-        F("iron-gear-wheel", 10.0, "assembling-machine-2", &["iron-ore"], &[]),
-        F("iron-gear-wheel", 20.0, "assembling-machine-2", &["iron-plate"], &[]),
-        F("electronic-circuit", 10.0, "assembling-machine-2", &["iron-plate", "copper-plate"], &[]),
-        F("electronic-circuit", 10.0, "assembling-machine-1", &["iron-ore", "copper-ore"], &[]),
-        F("electronic-circuit", 20.0, "assembling-machine-2", &["iron-ore", "copper-ore"], &[]),
-        F("plastic-bar", 10.0, "chemical-plant", &["petroleum-gas", "coal"], &[]),
-        F("plastic-bar", 10.0, "chemical-plant", &["crude-oil", "coal"], &[]),
-        F("sulfuric-acid", 5.0, "chemical-plant", &["iron-plate", "sulfur", "water"], &[]),
-        F("light-oil", 5.0, "chemical-plant", &["water", "heavy-oil"], &["advanced-oil-processing", "coal-liquefaction"]),
-        F("petroleum-gas", 12.0, "oil-refinery", &["water", "crude-oil"], &[]),
-        F("petroleum-gas", 24.0, "oil-refinery", &["water", "crude-oil"], &["basic-oil-processing", "coal-liquefaction"]),
-        F("advanced-circuit", 1.0, "assembling-machine-2", &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], &[]),
-        F("advanced-circuit", 5.0, "assembling-machine-2", &["iron-ore", "copper-ore", "coal", "water", "crude-oil"], &[]),
-        F("processing-unit", 2.0, "assembling-machine-3", &["iron-ore", "copper-ore", "coal", "water", "crude-oil"], &[]),
-        F("uranium-235", 0.1, "assembling-machine-3", &["uranium-238"], &["uranium-processing"]),
-        F("uranium-235", 0.05, "assembling-machine-3", &["uranium-ore"], &["kovarex-enrichment-process"]),
-        F("pentapod-egg", 0.2, "assembling-machine-3", &["nutrients", "water"], &[]),
-        F("raw-fish", 0.15, "assembling-machine-3", &["nutrients", "water"], &[]),
-        F("iron-bacteria", 1.0, "assembling-machine-3", &["bioflux"], &["iron-bacteria"]),
-        F("electronic-circuit", 30.0, "assembling-machine-2", &["iron-ore", "copper-ore"], &[]),
-        F("advanced-circuit", 45.0, "assembling-machine-2", &["iron-plate", "copper-plate", "plastic-bar"], &[]),
-        F("advanced-circuit", 5.0, "assembling-machine-2", &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], &[]),
-        F("advanced-circuit", 4.0, "assembling-machine-2", &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], &[]),
-        F("electronic-circuit", 60.0, "assembling-machine-2", &["iron-ore", "copper-ore"], &[]),
-        F("electronic-circuit", 22.0, "assembling-machine-2", &["iron-ore", "copper-ore"], &[]),
-        F("electronic-circuit", 23.0, "assembling-machine-2", &["iron-ore", "copper-ore"], &[]),
-        F("electronic-circuit", 35.0, "assembling-machine-2", &["iron-ore", "copper-ore"], &[]),
-        F("electronic-circuit", 40.0, "assembling-machine-2", &["iron-ore", "copper-ore"], &[]),
-    ]
-}
+// Corpus shared with probe_motif_cost so the two probes cannot drift.
+include!("celldb/corpus.rs");
 
 #[derive(Default)]
 struct Unit {
@@ -89,7 +50,7 @@ fn main() {
     let mut edges: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     let (mut solved, mut refused) = (0usize, 0usize);
 
-    for F(item, rate, machine, inputs, excluded) in &corpus {
+    for F(item, rate, machine, _belt, inputs, excluded) in &corpus {
         let key = format!("{item}|{rate}|{machine}|{inputs:?}|{excluded:?}");
         if !seen.insert(key) {
             continue;
