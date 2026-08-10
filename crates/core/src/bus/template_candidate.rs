@@ -102,6 +102,13 @@ impl DecompositionCandidate for TemplateCandidate {
                     occupied.insert((e.x + dx, e.y + dy));
                 }
             }
+            // entity_size reports (1,1) for splitters; the shipping
+            // pipeline reserves the second tile via splitter_second_tile —
+            // without this a pole could stamp onto it (latent: no current
+            // seed has a splitter; round-2 review on this PR).
+            if crate::common::is_splitter(&e.name) {
+                occupied.insert(crate::common::splitter_second_tile(e));
+            }
             if is_machine_entity(&e.name) {
                 // place_poles' tuple is (center_x, top_y, HEIGHT) — mirror
                 // layout.rs:1209 exactly. Passing (x, y, width) was silent

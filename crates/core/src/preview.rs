@@ -74,11 +74,20 @@ pub fn preview_boxes(sr: &SolverResult, max_belt_tier: Option<&str>) -> PreviewL
             *item_rates.entry(o.item.as_str()).or_default() += o.rate;
         }
     }
+    // Lane math mirrors the PLANNER'S OWN CONSTANT: a bus lane carries one
+    // item at HALF belt throughput (LANE_CAPACITY_TABLE,
+    // lane_planner.rs:20-24) — dividing by full throughput undercounted
+    // lanes ~2x on saturated fixtures (round-2 review on this PR).
     let lanes: i32 = item_rates
         .values()
         .map(|r| {
             let tier = belt_entity_for_rate(*r, max_belt_tier);
-            (r / belt_throughput(tier)).ceil().max(1.0) as i32
+            let lane_cap = crate::bus::lane_planner::LANE_CAPACITY_TABLE
+                .iter()
+                .find(|(n, _)| *n == tier)
+                .map(|(_, c)| *c)
+                .unwrap_or_else(|| belt_throughput(tier) / 2.0);
+            (r / lane_cap).ceil().max(1.0) as i32
         })
         .sum();
     let trunk_w = 2 + lanes;
