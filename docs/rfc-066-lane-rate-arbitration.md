@@ -30,11 +30,15 @@ Reproducible today, with numbers rather than reasoning. Across 504 layouts
 
 | | |
 |---|---|
-| tile slots where the two walkers disagree >0.01/s | **134,702 / 233,441 (58%)** |
+| tile slots where the two walkers disagree >0.01/s | **134,702 / 231,704 (58.1%)** — both sides counted over tiles present in BOTH maps. A further **1,737** tiles exist in `belt_flow`'s map only (0 the other way), excluded from numerator and denominator alike, so this ratio is a floor for the same reason the blind-tile figure below is |
 | tiles where the DISPATCHED model reads ~0.0/s and the other sees flow | **112,407** |
 | — by segment (all, sums to the total) | 57,649 `row:`, 28,859 `trunk:`, 10,588 `ghost:`, 5,661 `di-row:`, 3,959 `crossing:`, 2,452 `feed:`, 1,981 `balancer:`, 872 `corr:`, 327 untagged, 59 `tapoff:` |
 | `lane-throughput` firings, dispatched model | **5 of 504 layouts** |
-| same check under the other model | **176 of 504 layouts** |
+| same check under the other model | **176 of 504 layouts**, *pre-cap-fix* — this is `belt_flow::check_lane_throughput` **as written**, including the splitter yellow-fallback firings the next section shows are ~57% artifact. The fixed winner's true count is lower; pinning it is what Phase 2 exists for |
+
+Counting note: both checks push **one issue per over-cap lane**, so issue counts
+are lane readings, not tiles — a tile over on both lanes counts twice. The
+5-vs-176 *layout* comparison is unaffected, since both sides share the convention.
 
 **Why the dispatched model reads zero.** `belt_flow::compute_lane_rates_impl`
 seeds graph-source belts carrying external inputs (`belt_flow.rs:2623-2688`), and
@@ -179,6 +183,28 @@ dropped.
    them. Same blind spot `docs/validator-trust.md` already records for
    `row-input-belt-margin`; this is a third consumer of it.
 
+### Known limits of the B8 instrument
+
+Stated rather than implied. Two blind spots survive in `probe_b8_modes.rs`, both
+in the under-counting direction, and both left unfixed as vacuous **given** the
+measured result rather than assumed vacuous in advance:
+
+- **B8 into a UG output is not detectable.** `straight` is set only by a
+  registered neighbour behind the tile; the tile behind a UG output lies in the
+  tunnel and never enters the feeder index, so a perpendicular feed coexisting
+  with the underground straight feed would land in a benign bucket. The probe's
+  header claims UG-output coverage — that claim is overstated.
+- **A splitter inside a belt-in run is never scanned as a run tile** (the run
+  filter is `is_surface_belt || is_ug_belt`), although splitters *are* registered
+  as feeders.
+
+Both are vacuous only because the sweep finds **no perpendicular feed of any kind**
+into these runs: with zero perpendicular feeders present, neither gap has anything
+to misclassify. If any future run reports a non-zero perpendicular count, both
+must be closed before the result is quoted. Recorded this way because two earlier
+under-counting defects in this same probe were each rationalised as probably
+harmless, and both needed a full re-run once found.
+
 ### Shape of the diff
 
 - `crates/core/src/validate/belt_flow.rs` — fix the cycle damping; adopt the
@@ -213,6 +239,13 @@ reads as a two-file change and is not:
   forward consumption decrement, one of the three features this RFC credits
   `belt_flow` with. Whoever re-points line 976 must rewrite this paragraph, or a
   reader checking the source finds the repo contradicting the RFC's premise.
+- `crates/core/examples/probe_walkers.rs:73` and
+  `crates/core/examples/probe_walker_shape.rs:25` — **the probes this RFC commits
+  as its own reproducibility guarantee call `belt_structural::compute_lane_rates`
+  directly.** Deleting it stops them compiling, so an implementer following this
+  plan breaks the very instruments the reproduction table below tells them to run.
+  They must be ported (to compare the survivor against the meter) or deleted with
+  the model. Called out because it is the most self-inflicted item on this list.
 - `crates/core/src/validate/inserters.rs:1041` — an unqualified
   `check_lane_throughput` backtick. It will not dangle (a function of that name
   survives in `belt_flow`), but its referent silently changes, so the surrounding
@@ -440,3 +473,25 @@ has them. An earlier draft of this RFC quoted a figure produced that way.
   so the misleading qualifier is gone; and `probe_walker_shape.rs` no longer
   panics on an empty lane map or a NaN rate, which matters now that it is a
   committed instrument rather than a scratch script.*
+- *2026-08-09 — sixth review pass, eight findings. The one that mattered: the two
+  probes this RFC commits **as its own reproducibility guarantee** call
+  `belt_structural::compute_lane_rates` directly, so the delete plan breaks them —
+  the most self-inflicted omission in the consumer list, now added. Also corrected:
+  the 58% ratio mixed denominators (numerator over tiles in both maps, denominator
+  over their union) and is now 134,702 / 231,704 with the 1,737 one-sided tiles
+  called out; the "tiles" label on issue counts actually counts per-lane readings;
+  and 176-of-504 is marked **pre-cap-fix**, since it includes the splitter-fallback
+  firings this RFC separately shows are ~57% artifact. Two surviving instrument
+  blind spots (B8 into a UG output; a splitter inside a run) are recorded as
+  limitations rather than fixed — both vacuous **given** a measured zero
+  perpendicular feeds of any kind, with the RFC now stating they must be closed
+  before any non-zero perpendicular count is quoted. Judgement recorded so it can
+  be checked rather than taken on trust.*
+- *2026-08-09 — process note, because it bit twice in one session. Two patch
+  scripts in this branch's history asserted on a later anchor and exited **before**
+  writing the file, silently discarding edits the commit message then claimed had
+  landed — once for the splitter fix (caught only by review, after a sweep had
+  been published on the unfixed probe), once for this very entry's edits (caught
+  because the second time I grepped for the effect instead of trusting the exit
+  status). Any patch that reports success must be verified by grepping for its own
+  effect before anything is written about it.*

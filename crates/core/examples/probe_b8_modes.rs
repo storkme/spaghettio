@@ -5,7 +5,8 @@
 //! `factorio-mechanics.md`:
 //!
 //! - B11 TURN — sole perpendicular feeder, no straight feeder: BOTH lanes
-//!   preserved. Harmless. The engine builds these constantly.
+//!   preserved. Harmless. The engine builds these constantly ELSEWHERE (~1,275 on
+//!   `tap:` segments); into belt-in runs specifically this sweep finds none.
 //! - B8 SIDELOAD — perpendicular feeder coexisting with a straight feeder into
 //!   the same tile: NEAR LANE ONLY. This is the defect shape #609 wants to
 //!   close.
