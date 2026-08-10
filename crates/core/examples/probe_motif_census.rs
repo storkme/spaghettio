@@ -74,10 +74,14 @@ fn main() {
             u.machines += m.count.ceil();
             u.counts.push(m.count);
         }
-        // Edge motifs: producer -> consumer on a shared item. The solver
-        // output is a DAG (byproducts, shared intermediates), so an item may
-        // have several producers and consumers; every pair that shares the
-        // item is one edge observation.
+        // Edge motifs: producer -> consumer on a shared item, counted as
+        // SOLVE MEMBERSHIP — an edge increments once per solve regardless of
+        // how many group pairs share the item, so the printed number is
+        // literally "in how many solves does this edge appear". (The solver
+        // emits one MachineSpec per recipe, so pair-count and solve-count
+        // coincide today; the dedupe makes the label true by construction
+        // rather than by that invariant.)
+        let mut solve_edges: FxHashSet<(String, String, String)> = FxHashSet::default();
         for p in &sr.machines {
             for out in &p.outputs {
                 for c in &sr.machines {
@@ -85,12 +89,17 @@ fn main() {
                         continue;
                     }
                     if c.inputs.iter().any(|i| i.item == out.item) {
-                        *edges
-                            .entry((p.recipe.clone(), c.recipe.clone(), out.item.clone()))
-                            .or_default() += 1;
+                        solve_edges.insert((
+                            p.recipe.clone(),
+                            c.recipe.clone(),
+                            out.item.clone(),
+                        ));
                     }
                 }
             }
+        }
+        for e in solve_edges {
+            *edges.entry(e).or_default() += 1;
         }
     }
 
@@ -107,7 +116,13 @@ fn main() {
         cum += u.machines;
         let mut c = u.counts.clone();
         c.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let med = c[c.len() / 2];
+        // Textbook median (mean of middles for even n) — the upper-middle
+        // shortcut disagrees with itself across even/odd sample sizes.
+        let med = if c.len() % 2 == 1 {
+            c[c.len() / 2]
+        } else {
+            (c[c.len() / 2 - 1] + c[c.len() / 2]) / 2.0
+        };
         println!(
             "{recipe:<34} {entity:<22} {:>4} {:>6.0} {:>6.1}% {:>7.1}/{med:.1}/{:.1}{}",
             u.fixtures,
@@ -119,7 +134,7 @@ fn main() {
         );
     }
 
-    println!("\n--- edge motifs (producer -> consumer via item), by fixture count ---");
+    println!("\n--- edge motifs (producer -> consumer via item), by SOLVE count ---");
     let mut erows: Vec<(&(String, String, String), &usize)> = edges.iter().collect();
     erows.sort_by(|a, b| b.1.cmp(a.1));
     for ((p, c, item), n) in erows.iter().take(25) {
