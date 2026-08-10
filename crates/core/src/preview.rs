@@ -71,7 +71,12 @@ pub fn preview_boxes(sr: &SolverResult, max_belt_tier: Option<&str>) -> PreviewL
     }
     for m in &sr.machines {
         for o in m.outputs.iter().filter(|o| !o.is_fluid) {
-            *item_rates.entry(o.item.as_str()).or_default() += o.rate;
+            // MachineSpec output rates are PER-MACHINE — the planner
+            // multiplies by machine_count (lane_planner.rs:291) and so
+            // must this, or every multi-machine group undercounts its
+            // lanes ~countx (round-7 review, 3/3 — verified against the
+            // planner before believing).
+            *item_rates.entry(o.item.as_str()).or_default() += o.rate * m.count;
         }
     }
     // Lane math mirrors split_overflowing_lanes: ONE GLOBAL lane capacity
@@ -123,10 +128,13 @@ pub fn preview_boxes(sr: &SolverResult, max_belt_tier: Option<&str>) -> PreviewL
                 unreachable!("query_unit filters Fused motifs");
             };
             let entry_count = (*entry_count).max(1);
-            let tiles =
-                e.metrics.interior_tiles as f64 * (count as f64 / entry_count as f64);
-            let h = e.metrics.bbox_h;
-            (((tiles / h as f64).ceil() as i32).max(1), h, true)
+            // Scale the entry's REAL bbox width — deriving width from
+            // interior_tiles/bbox_h undercut even exact-count matches by
+            // ~19% (rows are not perfectly dense; bbox_w is the geometry
+            // the fragment actually occupies — round-7 review).
+            let w = ((e.metrics.bbox_w as f64) * (count as f64 / entry_count as f64))
+                .ceil() as i32;
+            (w.max(1), e.metrics.bbox_h, true)
         } else {
             let (mw, mh) = entity_size(&m.entity);
             let tiles = (mw * mh) as f64 * INTERIOR_FACTOR * count as f64;
