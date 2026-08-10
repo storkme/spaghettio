@@ -88,11 +88,24 @@ pub fn preview_boxes(sr: &SolverResult, max_belt_tier: Option<&str>) -> PreviewL
             .map(|(_, c)| *c)
             .unwrap_or_else(|| belt_throughput(tier) / 2.0)
     };
-    let lanes: i32 = item_rates
+    let solid_lanes: i32 = item_rates
         .values()
         .map(|r| (r / lane_cap).ceil().max(1.0) as i32)
         .sum();
-    let trunk_w = 2 + lanes;
+    // One pipe lane per distinct FLUID — the engine keeps every fluid lane
+    // in the bus (lane_planner's is_fluid passthrough). Excluding fluids
+    // handed all-fluid fixtures a zero-lane trunk and biased K67-2 toward
+    // PASS, the dangerous direction for a kill criterion (round-6 review).
+    let mut fluids: std::collections::BTreeSet<&str> = Default::default();
+    for f in sr.external_inputs.iter().filter(|f| f.is_fluid) {
+        fluids.insert(f.item.as_str());
+    }
+    for m in &sr.machines {
+        for o in m.outputs.iter().filter(|o| o.is_fluid) {
+            fluids.insert(o.item.as_str());
+        }
+    }
+    let trunk_w = 2 + solid_lanes + fluids.len() as i32;
 
     let mut boxes = Vec::new();
     let mut y = 0i32;

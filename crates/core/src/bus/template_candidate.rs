@@ -164,8 +164,12 @@ impl DecompositionCandidate for TemplateCandidate {
         // surfaced only as a validation warning nothing asserted on
         // (round-3 review). An uncoverable fragment is a refusal.
         if !uncovered.is_empty() {
+            // "subject(s)": place_poles' give_up set holds unmopable
+            // inserters AND uncoverable machine centers (fluid-only rows,
+            // the #400 pass) — calling them all inserters misdiagnosed the
+            // one case this message exists for (round-6 review).
             return Err(format!(
-                "pole placement left {} inserter(s) uncovered at {:?}",
+                "pole placement left {} coverage subject(s) unreachable at {:?}",
                 uncovered.len(),
                 &uncovered[..uncovered.len().min(4)]
             ));
