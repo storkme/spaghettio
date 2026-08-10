@@ -48,7 +48,7 @@ Scanline decomposition, five kinds because they imply different fixes
 | kind | share | meaning |
 |---|---:|---|
 | stripe | 0.0% | fully-empty scanline |
-| gutter | 27.5% | scanline occupied only by fabric/infra — inter-band corridor (a trunk-only line is this, not ragged) |
+| gutter | 27.5% | scanline occupied only by fabric/infra — inter-band corridors AND top/bottom margin lines holding only a trunk stub or pole (a trunk-only line is this, not ragged) |
 | **ragged** | **55.2%** | outside an interior-bearing scanline's occupied span — row-width variance |
 | ug-shadow | 0.0% | empty in-span tile under a UG hidden segment (not placeable) |
 | hole | 17.3% | empty, in-span, placeable |
@@ -117,6 +117,11 @@ gates (`candidate_runner`). Top of the pooled table:
 | copper-cable | 8,390 | 3,989 | 8.2 | 15 |
 | electronic-circuit | 5,581 | 3,106 | 11.3 | 15 |
 
+Keying note: fused DI cells key separately (`di:a+b`, inherited from the
+cost probe's round-5 collision fix), so a DI-winning layout's tiles would
+rank under the pair, not the member recipes. Zero DI layouts occurred in
+this corpus — the table above is all `row:` motifs.
+
 `advanced-circuit` is the first donor worth acquiring: the largest
 absolute prize and double the per-machine overhead of the smelters. Full
 table (19 motifs) in the probe output. Total pooled cell overhead is
@@ -133,9 +138,12 @@ area target on this corpus. (An earlier cut reported 6 tiles of
 "balancer stamps"; the strict classifier revealed them as the RFC-051
 composed-cell export drain, `out:*` — the segment-blind belt fallback
 had absorbed an unlisted prefix. This probe's fallback is now
-`segment_id: None`-only, unknown prefixes refuse the run, and the other
-reachable candidate-path prefixes — `corr:`, `cc:*`, `mergetree:` — are
-pre-classified as fabric, all zero-tile on this corpus. Note the
+`segment_id: None`-only, unknown prefixes refuse the run, and every
+remaining production segment-prefix constructor in `crates/core` (swept,
+not guessed: `corr:`, `cc:*`, `mergetree:`, `megafeed:`, `corridor:`,
+`compact-lane:`/`route`) is pre-classified as fabric, all zero-tile on
+this corpus — as are `junction:` and `fan` segments, which is why those
+kinds print no row. Note the
 divergence: `probe_motif_cost` still carries the segment-blind fallback,
 so its `fabric-stamp` figure absorbs these same 6 tiles; the fabric
 *share* it publishes is unaffected since both labels are fabric, but

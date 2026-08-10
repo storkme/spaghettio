@@ -81,19 +81,29 @@ fn class_of(seg: Option<&str>, name: &str) -> &'static str {
         // Previously absorbed as fab:stamp by the segment-blind belt
         // fallback; surfaced the moment that arm went None-only.
         Some(s) if s.starts_with("out:") => "fab:out",
-        // The rest of the reachable candidate-path prefixes, classified
-        // NOW rather than left to a future refusal (round-2 review, 2/2:
-        // strict refusal is only as good as its enumeration, and these
-        // come from the same default-Candidate paths that produced out:).
-        // All zero-tile on the current corpus. corr: = inter-cell
-        // producer→consumer routing (chain.rs:1327/1415); cc:a/b{k}/m{k}:
-        // = a multi-output cell's merge cascade, stamped OUTSIDE the cell
-        // proper (chain.rs:1496-1519); mergetree: = stamped lane-family
-        // merge tree (balancer.rs:430). Inter-cell/merge transport =
-        // fabric.
+        // Every remaining production segment-prefix constructor in
+        // crates/core, classified NOW rather than left to a future refusal
+        // (rounds 2+3 each found more; enumeration-by-review is
+        // whack-a-mole, so this list is now SWEPT, not guessed):
+        //   grep -rh 'segment_id.*Some(format!("' src/ (+ the `let seg =`
+        //   variants and string literals)
+        // finds, beyond the arms above: corr: (chain.rs inter-cell
+        // routing), cc:a/b{k}/m{k}: (chain.rs merge cascade, stamped
+        // outside the cell), mergetree: (balancer.rs:430 lane-family
+        // tree), megafeed: (cells/mega.rs:369), corridor:feed:
+        // (cells/compose.rs), compact-lane: + literal "route"
+        // (compaction.rs — RFC-057 opt-in, default-off). All are
+        // inter-cell/merge/replacement transport = fabric; all zero-tile
+        // on the current corpus. Excluded as test-only: family:
+        // (validate/ fixtures), row:test-*/foo/gear literals. Poles carry
+        // Some("pole") but classify infra BY NAME above, before any
+        // segment match.
         Some(s) if s.starts_with("corr:") => "fab:corr",
         Some(s) if s.starts_with("cc:") => "fab:cell-merge",
         Some(s) if s.starts_with("mergetree:") => "fab:mergetree",
+        Some(s) if s.starts_with("megafeed:") => "fab:megafeed",
+        Some(s) if s.starts_with("corridor:") => "fab:corridor",
+        Some(s) if s.starts_with("compact-lane:") || s == "route" => "fab:compact",
         // Segmentless transport = balancer-library stamps (segment_id: None
         // by construction, balancer_library.rs:84). None-only on purpose: a
         // belt under an UNRECOGNIZED prefix must fall to "other" and
