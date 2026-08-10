@@ -92,6 +92,16 @@ fn template_vs_incumbent_copper_cable_row_demand_matched() {
 }
 
 #[test]
+fn template_vs_incumbent_copper_plate_smelting_demand_matched() {
+    // 48 = the seeded copper-plate entry's machine count. Added after a
+    // review round showed the K67-3 discharge skipped a realizable motif:
+    // of the five seeds, exactly three (iron-plate, copper-plate,
+    // copper-cable) admit single-group demands — ec/ac always co-solve
+    // with their cable/circuit inputs and refuse by v1 design.
+    run_fixture("copper-plate", 48, "electric-furnace", &["copper-ore"]);
+}
+
+#[test]
 fn template_refuses_multi_group_solves_cleanly() {
     let input_set: FxHashSet<String> =
         ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
