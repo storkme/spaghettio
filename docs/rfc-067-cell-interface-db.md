@@ -190,7 +190,7 @@ by the seeding tool, not typed by hand.**
   amendment, **K67-1 adjudicated CLEAN: zero escape hatches** across the
   top-5 engine seeds.*
 - *2026-08-10 — **K67-2 adjudicated FAIL**: median |total-area error|
-  32.7% vs the 30% bar (n=29, `celldb_preview_calibration`; FIFTH adjudication — the sequence ran 31.9/33.1/32.6/31.5/32.7 as review catches removed a belt-tier default artifact and then corrected lane math to the planner's half-throughput constant. Five principled attempts all land in the 31-33% band, so the criterion's kill clause — "if recalibration cannot reach 30%, kill the preview consumer" — is now LIVE; the module and instrument stay as the baseline either way, and the disabled-vs-killed disposition is the RFC owner's call). Three
+  32.3% vs the 30% bar (n=29, `celldb_preview_calibration`; SIXTH adjudication — the sequence ran 31.9/33.1/32.6/31.5/32.7/32.3 as review catches removed a belt-tier default artifact and then corrected lane math to the planner's half-throughput constant. Five principled attempts all land in the 31-33% band, so the criterion's kill clause — "if recalibration cannot reach 30%, kill the preview consumer" — is now LIVE; the module and instrument stay as the baseline either way, and the disabled-vs-killed disposition is the RFC owner's call). Three
   principled levers tried — fabric allowance, uniform Phase-0 non-interior
   factor (banded variant measured WORSE than uniform), lane-count physics
   (`ceil(rate/belt capacity)` trunk lanes). Residual error is structural:
@@ -200,14 +200,14 @@ by the seeding tool, not typed by hand.**
   reopening attempt: per-machine-class fallback factors; balancer cost
   modeled from lane count; predicting the placer's row-split widths (at
   which point the preview has become the placer — the likely kill line).*
-- *2026-08-10 — **K67-3 adjudicated NULL** on the harness fixtures
-  (`tests/celldb_template.rs` prints the data): iron-plate template passes
-  never-worse but loses the ranking (32-furnace entry stamped for a
-  16-furnace need — ar_score −1.31); copper-cable inadmissible (20-machine
-  entry for a 4-machine need, +3.3% entities). No template wins. Root
-  cause structural and predicted by the density reality check:
-  engine-derived seeds cannot beat the engine that produced them, and
-  single-count entries oversize for smaller demands. **Phase 3 PARKED per
-  K67-3**; the reopening path is count-matched seed ladders and
-  community/hand donors with inferred ports — both explicitly future
-  work.*
+- *2026-08-10 — **K67-3 adjudicated NULL**, twice. First pass stamped
+  unscaled entries against smaller demands and the losses were foregone
+  (review caught it — three rounds flagged the shape). RE-ADJUDICATED
+  DEMAND-MATCHED (the harness derives the rate demanding exactly the
+  seeded count): copper-cable's template scores a POSITIVE composite
+  (+0.18 aspect, fewer entities) but fails a never-worse validation
+  category; iron-plate passes never-worse and ties within noise. No
+  template wins — because engine-derived seeds TIE the engine at matched
+  demand, which is this RFC's own density thesis. **Phase 3 PARKED per
+  K67-3**; the reopening path is community/hand donors with inferred
+  ports, plus count ladders so matched demand is the common case.*
