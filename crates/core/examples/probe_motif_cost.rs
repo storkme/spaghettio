@@ -74,7 +74,11 @@ fn main() {
     let (mut built, mut failed) = (0usize, 0usize);
 
     for F(item, rate, machine, belt, inputs, excluded) in &corpus {
-        let key = format!("{item}|{rate}|{machine}|{inputs:?}|{excluded:?}");
+        // Unlike the census (solver-only; belt is irrelevant there), this
+        // probe's entire output depends on the belt tier — it MUST be in
+        // the dedupe key or two entries differing only by tier would get
+        // one layout silently dropped.
+        let key = format!("{item}|{rate}|{machine}|{belt:?}|{inputs:?}|{excluded:?}");
         if !seen.insert(key) {
             continue;
         }
@@ -173,12 +177,12 @@ fn main() {
             continue;
         }
         v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        println!(
-            "  {label:<8} n={:<3} median {:.1}%  max {:.1}%",
-            v.len(),
-            v[v.len() / 2],
-            v.last().unwrap()
-        );
+        let m = if v.len() % 2 == 1 {
+            v[v.len() / 2]
+        } else {
+            (v[v.len() / 2 - 1] + v[v.len() / 2]) / 2.0
+        };
+        println!("  {label:<8} n={:<3} median {m:.1}%  max {:.1}%", v.len(), v.last().unwrap());
     }
 
     // Probe 2: per-motif attributed interior cost.

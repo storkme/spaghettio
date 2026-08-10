@@ -5,8 +5,10 @@
 // `include!` by both probes so the two corpora cannot drift (plain comments:
 // inner doc comments are illegal under include!).
 //
-// Fields: item, rate, machine, belt tier (None = yellow), inputs, excluded
-// recipes. Module assumption: bare machines (matches the fixtures).
+// Fields: item, rate, machine, belt tier (None = UNCAPPED — the engine
+// escalates to the tier the rate demands, matching e2e's belt_tier:None
+// semantics; it does NOT mean yellow), inputs, excluded recipes.
+// Module assumption: bare machines (matches the fixtures).
 
 pub struct F(
     pub &'static str,

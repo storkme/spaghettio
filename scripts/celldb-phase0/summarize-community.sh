@@ -44,11 +44,10 @@ echo
 echo "=== donor candidates: single-recipe arrays (dominant >= $DOM) ==="
 jq -r --argjson mm "$MIN_MACHINES" --argjson dom "$DOM" '
   select(.machine_count >= $mm)
-  # Geometry can be null (records the analyzer could not bbox); those
-  # cannot yield density/area baselines, so they are excluded HERE and the
-  # exclusion is visible as the gap between demand rows and donor rows.
-  | select(.area != null and .width != null and .height != null
-           and .density != null and .width > 0 and .height > 0)
+  # Degenerate geometry (zero-extent bbox) cannot yield density/area
+  # baselines. (The analyzer serializes width/height/area unconditionally —
+  # a null-check here would be dead code, a round-2 review finding.)
+  | select(.width > 0 and .height > 0)
   | (.recipe_groups | max_by(.count)) as $d
   | select($d.count != null and (($d.count / .machine_count) >= $dom))
   | [$d.recipe, $d.machine_type, $d.count, .density, .area,
@@ -60,14 +59,25 @@ jq -r --argjson mm "$MIN_MACHINES" --argjson dom "$DOM" '
   | @tsv' "$J" |
 tee "$OUT/donors.tsv" |
 awk -F'\t' '
-  { key=$1" ["$2"]"; n[key]++; if($7=="legal") legal[key]++
+  { key=$1" ["$2"]"; n[key]++
+    if($7=="legal"){ legal[key]++; apml[key]=apml[key]" "($5/$3) }
     dens[key]=dens[key]" "$4; apm[key]=apm[key]" "($5/$3); asp[key]=asp[key]" "$6 }
+  # NB awk single-space split strips leading whitespace, so the leading " "
+  # in the accumulators does NOT produce a phantom empty element (round-2
+  # review claimed it did; refuted empirically — split(" 5 10") is [5,10]).
   function med(s,  a,m){ m=split(s,a," ")
     for(i=1;i<m;i++)for(j=i+1;j<=m;j++)if(a[j]<a[i]){t=a[i];a[i]=a[j];a[j]=t}
     return (m%2) ? a[(m+1)/2] : (a[m/2]+a[m/2+1])/2 }
   END{
-    printf "  %-44s %4s %6s %10s %10s %8s\n","dominant recipe [machine]","n","legal","med dens","med area/m","med asp"
-    for (k in n)
-      printf "  %-44s %4d %6d %10.2f %10.1f %8.2f\n", k, n[k], legal[k]+0, med(dens[k]), med(apm[k]), med(asp[k])
-  }' | sort -k2 -rn
-echo "  (rows: donor blueprints per dominant recipe; full list in $OUT/donors.tsv)"
+    for (k in n) {
+      lm = (legal[k] > 0) ? sprintf("%10.1f", med(apml[k])) : sprintf("%10s", "-")
+      printf "  %-44s %4d %6d %10.2f %10.1f %s %8.2f\n", k, n[k], legal[k]+0, med(dens[k]), med(apm[k]), lm, med(asp[k])
+    }
+  }' | sort -k3 -rn > "$OUT/.donor_rows"
+# Header OUTSIDE the sort stream — piping it through sort lands it mid-table
+# (the 04-analyze.sh lesson, re-learned here in round 2). The sort key is
+# field 3: the key "recipe [machine]" spans fields 1-2.
+printf "  %-44s %4s %6s %10s %10s %10s %8s\n" "dominant recipe [machine]" "n" "legal" "med dens" "med area/m" "legal a/m" "med asp"
+cat "$OUT/.donor_rows"
+rm -f "$OUT/.donor_rows"
+echo "  (rows: donor blueprints per dominant recipe, ranked by donor count; full list in $OUT/donors.tsv)"

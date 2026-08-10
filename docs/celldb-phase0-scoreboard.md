@@ -66,13 +66,21 @@ arrays* because the community fuses cable→circuit into one block —
 independent confirmation that the two-recipe motif (what DI cells model) is
 the right cacheable unit there.
 
-Density reality check (legal donors, bbox area/machine, includes their
-internal belts): iron-plate/electric-furnace 19.2 (n=7) vs our 17.0
-interior-only; advanced-circuit/am2 31.7 (n=5) vs our 25.1 + ~18% fabric
-≈ 30. **The engine's per-machine density is already community-ballpark** —
-the DB's expected win is composition, aspect control and the tails, not raw
-density. (Not directly comparable metrics; both definitions stated here on
-purpose.)
+Density reality check (legal donors, median bbox area/machine — the
+`legal a/m` column `summarize-community.sh` prints, so this figure is
+script-derivable, not a hand cut): iron-plate/electric-furnace 19.2 (n=7)
+vs our 17.0 interior-only; advanced-circuit/am2 25.5 (n=5) vs our 25.1
+interior-only. **The engine's per-machine density is already
+community-ballpark, at parity on red circuits** — the DB's expected win is
+composition, aspect control and the tails, not raw density. (Community
+bbox area includes their internal belts; ours excludes fabric — both
+definitions stated here on purpose.)
+
+**Corpus drift caveat:** the shared probe corpus is a frozen snapshot of
+`survey_fixtures()` at cd78eed7, deliberately decoupled from the live e2e
+table. The probes let a reader re-derive every figure above, but they do
+NOT detect the survey table growing past the snapshot — re-snapshot when
+the RFC absorbs this note.
 
 ## Schema decisions banked (argued 2026-08-10, probe headers carry them)
 
