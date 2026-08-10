@@ -36,7 +36,12 @@ census. (Attribution keys on recipe alone while the census keys on
 (recipe, machine); the join coincides because the top motifs are
 machine-uniform in this corpus — a qualification, not an identity.)
 
-## 3. Fabric share (the pre-registered RFC-057 kill criterion)
+## 3. Fabric share (this Phase-0's pre-registered kill criterion — the RFC-057 lesson)
+
+Pre-registered by *this investigation* before the sweep ran (RFC-057's own
+kill criteria were about belt reduction and throughput, not fabric share —
+the lesson borrowed from it is that inter-box transport killed dense
+repacking, so measure fabric before designing around interiors).
 
 Fabric = `trunk/tap/ghost/balancer` segments, **RFC-061 per-block trunk
 columns** (`row:*:trunk/trunk-dive/current-feed` — under the row prefix
@@ -62,8 +67,11 @@ low-rate winner; high rates via composition").
 
 The 172-file corpus is an external download (factorioprints JSON exports),
 not vendored; `corpus-manifest.tsv` pins every file by SHA256 and
-`mine-community.sh` refuses to mine a corpus that does not match — the
-sim-harness pattern (external artifact, tracked verification).
+`mine-community.sh` refuses to mine a corpus that does not match — missing,
+drifted, or unlisted-extra alike (the sim-harness pattern: external
+artifact, tracked verification). Of the 172, **3 fail to mine** and are
+excluded from every figure here: all three are deconstruction/upgrade
+planner books, not blueprints (`mine_failures.txt` lists them per run).
 
 Independent demand signal agrees at the head (iron-plate #1,
 advanced-circuit #2, copper-cable #3, copper-plate #5, electronic-circuit

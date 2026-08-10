@@ -31,13 +31,21 @@ if [ -s "$MANIFEST" ]; then
     got=$(sha256sum -- "$CORPUS/$f" | awk '{print $1}')
     [ "$got" = "$want" ] || { drifted=$((drifted+1)); echo "DRIFT: $f" >&2; }
   done < "$MANIFEST"
-  if [ "$missing" -gt 0 ] || [ "$drifted" -gt 0 ]; then
+  # Extras matter as much as missing/drifted: the mining loop takes every
+  # *.json in $CORPUS, so an unlisted file would silently shift the demand
+  # distribution while "verification" passed (round-4 review).
+  extras=0
+  for f in "$CORPUS"/*.json; do
+    base="$(basename "$f")"
+    grep -qF -- "$base"$'\t' "$MANIFEST" || { extras=$((extras+1)); echo "EXTRA: $base" >&2; }
+  done
+  if [ "$missing" -gt 0 ] || [ "$drifted" -gt 0 ] || [ "$extras" -gt 0 ]; then
     echo "ERROR: corpus does not match corpus-manifest.tsv ($missing missing," >&2
-    echo "       $drifted drifted of $(wc -l < "$MANIFEST")). Numbers derived" >&2
-    echo "       from this corpus would not be the scoreboard's. Refusing." >&2
+    echo "       $drifted drifted, $extras unlisted of $(wc -l < "$MANIFEST"))." >&2
+    echo "       Numbers from this corpus would not be the scoreboard's. Refusing." >&2
     exit 2
   fi
-  echo "corpus verified against manifest: $(wc -l < "$MANIFEST") files"
+  echo "corpus verified against manifest: $(wc -l < "$MANIFEST") files, no extras"
 else
   echo "WARNING: no corpus-manifest.tsv — mining an UNVERIFIED corpus." >&2
 fi
