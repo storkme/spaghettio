@@ -19,8 +19,11 @@
 # numbers. (Same pattern as the sim harness's untracked Factorio install:
 # the artifact is external, the verification is tracked.)
 set -euo pipefail
-CORPUS="${CORPUS:-/home/stork/code/fucktorio/scripts/blueprints}"
-OUT="${OUT:-./celldb-phase0-work}"
+# CORPUS is REQUIRED — a hardcoded personal-path default failed every other
+# checkout with a confusing manifest error (round-5 review). OUT defaults
+# under target/ so 6k-record outputs can never be accidentally committed.
+CORPUS="${CORPUS:?set CORPUS to the downloaded blueprint corpus directory (see corpus-manifest.tsv for the expected files)}"
+OUT="${OUT:-./target/celldb-phase0-work}"
 mkdir -p "$OUT"
 
 MANIFEST="$(dirname "$0")/corpus-manifest.tsv"
