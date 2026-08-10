@@ -1,6 +1,9 @@
 # RFC-066: Arbitrate the two lane-rate walkers against the meter
 
-**Status: proposed 2026-08-09.** Tracking issue: #609. No code written.
+**Status: proposed 2026-08-09.** Tracking issue: #609. No *engine* code written —
+no phase has started. The four `crates/core/examples/probe_*.rs` binaries listed
+in the verification plan are committed evidence instruments and touch nothing the
+engine dispatches.
 
 ## Summary
 
@@ -87,9 +90,11 @@ the oracle**. The meter caught that defect — nine of ten copper-cable machines
 saturated, the stage able to make plan, the binding constraint elsewhere — which
 is exactly the per-lane discrimination Phase 0 needs it to have.
 
-A local, uncommitted session handoff (`handoff-meter-as-gate-2026-08-07.md`)
-covers similar ground and is where I first read the framing, but it is **not in
-the repo** and nothing here depends on it.
+A session handoff ([`handoff-meter-as-gate-2026-08-07.md`](handoff-meter-as-gate-2026-08-07.md))
+covers similar ground and is where I first read the framing. It was untracked
+when this RFC was reviewed — see the 2026-08-09 decision-log entry — and was
+committed afterwards. Nothing here depends on it, and that has not changed: it
+is a session note, not a source.
 
 ## Design
 
