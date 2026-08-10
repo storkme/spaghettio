@@ -59,6 +59,14 @@ web/src/wasm-pkg/
 # there is no tracked way to produce the pair" as a known gap; this closes it
 # while keeping every other script in the directory local-only.
 !/crates/core/examples/sim_export.rs
+# ...and the four probes that generate RFC-066's headline corpus numbers. Same
+# reasoning as sim_export above: a reader who cannot regenerate a figure cannot
+# detect corpus drift, and an RFC resting on unreproducible aggregates has the
+# same defect as one citing an uncommitted file.
+!/crates/core/examples/probe_walkers.rs
+!/crates/core/examples/probe_overcap_triage.rs
+!/crates/core/examples/probe_b8_modes.rs
+!/crates/core/examples/probe_walker_shape.rs
 
 # not sure what this is even lol
 *:Zone.Identifier
