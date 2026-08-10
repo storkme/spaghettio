@@ -58,7 +58,13 @@ fn main() {
     let mut seen: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     let mut ticked = 0u64;
     for k in 0..SAMPLES {
-        let run = if k == SAMPLES - 1 { measure.saturating_sub(ticked) } else { chunk };
+        // Clamp every iteration to what is left, not just the last one. With
+        // `chunk` floored at 1, a `measure` smaller than SAMPLES would
+        // otherwise run one tick per iteration and OVERSHOOT the requested
+        // window (measure=5 ran 7 ticks). Unreachable at the defaults, wrong
+        // regardless.
+        let remaining = measure.saturating_sub(ticked);
+        let run = if k == SAMPLES - 1 { remaining } else { chunk.min(remaining) };
         f.run_for(run);
         ticked += run;
         for (i, t) in f.net.tiles.iter().enumerate() {
