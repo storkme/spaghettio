@@ -6,12 +6,14 @@ An in-repo, searchable store of production-subtree implementations, keyed by
 **demand motif** — `(recipe, machine, count)`, plus fused two-recipe motifs —
 with every implementation carrying a **port contract** (where flows enter and
 leave) and a **derived constraint vector** (what the implementation needs to
-be legal). Three consumers, in order of shipping: an **interface-first
-preview** (place boxes and trunks before interiors exist), **template
-candidates** competing in the existing candidate machinery under the standing
-never-worse and sim-anchor gates, and a **standing regression corpus** (every
-entry is sim-anchorable, so "did this engine change regress the top motifs"
-becomes a check instead of a hope). Evidence that this pays lives in the
+be legal). Three consumers were designed; the kill criteria adjudicated two of
+them out (see the decision log — this Summary records outcomes, not the
+original promise): the **interface-first preview** module exists but its
+consumer is **KILLED per K67-2** (six calibration runs, 31–33% vs a 30%
+bar); **template candidates** exist inert in the candidate harness and are
+**PARKED per K67-3** (NULL on all three realizable motifs — engine-derived
+seeds tie the engine); the **standing regression corpus** is the surviving
+consumer, delivered as the store's every-entry drift test. Evidence that this pays lives in the
 Phase-0 scoreboard ([`celldb-phase0-scoreboard.md`](celldb-phase0-scoreboard.md)):
 demand is power-law concentrated (top 5 motifs = 87.7% of machine mass),
 interiors dominate layout area at low/mid rates (fabric median 18.3%), and
@@ -96,16 +98,16 @@ by the seeding tool, not typed by hand.**
 
 ### Consumers
 
-1. **Preview (Phase 2):** `SolverResult -> Vec<PlacedBox>` — one box per
-   machine group sized from the store's entry (or, for uncached motifs, from
-   the Phase-0 tiles/machine table), with ports on the contract edges and
-   trunk polylines between them. Pure function in core, exposed through
-   wasm; the web app renders boxes as a toggle. No correctness stakes: the
-   preview is labelled an estimate, and its calibration against realized
-   layouts is measured, not assumed (see verification).
-2. **Template candidates (Phase 3):** for motifs with store entries, a
-   candidate that stamps the stored fragment instead of running row
-   placement. Competes under the existing candidate scoring;
+1. **Preview (Phase 2) — CONSUMER KILLED per K67-2, design retained for
+   the record:** `SolverResult -> Vec<PlacedBox>` — one box per machine
+   group sized from the store's entry, ports on the contract edges. The
+   core function and calibration instrument exist (#621); the wasm/web
+   consumer described by the original design was never built and MUST NOT
+   be without a decision-log amendment — six calibration runs landed
+   31–33% against the 30% bar (decision log).
+2. **Template candidates (Phase 3) — PARKED per K67-3, harness landed
+   inert:** for motifs with store entries, a candidate that stamps the
+   stored fragment instead of running row placement. Competes under the existing candidate scoring;
    **never-worse by the validator is the admission floor, the meter refutes
    cheaply, and selection stays firewalled until sim-anchored** — the
    standing #519/#520 discipline, inherited verbatim. Ships inert
@@ -179,6 +181,13 @@ by the seeding tool, not typed by hand.**
   adjudicated NULL, Phase 3 PARKED** (decision log); the default-on flip
   was never in scope and is now doubly gated.
 
+**Certification status of the adjudications below:** the measurements come
+from instruments checked into #620/#621, which are sequenced immediately
+after this RFC (620's review required the design authority on main first).
+Until those PRs merge, the numbers are verifiable from the PR branches, not
+from main; when they merge, every figure re-derives from main. Docs-lead
+ordering is a deliberate trade recorded here, not an oversight.
+
 ## Decision log
 
 - *2026-08-10 — opened, on the Phase-0 scoreboard's four GO verdicts. Schema
@@ -196,14 +205,17 @@ by the seeding tool, not typed by hand.**
   the seed tool's first run surfaced this as 5 PORT-WARNs, and min-picking
   one port would starve the other half under composition. With the
   amendment, **K67-1 adjudicated CLEAN: zero escape hatches** across the
-  top-5 engine seeds. Accounting note: the criterion counts per-entry
-  hatches under the FINAL contract — the five first-run PORT-WARNs were
-  one systematic contract misdesign (single-port assumption), not five
-  per-entry special cases, and the amended contract expresses every seed
-  with zero hatches; a contract fix that ELIMINATES a warning class is
-  the opposite of an escape hatch, which is a warning resolved by hand.*
+  top-5 engine seeds. Accounting, both readings recorded (a review round
+  correctly objected that counting only under the final contract is a
+  retroactive re-score): **under K67-1 as originally written, the first
+  run TRIPS it** — five PORT-WARNs against a >1 threshold. The response
+  was a CONTRACT AMENDMENT (multi-port per (kind, item)), logged above as
+  its own decision, and a re-adjudication under the amended contract:
+  zero hatches. The amendment is the recorded event; the CLEAN verdict
+  applies to the amended contract only, and the original trip is not
+  erased by it.*
 - *2026-08-10 — **K67-2 adjudicated FAIL**: median |total-area error|
-  32.3% vs the 30% bar (n=29, `celldb_preview_calibration`; SIXTH adjudication — the sequence ran 31.9/33.1/32.6/31.5/32.7/32.3 as review catches removed a belt-tier default artifact and then corrected lane math to the planner's half-throughput constant. Five principled attempts all land in the 31-33% band, so the criterion's kill clause — "if recalibration cannot reach 30%, kill the preview consumer" — is now LIVE; the module and instrument stay as the baseline either way, and the disabled-vs-killed disposition is the RFC owner's call). Three
+  32.3% vs the 30% bar (n=29, `celldb_preview_calibration`; SIXTH adjudication RUN. Count accounting, explicit because the kill-clause math depends on it: six runs = one initial + three estimator levers (fabric allowance; uniform Phase-0 factor after a banded variant measured worse; lane-count physics) + two instrument corrections from review (belt-tier default artifact; lane math onto the planner's half-throughput constant). The sequence ran 31.9/33.1/32.6/31.5/32.7/32.3 — every run in the 31-33% band, so the criterion's kill clause — "if recalibration cannot reach 30%, kill the preview consumer" — FIRED, and this log records the kill: **the preview CONSUMER is KILLED per K67-2's letter** — no discretion clause exists and none is invented here. The module and calibration instrument remain as the measured baseline; any future consumer requires an explicit decision-log amendment reopening the criterion, which the owner can always make — by amendment, not by this log hedging). Three
   principled levers tried — fabric allowance, uniform Phase-0 non-interior
   factor (banded variant measured WORSE than uniform), lane-count physics
   (`ceil(rate/belt capacity)` trunk lanes). Residual error is structural:
@@ -222,11 +234,13 @@ by the seeding tool, not typed by hand.**
   category; iron-plate passes never-worse and ties within noise. No
   template wins — because engine-derived seeds TIE the engine at matched
   demand, which is this RFC's own density thesis. **Phase 3 PARKED per
-  K67-3**. Discharge scope, stated: the criterion names the top-5 motifs,
-  but v1 stamping is single-group-only, and copper-cable + iron-plate are
-  the only seeded motifs realizable as single-group demands — the other
-  three arise mid-chain in every survey fixture, where v1 refuses by
-  design. The criterion is discharged on the realizable subset; a wider
-  discharge requires multi-group stamping, which is exactly the parked
-  work. The reopening path is community/hand donors with inferred ports,
+  K67-3**. Discharge scope, corrected after review: a round claimed
+  ac/ec-rooted survey fixtures made those motifs testable — false, those
+  are multi-group solves (ec co-solves with cable, ac with both) and v1
+  refuses them by design — but the objection exposed a real gap:
+  copper-plate IS single-group-realizable and was untested. Added and
+  adjudicated: passes never-worse, ties within noise (composite −0.059),
+  incumbent wins. **The NULL now covers 3 of 3 realizable motifs** —
+  complete over everything v1 stamping can express; ec/ac require
+  multi-group stamping, which is exactly the parked work. The reopening path is community/hand donors with inferred ports,
   plus count ladders so matched demand is the common case.*
