@@ -9,13 +9,38 @@
 # into one JSONL of per-blueprint records (books expanded by the analyzer).
 # Summarize with summarize-community.sh.
 #
-# CORPUS default points at the untracked download dir in the primary
-# checkout; override for other hosts. Failures are counted and listed, not
-# silently skipped.
+# CORPUS points at a download of the 172 factorioprints JSON exports this
+# study used. The corpus itself is NOT vendored (megabytes of third-party
+# blueprint text); what IS checked in is `corpus-manifest.tsv` — filename +
+# SHA256 for every file — and this script VERIFIES the corpus against it
+# before mining, so a reader with any copy of the files can prove they are
+# analyzing the same bytes the scoreboard's numbers came from, and a
+# partial or drifted corpus is a loud refusal instead of silently different
+# numbers. (Same pattern as the sim harness's untracked Factorio install:
+# the artifact is external, the verification is tracked.)
 set -euo pipefail
 CORPUS="${CORPUS:-/home/stork/code/fucktorio/scripts/blueprints}"
 OUT="${OUT:-./celldb-phase0-work}"
 mkdir -p "$OUT"
+
+MANIFEST="$(dirname "$0")/corpus-manifest.tsv"
+if [ -s "$MANIFEST" ]; then
+  missing=0; drifted=0
+  while IFS=$'\t' read -r f want; do
+    if [ ! -f "$CORPUS/$f" ]; then missing=$((missing+1)); continue; fi
+    got=$(sha256sum -- "$CORPUS/$f" | awk '{print $1}')
+    [ "$got" = "$want" ] || { drifted=$((drifted+1)); echo "DRIFT: $f" >&2; }
+  done < "$MANIFEST"
+  if [ "$missing" -gt 0 ] || [ "$drifted" -gt 0 ]; then
+    echo "ERROR: corpus does not match corpus-manifest.tsv ($missing missing," >&2
+    echo "       $drifted drifted of $(wc -l < "$MANIFEST")). Numbers derived" >&2
+    echo "       from this corpus would not be the scoreboard's. Refusing." >&2
+    exit 2
+  fi
+  echo "corpus verified against manifest: $(wc -l < "$MANIFEST") files"
+else
+  echo "WARNING: no corpus-manifest.tsv — mining an UNVERIFIED corpus." >&2
+fi
 
 BIN="$(git rev-parse --show-toplevel)/target/release/blueprint-analyze"
 [ -x "$BIN" ] || {
