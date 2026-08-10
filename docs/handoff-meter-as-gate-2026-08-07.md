@@ -250,3 +250,9 @@ triangulate it. Not run (5540+ entities, ~20+ min).
 
 Both scripts are on `tooling/sim-graphite-export` (#604), **not yet on
 `main`** — check that branch out or run them from it.
+
+> **Correction, 2026-08-10 (at commit time).** Stale: #604 has since merged.
+> Both `scripts/sim-to-graphite.py` and `scripts/sim-live.sh` are on `main`.
+> Run them from there, not from the branch. Left in place rather than rewritten
+> because this is a dated note — but corrected, since it tells the reader to go
+> somewhere, and RFC-066 now links here.
