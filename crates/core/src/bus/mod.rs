@@ -38,6 +38,7 @@ pub mod balancer_library;
 pub mod balancer_topology;
 pub mod candidate_runner;
 pub mod decomposition_search;
+pub mod template_candidate;
 pub mod di_cell;
 pub(crate) mod ghost_occupancy;
 pub mod ghost_router;
