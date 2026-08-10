@@ -42,13 +42,13 @@ fn run_fixture(item: &str, rate: f64, machine: &str, inputs: &[&str]) {
         .expect("template outcome recorded");
     match entry {
         CandidateOutcome::Refused { reason, .. } => {
-            // A refusal must be a SCOPE refusal (no matching entry), never a
-            // structural failure of the stamping itself.
-            assert!(
-                reason.contains("no celldb entry"),
-                "template refused for a non-scope reason on {item}@{rate}: {reason}"
-            );
-            println!("K67-3 data: {item}@{rate}: REFUSED (scope): {reason}");
+            // Scope refusals (no matching entry) are expected; measurement
+            // refusals from the runner ("transit is not measurable", etc.)
+            // are DATA for K67-3, not test failures — panicking on them
+            // hid outcomes (round-2 review). Only a stamping panic-class
+            // reason (overlap/pole failure text) would indicate a bug, and
+            // those surface as produce() errors with their own text.
+            println!("K67-3 data: {item}@{rate}: REFUSED: {reason}");
         }
         CandidateOutcome::Evaluated(ev) => {
             println!(

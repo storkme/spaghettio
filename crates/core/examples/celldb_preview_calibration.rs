@@ -73,6 +73,10 @@ fn main() {
         errs.push((ratio - 1.0).abs());
         println!("{:<28} {:>10.0} {:>10.0} {:>8.2}", format!("{item}@{rate}"), pa, ra, ratio);
     }
+    if errs.is_empty() {
+        println!("\nK67-2: NO DATA — every corpus entry failed to solve or lay out.");
+        return;
+    }
     errs.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let med = if errs.len() % 2 == 1 {
         errs[errs.len() / 2]
