@@ -16,7 +16,7 @@
 //! `recipes.json` / balancer-library pattern: versioned, diffable, no
 //! infrastructure.
 
-use crate::common::{entity_size, is_surface_belt, is_ug_belt};
+use crate::common::{entity_size, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt};
 use crate::models::PlacedEntity;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,7 @@ impl DerivedConstraints {
         let mut belt_tiers = BTreeSet::new();
         for e in &entry.entities {
             vocabulary.insert(e.name.clone());
-            if is_surface_belt(&e.name) || is_ug_belt(&e.name) || e.name.contains("splitter") {
+            if is_surface_belt(&e.name) || is_ug_belt(&e.name) || is_splitter(&e.name) {
                 belt_tiers.insert(e.name.clone());
             }
         }
@@ -150,6 +150,169 @@ pub fn query_unit<'a>(
     hits
 }
 
+/// Extract a unit-motif fragment from a laid-out entity list: the recipe's
+/// machines plus every `row:{recipe}:*` entity, origin-normalized, with
+/// ports DERIVED from the belt-in/belt-out/fluid-in segment runs. Returns
+/// the entry plus any derivation warnings — a warning is an escape hatch
+/// under RFC-067 K67-1, so the seed tool prints them and the drift test
+/// asserts there are none.
+///
+/// Lives in the library (not the seed example) so the regression test can
+/// re-extract from a freshly built layout and diff against the stored
+/// entry — stored-vs-stored testing cannot see engine drift.
+pub fn extract_unit(
+    entities: &[PlacedEntity],
+    recipe: &str,
+    machine: &str,
+    provenance: &str,
+) -> (Option<CellEntry>, Vec<String>) {
+    use crate::common::{dir_to_vec, is_machine_entity};
+    let mut warnings = Vec::new();
+    let frag: Vec<PlacedEntity> = entities
+        .iter()
+        .filter(|e| {
+            e.recipe.as_deref() == Some(recipe) && is_machine_entity(&e.name)
+                || e
+                    .segment_id
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with(&format!("row:{recipe}:")))
+        })
+        .cloned()
+        .collect();
+    if frag.is_empty() {
+        warnings.push(format!("no entities for {recipe}"));
+        return (None, warnings);
+    }
+    let min_x = frag.iter().map(|e| e.x).min().unwrap();
+    let min_y = frag.iter().map(|e| e.y).min().unwrap();
+    let mut frag: Vec<PlacedEntity> = frag
+        .into_iter()
+        .map(|mut e| {
+            e.x -= min_x;
+            e.y -= min_y;
+            // Counts stored, rates derived — enforced at extraction: rate
+            // stamps are fixture-specific flow aggregates and committing
+            // them is the stale-declared-data failure the schema bans.
+            e.rate = None;
+            e
+        })
+        .collect();
+    frag.sort_by_key(|e| (e.y, e.x, e.name.clone()));
+
+    let count = frag
+        .iter()
+        .filter(|e| e.recipe.as_deref() == Some(recipe) && is_machine_entity(&e.name))
+        .count() as u32;
+
+    let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+    let mut tiles = 0u32;
+    let (mut max_x, mut max_y) = (0, 0);
+    for e in &frag {
+        let (w, h) = entity_size(&e.name);
+        for dx in 0..w as i32 {
+            for dy in 0..h as i32 {
+                occupied.insert((e.x + dx, e.y + dy));
+                max_x = max_x.max(e.x + dx);
+                max_y = max_y.max(e.y + dy);
+                tiles += 1;
+            }
+        }
+    }
+
+    let mut ports: Vec<Port> = Vec::new();
+    let mut seg_items: Vec<(String, String)> = Vec::new();
+    for e in &frag {
+        if let Some(s) = e.segment_id.as_deref() {
+            let parts: Vec<&str> = s.split(':').collect();
+            if parts.len() >= 4 && (parts[2] == "belt-in" || parts[2] == "fluid-in") {
+                let key = (parts[2].to_string(), parts[3].to_string());
+                if !seg_items.contains(&key) {
+                    seg_items.push(key);
+                }
+            } else if parts.len() >= 3 && parts[2] == "belt-out" {
+                let item = parts.get(3).unwrap_or(&recipe).to_string();
+                let key = ("belt-out".to_string(), item);
+                if !seg_items.contains(&key) {
+                    seg_items.push(key);
+                }
+            }
+        }
+    }
+    for (kind, item) in &seg_items {
+        let run: Vec<&PlacedEntity> = frag
+            .iter()
+            .filter(|e| {
+                e.segment_id.as_deref().is_some_and(|s| {
+                    let p: Vec<&str> = s.split(':').collect();
+                    p.get(2).is_some_and(|k| k == kind)
+                        && (p.get(3).is_some_and(|i| i == item)
+                            || (kind == "belt-out" && p.len() == 3))
+                })
+            })
+            .collect();
+        let candidates: Vec<(i32, i32)> = match kind.as_str() {
+            "belt-in" => run
+                .iter()
+                .filter(|t| {
+                    !run.iter().any(|f| {
+                        let (dx, dy) = dir_to_vec(f.direction);
+                        (f.x + dx, f.y + dy) == (t.x, t.y)
+                    })
+                })
+                .map(|t| (t.x, t.y))
+                .collect(),
+            "belt-out" => run
+                .iter()
+                .filter(|t| {
+                    let (dx, dy) = dir_to_vec(t.direction);
+                    !occupied.contains(&(t.x + dx, t.y + dy))
+                })
+                .map(|t| (t.x, t.y))
+                .collect(),
+            _ => run
+                .iter()
+                .filter(|t| t.x == 0 || t.x == max_x || t.y == 0 || t.y == max_y)
+                .map(|t| (t.x, t.y))
+                .collect(),
+        };
+        // Multiple candidates are genuine (one port per split-row half);
+        // only ZERO is an escape hatch.
+        if candidates.is_empty() {
+            warnings.push(format!("{kind}:{item} derived no port tiles"));
+            continue;
+        }
+        let pk = match kind.as_str() {
+            "belt-in" => PortKind::BeltIn,
+            "belt-out" => PortKind::BeltOut,
+            _ => PortKind::PipeIn,
+        };
+        let mut sorted = candidates.clone();
+        sorted.sort();
+        for (dx, dy) in sorted {
+            ports.push(Port { dx, dy, kind: pk, item: item.clone() });
+        }
+    }
+
+    let entry = CellEntry {
+        motif: Motif::Unit {
+            recipe: recipe.to_string(),
+            machine: machine.to_string(),
+            count,
+        },
+        metrics: Metrics {
+            bbox_w: max_x + 1,
+            bbox_h: max_y + 1,
+            interior_tiles: tiles,
+            entity_count: frag.len() as u32,
+        },
+        entities: frag,
+        ports,
+        provenance: provenance.to_string(),
+        sim_anchor: "unanchored".to_string(),
+    };
+    (Some(entry), warnings)
+}
+
 /// Structural invariants every entry must hold. Returns human-readable
 /// violations; the test suite asserts the list is empty for every embedded
 /// entry, so a bad seed is a build failure, not a runtime surprise.
@@ -202,6 +365,27 @@ pub fn check_entry(entry: &CellEntry) -> Vec<String> {
             entry.entities.len()
         ));
     }
+    // Counts stored, rates derived — both halves enforced. A stored rate is
+    // stale-by-construction data; a motif count diverging from the fragment
+    // silently mis-ranks every query while tests stay green (round-1
+    // review, both flagged).
+    for e in &entry.entities {
+        if e.rate.is_some() {
+            issues.push(format!("entity {} at ({},{}) stores a rate", e.name, e.x, e.y));
+        }
+    }
+    if let Motif::Unit { recipe, machine, count } = &entry.motif {
+        let derived = entry
+            .entities
+            .iter()
+            .filter(|e| e.recipe.as_deref() == Some(recipe.as_str()) && &e.name == machine)
+            .count() as u32;
+        if derived != *count {
+            issues.push(format!(
+                "motif count {count} != {derived} matching machines in fragment"
+            ));
+        }
+    }
     if entry.ports.is_empty() {
         issues.push("entry declares no ports".into());
     }
@@ -210,6 +394,30 @@ pub fn check_entry(entry: &CellEntry) -> Vec<String> {
             p.dx == min_x || p.dx == max_x || p.dy == min_y || p.dy == max_y;
         if !on_edge {
             issues.push(format!("port at ({},{}) not on fragment boundary", p.dx, p.dy));
+        }
+        // A port must be a real transport tile carrying the declared item —
+        // an unoccupied or wrong-item port composes into a dead feed.
+        let holder = entry.entities.iter().find(|e| {
+            let (w, h) = entity_size(&e.name);
+            p.dx >= e.x && p.dx < e.x + w as i32 && p.dy >= e.y && p.dy < e.y + h as i32
+        });
+        match holder {
+            None => issues.push(format!("port at ({},{}) is an empty tile", p.dx, p.dy)),
+            Some(e) => {
+                if is_machine_entity(&e.name) {
+                    issues.push(format!(
+                        "port at ({},{}) sits on machine {}, not transport",
+                        p.dx, p.dy, e.name
+                    ));
+                } else if let Some(c) = e.carries.as_deref() {
+                    if c != p.item {
+                        issues.push(format!(
+                            "port at ({},{}) declares {} but tile carries {c}",
+                            p.dx, p.dy, p.item
+                        ));
+                    }
+                }
+            }
         }
     }
     issues
@@ -255,6 +463,40 @@ mod tests {
                 assert!(counts.iter().all(|c| c >= count));
             }
         }
+    }
+
+    /// The drift test the round-1 review asked for: stored-vs-CURRENT-ENGINE,
+    /// not stored-vs-stored. Rebuilds one seed source fixture, re-extracts,
+    /// and diffs against the committed entry — an engine change that moves
+    /// the fragment now fails here instead of sailing through.
+    #[test]
+    fn stored_entry_matches_fresh_engine_extraction() {
+        use crate::bus::layout::{self, LayoutOptions};
+        let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "plastic-bar"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let sr = crate::solver::solve("advanced-circuit", 4.0, &inputs, "assembling-machine-2")
+            .expect("seed source solves");
+        let l = layout::build_bus_layout(&sr, LayoutOptions::default())
+            .expect("seed source lays out");
+        let (fresh, warnings) =
+            extract_unit(&l.entities, "advanced-circuit", "assembling-machine-2", "test");
+        assert!(warnings.is_empty(), "escape hatches on re-extraction: {warnings:?}");
+        let fresh = fresh.expect("extraction succeeds");
+        let stored = celldb()
+            .entries
+            .iter()
+            .find(|e| matches!(&e.motif, Motif::Unit { recipe, .. } if recipe == "advanced-circuit"))
+            .expect("advanced-circuit entry is seeded");
+        assert_eq!(stored.motif, fresh.motif, "motif drifted from engine output");
+        assert_eq!(stored.metrics, fresh.metrics, "metrics drifted from engine output");
+        assert_eq!(stored.ports, fresh.ports, "ports drifted from engine output");
+        assert_eq!(
+            stored.entities.len(),
+            fresh.entities.len(),
+            "entity roster drifted from engine output"
+        );
     }
 
     #[test]
