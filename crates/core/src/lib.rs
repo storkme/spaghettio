@@ -28,6 +28,7 @@ pub mod module_policy;
 pub mod netflow;
 pub mod objective;
 pub mod power_wires;
+pub mod preview;
 pub mod recipe_db;
 pub mod sat;
 pub mod short_ids;
