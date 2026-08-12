@@ -318,15 +318,19 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    controls byte-identical (stress golden layout hashes + scoreboards
    vs origin/main on the same host). **Remaining recorded
    approximation**: a splitter pair's own pickups are not debited from
-   its branch flows — an upper-bound optimism of the pair's draw
-   (~1.25/s per inline splitter on the ON0 shape), same class as the
-   DI-bridge credit; and the pooled-pair read widens the pre-existing
-   same-TILE over-credit to same-PAIR (two inserters picking from the
-   two halves of one pair each read the pooled stream, so it is
-   credited twice against per-inserter requirements). The sim bounds
-   both (the donor cells measured at plan), and the ON0 count-52
-   verdict's dependency on this credit is recorded in the RFC-067
-   decision log rather than left implicit.
+   its branch flows, and a pickup on a pair tile is credited the whole
+   pooled stream while downstream branch consumers are credited the
+   same units — so the optimism scales with the pair-pickup machines'
+   demand, NOT a fixed constant (~1.25/s is the ON0 shape's figure,
+   not a universal bound; a splitter that both feeds pair-pickups and
+   supplies downstream rows can in principle rubber-stamp a machine
+   the intake physically cannot serve). The pooled-pair read also
+   widens the pre-existing same-TILE over-credit to same-PAIR. No
+   engine layout has pair-tile pickups today; the donor cells that do
+   are sim-anchored at plan, and the ON0 count-52 verdict's dependency
+   on this credit is recorded in the RFC-067 decision log. Proper
+   pair-level debit modeling is tracked in #627 along with the (8,3)
+   propagation diagnosis.
 
 ## Receipts (sim anchors and falsifications)
 
