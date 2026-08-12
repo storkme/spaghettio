@@ -84,11 +84,12 @@ fn specs() -> Vec<DonorSpec> {
                 (73, 6, PortKind::BeltOut, "copper-plate"),
             ],
         },
-        // "Mass Plate Production": tileable double-row yellow... fast-belt
-        // cell, long-handed feeders from the lower ore belt, plates drain
-        // onto the upper belt; both belts exit east (ore pass-through is
-        // the design's chaining feature). 50 furnaces. Ports are in
-        // POST-pole-strip coordinates (strip shifts x by -1).
+        // "Mass Plate Production": tileable double-row fast-belt cell
+        // (its inserters are yellow, its belts are not), long-handed
+        // feeders from the lower ore belt, plates drain onto the upper
+        // belt; both belts exit east (ore pass-through is the design's
+        // chaining feature). 50 furnaces. Ports are in POST-pole-strip
+        // coordinates (strip shifts x by -1).
         DonorSpec {
             source_file: "-Lxr8KxgJup5AsKyTygI_factory_blueprints.json",
             record_index: 6,
