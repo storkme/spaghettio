@@ -333,6 +333,24 @@ fn translate(spec: &DonorSpec, corpus: &str) -> CellEntry {
         }
         entities.push(e.clone());
     }
+    // Donors donate GEOMETRY only. Module payloads are stripped: the
+    // incumbent competes module-less (module planning is the solver's
+    // RFC-044 axis, not the fragment's), and a speed-moduled donor would
+    // claim capability the plan never funded — the ON0 donor shipped with
+    // speed modules that made its first sim read 45/s from a 32.5/s plan.
+    let mut stripped_modules = 0usize;
+    for e in entities.iter_mut() {
+        if !e.items.is_empty() {
+            stripped_modules += e.items.len();
+            e.items.clear();
+        }
+    }
+    if stripped_modules > 0 {
+        println!(
+            "{}: stripped {stripped_modules} module payload(s) (geometry-only donation)",
+            spec.provenance
+        );
+    }
     // The motif recipe is a declaration, not a read: furnace arrays are
     // item-agnostic and community furnaces carry no recipe field. Refuse
     // if the source DID declare one — overriding a real declaration would

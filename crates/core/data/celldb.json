@@ -15926,325 +15926,175 @@
           "x": 0,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 3,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 7,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 10,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 14,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 17,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 21,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 24,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 28,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 31,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 35,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 38,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 42,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 45,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 49,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 52,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 56,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 59,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 63,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 66,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 70,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 73,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 77,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 80,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 84,
           "y": 0,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -18155,325 +18005,175 @@
           "x": 0,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 3,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 7,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 10,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 14,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 17,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 21,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 24,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 28,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 31,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 35,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 38,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 42,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 45,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 49,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 52,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 56,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 59,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 63,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 66,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 70,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 73,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 77,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 80,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "electric-furnace",
           "x": 84,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "efficiency-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         }
       ],
       "ports": [
@@ -18533,13 +18233,7 @@
           "x": 2,
           "y": 1,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 1
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -18588,13 +18282,7 @@
           "x": 14,
           "y": 1,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 1
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -18636,13 +18324,7 @@
           "x": 5,
           "y": 3,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 1
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -18677,13 +18359,7 @@
           "x": 11,
           "y": 3,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 1
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -18732,13 +18408,7 @@
           "x": 2,
           "y": 5,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -18787,13 +18457,7 @@
           "x": 14,
           "y": 5,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -18842,13 +18506,7 @@
           "x": 5,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -18883,13 +18541,7 @@
           "x": 11,
           "y": 7,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -18938,13 +18590,7 @@
           "x": 2,
           "y": 9,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -18993,13 +18639,7 @@
           "x": 14,
           "y": 9,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19048,13 +18688,7 @@
           "x": 5,
           "y": 11,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19089,13 +18723,7 @@
           "x": 11,
           "y": 11,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -19144,13 +18772,7 @@
           "x": 2,
           "y": 13,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -19199,13 +18821,7 @@
           "x": 14,
           "y": 13,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19254,13 +18870,7 @@
           "x": 5,
           "y": 15,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19295,13 +18905,7 @@
           "x": 11,
           "y": 15,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -19350,13 +18954,7 @@
           "x": 2,
           "y": 17,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -19405,13 +19003,7 @@
           "x": 14,
           "y": 17,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19460,13 +19052,7 @@
           "x": 5,
           "y": 19,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19501,13 +19087,7 @@
           "x": 11,
           "y": 19,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -19556,13 +19136,7 @@
           "x": 2,
           "y": 21,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -19611,13 +19185,7 @@
           "x": 14,
           "y": 21,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19666,13 +19234,7 @@
           "x": 5,
           "y": 23,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19707,13 +19269,7 @@
           "x": 11,
           "y": 23,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -19762,13 +19318,7 @@
           "x": 2,
           "y": 25,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -19817,13 +19367,7 @@
           "x": 14,
           "y": 25,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19872,13 +19416,7 @@
           "x": 5,
           "y": 27,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -19913,13 +19451,7 @@
           "x": 11,
           "y": 27,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -19968,13 +19500,7 @@
           "x": 2,
           "y": 29,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20023,13 +19549,7 @@
           "x": 14,
           "y": 29,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20078,13 +19598,7 @@
           "x": 5,
           "y": 31,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20119,13 +19633,7 @@
           "x": 11,
           "y": 31,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20174,13 +19682,7 @@
           "x": 2,
           "y": 33,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20229,13 +19731,7 @@
           "x": 14,
           "y": 33,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20284,13 +19780,7 @@
           "x": 5,
           "y": 35,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20325,13 +19815,7 @@
           "x": 11,
           "y": 35,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20380,13 +19864,7 @@
           "x": 2,
           "y": 37,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20435,13 +19913,7 @@
           "x": 14,
           "y": 37,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20490,13 +19962,7 @@
           "x": 5,
           "y": 39,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20531,13 +19997,7 @@
           "x": 11,
           "y": 39,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20586,13 +20046,7 @@
           "x": 2,
           "y": 41,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20641,13 +20095,7 @@
           "x": 14,
           "y": 41,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20696,13 +20144,7 @@
           "x": 5,
           "y": 43,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20737,13 +20179,7 @@
           "x": 11,
           "y": 43,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20792,13 +20228,7 @@
           "x": 2,
           "y": 45,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20847,13 +20277,7 @@
           "x": 14,
           "y": 45,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20902,13 +20326,7 @@
           "x": 5,
           "y": 47,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -20943,13 +20361,7 @@
           "x": 11,
           "y": 47,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -20998,13 +20410,7 @@
           "x": 2,
           "y": 49,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
@@ -21053,13 +20459,7 @@
           "x": 14,
           "y": 49,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -21108,13 +20508,7 @@
           "x": 5,
           "y": 51,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "fast-inserter",
@@ -21149,13 +20543,7 @@
           "x": 11,
           "y": 51,
           "direction": "North",
-          "recipe": "copper-plate",
-          "items": [
-            {
-              "item": "speed-module",
-              "count": 2
-            }
-          ]
+          "recipe": "copper-plate"
         },
         {
           "name": "long-handed-inserter",
