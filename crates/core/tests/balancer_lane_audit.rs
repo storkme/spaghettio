@@ -63,9 +63,13 @@ use spaghettio_core::validate::Severity;
 /// fix): exactly four shapes' delivered/seeded flow changed — (6,3)
 /// 0.333→0.667, (6,4) 0.000→0.833, (7,4) 0.143→0.857, and **(8,3)
 /// 0.000→0.375** (its y=0 row is four splitters covering all 8 inputs,
-/// the same topology as (6,4)). (8,3) audits clean at its new partial
-/// drive and is NOT in this list, but its clean baseline was equally
-/// vacuous pre-fix — a full-drive reading for it does not exist yet.
+/// the same topology as (6,4)). (8,3) is NOT in this list and the gate
+/// DOES run it, fully seeded, at 100% saturation — but only 0.375 of
+/// its seeded flow propagates in-model even post-fix (cause
+/// un-diagnosed), so its clean verdict covers the flow the model can
+/// see and no more. It stays out of this list because the list
+/// suppresses ERRORS and (8,3) has none; the open item on it is
+/// diagnostic (why 62.5% of seed doesn't propagate), not acceptance.
 const KNOWN_IMBALANCED: [(u32, u32); 4] = [(6, 3), (6, 4), (7, 3), (7, 4)];
 
 #[test]
@@ -323,14 +327,28 @@ fn audit_lane_correctness_partial() {
     // a regression we want to catch immediately. Warnings are
     // topological and unaffected by rate, so they're not gated here
     // (the main audit handles that).
+    // A known-imbalanced shape is excluded ONLY at fractions where its
+    // measured full-saturation worst lane, scaled linearly, can reach the
+    // 7.5/s cap — the documented skew, not a walker regression. At every
+    // other (shape, fraction) the tripwire stays armed (bot review on the
+    // #624 PR: the earlier blanket exclusion silently dropped coverage at
+    // fractions where the known skew physically cannot exceed any cap —
+    // (6,3)'s 7.7/s and (7,3)'s 8.112/s never cross within 25–75%).
+    // (7,4) is excluded at every fraction: it does not converge, so its
+    // numbers are oscillation snapshots and linear scaling does not apply.
+    let known_worst = |shape: &(u32, u32)| -> f64 {
+        match shape {
+            (6, 3) => 7.7,
+            (6, 4) => 15.0,
+            (7, 3) => 8.112,
+            (7, 4) => f64::INFINITY,
+            _ => 0.0,
+        }
+    };
     for &fraction in saturations {
-        // Known-imbalanced shapes are excluded: their accepted full-
-        // saturation skew scales linearly, so it crosses the lane cap at
-        // high fractions too ((6,4)'s worst 15.0/s lane is over cap from
-        // 50% up) — that is the documented skew, not a walker regression.
         let total_errors: usize = shapes
             .iter()
-            .filter(|shape| !KNOWN_IMBALANCED.contains(shape))
+            .filter(|shape| known_worst(shape) * fraction < 7.5 - 1e-6)
             .map(|shape| {
                 validate_template_lanes_at(
                     BalancerTemplateRef::from(&templates[shape]),
