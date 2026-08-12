@@ -82,6 +82,10 @@ web/src/wasm-pkg/
 # ...and the hotspot probe (RFC-067 follow-up): produces the area-budget /
 # whitespace-decomposition numbers; same tracked-producer reasoning.
 !/crates/core/examples/probe_hotspots.rs
+# Donor translator (RFC-067 donor probe): tracked because the store's
+# community entries must be reproducible from the manifest-verified corpus
+# and the hand-declared port specs must be reviewable.
+!/crates/core/examples/celldb_donor.rs
 
 # not sure what this is even lol
 *:Zone.Identifier

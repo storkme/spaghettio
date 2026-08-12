@@ -79,8 +79,20 @@ fn main() {
         );
         std::process::exit(2);
     }
-    let db = CellDb { version: 1, entries };
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/data/celldb.json");
+    // This tool owns engine@ rows ONLY. Donor entries (community:/hand
+    // provenance, RFC-067 donor probe) pass through a re-seed untouched —
+    // rebuilding the store from seed_sources() used to silently drop them.
+    if let Ok(existing) = std::fs::read_to_string(path) {
+        let existing: CellDb = serde_json::from_str(&existing).expect("celldb.json parses");
+        entries.extend(
+            existing
+                .entries
+                .into_iter()
+                .filter(|e| !e.provenance.starts_with("engine@")),
+        );
+    }
+    let db = CellDb { version: 1, entries };
     std::fs::write(path, serde_json::to_string_pretty(&db).unwrap()).unwrap();
     println!(
         "wrote {} entries to {path}  (escape hatches: 0 — K67-1 clean)",
