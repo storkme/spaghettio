@@ -275,3 +275,49 @@ ordering is a deliberate trade recorded here, not an oversight.
   port contract v1 at all, the binding constraint is the contract, not
   donor value — a contract-narrowness finding, which neither reopens
   Phase 3 nor counts toward the kill's denominator.*
+- *2026-08-12 — **donor probe ADJUDICATED: no win under the registered
+  gate, kill does not fire — the floor instrument was caught
+  false-positive on 2 of 3 donors, and the gate re-arms after #624.**
+  Harvest: the manifest-verified Phase-0 corpus held exactly 7
+  engine-legal electric-furnace arrays; 3 distinct designs shortlisted
+  and ALL translated cleanly under port contract v1 (`celldb_donor`:
+  ports hand-declared, carries derived from inserter drop-side
+  semantics with refuse-on-ambiguity, zero refusals — so no
+  contract-narrowness verdict). One translation lesson banked: the ON0
+  donor's furnaces carried speed-module payloads (its "45/s" label was
+  the tell) which inflated its first sim to 44.9/s against a 32.5/s
+  plan; donors donate GEOMETRY only, the translator now strips module
+  payloads, and the store was regenerated (harness numbers unchanged).
+  Results at matched demand, per the registration: composites +0.366
+  (F3R#8, count 48) / +0.289 (Lxr#6, 50) / +0.447 (ON0#2, 52) — all
+  far above the +0.02 win bar — but all three FAIL the never-worse
+  floor, so **no donor wins as registered**. Floor forensics
+  (instrument-before-finding): Lxr#6's failure is genuine physics —
+  31.24/s demanded through a 30/s fast-belt feed; its own label sells
+  it as a chained 30/s cell — **one real loss**. F3R#8 and ON0#2 fail
+  on `input-rate-delivery` alone, and that is a MEASURED false
+  positive: the walker seeds their entry splitters correctly
+  (seed-stats demand-consistent) then strands the rate — propagation
+  through unsegmented splitters never runs, and ON0's half-fed inline
+  balancer tiles read as 28 phantom sources (Σdemand 48.7 vs 32.5).
+  Engine layouts never reach this path (balancer:-segmented splitters
+  are skipped), so the hole was real but unreachable until community
+  geometry arrived — receipts in #624 and validator-trust.md hole 7.
+  **Sim anchors, the only clearing instrument: both blocked donors PASS
+  at matched demand** — 30.1/s vs 29.99 planned (48/48 working) and,
+  module-less, 32.1/s vs 32.49 (52/52 working, stable windows;
+  east/north feed directions carry the harness's uncalibrated-direction
+  flag). Verdict by the gate's own structure: the kill's denominator
+  holds 1 loss of 3; two adjudications are invalidated by an
+  instrument defect (the separate-verdict class the registration
+  reserved); the win condition cannot fire while the floor cannot
+  evaluate splitter-fed cells. **Phase 3 stays parked. The gate
+  re-arms after the #624 walker fix** — re-adjudication needs no new
+  harvest: the store rows, fixtures, and the tracked `donor_sim_export`
+  are all in place. What the probe changed regardless of verdict: the
+  count-48 fixture now stamps the F3R donor (753 < 817 interior tiles
+  wins the sort — the pre-registered collision rule, recorded in the
+  test), and the composite margins say community geometry beats the
+  engine's strip-shaped cells on aspect by an order of magnitude more
+  than the tie epsilon, which is exactly the shape of value RFC-067
+  predicted donors would carry if any did.*

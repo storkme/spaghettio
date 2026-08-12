@@ -86,6 +86,10 @@ web/src/wasm-pkg/
 # community entries must be reproducible from the manifest-verified corpus
 # and the hand-declared port specs must be reviewable.
 !/crates/core/examples/celldb_donor.rs
+# Donor sim exporter: tracked because the RFC-067 decision log's sim
+# receipts (donor cells PASS at matched demand) must be re-derivable —
+# it synthesizes the boundary records TemplateCandidate::produce omits.
+!/crates/core/examples/donor_sim_export.rs
 
 # not sure what this is even lol
 *:Zone.Identifier

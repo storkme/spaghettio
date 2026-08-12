@@ -294,6 +294,24 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    the bullet changing. Rule going forward: an exclusion or severity choice
    made for *trust* reasons gets a row here with its graduation
    precondition and the receipt that would satisfy it.
+7. **The lane walker cannot evaluate splitter-headed input paths without
+   segment ids** (#624, found 2026-08-12 by the RFC-067 donor probe).
+   External-input seeds landing on an unsegmented splitter tile strand
+   there (every downstream feeder reads 0.0/s → per-machine
+   `input-rate-delivery` false positives), and an inline splitter's unfed
+   second tile is miscounted as a fresh external source (observed: 28
+   phantom sources, Σdemand 48.7 vs solver total 32.5). Engine layouts
+   never reach the path — their splitters are `balancer:`-segmented and
+   skipped — so the hole only fires on foreign geometry (celldb community
+   donors today; anything stamped from wild blueprints tomorrow).
+   Measured cost: both splitter-fed donor adjudications in the RFC-067
+   probe were invalidated (never-worse floor failed on IRD alone while
+   the sim PASSED both cells at matched demand — 30.1/s vs 29.99 planned
+   and 32.1/s vs 32.49; receipts in #624). Trust rule until fixed: an
+   `input-rate-delivery` wall covering every feeder of a layout whose
+   input path crosses an unsegmented splitter is the *instrument*, not
+   the layout — check seed-stats (`SPAGHETTIO_LANE_WALK_STATS=1`) before
+   believing it.
 
 ## Receipts (sim anchors and falsifications)
 
