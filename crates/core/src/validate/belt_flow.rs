@@ -5710,8 +5710,10 @@ mod tests {
         // tile (1,1) and drops into the machine at (3,0)..(5,2). The
         // splitter's outputs lead nowhere, so demand-aware allocation has
         // no branch preference and the seed's path to the pickup is the
-        // pooled pair itself. (1,1) is also unfed-with-fed-sibling, so
-        // this doubles as the phantom-source filter's regression net.
+        // pooled pair itself. (This does NOT pin the phantom-source
+        // filter — post-fix, phantom seeding is mass-conserving in a
+        // single-source chain, so this fixture's verdicts are identical
+        // with or without it; see the dedicated test below.)
         let entities = vec![
             PlacedEntity {
                 name: "transport-belt".to_string(),
@@ -5775,5 +5777,130 @@ mod tests {
             "under-fed splitter pickup must warn despite pooling: {issues:?}"
         );
         assert_eq!((issues[0].x, issues[0].y), (Some(1), Some(1)), "{issues:?}");
+    }
+
+    /// #624 phantom-source filter regression net. The filter's observable
+    /// is seed PLACEMENT, not mass (post-fix, a phantom seed on a
+    /// splitter tile is no longer erased, so mass conserves in simple
+    /// chains — bot review caught the first attempt at this net testing
+    /// nothing). The discriminating topology: an upstream consumer
+    /// BETWEEN the real source and an inline splitter. If the splitter's
+    /// unfed half is wrongly seeded, part of the external supply enters
+    /// AT the splitter — bypassing the upstream consumer, whose belt
+    /// then models below full supply.
+    #[test]
+    fn phantom_splitter_source_does_not_bypass_upstream_consumers() {
+        let sr = SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-3".to_string(),
+                recipe: "iron-gear-wheel".to_string(),
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
+                count: 2.0,
+                inputs: vec![ItemFlow {
+                    item: "iron-plate".to_string(),
+                    rate: 2.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                outputs: vec![ItemFlow {
+                    item: "iron-gear-wheel".to_string(),
+                    rate: 1.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+            }],
+            external_inputs: vec![ItemFlow {
+                item: "iron-plate".to_string(),
+                rate: 4.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec!["iron-gear-wheel".to_string()],
+            ..Default::default()
+        };
+        // (0,0)..(2,0)E belt; upstream machine picks at (2,0) via
+        // inserter (2,1)N (drop (2,2) into machine at (0,2)..(2,4));
+        // belt continues (3,0)E into splitter (4,0)+(4,1)E; downstream
+        // machine picks at (4,0) via inserter (5,0)E dropping into the
+        // machine at (6,0)..(8,2). The splitter half (4,1) is unfed with
+        // a fed sibling — the phantom candidate.
+        let mut entities = vec![
+            PlacedEntity {
+                name: "splitter".to_string(),
+                x: 4,
+                y: 0,
+                direction: EntityDirection::East,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "inserter".to_string(),
+                x: 2,
+                y: 1,
+                direction: EntityDirection::South,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "assembling-machine-3".to_string(),
+                x: 0,
+                y: 2,
+                direction: EntityDirection::North,
+                recipe: Some("iron-gear-wheel".to_string()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "inserter".to_string(),
+                x: 5,
+                y: 0,
+                direction: EntityDirection::East,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "assembling-machine-3".to_string(),
+                x: 6,
+                y: 0,
+                direction: EntityDirection::North,
+                recipe: Some("iron-gear-wheel".to_string()),
+                ..Default::default()
+            },
+        ];
+        for x in 0..=3 {
+            entities.push(PlacedEntity {
+                name: "transport-belt".to_string(),
+                x,
+                y: 0,
+                direction: EntityDirection::East,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            });
+        }
+        let lr = LayoutResult {
+            entities,
+            width: 12,
+            height: 8,
+            ..Default::default()
+        };
+        let rates = compute_lane_rates(&lr, Some(&sr));
+        let total = |p: (i32, i32)| rates.get(&p).map(|r| r[0] + r[1]).unwrap_or(0.0);
+        // The ENTIRE external supply must arrive at the belt head and
+        // traverse the upstream pickup tile. A phantom seed on (4,1)
+        // diverts part of the supply to enter at the splitter, and this
+        // reads below 4.0 (with the filter regressed and even-split
+        // seeding, (0,0) models 2.0).
+        assert!(
+            (total((0, 0)) - 4.0).abs() < 1e-6,
+            "external supply must enter at the run head, not at the inline \
+             splitter's phantom half: head carries {:?}",
+            total((0, 0))
+        );
+        assert!(
+            (total((2, 0)) - 4.0).abs() < 1e-6,
+            "upstream pickup tile must see the full supply: {:?}",
+            total((2, 0))
+        );
     }
 }

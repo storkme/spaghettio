@@ -234,12 +234,12 @@ fn audit_lane_correctness() {
     // old lane-mixing model structurally could not see this). ACCEPTED
     // 2026-07-24 (#334 closed, user call): months in production with no
     // correlated field failure; the skew is a documented limitation of
-    // these two shapes, not pending work. Acceptance is revocable — a
-    // re-bake with a lane-balance constraint that fixes them should
-    // remove them from this list (the assert below fires to force that
-    // bookkeeping), and a field failure implicating either shape
-    // reopens #334. Any error OUTSIDE these shapes (or any new category
-    // inside them) still fails the audit.
+    // the listed shapes, not pending work. Acceptance is revocable — a
+    // re-bake with a lane-balance constraint that fixes a shape must
+    // remove it from the list (the per-shape assert below fires to force
+    // that bookkeeping), and a field failure implicating a listed shape
+    // reopens #334. Any error OUTSIDE the list, any new category inside
+    // it, or any listed shape past its error ceiling still fails.
     // KNOWN_IMBALANCED is module-level (shared with the partial-saturation
     // audit, whose zero-error premise also breaks once a known shape's
     // scaled skew crosses the lane cap).
@@ -258,15 +258,41 @@ fn audit_lane_correctness() {
              set (#334): {unexpected:?}. Set BALANCER_AUDIT_NO_FAIL=1 to suppress this \
              assert. Full report above (run with --nocapture)."
         );
-        let known_still_failing = rows
-            .iter()
-            .any(|r| KNOWN_IMBALANCED.contains(&r.shape) && r.errors > 0);
-        assert!(
-            known_still_failing,
-            "known-imbalanced shapes (7,3)/(7,4) now pass — a re-bake fixed the \
-             accepted #334 skew; remove KNOWN_IMBALANCED and note the fix on the \
-             closed issue."
-        );
+        // Per-shape bookkeeping, both directions (bot review on the #624
+        // PR: `.any()` let a partial re-bake heal one shape silently).
+        // A shape that stops failing must be REMOVED from the list; a
+        // shape whose error count blows past its recorded ceiling is a
+        // regression, not accepted skew. Ceilings are the measured
+        // post-#624 counts with headroom — (7,4)'s is generous because
+        // its numbers are non-converged oscillation snapshots, but a
+        // gross walker regression still trips it (its only other gate
+        // coverage is the new-category rule).
+        let ceiling = |shape: &(u32, u32)| -> usize {
+            match shape {
+                (6, 3) => 20,  // measured 10
+                (6, 4) => 40,  // measured 19
+                (7, 3) => 15,  // measured ~5 (#334 era)
+                (7, 4) => 60,  // measured 31, non-converged
+                _ => 0,
+            }
+        };
+        for shape in &KNOWN_IMBALANCED {
+            let row = rows.iter().find(|r| r.shape == *shape);
+            let errors = row.map(|r| r.errors).unwrap_or(0);
+            assert!(
+                errors > 0,
+                "known-imbalanced shape {shape:?} now passes — a re-bake fixed its \
+                 accepted skew; remove it from KNOWN_IMBALANCED and note the fix \
+                 (#334 for (7,3)/(7,4), the #624 PR for (6,3)/(6,4))."
+            );
+            assert!(
+                errors <= ceiling(shape),
+                "known-imbalanced shape {shape:?} produced {errors} errors, past its \
+                 recorded ceiling {} — that is a walker or template regression, not \
+                 the accepted skew.",
+                ceiling(shape)
+            );
+        }
     }
 }
 
