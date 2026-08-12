@@ -242,3 +242,36 @@ ordering is a deliberate trade recorded here, not an oversight.
   complete over everything v1 stamping can express; ec/ac require
   multi-group stamping, which is exactly the parked work. The reopening path is community/hand donors with inferred ports,
   plus count ladders so matched demand is the common case.*
+- *2026-08-12 — **donor-probe reopening attempt OPENED, gate pre-registered
+  before any measurement.** The hotspot scoreboard
+  ([`hotspot-scoreboard-2026-08.md`](hotspot-scoreboard-2026-08.md), #623)
+  priced the donor targets; copper-plate is the largest single-group-
+  realizable prize (5,987 pooled overhead tiles). K67-3's NULL covers
+  engine-derived seeds only; whether a denser community cell exists is the
+  untested half, and this entry registers its adjudication terms in
+  advance. **Scope:** hand-translated community copper-plate smelter
+  cell(s) under port contract v1 — the recorded port-inference gap stands,
+  translation is by hand, provenance `community:<source>`,
+  `sim_anchor: unanchored`, metrics machine-verified by the loader
+  invariant test (`embedded_db_parses_and_entries_hold_invariants`).
+  **Procedure, fixed now:** each donor keeps its natural machine count N; a
+  new demand-matched fixture in `crates/core/tests/celldb_template.rs`
+  derives the rate demanding exactly N (same `rate_for_count`), incumbent =
+  `FullSelectionCandidate`, candidate = `TemplateCandidate`, same
+  `Policy::fold()` and 0.5/0.5 composite weights as K67-3. If N collides
+  with an engine entry's count, the donor must win `query_unit`'s
+  (count, interior_tiles) sort to be stamped at all — recorded if it
+  happens, not worked around. **Donor WINS** = passes the never-worse
+  floor AND composite > +0.02 (`COMPOSITE_TIE_EPSILON`) vs the incumbent;
+  that reopens Phase 3 toward multi-group stamping (the ac/ec prizes),
+  with sim-anchor still required before any selection influence (K67-4,
+  inherited verbatim). **KILL** = after a documented harvest (target ≥3
+  translatable donors; fewer only if the harvest cannot produce 3, with
+  the shortfall recorded), no donor wins: the community-donor reopening
+  path is adjudicated dead for single-group smelters and Phase 3 stays
+  parked. **Distinct verdicts, counted separately from losses:** a donor
+  whose belt tiers exceed the fixture's allowed set is inadmissible by
+  construction (K67-4), and if no harvested design is expressible under
+  port contract v1 at all, the binding constraint is the contract, not
+  donor value — a contract-narrowness finding, which neither reopens
+  Phase 3 nor counts toward the kill's denominator.*
