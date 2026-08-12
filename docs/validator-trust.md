@@ -294,24 +294,39 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    the bullet changing. Rule going forward: an exclusion or severity choice
    made for *trust* reasons gets a row here with its graduation
    precondition and the receipt that would satisfy it.
-7. **The lane walker cannot evaluate splitter-headed input paths without
-   segment ids** (#624, found 2026-08-12 by the RFC-067 donor probe).
-   External-input seeds landing on an unsegmented splitter tile strand
-   there (every downstream feeder reads 0.0/s → per-machine
-   `input-rate-delivery` false positives), and an inline splitter's unfed
-   second tile is miscounted as a fresh external source (observed: 28
-   phantom sources, Σdemand 48.7 vs solver total 32.5). Engine layouts
-   never reach the path — their splitters are `balancer:`-segmented and
-   skipped — so the hole only fires on foreign geometry (celldb community
-   donors today; anything stamped from wild blueprints tomorrow).
-   Measured cost: both splitter-fed donor adjudications in the RFC-067
-   probe were invalidated (never-worse floor failed on IRD alone while
-   the sim PASSED both cells at matched demand — 30.1/s vs 29.99 planned
-   and 32.1/s vs 32.49; receipts in #624). Trust rule until fixed: an
-   `input-rate-delivery` wall covering every feeder of a layout whose
-   input path crosses an unsegmented splitter is the *instrument*, not
-   the layout — check seed-stats (`SPAGHETTIO_LANE_WALK_STATS=1`) before
-   believing it.
+7. ~~**The lane walker cannot evaluate splitter-headed input paths
+   without segment ids**~~ — **CLOSED 2026-08-12 (#624 fix).** As found
+   by the RFC-067 donor probe: external-input seeds landing on a
+   splitter tile were ERASED by the convergence pass (phase 2 computed
+   splitter pairs from feeder contributions only, omitting the
+   `seed_rates` base phase 1 gives every other tile), an inline
+   splitter's unfed second tile was miscounted as a fresh external
+   source (ON0 donor: 30 sources reduced to 4 by the fix, 26 phantoms
+   removed, Σdemand 48.741 vs solver total 32.494 — measured by the
+   fix's adversarial review), and a pickup ON a splitter tile read only
+   its half's
+   demand-allocated branch share. All three fixed; the original "engine
+   layouts never reach the path" claim was WRONG — the tier4 AC
+   partitioned fixture's `tapoff:copper-plate` splitter fired the
+   defect pair on an engine layout (its copper-plate input seeded a
+   phantom whose share was then erased, fabricating 2 of its 3 pinned
+   `input-rate-delivery` residuals), and the balancer lane audit had
+   been auditing splitter-headed-input shapes at near-zero flow
+   ((6,3)/(6,4)'s "0 errors" baselines were vacuous — now provisionally
+   known-imbalanced, owner ratification pending). Fix receipts: donor
+   fixtures flip to floor-PASS wins matching their sim anchors; engine
+   controls byte-identical (stress golden layout hashes + scoreboards
+   vs origin/main on the same host). **Remaining recorded
+   approximation**: a splitter pair's own pickups are not debited from
+   its branch flows — an upper-bound optimism of the pair's draw
+   (~1.25/s per inline splitter on the ON0 shape), same class as the
+   DI-bridge credit; and the pooled-pair read widens the pre-existing
+   same-TILE over-credit to same-PAIR (two inserters picking from the
+   two halves of one pair each read the pooled stream, so it is
+   credited twice against per-inserter requirements). The sim bounds
+   both (the donor cells measured at plan), and the ON0 count-52
+   verdict's dependency on this credit is recorded in the RFC-067
+   decision log rather than left implicit.
 
 ## Receipts (sim anchors and falsifications)
 

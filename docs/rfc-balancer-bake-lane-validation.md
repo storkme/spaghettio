@@ -367,3 +367,30 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
   **Phase 1 deliverable status:** module + audit test land in this
   worktree. Findings recorded above. Phase 2 remains worth doing per
   the recommendation, with the narrowed scope.*
+
+- *2026-08-12 — **audit un-blinded by the #624 walker fix; (6,3)/(6,4)
+  provisionally added to KNOWN_IMBALANCED.** The pre-fix lane walker
+  ERASED external seeds landing on splitter tiles (convergence phase 2
+  omitted the seed base every other tile gets), so every template whose
+  input row is splitter-headed had been audited at reduced or
+  near-zero flow — (6,4)'s inputs are ALL splitters, (6,3)'s are 2/3 —
+  and their post-#285 "0 errors" baselines were vacuous. At true
+  saturation both show the #334 lane-throughput skew class: (6,3)
+  worst 7.7/s on the 7.5/s lane cap (milder than the accepted 8.112),
+  (6,4) worst 15.0/s — a full lane over cap, i.e. the model says the
+  template cannot sustain rated per-lane throughput. Provisionally
+  accepted on #334's revocable terms so the walker fix could land;
+  owner ratification or a lane-balance re-bake of both shapes is the
+  recorded follow-up (see #624 and the fix PR). The fix's adversarial
+  review replaced this entry's original two-example reassurance with a
+  flow CENSUS over all 77 templates: exactly four shapes' delivered/
+  seeded flow changed — (6,3) 0.333→0.667, (6,4) 0.000→0.833, (7,4)
+  0.143→0.857, (8,3) 0.000→0.375. Consequences recorded: #334's
+  accepted magnitude for (7,4) was measured on a 0.143-driven audit
+  and now reads worst 38.6/s with `forward_converged=false` (synthetic
+  harness only; the production corpus converges 92/92 — see the
+  KNOWN_IMBALANCED doc); and (8,3), whose input row is four splitters,
+  had an equally vacuous clean baseline — it audits clean at its new
+  0.375 drive, but no full-drive reading exists for it yet. Every
+  other shape's audit drive is unchanged by the fix, which is the
+  census-based form of the baseline-stands claim.*

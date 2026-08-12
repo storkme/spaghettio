@@ -337,3 +337,48 @@ ordering is a deliberate trade recorded here, not an oversight.
   engine's strip-shaped cells on aspect by an order of magnitude more
   than the tie epsilon, which is exactly the shape of value RFC-067
   predicted donors would carry if any did.*
+- *2026-08-12 — **FRESH GATE ADJUDICATED after the #624 walker fix: TWO
+  DONORS WIN — the Phase-3 reopening condition is MET.** The fix
+  (external seeds no longer erased on splitter tiles; unfed splitter
+  second-tiles no longer counted as phantom sources; pickups on
+  splitter tiles read the pair's pooled stream) removed the
+  `input-rate-delivery` false-positive walls, and the demand-matched
+  fixtures now record: **count 48 (F3R#8): floor PASS, composite
+  +0.366, winner celldb-template; count 52 (ON0#2): floor PASS,
+  composite +0.447, winner celldb-template** — 18–22× the +0.02 win
+  bar, both sim-anchored at matched demand by the probe (30.1/s vs
+  29.99 planned; 32.1/s vs 32.49, module-less). **Win dependency
+  accounting (adversarial-review ablation, recorded because the two
+  wins do not rest on the same legs)**: count 48 flips on the
+  seed-erasure fix alone; count 52 additionally requires the
+  pooled-pair pickup read, which is a documented upper bound (a
+  splitter pair's own pickups are not debited) — its floor pass
+  therefore leans on the credit, and its sim anchor (32.1/s measured,
+  all 52 working) is the grounding that makes the win claim honest
+  rather than model-circular. Also banked from that review: post-fix
+  the ON0 seeding becomes EXACTLY demand-consistent (Σ attributed
+  32.494 == solver 32.494, `consistent=true`, demand-weighted seeding
+  replacing the even-split fallback) — the strongest single seeding
+  receipt in the campaign. The count-50 donor's genuine physics loss
+  stands unchanged (lane-throughput/dead-end, not IRD, not instrument
+  artifacts). Engine-side controls, verified in the fix PR:
+  iron-plate and copper-cable fixtures print byte-identical verdicts;
+  all 8 host-drifting stress goldens have byte-identical layout
+  hashes vs an origin/main run on the same host with a pinned private
+  SAT zone cache (the drift is the documented cache artifact, not the
+  fix). The fix's engine-corpus footprint, complete per the review's
+  census: `tier4_advanced_circuit_partitioned` 3→1
+  `input-rate-delivery` (the two cleared copper-plate warnings were
+  the defect pair firing on the engine's own tapoff splitter —
+  receipts in the fixture comment);
+  `stress_advanced_circuit_partitioned_4s_from_plates`'s
+  PartitionedDecomposed leg 8→3 warnings (within its ceiling, Pooled
+  golden legs byte-identical); and the balancer-audit un-blinding —
+  four shapes' audit drive changed ((6,3), (6,4), (7,4), (8,3); see
+  the KNOWN_IMBALANCED doc for the census), (6,3)/(6,4) provisionally
+  known-imbalanced, owner ratification pending. **What reopening means and does not mean**:
+  per the amended gate, Phase 3 may resume toward multi-group stamping
+  (the ac/ec prizes) under a plan of its own; stamping stays inert and
+  selection stays untouched until the standing K67-4 discipline is
+  separately satisfied — this entry records the gate outcome, it does
+  not flip any default.*

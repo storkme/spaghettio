@@ -2654,6 +2654,18 @@ fn compute_lane_rates_impl(
             if feeders.contains_key(&pos) {
                 continue; // has upstream feeders, not a source
             }
+            // A splitter pair is ONE machine: if either half has feeders,
+            // the pair is fed and the unfed half is not a graph source.
+            // Counting it as one fabricated a phantom source on every
+            // inline splitter whose second tile sits beside the fed lane
+            // (#624: 28 phantoms on the ON0 donor, Σ attributed demand
+            // 1.5× the solver total, even-split fallback distorting every
+            // real seed).
+            if let Some(&sib) = splitter_sibling.get(&pos) {
+                if feeders.contains_key(&sib) {
+                    continue;
+                }
+            }
             if let Some(Some(item)) = belt_carries.get(&pos) {
                 if external_rates.contains_key(item.as_str()) {
                     sources_by_item
@@ -3073,8 +3085,20 @@ fn compute_lane_rates_impl(
             // the export branch gets the remainder, via
             // `splitter_output_rates_convergence` (per-lane, RFC-047).
             for &(a, b) in &pair_set {
+                // Seeds land on splitter tiles too — an entry splitter fed
+                // from the layout edge carries an external-source seed with
+                // zero feeders, and phase 1 folds `seed_rates` into every
+                // non-splitter tile. Omitting it here erased the seed on
+                // the first iteration and converged the entire downstream
+                // graph to 0/s (#624: every feeder of the RFC-067 donor
+                // cells read "delivers 0.0/s" while seed-stats showed the
+                // seeding itself was correct).
+                let a_seed = seed_rates.get(&a).copied().unwrap_or([0.0, 0.0]);
+                let b_seed = seed_rates.get(&b).copied().unwrap_or([0.0, 0.0]);
                 let a_fc = feeder_contributions_for_tile(a, &prev, &feeders, &belt_dir_map, &base_demand);
                 let b_fc = feeder_contributions_for_tile(b, &prev, &feeders, &belt_dir_map, &base_demand);
+                let a_fc = [a_seed[0] + a_fc[0], a_seed[1] + a_fc[1]];
+                let b_fc = [b_seed[0] + b_fc[0], b_seed[1] + b_fc[1]];
                 let loop_priority_rate =
                     splitter_entity.get(&a).and_then(|e| e.loop_priority_rate);
                 // Demand at each output tile's downstream, and the per-output
@@ -3633,6 +3657,7 @@ pub fn check_input_rate_delivery(
     }
 
     // Second pass: check each inserter's available rate vs its share of the required rate.
+    let pickup_splitter_siblings = build_splitter_siblings(layout);
     for ins in &inserters {
         let me = match machine_entity.get(&ins.machine_pos) {
             Some(e) => e,
@@ -3674,6 +3699,21 @@ pub fn check_input_rate_delivery(
             Some(&[left, right]) => left + right,
             None => 0.0,
         };
+        // A pickup ON a splitter tile draws from the pair's whole stream:
+        // the walker's demand-aware allocation can route ~all flow to the
+        // other half (an output blocked by a pole models ≈0 on this half),
+        // but the inserter physically picks items traversing the splitter
+        // regardless of exit branch (#624 residue: 26 long-handed feeders
+        // read 0.0/s on a donor cell the sim measured at full plan). Both
+        // walker phases preserve pair-sum == pooled input, so the pooled
+        // read is convention-consistent. Known optimism, recorded: the
+        // pair's own pickups are not debited from branch flows — the same
+        // upper-bound class as the DI-bridge credit below.
+        if let Some(&sib) = pickup_splitter_siblings.get(&ins.pickup_pos) {
+            if let Some(&[l2, r2]) = lane_rates.get(&sib) {
+                available += l2 + r2;
+            }
+        }
         // A DI bridge feeding this input belt adds its delivery on top of any
         // bus-lane rate (usually there is no lane — the DI'd item skips the
         // bus). Under-provisioned bridges still fall short and warn.
