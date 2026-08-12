@@ -1882,7 +1882,16 @@ fn tier4_advanced_circuit_partitioned() {
     // #519 tail-starvation class, NOT a sim-verified one. It is pinned here
     // so it stays visible; if a sim run shows this fixture at plan, it is a
     // false positive and this line is the place to re-adjudicate.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 3), ("belt-detour", 2)]);
+    // 2026-08-12 #624 walker fix: 3 -> 1. The two copper-plate warnings
+    // ((15,23) 0.5/1.0, (15,32) 0.6/1.2) were false positives of the
+    // splitter-seed defect pair: the layout's copper-plate input seeded
+    // THREE "sources" — two real heads plus the tapoff:copper-plate
+    // splitter's unfed second tile — and the phantom's share was then
+    // erased on the splitter tile by the convergence pass, starving the
+    // modeled trunk by a third. With seeding repaired both clear; the
+    // copper-cable warning (the candidate true positive above) remains,
+    // exactly as that adjudication predicted. Layout hash unchanged.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("belt-detour", 2)]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
