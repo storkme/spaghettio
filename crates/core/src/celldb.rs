@@ -563,7 +563,13 @@ mod tests {
                     .entries
                     .iter()
                     .find(|e| {
-                        matches!(&e.motif, Motif::Unit { recipe: r, machine: m, .. }
+                        // Provenance-scoped: community donor rows (RFC-067
+                        // donor probe) can share a motif with an engine
+                        // seed — count-48 copper-plate already does — and
+                        // an unscoped find would compare the wrong entry
+                        // the moment store order changes.
+                        e.provenance.starts_with("engine@")
+                            && matches!(&e.motif, Motif::Unit { recipe: r, machine: m, .. }
                                  if r == recipe && m == target_machine)
                     })
                     .unwrap_or_else(|| panic!("{recipe} entry is seeded"));

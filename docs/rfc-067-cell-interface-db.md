@@ -307,14 +307,30 @@ ordering is a deliberate trade recorded here, not an oversight.
   at matched demand** — 30.1/s vs 29.99 planned (48/48 working) and,
   module-less, 32.1/s vs 32.49 (52/52 working, stable windows;
   east/north feed directions carry the harness's uncalibrated-direction
-  flag). Verdict by the gate's own structure: the kill's denominator
-  holds 1 loss of 3; two adjudications are invalidated by an
-  instrument defect (the separate-verdict class the registration
-  reserved); the win condition cannot fire while the floor cannot
-  evaluate splitter-fed cells. **Phase 3 stays parked. The gate
-  re-arms after the #624 walker fix** — re-adjudication needs no new
+  flag). Verdict accounting, both readings recorded (the K67-1
+  discipline; a review round correctly objected that this entry's first
+  draft claimed the registration had reserved an instrument-defect
+  verdict class — it had not, it reserved exactly belt-tier
+  inadmissibility and contract narrowness, and that claim is
+  RETRACTED): **under the registration as written, the kill FIRES** —
+  zero donors won, and the letter offers the two blocked donors no
+  shelter. The response is an AMENDMENT, logged here as its own
+  decision exactly as K67-1's contract amendment was: a verdict whose
+  floor input is a measured instrument false positive (receipts: #624
+  seed-stats, plus both sim clears above) adjudicates the
+  *instrument*, not donor value, and is recorded as
+  instrument-invalidated rather than as a loss. Under the amended
+  registration the kill's denominator holds 1 loss of 3 and the kill
+  does not fire; the letter-firing above is the recorded event and is
+  not erased by the amendment. **Phase 3 stays parked either way. The
+  post-#624 re-adjudication is a FRESH gate under the amended
+  registration** — not a continuation of this one — and needs no new
   harvest: the store rows, fixtures, and the tracked `donor_sim_export`
-  are all in place. What the probe changed regardless of verdict: the
+  are all in place. Ripple, recorded: the donor rows change
+  `query_unit`'s first pick for copper-plate (753 < 817 interior
+  tiles), which also moves the killed preview module's reference
+  geometry — `celldb_preview_calibration` re-runs on a donor-bearing
+  store are NOT comparable to the K67-2 sequence quoted above. What the probe changed regardless of verdict: the
   count-48 fixture now stamps the F3R donor (753 < 817 interior tiles
   wins the sort — the pre-registered collision rule, recorded in the
   test), and the composite margins say community geometry beats the

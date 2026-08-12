@@ -61,6 +61,33 @@ fn main() {
         let rate = (count as f64 - 0.01) / probe.machines[0].count;
         let sr = solver::solve("copper-plate", rate, &inputs, "electric-furnace").unwrap();
         let mut layout = TemplateCandidate.produce(&sr, &LayoutOptions::default()).unwrap();
+        // The hand-keyed records are verified against the layout produce()
+        // actually returned: each port tile must hold a transport entity
+        // whose SURFACE tier matches the record's belt prototype. The
+        // record deliberately names the surface belt, never a splitter —
+        // the sim kit builds its own rig belts from `entity`, and a
+        // splitter prototype there would stamp splitters down the rig.
+        for rec in [&rec_in, &rec_out] {
+            let holder = layout
+                .entities
+                .iter()
+                .find(|e| {
+                    let (w, h) =
+                        spaghettio_core::common::oriented_entity_dims(&e.name, e.direction);
+                    rec.x >= e.x && rec.x < e.x + w && rec.y >= e.y && rec.y < e.y + h
+                })
+                .unwrap_or_else(|| panic!("port tile ({},{}) is empty", rec.x, rec.y));
+            let surface = holder
+                .name
+                .strip_suffix("-splitter")
+                .map(|b| format!("{b}-transport-belt"))
+                .unwrap_or_else(|| holder.name.clone());
+            assert_eq!(
+                surface, rec.entity,
+                "boundary record at ({},{}) names {} but the tile holds {}",
+                rec.x, rec.y, rec.entity, holder.name
+            );
+        }
         layout.boundary_inputs = vec![rec_in];
         layout.boundary_outputs = vec![rec_out];
         let (bp, manifest) = blueprint::export_with_manifest(&layout, &sr, label);

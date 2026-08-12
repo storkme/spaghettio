@@ -230,8 +230,8 @@ fn assign_carries(entities: &mut [PlacedEntity], spec: &DonorSpec) {
             }
         }
     }
-    // Seeds from inserters; also set inserter carries.
-    let mut seed: BTreeMap<usize, &'static str> = BTreeMap::new();
+    // Classify every inserter (drop side = its direction, engine
+    // semantics) and refuse anything a smelter cell shouldn't contain.
     let mut ins_item: Vec<Option<&'static str>> = vec![None; n];
     for (i, e) in entities.iter().enumerate() {
         if !is_inserter(&e.name) {
@@ -246,22 +246,13 @@ fn assign_carries(entities: &mut [PlacedEntity], spec: &DonorSpec) {
         match (feeds_machine, drains_machine) {
             (true, false) => {
                 ins_item[i] = Some(spec.in_item);
-                if let Some(&t) = tile_of.get(&pick) {
-                    seed.insert(find(&mut parent, t), spec.in_item);
-                } else {
+                if !tile_of.contains_key(&pick) {
                     fail(&format!("feeder inserter at ({},{}) picks from a non-transport tile", e.x, e.y));
                 }
             }
             (false, true) => {
                 ins_item[i] = Some(spec.out_item);
-                if let Some(&t) = tile_of.get(&drop) {
-                    let root = find(&mut parent, t);
-                    if let Some(prev) = seed.insert(root, spec.out_item) {
-                        if prev != spec.out_item {
-                            fail(&format!("belt run reached by both items near ({},{})", e.x, e.y));
-                        }
-                    }
-                } else {
+                if !tile_of.contains_key(&drop) {
                     fail(&format!("drain inserter at ({},{}) drops onto a non-transport tile", e.x, e.y));
                 }
             }
@@ -269,10 +260,9 @@ fn assign_carries(entities: &mut [PlacedEntity], spec: &DonorSpec) {
             (false, false) => fail(&format!("inserter at ({},{}) touches no machine", e.x, e.y)),
         }
     }
-    // Conflict check: a root seeded twice with different items already
-    // refused above for drains; feeders can conflict with drains too.
-    // (seed.insert refuses via the drain arm; feeder arm inserts blindly —
-    // re-verify all seeds agree per root.)
+    // Seed each belt-run root from its inserters and refuse on conflict —
+    // the SINGLE conflict authority (an earlier duplicate map invited
+    // fixing the wrong copy; second-opinion round on the donor-probe PR).
     let mut root_item: BTreeMap<usize, &'static str> = BTreeMap::new();
     for (i, e) in entities.iter().enumerate() {
         if !is_inserter(&e.name) {
