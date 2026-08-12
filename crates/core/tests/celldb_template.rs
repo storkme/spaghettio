@@ -98,7 +98,29 @@ fn template_vs_incumbent_copper_plate_smelting_demand_matched() {
     // of the five seeds, exactly three (iron-plate, copper-plate,
     // copper-cable) admit single-group demands — ec/ac always co-solve
     // with their cable/circuit inputs and refuse by v1 design.
+    //
+    // Since the donor probe (RFC-067 decision log 2026-08-12), count 48 is
+    // shared with community donor -OL38TX27JmPIivo#8, which wins the
+    // (count, interior_tiles) sort at 753 < 817 — so THIS fixture stamps
+    // the DONOR, per the pre-registered collision rule. The engine seed's
+    // own tie verdict stays recorded in the decision log; re-deriving it
+    // requires a store without the donor row.
     run_fixture("copper-plate", 48, "electric-furnace", &["copper-ore"]);
+}
+
+#[test]
+fn template_vs_incumbent_copper_plate_donor_lxr_demand_matched() {
+    // 50 = community donor -Lxr8KxgJup5AsKyTygI#6 ("Mass Plate
+    // Production", RFC-067 donor probe): the only count-50 entry, so the
+    // stamp is the donor by construction.
+    run_fixture("copper-plate", 50, "electric-furnace", &["copper-ore"]);
+}
+
+#[test]
+fn template_vs_incumbent_copper_plate_donor_on0_demand_matched() {
+    // 52 = community donor -ON0-7RmLQJjDfgq7s_W#2 (vertical express
+    // column cell, RFC-067 donor probe): the only count-52 entry.
+    run_fixture("copper-plate", 52, "electric-furnace", &["copper-ore"]);
 }
 
 #[test]

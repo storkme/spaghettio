@@ -67,7 +67,59 @@ const STRIP: &[&str] = &["small-electric-pole", "medium-electric-pole", "big-ele
 
 fn specs() -> Vec<DonorSpec> {
     vec![
-        // Filled in per donor after the geometry maps; see PR body.
+        // Double-row fast-belt smelter: ore enters a west-edge splitter
+        // feeding top/bottom ore belts via two distribution columns; the
+        // shared middle belt drains east. 48 furnaces.
+        DonorSpec {
+            source_file: "-OL38TX27JmPIivo_F3R_factorio_handbook.json",
+            record_index: 8,
+            record_label: "[item=electric-furnace] 30/s",
+            provenance: "community:factorioprints/-OL38TX27JmPIivo#8",
+            recipe: "copper-plate",
+            machine: "electric-furnace",
+            in_item: "copper-ore",
+            out_item: "copper-plate",
+            ports: &[
+                (0, 6, PortKind::BeltIn, "copper-ore"),
+                (73, 6, PortKind::BeltOut, "copper-plate"),
+            ],
+        },
+        // "Mass Plate Production": tileable double-row yellow... fast-belt
+        // cell, long-handed feeders from the lower ore belt, plates drain
+        // onto the upper belt; both belts exit east (ore pass-through is
+        // the design's chaining feature). 50 furnaces. Ports are in
+        // POST-pole-strip coordinates (strip shifts x by -1).
+        DonorSpec {
+            source_file: "-Lxr8KxgJup5AsKyTygI_factory_blueprints.json",
+            record_index: 6,
+            record_label: "Mass Plate Production",
+            provenance: "community:factorioprints/-Lxr8KxgJup5AsKyTygI#6",
+            recipe: "copper-plate",
+            machine: "electric-furnace",
+            in_item: "copper-ore",
+            out_item: "copper-plate",
+            ports: &[
+                (0, 5, PortKind::BeltIn, "copper-ore"),
+                (86, 4, PortKind::BeltOut, "copper-plate"),
+            ],
+        },
+        // Vertical express column cell: ore enters a south-edge splitter,
+        // climbs both side columns (inline splitters as lane balancers);
+        // plates merge onto the center column and exit north. 52 furnaces.
+        DonorSpec {
+            source_file: "-ON0-7RmLQJjDfgq7s_W_all_the_book.json",
+            record_index: 2,
+            record_label: "[item=iron-plate][item=copper-plate]45/s 2700/m",
+            provenance: "community:factorioprints/-ON0-7RmLQJjDfgq7s_W#2",
+            recipe: "copper-plate",
+            machine: "electric-furnace",
+            in_item: "copper-ore",
+            out_item: "copper-plate",
+            ports: &[
+                (8, 56, PortKind::BeltIn, "copper-ore"),
+                (9, 0, PortKind::BeltOut, "copper-plate"),
+            ],
+        },
     ]
 }
 
