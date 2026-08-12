@@ -390,7 +390,10 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
   and now reads worst 38.6/s with `forward_converged=false` (synthetic
   harness only; the production corpus converges 92/92 — see the
   KNOWN_IMBALANCED doc); and (8,3), whose input row is four splitters,
-  had an equally vacuous clean baseline — it audits clean at its new
-  0.375 drive, but no full-drive reading exists for it yet. Every
-  other shape's audit drive is unchanged by the fix, which is the
-  census-based form of the baseline-stands claim.*
+  had an equally vacuous clean baseline — the gate runs it fully
+  seeded at 100% saturation, but only 0.375 of its seeded flow
+  propagates in-model even post-fix (cause un-diagnosed), so its clean
+  verdict covers the flow the model can see and no more; the open item
+  is diagnostic, not acceptance. Every other shape's audit drive is
+  unchanged by the fix, which is the census-based form of the
+  baseline-stands claim.*

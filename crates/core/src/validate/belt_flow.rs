@@ -2658,9 +2658,21 @@ fn compute_lane_rates_impl(
             // the pair is fed and the unfed half is not a graph source.
             // Counting it as one fabricated a phantom source on every
             // inline splitter whose second tile sits beside the fed lane
-            // (#624: 28 phantoms on the ON0 donor, Σ attributed demand
-            // 1.5× the solver total, even-split fallback distorting every
-            // real seed).
+            // (#624: 26 phantoms removed on the ON0 donor — 30 sources →
+            // 4 — Σ attributed demand 1.5× the solver total, even-split
+            // fallback distorting every real seed).
+            //
+            // KNOWN LIMIT of this rule (bot review on the fix PR): a
+            // splitter half where external flow genuinely arrives while
+            // its sibling is INDEPENDENTLY belt-fed (e.g. an entry
+            // splitter that also receives an internal recirculation loop)
+            // would be wrongly skipped — the walker cannot distinguish
+            // "fed pair" from "fed sibling + external entry half" by
+            // graph shape alone. No engine layout, celldb entry, or
+            // balancer template has that topology today (both donor entry
+            // splitters have BOTH halves unfed and still seed); if one
+            // appears, seed-stats (`SPAGHETTIO_LANE_WALK_STATS=1`) will
+            // show the missing source.
             if let Some(&sib) = splitter_sibling.get(&pos) {
                 if feeders.contains_key(&sib) {
                     continue;
@@ -3092,7 +3104,13 @@ fn compute_lane_rates_impl(
                 // the first iteration and converged the entire downstream
                 // graph to 0/s (#624: every feeder of the RFC-067 donor
                 // cells read "delivers 0.0/s" while seed-stats showed the
-                // seeding itself was correct).
+                // seeding itself was correct). NOTE `seed_rates` is
+                // injections + external seeds, so this line also repairs
+                // the sibling defect for INSERTER DROPS onto splitter
+                // tiles (previously equally erased) — no engine layout
+                // exercises that today (the attributed-footprint census
+                // would have shown it), but it is the same fix, claimed
+                // deliberately rather than fixed by accident.
                 let a_seed = seed_rates.get(&a).copied().unwrap_or([0.0, 0.0]);
                 let b_seed = seed_rates.get(&b).copied().unwrap_or([0.0, 0.0]);
                 let a_fc = feeder_contributions_for_tile(a, &prev, &feeders, &belt_dir_map, &base_demand);
@@ -5646,5 +5664,116 @@ mod tests {
         // receives exactly its share and nothing warns.
         let issues = check_input_rate_delivery(&lr, Some(&sr_with_supply(7.5)));
         assert!(issues.is_empty(), "exact supply must not warn: {issues:?}");
+    }
+
+    /// #624 pooled-pair pickup read: the negative case must survive the
+    /// credit. A pickup ON a splitter tile reads the pair's pooled
+    /// stream — that must CLEAR a pickup whose demand the pooled stream
+    /// covers (even when its own half's branch share alone would not),
+    /// and must STILL WARN when the pooled stream genuinely falls short.
+    #[test]
+    fn input_rate_delivery_splitter_pickup_pooled_but_not_rubber_stamped() {
+        fn sr_with_supply(supply: f64) -> SolverResult {
+            SolverResult {
+                machines: vec![MachineSpec {
+                    entity: "assembling-machine-3".to_string(),
+                    recipe: "iron-gear-wheel".to_string(),
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
+                    count: 1.0,
+                    inputs: vec![ItemFlow {
+                        item: "iron-plate".to_string(),
+                        rate: 2.5,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                    outputs: vec![ItemFlow {
+                        item: "iron-gear-wheel".to_string(),
+                        rate: 1.25,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                }],
+                external_inputs: vec![ItemFlow {
+                    item: "iron-plate".to_string(),
+                    rate: supply,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                external_outputs: vec![],
+                surplus_outputs: vec![],
+                dependency_order: vec!["iron-gear-wheel".to_string()],
+                ..Default::default()
+            }
+        }
+        // External iron-plate belt (0,0)E feeds a splitter (1,0)+(1,1)E;
+        // the input inserter at (2,1)E picks FROM the splitter's second
+        // tile (1,1) and drops into the machine at (3,0)..(5,2). The
+        // splitter's outputs lead nowhere, so demand-aware allocation has
+        // no branch preference and the seed's path to the pickup is the
+        // pooled pair itself. (1,1) is also unfed-with-fed-sibling, so
+        // this doubles as the phantom-source filter's regression net.
+        let entities = vec![
+            PlacedEntity {
+                name: "transport-belt".to_string(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::East,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "splitter".to_string(),
+                x: 1,
+                y: 0,
+                direction: EntityDirection::East,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "inserter".to_string(),
+                x: 2,
+                y: 1,
+                direction: EntityDirection::East,
+                carries: Some("iron-plate".to_string()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "assembling-machine-3".to_string(),
+                x: 3,
+                y: 0,
+                direction: EntityDirection::North,
+                recipe: Some("iron-gear-wheel".to_string()),
+                ..Default::default()
+            },
+        ];
+        let lr = LayoutResult {
+            entities,
+            width: 10,
+            height: 10,
+            ..Default::default()
+        };
+
+        // Fed (2.5 == demand): clean — and ONLY because of the pooled
+        // read: the pickup tile's own half carries strictly less than the
+        // requirement.
+        let issues = check_input_rate_delivery(&lr, Some(&sr_with_supply(2.5)));
+        assert!(issues.is_empty(), "pooled read must clear a fed pickup: {issues:?}");
+        let rates = compute_lane_rates(&lr, Some(&sr_with_supply(2.5)));
+        let half = rates.get(&(1, 1)).map(|r| r[0] + r[1]).unwrap_or(0.0);
+        assert!(
+            half < 2.5 - 0.02,
+            "test premise: the branch share alone must NOT cover the demand \
+             (got {half}); otherwise this test no longer exercises the pooled read"
+        );
+
+        // Genuinely under-fed (1.0 vs 2.5): the pooled credit must NOT
+        // rubber-stamp it — the pickup still warns.
+        let issues = check_input_rate_delivery(&lr, Some(&sr_with_supply(1.0)));
+        assert_eq!(
+            issues.len(),
+            1,
+            "under-fed splitter pickup must warn despite pooling: {issues:?}"
+        );
+        assert_eq!((issues[0].x, issues[0].y), (Some(1), Some(1)), "{issues:?}");
     }
 }
