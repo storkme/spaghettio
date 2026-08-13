@@ -411,7 +411,14 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
   the quality_ec_45s fixture pair (still 48% under the unthinned
   baseline). A 12-lane Clos factorization for (6,4) was tried first and
   abandoned for solver cost (INFEASIBLE/UNKNOWN at 600s/height through
-  jh=13), recorded in the recipe comment. Audit-side note: the lane
+  jh=13), recorded in the recipe comment. Audit-side notes: the lane
   audit gates errors only — its warning counts are printed, not
   asserted — so "0 warnings" here is a report, not a CI-enforced
-  invariant.*
+  invariant; the partial-saturation tripwire's known_worst arms for
+  (6,3)/(6,4) are removed with the re-bake (a 3/3-pass bot finding —
+  the stale (6,4)=15.0 arm would have excluded the new template from
+  50%/75% coverage); and at full drive the new (6,4)'s mid-lanes sit
+  exactly at the 7.5/s per-lane cap (+0.01 audit tolerance), so its
+  0-error verdict is a tight-margin walker property, deliberate but
+  worth knowing before blaming a future walker change for "breaking"
+  the template.*
