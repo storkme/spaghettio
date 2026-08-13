@@ -28,8 +28,8 @@ inherited verbatim as K68-4.
 - **The reopening evidence says composition is where donors pay.** At
   matched single-group demand, engine seeds tie the engine (K67-3 NULL,
   3 of 3 realizable motifs) — but community donors win on *shape*
-  (composites +0.366/+0.447: the winners are 74×13 and 19×57, an order
-  of magnitude closer to square than the engine's 144×7 strip), and
+  (composites +0.366/+0.447: the winners are 74×13 and 19×57 —
+  aspect 5.7:1 and 3:1 against the engine strip's 20.6:1), and
   shape value compounds inside multi-group layouts where ragged
   row-width variance is 55.2% of whitespace. The single-group
   harness could measure a donor's cell; only multi-group stamping can
@@ -110,11 +110,13 @@ unmodified; they replan geometry from the stamped fragment's footprint
 and belt positions exactly as they would for any row whose width or
 height differed (a stamp does change `row_width` and band height, so
 routes differ; what never happens is fabric being re-derived around
-*relocated* bands). That is the load-bearing distinction from the five
-adjudicated packing deaths (prior-adjudication map in the hotspot
-scoreboard): RFC-057/058 **relocated** bands and paid 6–8× logistics
-re-routing them; this mechanism substitutes an interior at the band's
-native slot in the row sequence.
+*relocated* bands). That is the load-bearing distinction from the
+packing-death record (five mechanisms adjudicated dead in the hotspot
+scoreboard's prior-adjudication map; the **three that died specifically
+on relocation** — RFC-057, RFC-058, RFC-064-P3 — relocated bands and
+paid 6–8× logistics re-routing them; wide-row splitting and folding
+died on their own distinct grounds): this mechanism substitutes an
+interior at the band's native slot in the row sequence.
 
 ### Orientation is resolved at storage time, never at stamp time
 
@@ -152,10 +154,15 @@ cable→circuit blocks (Phase-0 community mining). Scope:
   follows the **DI-cell convention** the placer already has: the
   consumer's spec owns the span (DI cells are keyed by the consumer for
   the same reason — all external inputs must already be available at
-  its slot), and producer-side external inputs ride the same
-  `RowSpan`-level mechanism DI uses (`di_input` and the cell fields);
-  P2's code PR pins the exact field set against the DI implementation
-  rather than this doc restating it. This is the "multi-band cell"
+  its slot). One honestly-open piece (third review round): the
+  producer-side *belt-fed external input* — copper-plate feeding the
+  cable half — has **no proven consumer-owned carrier**: `di_input`
+  entries reference a separate producer row, and native DI delivers
+  that feed via the producer's own `RowSpan`, which a single fused
+  span doesn't have. P2's code PR pins the mechanism against the DI
+  implementation; if pinning discovers a `RowSpan` contract extension
+  is required, that is adjudicated openly as a contract change under
+  K68-2's terms, not patched in silently. This is the "multi-band cell"
   RFC-053 deferred as its own (still-open) Phase 3 — the DI coupling
   map's un-split refusal names it in-code — built here as a stamp of
   verified stored geometry, not as computed straddle geometry.
@@ -327,3 +334,16 @@ registry row if it stays within the size norm.
   checklist items; K68-3 calibration note added (an epsilon-scraping
   pass is weak evidence, the reopening cleared the bar 18–22×).
   Tracking: work proceeds under #629.*
+- *2026-08-13 — third review round, verdict "no blocker/major": three
+  minors absorbed — the relocation distinction now claimed against the
+  three relocation deaths specifically (wide-row splitting and folding
+  died on distinct grounds); the fused producer-side belt feed
+  acknowledged as having no proven consumer-owned carrier (`di_input`
+  references a separate producer row) with any needed contract
+  extension adjudicated under K68-2, not patched silently; donor
+  aspect stated as plain ratios. One finding REFUTED with receipts:
+  the claim that ac@4-from-plates is a single-group solve is false —
+  advanced-circuit's ingredients are electronic-circuit + plastic-bar
+  + copper-cable (recipes.json), and with plates/plastic external the
+  solve produces ec and cable, a 3-group layout, so the ac self-stamp
+  does have seam neighbors and K68-1's coverage claim stands.*
