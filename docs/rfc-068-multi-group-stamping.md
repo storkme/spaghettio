@@ -194,7 +194,9 @@ cable→circuit blocks (Phase-0 community mining). Scope:
   selects fragments **by provenance (`engine@…`), not by the normal
   query**: copper-plate@48 is a recorded key collision where the
   dominance sort resolves to the community donor (753 < 817 interior
-  tiles, the pre-registered rule in `celldb_template.rs`), and a
+  tiles — the sort lives in `celldb.rs::query_unit`; the collision and
+  its pre-registered resolution are recorded in `celldb_template.rs`),
+  and a
   query-driven "self"-stamp would silently stamp the donor and void
   the isolation premise. Error-parity is also stated with its limit:
   it cannot catch the `output_feed_x_min` class (a throughput defect,
