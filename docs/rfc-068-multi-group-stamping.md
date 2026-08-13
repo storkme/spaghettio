@@ -28,9 +28,10 @@ inherited verbatim as K68-4.
 - **The reopening evidence says composition is where donors pay.** At
   matched single-group demand, engine seeds tie the engine (K67-3 NULL,
   3 of 3 realizable motifs) — but community donors win on *shape*
-  (composites +0.366/+0.447, near-square cells vs the engine's 144×7
-  strips), and shape value compounds inside multi-group layouts where
-  ragged row-width variance is 55.2% of whitespace. The single-group
+  (composites +0.366/+0.447: the winners are 74×13 and 19×57, an order
+  of magnitude closer to square than the engine's 144×7 strip), and
+  shape value compounds inside multi-group layouts where ragged
+  row-width variance is 55.2% of whitespace. The single-group
   harness could measure a donor's cell; only multi-group stamping can
   measure what a donor does to a *layout*.
 - **The prizes are multi-group by construction.** `advanced-circuit`
@@ -81,17 +82,18 @@ The stamp path, per eligible group:
      group's schedule and any item it cannot place at its schedule
      index is a refusal, because a misordering misroutes taps silently
      with no Error.
-   - **`output_feed_x_min`**: a stored fragment's output belt is fed at
-     the *discrete* columns where its inserters drop — the DI-cell
-     shape, not the ordinary row's continuous coverage. Leaving it
-     `None` claims continuous coverage from `output_belt_x_min` and
-     reproduces the structural-cap bug the field exists to prevent (a
-     bridge upstream of the last drop permanently misses later drops'
-     share — a validator-clean, meter-visible defect; see the field's
-     doc in `placer.rs`). The adapter **derives it as the rightmost
-     drop column onto the output run** for every stamp, unit and fused
-     alike; a fragment whose drop structure cannot be derived is a
-     refusal, never a `None`.
+   - **`output_feed_x_min`**: the adapter derives the fragment's drop
+     coverage onto its output run and **branches on it**. Coverage
+     continuous from the run's start (the ordinary-row shape — which is
+     what engine seeds are) → `None`, exactly what `place_rows` sets,
+     so P0 self-stamps stay native-identical. Discrete drop columns
+     (the DI-cell shape a community donor may carry) →
+     `Some(rightmost drop column)`; `None` there claims continuous
+     coverage and reproduces the structural-cap bug the field exists
+     to prevent (a bridge upstream of the last drop permanently misses
+     later drops' share — validator-clean, meter-visible; see the
+     field's doc in `placer.rs`). A fragment whose drop structure
+     cannot be derived at all is a refusal.
 
    Beyond these, any port the adapter cannot map, or any `RowSpan`
    field left unfilled, is a **refuse-on-ambiguity** for that entry
@@ -103,11 +105,16 @@ The stamp path, per eligible group:
    advances by the fragment height; poles remain LAST, placed by the
    normal `place_poles` pass over the whole layout.
 
-Nothing downstream changes. This is the load-bearing distinction from
-the five adjudicated packing deaths (prior-adjudication map in the
-hotspot scoreboard): RFC-057/058 **relocated** bands and paid 6–8×
-logistics re-routing them; this mechanism substitutes an interior at the
-band's native slot and the fabric is planned exactly as before.
+No downstream **code** changes — the lane planner and ghost router run
+unmodified; they replan geometry from the stamped fragment's footprint
+and belt positions exactly as they would for any row whose width or
+height differed (a stamp does change `row_width` and band height, so
+routes differ; what never happens is fabric being re-derived around
+*relocated* bands). That is the load-bearing distinction from the five
+adjudicated packing deaths (prior-adjudication map in the hotspot
+scoreboard): RFC-057/058 **relocated** bands and paid 6–8× logistics
+re-routing them; this mechanism substitutes an interior at the band's
+native slot in the row sequence.
 
 ### Orientation is resolved at storage time, never at stamp time
 
@@ -141,16 +148,24 @@ cable→circuit blocks (Phase-0 community mining). Scope:
   (the existing DI coupling derivation identifies exactly these) with a
   matching fused entry and substitutes one fragment for both bands,
   synthesizing a single `RowSpan` whose inputs are the pair's external
-  inputs. This is the "multi-band cell" RFC-053 deferred as its own
-  (still-open) Phase 3 — the DI coupling map's un-split refusal names it
-  in-code — built here as a stamp of verified stored geometry, not as
-  computed straddle geometry.
+  inputs. `RowSpan.spec` is strictly single-recipe, so the fused span
+  follows the **DI-cell convention** the placer already has: the
+  consumer's spec owns the span (DI cells are keyed by the consumer for
+  the same reason — all external inputs must already be available at
+  its slot), and producer-side external inputs ride the same
+  `RowSpan`-level mechanism DI uses (`di_input` and the cell fields);
+  P2's code PR pins the exact field set against the DI implementation
+  rather than this doc restating it. This is the "multi-band cell"
+  RFC-053 deferred as its own (still-open) Phase 3 — the DI coupling
+  map's un-split refusal names it in-code — built here as a stamp of
+  verified stored geometry, not as computed straddle geometry.
 
 ### What is deliberately out of scope
 
 - **Count ladders** (inexact-count stamping) — RFC-067's other named
   reopening lever. Exact-count refusal stays; the adjudication fixtures
-  are demand-matched, and the follow-up is recorded, not smuggled in.
+  are demand-matched, and the follow-up is recorded as a checklist item
+  on the tracking issue (#629), not smuggled in.
 - **Port inference from wild blueprints** — the standing v1 gap; donor
   ports remain hand-declared, machine-verified.
 - **Intermediate-band stamping / mirrored variants** — above.
@@ -209,8 +224,13 @@ cable→circuit blocks (Phase-0 community mining). Scope:
   establishes **donor value under composition** — it does not establish
   that stamping fires on pre-existing corpus layouts, whose group
   counts will essentially never coincide with a store count under
-  exact-count lookup. Deployment reach is exactly the recorded
-  count-ladder follow-up; a K68-3 pass funds it, not a default flip.
+  exact-count lookup. Deployment reach is exactly the count-ladder
+  follow-up, tracked durably as a checklist item on #629; a K68-3 pass
+  funds it, not a default flip. Calibration note on the bar itself: the
+  +0.02 epsilon is the pre-registered donor-gate constant and stays,
+  but the reopening evidence cleared it by 18–22× — a pass that merely
+  scrapes the epsilon is weak evidence for the composition thesis and
+  should be reported as such, not rounded up to vindication.
 - **K68-4 (standing constraints, inherited verbatim):** belt tier is a
   user constraint, never a search axis — an entry exceeding the caller's
   tier is inadmissible by construction. Stamping ships inert; no
@@ -292,3 +312,18 @@ registry row if it stays within the size norm.
   composition, not deployment reach; (6) the motivation's sim-anchor
   claim corrected — anchors live in RFC-067's decision log, store rows
   are `unanchored` until a recorded anchor run.*
+- *2026-08-13 — second review round (all 1/3-pass minors) absorbed:
+  `output_feed_x_min` derivation branches continuous→`None` /
+  discrete→`Some(rightmost drop)` — the first round's blanket
+  never-`None` rule would have made P0 self-stamps diverge from native
+  rows; the fused span pinned to the DI-cell convention
+  (consumer-owned spec, `di_input`-style external inputs, exact fields
+  pinned in P2's code PR); "nothing downstream changes" rephrased to
+  code-unchanged/geometry-replans; donor aspect stated numerically
+  (74×13, 19×57) instead of "near-square"; RFC-063 dropped from the
+  registry row's death enumeration (its Phase-C spike cleared its bbox
+  bar — it died on other grounds); follow-ups given a durable home:
+  tracking issue #629, count ladders and mirrored variants as
+  checklist items; K68-3 calibration note added (an epsilon-scraping
+  pass is weak evidence, the reopening cleared the bar 18–22×).
+  Tracking: work proceeds under #629.*
