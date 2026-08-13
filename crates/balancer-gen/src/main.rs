@@ -1563,15 +1563,21 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
         },
         // (6, 4) — lane-balance re-bake (same #624 un-blinding; worst-lane
         // 15.0/s, a full lane at 2× cap). Merge-then-balance would cap
-        // throughput at 3 of 4 rated belts, so this is a Clos like the
-        // (m, 9) family: parallel((1, 2), 6) → parallel((6, 2), 2) with
-        // clos_interleave(6, 2). (6, 2) is audit-clean in the library.
+        // throughput at 3 of 4 rated belts. A Clos through
+        // parallel((1, 2), 6) → parallel((6, 2), 2) was tried first and
+        // ground out: the 12-lane clos_interleave junction returned
+        // INFEASIBLE/UNKNOWN at 600s per height through jh=13. This
+        // factorization needs only an IDENTITY junction: each input
+        // half-splits inside a (3, 2), and the (4, 4) balances the four
+        // mid-lanes — uniform 1/4 mix, min-cut 4 (both atoms carry rated
+        // min-cut per the MX1 tripwire; classify re-verifies the
+        // composition here anyway).
         Recipe {
             shape: (6, 4),
-            stage1: Stage::Parallel(1, 2, 6),
-            stage2: Stage::Parallel(6, 2, 2),
-            perm: Perm::Clos(6, 2),
-            max_jh: 24,
+            stage1: Stage::Parallel(3, 2, 2),
+            stage2: Stage::Lib(4, 4),
+            perm: Perm::Identity,
+            max_jh: 8,
         },
         // (9, 2) — merge-then-balance via parallel((3, 1), 3) → (3, 2).
         Recipe {
