@@ -10,10 +10,10 @@
 //! **Gates by default**: as of the (7, 2) re-bake (#285) the library
 //! audited lane-clean, and the test asserts that baseline holds outside
 //! the `KNOWN_IMBALANCED` set (see its doc: (7,3)/(7,4) accepted per
-//! #334; (6,3)/(6,4) provisionally added when the #624 walker fix
-//! un-blinded splitter-headed inputs the pre-fix walker had audited at
-//! near-zero flow). Any error outside that set — or any new category
-//! inside it — breaks this test. Set `BALANCER_AUDIT_NO_FAIL=1` to
+//! #334; (6,3)/(6,4) were provisionally listed by the #624 walker fix
+//! and removed 2026-08-13 after their lane-balance re-bake — they gate
+//! like any other shape now). Any error outside that set — or any new
+//! category inside it — breaks this test. Set `BALANCER_AUDIT_NO_FAIL=1` to
 //! suppress the assert during exploratory work (e.g. baking new
 //! shapes, regenerating the library).
 //!
@@ -48,16 +48,18 @@ use spaghettio_core::validate::Severity;
 /// lane-walk invocations on both trees) but means (7,4)'s printed
 /// numbers are an oscillation snapshot, not a fixed point.
 ///
-/// (6,3)/(6,4): added 2026-08-12 (#624 walker fix). Their input rows are
-/// splitter-headed — (6,4) entirely so — and the pre-fix walker ERASED
-/// external seeds landing on splitter tiles, so both templates had been
-/// audited at near-zero flow: the "0 errors" baseline was vacuous. The
-/// un-blinded audit shows the same skew class as #334 — (6,3) worst
-/// 7.7/s on the 7.5/s cap, (6,4) worst 15.0/s, a full lane over cap,
-/// i.e. the model says that template cannot sustain rated per-lane
-/// throughput. PROVISIONALLY accepted on #334's revocable terms to land
-/// the walker fix; owner ratification (or a lane-balance re-bake) is the
-/// recorded follow-up — see #624 and the walker-fix PR body.
+/// (6,3)/(6,4): PROVISIONALLY listed 2026-08-12 (#624 walker fix — the
+/// pre-fix walker ERASED external seeds landing on their splitter-headed
+/// input rows, so both had been audited at near-zero flow and the "0
+/// errors" baseline was vacuous; un-blinded, (6,3) read worst-lane 7.7/s
+/// on the 7.5/s cap and (6,4) 15.0/s, a full lane at 2× cap), then
+/// REMOVED 2026-08-13: the owner directed a lane-balance re-bake instead
+/// of ratification. Both python-derived templates were replaced with
+/// balancer-gen compositions through clean atoms — (6,3) =
+/// parallel((2,1),3) → (3,3), (6,4) = parallel((3,2),2) → (4,4), both
+/// identity-junction, classified Balanced — and both audit 0-error /
+/// 0-warning under the un-blinded walker, so the gate runs them like any
+/// other shape.
 ///
 /// Flow census over all 77 templates (adversarial review of the #624
 /// fix): exactly four shapes' delivered/seeded flow changed — (6,3)
@@ -70,7 +72,7 @@ use spaghettio_core::validate::Severity;
 /// see and no more. It stays out of this list because the list
 /// suppresses ERRORS and (8,3) has none; the open item on it is
 /// diagnostic (why 62.5% of seed doesn't propagate), not acceptance.
-const KNOWN_IMBALANCED: [(u32, u32); 4] = [(6, 3), (6, 4), (7, 3), (7, 4)];
+const KNOWN_IMBALANCED: [(u32, u32); 2] = [(7, 3), (7, 4)];
 
 #[test]
 fn audit_lane_correctness() {
@@ -269,8 +271,6 @@ fn audit_lane_correctness() {
         // coverage is the new-category rule).
         let ceiling = |shape: &(u32, u32)| -> usize {
             match shape {
-                (6, 3) => 20,  // measured 10
-                (6, 4) => 40,  // measured 19
                 (7, 3) => 15,  // measured ~5 (#334 era)
                 (7, 4) => 60,  // measured 31, non-converged
                 _ => 0,
