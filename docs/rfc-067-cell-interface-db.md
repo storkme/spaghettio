@@ -382,3 +382,8 @@ ordering is a deliberate trade recorded here, not an oversight.
   selection stays untouched until the standing K67-4 discipline is
   separately satisfied — this entry records the gate outcome, it does
   not flip any default.*
+- *2026-08-13 — **the Phase-3 resumption plan is
+  [RFC-068](rfc-068-multi-group-stamping.md)** (in-place `RowSpan`
+  substitution; fused stamping for the ec prize; self-stamp fidelity as
+  its Phase-0 gate). Phase-3 status now tracks that RFC's decision log;
+  this log takes only the close-out echo.*
