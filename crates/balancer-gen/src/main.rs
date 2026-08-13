@@ -1570,9 +1570,13 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
         // factorization needs only an IDENTITY junction: each (3, 2)
         // atom merges-and-balances 3 inputs down to 2 mid-lanes (each
         // input contributing 1/2 to each), and the (4, 4) balances the
-        // four mid-lanes — uniform 1/4 mix, min-cut 4 (both atoms carry
-        // rated min-cut per the MX1 tripwire; classify re-verifies the
-        // composition here anyway).
+        // four mid-lanes — uniform 1/4 mix and min-cut 4 AT THE RATED
+        // SYMMETRIC POINT (classify re-verifies the composition).
+        // Group-asymmetric partial load degrades like the accepted
+        // (9, m) merge-then-balance family — TU is warned, never gated.
+        // At full audit drive the mid-lanes sit exactly at the 7.5/s
+        // per-lane cap (+0.01 tolerance), so the audit's 0-error verdict
+        // is a tight-margin property of the walker, not slack.
         Recipe {
             shape: (6, 4),
             stage1: Stage::Parallel(3, 2, 2),

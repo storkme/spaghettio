@@ -282,8 +282,10 @@ fn audit_lane_correctness() {
             assert!(
                 errors > 0,
                 "known-imbalanced shape {shape:?} now passes — a re-bake fixed its \
-                 accepted skew; remove it from KNOWN_IMBALANCED and note the fix \
-                 (#334 for (7,3)/(7,4), the #624 PR for (6,3)/(6,4))."
+                 accepted skew; remove it from KNOWN_IMBALANCED (and its known_worst \
+                 arm in the partial audit) and record the fix in \
+                 rfc-balancer-bake-lane-validation.md's decision log — the \
+                 (6,3)/(6,4) re-bake (2026-08-13) is the worked example."
             );
             assert!(
                 errors <= ceiling(shape),
@@ -359,13 +361,16 @@ fn audit_lane_correctness_partial() {
     // other (shape, fraction) the tripwire stays armed (bot review on the
     // #624 PR: the earlier blanket exclusion silently dropped coverage at
     // fractions where the known skew physically cannot exceed any cap —
-    // (6,3)'s 7.7/s and (7,3)'s 8.112/s never cross within 25–75%).
+    // (7,3)'s 8.112/s never crosses within 25–75%).
     // (7,4) is excluded at every fraction: it does not converge, so its
     // numbers are oscillation snapshots and linear scaling does not apply.
+    // (6,3)/(6,4) arms REMOVED with their 2026-08-13 re-bake (this file's
+    // KNOWN_IMBALANCED doc) — a stale (6,4)=15.0 arm here would have
+    // excluded the brand-new template from the 50%/75% tripwire exactly
+    // when it needs coverage most (3/3-pass bot finding on the re-bake
+    // PR).
     let known_worst = |shape: &(u32, u32)| -> f64 {
         match shape {
-            (6, 3) => 7.7,
-            (6, 4) => 15.0,
             (7, 3) => 8.112,
             (7, 4) => f64::INFINITY,
             _ => 0.0,
