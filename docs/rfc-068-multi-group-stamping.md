@@ -41,8 +41,12 @@ inherited verbatim as K68-4.
   today (`template_candidate.rs`: single-group refusal, with its own
   regression test).
 - **The two winning copper-plate donors are already in the store** with
-  demand-matched fixtures and sim anchors. Band substitution is what
-  makes those rows (and every future donor) reachable from real,
+  demand-matched fixtures; their sim anchors (30.1/s vs 29.99 planned,
+  32.1/s vs 32.49) are recorded in RFC-067's decision log, while the
+  store rows themselves still read `sim_anchor: "unanchored"` — the
+  field flips only with a recorded anchor run, which is P3 bookkeeping
+  this RFC inherits, not a fact it may pre-claim. Band substitution is
+  what makes those rows (and every future donor) reachable from real,
   multi-group demand rather than only from the synthetic matched-demand
   fixtures.
 
@@ -69,10 +73,30 @@ The stamp path, per eligible group:
    item, multi-port per item allowed per the amended contract);
    `belt-out` port edge must match the slot's role (east edge for a
    final band, west edge for an intermediate band) → `output_belt_*` +
-   `output_east`; pipe ports → the fluid fields. Any port the adapter
-   cannot map, or any `RowSpan` field left unfilled, is a
-   **refuse-on-ambiguity** for that entry (the K67-1 discipline; a
-   refusal is recorded, never worked around inline).
+   `output_east`; pipe ports → the fluid fields. Two obligations the
+   field list alone doesn't show (both from this RFC's review round):
+   - **`input_belt_y` ordering**: the lane planner indexes
+     `input_belt_y[input_idx]` by the row spec's *input schedule*
+     order, not by port declaration order — the adapter orders by the
+     group's schedule and any item it cannot place at its schedule
+     index is a refusal, because a misordering misroutes taps silently
+     with no Error.
+   - **`output_feed_x_min`**: a stored fragment's output belt is fed at
+     the *discrete* columns where its inserters drop — the DI-cell
+     shape, not the ordinary row's continuous coverage. Leaving it
+     `None` claims continuous coverage from `output_belt_x_min` and
+     reproduces the structural-cap bug the field exists to prevent (a
+     bridge upstream of the last drop permanently misses later drops'
+     share — a validator-clean, meter-visible defect; see the field's
+     doc in `placer.rs`). The adapter **derives it as the rightmost
+     drop column onto the output run** for every stamp, unit and fused
+     alike; a fragment whose drop structure cannot be derived is a
+     refusal, never a `None`.
+
+   Beyond these, any port the adapter cannot map, or any `RowSpan`
+   field left unfilled, is a **refuse-on-ambiguity** for that entry
+   (the K67-1 discipline; a refusal is recorded, never worked around
+   inline).
 3. **Stamp** — entities translated to the slot origin, occupancy
    including splitter second tiles and direction-aware dims (the v1
    candidate's hardened passes, reused not rewritten); `y_cursor`
@@ -144,7 +168,16 @@ cable→circuit blocks (Phase-0 community mining). Scope:
   in the ec fixture) and a final east-flowing band (ec or ac in its own
   fixture) — so both adapter arms are exercised. (A fused self-stamp is
   impossible in P0 — the store holds zero fused entries until P2; the
-  fused mechanism gets its own differential control there.) The fragment is what `place_rows` would have
+  fused mechanism gets its own differential control there.) The probe
+  selects fragments **by provenance (`engine@…`), not by the normal
+  query**: copper-plate@48 is a recorded key collision where the
+  dominance sort resolves to the community donor (753 < 817 interior
+  tiles, the pre-registered rule in `celldb_template.rs`), and a
+  query-driven "self"-stamp would silently stamp the donor and void
+  the isolation premise. Error-parity is also stated with its limit:
+  it cannot catch the `output_feed_x_min` class (a throughput defect,
+  not an Error) — that obligation is verified by P2/P3's meter and sim
+  instruments, not by this gate. The fragment is what `place_rows` would have
   emitted, so this isolates the mechanism from donor quality. If a
   self-stamped layout cannot reach **validator Error-parity with the
   native layout** on any probe fixture — excess Errors attributable to
@@ -156,8 +189,14 @@ cable→circuit blocks (Phase-0 community mining). Scope:
   escape hatch in total** (any per-entry special case or hand-resolved
   ambiguity — K67-1's bar, reused verbatim), the port contract lacks
   the vocabulary this RFC needs — stop and amend the contract as its
-  own decision before continuing. A contract-narrowness stop is its own
-  verdict and does not count toward K68-3's denominator.
+  own decision before continuing. Honest weighting, from this RFC's
+  review round: the P0 half is near-trivially clean by construction
+  (engine-seed ports were extracted from the very `RowSpan` semantics
+  the adapter targets), so the criterion's real information is in the
+  donor half — **the first translated donor adjudicates it before the
+  rest of the harvest is funded**, so a contract-narrowness stop costs
+  one translation, not a full harvest. A contract-narrowness stop is
+  its own verdict and does not count toward K68-3's denominator.
 - **K68-3 (value at the prizes):** after a documented Phase-2 harvest
   (target ≥3 translatable donors across advanced-circuit and fused
   cable→ec; fewer only if the harvest cannot produce 3, shortfall
@@ -165,7 +204,13 @@ cable→circuit blocks (Phase-0 community mining). Scope:
   layout** under the never-worse floor with composite > +0.02
   (`COMPOSITE_TIE_EPSILON`, the donor-probe gate's constants) — Phase 3
   parks again, this time with the composition thesis itself adjudicated,
-  not just single-group density.
+  not just single-group density. Scope of a PASS, stated to prevent
+  over-reading: K68-3's fixtures are demand-matched, so a pass
+  establishes **donor value under composition** — it does not establish
+  that stamping fires on pre-existing corpus layouts, whose group
+  counts will essentially never coincide with a store count under
+  exact-count lookup. Deployment reach is exactly the recorded
+  count-ladder follow-up; a K68-3 pass funds it, not a default flip.
 - **K68-4 (standing constraints, inherited verbatim):** belt tier is a
   user constraint, never a search axis — an entry exceeding the caller's
   tier is inadmissible by construction. Stamping ships inert; no
@@ -233,3 +278,17 @@ registry row if it stays within the size norm.
   resolved at storage time (no stamp-time transforms; splitter
   directionality). Self-stamp fidelity chosen as the Phase-0 gate so
   the mechanism is adjudicated before any donor is harvested.*
+- *2026-08-13 — review round (second-opinion bot on #628), six findings
+  verified against source and absorbed rather than argued: (1) the
+  adapter owes `output_feed_x_min` derivation for every stamp — a
+  stored fragment's output belt is drop-fed at discrete columns, the
+  DI-cell shape, and `None` reproduces the structural-cap bug the
+  field exists to prevent; (2) `input_belt_y` must be ordered by the
+  spec's input schedule, misordering refused; (3) P0 selects seeds by
+  provenance because the copper-plate@48 key collision resolves the
+  normal query to the community donor; (4) K68-2's information is in
+  its donor half — first translation adjudicates it before the harvest
+  is funded; (5) K68-3's pass scope pinned to donor-value-under-
+  composition, not deployment reach; (6) the motivation's sim-anchor
+  claim corrected — anchors live in RFC-067's decision log, store rows
+  are `unanchored` until a recorded anchor run.*
