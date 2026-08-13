@@ -7548,15 +7548,18 @@ fn quality_ec_45s_express_legendary_from_ore() {
     );
 
     // rfc-043-pole-band-thinning kill criterion 2 pin: single-band mode at
-    // Legendary (budget 4) — 30 medium poles vs 60 unthinned (50%
-    // reduction; census 2026-07-20). Exact pin so any placement change
+    // Legendary (budget 4) — 31 medium poles vs 60 unthinned (48%
+    // reduction; census 2026-07-20 read 30, re-pinned 2026-08-13 when the
+    // (6,3)/(6,4) lane-balance re-bake gave this layout a taller balancer
+    // stamp and one more pole; the 18-residual IRD census above was
+    // unchanged by the same diff). Exact pin so any placement change
     // renegotiates the number consciously.
     let poles = layout_result
         .entities
         .iter()
         .filter(|e| e.name == "medium-electric-pole")
         .count();
-    assert_eq!(poles, 30, "kill-2 pole census pin (was 60 unthinned)");
+    assert_eq!(poles, 31, "kill-2 pole census pin (was 60 unthinned)");
 
     // Functional entities stamped; logistics not (spot-check via export).
     let bp = blueprint::export(&layout_result, "ec-45s-legendary");
@@ -7795,11 +7798,13 @@ fn quality_ec_45s_legendary_tree_wire_differential() {
         .iter()
         .filter(|e| e.name == "medium-electric-pole")
         .count();
-    assert_eq!(poles, 30, "census pin (rfc-043)");
+    // Re-pinned 30→31 with the (6,3)/(6,4) lane-balance re-bake
+    // (2026-08-13) — same renegotiation as the kill-2 pin above.
+    assert_eq!(poles, 31, "census pin (rfc-043)");
 
     let tree = layout_result.power_wires.as_deref().expect("stored wires").to_vec();
     let dense = compute_pole_wires(&layout_result.entities, WireMode::Dense);
-    assert_eq!(tree.len(), 29, "spanning tree of one 30-pole component");
+    assert_eq!(tree.len(), 30, "spanning tree of one 31-pole component");
     assert!(dense.len() > tree.len(), "dense {} must exceed tree {}", dense.len(), tree.len());
     for e in &tree {
         assert!(dense.contains(e), "tree edge {e:?} not in dense candidate set");

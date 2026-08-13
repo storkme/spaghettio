@@ -6449,6 +6449,9 @@ mod tests {
         (1, 9), (9, 1), (1, 10), (10, 1), (2, 9),
         (3, 2), (6, 1), (6, 2), (7, 3), (8, 1), (8, 2), (8, 6),
         (7, 2),
+        // (6, 3)/(6, 4): lane-balance re-bakes 2026-08-13 (the #624
+        // provisional KNOWN_IMBALANCED pair, owner-directed re-bake).
+        (6, 3), (6, 4),
         (9, 2), (9, 3), (9, 4), (9, 5), (9, 6), (9, 7), (9, 8),
         // utility@10/s balancer-gap spike (uncommitted, see
         // crates/core/examples/census_missing_balancer_shapes.rs):
