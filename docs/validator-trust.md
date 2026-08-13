@@ -312,8 +312,11 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    phantom whose share was then erased, fabricating 2 of its 3 pinned
    `input-rate-delivery` residuals), and the balancer lane audit had
    been auditing splitter-headed-input shapes at near-zero flow
-   ((6,3)/(6,4)'s "0 errors" baselines were vacuous — now provisionally
-   known-imbalanced, owner ratification pending). Fix receipts: donor
+   ((6,3)/(6,4)'s "0 errors" baselines were vacuous — provisionally
+   known-imbalanced at the time; resolved 2026-08-13 when the owner
+   directed a lane-balance re-bake instead of ratification: both
+   templates replaced with compositions that audit 0-error under the
+   un-blinded walker and gate like any other shape, PR #630). Fix receipts: donor
    fixtures flip to floor-PASS wins matching their sim anchors; engine
    controls byte-identical (stress golden layout hashes + scoreboards
    vs origin/main on the same host). **Remaining recorded

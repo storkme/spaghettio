@@ -397,3 +397,21 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
   is diagnostic, not acceptance. Every other shape's audit drive is
   unchanged by the fix, which is the census-based form of the
   baseline-stands claim.*
+- *2026-08-13 — the recorded (6,3)/(6,4) follow-up is CLOSED by re-bake
+  (owner-directed, PR #630). Both python-derived templates replaced with
+  compose-pipeline bakes through audit-clean atoms — (6,3) =
+  parallel((2,1),3) → (3,3) at 6×16, (6,4) = parallel((3,2),2) → (4,4)
+  at 6×27, both identity-junction, classified Balanced, 0-error/
+  0-warning under the un-blinded lane audit — and removed from
+  KNOWN_IMBALANCED, which shrinks to the #334 pair. The conscious
+  trade, named: bbox grows 2.0× / 2.7× (48→96, 60→162 tiles) —
+  lane correctness bought with footprint, the same direction as this
+  RFC's original (7,2) re-bake, and the opposite of the #135 oversized-
+  template concern; the one measured downstream effect is +1 pole on
+  the quality_ec_45s fixture pair (still 48% under the unthinned
+  baseline). A 12-lane Clos factorization for (6,4) was tried first and
+  abandoned for solver cost (INFEASIBLE/UNKNOWN at 600s/height through
+  jh=13), recorded in the recipe comment. Audit-side note: the lane
+  audit gates errors only — its warning counts are printed, not
+  asserted — so "0 warnings" here is a report, not a CI-enforced
+  invariant.*

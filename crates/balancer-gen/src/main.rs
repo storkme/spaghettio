@@ -1567,10 +1567,11 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
         // parallel((1, 2), 6) → parallel((6, 2), 2) was tried first and
         // ground out: the 12-lane clos_interleave junction returned
         // INFEASIBLE/UNKNOWN at 600s per height through jh=13. This
-        // factorization needs only an IDENTITY junction: each input
-        // half-splits inside a (3, 2), and the (4, 4) balances the four
-        // mid-lanes — uniform 1/4 mix, min-cut 4 (both atoms carry rated
-        // min-cut per the MX1 tripwire; classify re-verifies the
+        // factorization needs only an IDENTITY junction: each (3, 2)
+        // atom merges-and-balances 3 inputs down to 2 mid-lanes (each
+        // input contributing 1/2 to each), and the (4, 4) balances the
+        // four mid-lanes — uniform 1/4 mix, min-cut 4 (both atoms carry
+        // rated min-cut per the MX1 tripwire; classify re-verifies the
         // composition here anyway).
         Recipe {
             shape: (6, 4),
