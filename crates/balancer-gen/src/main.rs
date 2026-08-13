@@ -1549,6 +1549,30 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             perm: Perm::Identity,
             max_jh: 4,
         },
+        // (6, 3) — lane-balance re-bake (#624 un-blinding: the python-
+        // derived template's splitter-headed inputs had been audited at
+        // near-zero flow; the un-blinded audit reads worst-lane 7.7/s on
+        // the 7.5/s cap). Merge-then-balance through clean atoms, the
+        // (9, 3) pattern: parallel((2, 1), 3) → Lib(3, 3).
+        Recipe {
+            shape: (6, 3),
+            stage1: Stage::Parallel(2, 1, 3),
+            stage2: Stage::Lib(3, 3),
+            perm: Perm::Identity,
+            max_jh: 8,
+        },
+        // (6, 4) — lane-balance re-bake (same #624 un-blinding; worst-lane
+        // 15.0/s, a full lane at 2× cap). Merge-then-balance would cap
+        // throughput at 3 of 4 rated belts, so this is a Clos like the
+        // (m, 9) family: parallel((1, 2), 6) → parallel((6, 2), 2) with
+        // clos_interleave(6, 2). (6, 2) is audit-clean in the library.
+        Recipe {
+            shape: (6, 4),
+            stage1: Stage::Parallel(1, 2, 6),
+            stage2: Stage::Parallel(6, 2, 2),
+            perm: Perm::Clos(6, 2),
+            max_jh: 24,
+        },
         // (9, 2) — merge-then-balance via parallel((3, 1), 3) → (3, 2).
         Recipe {
             shape: (9, 2),
