@@ -162,7 +162,7 @@ export function renderTraceOverlay(
     const cy = d.from_y * TILE_PX + TILE_PX / 2;
     const halfSpan = 4;
     const g = new Graphics();
-    g.label = "RouteFailure";
+    g.label = "GhostSpecFailed";
     g.moveTo(cx - halfSpan, cy - halfSpan).lineTo(cx + halfSpan, cy + halfSpan).stroke({ width: 2, color: 0xff3333 });
     g.moveTo(cx + halfSpan, cy - halfSpan).lineTo(cx - halfSpan, cy + halfSpan).stroke({ width: 2, color: 0xff3333 });
     drawDashedLine(g, cx, cy, d.to_x * TILE_PX + TILE_PX / 2, d.to_y * TILE_PX + TILE_PX / 2,

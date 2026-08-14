@@ -1263,13 +1263,14 @@ fn tier2_electronic_circuit_20s_from_ore() {
 ///
 /// The historical sideload-into-UG-input retry-loop coverage this config once
 /// nominally provided is defunct on the current pipeline: the retry is now
-/// driven by junction `cap_coords` (`LayoutRetried`), not `DroppedBridge`, and
-/// that event doesn't fire for EC AM1 fast at any rate 6..=10 (probe-verified).
-/// It is also moot here now that the config refuses upstream of routing. Fresh
-/// UG-retry regression coverage, if wanted, needs a config that actually emits
-/// `LayoutRetried`; tracked as a follow-up, out of RFC-047 scope. (The sibling
-/// event `BridgeDropped`, also referenced by earlier drafts of this comment,
-/// was declared but never emitted and was deleted 2026-08-14, issue #632 A4.)
+/// driven by junction `cap_coords` (`LayoutRetried`), not the old
+/// `BridgeDropped` mechanism — and `LayoutRetried` itself doesn't fire for EC
+/// AM1 fast at any rate 6..=10 either (probe-verified). It is also moot here
+/// now that the config refuses upstream of routing. Fresh UG-retry regression
+/// coverage, if wanted, needs a config that actually emits `LayoutRetried`;
+/// tracked as a follow-up, out of RFC-047 scope. (`BridgeDropped` was
+/// declared but never emitted in production and was deleted 2026-08-14,
+/// issue #632 A4.)
 #[test]
 // Kept the 30s ceiling from the pre-047 build-and-validate era; the refusal
 // path returns far sooner, but the solve still runs.

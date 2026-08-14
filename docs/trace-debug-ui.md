@@ -19,6 +19,20 @@ The Rust pipeline emits 22 structured trace events during bus layout generation.
 
 **Not visualized** (14 events): `RouteFailure`, `CrossingZoneConflict`, `LaneConsolidated`, `RowSplit`, `LaneOrderOptimized`, `LaneSplit`, `LaneRouted`, `OutputMerged`, `PolesPlaced`, `PhaseTime`, `NegotiateComplete`, `SolverCompleted`, `LaneConsolidated`, `ValidationCompleted`
 
+> **Amendment 2026-08-14 (issue #632 A4):** `RouteFailure` (listed above)
+> and its sibling `BridgeDropped` (not listed above — it was never
+> visualized either) were declared in `trace.rs` but never emitted by
+> production code, and have been deleted along with the overlay code that
+> had, in fact, already implemented §1.1 below (this "Current State"
+> section was stale on that point even before the deletion). Every
+> `RouteFailure` reference below — §1.1, the A* Routing panel, the
+> jump-to-failure shortcut, and the TypeScript pattern sample — describes a
+> data source that no longer exists. Kept as historical design record, not
+> a build plan, until re-scoped against a live event. `GhostSpecFailed`
+> (already visualized, `spec_key`/`from_x`/`from_y`/`to_x`/`to_y` — the
+> same shape `RouteFailure` had, minus `item`) is the nearest live
+> equivalent for "A* couldn't route this spec."
+
 **Existing UI entry points:**
 - Debug checkbox (`main.ts`) — enables `buildLayoutTraced()` + shows overlay
 - Step-through bar (`main.ts`) — ◀/▶ through PhaseComplete/PhaseSnapshot boundaries
@@ -32,6 +46,12 @@ The Rust pipeline emits 22 structured trace events during bus layout generation.
 **What to build:** Add 5 new overlay types to `renderTraceOverlay()` in `web/src/renderer/traceOverlay.ts`.
 
 ### 1.1 RouteFailure — red ✕ cross
+
+> **Obsolete 2026-08-14 (issue #632 A4):** `RouteFailure` was deleted — see
+> the amendment under "Current State" above. This subsection was actually
+> already implemented (the overlay it describes matches what
+> `traceOverlay.ts` shipped, hover text included) before the event and its
+> render block were deleted as dead code. Kept for historical record.
 
 When A* can't find a path, draw a red cross marker at the source tile and a dashed line to the target.
 
@@ -157,6 +177,11 @@ Order: [copper-plate] [iron-plate] [copper-cable] [plastic-bar] [circuit]
 
 Source events: `NegotiateComplete`, `RouteFailure`
 
+> **Obsolete 2026-08-14 (issue #632 A4):** `RouteFailure` was deleted — see
+> the amendment under "Current State" above. This section's failure list
+> would need re-sourcing from a live event (`GhostSpecFailed` is the
+> nearest equivalent) before it could be built.
+
 ```
 47 specs · 3 iterations · 29ms
 ✓ all routes resolved
@@ -245,6 +270,11 @@ When stepping from phase N to N+1, newly added entities (present in snapshot N+1
 
 ### 3.3 Jump to failure shortcut
 
+> **Obsolete 2026-08-14 (issue #632 A4):** `RouteFailure` was deleted — see
+> the amendment under "Current State" above. This shortcut (and 3.4's `f`
+> binding below, which depends on it) would need re-sourcing from a live
+> event before it could be built.
+
 If `RouteFailure` events exist, add a `⚠ N` badge to the step bar. Clicking it:
 1. Jumps the pixi-viewport to center on the first failure tile
 2. Highlights the ✕ marker with a pulse animation
@@ -314,13 +344,20 @@ If any phase takes >50% of total time, annotate its segment with an amber `⚡` 
 All existing overlay code uses `Extract<TraceEvent, { phase: "..." }>` narrowing. Follow the same pattern:
 
 ```typescript
-type RouteFailureEvent = Extract<TraceEvent, { phase: "RouteFailure" }>;
+type GhostSpecFailedEvent = Extract<TraceEvent, { phase: "GhostSpecFailed" }>;
 for (const evt of events) {
-  if (evt.phase !== "RouteFailure") continue;
-  const d = (evt as RouteFailureEvent).data;
+  if (evt.phase !== "GhostSpecFailed") continue;
+  const d = (evt as GhostSpecFailedEvent).data;
   // ...
 }
 ```
+
+<!-- Amendment 2026-08-14 (issue #632 A4): this sample originally narrowed
+     on `RouteFailure`, which was deleted as dead code (declared, never
+     emitted — see the amendment under "Current State" above). Swapped to
+     `GhostSpecFailed`, a live event with the same narrowing pattern and
+     near-identical shape, so the sample compiles against the current
+     `TraceEvent` union. -->
 
 ### Key files
 
