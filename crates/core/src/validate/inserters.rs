@@ -973,7 +973,8 @@ pub fn check_row_output_lane_budget(
 /// binding constraint is the belt, not the inserters.
 ///
 /// **Why the existing checks miss it.**
-/// [`crate::validate::belt_structural::check_lane_throughput`] compares
+/// [`crate::validate::belt_flow::check_lane_throughput`] (dispatched since
+/// #632 B5; the `belt_structural` twin predated it here) compares
 /// demand against capacity and 45 ≤ 45 passes.
 /// [`crate::validate::belt_flow::check_input_rate_delivery`] compares each
 /// machine's pickup-tile lane rate against that machine's OWN requirement
