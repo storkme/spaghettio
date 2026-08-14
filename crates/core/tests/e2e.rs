@@ -3162,7 +3162,7 @@ fn run_timed_validators(lr: &LayoutResult, sr: &SolverResult) {
         ("belt_item_isolation", Box::new(|| belt_structural::check_belt_item_isolation(lr))),
         ("belt_inserter_conflict", Box::new(|| belt_structural::check_belt_inserter_conflict(lr))),
         ("belt_flow_reachability", Box::new(|| belt_flow::check_belt_flow_reachability(lr, Some(sr), LayoutStyle::Bus))),
-        ("lane_throughput", Box::new(|| belt_structural::check_lane_throughput(lr, Some(sr)))),
+        ("lane_throughput", Box::new(|| spaghettio_core::validate::belt_flow::check_lane_throughput(lr, Some(sr)))),
         ("input_rate_delivery", Box::new(|| belt_flow::check_input_rate_delivery(lr, Some(sr)))),
     ];
 
@@ -3926,10 +3926,11 @@ fn stress_electronic_circuit_30s_decomposed() {
     // (sibling families polluting each other's `family_balancer_range`).
     // After both fixes (lane_planner.rs:370 module_id propagation guard,
     // and ghost_router.rs decomposition-aware feeder generation), the
-    // Pool and Decomposed paths both produce zero validator errors here.
-    // K1-1 originally asked for "validator-clean on the smallest gate-
-    // passing partition"; we now satisfy that, and additionally Pool is
-    // also clean on this case.
+    // Pool and Decomposed paths both produced zero validator errors
+    // UNDER THE OLD LANE WALKER. K1-1's "validator-clean on the
+    // smallest gate-passing partition" was satisfied by that walker's
+    // blindness: belt_flow's dispatched check (#632 B5) surfaces the
+    // real trunk deficit both arms carry (#644), pinned below.
     // 2026-08-15 (#632 B5 dispatch swap, #644): 0 -> 140 lane-throughput
     // on the Pool arm — the same adjudicated trunk under-provisioning as
     // the stress_ec_30s baseline (sim 92.1% delivered / meter 91.9%).
