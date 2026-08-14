@@ -45,7 +45,7 @@ without comment.
 | # | Stage | What validation does there |
 |---|---|---|
 | C1 | e2e fixtures | fixtures that call `validate()` and unwrap fail on any Error; scoreboards count both severities |
-| C2 | candidate search (`bus/decomposition_search.rs`) | DI arm **refuses** any Error-carrying layout; `IssueCounts` (errors, selection-scoped warnings, `LayoutResult.warnings`) are component-wise never-worse **floors**; `selection_warning_count` ranks candidates by Warning count **minus exclusions** (`belt-detour` only, since `input-rate-delivery` was lifted 2026-08-07 — hole 2); `score_layout` hard-gates `missing-balancer-template` |
+| C2 | candidate search (`bus/decomposition_search.rs`) | DI arm **refuses** any Error-carrying layout; `IssueCounts` (errors, selection-scoped warnings, `LayoutResult.warnings`) are component-wise never-worse **floors**; `selection_warning_count` ranks candidates by Warning count **minus exclusions** (the four-category `SELECTION_EXCLUDED_WARNING_CATEGORIES` set: `belt-detour` + the three #632 B6 demotions; `input-rate-delivery` was lifted INTO the count 2026-08-07 — hole 2); `score_layout` hard-gates `missing-balancer-template` |
 | C3 | transactional transforms (`bus/compaction.rs`) | a cut/candidate that has (or adds) Errors is rejected; the pre-transform layout survives. RFC-065 adds a `connectivity::error_certain_regression` reject-fast prefilter ahead of the full validate |
 | C4 | web UI | issues render as markers; export button works regardless |
 | C5 | blueprint export | **no gate** — export never consults validation |
@@ -200,6 +200,21 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    the 0.51/s one keeps its real `inserter-item-throughput` warning and
    scores 1 — the ranking is correct, and lift-on-top drift falls from 6
    fixtures to 2.
+
+   **2026-08-14 (#632 B6): the `inserter-item-throughput` discriminator no
+   longer ranks** — the category is demoted from `selection_warning_count`
+   (rows above). What protects this config now, measured not assumed: on
+   the DEFAULT path, RFC-059's `DiClaimOrder::Downstream` pins the good
+   arm outright (its teeth test stayed green across the demotion); under
+   an explicit `--claim search`, both arms now count 0 selection warnings
+   and the tie falls through to `(layout.warnings, entities)` — probed
+   post-demotion: Search ships the **1127-entity (1.10/s) arm**, because
+   the measured-good arm is also the denser one here. The unguarded
+   residue: a config where the measured-BAD arm is denser and the good
+   arm's only distinguishing signal is a demoted category — no known
+   instance, but nothing pins its absence; a future anchored re-lift of
+   `inserter-item-throughput` (this hole's own pattern for
+   `input-rate-delivery`) is the durable fix.
 
    **LIFT LANDED (2026-08-07).** `input-rate-delivery` now counts in
    `selection_warning_count`. The exemption's own stated exit condition —
