@@ -513,8 +513,16 @@ fn assert_no_warnings_except(result: &E2EResult, skip_categories: &[&str]) {
 ///
 /// rewrites every file; commit the diff, which shows the change
 /// per-fixture like any golden. Unlike the deleted stress goldens these
-/// are ALWAYS enforced (CI included) — their values were CI-stable as
-/// inline pins, so the files inherit that stability.
+/// are ALWAYS enforced — CI included, and CI never sets the bless var
+/// (setting it would fail-open, the same property every bless-mode
+/// golden here has) — their values were CI-stable as inline pins, so
+/// the files inherit that stability.
+///
+/// A drift is a FINDING first and a re-bless second (bot review on the
+/// conversion PR): adjudicate why the validator's verdict on the
+/// fixture moved — docs/validator-reporting.md's whole history is
+/// checks going quiet without their problem being fixed — and only
+/// then bless, recording the adjudication where the change lives.
 fn assert_warnings_golden(result: &E2EResult, test_name: &str) {
     assert_no_errors(result);
     let mut actual: std::collections::BTreeMap<&str, usize> = Default::default();
@@ -544,8 +552,12 @@ fn assert_warnings_golden(result: &E2EResult, test_name: &str) {
     assert_eq!(
         expected, got,
         "{test_name}: warning breakdown drifted from the committed pin \
-         (expected left, got right). If intentional, re-bless with \
-         SPAGHETTIO_WARNING_PINS=bless and commit the diff."
+         (expected left, got right). INVESTIGATE FIRST — a changed verdict \
+         is a finding about the validator or the layout, not paperwork \
+         (docs/validator-reporting.md); several pinned fixtures tolerate \
+         known defects EXPLICITLY and blessing away their pins hides them. \
+         Once adjudicated, re-bless with SPAGHETTIO_WARNING_PINS=bless and \
+         commit the diff with the adjudication."
     );
 }
 
