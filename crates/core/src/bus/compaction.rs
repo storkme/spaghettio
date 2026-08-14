@@ -4896,24 +4896,28 @@ pub fn search_snake_fold_with_stats(
     // honest gate for a resynthesized category — same rationale as the
     // verdict's own whole-category degrade for unresolvable positions.
     //
-    // Every category excluded from `selection_warning_count` is ReportOnly
-    // here, DERIVED from the same const so the two sites cannot drift
-    // (#632 B6 bot review: the belt-detour override below had been added
-    // alone, and the three categories demoted later needed the identical
-    // treatment — a diagnostic that must not steer which layout ships must
-    // not veto a fold either). The original belt-detour rationale, which
-    // generalizes: a snake fold's seam connectors double back BY DESIGN —
+    // `belt-detour` is ReportOnly here because folds trip it FALSELY by
+    // construction: a snake fold's seam connectors double back BY DESIGN —
     // measured whole (RFC-065 slice 2 healed the phantom cuts that used to
     // fragment them below the floors), they read as detours, and gating
     // them rejected every multi-fold candidate on chain-mil5ore. Transit
     // cost of folds is RFC-064's objective-scoring channel, not an
     // admission veto. (RFC-065 decision log, slice-2 fold-gate entry.)
-    let mut policy = Policy::new(GatePolicy::GateInstances)
-        .with_override("power", GatePolicy::GateCount);
-    for cat in crate::validate::SELECTION_EXCLUDED_WARNING_CATEGORIES {
-        policy = policy.with_override(cat, GatePolicy::ReportOnly);
-    }
-    let policy = policy;
+    //
+    // The #632 B6 selection demotions (`SELECTION_EXCLUDED_WARNING_
+    // CATEGORIES`) are deliberately NOT mirrored here — adjudicated across
+    // two bot-review rounds on the B6 PR (#639), which pulled in opposite
+    // directions. Ranking and fold ADMISSION have different safe defaults
+    // under an uncalibrated signal: ranking picks between two viable
+    // candidates (ranking on noise is arbitrary but neutral), while
+    // admission weighs a transform against the native status quo — there
+    // the conservative default is to keep native, so an uncalibrated
+    // warning newly introduced by a fold still rejects the fold. Only a
+    // category with a fold-specific FALSE-POSITIVE mechanism (belt-detour
+    // above) earns ReportOnly in this gate.
+    let policy = Policy::new(GatePolicy::GateInstances)
+        .with_override("power", GatePolicy::GateCount)
+        .with_override("belt-detour", GatePolicy::ReportOnly);
 
     let mut best: Option<(i64, Vec<i32>, LayoutResult, i32)> = None;
 
