@@ -1156,4 +1156,52 @@ mod tests {
             "an unlabelled tile must not be usable by an arbitrary net"
         );
     }
+
+    /// Ported verbatim from `bus::compaction`'s own test module (deleted with
+    /// the rest of that file, #632 A2) when `ProductionSignature` relocated
+    /// here — its only direct correctness pin, lost in the module deletion
+    /// per second-opinion review on PR #645, restored here rather than left
+    /// unpinned on code that moved.
+    #[test]
+    fn production_signature_is_order_independent() {
+        let plate = MachineSpec {
+            entity: "electric-furnace".into(),
+            recipe: "iron-plate".into(),
+            count: 2.0,
+            outputs: vec![ItemFlow {
+                item: "iron-plate".into(),
+                rate: 1.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let gear = MachineSpec {
+            entity: "assembling-machine-3".into(),
+            recipe: "iron-gear-wheel".into(),
+            count: 3.0,
+            inputs: vec![ItemFlow {
+                item: "iron-plate".into(),
+                rate: 2.0,
+                ..Default::default()
+            }],
+            outputs: vec![ItemFlow {
+                item: "iron-gear-wheel".into(),
+                rate: 1.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let a = SolverResult {
+            machines: vec![plate.clone(), gear.clone()],
+            ..Default::default()
+        };
+        let b = SolverResult {
+            machines: vec![gear, plate],
+            ..Default::default()
+        };
+        assert_eq!(
+            ProductionSignature::from_solver(&a).unwrap(),
+            ProductionSignature::from_solver(&b).unwrap()
+        );
+    }
 }

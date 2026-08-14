@@ -2775,6 +2775,172 @@ fn probe_mil5_errors() {
     }
 }
 
+/// Export `mega-chain-chem5raw` at its registry-declared capacity, for
+/// re-blessing its pinned geometry after a change.
+///
+/// The registry pin carries a SIM-VERIFIED claim, so moving the hash without
+/// re-measuring would attach yesterday's evidence to today's factory — the
+/// exact failure its own assert message warns about.
+#[test]
+#[ignore = "sim export — re-bless the chem5 registry pin"]
+fn export_chem5_for_rebless() {
+    let fixture = SimFixture::find("mega-chain-chem5raw");
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    )
+    .unwrap();
+    let mut l = fixture.compose_layout();
+    // Registry entry declares inserter_capacity 2 / stacking 1.
+    l.inserter_capacity = 2;
+    let tag = "chem5-rebless";
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, tag);
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write(format!("target/tmp/{tag}.bp"), &bp).unwrap();
+    std::fs::write(
+        format!("target/tmp/{tag}.manifest.json"),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    ).unwrap();
+    println!(
+        "wrote target/tmp/{tag}.bp — {}x{}, {} entities, hash {:016x}",
+        l.width, l.height, l.entities.len(),
+        spaghettio_core::bus::cells::registry::geometry_hash(&l),
+    );
+}
+
+/// How often does the NORMAL pipeline emit a fragmented pole network?
+///
+/// Decides whether `check_pole_network_connectivity` can be promoted from
+/// Warning to Error: a factory whose poles form two islands does not run, but
+/// promoting a check that already fires on ordinary output would just break
+/// every build. Measures rather than assumes.
+///
+/// Trimmed from its original form (second-opinion review on PR #645, #632
+/// A2): the original also compared each case's raw-bus pole count against a
+/// `compact_validated_geometry`-compacted variant ("COMPACTION MADE IT
+/// WORSE"), and — for the cell-composed fixtures below — computed a compacted
+/// variant's pole count that was never even printed (`let _ = (cd, cn);` in
+/// the original). Both uses were incidental to this probe's actual purpose
+/// (measuring the NORMAL pipeline, per the doc comment above) and depended on
+/// the now-deleted `bus::compaction` module, so they're cut rather than
+/// ported; the surviving normal-pipeline and composed/repaired measurements
+/// below are unchanged from the original.
+#[test]
+#[ignore = "measurement probe — pole connectivity across the pipeline"]
+fn probe_pole_connectivity_census() {
+    use spaghettio_core::power_wires::{disconnected_poles, wires_for};
+
+    let cases: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("gear15-ore", "iron-gear-wheel", 15.0, &["iron-ore"], "assembling-machine-2"),
+        ("gear15-plate", "iron-gear-wheel", 15.0, &["iron-plate"], "assembling-machine-2"),
+        ("ec10-ore", "electronic-circuit", 10.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("ec15-plate", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "assembling-machine-2"),
+        ("belt5-ore", "transport-belt", 5.0, &["iron-ore"], "assembling-machine-2"),
+        ("insert3-ore", "inserter", 3.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("plastic10", "plastic-bar", 10.0, &["coal", "petroleum-gas"], "chemical-plant"),
+    ];
+
+    let mut dirty_raw = 0;
+    let mut total = 0;
+    for (label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve_with_palette_exclusions_and_quality(
+            item, *rate, &inputs_set, &MachinePalette::default(), machine,
+            &FxHashSet::default(), QualityTier::Normal,
+        ) else { println!("{label}: solver refused"); continue };
+        let Ok(bus) = layout::build_bus_layout(&sr, layout::LayoutOptions::default()) else {
+            println!("{label}: layout refused"); continue
+        };
+        let poles = |l: &spaghettio_core::models::LayoutResult| {
+            let n = l.entities.iter()
+                .filter(|e| e.name.ends_with("electric-pole") || e.name == "substation")
+                .count();
+            (n, disconnected_poles(&l.entities, &wires_for(l)).len())
+        };
+        let (bn, bd) = poles(&bus);
+        total += 1;
+        if bd > 0 { dirty_raw += 1; }
+        println!("{label:<14} bus {bd:>3}/{bn:<4} disconnected");
+    }
+    println!("\n{dirty_raw}/{total} raw bus layouts have a fragmented pole network");
+
+    // Cell composition is the other producer of layouts, and the one whose
+    // compacted mil5 control carries 2 disconnected poles.
+    println!("\n--- cell-composed fixtures ---");
+    for label in ["chain-mil5ore", "mega-chain-chem5raw", "mega-chain-pu4raw", "mega-chain-usp2raw"] {
+        let fixture = SimFixture::find(label);
+        let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+        // Solve-and-discard: the solve itself is the refusal gate (skip
+        // fixtures the solver won't accept), unused otherwise now that the
+        // compacted-variant comparison (the solve's only consumer) is gone.
+        let Ok(_sr) = solver::solve_with_palette_exclusions_and_quality(
+            fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ) else { continue };
+        let base = fixture.compose_layout();
+        // `disconnected_poles` counts "unreachable from pole[0]", which is a
+        // poor progress metric: merging two components that both exclude
+        // pole[0] leaves the count unchanged while ADDING the bridge, so real
+        // repair can read as regression. Component count is the honest one.
+        let components = |l: &spaghettio_core::models::LayoutResult| -> usize {
+            let poles: Vec<(f64, f64, f64)> = l
+                .entities
+                .iter()
+                .filter_map(|e| {
+                    spaghettio_core::power_wires::wire_reach(
+                        &e.name,
+                        e.quality.unwrap_or_default(),
+                    )
+                    .map(|r| {
+                        let (cx, cy) = spaghettio_core::power_wires::pole_center(&e.name, e.x, e.y);
+                        (cx, cy, r)
+                    })
+                })
+                .collect();
+            let n = poles.len();
+            let mut parent: Vec<usize> = (0..n).collect();
+            fn find(p: &mut [usize], mut x: usize) -> usize {
+                while p[x] != x { p[x] = p[p[x]]; x = p[x]; }
+                x
+            }
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let (ax, ay, ar) = poles[i];
+                    let (bx, by, br) = poles[j];
+                    let (dx, dy) = (ax - bx, ay - by);
+                    let reach = ar.min(br);
+                    if dx * dx + dy * dy <= reach * reach {
+                        let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                        if ri != rj { parent[ri] = rj; }
+                    }
+                }
+            }
+            let mut roots = std::collections::BTreeSet::new();
+            for i in 0..n { let r = find(&mut parent, i); roots.insert(r); }
+            roots.len()
+        };
+        let count = |l: &spaghettio_core::models::LayoutResult| {
+            let n = l.entities.iter()
+                .filter(|e| e.name.ends_with("electric-pole") || e.name == "substation")
+                .count();
+            (n, disconnected_poles(&l.entities, &wires_for(l)).len())
+        };
+        let (bn, bd) = count(&base);
+        // Can the pipeline's own repair close the gap on composed output?
+        let mut repaired = base.clone();
+        let added = spaghettio_core::bus::layout::repair_pole_network(&mut repaired);
+        let (rn, rd) = count(&repaired);
+        println!(
+            "{label:<22} composed {bd:>4}/{bn:<4} in {:>4} networks   \
+             after repair {rd:>4}/{rn:<4} in {:>4} networks (+{added} bridges)",
+            components(&base),
+            components(&repaired),
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // RFC-058 band helpers, shared by the phase-0 probes below.
 //

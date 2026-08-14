@@ -52,6 +52,14 @@ export interface FormState {
    * bus, so enabling this never makes a layout worse — it is opt-in only
    * because coverage is still narrow (fluids and modules refuse). */
   directInsertion: boolean;
+  // `compactLayout`/`foldLayout` fields (RFC-057/064 post-layout transforms,
+  // `?compact=1`/`?fold=1`) were removed 2026-08-14 (#632 A2, owner call)
+  // along with the engine flags they drove. A bookmarked URL carrying either
+  // param now silently drops it on read (same graceful-degrade shape as any
+  // other retired param) — the layout it renders reverts to the
+  // un-transformed geometry, which for a URL bookmarked specifically to see
+  // a compacted/folded layout is a real, user-visible behavior change, not
+  // just an internal cleanup (flagged by second-opinion review on PR #645).
   /** Global module policy, compact form `<kind><tier><quality?>` —
    * `s`peed / `p`roductivity, tier 1–3, optional module-quality initial
    * (`u`/`r`/`e`/`l`), e.g. "s2", "p3l". null = no modules (today's
