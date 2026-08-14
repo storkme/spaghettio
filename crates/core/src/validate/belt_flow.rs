@@ -3514,6 +3514,11 @@ fn do_propagate(
     // #632 B5). The Jacobi convergence pass would overwrite the push-side
     // rates anyway, but leaving the push path head-on-blind was a latent
     // landmine for any future flow that skips that pass (bot review).
+    // Returning BEFORE the in_degree/sibling bookkeeping below is the
+    // consistent half of the pair: the feeder map (and therefore
+    // `in_degree`) no longer counts head-on edges, so decrementing here
+    // would over-decrement an edge that was never counted and dequeue
+    // the downstream tile early.
     {
         let (dsx, dsy) = dir_to_vec(ds_d);
         if (dsx, dsy) == (-ddx, -ddy) {
