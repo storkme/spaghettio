@@ -1,11 +1,18 @@
-//! RFC-065 Phase 0 gates: K65-1 (parity — zero IR findings on green
-//! layouts) and K65-2 (detection — reconstructed historical failure classes
-//! fire), plus the regression pin for the `effective_rows` compaction fix.
+//! RFC-065 Phase 0 gates: K65-1 (parity — zero record-integrity findings on
+//! green layouts) and K65-2 (detection — reconstructed historical failure
+//! classes fire), plus the regression pin for the `effective_rows`
+//! compaction fix.
 //!
 //! Parity fixtures are built through the real pipeline (`solver` →
 //! `build_bus_layout`) and asserted validator-green first, so a red parity
 //! assertion means the IR disagrees with the engine's semantics — the K65-1
 //! stop signal — not that the fixture drifted.
+//!
+//! `scan_graph_anomalies` (the graph-anomaly half of the original K65-1
+//! parity check) was deleted 2026-08-14, issue #632 A4: it was never wired
+//! into `validate()`, and its one candidate consumer was built, measured,
+//! and killed on a pre-registered criterion in Phase 2b. K65-1 now covers
+//! `check_record_integrity` only.
 
 use rustc_hash::FxHashSet;
 
@@ -13,9 +20,7 @@ use spaghettio_core::bus::compaction::{
     compact_validated_geometry, compact_validated_geometry_with_stats,
 };
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
-use spaghettio_core::connectivity::{
-    check_record_integrity, derive_connectivity, diff, scan_graph_anomalies,
-};
+use spaghettio_core::connectivity::{check_record_integrity, derive_connectivity, diff};
 use spaghettio_core::models::{LayoutResult, SolverResult};
 use spaghettio_core::solver;
 use spaghettio_core::validate::{self, LayoutStyle, Severity, ValidationIssue};
@@ -55,8 +60,8 @@ fn issues_of(layout: &LayoutResult, solver_result: &SolverResult) -> Vec<Validat
 }
 
 /// Assert the fixture is validator-green (no errors; residual warnings are
-/// corpus-normal), then assert the IR sees nothing either: no graph
-/// anomalies, no record-integrity findings.
+/// corpus-normal), then assert the IR sees nothing either: no
+/// record-integrity findings.
 fn assert_green_and_ir_parity(name: &str, layout: &LayoutResult, solver_result: &SolverResult) {
     let errors: Vec<_> = issues_of(layout, solver_result)
         .into_iter()
@@ -68,11 +73,6 @@ fn assert_green_and_ir_parity(name: &str, layout: &LayoutResult, solver_result: 
     );
 
     let graph = derive_connectivity(layout);
-    let anomalies = scan_graph_anomalies(&graph, layout);
-    assert!(
-        anomalies.is_empty(),
-        "{name}: K65-1 — graph anomalies on a validator-green layout: {anomalies:#?}"
-    );
     let integrity = check_record_integrity(layout);
     assert!(
         integrity.is_empty(),

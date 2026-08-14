@@ -716,17 +716,6 @@ pub enum TraceEvent {
         sample: Vec<(i32, i32)>,
     },
 
-    // A* route failure — a spec had no valid path after all iterations
-    RouteFailure {
-        /// The lane key (e.g. "tap:iron-plate:3:45" or "trunk:copper-wire:2")
-        spec_key: String,
-        item: String,
-        from_x: i32,
-        from_y: i32,
-        to_x: i32,
-        to_y: i32,
-    },
-
     // Validation results — emitted by validate() after all checks run
     ValidationCompleted {
         error_count: usize,
@@ -808,17 +797,6 @@ pub enum TraceEvent {
         /// Tile position of the conflict
         conflict_x: i32,
         conflict_y: i32,
-    },
-
-    // A foreign-trunk UG bridge was dropped because its output collided with
-    // the trunk's own tap-off. Surfaced by `route_belt_lane`/`route_intermediate_lane`
-    // to `build_bus_layout` so it can push rows apart and retry.
-    BridgeDropped {
-        trunk_item: String,
-        trunk_x: i32,
-        range_start: i32,
-        range_end: i32,
-        colliding_tap_y: i32,
     },
 
     // Fluid trunk gap-fill failed: the UG-in/UG-out pair needed to bridge

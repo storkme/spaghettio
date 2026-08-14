@@ -738,10 +738,10 @@ const KIND_CONTAMINATION_WEIGHT: usize = 3;
 ///   with fifty functional ones — the latter at least imports and can be
 ///   patched).
 /// - **contamination** (`belt-item-isolation`, `fluid-network`,
-///   `pipe-isolation`, `fluid-connectivity`, `underground-belt-sideload`,
-///   `belt-junction`) — a wrong item/fluid reaches a shared belt/pipe. It jams
-///   and PROPAGATES downstream, poisoning the sink; a single one can stall a
-///   whole branch. Weighted [`KIND_CONTAMINATION_WEIGHT`]× starvation.
+///   `pipe-isolation`, `fluid-connectivity`, `belt-junction`) — a wrong
+///   item/fluid reaches a shared belt/pipe. It jams and PROPAGATES
+///   downstream, poisoning the sink; a single one can stall a whole branch.
+///   Weighted [`KIND_CONTAMINATION_WEIGHT`]× starvation.
 /// - **starvation** (everything else: `belt-dead-end`, `lane-throughput`,
 ///   `unresolved-junction`, `input-rate-delivery`, `belt-flow-reachability`,
 ///   inserter/power) — a LOCAL underdelivery that stays put and is recoverable
@@ -805,7 +805,7 @@ fn classify_errors(layout: &LayoutResult, solver_result: &SolverResult) -> Error
     {
         match i.category.as_str() {
             "belt-item-isolation" | "fluid-network" | "pipe-isolation"
-            | "fluid-connectivity" | "underground-belt-sideload" | "belt-junction" => {
+            | "fluid-connectivity" | "belt-junction" => {
                 kinds.contamination += 1
             }
             "entity-overlap" | "pipe-to-ground" => kinds.structural += 1,
