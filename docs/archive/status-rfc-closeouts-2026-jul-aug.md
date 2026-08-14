@@ -3,9 +3,11 @@
 Moved VERBATIM from `docs/status.md` §"Recent RFC close-outs" on
 2026-08-15 (#632 docs archive sweep) — the section had grown to 855
 lines of superseded-retracted-superseded narrative, 71% of the status
-ledger. Nothing here was edited in the move: each entry reads exactly
-as it did in status.md, so embedded caveats and pointers remain
-valid-as-of-their-dates. Current state lives in `docs/status.md`; the
+ledger. The only edits made in the move: relative links re-prefixed
+`../` so they still resolve from this directory, and the "below"
+cross-references to the deep-chain-warmup section (which STAYED in
+status.md) repointed there. Everything else reads exactly as it did
+in status.md, so embedded caveats remain valid-as-of-their-dates. Current state lives in `docs/status.md`; the
 per-RFC trails live in each RFC's own decision log, which remains the
 canonical record. The index in status.md points here.
 
@@ -140,7 +142,7 @@ to preserve squareness once under it, so a near-square native (AR 1.06,
 estimated `Transit_score` is positive (+0.32, +0.52, RFC-058's own
 band-centre Manhattan proxy — an estimate, not measured routing). **All
 three verdicts are bbox-area-objective numbers and do not transfer to
-[`RFC-064`](rfc-064-spaghetti-objective.md)'s aspect-ratio/transit
+[`RFC-064`](../rfc-064-spaghetti-objective.md)'s aspect-ratio/transit
 framing** — Phase C's own AR_score result is direct evidence the two
 objectives can disagree on the identical candidate, not just an assertion
 that they might. Spike code was never merged, per the RFC's own
@@ -251,7 +253,7 @@ Fixed by modelling lifts as both source and sink (which makes the check
 transitive and localises the fault at the starved pickup) and by replacing the
 per-machine BFS with one forward sweep from every source plus one backward sweep
 from every sink, tested per tile — stricter *and* cheaper. Recorded as instance
-**ten** in [`validator-reporting.md`](validator-reporting.md), with the rule it
+**ten** in [`validator-reporting.md`](../validator-reporting.md), with the rule it
 adds: a check that aggregates over a set must ask its question per element, not
 over the union.
 
@@ -376,7 +378,7 @@ validated at exact control parity and produced 0.00/s in Factorio, because a
 relocated output belt left its `boundary_outputs` record behind. Geometry-only
 validation cannot certify a transform that moves a boundary. Fixed separately in
 PR #482. Open blockers and measured refusal causes:
-[`snake-fold-followups.md`](snake-fold-followups.md).
+[`snake-fold-followups.md`](../snake-fold-followups.md).
 
 **`rfc-053-direct-insertion-cells.md` Phase 0 (2026-07-25, PR #436 —
 RFC ACTIVE, not closed)**: machine→inserter→machine DI, the topology
@@ -576,7 +578,7 @@ Geometry made no difference — the pre-#466 L2-geometry fixture measured
 than mixed-world, and both configurations perform identically. Tracked
 follow-ups: #383 (bound lift), #409 (landed independently), #423
 (pitch-1 splitter-passthrough). Full trail:
-[`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) decision log.
+[`rfc-052-oil-mega-cell.md`](../rfc-052-oil-mega-cell.md) decision log.
 
 > **Instrument caveat on the numbers above** ([#454](https://github.com/storkme/spaghettio/issues/454)
 > / [#464](https://github.com/storkme/spaghettio/pull/464), 2026-07-25).
@@ -604,10 +606,10 @@ reassignment lever and a user-facing `max_inserter_tier` engine param
 close-out → 8 after the last-in-row belt extension (`0d7132c`); the
 remaining 8 are production-science, root-caused 2026-07-20 (6 input3
 contest-losses + 2 genuine far-side rate walls — see
-[`inserter-throughput-followups.md`](inserter-throughput-followups.md)).
+[`inserter-throughput-followups.md`](../inserter-throughput-followups.md)).
 Validator-verified only — the RFC's two in-game blueprint-import anchors
 (kill criterion 5) remain open until the user runs them; full trail in
-[`rfc-inserter-sizing.md`](rfc-inserter-sizing.md)'s decision log.
+[`rfc-inserter-sizing.md`](../rfc-inserter-sizing.md)'s decision log.
 
 **`rfc-build-quality.md` close-out (2026-07-20)**: user-facing **build
 quality** param (normal→legendary, `quality`/`q=` URL-encoded through wasm
@@ -624,13 +626,13 @@ fix (parked → cluster
 [#527](https://github.com/storkme/spaghettio/issues/527));
 [#312](https://github.com/storkme/spaghettio/issues/312) (parked, same
 cluster) tracks the quality-magnified consumer-clamped fan-in wall. **In-game import anchor
-still open** (user-run). Full trail: [`rfc-build-quality.md`](rfc-build-quality.md)
+still open** (user-run). Full trail: [`rfc-build-quality.md`](../rfc-build-quality.md)
 decision log; renderer constraints learned en route: `web/CLAUDE.md`.
 
 **`rfc-043-pole-band-thinning.md` close-out (2026-07-20)**: quality-aware
 pole-band thinning landed (Phase 1; Phase 2 cross-row sharing deferred) —
 closed [#310](https://github.com/storkme/spaghettio/issues/310) via PR #318.
-Registry: [`rfcs.md`](rfcs.md).
+Registry: [`rfcs.md`](../rfcs.md).
 
 **`rfc-044-machine-modules.md` close-out (2026-07-21, all 4 phases)**:
 user-facing **module policy** param (speed/productivity × tier 1–3 ×
@@ -649,7 +651,7 @@ slot overlay ships alongside. Corpus evidence: 198/198 community files
 sweep with zero module warnings. **In-game anchor CLOSED** (KC2:
 user-pasted four-inventory-class anchor verified in Space Age) — the
 only recent arc with its game anchor closed. Full trail:
-[`rfc-044-machine-modules.md`](rfc-044-machine-modules.md) decision log
+[`rfc-044-machine-modules.md`](../rfc-044-machine-modules.md) decision log
 (PRs #321/#322/#323/#325).
 
 **`rfc-046-belt-stacking.md` close-out (2026-07-21)**: user-facing **belt
@@ -666,13 +668,13 @@ RFC-047 (2026-07-22), which grounded and scaled them.* Headline: the #311
 stress config (EC@60/s red from ore) fits one stacked belt at **S=2** — per
 an in-fixture TIER-SELECTION probe. **Corrected 2026-08-07:** that probe was
 described as a per-tile capacity audit and is not one
-([`rate-stamp-semantics.md`](rate-stamp-semantics.md)); physical standing
+([`rate-stamp-semantics.md`](../rate-stamp-semantics.md)); physical standing
 rests on `check_lane_throughput` plus the 96.0%-of-plan sim. S=1 is
 bit-identical to pre-RFC (zero golden re-blesses). Mechanics:
 `factorio-mechanics.md` BS1–BS7. In-game import anchor open (user-run;
 [#335](https://github.com/storkme/spaghettio/issues/335)'s one-bank
 ore-routing warnings persist on legendary-express). Full trail:
-[`rfc-046-belt-stacking.md`](rfc-046-belt-stacking.md) decision log.
+[`rfc-046-belt-stacking.md`](../rfc-046-belt-stacking.md) decision log.
 
 **`rfc-051-cell-composition-integration.md` close-out (2026-07-22,
 updated 2026-07-23)**: cell composition is a **production path ON BY
@@ -726,9 +728,9 @@ unregistered.~~ **RETRACTED 2026-07-26** — both the number and its stated
 cause. The same fixture measures **+0.7%, 146/146 machines working, PASS**
 at `--warmup 288000`; the −28.7% was a buffer-fill transient, so there was
 no inserter-count defect to attribute. See §"Default warmup is too short
-for deep chains" below. Registration still pending a corpus-wide
+for deep chains" in [`../status.md`](../status.md). Registration still pending a corpus-wide
 re-measure, which must be justified by the oracle alone. Full trail:
-[`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md).
+[`rfc-051-cell-composition-integration.md`](../rfc-051-cell-composition-integration.md).
 
 **`rfc-048-cell-composition.md` Phase-1 close-out (2026-07-22, PR #365)**:
 the cell-composition method delivered its existence proof — a composed
@@ -748,7 +750,7 @@ infinity-pipe feed path delivers nothing for ANY layout, proven by
 controlled attribution); sim-kit composition rules learned en route
 live in [#363](https://github.com/storkme/spaghettio/issues/363).
 Verdict: **GO for the Phase-2 integration RFC.** Full trail:
-[`rfc-048-cell-composition.md`](rfc-048-cell-composition.md) decision
+[`rfc-048-cell-composition.md`](../rfc-048-cell-composition.md) decision
 log + Phase-1 close-out section.
 
 **`rfc-049-inserter-capacity-research.md` close-out (2026-07-22)**: user-facing **inserter capacity research** param (level 0–7, `inserter_capacity`/`ir=` URL-encoded, sidebar "Inserter research"). Schedule pinned from raw wikitext with 2-fetch reproducibility (bulk 2→12; stack = bulk+4 → 6→16; non-bulk 1→3 via the chain +1 from Transport-belt-capacity-2 → 4) — summarized wiki fetches are BANNED as constant sources (two contradicted each other; the failure mode reproduced live in review). Output belt-drop sides originally scaled linearly (swings × researched hand, with BS3 rounding — healing is exactly `hand ≡ 0 mod S`, non-monotonic: I8b) — **superseded 2026-07-23 (#385)**, see below. Input (belt-pickup) sides stayed at the L0 floor pending measured data — **closed 2026-07-22 (Phase 2, PR #378, #343)**: a 25-cell sim calibration matrix (tech-state-parity harness, all 8 levels for stack/bulk) measured belt→machine intake; `common::machine_feed_rate` now credits hand-ratio rates for non-bulk/bulk (measured conservative, 1.04–2.27× margins) and a measured floor table for stack (its real curve is non-monotone in hand size — dips at hands 7/14 — caught by the #376 adversarial review and confirmed by measurement). L0 bit-identical. **Phase 3 (2026-07-24, PR #381): the ladder now sizes to the declared level** — `size_side`/`contest_favors_far`/`capped_limit` take the research level at the measured `machine_feed_rate`; decided user+session 2026-07-22 (the axis is user-declared like belt tier). Gate closed honest-or-at-plan: the L7 fixture generates warned (`row-output-lane-budget`, plate row 15 vs 13 measured) and the sim confirms the priced floor. In-game anchor open (user-run; a legendary S=4/L7 export validates RFC-046/047/049 in one import). Full trail: `docs/rfc-049-inserter-capacity-research.md` decision log.
@@ -841,7 +843,7 @@ it was never starving. Re-measured at `--warmup 288000` it runs at
 transient. `mega-chain-pu4raw` stands, and was independently re-measured
 at the same long warmup: −21.0%, byte-identical to its default-warmup
 run, so it is genuinely bound by something. See §"Default warmup is too
-short for deep chains".)**
+short for deep chains" in [`../status.md`](../status.md).)**
 
 **`rfc-047-lane-aware-tap-delivery.md` close-out (2026-07-22)**: made
 delivery **lane-aware** so belt stacking raises rate CEILINGS, not just
@@ -864,5 +866,5 @@ legendary-express@60 headline landed
 [#335](https://github.com/storkme/spaghettio/issues/335) tracks one
 unreached furnace bank). Three falsified premises decision-logged. Zero
 golden re-blesses across the arc. Full trail:
-[`rfc-047-lane-aware-tap-delivery.md`](rfc-047-lane-aware-tap-delivery.md).
+[`rfc-047-lane-aware-tap-delivery.md`](../rfc-047-lane-aware-tap-delivery.md).
 
