@@ -114,11 +114,13 @@ def main():
                 sys.exit(f"unrecognised template name {a!r} (expected T_n_m)")
             wanted.add((int(m.group(1)), int(m.group(2))))
     failed = []
+    seen = set()
     for shape in sorted(arrays):
         if wanted is not None and shape not in wanted:
             continue
         if shape not in regs:
             continue
+        seen.add(shape)
         n_inputs, n_outputs, height = regs[shape]
         rated = min(n_inputs, n_outputs)
         cuts, notes = census(arrays[shape], height)
@@ -128,6 +130,12 @@ def main():
               + (f"  ({'; '.join(notes)})" if notes else ""))
         if min(cuts) < rated:
             failed.append(shape)
+    # An exclusion instrument must not no-op silently: a mistyped or
+    # unregistered shape name exiting 0 reads as clearance.
+    if wanted is not None:
+        missing = wanted - seen
+        if missing:
+            sys.exit(f"requested shapes not found or unregistered: {sorted(missing)}")
     if failed:
         print(f"\nWAIST-CAPPED: {failed}")
         sys.exit(1)
