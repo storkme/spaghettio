@@ -125,8 +125,11 @@ semantics below).
 
 A workflow-level step in `second-opinion.yml` (before the action step)
 skips the K=3 review when the delta since the last **actually reviewed**
-head — the newest `<!-- second-opinion sha=... -->` marker — is
-docs-only (`*.md`) and/or comment-only Rust. Rationale: this repo's
+head — the newest `<!-- second-opinion sha=... -->` marker **whose body
+also carries the review header** (`### 🤖 Second opinion`; the marker
+alone is forgeable and claude[bot] posts byte-identical ones naming
+different commits — storkme/second-opinion#49) — is docs-only (`*.md`)
+and/or comment-only Rust. Rationale: this repo's
 conventions generate doc-only pushes constantly (decision-log commits,
 attribution sweeps), and each bought a full re-review of the whole PR
 diff that could only re-find already-adjudicated items (4 of PR #630's

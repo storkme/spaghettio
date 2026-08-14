@@ -125,8 +125,16 @@ jobs:
             # >100-comment thread can emit one line per page — tail -n1
             # keeps the newest marker across pages (pages arrive oldest
             # first).
+            # The marker alone is NOT proof of ownership: claude[bot]
+            # posts byte-identical `<!-- second-opinion sha=... -->`
+            # markers naming DIFFERENT commits (live evidence:
+            # storkme/second-opinion#49), and a foreign marker naming a
+            # mid-PR commit measures a SMALLER delta than the truly
+            # unreviewed one. Require the review header too; if the
+            # action ever rewords it, the baseline is lost and the gate
+            # fails toward review — the safe direction.
             last=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
-              --jq '[.[] | select(.body | test("^<!-- second-opinion sha=[0-9a-f]{40} -->")) | .body | capture("sha=(?<s>[0-9a-f]{40})").s] | last // empty' \
+              --jq '[.[] | select(.body | test("^<!-- second-opinion sha=[0-9a-f]{40} -->")) | select(.body | contains("### 🤖 Second opinion")) | .body | capture("sha=(?<s>[0-9a-f]{40})").s] | last // empty' \
               | tail -n1 || true)
             if [ -z "$last" ]; then
               reason="no prior review marker on this PR"
@@ -139,8 +147,13 @@ jobs:
                     if .previous_filename then "code"
                     elif (.filename | test("\\.md$")) then "ok"
                     elif (.filename | test("\\.rs$")) and .status == "modified" and (.patch != null) then
+                      # Compare-API patches start at the first @@ hunk and
+                      # carry NO +++/--- file headers — do not "skip" them:
+                      # that exclusion misreads a genuine added line whose
+                      # content begins with "++" (found in upstreaming,
+                      # storkme/second-opinion#47).
                       if ([ .patch | split("\n")[] |
-                            select(test("^[+-]") and (test("^\\+\\+\\+ |^--- ") | not)) |
+                            select(test("^[+-]")) |
                             select(test("^[+-][[:space:]]*(//.*)?$") | not)
                           ] | length) == 0
                       then "ok" else "code" end
