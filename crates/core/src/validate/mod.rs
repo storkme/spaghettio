@@ -255,8 +255,9 @@ impl ValidatorSummary {
     ///   call it a defect count.**
     /// - **This is not the engine's selection count.** `selection_warning_count`
     ///   — what `decomposition_search` ranks on and the e2e scoreboards
-    ///   report — *excludes* `belt-detour`, which the engine treats as
-    ///   report-only. `ValidatorSummary` includes every category, so a
+    ///   report — *excludes* [`SELECTION_EXCLUDED_WARNING_CATEGORIES`]
+    ///   (`belt-detour` plus the three #632 B6 demotions), which the engine
+    ///   treats as report-only. `ValidatorSummary` includes every category, so a
     ///   belt-detour-only layout is `is_clean() == false` here while the
     ///   engine considers it unremarkable. Two definitions of "warning"
     ///   coexist on purpose: selection needs the filtered one, an artifact

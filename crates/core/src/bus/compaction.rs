@@ -4896,21 +4896,24 @@ pub fn search_snake_fold_with_stats(
     // honest gate for a resynthesized category — same rationale as the
     // verdict's own whole-category degrade for unresolvable positions.
     //
-    // `belt-detour` is ReportOnly here for the same reason it is excluded
-    // from `selection_warning_count` (see that function's 2026-08-01
-    // wiring note): a survey-calibrated diagnostic must not steer which
-    // layout ships. A snake fold's seam connectors double back BY DESIGN —
+    // Every category excluded from `selection_warning_count` is ReportOnly
+    // here, DERIVED from the same const so the two sites cannot drift
+    // (#632 B6 bot review: the belt-detour override below had been added
+    // alone, and the three categories demoted later needed the identical
+    // treatment — a diagnostic that must not steer which layout ships must
+    // not veto a fold either). The original belt-detour rationale, which
+    // generalizes: a snake fold's seam connectors double back BY DESIGN —
     // measured whole (RFC-065 slice 2 healed the phantom cuts that used to
     // fragment them below the floors), they read as detours, and gating
     // them rejected every multi-fold candidate on chain-mil5ore. Transit
     // cost of folds is RFC-064's objective-scoring channel, not an
-    // admission veto. Participation was vacuous before the measurement
-    // fix, so this override aligns the gate with the adjudicated principle
-    // without changing any previously-effective behavior (RFC-065 decision
-    // log, slice-2 fold-gate entry).
-    let policy = Policy::new(GatePolicy::GateInstances)
-        .with_override("power", GatePolicy::GateCount)
-        .with_override("belt-detour", GatePolicy::ReportOnly);
+    // admission veto. (RFC-065 decision log, slice-2 fold-gate entry.)
+    let mut policy = Policy::new(GatePolicy::GateInstances)
+        .with_override("power", GatePolicy::GateCount);
+    for cat in crate::validate::SELECTION_EXCLUDED_WARNING_CATEGORIES {
+        policy = policy.with_override(cat, GatePolicy::ReportOnly);
+    }
+    let policy = policy;
 
     let mut best: Option<(i64, Vec<i32>, LayoutResult, i32)> = None;
 
