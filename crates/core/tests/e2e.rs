@@ -3889,10 +3889,13 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
 /// pre-existing engine assumptions, not partitioner bugs.
 ///
 /// What this gates:
-///   - **K1-1 strict-improvement signal**: PartitionedDecomposed must
-///     produce strictly fewer errors than the Pooled baseline at this
-///     rate. If the gap closes (decomposition stops winning), Phase 2
-///     has regressed.
+///   - **K1-1 relative signal**: PartitionedDecomposed must never carry
+///     MORE errors than the Pooled baseline at this rate. (Originally a
+///     strict-improvement gate, 7 < 10; strictness lapsed when both
+///     arms reached 0 pre-#644, and the #644 lane-throughput class hits
+///     both arms equally — the shared trunk provisioning — so the
+///     enforceable truth today is never-worse plus the #644 ceiling.
+///     Restore strictly-fewer if #644's fix differentiates the arms.)
 ///   - **ShardSplit fires** for copper-cable. Trace event presence
 ///     confirms the algorithm path executed.
 #[test]
@@ -3951,6 +3954,13 @@ fn stress_electronic_circuit_30s_decomposed() {
     if decomposed_errors < 140 {
         eprintln!("Decomposed EC@30/s improved ({decomposed_errors} < 140) — tighten (#644)");
     }
+    // K1-1 relative signal (bot round 4): the ceilings alone lost the
+    // arms' ranking — decomposition must never be WORSE than Pooled.
+    assert!(
+        decomposed_errors <= pooled_errors,
+        "K1-1 regressed: PartitionedDecomposed ({decomposed_errors} errors) worse than \
+         Pooled ({pooled_errors})"
+    );
 
     // ShardSplit must fire — the algorithm path is what we're gating on.
     let shard_split_events = decomposed.trace_events.iter().filter(|evt| {
