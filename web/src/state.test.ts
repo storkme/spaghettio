@@ -28,8 +28,6 @@ function makeState(overrides: Partial<FormState>): FormState {
     machines: {},
     inputs: DEFAULT_CHECKED_INPUTS,
     belt: null,
-    compactLayout: false,
-    foldLayout: false,
     strategy: null,
     rowLayout: null,
     inserterTier: null,
@@ -50,8 +48,6 @@ describe("readUrlState — defaults", () => {
     expect(readUrlState()).toEqual({
       item: DEFAULT_ITEM,
       rate: DEFAULT_RATE,
-      compactLayout: false,
-      foldLayout: false,
       machines: {},
       inputs: DEFAULT_CHECKED_INPUTS,
       belt: null,
@@ -127,8 +123,6 @@ describe("readUrlState — hash form", () => {
     expect(readUrlState()).toEqual({
       item: DEFAULT_ITEM,
       rate: DEFAULT_RATE,
-      compactLayout: false,
-      foldLayout: false,
       machines: {},
       inputs: DEFAULT_CHECKED_INPUTS,
       belt: null,

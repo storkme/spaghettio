@@ -303,7 +303,7 @@ function allProducerMachines(): string[] {
   return machinesCache;
 }
 
-function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string, directInsertion?: boolean, compactLayout?: boolean, foldLayout?: boolean): Promise<LayoutResult> {
+function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string, directInsertion?: boolean): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layout",
     result,
@@ -320,16 +320,10 @@ function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: stri
     // unchecked. Checked means FORCE DI into the native pass — the
     // A/B-comparison mode, and what `di=1` has always meant.
     directInsertion: directInsertion ? "on" : undefined,
-    // RFC-057 post-layout compaction. Off unless asked for: it rewrites
-    // geometry, so a bookmarked URL must keep rendering what it did.
-    compactLayout: compactLayout ?? false,
-    // RFC-064 Phase 1 fold-and-square knob. Off unless asked for, same
-    // contract as `compactLayout` above.
-    foldLayout: foldLayout ?? false,
   });
 }
 
-function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string, directInsertion?: boolean, compactLayout?: boolean, foldLayout?: boolean): Promise<LayoutResult> {
+function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string, directInsertion?: boolean): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layoutTraced",
     result,
@@ -346,12 +340,6 @@ function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?
     // unchecked. Checked means FORCE DI into the native pass — the
     // A/B-comparison mode, and what `di=1` has always meant.
     directInsertion: directInsertion ? "on" : undefined,
-    // RFC-057 post-layout compaction. Off unless asked for: it rewrites
-    // geometry, so a bookmarked URL must keep rendering what it did.
-    compactLayout: compactLayout ?? false,
-    // RFC-064 Phase 1 fold-and-square knob. Off unless asked for, same
-    // contract as `compactLayout` above.
-    foldLayout: foldLayout ?? false,
   });
 }
 
@@ -382,8 +370,6 @@ async function buildLayoutStreaming(
   stacking: string | undefined,
   inserterCapacity: string | undefined,
   directInsertion: boolean | undefined,
-  compactLayout: boolean | undefined,
-  foldLayout: boolean | undefined,
   onEvent: (evt: TraceEvent) => void,
 ): Promise<LayoutResult> {
   if (activeStreamingId !== null) {
@@ -425,10 +411,6 @@ async function buildLayoutStreaming(
     // unchecked. Checked means FORCE DI into the native pass — the
     // A/B-comparison mode, and what `di=1` has always meant.
     directInsertion: directInsertion ? "on" : undefined,
-    compactLayout: compactLayout ?? false,
-    // RFC-064 Phase 1 fold-and-square knob. Off unless asked for, same
-    // contract as `compactLayout` above.
-    foldLayout: foldLayout ?? false,
       traceLogs,
     });
   });
