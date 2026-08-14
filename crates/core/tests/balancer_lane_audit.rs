@@ -7,15 +7,13 @@
 //! validators (UG pair / UG sideload / UG entry-sideload /
 //! lane-throughput). Print a markdown taxonomy table to stderr.
 //!
-//! **Gates by default**: as of the (7, 2) re-bake (#285) the library
-//! audited lane-clean, and the test asserts that baseline holds outside
-//! the `KNOWN_IMBALANCED` set (see its doc: (7,3)/(7,4) accepted per
-//! #334; (6,3)/(6,4) were provisionally listed by the #624 walker fix
-//! and removed 2026-08-13 after their lane-balance re-bake — they gate
-//! like any other shape now). Any error outside that set — or any new
-//! category inside it — breaks this test. Set `BALANCER_AUDIT_NO_FAIL=1` to
-//! suppress the assert during exploratory work (e.g. baking new
-//! shapes, regenerating the library).
+//! **Gates by default**: the test asserts zero lane errors outside the
+//! `KNOWN_IMBALANCED` set — which is EMPTY as of 2026-08-14 (#632 A3:
+//! the last pair, (7,3)/(7,4), was deleted from the library with the
+//! rest of the defective-template cull; the const's doc carries the
+//! full history). Every registered shape gates at zero errors. Set
+//! `BALANCER_AUDIT_NO_FAIL=1` to suppress the assert during exploratory
+//! work (e.g. baking new shapes, regenerating the library).
 //!
 //! Pattern mirrors `balancer_classify::tests::audit_report` (line 811
 //! of that module).
@@ -75,7 +73,15 @@ use spaghettio_core::validate::Severity;
 /// see and no more. It stays out of this list because the list
 /// suppresses ERRORS and (8,3) has none; the open item on it is
 /// diagnostic (why 62.5% of seed doesn't propagate), not acceptance.
-const KNOWN_IMBALANCED: [(u32, u32); 2] = [(7, 3), (7, 4)];
+/// EMPTIED 2026-08-14 (#632 A3): the final pair, (7,3)/(7,4) — the #334
+/// residue — was DELETED from the library outright rather than re-baked:
+/// the usage census (`scripts/balancer_usage_census.py`) measured the
+/// whole KNOWN_IMBALANCED set plus all 12 waist-capped shapes (#631) as
+/// corpus-unexercised, and a defective template serving an exotic future
+/// request silently at half-rate is worse than that request failing
+/// loudly as unstampable. The mechanism stays: a future provisionally-
+/// dirty bake gets an entry here, not a gate bypass.
+const KNOWN_IMBALANCED: [(u32, u32); 0] = [];
 
 #[test]
 fn audit_lane_correctness() {
@@ -272,13 +278,10 @@ fn audit_lane_correctness() {
         // its numbers are non-converged oscillation snapshots, but a
         // gross walker regression still trips it (its only other gate
         // coverage is the new-category rule).
-        let ceiling = |shape: &(u32, u32)| -> usize {
-            match shape {
-                (7, 3) => 15,  // measured ~5 (#334 era)
-                (7, 4) => 60,  // measured 31, non-converged
-                _ => 0,
-            }
-        };
+        // No entries: KNOWN_IMBALANCED is empty (its doc, #632 A3). A
+        // future provisional bake reintroduces a `match shape` here with
+        // its measured ceiling alongside its list entry.
+        let ceiling = |_shape: &(u32, u32)| -> usize { 0 };
         for shape in &KNOWN_IMBALANCED {
             let row = rows.iter().find(|r| r.shape == *shape);
             let errors = row.map(|r| r.errors).unwrap_or(0);
@@ -363,22 +366,13 @@ fn audit_lane_correctness_partial() {
     // 7.5/s cap — the documented skew, not a walker regression. At every
     // other (shape, fraction) the tripwire stays armed (bot review on the
     // #624 PR: the earlier blanket exclusion silently dropped coverage at
-    // fractions where the known skew physically cannot exceed any cap —
-    // (7,3)'s 8.112/s never crosses within 25–75%).
-    // (7,4) is excluded at every fraction: it does not converge, so its
-    // numbers are oscillation snapshots and linear scaling does not apply.
-    // (6,3)/(6,4) arms REMOVED with their 2026-08-13 re-bake (this file's
-    // KNOWN_IMBALANCED doc) — a stale (6,4)=15.0 arm here would have
-    // excluded the brand-new template from the 50%/75% tripwire exactly
-    // when it needs coverage most (3/3-pass bot finding on the re-bake
-    // PR).
-    let known_worst = |shape: &(u32, u32)| -> f64 {
-        match shape {
-            (7, 3) => 8.112,
-            (7, 4) => f64::INFINITY,
-            _ => 0.0,
-        }
-    };
+    // fractions where the known skew physically cannot exceed any cap).
+    // All arms REMOVED 2026-08-14 (#632 A3): the (7,3)/(7,4) pair was
+    // deleted from the library (see KNOWN_IMBALANCED's doc), so the
+    // tripwire is fully armed across every remaining shape. A future
+    // provisional bake adds its measured worst here alongside its
+    // KNOWN_IMBALANCED entry.
+    let known_worst = |_shape: &(u32, u32)| -> f64 { 0.0 };
     for &fraction in saturations {
         let total_errors: usize = shapes
             .iter()

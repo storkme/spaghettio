@@ -548,9 +548,15 @@ mod tests {
     /// missing library templates or richer generator atoms.
     #[test]
     fn shape_is_stampable_pins_known_gaps() {
+        // (9,1)/(9,3) removed from this list 2026-08-14 per the fixture's
+        // own instruction: both are registered library templates and
+        // stampable. (9,2)/(9,4..8) became REAL gaps the same day — the
+        // #632 A3 cull deleted them as waist-capped (#631); a request for
+        // those shapes is now loudly unstampable rather than silently
+        // half-rate.
         let known_gaps: &[(u32, u32)] = &[
             (1, 9), (2, 9), (4, 9), (5, 9), (7, 9), (8, 9),
-            (9, 1), (9, 2), (9, 3), (9, 4), (9, 5), (9, 6), (9, 7), (9, 8),
+            (9, 2), (9, 4), (9, 5), (9, 6), (9, 7), (9, 8),
         ];
         for &(n, m) in known_gaps {
             let stampable = shape_is_stampable(n, m);
