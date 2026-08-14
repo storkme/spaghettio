@@ -295,8 +295,11 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
 - **Full e2e suite green** — `cargo test --manifest-path crates/core/Cargo.toml`,
   all non-ignored tests.
 - **Inertness gate** — with the flag off, output is byte-identical to today.
-  A focused test asserts this, in the style of
-  `compact_layout_option_is_explicit_and_validated`.
+  A focused test asserts this. (The style example this line originally cited,
+  `compact_layout_option_is_explicit_and_validated`, was deleted 2026-08-14
+  along with `compact_layout` itself — #632 A2; `rfc058_band_packing_premise_holds`
+  in `cell_composition.rs`, this RFC's own surviving CI guard, is the
+  in-tree pattern to follow now.)
 - **Per-fixture validation parity**, reported **per issue with a position**,
   never as a count in prose — `docs/validator-reporting.md` records nine
   instances of that failure mode, one of which concealed a total failure in

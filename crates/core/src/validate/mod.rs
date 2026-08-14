@@ -376,8 +376,9 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// form. Both remain REPORTED unchanged; what stops consuming them is
 /// the selection contract — ranking AND the never-worse floors that
 /// share this count (they are one mechanism, #605). Transform-admission
-/// gates (the compaction fold gate, row_rotation's refusal) keep their
-/// own conservative policies and are NOT derived from this const —
+/// gates (`row_rotation`'s refusal; the compaction fold gate this
+/// sentence used to also name was deleted 2026-08-14, #632 A2) keep
+/// their own conservative policies and are NOT derived from this const —
 /// adjudicated on the B6 PR (#639 round 2): admission against a native
 /// status quo defaults to keep-native under an uncalibrated signal.
 ///
@@ -1109,13 +1110,17 @@ pub fn validate(
         Box::new(|| check_boundary_record_integrity(layout)),
         // RFC-065 Phase 1: record-vs-geometry integrity (effective_rows
         // bands, power_wires indices) joins the dispatch. Scope honesty
-        // (bot round 5): this guards REMAP-path transforms (the strip/cut
-        // compaction passes) and any future transform that forgets the
-        // ledger — cleared-ledger paths (fold_snake, island placement)
-        // pass vacuously by design until graph-derived attribution lands;
+        // (bot round 5): this guards REMAP-path transforms and any future
+        // transform that forgets the ledger — cleared-ledger paths pass
+        // vacuously by design until graph-derived attribution lands;
         // artifacts with no records (parsed blueprints, hand-built
         // layouts) are structurally out of scope. Zero findings on the
-        // committed parity corpus (K65-1).
+        // committed parity corpus (K65-1). (The original motivating
+        // examples — the strip/cut compaction passes as the REMAP case,
+        // fold_snake/island placement as the cleared-ledger case — were
+        // deleted 2026-08-14, #632 A2, along with the rest of
+        // `bus::compaction`; the check itself is general-purpose and
+        // unaffected, still dispatched on every `validate()` call.)
         Box::new(|| crate::connectivity::check_record_integrity(layout)),
         Box::new(|| {
             solver

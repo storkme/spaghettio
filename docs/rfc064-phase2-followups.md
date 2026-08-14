@@ -7,6 +7,14 @@ findings that need engineering or a decision. The two layout/rig defects are
 tracked together in **#567**; the dropped duplicate stress fixtures are being
 re-run at the tuned settings (this file's item 6, in progress).
 
+**Status update 2026-08-14 (#632 A2, owner call):** `compact_layout` and
+`bus::compaction` are deleted — the "Decided / closed" item below recommending
+`compact_layout` default-on is now moot (there is no flag to default on). The
+Stage B campaign's never-worse finding stands as a historical measurement.
+Every OTHER item in this file (stress-EC throughput ceiling, tier2's
+zero-headroom class, etc.) is about the shipping bus/solver pipeline, not
+compaction, and is unaffected.
+
 ## Open items (pick-up notes)
 
 ### 1. stress-EC high-rate throughput ceiling — ROOT CAUSE CONFIRMED (in-game) + fix spec (#567)

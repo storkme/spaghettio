@@ -33,3 +33,11 @@ Next: (1) #135 template shrinking — only move that attacks the floor; (2) #526
 ## The honest paragraph
 
 The record voted against the post-pass. Every gram of shipped density came from candidates inside the decomposition search under never-worse gates; every post-pass failed its gate, was demoted to shape-only, or sits opt-in and unused. #456's thesis assumed the grid's sparsity was waste; the arc measured that it mostly isn't — the row is near-optimal shared delivery, and the slack is either load-bearing margin (RFC-061) or template footprint (#135, named fifteen weeks ago). The post-pass framing bought the meter, a harder validator, and a clean falsification record — its residual value is as an audit instrument, not a product direction. Fund density where wins came from: new primitives and candidates under sim-anchored never-worse gates; do not reopen whole-factory repacking until a primitive-level change moves the logistics floor that killed it twice.
+
+**Addendum, 2026-08-14 (#632 A2, owner call):** `bus::compaction` and the
+`compact_layout`/`fold_layout` flags this retro's "opt-in and unused" line
+refers to are deleted — the audit-instrument residual value this document
+identified was banked (this retro, the RFC decision logs, the validator
+hardening it describes) and the dead code itself removed. Git history at
+the deletion PR is the revival path if a primitive-level change ever moves
+the logistics floor this arc measured twice.
