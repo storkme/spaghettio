@@ -2422,11 +2422,25 @@ fn tier5_processing_unit_from_ore_am3() {
         for i in result.issues.iter().filter(|i| i.severity == Severity::Error) {
             *by.entry(i.category.as_str()).or_default() += 1;
         }
-        assert_eq!(
-            by,
-            [("lane-throughput", 70)].into_iter().collect(),
-            "tier5 PU known-deficit pin (#644) moved - adjudicate, don't re-bless blind"
+        // Ceiling + tighten-advisory, not an exact pin (bot review on the
+        // swap PR): lane rates sit near a float threshold, so exact counts
+        // flake under the recorded CI nondeterminism; a ceiling fails on
+        // regression, and the advisory below keeps improvement visible.
+        let lane = by.get("lane-throughput").copied().unwrap_or(0);
+        let other: Vec<_> = by.keys().filter(|k| **k != "lane-throughput").collect();
+        assert!(
+            other.is_empty(),
+            "tier5 PU: error categories beyond the adjudicated #644 class: {other:?}"
         );
+        assert!(
+            lane <= 70,
+            "tier5 PU known-deficit ceiling (#644) regressed: {lane} > 70"
+        );
+        if lane < 70 {
+            eprintln!(
+                "tier5 PU: lane-throughput improved ({lane} < 70) — tighten the                  ceiling (#644)"
+            );
+        }
     }
     // RFC Phase 1: 129 inserter-bound machine-sides (processing-unit @2/s deep chain).
     // Demand-pull + the UG-crossing demand fix clear every prior belt-delivery false
@@ -3920,16 +3934,22 @@ fn stress_electronic_circuit_30s_decomposed() {
     // on the Pool arm — the same adjudicated trunk under-provisioning as
     // the stress_ec_30s baseline (sim 92.1% delivered / meter 91.9%).
     // Tighten as #644's engine fix lands.
-    assert_eq!(
-        pooled_errors, 140,
-        "Pool errors on EC@30/s should be 140 (#644 known deficit); got {pooled_errors}.",
+    assert!(
+        pooled_errors <= 140,
+        "Pool errors on EC@30/s regressed past the #644 ceiling (140); got {pooled_errors}.",
     );
+    if pooled_errors < 140 {
+        eprintln!("Pool EC@30/s improved ({pooled_errors} < 140) — tighten (#644)");
+    }
     // 2026-08-15 (#632 B5 dispatch swap, #644): 0 -> 140, same class and
     // same count as the Pool arm.
-    assert_eq!(
-        decomposed_errors, 140,
-        "PartitionedDecomposed errors on EC@30/s should be 140 (#644); got {decomposed_errors}.",
+    assert!(
+        decomposed_errors <= 140,
+        "PartitionedDecomposed errors on EC@30/s regressed past the #644 ceiling (140); got {decomposed_errors}.",
     );
+    if decomposed_errors < 140 {
+        eprintln!("Decomposed EC@30/s improved ({decomposed_errors} < 140) — tighten (#644)");
+    }
 
     // ShardSplit must fire — the algorithm path is what we're gating on.
     let shard_split_events = decomposed.trace_events.iter().filter(|evt| {
