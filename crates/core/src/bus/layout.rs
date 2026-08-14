@@ -771,7 +771,7 @@ fn compute_substation_bands(
     // row to a dual-input row, or shifts an inserter one tile deeper, tips
     // distance 3→4 and re-uncovers those inserters — and 4 is outside a
     // NORMAL medium pole's ±3, so the medium mop-up can't recover it. The only
-    // guard is the four `assert_warnings_exactly([(power, 0)])` pins (which
+    // guard is the four `assert_warnings_golden` power pins (which
     // flip loudly) plus the substation FALLBACK below (which fires only for
     // inserters STILL 0/49-free after widening). If you change belt-row count
     // or inserter depth in a dual-input template, re-run those pins and expect
