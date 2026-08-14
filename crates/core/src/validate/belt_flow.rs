@@ -2395,6 +2395,19 @@ fn compute_lane_rates_impl(
                     0u8
                 } else {
                     let dot = (nx - bx) * left_dx + (ny - by) * left_dy;
+                    // dot == 0 ⟺ the neighbor flows into this belt's FRONT
+                    // face (opposite direction, head-on). Items enter a
+                    // belt from behind or the sides, never the front — two
+                    // facing belts jam at the interface and transfer
+                    // NOTHING (factorio-mechanics.md). Classifying this as
+                    // a sideload made the two belts mutual feeders: a
+                    // gain-1 cycle the Jacobi pass grew by one seed per
+                    // sweep up to the iteration budget — the impossible
+                    // 645/4,192-per-s lane readings on DI fixtures whose
+                    // output runs abut a ghost return belt (#632 B5).
+                    if dot == 0 {
+                        continue;
+                    }
                     if dot > 0 { 1u8 } else { 2u8 }
                 };
                 tile_feeders.push(((nx, ny), feed_type));
@@ -3903,6 +3916,57 @@ mod tests {
         let map = belt_dir_map_from(&[sp]);
         assert!(map.contains_key(&(2, 4)));
         assert!(map.contains_key(&(3, 4))); // second tile (North/South → x+1)
+    }
+
+    // --- head-on belts (B5, #632) ---
+
+    /// Two belts facing each other transfer NOTHING — items cannot enter
+    /// a belt's front face. The feeder builder used to classify a
+    /// head-on neighbor as a sideload (its left-vector dot is 0), making
+    /// the pair MUTUAL feeders: a gain-1 cycle the Jacobi convergence
+    /// pass grew by one seed per sweep up to the iteration budget —
+    /// 4,192/s lane readings on a 4/s seed in production DI fixtures.
+    /// This pins both halves: no amplification on the seeded run, zero
+    /// flow on the opposing belt.
+    #[test]
+    fn head_on_belts_are_not_feeders() {
+        let layout = LayoutResult {
+            entities: vec![
+                machine(0, 0, "iron-gear-wheel"),
+                inserter(3, 1, EntityDirection::East),
+                belt_carries(4, 1, EntityDirection::East, "iron-gear-wheel"),
+                belt_carries(5, 1, EntityDirection::East, "iron-gear-wheel"),
+                // Head-on partner: faces WEST, directly abutting the
+                // eastbound run's front — the production shape was a DI
+                // cell's output run meeting a ghost return belt.
+                belt_carries(6, 1, EntityDirection::West, "iron-gear-wheel"),
+            ],
+            width: 10,
+            height: 5,
+            ..Default::default()
+        };
+        let sr = simple_solver(2.0, 10.0);
+        let rates = compute_lane_rates(&layout, Some(&sr));
+
+        let max_lane = rates
+            .values()
+            .flat_map(|r| r.iter().copied())
+            .fold(0.0f64, f64::max);
+        assert!(
+            max_lane <= 10.0 + 1e-6,
+            "head-on adjacency amplified flow: max lane {max_lane:.1}/s on a 10.0/s seed \
+             (pre-fix this read seed x iteration-budget)"
+        );
+        let opposing = rates.get(&(6, 1)).copied().unwrap_or([0.0, 0.0]);
+        assert!(
+            opposing[0].abs() < 1e-6 && opposing[1].abs() < 1e-6,
+            "the head-on opposing belt must receive nothing, got {opposing:?}"
+        );
+        let dropped: f64 = rates.get(&(4, 1)).map(|r| r[0] + r[1]).unwrap_or(0.0);
+        assert!(
+            (dropped - 10.0).abs() < 1e-6,
+            "the seeded drop tile must still carry the full injection, got {dropped:.2}"
+        );
     }
 
     // --- build_ug_pairs ---
