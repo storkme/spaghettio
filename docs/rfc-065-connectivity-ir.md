@@ -1463,7 +1463,9 @@ Per `CLAUDE.md` § verification protocol:
   are stale since 2026-07-24 against #519 AND belt-detour and this
   slice — env-gated so nothing trips today; named followup in
   `docs/test-suite-followups.md` (re-bless deliberately, not
-  rubber-stamp). Flow-edge guard ACCEPTED as the rounds' synthesis:
+  rubber-stamp). *[2026-08-15, #632 B7: that followup closed by
+  DELETION of the golden flow — see its closure entry — after its
+  predicted mis-attribution failure occurred verbatim.]* Flow-edge guard ACCEPTED as the rounds' synthesis:
   loud `debug_assert` (every test/CI run) + deterministic
   first-edge degrade in release — a report-only diagnostic must not
   abort production validate() or admission loops. Double-derivation

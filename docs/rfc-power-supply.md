@@ -202,8 +202,10 @@ Two reproducibility caveats are recorded at the end of this section.
   **percentage points** or any count by more than 10% relative, Phases 1–3
   must be re-derived from the new numbers before proceeding — not patched
   incrementally.
-- If Phase 0c moves goldens on any case that contains no biochamber rows, the
-  change is leaking — stop and investigate before re-blessing.
+- If Phase 0c moves any pinned baseline (warning pins, scoreboard ceilings,
+  before/after `STRESSGOLD` hashes — the committed stress goldens were deleted
+  2026-08-15, #632 B7) on any case that contains no biochamber rows, the
+  change is leaking — stop and investigate before re-pinning.
 - If Phase 0e's port-face fix cannot be a bounded parameterization of the
   existing fluid templates — i.e. it starts requiring the wholesale fluid-row
   redesign of [#68](https://github.com/storkme/spaghettio/issues/68) /
@@ -217,8 +219,8 @@ Two reproducibility caveats are recorded at the end of this section.
 - If Phase 1's rule cannot hold current row pitch (any corpus fluid row needs
   extra row height to fit the reservation), **stop** — the footprint-vs-power
   trade-off goes to the user, not into code.
-- If Phase 1 moves goldens on any non-fluid row, the rule is leaking beyond
-  its scope — stop and re-scope before re-blessing anything.
+- If Phase 1 moves any pinned baseline on any non-fluid row, the rule is
+  leaking beyond its scope — stop and re-scope before re-pinning anything.
 - Phase 2 fixed point: on unchanged post-Phase-1 main, the live-instrumented
   zero-slack counts must match a fresh ground-truth census within ±1 pole per
   case. Larger divergence means the instrumentation measures something other
