@@ -7553,10 +7553,11 @@ fn quality_ec_45s_express_legendary_from_ore() {
 
     // rfc-043-pole-band-thinning kill criterion 2 pin: single-band mode at
     // Legendary (budget 4) — 31 medium poles vs 60 unthinned (48%
-    // reduction; census 2026-07-20 read 30, re-pinned 2026-08-13 when the
-    // (6,3)/(6,4) lane-balance re-bake gave this layout a taller balancer
-    // stamp and one more pole; the 18-residual IRD census above was
-    // unchanged by the same diff). Exact pin so any placement change
+    // reduction; census 2026-07-20 read 30, re-pinned 2026-08-13/14 with
+    // the (6,3)/(6,4) lane-balance re-bake — the shipped shapes (6×16
+    // compose, 6×14 native solve) are taller than the originals and cost
+    // one pole; the same re-bake re-blessed the IRD census above 18→14,
+    // see that pin's comment). Exact pin so any placement change
     // renegotiates the number consciously.
     let poles = layout_result
         .entities
