@@ -2146,6 +2146,22 @@ pub fn check_lane_throughput(
             belt_name_map.insert((e.x, e.y), &e.name);
         } else if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("output") {
             belt_name_map.insert((e.x, e.y), ug_to_surface_tier(&e.name));
+        } else if is_splitter(&e.name) {
+            // Both splitter tiles rate at the splitter's own tier. This
+            // arm was MISSING here while present in belt_structural's
+            // twin (#632 B5): splitter tiles fell through to the
+            // "transport-belt" default below, so a fast/express
+            // splitter lawfully carrying more than 7.5/s per lane was
+            // falsely flagged over-cap — the class that refused the
+            // sim-measured 1.10/s big-electric-pole layout (its
+            // iron-plate 1x2 balancer runs 12.2-12.8/s per lane
+            // through a FAST splitter) and would have shipped the
+            // 0.51/s twin on dispatch swap.
+            belt_name_map.insert((e.x, e.y), splitter_to_surface_tier(&e.name));
+            belt_name_map.insert(splitter_second_tile(e), splitter_to_surface_tier(&e.name));
+            if let Some(item) = e.carries.as_deref() {
+                carries_map.insert(splitter_second_tile(e), item);
+            }
         } else {
             continue;
         }
@@ -3966,6 +3982,55 @@ mod tests {
         assert!(
             (dropped - 10.0).abs() < 1e-6,
             "the seeded drop tile must still carry the full injection, got {dropped:.2}"
+        );
+    }
+
+    /// The cap lookup must rate splitter tiles at the SPLITTER's tier.
+    /// The splitter arm was missing from check_lane_throughput's
+    /// belt_name_map (present in belt_structural's twin), so both tiles
+    /// of any splitter fell back to the yellow 7.5/s default — a fast
+    /// splitter lawfully carrying 12/s per lane read as over-cap. That
+    /// false positive refused the sim-measured 1.10/s big-electric-pole
+    /// layout on dispatch swap (#632 B5). Both directions pinned: the
+    /// fast splitter at 12/s per lane is clean, and the same flow onto
+    /// a genuine yellow belt still flags.
+    #[test]
+    fn splitter_tiles_rate_at_splitter_tier() {
+        let mk = |splitter: bool| {
+            let mut ents = vec![
+                machine(0, 0, "iron-gear-wheel"),
+                inserter(3, 1, EntityDirection::East),
+            ];
+            if splitter {
+                ents.push(PlacedEntity {
+                    name: "fast-splitter".to_string(),
+                    x: 4,
+                    y: 1,
+                    direction: EntityDirection::East,
+                    carries: Some("iron-gear-wheel".to_string()),
+                    ..Default::default()
+                });
+            } else {
+                ents.push(belt_carries(4, 1, EntityDirection::East, "iron-gear-wheel"));
+            }
+            LayoutResult { entities: ents, width: 10, height: 5, ..Default::default() }
+        };
+        // A single inserter drops onto ONE lane. Splitter tiles record
+        // POST-SPLIT rates (16/s in -> 8/8 across the two branches on
+        // that lane), so 8/s per splitter tile: legal on fast hardware
+        // (15/s per lane), over-cap on a yellow fallback (7.5/s). On
+        // the plain-belt variant the full 16/s sits on one yellow lane.
+        let sr = simple_solver(2.0, 16.0);
+
+        let clean = check_lane_throughput(&mk(true), Some(&sr));
+        assert!(
+            clean.is_empty(),
+            "12/s per lane through a FAST splitter is legal; got {clean:?}"
+        );
+        let flagged = check_lane_throughput(&mk(false), Some(&sr));
+        assert!(
+            !flagged.is_empty(),
+            "12/s per lane on a YELLOW belt must still flag over-cap"
         );
     }
 
