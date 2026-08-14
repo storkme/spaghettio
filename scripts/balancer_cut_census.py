@@ -9,7 +9,11 @@ say — both are blind to the waist class.
 
 Flow across the cut between row y and y+1 is carried by:
   - a surface transport-belt at row y facing south (1 tile)
-  - a splitter at row y facing south (2 tiles: x and x+1)
+  - a splitter at row y facing south (2 tiles: x and x+1). Both tiles
+    are counted even if a downstream tile is absent/turns away — these
+    are capacity POTENTIALS, and overcounting only loosens the upper
+    bound, which the one-sided verdict already tolerates (it can never
+    manufacture a false WAIST)
   - an underground-belt pair (input at y1, output at y2, same x, facing
     south): 1 tile across every cut y1..y2 INCLUSIVE — the item travels
     underground across cuts y1..y2-1, then the output tile itself emits

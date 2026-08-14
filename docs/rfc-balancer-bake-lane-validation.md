@@ -477,3 +477,12 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
     the attribution carries). Sweep dividend handed to #631: with
     rated correctly min(n,m), the full-library census reads 12
     waist-capped shapes — the recorded class plus (8,6) and (15,7).*
+  - *2026-08-14 — review round 9: two real findings absorbed —
+    `template_provenance` gains the (6,3) compose arm (it was falling
+    through to the factorio-sat default, mislabeling it in the web UI;
+    (6,4) deliberately keeps NO arm — the default is now literally
+    true for it), and the tree-wire differential's docstring still
+    said 30 poles/29 edges (stale vs the re-pinned 31/30). The bot's
+    claim that "(6,4) correctly maps to compose" was hallucinated —
+    no such arm exists, and one would be wrong. Third minor = the
+    round-8 major restated; stands as documented residual risk.*
