@@ -521,3 +521,25 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
     that would have exempted regenerated defective templates from the
     source_blueprint gate are cleaned. A bake re-run can no longer
     regenerate any culled shape.*
+  - *2026-08-14 — **min-cut census CI-wired, script retired** (#632,
+    #631's endgame): the min-cut ≥ rated invariant is now enforced by
+    `audit_min_cut_capacity` in
+    `crates/core/tests/balancer_lane_audit.rs`, which runs in CI's
+    `cargo nextest -p spaghettio_core` job — a re-registered waisted
+    shape fails the build, not an eprintln. The test reads the COMPILED
+    registry (`balancer_templates()`), unlike its predecessor
+    `scripts/balancer_cut_census.py`, which regex-parsed the library
+    source and would have no-opped silently (exit 0, zero shapes
+    censused) on a source-format change — the same silent-instrument
+    class every #632 deletion PR was caught on in review. Parity
+    receipt before deleting the script: both instruments' per-shape
+    census lines (`(n,m): min cut X vs rated Y [verdict] cuts=[...]`)
+    are byte-identical across all 64 registered shapes. The test
+    carries pinned instrument-can-fail fixtures from birth
+    (`cut_census_reads_synthetic_waist`): a synthetic waist censuses
+    [2, 1, 2], the UG-pair y1..y2-INCLUSIVE semantics are asserted
+    exactly, and north-facing/unpaired entities pin to notes-not-counts.
+    One strictness delta over the script: an out-of-bounds counted
+    entity now fails loudly (Python would have wrapped a negative index
+    into the LAST cut). The script is deleted; historical mentions in
+    this log describe runs that happened and stand as written.*
