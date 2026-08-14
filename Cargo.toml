@@ -14,8 +14,9 @@ resolver = "2"
 # (25ms cost-descent budget), so a faster build can land on *different*
 # valid solutions when solving fresh. Warm-cache runs replay recorded
 # solutions and are unaffected. Changing these opt levels is
-# layout-moving for cold-cache solves: expect a stress-golden re-bless
-# (see crates/core/tests/goldens/stress/README.md).
+# layout-moving for cold-cache solves: verify with before/after
+# STRESSGOLD hash captures on the same host/cache (the committed
+# stress-golden flow was deleted 2026-08-15, #632 B7).
 [profile.dev.package.spaghettio_core]
 opt-level = 1
 

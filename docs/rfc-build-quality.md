@@ -338,11 +338,14 @@ conservative in the safe direction.
    Normal are bit-identical (`==` on f64) to their pre-RFC values,
    swept across all machines/inserters/poles and across rates adjacent
    to whole-machine ceil boundaries; (b) full e2e suite green with
-   unchanged assertion/scoreboard counts; (c)
-   `SPAGHETTIO_STRESS_GOLDEN=check` clean, run on the same host/cache
-   that blessed the current goldens (this is an opt-in, host-relative
-   check per `goldens/stress/README.md` — it is *named here as a
-   required step* precisely because nothing else forces it). If (a–c)
+   unchanged assertion/scoreboard counts; (c) byte-stability: capture
+   `STRESSGOLD` hash lines (`SPAGHETTIO_STRESS_GOLDEN=1`) before and
+   after on the same host/cache and diff — identical hashes prove the
+   stress fixtures' shipped layouts did not move (the committed-golden
+   `check` flow this step originally named was deleted 2026-08-15,
+   #632 B7 — stale-by-construction; the before/after capture is the
+   surviving equivalent, *named here as a required step* precisely
+   because nothing else forces it). If (a–c)
    cannot all pass without forking helpers into quality and
    non-quality variants, the parameterization is wrong — stop and
    redesign.
