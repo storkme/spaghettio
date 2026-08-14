@@ -313,10 +313,12 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    `input-rate-delivery` residuals), and the balancer lane audit had
    been auditing splitter-headed-input shapes at near-zero flow
    ((6,3)/(6,4)'s "0 errors" baselines were vacuous — provisionally
-   known-imbalanced at the time; resolved 2026-08-13 when the owner
-   directed a lane-balance re-bake instead of ratification: both
-   templates replaced with compositions that audit 0-error under the
-   un-blinded walker and gate like any other shape, PR #630). Fix receipts: donor
+   known-imbalanced at the time; resolved 2026-08-13/14 when the owner
+   directed a lane-balance re-bake instead of ratification: (6,3)
+   replaced with a composition, (6,4) with a native factorio-sat
+   re-solve after its compose attempt was withdrawn as
+   throughput-capped (#631) — both audit 0-error under the un-blinded
+   walker and gate like any other shape, PR #630). Fix receipts: donor
    fixtures flip to floor-PASS wins matching their sim anchors; engine
    controls byte-identical (stress golden layout hashes + scoreboards
    vs origin/main on the same host). **Remaining recorded

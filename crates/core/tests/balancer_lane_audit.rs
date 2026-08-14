@@ -53,13 +53,15 @@ use spaghettio_core::validate::Severity;
 /// input rows, so both had been audited at near-zero flow and the "0
 /// errors" baseline was vacuous; un-blinded, (6,3) read worst-lane 7.7/s
 /// on the 7.5/s cap and (6,4) 15.0/s, a full lane at 2× cap), then
-/// REMOVED 2026-08-13: the owner directed a lane-balance re-bake instead
-/// of ratification. Both python-derived templates were replaced with
-/// balancer-gen compositions through clean atoms — (6,3) =
-/// parallel((2,1),3) → (3,3), (6,4) = parallel((3,2),2) → (4,4), both
-/// identity-junction, classified Balanced — and both audit 0-error /
-/// 0-warning under the un-blinded walker, so the gate runs them like any
-/// other shape.
+/// REMOVED 2026-08-13/14: the owner directed a lane-balance re-bake
+/// instead of ratification. (6,3) is a balancer-gen composition through
+/// clean atoms (parallel((2,1),3) → (3,3), identity-junction, classified
+/// Balanced); (6,4) is a NATIVE factorio-sat re-solve at 6×14 — its
+/// compose replacement was withdrawn mid-review as structurally
+/// throughput-capped (waist class, #631; trail in
+/// rfc-balancer-bake-lane-validation.md's decision log). Both audit
+/// 0-error / 0-warning under the un-blinded walker, so the gate runs
+/// them like any other shape.
 ///
 /// Flow census over all 77 templates (adversarial review of the #624
 /// fix): exactly four shapes' delivered/seeded flow changed — (6,3)
