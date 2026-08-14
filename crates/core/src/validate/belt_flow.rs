@@ -2139,6 +2139,10 @@ pub fn check_lane_throughput(
     // validator re-derives the family exemption independently instead of
     // trusting the planner's discipline (code-review finding, 2026-07-21).
     let stacking_ctx = crate::bus::stacking_ctx::StackingCtx::derive(sr, layout.stacking);
+    // NOTE: this cap map is deliberately RICHER than the one in
+    // belt_structural's twin (splitter tiles + BOTH UG halves): the twin
+    // is scheduled for deletion once this check takes the dispatch slot
+    // (#632 B5 step 3), so its gaps are not mirrored-fixed there.
     let mut belt_name_map: FxHashMap<(i32, i32), &str> = FxHashMap::default();
     let mut carries_map: FxHashMap<(i32, i32), &str> = FxHashMap::default();
     for e in &layout.entities {
@@ -3505,6 +3509,17 @@ fn do_propagate(
         consumption.get(&tile).copied().unwrap_or(0.0),
     );
     let ds_d = belt_dir_map[&downstream];
+    // Head-on: the downstream tile faces us — items cannot enter a belt's
+    // front, so nothing transfers (mirror of the feeder-builder guard,
+    // #632 B5). The Jacobi convergence pass would overwrite the push-side
+    // rates anyway, but leaving the push path head-on-blind was a latent
+    // landmine for any future flow that skips that pass (bot review).
+    {
+        let (dsx, dsy) = dir_to_vec(ds_d);
+        if (dsx, dsy) == (-ddx, -ddy) {
+            return;
+        }
+    }
     let contrib = lane_transfer(
         tile,
         d,
@@ -4032,12 +4047,12 @@ mod tests {
         let clean = check_lane_throughput(&mk(true), Some(&sr));
         assert!(
             clean.is_empty(),
-            "12/s per lane through a FAST splitter is legal; got {clean:?}"
+            "8/s post-split per lane through a FAST splitter is legal; got {clean:?}"
         );
         let flagged = check_lane_throughput(&mk(false), Some(&sr));
         assert!(
             !flagged.is_empty(),
-            "12/s per lane on a YELLOW belt must still flag over-cap"
+            "16/s on one YELLOW lane must still flag over-cap"
         );
     }
 
