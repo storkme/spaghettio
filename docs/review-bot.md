@@ -121,6 +121,37 @@ non-draft PRs with ≥20 changed lines, zero review activity, and a
 transcript that doesn't bear the cheap gate-skip signature (see Guard
 semantics below).
 
+## Trivial-delta gate (#632 C8, 2026-08-14)
+
+A workflow-level step in `second-opinion.yml` (before the action step)
+skips the K=3 review when the delta since the last **actually reviewed**
+head — the newest `<!-- second-opinion sha=... -->` marker — is
+docs-only (`*.md`) and/or comment-only Rust. Rationale: this repo's
+conventions generate doc-only pushes constantly (decision-log commits,
+attribution sweeps), and each bought a full re-review of the whole PR
+diff that could only re-find already-adjudicated items (4 of PR #630's
+10 rounds).
+
+Semantics that matter for forensics:
+
+- **A skip is never silent.** It posts a comment with the DISTINCT
+  marker `<!-- second-opinion-skip sha=... -->`. If a head has neither
+  marker and the check is green, that's the pre-existing
+  reviewer-malfunction class, not a gate skip.
+- **Trivial deltas accumulate.** Skips don't advance the baseline; the
+  first push whose cumulative delta since the last real review touches
+  code gets a full-PR-diff review.
+- **Everything ambiguous fails toward review**: no prior marker,
+  force-push/diverged history, renames, any non-md/rs file, missing or
+  truncated compare patches, API errors. The one known over-skip: an
+  `.rs` string literal whose changed line starts with `//` inside the
+  quotes (none committed today).
+- **Escape hatch**: the `force-review` label disables the gate for the
+  PR. The gate's decision and reason are one log line in the
+  "Trivial-delta gate" step (`gate: trivial=... (reason)`).
+- Fork PRs bypass the gate entirely (kept on today's no-review,
+  session-side-rule path).
+
 ## Failure-class history
 
 Classes 1–6 share one symptom — green check, nothing posted — and each is

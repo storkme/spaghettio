@@ -93,7 +93,11 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   subscription's usage windows) reviews every non-draft PR and posts one
   advisory comment per head SHA (known gap, accepted: a base-branch
   retarget keeps the old SHA's green check — see the workflow's trigger
-  comment; re-review those session-side). Its silent-failure mode is loud: a
+  comment; re-review those session-side). Exception: a push whose delta
+  since the last-reviewed head is docs/comment-only posts a
+  `second-opinion-skip` marker instead of buying a re-review (#632 C8;
+  semantics + escape hatch in [`docs/review-bot.md`](docs/review-bot.md)
+  §"Trivial-delta gate"). Its silent-failure mode is loud: a
   degraded pass that posts no review FAILS the `second-opinion` check
   (`fail-on-degraded`), and that check is **required on main**
   (`enforce_admins=true`; escape hatch `scripts/review-gate.sh unrequire`).

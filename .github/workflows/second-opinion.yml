@@ -79,13 +79,111 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v4
+      - name: Trivial-delta gate
+        # #632 C8 (review-tail): a push whose delta since the last ACTUALLY
+        # REVIEWED head is docs-only (*.md) and/or comment-only Rust does not
+        # buy a new K=3 review. The repo's own conventions generate such
+        # pushes constantly (decision-log commits, attribution-comment
+        # sweeps), and each cost a full review (~$0.02-0.32, 15-20 min) that
+        # can only re-find already-adjudicated items — 4 of PR #630's 10
+        # rounds were this loop.
+        #
+        # Semantics, chosen so skips can never hide code:
+        # - The baseline is the newest `<!-- second-opinion sha=... -->`
+        #   marker — the last head a review actually POSTED for. Skipped
+        #   pushes deliberately post a DIFFERENT marker, so trivial deltas
+        #   ACCUMULATE against the reviewed baseline: the first push whose
+        #   cumulative delta touches code gets a full-PR-diff review.
+        # - Comment-only Rust = every +/- patch line is blank or starts
+        #   with `//` after indent (compare-API patch, headers excluded).
+        #   A code line with a trailing comment edit does NOT match — that
+        #   counts as code. Known residual over-skip: an .rs string literal
+        #   whose line starts with `//` inside the quotes; accepted, none
+        #   exist in this codebase's committed source today.
+        # - Everything else fails toward review: no prior marker, diverged
+        #   or force-pushed history, renames, non-md/rs files, missing or
+        #   oversized patches (>=300 files), any API error.
+        # - Escape hatch: the `force-review` label disables the gate for
+        #   the PR.
+        # Fork PRs skip the gate (read-only token can't post the audit
+        # comment); they keep today's behavior — no review, session-side
+        # rule applies.
+        id: delta
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          trivial=false
+          last=""
+          if jq -e '[.pull_request.labels[].name] | index("force-review")' "$GITHUB_EVENT_PATH" >/dev/null; then
+            reason="force-review label present"
+          else
+            # NB --paginate + --jq filters PER PAGE and concatenates, so a
+            # >100-comment thread can emit one line per page — tail -n1
+            # keeps the newest marker across pages (pages arrive oldest
+            # first).
+            last=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+              --jq '[.[] | select(.body | test("^<!-- second-opinion sha=[0-9a-f]{40} -->")) | .body | capture("sha=(?<s>[0-9a-f]{40})").s] | last // empty' \
+              | tail -n1 || true)
+            if [ -z "$last" ]; then
+              reason="no prior review marker on this PR"
+            else
+              verdict=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${last}...${HEAD_SHA}" --jq '
+                if .status != "ahead" then "review:history-diverged"
+                elif (.files | length) >= 300 then "review:file-list-truncated"
+                else
+                  [ .files[] |
+                    if .previous_filename then "code"
+                    elif (.filename | test("\\.md$")) then "ok"
+                    elif (.filename | test("\\.rs$")) and .status == "modified" and (.patch != null) then
+                      if ([ .patch | split("\n")[] |
+                            select(test("^[+-]") and (test("^\\+\\+\\+ |^--- ") | not)) |
+                            select(test("^[+-][[:space:]]*(//.*)?$") | not)
+                          ] | length) == 0
+                      then "ok" else "code" end
+                    else "code" end
+                  ] | if length == 0 or all(. == "ok") then "skip" else "review:code-in-delta" end
+                end' 2>/dev/null || echo "review:compare-api-failed")
+              if [ "$verdict" = "skip" ]; then
+                trivial=true
+                reason="docs/comment-only delta since reviewed ${last:0:9}"
+              else
+                reason="$verdict"
+              fi
+            fi
+          fi
+          echo "trivial=$trivial" >> "$GITHUB_OUTPUT"
+          echo "last=$last" >> "$GITHUB_OUTPUT"
+          echo "gate: trivial=$trivial ($reason)"
+      - name: Record skipped review
+        # The audit trail for a skip: a comment with a marker DISTINCT from
+        # the review marker (so the gate above keeps measuring against the
+        # last real review), naming the baseline and the escape hatch. A
+        # skip must never be silent — silence ≠ clean is this workflow's
+        # founding rule.
+        if: steps.delta.outputs.trivial == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LAST: ${{ steps.delta.outputs.last }}
+        run: |
+          set -euo pipefail
+          printf '<!-- second-opinion-skip sha=%s -->\n**Second opinion — skipped for %s**: the delta since the last reviewed head (%s) is docs-only / comment-only. Trivial deltas accumulate — the first push whose cumulative delta touches code gets a full-PR review. Apply the `force-review` label to force one.\n' \
+            "$HEAD_SHA" "${HEAD_SHA:0:9}" "${LAST:0:9}" > /tmp/skip-comment.md
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -F body=@/tmp/skip-comment.md >/dev/null
       - name: Second opinion review
         # Fork PRs get no secrets on `pull_request` (by design, not a leak),
         # so the action would fail on an empty key and red an unclearable
         # required check for an outside contributor. Such PRs need
         # session-side review — same rule as workflow-file PRs (CLAUDE.md
         # "Workflow"). The skipped step still yields a real job conclusion.
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        # `!= 'true'` not `== 'false'`: on fork PRs the gate step is skipped
+        # and its output is empty — empty must mean "review", not "skip".
+        if: github.event.pull_request.head.repo.full_name == github.repository && steps.delta.outputs.trivial != 'true'
         uses: storkme/second-opinion@v1
         with:
           openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
