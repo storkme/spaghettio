@@ -1488,6 +1488,24 @@ mod tests {
         assert!(edge(&g2, 0, 1, EdgeKind::UgSpan), "{:?}", g2.edges);
     }
 
+    /// Re-expressed 2026-08-14 (issue #632 A4 review) as an edge assertion:
+    /// this used to pin "both halves are anomalies" via the now-deleted
+    /// `scan_graph_anomalies`. The invariant it actually protects — pairing
+    /// requires same axis, so cross-row halves must not form a span edge —
+    /// is fully captured without it, same pattern as the cross-tier case
+    /// above.
+    #[test]
+    fn unpaired_ug_halves_yield_no_span_edge() {
+        use EntityDirection::East;
+        let lr = layout(vec![ug(1, 0, East, "input"), ug(10, 5, East, "output")]);
+        let g = derive_connectivity(&lr);
+        assert!(
+            !g.edges.iter().any(|e| e.kind == EdgeKind::UgSpan),
+            "axis-mismatched (different-row) UG halves must not form a span edge: {:?}",
+            g.edges
+        );
+    }
+
     #[test]
     fn splitter_in_and_out() {
         use EntityDirection::East;
