@@ -133,14 +133,25 @@ jobs:
             # unreviewed one. Require the review header too; if the
             # action ever rewords it, the baseline is lost and the gate
             # fails toward review — the safe direction.
+            # grep -v ^$ is belt-and-braces: jq `empty` should emit no line
+            # for marker-less pages, but a blank line reaching tail -n1
+            # would silently lose the baseline (fail-toward-review, so safe
+            # but defeats the gate on long threads).
             last=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
               --jq '[.[] | select(.body | test("^<!-- second-opinion sha=[0-9a-f]{40} -->")) | select(.body | contains("### 🤖 Second opinion")) | .body | capture("sha=(?<s>[0-9a-f]{40})").s] | last // empty' \
-              | tail -n1 || true)
+              | grep -v '^$' | tail -n1 || true)
             if [ -z "$last" ]; then
               reason="no prior review marker on this PR"
             else
               verdict=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${last}...${HEAD_SHA}" --jq '
                 if .status != "ahead" then "review:history-diverged"
+                # null/absent .files is a malformed or partial response, NOT
+                # an empty delta — it must fail toward review (bot round-3
+                # major: null[] iterates to zero and read as "skip"). A
+                # genuinely EMPTY list (status ahead, zero changed files —
+                # e.g. an empty commit) stays a skip: there is nothing to
+                # review and the runner per-SHA gate cannot catch it.
+                elif (.files == null) then "review:compare-api-failed"
                 elif (.files | length) >= 300 then "review:file-list-truncated"
                 else
                   [ .files[] |
@@ -185,6 +196,13 @@ jobs:
           LAST: ${{ steps.delta.outputs.last }}
         run: |
           set -euo pipefail
+          # Dedup per head: a same-head re-event (reopened /
+          # ready_for_review) re-runs the gate; don't re-post the notice.
+          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+               --jq '.[].body' | grep -qF "<!-- second-opinion-skip sha=${HEAD_SHA} -->"; then
+            echo "skip notice already posted for ${HEAD_SHA:0:9}"
+            exit 0
+          fi
           printf '<!-- second-opinion-skip sha=%s -->\n**Second opinion — skipped for %s**: the delta since the last reviewed head (%s) is docs-only / comment-only. Trivial deltas accumulate — the first push whose cumulative delta touches code gets a full-PR review. Apply the `force-review` label to force one.\n' \
             "$HEAD_SHA" "${HEAD_SHA:0:9}" "${LAST:0:9}" > /tmp/skip-comment.md
           gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -F body=@/tmp/skip-comment.md >/dev/null
