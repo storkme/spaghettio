@@ -511,4 +511,13 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
     (#631's endgame; wiring is a follow-up). KNOWN_IMBALANCED is
     empty, the partial-saturation tripwire fully armed, and the bake
     recipes that produced the waisted composes are deleted with their
-    products.*
+    products. Review round on the cull PR (#636): the recipe deletion
+    initially missed 8 recipes in one-line format ((9,4..8), (12,7),
+    (15,7), plus (15,14) which Clos-composes on culled (15,7)) — the
+    cull script's ledger printed "recipe x0" for those shapes and the
+    absence was misread as "never had recipes" instead of investigated;
+    all 8 are waisted BY CONSTRUCTION (mid cut 3 or 5 vs rated 4..14)
+    and are now deleted, and the stale COMPOSE_GENERATED_SHAPES entries
+    that would have exempted regenerated defective templates from the
+    source_blueprint gate are cleaned. A bake re-run can no longer
+    regenerate any culled shape.*

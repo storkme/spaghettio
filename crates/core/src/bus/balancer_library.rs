@@ -4896,15 +4896,19 @@ mod tests {
     /// generator and must keep its blueprint string for round-trip
     /// regeneration.
     const COMPOSE_GENERATED_SHAPES: &[(u32, u32)] = &[
+        // Culled shapes ((3,2), (7,3), (8,6), (9,2), (9,4..8)) removed
+        // from this list 2026-08-14 (#632 A3 review round): a stale entry
+        // here would exempt a regenerated defective template from the
+        // source_blueprint gate — the two regressions compound.
         (1, 9), (9, 1), (1, 10), (10, 1), (2, 9),
-        (3, 2), (6, 1), (6, 2), (7, 3), (8, 1), (8, 2), (8, 6),
+        (6, 1), (6, 2), (8, 1), (8, 2),
         // (6, 3): lane-balance re-bake 2026-08-13 (the #624 provisional
         // KNOWN_IMBALANCED pair, owner-directed re-bake). (6, 4) is NOT
         // here: its compose re-bake was withdrawn (structural waist —
         // #631) and it is a native factorio-sat re-solve with a real
         // source blueprint.
         (6, 3),
-        (9, 2), (9, 3), (9, 4), (9, 5), (9, 6), (9, 7), (9, 8),
+        (9, 3),
         // utility@10/s balancer-gap spike (uncommitted, see
         // crates/core/examples/census_missing_balancer_shapes.rs):
         // (15, 7) is an intermediate atom for (15, 14) copper-cable, not
