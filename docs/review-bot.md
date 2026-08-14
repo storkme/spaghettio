@@ -145,10 +145,14 @@ Semantics that matter for forensics:
   first push whose cumulative delta since the last real review touches
   code gets a full-PR-diff review.
 - **Everything ambiguous fails toward review**: no prior marker,
-  force-push/diverged history, renames, any non-md/rs file, missing or
-  truncated compare patches, API errors. The one known over-skip: an
+  force-push/diverged history, renames, any non-md/rs file, missing,
+  oversized (≥10k chars, truncation insurance) or truncated compare
+  patches, API errors. Known over-skips, both accepted by design: an
   `.rs` string literal whose changed line starts with `//` inside the
-  quotes (none committed today).
+  quotes (none committed today), and `.md` *content* — the md-only skip
+  is the feature, so programmatic content embedded in docs (commands,
+  JSON, CI snippets) is outside the gate's review scope on skipped
+  pushes.
 - **Escape hatch**: the `force-review` label disables the gate for the
   PR — and applying it is itself a trigger (`labeled` event), so it
   works even when there is nothing left to push. The gate's decision
@@ -165,10 +169,13 @@ Semantics that matter for forensics:
   on the already-reviewed head skip with NO notice — nothing to review,
   nothing new to say, and no container spin.
 - Fork PRs bypass the gate entirely (kept on today's no-review,
-  session-side-rule path).
+  session-side-rule path) — which means the `force-review` label is
+  also inert on forks; their review remains session-side by rule.
 - **Tests**: `scripts/test_second_opinion_gate.py` extracts the gate's
-  bash and all three jq programs VERBATIM from the workflow and drives
-  them through ~24 fixtures. Not CI-wired; run it when touching the
+  bash and all three jq programs VERBATIM from the workflow, drives the
+  jq through fixtures AND the full bash orchestration end-to-end under
+  a fake `gh` (label handling, anchor parsing, retarget-margin date
+  arithmetic, verdict dispatch). Not CI-wired; run it when touching the
   gate.
 
 ## Failure-class history
