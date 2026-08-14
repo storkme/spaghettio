@@ -1,4 +1,4 @@
-import { r as x } from "./index-CgY8Dar6.js";
+import { r as x } from "./index-BMlGCMKv.js";
 function y(a, c, r, m) {
   x(a, c);
   const o = c.children.slice(), h = o.length;
