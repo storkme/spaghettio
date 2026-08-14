@@ -1039,9 +1039,10 @@ cell-interface RFC.)
 
 Test-suite time recovery (audited 2026-07-19, pick-up notes per item in
 [`test-suite-followups.md`](test-suite-followups.md)): committed STRESSGOLD
-baseline goldens landed 2026-07-19 (`SPAGHETTIO_STRESS_GOLDEN=check|bless`,
-see `crates/core/tests/goldens/stress/README.md` — host-cache-relative,
-opt-in, not CI-enforced); CI nextest parallelism re-enable via
+baseline goldens landed 2026-07-19 and were DELETED 2026-08-15 (#632 B7 —
+host-cache-relative so never CI-enforceable, unrun for three weeks, and
+their only consultation produced false drift signals; the `STRESSGOLD`
+hash-print protocol survives, see the followups entry); CI nextest parallelism re-enable via
 timeout-ceiling bumps (~5 min/push, experiment already documented in
 `.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy
 tests (measure before adopting).

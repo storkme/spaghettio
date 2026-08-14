@@ -10,9 +10,10 @@ recipe verbatim. Written 2026-08-01. Status: none started.
 - **Capture, don't interpret.** Save every raw output (JSON, logs, .fls,
   bp.txt, PNGs). A later session does the analysis. Never summarize-and-
   discard; disk is the cheap resource.
-- **Read-only repo.** No commits, no branch changes, no golden blessing
-  (`SPAGHETTIO_STRESS_GOLDEN` stays unset), no cache blessing. Artifacts go
-  to a dated directory under `~/spaghettio-corpora/<job>/<date>/`.
+- **Read-only repo.** No commits, no branch changes, no cache blessing.
+  (`SPAGHETTIO_STRESS_GOLDEN` is safe to set — since 2026-08-15 it only
+  prints STRESSGOLD hash lines; the golden-file bless flow is deleted.)
+  Artifacts go to a dated directory under `~/spaghettio-corpora/<job>/<date>/`.
 - **Stamp provenance in every artifact dir**: `git rev-parse HEAD`, `rustc
   --version`, Factorio version, and the exact command used. (Sim results
   are tech-state- and version-sensitive; unstamped data is undiagnosable.)

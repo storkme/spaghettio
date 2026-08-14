@@ -81,7 +81,8 @@ shared-by-construction across agents, and moves drift detection into git
 history. This is the best ergonomics payoff for the RFC team flow — do it
 first.
 
-**LANDED 2026-07-19**: one golden per fixture under
+**LANDED 2026-07-19, DELETED 2026-08-15** (#632 B7 — see "Stale stress
+goldens" below for the full closure): one golden per fixture under
 `crates/core/tests/goldens/stress/` (canonical scoreboard + layout hash),
 driven by `SPAGHETTIO_STRESS_GOLDEN=check|bless` in `check_stress_scoreboard`
 (`=1` keeps the legacy hash-print protocol). Opt-in only — **not** enforced
@@ -157,16 +158,23 @@ census datum most plausibly reflects that environment, not this host.
   flow. Don't dedupe it.
 - **paths-filter short-circuit** already reduces docs-only pushes to 8 s.
 
-## Stale stress goldens (open, 2026-08-06 — from PR #583 bot round 2)
+## Stale stress goldens (CLOSED BY DELETION 2026-08-15, #632 B7)
 
-`tests/goldens/stress/*.txt` were last blessed 2026-07-24 and predate
-both the #519 input-rate-delivery recalibration (2026-07-31) and the
-belt-detour check (2026-08-01) — several record `total warnings: 0` for
-fixtures that now legitimately warn (and RFC-065 slice 2's measurement
-fix adds belt-detour verdicts on the two AC partition configs). The
-golden flow is env-gated (`SPAGHETTIO_STRESS_GOLDEN=check|bless`, not in
-the default suite), so nothing trips today — but the next `check` run
-will diff against a month-stale world and mis-attribute the drift to
-whatever ran it. Pick-up: re-bless deliberately, adjudicating the
-accumulated drift against the owning decision logs (#519, belt-detour
-calibration, RFC-065 slice 2) rather than rubber-stamping.
+Opened 2026-08-06 (PR #583 bot round 2), and its prediction — "the next
+`check` run will diff against a month-stale world and mis-attribute the
+drift to whatever ran it" — came true verbatim on 2026-08-14: the B6
+demotion's first measurement run had `check` on, "found" 8 dramatic
+selection flips, and only a clean-main control stopped the
+mis-adjudication (receipts on #632). Resolution: the committed-golden
+`check`/`bless` flow and all 8 golden files are DELETED rather than
+re-blessed — the instrument is host-cache-relative (cannot be
+CI-enforced), opt-in (nobody ran it in three weeks), and stale by
+construction; a re-bless would only reset the same clock. The
+`STRESSGOLD` hash-print protocol (same env var, any value) survives —
+it is a within-change instrument with no committed claim to rot. The
+original pick-up's adjudication duty is not dropped: the warning-count
+drift is attributable to the recalibrations this entry already named
+(#519 ×10 counts, belt-detour, RFC-065 slice 2), and the residual
+ENTITY-count drift on the from-ore family (e.g. ec22 3410→2455) is
+folded into B5's sim-anchored corpus adjudication (#632). The
+2026-07-24 frozen state remains readable at that blame point.
