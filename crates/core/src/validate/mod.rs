@@ -366,16 +366,54 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// comment), not physically-grounded the way an error is, so it stays
 /// report-only until a similar sim-anchoring case is made for letting it
 /// steer selection.
+///
+/// `inserter-throughput`, `inserter-item-throughput`, and
+/// `row-output-lane-budget` (2026-08-14, #632 B6) are excluded by the
+/// same rule applied retroactively: none of the three has ever been
+/// sim-anchored in the steering direction (trust-table rows), so their
+/// participation was steering candidate selection on unvalidated
+/// evidence — the #519 lesson in standing form. They remain REPORTED
+/// unchanged; only ranking stops consuming them. The one receipt that
+/// looks like an anchor — big-electric-pole@1/am2, where a single
+/// `inserter-item-throughput` warning is the only validator signal on
+/// the layout that measured 0.51/s — does not depend on this count:
+/// that config ships the measured-good layout via RFC-059's
+/// `DiClaimOrder::Downstream` DEFAULT, pinned by its own teeth test
+/// (`di_claim_order_default_is_downstream_and_ships_the_working_big_pole`),
+/// which stayed green across this demotion.
+///
+/// Measured receipts for the demotion (#632 B6 PR): the full plain
+/// suite is green (1238/1238 — every active pin holds), and a
+/// 513-config layout-fingerprint sweep found SEVEN configs (1.4%,
+/// three config families) whose selected layout moves by ±2–3
+/// entities. All seven are knife-edge ties: re-built standalone (a
+/// different SAT-zone-cache history), each family selects identically
+/// with and without the demotion, and the calibrated channels (errors,
+/// `input-rate-delivery`) are unchanged on every flipped family. The
+/// stress GOLDENS were not usable as a receipt: check mode fails 8/8
+/// on clean main too — they have been stale on this host since their
+/// 2026-07-24 bless (recorded on #632; feeds the B7 pin diet).
+///
 /// Public so e2e never-worse gates assert against THE canonical definition
 /// rather than re-typing the predicate. Three of them had re-typed it, kept a
 /// stale `input-rate-delivery` exclusion after the engine dropped it, and
 /// thereby stopped asserting what the engine enforces — a flux-channel
 /// regression would have passed them silently (review, #605). One definition,
 /// one place to change it.
+pub const SELECTION_EXCLUDED_WARNING_CATEGORIES: [&str; 4] = [
+    "belt-detour",
+    "inserter-throughput",
+    "inserter-item-throughput",
+    "row-output-lane-budget",
+];
+
 pub fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
     issues
         .iter()
-        .filter(|i| i.severity == Severity::Warning && i.category != "belt-detour")
+        .filter(|i| {
+            i.severity == Severity::Warning
+                && !SELECTION_EXCLUDED_WARNING_CATEGORIES.contains(&i.category.as_str())
+        })
         .count()
 }
 
