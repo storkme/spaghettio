@@ -50,9 +50,9 @@ type Request =
       quality: string | null;
       modules: string | null;
     }
-  | { id: number; method: "layout"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null; stacking: string | null; inserterCapacity: string | null; directInsertion?: string; compactLayout?: boolean; foldLayout?: boolean }
-  | { id: number; method: "layoutTraced"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null; stacking: string | null; inserterCapacity: string | null; directInsertion?: string; compactLayout?: boolean; foldLayout?: boolean }
-  | { id: number; method: "layoutStreaming"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null; stacking: string | null; inserterCapacity: string | null; directInsertion?: string; compactLayout?: boolean; foldLayout?: boolean }
+  | { id: number; method: "layout"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null; stacking: string | null; inserterCapacity: string | null; directInsertion?: string }
+  | { id: number; method: "layoutTraced"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null; stacking: string | null; inserterCapacity: string | null; directInsertion?: string }
+  | { id: number; method: "layoutStreaming"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null; stacking: string | null; inserterCapacity: string | null; directInsertion?: string }
   | { id: number; method: "exportBlueprint"; layout: LayoutResult; label: string }
   | {
       id: number;
@@ -146,10 +146,10 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         );
         break;
       case "layout":
-        result = layout(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined, req.wireMode ?? undefined, req.stacking ? Number(req.stacking) : undefined, req.inserterCapacity ? Number(req.inserterCapacity) : undefined, undefined, req.directInsertion ?? undefined, req.compactLayout ? "1" : undefined, req.foldLayout ? "1" : undefined);
+        result = layout(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined, req.wireMode ?? undefined, req.stacking ? Number(req.stacking) : undefined, req.inserterCapacity ? Number(req.inserterCapacity) : undefined, undefined, req.directInsertion ?? undefined);
         break;
       case "layoutTraced":
-        result = layout_traced(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined, req.wireMode ?? undefined, req.stacking ? Number(req.stacking) : undefined, req.inserterCapacity ? Number(req.inserterCapacity) : undefined, undefined, req.directInsertion ?? undefined, req.compactLayout ? "1" : undefined, req.foldLayout ? "1" : undefined);
+        result = layout_traced(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined, req.wireMode ?? undefined, req.stacking ? Number(req.stacking) : undefined, req.inserterCapacity ? Number(req.inserterCapacity) : undefined, undefined, req.directInsertion ?? undefined);
         break;
       case "layoutStreaming": {
         const id = req.id;
@@ -192,7 +192,7 @@ self.onmessage = async (e: MessageEvent<Request>) => {
           if (batch.length >= BATCH_SIZE) flushBatch();
         };
         try {
-          result = layout_streaming(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined, req.wireMode ?? undefined, req.stacking ? Number(req.stacking) : undefined, req.inserterCapacity ? Number(req.inserterCapacity) : undefined, undefined, req.directInsertion ?? undefined, req.compactLayout ? "1" : undefined, req.foldLayout ? "1" : undefined, emit);
+          result = layout_streaming(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined, req.wireMode ?? undefined, req.stacking ? Number(req.stacking) : undefined, req.inserterCapacity ? Number(req.inserterCapacity) : undefined, undefined, req.directInsertion ?? undefined, emit);
         } finally {
           flushBatch();
           if (TRACE_LOGS) {
