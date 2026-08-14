@@ -376,7 +376,10 @@ ordering is a deliberate trade recorded here, not an oversight.
   golden legs byte-identical); and the balancer-audit un-blinding —
   four shapes' audit drive changed ((6,3), (6,4), (7,4), (8,3); see
   the KNOWN_IMBALANCED doc for the census), (6,3)/(6,4) provisionally
-  known-imbalanced, owner ratification pending. **What reopening means and does not mean**:
+  known-imbalanced, owner ratification pending (resolved 2026-08-14:
+  the owner directed a re-bake instead — both shapes re-baked
+  gate-clean and removed from KNOWN_IMBALANCED, PR #630; full trail
+  in RFC-027's decision log). **What reopening means and does not mean**:
   per the amended gate, Phase 3 may resume toward multi-group stamping
   (the ac/ec prizes) under a plan of its own; stamping stays inert and
   selection stays untouched until the standing K67-4 discipline is
