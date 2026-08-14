@@ -529,9 +529,10 @@ fn assert_warnings_golden(result: &E2EResult, test_name: &str) {
 }
 
 /// `assert_warnings_golden` without the zero-error precondition, for the
-/// fixtures that carry an ADJUDICATED known-deficit error pin of their own
-/// (#644): their error state is enforced by an exact category pin at the
-/// call site, so the warning golden pins warnings only. Never reach for
+/// fixtures that carry an ADJUDICATED known-deficit error ceiling of their
+/// own (#644): their error state is enforced by a category-scoped ceiling
+/// with a tighten advisory at the call site, so the warning golden pins
+/// warnings only. Never reach for
 /// this to silence an unadjudicated error.
 fn assert_warnings_golden_allow_errors(result: &E2EResult, test_name: &str) {
     let mut actual: std::collections::BTreeMap<&str, usize> = Default::default();
@@ -2382,12 +2383,14 @@ fn tier4_advanced_circuit_from_ore_am2() {
     assert_round_trip(&result);
 }
 
-/// Tier 5 green: processing-unit @ 2/s, AM3, red belts, fully from ore.
+/// Tier 5: processing-unit @ 2/s, AM3, red belts, fully from ore.
 /// Deep chain — electronic-circuit + advanced-circuit + sulfuric-acid,
-/// with the whole plastic/sulfur/oil subtree upstream. This is the
-/// first tier-5 config to reach 0 errors / 0 warnings under the
-/// default Pooled strategy (same bar as the tier-4 green above), so
-/// it gates the recipe-ladder claim that tier 5 is solved.
+/// with the whole plastic/sulfur/oil subtree upstream. Reached
+/// 0 errors / 0 warnings under the OLD lane walker (the recipe-ladder
+/// "tier 5 solved" bar); since #632 B5's truth-telling dispatch it
+/// carries the adjudicated #644 known-deficit ceiling below —
+/// "solved" meant validator-clean, and the validator was blind to the
+/// trunk deficit the meter measures at 85.6% of plan.
 ///
 /// URL repro:
 /// `?item=processing-unit&rate=2&machine=assembling-machine-3&in=coal,water,crude-oil,iron-ore,copper-ore&belt=fast-transport-belt`
@@ -2413,10 +2416,11 @@ fn tier5_processing_unit_from_ore_am3() {
     // 2026-08-15 (#632 B5 dispatch swap, #644): this fixture carries 70
     // lane-throughput errors — a REAL deficit, meter-measured at 85.6%
     // of plan (1.712/2.0 produced, uniform choke signature: cable 87.3%,
-    // EC 86.8%) — so the zero-error assert becomes an exact known-deficit
-    // pin. Any NEW error category, or movement in the count either
-    // direction, fails loudly; drop back to `assert_no_errors` when
-    // #644's engine fix lands.
+    // EC 86.8%). The zero-error assert becomes a category-scoped CEILING:
+    // any NEW error category or a count above 70 fails loudly; a lower
+    // count prints a tighten advisory (exact counts of float-threshold
+    // tile flips would flake on CI). Drop back to `assert_no_errors`
+    // when #644's engine fix lands.
     {
         let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
         for i in result.issues.iter().filter(|i| i.severity == Severity::Error) {
