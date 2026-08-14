@@ -5389,6 +5389,9 @@ pub fn template_provenance(shape: (u32, u32)) -> TemplateProvenance {
         (2, 9) => P { source: "compose", strategy: "Parallel(1, 3, 2) → Parallel(2, 3, 3) via Clos(2, 3)", reference: "" },
         (3, 2) => P { source: "compose", strategy: "Lib(3, 1) → Lib(1, 2)", reference: "" },
         (3, 9) => P { source: "compose", strategy: "Parallel(1, 3, 3) → Parallel(3, 3, 3) via Clos(3, 3)", reference: "" },
+        // (6, 3) is compose-baked; (6, 4) deliberately has NO arm — it is
+        // a native factorio-sat re-solve (#630), so the default is right.
+        (6, 3) => P { source: "compose", strategy: "Parallel(2, 1, 3) → Lib(3, 3)", reference: "" },
         (6, 1) => P { source: "compose", strategy: "Parallel(3, 1, 2) → Lib(2, 1)", reference: "" },
         (6, 2) => P { source: "compose", strategy: "Parallel(3, 1, 2) → Lib(2, 2)", reference: "" },
         (7, 2) => P { source: "compose", strategy: "Lib(7, 1) → Lib(1, 2)", reference: "" },
