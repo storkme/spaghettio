@@ -2144,7 +2144,14 @@ pub fn check_lane_throughput(
     for e in &layout.entities {
         if is_surface_belt(&e.name) {
             belt_name_map.insert((e.x, e.y), &e.name);
-        } else if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("output") {
+        } else if is_ug_belt(&e.name) {
+            // BOTH halves of a UG pair, not just the output: UG-in tiles
+            // carry rates via the walker's deliberate fix-up (inserter
+            // pickups resolve there), and rating them at the yellow
+            // fallback flagged fast UG entries lawfully carrying their
+            // own tier's flow — the stacking family's "30.0/s exceeds
+            // transport-belt 15/s" false positives (#632 B5; 30.0 is
+            // exactly AT the fast S=2 per-lane cap).
             belt_name_map.insert((e.x, e.y), ug_to_surface_tier(&e.name));
         } else if is_splitter(&e.name) {
             // Both splitter tiles rate at the splitter's own tier. This
@@ -4031,6 +4038,60 @@ mod tests {
         assert!(
             !flagged.is_empty(),
             "12/s per lane on a YELLOW belt must still flag over-cap"
+        );
+    }
+
+    /// UG INPUT tiles must rate at the UG's surface tier too. The walker
+    /// deliberately copies upstream rates onto UG-in tiles (so inserter
+    /// pickups resolve there), but the cap map covered UG OUTPUTS only —
+    /// a fast UG entry lawfully carrying 12/s per lane rated against the
+    /// yellow 7.5/s fallback (#632 B5, the stacking family's
+    /// 30.0-vs-15 false positives).
+    #[test]
+    fn ug_input_tiles_rate_at_ug_tier() {
+        let mk = |ug_name: &str| LayoutResult {
+            entities: vec![
+                machine(0, 0, "iron-gear-wheel"),
+                inserter(3, 1, EntityDirection::East),
+                {
+                    let mut b = belt_carries(4, 1, EntityDirection::East, "iron-gear-wheel");
+                    b.name = "fast-transport-belt".to_string();
+                    b
+                },
+                PlacedEntity {
+                    name: ug_name.to_string(),
+                    x: 5,
+                    y: 1,
+                    direction: EntityDirection::East,
+                    io_type: Some("input".to_string()),
+                    carries: Some("iron-gear-wheel".to_string()),
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: ug_name.to_string(),
+                    x: 8,
+                    y: 1,
+                    direction: EntityDirection::East,
+                    io_type: Some("output".to_string()),
+                    carries: Some("iron-gear-wheel".to_string()),
+                    ..Default::default()
+                },
+            ],
+            width: 12,
+            height: 5,
+            ..Default::default()
+        };
+        // 12/s on one lane: legal on fast hardware, over the yellow cap.
+        let sr = simple_solver(2.0, 12.0);
+        let clean = check_lane_throughput(&mk("fast-underground-belt"), Some(&sr));
+        assert!(
+            clean.is_empty(),
+            "12/s per lane through a FAST UG entry is legal; got {clean:?}"
+        );
+        let flagged = check_lane_throughput(&mk("underground-belt"), Some(&sr));
+        assert!(
+            !flagged.is_empty(),
+            "12/s per lane through a YELLOW UG must still flag over-cap"
         );
     }
 
