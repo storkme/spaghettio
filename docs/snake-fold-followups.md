@@ -180,7 +180,9 @@ the later checks, exactly as item 1 anticipated: `pu4raw` goes from 0
 `InputStranded` (173 died on lane clashes, the other 23 on `JunctionBlocked`,
 none reaching the input check) to 118.
 `InputStranded` is now the dominant refusal on all three non-folding fixtures;
-its shape is diagnosed in `status.md` as one item wanted at two columns on the
+its shape is diagnosed in the close-out archive
+(`archive/status-rfc-closeouts-2026-jul-aug.md`, RFC-057 multi-fold
+entry; moved from `status.md` 2026-08-15) as one item wanted at two columns on the
 same side, which needs a splitter the gap-lane pass cannot synthesize.
 `JunctionBlocked` is second on those three and the sole refusal cause on
 `mil5ore`, and that one number hides two causes:

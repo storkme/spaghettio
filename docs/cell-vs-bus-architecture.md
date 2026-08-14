@@ -225,4 +225,4 @@ automatic candidate.
 | DI cells | `bus/di_cell.rs` — RFC-053 |
 | Cell composition | `bus/cells/*` — RFC-048 / RFC-051 / RFC-052; `tests/cell_composition.rs` |
 | Direction / open work | RFC-062 (multi-target outputs), RFC-064 (spaghetti objective: folding, transit) |
-| Status ledger | [`status.md`](status.md) — recipe complexity ladder, RFC close-outs, residual warnings |
+| Status ledger | [`status.md`](status.md) — recipe complexity ladder, RFC close-out index (narratives in `archive/`), residual warnings |
