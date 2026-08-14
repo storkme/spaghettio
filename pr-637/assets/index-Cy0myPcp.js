@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-3zgq9YAo.js","assets/webworkerAll-C3FzzGU9.js","assets/Filter-itfXW68g.js","assets/WebGPURenderer-DEweLE0J.js","assets/BufferResource-jmbbvjH3.js","assets/RenderTargetSystem-CjGetXJg.js","assets/WebGLRenderer-CHs556Ha.js","assets/CanvasRenderer-4DnHhnj8.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-CWbOf7Ko.js","assets/webworkerAll-BKGMaqH9.js","assets/Filter-rNPenalR.js","assets/WebGPURenderer-C096VyO-.js","assets/BufferResource-Cmeunf0d.js","assets/RenderTargetSystem-DY07Z76u.js","assets/WebGLRenderer-Uk8iQNBk.js","assets/CanvasRenderer-B0-0NErR.js"])))=>i.map(i=>d[i]);
 let Uh, Sa, dr, zt, zm, bn, $f, Ai, ps, Ns, ue, se, Kt, ai, $h, vt, lt, pt, Ut, Er, S, ye, qy, Dg, Ar, Lg, Rn, kr, yr, $t, dd, Go, Dt, as, mi, It, Fp, Fm, Hs, Wd, ud, Ti, sm, Zf, Cd, Um, mg, yg, Sg, vg, Eg, Ol, or, wa, ld, ze, Ca, fg, gg, Cg, _g, Sp, Tg, Ie, Rh, Ge, vr, xl, qe, Tx, ef, _l, Yr, wl, nf, Oh, Mr, Zn, Lr, C1, ur, va, Lt, Et, ta, ds, Sn, Qo, Ui, Xt, Ke, Hd, Ud, pi, Ve, v1, mx, ne, nx, re, Jt, Mt;
 let __tla = (async () => {
   (function() {
@@ -148,7 +148,7 @@ let __tla = (async () => {
     },
     test: () => true,
     load: async () => {
-      await Hn(() => import("./browserAll-3zgq9YAo.js"), __vite__mapDeps([0,1,2]));
+      await Hn(() => import("./browserAll-CWbOf7Ko.js"), __vite__mapDeps([0,1,2]));
     }
   };
   pp = {
@@ -159,7 +159,7 @@ let __tla = (async () => {
     },
     test: () => typeof self < "u" && self.WorkerGlobalScope !== void 0,
     load: async () => {
-      await Hn(() => import("./webworkerAll-C3FzzGU9.js"), __vite__mapDeps([1,2]));
+      await Hn(() => import("./webworkerAll-BKGMaqH9.js"), __vite__mapDeps([1,2]));
     }
   };
   class ge {
@@ -5189,7 +5189,7 @@ ${n}`;
       const o = t[r];
       if (o === "webgpu" && await em()) {
         const { WebGPURenderer: a } = await Hn(async () => {
-          const { WebGPURenderer: l } = await import("./WebGPURenderer-DEweLE0J.js");
+          const { WebGPURenderer: l } = await import("./WebGPURenderer-C096VyO-.js");
           return {
             WebGPURenderer: l
           };
@@ -5201,7 +5201,7 @@ ${n}`;
         break;
       } else if (o === "webgl" && tm(n.failIfMajorPerformanceCaveat ?? dd.defaultOptions.failIfMajorPerformanceCaveat)) {
         const { WebGLRenderer: a } = await Hn(async () => {
-          const { WebGLRenderer: l } = await import("./WebGLRenderer-CHs556Ha.js");
+          const { WebGLRenderer: l } = await import("./WebGLRenderer-Uk8iQNBk.js");
           return {
             WebGLRenderer: l
           };
@@ -5213,7 +5213,7 @@ ${n}`;
         break;
       } else if (o === "canvas") {
         const { CanvasRenderer: a } = await Hn(async () => {
-          const { CanvasRenderer: l } = await import("./CanvasRenderer-4DnHhnj8.js");
+          const { CanvasRenderer: l } = await import("./CanvasRenderer-B0-0NErR.js");
           return {
             CanvasRenderer: l
           };
@@ -5523,7 +5523,7 @@ ${n}`;
       }
       const [l, { BitmapFont: c }] = await Promise.all([
         e.load(o),
-        Hn(() => import("./BitmapFont-DhvkqtE0.js"), [])
+        Hn(() => import("./BitmapFont-DExSnoR0.js"), [])
       ]), h = o.map((u) => l[u.src]);
       return new c({
         data: s,
@@ -19624,7 +19624,7 @@ fn mainFragment(
     const w = new zt();
     v.addChild(w), v.fit(true, b * 1.15, x * 1.2), v.moveCenter(b / 2, x / 2);
     const { renderLayoutAnimated: C } = await Hn(async () => {
-      const { renderLayoutAnimated: A } = await import("./animated-D7mi7pRl.js");
+      const { renderLayoutAnimated: A } = await import("./animated-Bb4BV9kX.js");
       return {
         renderLayoutAnimated: A
       };
@@ -20045,7 +20045,7 @@ fn mainFragment(
     for (const h of n) {
       if (h.phase !== "GhostSpecFailed") continue;
       const d = h.data, u = d.from_x * S + S / 2, p = d.from_y * S + S / 2, f = 4, g = new pt();
-      g.label = "RouteFailure", g.moveTo(u - f, p - f).lineTo(u + f, p + f).stroke({
+      g.label = "GhostSpecFailed", g.moveTo(u - f, p - f).lineTo(u + f, p + f).stroke({
         width: 2,
         color: 16724787
       }), g.moveTo(u + f, p - f).lineTo(u - f, p + f).stroke({
@@ -23771,7 +23771,7 @@ ${L}` : ct, Le();
     const t = document.getElementById("app"), e = window.location.hash, s = new URLSearchParams(window.location.search);
     if (e.startsWith("#/balancers")) {
       const { renderBalancerShowcase: r } = await Hn(async () => {
-        const { renderBalancerShowcase: o } = await import("./balancers-C6LHb9aW.js");
+        const { renderBalancerShowcase: o } = await import("./balancers-DZ3AuFjU.js");
         return {
           renderBalancerShowcase: o
         };
