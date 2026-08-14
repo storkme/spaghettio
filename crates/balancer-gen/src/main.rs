@@ -1524,13 +1524,12 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             perm: Perm::Identity,
             max_jh: 8,
         },
-        // (9, 3..=8) — same merge-then-balance pattern through (3, m) atoms.
+        // (9, 3) — merge-then-balance through the (3, 3) atom (mid cut 3 =
+        // rated 3, sound). Its former siblings (9, 4..=8) were DELETED
+        // 2026-08-14 (#632 A3 review round): Parallel(3,1,3) gives a
+        // 3-belt mid cut against rated 4..8 — waisted BY CONSTRUCTION
+        // (#631), so the recipes go with their culled products.
         Recipe { shape: (9, 3), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 3), perm: Perm::Identity, max_jh: 8 },
-        Recipe { shape: (9, 4), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 4), perm: Perm::Identity, max_jh: 8 },
-        Recipe { shape: (9, 5), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 5), perm: Perm::Identity, max_jh: 8 },
-        Recipe { shape: (9, 6), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 6), perm: Perm::Identity, max_jh: 8 },
-        Recipe { shape: (9, 7), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 7), perm: Perm::Identity, max_jh: 8 },
-        Recipe { shape: (9, 8), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 8), perm: Perm::Identity, max_jh: 8 },
         // (m, 9) Clos for m in 3..=9 — same pattern as (2, 9):
         // parallel((1, 3), m) → parallel((m, 3), 3) with clos_interleave(m, 3).
         // Issue #136. max_jh=24 is generous; (4, 9) finds jh=9.
@@ -1549,21 +1548,15 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
         // full-corpus census this spike ran to confirm these are the only
         // missing shapes across all 24 gauntlet cells.
 
-        // (12, 7) — electronic-circuit. merge-then-balance: both atoms
-        // ((4, 1) and (3, 7)) already in the library.
-        Recipe { shape: (12, 7), stage1: Stage::Parallel(4, 1, 3), stage2: Stage::Lib(3, 7), perm: Perm::Identity, max_jh: 8 },
-
-        // (15, 7) — NOT itself a demanded shape. Intermediate atom for the
-        // (15, 14) Clos below (n=15 exceeds the library's direct-atom
-        // range, so the Clos second stage needs this baked first).
-        // merge-then-balance: (3, 1) and (5, 7) already in the library.
-        Recipe { shape: (15, 7), stage1: Stage::Parallel(3, 1, 5), stage2: Stage::Lib(5, 7), perm: Perm::Identity, max_jh: 16 },
-
-        // (15, 14) — copper-cable. Clos via parallel((1,2), 15) →
-        // parallel((15,7), 2) with clos_interleave(15, 2). Needs (15, 7)
-        // baked above and synced into the library first (run this as a
-        // second pass after (15, 7) lands).
-        Recipe { shape: (15, 14), stage1: Stage::Parallel(1, 2, 15), stage2: Stage::Parallel(15, 7, 2), perm: Perm::Clos(15, 2), max_jh: 24 },
+        // (12, 7), (15, 7), (15, 14) recipes DELETED 2026-08-14 (#632 A3
+        // review round; products culled the same day). All three are
+        // waisted by construction: (12,7) = Parallel(4,1,3)->Lib(3,7)
+        // mid cut 3 vs rated 7; (15,7) = Parallel(3,1,5)->Lib(5,7) mid
+        // cut 5 vs rated 7; (15,14) = Clos on (15,7)x2, cut 10 vs rated
+        // 14 — and its (15,7) dependency is culled. The utility@10/s
+        // demand these served needs a full-throughput design (native SAT
+        // solve or a sound factorization), gated by
+        // scripts/balancer_cut_census.py before shipping.
     ];
 
     // SPAGHETTIO_BAKE_ONLY: semicolon-separated `(m,n)` pairs. When set,

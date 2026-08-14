@@ -1075,7 +1075,10 @@ mod tests {
     ///
     /// History: #266 originally listed (5, 8) AND (8, 6); the 2026-07-24
     /// audit found (8, 6) already classifies MX3 balanced on main (fixed by
-    /// a later library re-bake), so only (5, 8) is pinned. The (5, 8)
+    /// a later library re-bake), so only (5, 8) is pinned. ((8, 6) itself
+    /// was CULLED 2026-08-14, #632 A3 — its structural min-cut was 2 of
+    /// rated 6 despite the MX3 verdict, the #631 classify-blindness in
+    /// one line.) The (5, 8)
     /// throughput limit (saturated inputs {1,2} realize 1 belt, not 2) is
     /// an accepted, documented limitation — revocable: a re-bake that
     /// fixes it should empty this list (the second assert forces that
