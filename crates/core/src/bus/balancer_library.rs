@@ -4913,7 +4913,9 @@ mod tests {
         // pipeline targets: their recipes were deleted 2026-08-14 with
         // the #632 A3 cull (waisted by construction — see the recipe
         // list's record in balancer-gen). That demand needs a
-        // full-throughput design gated by scripts/balancer_cut_census.py.
+        // full-throughput design gated by the min-cut audit
+        // (balancer_lane_audit::audit_min_cut_capacity — which any
+        // registered shape now faces in CI regardless).
     ];
 
     #[test]

@@ -1,5 +1,6 @@
-//! Audit of lane-correctness across the entire baked balancer
-//! library (`docs/rfc-balancer-bake-lane-validation.md`).
+//! Audit of lane-correctness and structural min-cut capacity across the
+//! entire baked balancer library
+//! (`docs/rfc-balancer-bake-lane-validation.md`).
 //!
 //! For every `(m, n)` template in
 //! [`balancer_templates`](spaghettio_core::bus::balancer_library::balancer_templates),
@@ -25,7 +26,7 @@
 use std::collections::BTreeMap;
 
 use spaghettio_core::bus::balancer_classify::BalancerTemplateRef;
-use spaghettio_core::bus::balancer_library::balancer_templates;
+use spaghettio_core::bus::balancer_library::{balancer_templates, BalancerTemplateEntity};
 use spaghettio_core::bus::template_validate::validate_template_lanes;
 use spaghettio_core::validate::Severity;
 
@@ -493,4 +494,229 @@ fn debug_single_shape() {
             eprintln!("  ({x:>2}, {y:>2}): L={l:6.3}  R={r:6.3}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Min-cut capacity census (#631; CI-wired 2026-08-14, #632)
+// ---------------------------------------------------------------------------
+
+/// South-flow capacity potential of each horizontal cut of a template.
+///
+/// A balancer whose min row-cut capacity is below its rated output count
+/// is throughput-capped no matter what classify's max-flow or the lane
+/// walker say — both are blind to the waist class (#631). Flow across
+/// the cut between row `y` and `y+1` is carried by:
+///
+/// - a surface transport-belt at row `y` facing south (1 tile)
+/// - a splitter at row `y` facing south (2 tiles). Both tiles count even
+///   if a downstream tile is absent/turns away — these are capacity
+///   POTENTIALS, and overcounting only loosens the upper bound, which
+///   the one-sided verdict tolerates (it can never manufacture a false
+///   WAIST)
+/// - an underground-belt pair (input at `y1`, output at `y2`, same `x`,
+///   both facing south): 1 tile across every cut `y1..y2` INCLUSIVE —
+///   the item travels underground across cuts `y1..y2-1`, then the
+///   output tile itself emits it southward across cut `y2`. Counting
+///   only `y1..y2-1` (or surface belts alone) reads false waists on
+///   clean templates.
+///
+/// North-facing entities are return/feedback paths; they are noted for
+/// visibility but do not reduce forward cut capacity. East/west belts
+/// move nothing southward and are ignored.
+///
+/// This is the compiled-registry successor of
+/// `scripts/balancer_cut_census.py` (PR #630 round 8), which
+/// regex-parsed the library source and would have no-opped silently on
+/// a source-format change; the script was deleted when this test landed.
+fn row_cut_capacities(
+    entities: &[BalancerTemplateEntity],
+    height: u32,
+) -> (Vec<u32>, Vec<String>) {
+    let h = height as usize;
+    let mut cuts = vec![0u32; h.saturating_sub(1)];
+    let mut notes = Vec::new();
+
+    let ug_outputs: Vec<(i32, i32)> = entities
+        .iter()
+        .filter(|e| {
+            e.name == "underground-belt" && e.io_type == Some("output") && e.direction == 4
+        })
+        .map(|e| (e.x, e.y))
+        .collect();
+
+    let north = entities.iter().filter(|e| e.direction == 0).count();
+    if north > 0 {
+        notes.push(format!("north-facing return paths: {north}"));
+    }
+
+    for e in entities {
+        if e.direction != 4 {
+            continue;
+        }
+        // A counted entity outside its own declared bounding box is a
+        // template defect in its own right — fail loudly rather than
+        // mis-attribute its capacity. (The Python predecessor would have
+        // Python-wrapped a negative index into the LAST cut here.)
+        assert!(
+            (0..height as i32).contains(&e.y),
+            "{} at ({}, {}) outside template height {height}",
+            e.name,
+            e.x,
+            e.y
+        );
+        let y = e.y as usize;
+        match (e.name, e.io_type) {
+            ("transport-belt", _) => {
+                if y < h - 1 {
+                    cuts[y] += 1;
+                }
+            }
+            ("splitter", _) => {
+                if y < h - 1 {
+                    cuts[y] += 2;
+                }
+            }
+            ("underground-belt", Some("input")) => {
+                let nearest_below = ug_outputs
+                    .iter()
+                    .filter(|(ox, oy)| *ox == e.x && *oy > e.y)
+                    .map(|(_, oy)| *oy)
+                    .min();
+                match nearest_below {
+                    None => notes.push(format!("unpaired south UG input at ({}, {})", e.x, e.y)),
+                    Some(below) => {
+                        let end = (below as usize + 1).min(h - 1);
+                        for c in cuts.iter_mut().take(end).skip(y) {
+                            *c += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (cuts, notes)
+}
+
+/// Library-wide enforcement of the min-cut ≥ rated invariant: every
+/// registered template's min row-cut capacity must be at least
+/// `min(n_inputs, n_outputs)` (rated throughput — a (1, 4) delivering
+/// one belt is at rated, not waisted). This is the CI tripwire promised
+/// when #631's 12 waist-capped shapes were culled (#632 A3): a
+/// re-registered waisted shape fails this test, not an eprintln.
+///
+/// The verdict is one-sided, like the meter: "min cut < rated" is a
+/// structural throughput cap — believe it. "min cut ≥ rated" clears
+/// nothing on its own (lateral distribution can still under-use a cut);
+/// clearing takes the sim.
+#[test]
+fn audit_min_cut_capacity() {
+    let templates = balancer_templates();
+    assert!(
+        !templates.is_empty(),
+        "balancer registry is empty — the census has nothing to enforce"
+    );
+
+    let mut shapes: Vec<(u32, u32)> = templates.keys().copied().collect();
+    shapes.sort();
+
+    let mut failed: Vec<(u32, u32)> = Vec::new();
+    eprintln!();
+    eprintln!("# Balancer library min-cut census (rated = min(n, m))");
+    for shape in &shapes {
+        let t = &templates[shape];
+        let rated = t.n_inputs.min(t.n_outputs);
+        let (cuts, notes) = row_cut_capacities(t.entities, t.height);
+        // A single-row template has no internal cut to cap it.
+        let min_cut = cuts.iter().copied().min().unwrap_or(rated);
+        let verdict = if min_cut >= rated { "ok" } else { "WAIST" };
+        eprintln!(
+            "({},{}): min cut {} vs rated {} [{}]  cuts={:?}{}",
+            shape.0,
+            shape.1,
+            min_cut,
+            rated,
+            verdict,
+            cuts,
+            if notes.is_empty() {
+                String::new()
+            } else {
+                format!("  ({})", notes.join("; "))
+            }
+        );
+        if min_cut < rated {
+            failed.push(*shape);
+        }
+    }
+
+    if std::env::var("BALANCER_AUDIT_NO_FAIL").is_err() {
+        assert!(
+            failed.is_empty(),
+            "WAIST-CAPPED templates (min row-cut below rated min(n, m) — structural \
+             throughput cap, #631): {failed:?}. Full census above (--nocapture). Set \
+             BALANCER_AUDIT_NO_FAIL=1 only for exploratory bake work."
+        );
+    }
+}
+
+/// The census must be able to READ a waist — pinned instrument-can-fail
+/// proof (#632 lesson: every deletion/exclusion instrument that day had
+/// a silent-no-op failure mode found in review; this one carries its
+/// positive fixture from birth). A synthetic 2-to-2 whose middle row
+/// narrows to a single belt must census as [2, 1, 2].
+#[test]
+fn cut_census_reads_synthetic_waist() {
+    fn ent(
+        name: &'static str,
+        x: i32,
+        y: i32,
+        direction: u8,
+        io_type: Option<&'static str>,
+    ) -> BalancerTemplateEntity {
+        BalancerTemplateEntity {
+            name,
+            x,
+            y,
+            direction,
+            io_type,
+            input_priority: None,
+            output_priority: None,
+        }
+    }
+
+    // Splitter row → single-belt waist row → splitter row → exit row.
+    let waisted = [
+        ent("splitter", 0, 0, 4, None),
+        ent("transport-belt", 0, 1, 4, None),
+        ent("splitter", 0, 2, 4, None),
+        ent("transport-belt", 0, 3, 4, None),
+        ent("transport-belt", 1, 3, 4, None),
+    ];
+    let (cuts, notes) = row_cut_capacities(&waisted, 4);
+    assert_eq!(cuts, vec![2, 1, 2], "unexpected cut vector: {notes:?}");
+    let rated = 2;
+    assert!(
+        cuts.iter().copied().min().unwrap() < rated,
+        "the synthetic waist must read as WAIST-capped"
+    );
+
+    // UG-pair semantics pin: input at y=1, output at y=3 carries across
+    // cuts 1, 2 AND 3 (the output tile emits southward across its own
+    // cut). Counting y1..y2-1 was the historical false-waist bug.
+    let ug_pair = [
+        ent("underground-belt", 0, 1, 4, Some("input")),
+        ent("underground-belt", 0, 3, 4, Some("output")),
+    ];
+    let (cuts, _) = row_cut_capacities(&ug_pair, 5);
+    assert_eq!(cuts, vec![0, 1, 1, 1]);
+
+    // North-facing return paths and unpaired UG inputs add no forward
+    // capacity — they surface as notes, never as counts.
+    let noise = [
+        ent("transport-belt", 5, 1, 0, None),
+        ent("underground-belt", 2, 0, 4, Some("input")),
+    ];
+    let (cuts, notes) = row_cut_capacities(&noise, 3);
+    assert_eq!(cuts, vec![0, 0]);
+    assert_eq!(notes.len(), 2, "expected north + unpaired notes: {notes:?}");
 }

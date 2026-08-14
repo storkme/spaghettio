@@ -1026,9 +1026,10 @@ guarded in `balancer_classify`. Both revocable on re-bake or field failure.
 2026-08-14: the #334 acceptance is REVOKED BY DELETION — (7,3)/(7,4) were
 culled from the library with the 12 waist-capped shapes (#632 A3;
 corpus-unexercised per `scripts/balancer_usage_census.py`), KNOWN_IMBALANCED
-is empty, and the min-cut ≥ rated invariant holds library-wide
-(`scripts/balancer_cut_census.py` exits 0; RFC-027's decision log has the
-full adjudication).
+is empty, and the min-cut ≥ rated invariant holds library-wide — enforced
+in CI since the same day by `balancer_lane_audit::audit_min_cut_capacity`,
+which superseded and deleted the `scripts/balancer_cut_census.py` instrument
+that first measured it (RFC-027's decision log has the full adjudication).
 2026-07-31, 28-issue audit: #513 and #429 closed as shipped — RFC-060 and
 RFC-053 respectively; #429's geometry residue filed as #526. #311/#312/
 #335/#336/#345 closed not-planned into parked cluster #527, revisit at the

@@ -1555,8 +1555,9 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
         // cut 5 vs rated 7; (15,14) = Clos on (15,7)x2, cut 10 vs rated
         // 14 — and its (15,7) dependency is culled. The utility@10/s
         // demand these served needs a full-throughput design (native SAT
-        // solve or a sound factorization), gated by
-        // scripts/balancer_cut_census.py before shipping.
+        // solve or a sound factorization); registering it puts it in
+        // front of the CI min-cut gate
+        // (balancer_lane_audit::audit_min_cut_capacity in spaghettio_core).
     ];
 
     // SPAGHETTIO_BAKE_ONLY: semicolon-separated `(m,n)` pairs. When set,
