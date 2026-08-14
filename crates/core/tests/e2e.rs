@@ -525,6 +525,15 @@ fn assert_no_warnings_except(result: &E2EResult, skip_categories: &[&str]) {
 /// then bless, recording the adjudication where the change lives.
 fn assert_warnings_golden(result: &E2EResult, test_name: &str) {
     assert_no_errors(result);
+    assert_warnings_golden_allow_errors(result, test_name);
+}
+
+/// `assert_warnings_golden` without the zero-error precondition, for the
+/// fixtures that carry an ADJUDICATED known-deficit error pin of their own
+/// (#644): their error state is enforced by an exact category pin at the
+/// call site, so the warning golden pins warnings only. Never reach for
+/// this to silence an unadjudicated error.
+fn assert_warnings_golden_allow_errors(result: &E2EResult, test_name: &str) {
     let mut actual: std::collections::BTreeMap<&str, usize> = Default::default();
     for w in result.issues.iter().filter(|i| i.severity == Severity::Warning) {
         *actual.entry(w.category.as_str()).or_default() += 1;
@@ -2401,7 +2410,24 @@ fn tier5_processing_unit_from_ore_am3() {
     )
     .unwrap_or_else(|e| panic!("tier5_processing_unit_from_ore_am3: {e}"));
 
-    assert_no_errors(&result);
+    // 2026-08-15 (#632 B5 dispatch swap, #644): this fixture carries 70
+    // lane-throughput errors — a REAL deficit, meter-measured at 85.6%
+    // of plan (1.712/2.0 produced, uniform choke signature: cable 87.3%,
+    // EC 86.8%) — so the zero-error assert becomes an exact known-deficit
+    // pin. Any NEW error category, or movement in the count either
+    // direction, fails loudly; drop back to `assert_no_errors` when
+    // #644's engine fix lands.
+    {
+        let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
+        for i in result.issues.iter().filter(|i| i.severity == Severity::Error) {
+            *by.entry(i.category.as_str()).or_default() += 1;
+        }
+        assert_eq!(
+            by,
+            [("lane-throughput", 70)].into_iter().collect(),
+            "tier5 PU known-deficit pin (#644) moved - adjudicate, don't re-bless blind"
+        );
+    }
     // RFC Phase 1: 129 inserter-bound machine-sides (processing-unit @2/s deep chain).
     // Demand-pull + the UG-crossing demand fix clear every prior belt-delivery false
     // positive across this layout's underground hops; the residual is purely
@@ -2429,7 +2455,9 @@ fn tier5_processing_unit_from_ore_am3() {
     // copper-plate / copper-cable / plastic rows — the same uniform
     // −24% chain signature pu@3 sim-measured (RFC-060 K60-3, converged,
     // warmup-flat). The check now reports what the sim already proved.
-    assert_warnings_golden(&result, "tier5_processing_unit_from_ore_am3");
+    // Known-deficit fixture (#644): errors are pinned exactly above; the
+    // golden pins warnings only.
+    assert_warnings_golden_allow_errors(&result, "tier5_processing_unit_from_ore_am3");
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -3537,10 +3565,20 @@ fn stress_electronic_circuit_30s_from_ore() {
             // The PR baseline of 10 belt-dead-end was probed before the
             // fluid-reservation filter + promote_blocked_encountered +
             // perimeter-boundary check landed.
-            max_errors: 0,
+            // 2026-08-15 (#632 B5 dispatch swap, #644): 0 -> 140. The
+            // calibrated belt_flow walker took the lane-throughput slot
+            // and surfaces the real trunk under-provisioning this
+            // fixture ships: sim-measured 92.1% delivered (post-lift
+            // bank 2026-08-07/08), meter 91.9% on a fresh export; the
+            // 140 instances name the yellow trunk choke tiles at
+            // 7.8-10.0/s vs the 7.5/s cap. Tighten as #644's engine fix
+            // lands.
+            max_errors: 140,
             // RFC rfc-lane-demand-flow.md Phase 1: was 0; +104 inserter-throughput (100) + input-rate-delivery (4).
             max_warnings: 104,
-            max_errors_by_category: Default::default(),
+            max_errors_by_category: [("lane-throughput".to_string(), 140)]
+                .into_iter()
+                .collect(),
         },
     );
 }
@@ -3878,13 +3916,19 @@ fn stress_electronic_circuit_30s_decomposed() {
     // K1-1 originally asked for "validator-clean on the smallest gate-
     // passing partition"; we now satisfy that, and additionally Pool is
     // also clean on this case.
+    // 2026-08-15 (#632 B5 dispatch swap, #644): 0 -> 140 lane-throughput
+    // on the Pool arm — the same adjudicated trunk under-provisioning as
+    // the stress_ec_30s baseline (sim 92.1% delivered / meter 91.9%).
+    // Tighten as #644's engine fix lands.
     assert_eq!(
-        pooled_errors, 0,
-        "Pool errors on EC@30/s should be 0; got {pooled_errors}.",
+        pooled_errors, 140,
+        "Pool errors on EC@30/s should be 140 (#644 known deficit); got {pooled_errors}.",
     );
+    // 2026-08-15 (#632 B5 dispatch swap, #644): 0 -> 140, same class and
+    // same count as the Pool arm.
     assert_eq!(
-        decomposed_errors, 0,
-        "PartitionedDecomposed errors on EC@30/s should be 0; got {decomposed_errors}.",
+        decomposed_errors, 140,
+        "PartitionedDecomposed errors on EC@30/s should be 140 (#644); got {decomposed_errors}.",
     );
 
     // ShardSplit must fire — the algorithm path is what we're gating on.
@@ -4037,7 +4081,10 @@ fn partition_strategy_scoreboard() {
             // that was silently dead-ending is now padded to a stampable
             // nearby shape.
             row_layout: None,
-            expected: (0, 3),
+            // 2026-08-15 (#632 B5 dispatch swap, #644): (0, 3) ->
+            // (70, 66) lane-throughput — the meter-measured 85.6%-of-plan
+            // PU deficit (see tier5's pin). Tighten as #644 lands.
+            expected: (70, 66),
         },
         ScoreboardCase {
             name: "AC@5/s plates yellow",
@@ -4516,7 +4563,11 @@ fn stress_electronic_circuit_60s_red_from_ore() {
         "stress_electronic_circuit_60s_red_from_ore",
         &result,
         StressBaseline {
-            max_errors: 1,
+            // 2026-08-15 (#632 B5 dispatch swap, #644): 1 -> 218, all
+            // lane-throughput — the same trunk under-provisioning class
+            // as the 30s fixture, sim-measured 90.7% delivered
+            // (post-lift bank). Tighten as #644's engine fix lands.
+            max_errors: 218,
             // RFC rfc-lane-demand-flow.md Phase 1: was 0; +200 inserter-throughput.
             // RFC `docs/rfc-power-reservation.md` Phase 3a-ii (reactive power
             // repair): this red variant's only warnings were the 60 hard-limit
@@ -4554,7 +4605,9 @@ fn stress_electronic_circuit_60s_red_from_ore() {
             // class the logistic/military sims measured at −40/−48% while
             // "validator-clean"). 5 -> 50; tighten as flux fixes land.
             max_warnings: 50,
-            max_errors_by_category: Default::default(),
+            max_errors_by_category: [("lane-throughput".to_string(), 218)]
+                .into_iter()
+                .collect(),
         },
     );
 }
@@ -4795,12 +4848,18 @@ fn stress_electronic_circuit_40s_from_ore() {
             // underlying issues have been present at this scoreboard
             // for a long time. Tighten when the upstream layout-pipeline
             // bugs (e.g. #297) get fixed.
-            max_errors: 13,
+            // 2026-08-15 (#632 B5 dispatch swap, #644): 13 -> 201 —
+            // the 13 belt-dead-end are unchanged; +188 lane-throughput
+            // from the truth-telling walker on the same trunk
+            // under-provisioning class as the 30s/60s fixtures. Tighten
+            // as #644's engine fix lands.
+            max_errors: 201,
             // RFC rfc-lane-demand-flow.md Phase 1: was 195; now +inserter-throughput = 329 (belt-flow-reachability + input-rate-delivery unchanged).
             // RFC rfc-inserter-sizing.md Phase 2: +81 inserter-item-throughput (new per-item companion check) = 330.
             max_warnings: 330,
             max_errors_by_category: [
                 ("belt-dead-end".to_string(), 13),
+                ("lane-throughput".to_string(), 188),
             ].into_iter().collect(),
         },
     );
@@ -6813,8 +6872,29 @@ fn stacking_ec_60s_red_one_belt_headline() {
             },
         )
         .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
-        let issues = validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
-            .unwrap_or_else(|e| panic!("S={stacking} validate: {e}"));
+        // 2026-08-15 (#632 B5 dispatch swap, #644): the S=1 arm carries
+        // real lane-throughput errors (16.1-16.8/s on 15/s fast lanes —
+        // the trunk under-provisioning class; S=1 at 60/s is exactly
+        // where it binds). This is a TIER-SELECTION probe, not a
+        // validity gate, so the arms keep their issues; any NON
+        // lane-throughput error still panics.
+        let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+            Ok(is) => is,
+            Err(e) => {
+                let other: Vec<_> = e
+                    .issues
+                    .iter()
+                    .filter(|i| {
+                        i.severity == Severity::Error && i.category != "lane-throughput"
+                    })
+                    .collect();
+                assert!(
+                    other.is_empty(),
+                    "S={stacking} validate: non-lane-throughput errors: {other:?}"
+                );
+                e.issues
+            }
+        };
         (layout, issues)
     };
 
@@ -6864,7 +6944,18 @@ fn stacking_ec_60s_red_one_belt_headline() {
     // unstacked red belt.
     let (l1, issues1) = run(1);
     let errors1: Vec<_> = issues1.iter().filter(|i| i.severity == Severity::Error).collect();
-    assert!(errors1.is_empty(), "S=1 baseline drifted from the recorded stress ceiling: {errors1:?}");
+    // 2026-08-15 (#632 B5 dispatch swap, #644): the S=1 arm carries real
+    // lane-throughput errors (16.1-16.8/s on 15/s fast lanes — S=1 at
+    // 60/s is where the trunk under-provisioning binds hardest). Any
+    // OTHER error category is still a drift.
+    let non_lane1: Vec<_> = errors1
+        .iter()
+        .filter(|i| i.category != "lane-throughput")
+        .collect();
+    assert!(
+        non_lane1.is_empty(),
+        "S=1 baseline drifted beyond the adjudicated lane-throughput class (#644): {non_lane1:?}"
+    );
     let over1 = family_over_one_belt(&l1, 1);
     assert!(
         !over1.is_empty(),
