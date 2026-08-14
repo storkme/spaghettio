@@ -42,19 +42,6 @@ fn layout_options(
     // "off" | "on" | anything else (incl. absent) -> Candidate, the
     // engine default. Same shape as `cell_composition` below.
     direct_insertion: Option<String>,
-    // RFC-057 post-layout compaction. "1" enables; absent/anything else is
-    // off, so every existing URL keeps byte-identical geometry. Opt-in
-    // rather than default because it rewrites geometry the user may have
-    // bookmarked, and because it can trade a slightly taller box for a
-    // large entity saving — a call the user should make, not the engine.
-    compact_layout: Option<String>,
-    // RFC-064 Phase 1 fold-and-square knob. "1" enables; absent/anything
-    // else is off, same byte-identical-by-default contract as
-    // `compact_layout` above. Opt-in rather than an auto-selected
-    // decomposition candidate because the corpus-applicability spike
-    // measured admissibility below the RFC's pre-registered 25% bar — see
-    // `LayoutOptions::fold_layout`'s doc comment for the full rationale.
-    fold_layout: Option<String>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -146,14 +133,6 @@ fn layout_options(
         // implicit one. Naming it here rather than `..Default::default()`
         // keeps the field list exhaustive — see the note below.
         di_claim_order: spaghettio_core::bus::di_cell::DiClaimOrder::default(),
-        // RFC-057 post-layout compaction, now reachable from the web surface.
-        // Transactional: `compact_validated_geometry` commits a transform only
-        // when validation is no worse than its input, so the worst case is
-        // "no change", never a broken factory.
-        compact_layout: compact_layout.as_deref() == Some("1"),
-        // RFC-064 Phase 1 fold-and-square knob, same "1" convention as
-        // `compact_layout` above.
-        fold_layout: fold_layout.as_deref() == Some("1"),
         // RFC-060: the horizontal-stack candidate is engine policy, not a
         // web-surface axis — pinned `true` (the engine default). The
         // never-worse contract makes an escape hatch unnecessary for
@@ -450,12 +429,10 @@ pub fn layout(
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
     direct_insertion: Option<String>,
-    compact_layout: Option<String>,
-    fold_layout: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion, compact_layout, fold_layout),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -478,12 +455,10 @@ pub fn layout_traced(
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
     direct_insertion: Option<String>,
-    compact_layout: Option<String>,
-    fold_layout: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion, compact_layout, fold_layout),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -550,8 +525,6 @@ pub fn layout_streaming(
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
     direct_insertion: Option<String>,
-    compact_layout: Option<String>,
-    fold_layout: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -565,7 +538,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion, compact_layout, fold_layout),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion),
         on_event,
     )
     .map_err(|e| JsError::new(&e))

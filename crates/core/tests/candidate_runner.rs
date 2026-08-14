@@ -1,23 +1,35 @@
 //! RFC-064 P2b: parity/behavior tests for `bus::candidate_runner` — the
-//! general produce → transform → validate → measure → verdict → rank loop.
+//! general produce → validate → measure → verdict → rank loop.
 //!
 //! This module ships nothing to any existing entry point: `build_bus_layout`
-//! and `select_best_decomposition` are unchanged. These tests exist to prove
-//! the new runner reproduces those two functions' behavior byte-for-byte
-//! when `CompactTransform`/`FoldTransform` are asked to do the same work,
-//! and that the runner's own scoring/verdict/ranking wiring behaves as
-//! documented on synthetic transforms that a real pipeline would never
-//! produce.
+//! and `select_best_decomposition` are unchanged; `run_candidate_field` is a
+//! parallel entry point consumed today by this crate's own tests and by the
+//! live RFC-068 celldb campaign (`crates/core/tests/celldb_template.rs`).
+//!
+//! Originally this file also carried parity tests proving the runner's
+//! `LayoutTransform` chain (`CompactTransform`/`FoldTransform`) reproduced
+//! `build_bus_layout`'s `compact_layout`/`fold_layout` flags byte-for-byte,
+//! plus two ranking/verdict tests built on synthetic `LayoutTransform` impls.
+//! The transform mechanism and both flags were deleted 2026-08-14 (#632 A2,
+//! owner call) after the underlying relocation research never shipped past
+//! three falsified attempts (RFC-057/058/064-P3 decision logs) — the parity
+//! tests went with it (there is nothing left to prove parity against; one of
+//! them, `runner_fold_plan_matches_build_bus_layout_fold_layout_true`, was
+//! also this suite's slowest test at >60s). The two ranking/verdict tests
+//! (4 and 5 below) were PORTED rather than deleted: their synthetic
+//! `LayoutTransform` impls became synthetic `DecompositionCandidate` base
+//! producers instead, since what they actually exercise — "a candidate whose
+//! score/verdict differs from the incumbent's" — never depended on the
+//! transform abstraction specifically.
 
 use spaghettio_core::bus::candidate_runner::{
-    produce_plan, run_candidate_field, CandidateOutcome, CandidatePlan, CompactTransform,
-    FoldTransform, FullSelectionCandidate, LayoutTransform, TransformOutcome,
+    run_candidate_field, CandidateOutcome, CandidatePlan, FullSelectionCandidate,
 };
 use spaghettio_core::bus::decomposition_search::DecompositionCandidate;
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy};
 use spaghettio_core::models::{LayoutResult, PlacedEntity, SolverResult};
 use spaghettio_core::solver;
-use spaghettio_core::verdict::{GatePolicy, MatchTier, Policy};
+use spaghettio_core::verdict::{GatePolicy, Policy};
 
 use rustc_hash::FxHashSet;
 
@@ -25,8 +37,9 @@ fn set(items: &[&str]) -> FxHashSet<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
-/// Mirrors `fold_layout_knob.rs`'s `base_opts` exactly, so the same fixture
-/// produces the same geometry across both test files.
+/// Mirrors what used to be `fold_layout_knob.rs`'s `base_opts` (deleted
+/// alongside `fold_layout` itself, #632 A2), kept here so this file's
+/// fixtures stay self-contained.
 fn base_opts(belt_tier: Option<&str>, strategy: LayoutStrategy) -> LayoutOptions {
     LayoutOptions {
         strategy,
@@ -55,152 +68,18 @@ fn json_of(l: &LayoutResult) -> serde_json::Value {
     serde_json::to_value(l).expect("LayoutResult must serialize")
 }
 
-/// The RFC-064 Phase 1 spike's own admissible-and-AR-improving fixture
-/// (`fold_layout_knob.rs`'s `fold_layout_finds_admissible_fold_on_stress_ac_partitioned`):
-/// advanced-circuit@5/s from plates, AM2, Pooled, no belt tier cap. Cheap
-/// (a few hundred entities) and — unlike most fixtures — actually finds an
-/// admissible fold, so it exercises `FoldTransform::apply`'s `Some(found)`
-/// branch rather than only its fallback.
-fn stress_ac_partitioned() -> SolverResult {
-    solve(
-        "advanced-circuit",
-        5.0,
-        &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
-        "assembling-machine-2",
-    )
-}
-
 // ---------------------------------------------------------------------------
-// 1. Fold parity
-// ---------------------------------------------------------------------------
-
-#[test]
-fn runner_fold_plan_matches_build_bus_layout_fold_layout_true() {
-    let sr = stress_ac_partitioned();
-    let opts = base_opts(None, LayoutStrategy::Pooled);
-
-    let native_layout = build_bus_layout(
-        &sr,
-        LayoutOptions {
-            fold_layout: true,
-            ..opts.clone()
-        },
-    )
-    .expect("build_bus_layout with fold_layout: true must succeed");
-
-    let plan = CandidatePlan::new("compact-fold", FullSelectionCandidate)
-        .with_transform(CompactTransform)
-        .with_transform(FoldTransform::default());
-
-    // `fold_layout: true` applies compact-then-fold UNCONDITIONALLY in
-    // `build_bus_layout` — there is no "does this beat native" gate at that
-    // call site, so parity means "what the CHAIN produces", not "what
-    // `run_candidate_field`'s own objective-driven ranking would have
-    // picked". `produce_plan` runs the chain with no competition, matching
-    // that unconditional-apply semantics exactly.
-    let produced = produce_plan(&plan, &sr, &opts).expect("produce_plan must succeed");
-    assert_eq!(
-        json_of(&produced),
-        json_of(&native_layout),
-        "runner's [compact, fold] plan must reproduce build_bus_layout(fold_layout: true) byte-for-byte"
-    );
-
-    // Bonus signal (not load-bearing for parity): on THIS fixture — the
-    // spike's own admissible-and-AR-improving case — the fold is such a
-    // clear aspect-ratio win that the runner's own objective ranking picks
-    // it over the incumbent too, confirming the objective genuinely rewards
-    // a fold that is known-good rather than merely being inert about it.
-    let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
-    let result = run_candidate_field(
-        &sr,
-        &opts,
-        &incumbent,
-        std::slice::from_ref(&plan),
-        &Policy::fold(),
-    )
-    .expect("run_candidate_field must succeed");
-    assert_eq!(
-        result.winner_name, "compact-fold",
-        "on this fixture the fold is a clear AR win, so the runner's own ranking should pick it"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 2. Compact parity
-// ---------------------------------------------------------------------------
-
-#[test]
-fn runner_compact_plan_matches_build_bus_layout_compact_layout_true() {
-    let sr = stress_ac_partitioned();
-    let opts = base_opts(None, LayoutStrategy::Pooled);
-
-    let native_layout = build_bus_layout(
-        &sr,
-        LayoutOptions {
-            compact_layout: true,
-            ..opts.clone()
-        },
-    )
-    .expect("build_bus_layout with compact_layout: true must succeed");
-
-    let plan =
-        CandidatePlan::new("compact-only", FullSelectionCandidate).with_transform(CompactTransform);
-
-    // Same reasoning as the fold test: `compact_layout: true` applies
-    // unconditionally in `build_bus_layout`, so parity is about the CHAIN's
-    // own output, via `produce_plan` — not about whether this fixture's
-    // objective-score ranking happens to prefer the compacted geometry over
-    // native (measured separately below: it does NOT always, since raw
-    // compaction legally shrinks entity count within
-    // `compact_validated_geometry`'s own error-count-only acceptance rule
-    // without any guarantee of improving RFC-064's aspect-ratio/transit
-    // metric — that is an honest, expected outcome, not a bug in either
-    // compaction or the objective).
-    let produced = produce_plan(&plan, &sr, &opts).expect("produce_plan must succeed");
-    assert_eq!(
-        json_of(&produced),
-        json_of(&native_layout),
-        "runner's [compact] plan must reproduce build_bus_layout(compact_layout: true) byte-for-byte"
-    );
-
-    // Exercise the full run_candidate_field pipeline too (validate/measure/
-    // verdict), without asserting on who wins: the candidate must at least
-    // evaluate cleanly and pass the fold-style verdict ON THIS FIXTURE.
-    // (Not an engine guarantee: `compact_validated_geometry` accepts on
-    // error-count-only, so a per-category warning increase is legal in
-    // general — this fixture just doesn't produce one. Scoped per the
-    // round-3 bot review, minor 4.)
-    let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
-    let result = run_candidate_field(
-        &sr,
-        &opts,
-        &incumbent,
-        std::slice::from_ref(&plan),
-        &Policy::fold(),
-    )
-    .expect("run_candidate_field must succeed");
-    let evaluated = result
-        .entries
-        .iter()
-        .find_map(|e| match e {
-            CandidateOutcome::Evaluated(ec) if ec.name == "compact-only" => Some(ec),
-            _ => None,
-        })
-        .expect("compact-only must have produced and evaluated");
-    assert!(
-        evaluated.verdict.pass,
-        "compaction must not regress any issue category's raw count ON THIS FIXTURE \
-         (fixture-scoped observation, not an engine invariant — see comment above)"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 3. Inertness
+// 1. Inertness
 // ---------------------------------------------------------------------------
 
 #[test]
 fn runner_incumbent_only_field_matches_plain_build_bus_layout() {
-    let sr = stress_ac_partitioned();
+    let sr = solve(
+        "advanced-circuit",
+        5.0,
+        &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
+        "assembling-machine-2",
+    );
     let opts = base_opts(None, LayoutStrategy::Pooled);
 
     let native_layout =
@@ -220,44 +99,33 @@ fn runner_incumbent_only_field_matches_plain_build_bus_layout() {
 }
 
 // ---------------------------------------------------------------------------
-// Synthetic test-local transforms for 4 and 5
+// Synthetic test-local base producers for 2 and 3
 // ---------------------------------------------------------------------------
 
-/// Doubles the bbox by translating every other entity far to the east.
-/// Deliberately crude — this is not meant to be a plausible transform, only
-/// one whose objective score is unambiguously worse than doing nothing.
-struct BboxDoublingTransform;
+/// Doubles the bbox by translating one entity far to the east, after normal
+/// production. Deliberately crude — this is not meant to be a plausible
+/// strategy, only one whose objective score is unambiguously worse than
+/// doing nothing.
+struct BboxDoublingCandidate;
 
-impl LayoutTransform for BboxDoublingTransform {
+impl DecompositionCandidate for BboxDoublingCandidate {
     fn name(&self) -> &str {
         "test-bbox-doubler"
     }
 
-    fn admissible_input(&self, _layout: &LayoutResult) -> Result<(), String> {
-        Ok(())
-    }
-
-    fn apply(
+    fn produce(
         &self,
-        layout: &LayoutResult,
-        _solver: &SolverResult,
-        _opts: &LayoutOptions,
-    ) -> Result<TransformOutcome, String> {
+        solver_result: &SolverResult,
+        opts: &LayoutOptions,
+    ) -> Result<LayoutResult, String> {
+        let mut out = FullSelectionCandidate.produce(solver_result, opts)?;
         // Degrade the aspect ratio by EXTENDING the footprint, not by tearing
         // the network apart.
-        //
-        // This used to shove every other entity half a layout-width sideways,
-        // which severs every belt run — and under RFC-064 §(b) an unreachable
-        // terminal makes the whole measurement refuse, so the candidate was
-        // never scored at all and the test passed through the refusal branch
-        // without exercising the score-based rejection it is named for
-        // (PR #582 review, 3/3).
         //
         // Appending one isolated belt tile far to the east grows the non-pole
         // bbox — so `ar_score` genuinely worsens — while leaving every routed
         // path exactly as it was, so the candidate still measures and the
         // ranking has a real negative composite to reject.
-        let mut out = layout.clone();
         let shove = out.width.max(1) * 2;
         let far = out
             .entities
@@ -274,37 +142,29 @@ impl LayoutTransform for BboxDoublingTransform {
             ..Default::default()
         });
         out.width += shove;
-        Ok(TransformOutcome {
-            layout: out,
-            correspondence: None,
-            tier: MatchTier::Count,
-        })
+        Ok(out)
     }
 }
 
 /// Moves the entity with the largest X coordinate onto the entity with the
-/// smallest X coordinate. This (a) shrinks the bounding box — a genuine,
-/// measurable objective improvement on any layout with more than one
-/// distinct X value — and (b) deliberately creates exactly one
-/// `entity-overlap` error, the gated regression test 5 exists to catch.
-struct ShrinkOntoOverlapTransform;
+/// smallest X coordinate, after normal production. This (a) shrinks the
+/// bounding box — a genuine, measurable objective improvement on any layout
+/// with more than one distinct X value — and (b) deliberately creates
+/// exactly one `entity-overlap` error, the gated regression test 3 exists to
+/// catch.
+struct ShrinkOntoOverlapCandidate;
 
-impl LayoutTransform for ShrinkOntoOverlapTransform {
+impl DecompositionCandidate for ShrinkOntoOverlapCandidate {
     fn name(&self) -> &str {
         "test-shrink-onto-overlap"
     }
 
-    fn admissible_input(&self, _layout: &LayoutResult) -> Result<(), String> {
-        Ok(())
-    }
-
-    fn apply(
+    fn produce(
         &self,
-        layout: &LayoutResult,
-        _solver: &SolverResult,
-        _opts: &LayoutOptions,
-    ) -> Result<TransformOutcome, String> {
-        let mut out = layout.clone();
+        solver_result: &SolverResult,
+        opts: &LayoutOptions,
+    ) -> Result<LayoutResult, String> {
+        let mut out = FullSelectionCandidate.produce(solver_result, opts)?;
         let n = out.entities.len();
         let min_idx = (0..n)
             .min_by_key(|&i| out.entities[i].x)
@@ -314,16 +174,12 @@ impl LayoutTransform for ShrinkOntoOverlapTransform {
             .expect("non-empty layout");
         assert_ne!(
             min_idx, max_idx,
-            "fixture must have more than one distinct X coordinate for this transform to mean anything"
+            "fixture must have more than one distinct X coordinate for this candidate to mean anything"
         );
         let (tx, ty) = (out.entities[min_idx].x, out.entities[min_idx].y);
         out.entities[max_idx].x = tx;
         out.entities[max_idx].y = ty;
-        Ok(TransformOutcome {
-            layout: out,
-            correspondence: None,
-            tier: MatchTier::Count,
-        })
+        Ok(out)
     }
 }
 
@@ -337,20 +193,19 @@ fn tier1_gear_from_ore() -> SolverResult {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Native-wins-by-construction
+// 2. Native-wins-by-construction
 // ---------------------------------------------------------------------------
 
 #[test]
-fn degrading_transform_loses_the_ranking_even_when_verdict_passes() {
+fn degrading_candidate_loses_the_ranking_even_when_verdict_passes() {
     let sr = tier1_gear_from_ore();
     let opts = base_opts(None, LayoutStrategy::Pooled);
 
     let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
-    let candidate = CandidatePlan::new("bbox-doubler", FullSelectionCandidate)
-        .with_transform(BboxDoublingTransform);
+    let candidate = CandidatePlan::new("bbox-doubler", BboxDoublingCandidate);
 
     // ReportOnly: the point of this test is the SCORE-based rejection, not
-    // the verdict-based one (that is test 5's job) — a policy that never
+    // the verdict-based one (that is test 3's job) — a policy that never
     // regresses isolates the mechanism under test.
     let policy = Policy::new(GatePolicy::ReportOnly);
     let result = run_candidate_field(
@@ -366,9 +221,9 @@ fn degrading_transform_loses_the_ranking_even_when_verdict_passes() {
     // accepted "Evaluated with a negative composite OR Refused", which made it
     // tautological — it passed whether the score-based rejection fired or the
     // transit-refusal path fired instead, and the score path is the one this
-    // test is named for (PR #582 review, 3/3). The transform now degrades the
-    // bbox without severing any route, so the candidate is measurable by
-    // construction and a Refused outcome is a real failure worth surfacing.
+    // test is named for (PR #582 review, 3/3). The candidate now degrades the
+    // bbox without severing any route, so it is measurable by construction
+    // and a Refused outcome is a real failure worth surfacing.
     let evaluated = match result
         .entries
         .iter()
@@ -399,7 +254,7 @@ fn degrading_transform_loses_the_ranking_even_when_verdict_passes() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Verdict wiring
+// 3. Verdict wiring
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -408,8 +263,7 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
     let opts = base_opts(None, LayoutStrategy::Pooled);
 
     let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
-    let candidate = CandidatePlan::new("shrink-overlap", FullSelectionCandidate)
-        .with_transform(ShrinkOntoOverlapTransform);
+    let candidate = CandidatePlan::new("shrink-overlap", ShrinkOntoOverlapCandidate);
 
     // Default policy: GateInstances on every category — a brand new
     // "entity-overlap" issue (native has none) must regress.
@@ -450,7 +304,7 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
         });
 
     // PREMISE WEAKENED, deliberately and visibly. This used to assert
-    // `composite > 0.0` — the transform had to genuinely out-score the
+    // `composite > 0.0` — the candidate had to genuinely out-score the
     // incumbent for "the gate beats the score" to mean anything. Under the
     // conforming metric it no longer does: the old non-conforming measurement
     // credited this shrink with a transit improvement it does not physically
@@ -458,7 +312,7 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
     // premise is recorded as lost and the gate assertion below — which is what
     // this test is actually for — is kept intact.
     //
-    // FOLLOW-UP: rebuild a synthetic transform that both improves the
+    // FOLLOW-UP: rebuild a synthetic candidate that both improves the
     // composite AND leaves the layout measurable, and restore the premise.
     // Until then this test proves the gate excludes a verdict-failing
     // candidate, but not that it does so *against* a winning score.
@@ -484,7 +338,7 @@ fn new_gated_issue_excludes_a_candidate_even_with_a_better_composite() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Duplicate plan names are refused (round-3 bot review, minor 5)
+// 4. Duplicate plan names are refused (round-3 bot review, minor 5)
 // ---------------------------------------------------------------------------
 
 /// Winner resolution and event replay look candidates up by name; two
@@ -509,7 +363,7 @@ fn duplicate_plan_names_are_refused() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. The incumbent-unmeasurable abort path (PR #582 review, 3/3, twice)
+// 5. The incumbent-unmeasurable abort path (PR #582 review, 3/3, twice)
 // ---------------------------------------------------------------------------
 
 /// A base candidate that produces a layout with the right machines and NO

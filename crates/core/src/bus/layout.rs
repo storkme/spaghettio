@@ -77,11 +77,10 @@ pub enum SurplusPolicy {
 /// ## Pinned vs. searchable fields (RFC-064 P2b, `bus::candidate_runner`)
 ///
 /// `candidate_runner::run_candidate_field` takes one `LayoutOptions` per
-/// call and passes it through to every base producer and transform
-/// UNCHANGED — the runner never varies a field itself; only
-/// `LayoutTransform`/`DecompositionCandidate` implementations express
-/// variation (`bus::candidate_runner`'s own module docs, "Searchable vs.
-/// pinned knobs"). This is a doc-only classification of what each field
+/// call and passes it through to every base producer UNCHANGED — the runner
+/// never varies a field itself; only `DecompositionCandidate` implementations
+/// express variation (`bus::candidate_runner`'s own module docs, "Searchable
+/// vs. pinned knobs"). This is a doc-only classification of what each field
 /// IS, not a restructuring — every field below is unchanged, this is a
 /// legend for callers deciding whether a field belongs on a searched axis:
 ///
@@ -94,9 +93,10 @@ pub enum SurplusPolicy {
 ///   slot — see `bus::decomposition_search`): `strategy`, `row_layout`,
 ///   `merge_tap`, `cell_composition`, `direct_insertion`, `di_claim_order`,
 ///   `horizontal_candidate`, `splitter_tap_spacers`.
-/// - **Post-layout transform axis** (exactly what `bus::candidate_runner`'s
-///   `LayoutTransform`s wrap): `compact_layout` (`CompactTransform`),
-///   `fold_layout` (`FoldTransform`).
+/// - **Post-layout transform axis**: none remain. `compact_layout`/
+///   `fold_layout` and the `CompactTransform`/`FoldTransform`
+///   `LayoutTransform` impls that backed them were deleted 2026-08-14
+///   (#632 A2, owner call) — see `bus::candidate_runner`'s module doc.
 /// - **Diagnostic / measurement-only** (bypasses candidate selection
 ///   entirely when set — not a search axis in either sense):
 ///   `band_packing`.
@@ -172,34 +172,6 @@ pub struct LayoutOptions {
     /// byte-identical; `Downstream` is P1, the alternative phase 1 measures
     /// against.
     pub di_claim_order: crate::bus::di_cell::DiClaimOrder,
-    /// RFC-057 topology-preserving post-layout compaction. Experimental and
-    /// default off, so the normal pipeline remains byte-identical.
-    pub compact_layout: bool,
-    /// RFC-064 Phase 1: the fold-and-square post-layout transform
-    /// (`search_snake_fold`/`fold_snake`, RFC-057's mechanism). Experimental
-    /// and default off, mirroring `compact_layout` above — the pipeline is
-    /// byte-identical when this is `false` (a dedicated test enforces it).
-    ///
-    /// This ships as a plain user knob rather than an auto-selected
-    /// decomposition candidate because the Phase 1 corpus-applicability
-    /// spike (2026-08-01, session artifacts + this RFC's decision log)
-    /// measured admissibility — fold found, validates no worse, never-worse
-    /// input-rate-delivery — at 21.4% literal / 14.3% AR-improving of a
-    /// 14-fixture corpus, both below the RFC's pre-registered 25% bar for
-    /// auto-selection. A knob reaches the one user who wants a folded
-    /// layout without adding search cost to every other solve.
-    ///
-    /// When `true`, `build_bus_layout` always compacts first regardless of
-    /// this call's separate `compact_layout` value (see the comment at the
-    /// call site for why), then searches for a fold at `max_folds = 4`. If
-    /// the compacted geometry exceeds `FOLD_SEARCH_ENTITY_THRESHOLD` the
-    /// search is skipped — a `warnings` entry says so, so the user isn't
-    /// gaslit by a silent no-op — rather than stalling single-threaded WASM
-    /// for multi-seconds on a mega-chain-scale input. If no admissible fold
-    /// is found, the (compacted) unfolded layout ships. This option never
-    /// errors and never returns a layout worse than `compact_layout: true`
-    /// alone would have produced.
-    pub fold_layout: bool,
     /// RFC-060: run the horizontal-stack row layout as a scored
     /// decomposition candidate when `row_layout` is `VerticalSplit` and
     /// the solve has a `RowKind::DualInput` row. Default `true`; the
@@ -268,8 +240,6 @@ impl Default for LayoutOptions {
             // strictly improve stays bit-identical.
             direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
             di_claim_order: crate::bus::di_cell::DiClaimOrder::default(),
-            compact_layout: false,
-            fold_layout: false,
             // Default ON 2026-07-30 (RFC-060): same never-worse shape as
             // `direct_insertion` above — the native pass stays vertical,
             // the horizontal variant competes only where a DualInput row
@@ -323,80 +293,16 @@ pub fn build_bus_layout(
             opts.stacking, opts.max_inserter_tier
         ));
     }
-    let compact_layout = opts.compact_layout;
-    let fold_layout = opts.fold_layout;
     // RFC-058 (concluded): band_packing is a measurement instrument, not a
     // candidate — flag-on runs the native pass directly so the packed
     // takeover (or its typed refusal) is what ships, never outcompeted by
     // K1/cell/DI variants. Without this, a scoring flip mislabels a
     // native-shaped winner as "packed" in the KC1 probe (#523 review
     // fallout, caught when pole clamping shifted the score).
-    let result = if opts.band_packing {
-        crate::bus::layout::run_layout_with_retry(solver_result, &opts)?
+    if opts.band_packing {
+        crate::bus::layout::run_layout_with_retry(solver_result, &opts)
     } else {
-        crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)?
-    };
-
-    if fold_layout {
-        // RFC-064 Phase 1: fold always compacts first, regardless of this
-        // call's separate `compact_layout` value — there is no "fold the
-        // raw layout" mode. Every established fold number in this repo,
-        // including PR #500's Factorio-verified chain-mil5ore result, was
-        // measured against `compact_validated_geometry`'s output, never raw
-        // decomposition-search geometry: Phase 0 finding 4 ("the
-        // undergroundified geometry is the native incumbent for the fold
-        // family throughout") and the Phase 1 spike's own native-baseline
-        // definition both confirm this.
-        let compacted =
-            crate::bus::compaction::compact_validated_geometry(&result, solver_result);
-
-        // Latency guard: `search_snake_fold` slides a comb of candidate
-        // fold columns across every legal seam for k = 1..=4, and each
-        // candidate pays a full `validate()` call whose cost scales with
-        // entity count — cheap on ordinary row-bus fixtures, but the
-        // Phase 1 spike measured minutes of its multi-minute budget going
-        // to the two largest mega-chain fixtures (mega-chain-pu4raw,
-        // 14,584 compacted entities; mega-chain-usp2raw, 19,534), neither
-        // of which ever produced an admissible fold. Left ungated, a
-        // fixture that size would stall single-threaded WASM for
-        // multi-seconds. 6,000 is chosen from the spike's own numbers: the
-        // largest fixture that ever produced an admissible fold was
-        // stress-ec-60s-red-from-ore at 4,593 compacted entities (chain-
-        // mil5ore's Factorio-verified fold sits at 2,831) — 6,000 leaves
-        // ~30% headroom above that high-water mark while sitting well
-        // below the two pathological mega-chains, so it comfortably covers
-        // every fixture folding is known to help without paying the search
-        // cost on inputs it never has helped. (Correction to an earlier
-        // verbal brief: the largest admissible fixture is stress-ec-60s-
-        // red-from-ore, not stress-ac-partitioned as first stated — see
-        // the spike's results.json.)
-        if compacted.entities.len() > FOLD_SEARCH_ENTITY_THRESHOLD {
-            let mut out = compacted;
-            out.warnings.push(format!(
-                "fold search skipped: layout too large ({} entities > {} \
-                 threshold) — showing the compacted, unfolded layout",
-                out.entities.len(),
-                FOLD_SEARCH_ENTITY_THRESHOLD,
-            ));
-            return Ok(out);
-        }
-
-        let search = crate::bus::compaction::search_snake_fold(&compacted, solver_result, 4);
-        return Ok(match search.best {
-            Some(found) => found.layout,
-            // No admissible fold — never an error, fall back to the
-            // (compacted) unfolded layout (spec item 2).
-            None => compacted,
-        });
-    }
-
-    if compact_layout {
-        Ok(crate::bus::compaction::compact_validated_geometry(
-            &result,
-            solver_result,
-        ))
-    } else {
-        Ok(result)
+        crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)
     }
 }
 
@@ -414,9 +320,6 @@ pub fn build_rotation_aware_row_layout(
 ) -> Result<LayoutResult, String> {
     if opts.band_packing || opts.band_pack_selection.is_some() {
         return Err("rotation-aware row packing cannot be combined with band packing".into());
-    }
-    if opts.compact_layout || opts.fold_layout {
-        return Err("rotation-aware row packing requires uncompacted, unfolded source rows".into());
     }
     opts.band_packing = false;
     opts.band_pack_selection = None;
@@ -442,9 +345,6 @@ pub fn build_rotation_aware_row_layout_selected(
     if opts.band_packing || opts.band_pack_selection.is_some() {
         return Err("rotation-aware row packing cannot be combined with band packing".into());
     }
-    if opts.compact_layout || opts.fold_layout {
-        return Err("rotation-aware row packing requires uncompacted, unfolded source rows".into());
-    }
     opts.band_packing = false;
     opts.band_pack_selection = None;
     let (native, rows, caps, uncovered) = layout_pass(solver_result, &opts, None, None, 0, None)?;
@@ -462,18 +362,6 @@ pub fn build_rotation_aware_row_layout_selected(
         selection,
     )
 }
-
-/// RFC-064 Phase 1 latency guard for `fold_layout`: above this many
-/// compacted entities, `build_bus_layout` skips `search_snake_fold`
-/// entirely rather than running it. See the comment at the call site in
-/// [`build_bus_layout`] for the numbers behind this constant.
-///
-/// `pub(crate)` (not private) so `bus::candidate_runner::FoldTransform`
-/// (P2b, RFC-064) can port this exact guard into its `admissible_input`
-/// instead of re-deriving the number — the guard is meant to live with the
-/// transform, not the call site, but the NUMBER itself has exactly one
-/// source of truth.
-pub(crate) const FOLD_SEARCH_ENTITY_THRESHOLD: usize = 6000;
 
 /// Today's `build_bus_layout` body — the retry orchestrator that
 /// invokes `layout_pass`, reads the junction-cap tiles it returns,
@@ -2331,137 +2219,6 @@ pub fn repair_pole_network(layout: &mut LayoutResult) -> usize {
     added
 }
 
-/// Add medium poles until every power-drawing entity is covered, and report
-/// how many were needed.
-///
-/// `repair_pole_network` fixes CONNECTIVITY between poles that exist; nothing
-/// fixed COVERAGE, and a fold creates coverage holes that no amount of
-/// rewiring closes. A 180-degree rotation is rigid, so coverage inside a
-/// segment survives it exactly — but an entity near a fold column was often
-/// covered by a pole that the fold moved into a different segment, tens of
-/// tiles away. Measured on the mil5 2-fold: 5 holes, all of them within 3
-/// tiles of a seam.
-///
-/// The coverage predicate here is deliberately the same continuous-centre test
-/// the power validator uses (`supply_area_distance`, entity centre at
-/// `index + size/2`). Re-deriving it would let placement and validation drift,
-/// which is the failure `place_poles` already carries a comment about.
-///
-/// Returns 0 without touching anything when coverage is already complete, so
-/// layouts that do not need it — every single-fold and composed-cell fixture —
-/// stay byte-identical and their sim-verified registry pins hold.
-pub(crate) fn cover_unpowered(layout: &mut LayoutResult) -> usize {
-    let is_pole_ent =
-        |e: &PlacedEntity| e.name.ends_with("electric-pole") || e.name == "substation";
-    let quality = layout
-        .entities
-        .iter()
-        .find(|e| is_machine_entity(&e.name))
-        .and_then(|e| e.quality)
-        .unwrap_or_default();
-
-    // Same shape as the validator: (centre_x, centre_y, supply_half_extent).
-    let pole_centres = |ents: &[PlacedEntity]| -> Vec<(f64, f64, f64)> {
-        ents.iter()
-            .filter(|e| is_pole_ent(e))
-            .map(|e| {
-                let (w, h) = crate::common::entity_size(&e.name);
-                (
-                    e.x as f64 + w as f64 / 2.0,
-                    e.y as f64 + h as f64 / 2.0,
-                    crate::common::supply_area_distance(&e.name, e.quality.unwrap_or_default()),
-                )
-            })
-            .collect()
-    };
-    let subject_centre = |e: &PlacedEntity| -> (f64, f64) {
-        let (w, h) = crate::common::entity_size(&e.name);
-        (e.x as f64 + w as f64 / 2.0, e.y as f64 + h as f64 / 2.0)
-    };
-
-    let mut poles = pole_centres(&layout.entities);
-    let uncovered: Vec<(f64, f64)> = layout
-        .entities
-        .iter()
-        .filter(|e| crate::common::needs_electricity(&e.name))
-        .filter_map(|e| {
-            let (scx, scy) = subject_centre(e);
-            let powered = poles
-                .iter()
-                .any(|&(pcx, pcy, d)| (scx - pcx).abs() <= d && (scy - pcy).abs() <= d);
-            (!powered).then_some((scx, scy))
-        })
-        .collect();
-    if uncovered.is_empty() {
-        return 0;
-    }
-
-    let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
-    for e in &layout.entities {
-        let (w, h) = crate::common::entity_size(&e.name);
-        for dx in 0..w as i32 {
-            for dy in 0..h as i32 {
-                occupied.insert((e.x + dx, e.y + dy));
-            }
-        }
-    }
-
-    let d = crate::common::supply_area_distance("medium-electric-pole", quality);
-    let reach = d.floor() as i32;
-    let mut added: Vec<PlacedEntity> = Vec::new();
-    let mut remaining = uncovered;
-
-    // Greedy: for each still-uncovered subject, take the free tile in its
-    // supply square that covers the most of the remaining set. Deterministic
-    // tie-break on (x, y) — a fold search compares candidates across runs, so
-    // a HashSet iteration order leaking into geometry would make the search
-    // non-reproducible.
-    while let Some(&(tx, ty)) = remaining.first() {
-        let mut best: Option<(usize, i32, i32)> = None;
-        for dx in -reach..=reach {
-            for dy in -reach..=reach {
-                let (px, py) = (tx.floor() as i32 + dx, ty.floor() as i32 + dy);
-                if occupied.contains(&(px, py)) {
-                    continue;
-                }
-                let (pcx, pcy) = (px as f64 + 0.5, py as f64 + 0.5);
-                let n = remaining
-                    .iter()
-                    .filter(|&&(sx, sy)| (sx - pcx).abs() <= d && (sy - pcy).abs() <= d)
-                    .count();
-                if n == 0 {
-                    continue;
-                }
-                if best.is_none_or(|(bn, bx, by)| (n, -px, -py) > (bn, -bx, -by)) {
-                    best = Some((n, px, py));
-                }
-            }
-        }
-        let Some((_, px, py)) = best else {
-            // No free tile can cover this subject. Leave it — the validator
-            // will report it, which is the correct loud outcome; silently
-            // dropping it is the reporting failure this repo has been
-            // cataloguing (docs/validator-reporting.md).
-            remaining.remove(0);
-            continue;
-        };
-        occupied.insert((px, py));
-        added.push(PlacedEntity {
-            name: "medium-electric-pole".to_string(),
-            x: px,
-            y: py,
-            ..Default::default()
-        });
-        let (pcx, pcy) = (px as f64 + 0.5, py as f64 + 0.5);
-        remaining.retain(|&(sx, sy)| !((sx - pcx).abs() <= d && (sy - pcy).abs() <= d));
-        poles.push((pcx, pcy, d));
-    }
-
-    let n = added.len();
-    layout.entities.extend(added);
-    n
-}
-
 pub(crate) fn repair_pole_connectivity(
     entities: &mut Vec<PlacedEntity>,
     placed: &FxHashSet<(i32, i32)>,
@@ -3536,56 +3293,6 @@ mod tests {
             Some(_) => unreachable!(),
         }
     }
-
-    #[test]
-    fn compact_layout_option_is_explicit_and_validated() {
-        let inputs: FxHashSet<String> =
-            ["iron-plate"].iter().map(|item| item.to_string()).collect();
-        let sr = crate::solver::solve_with_exclusions(
-            "iron-gear-wheel",
-            5.0,
-            &inputs,
-            "assembling-machine-3",
-            &FxHashSet::default(),
-        )
-        .expect("solve iron gears");
-        let base_opts = LayoutOptions {
-            cell_composition: crate::bus::cells::CellComposition::Off,
-            ..Default::default()
-        };
-        let control =
-            build_bus_layout(&sr, base_opts.clone()).expect("control layout should succeed");
-        let compacted = build_bus_layout(
-            &sr,
-            LayoutOptions {
-                compact_layout: true,
-                ..base_opts
-            },
-        )
-        .expect("compacted layout should succeed");
-
-        assert_eq!(
-            crate::bus::compaction::PlacedMachineSignature::from_layout(&control),
-            crate::bus::compaction::PlacedMachineSignature::from_layout(&compacted),
-        );
-        assert!(compacted.width <= control.width);
-        assert!(compacted.height <= control.height);
-        let issues = match crate::validate::validate(
-            &compacted,
-            Some(&sr),
-            crate::validate::LayoutStyle::Bus,
-        ) {
-            Ok(issues) => issues,
-            Err(error) => error.issues,
-        };
-        assert!(
-            issues
-                .iter()
-                .all(|issue| issue.severity != crate::validate::Severity::Error),
-            "compacted option emitted errors: {issues:?}",
-        );
-    }
-
     #[test]
     fn di_full_pipeline_ec_from_plates() {
         let inputs: FxHashSet<String> =
