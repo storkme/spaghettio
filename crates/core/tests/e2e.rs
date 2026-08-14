@@ -3162,7 +3162,7 @@ fn run_timed_validators(lr: &LayoutResult, sr: &SolverResult) {
         ("belt_item_isolation", Box::new(|| belt_structural::check_belt_item_isolation(lr))),
         ("belt_inserter_conflict", Box::new(|| belt_structural::check_belt_inserter_conflict(lr))),
         ("belt_flow_reachability", Box::new(|| belt_flow::check_belt_flow_reachability(lr, Some(sr), LayoutStyle::Bus))),
-        ("lane_throughput", Box::new(|| spaghettio_core::validate::belt_flow::check_lane_throughput(lr, Some(sr)))),
+        ("lane_throughput", Box::new(|| belt_flow::check_lane_throughput(lr, Some(sr)))),
         ("input_rate_delivery", Box::new(|| belt_flow::check_input_rate_delivery(lr, Some(sr)))),
     ];
 
