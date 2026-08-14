@@ -4909,12 +4909,11 @@ mod tests {
         // source blueprint.
         (6, 3),
         (9, 3),
-        // utility@10/s balancer-gap spike (uncommitted, see
-        // crates/core/examples/census_missing_balancer_shapes.rs):
-        // (15, 7) is an intermediate atom for (15, 14) copper-cable, not
-        // itself a demanded shape — the (15, 14) Clos bake was
-        // deprioritized/abandoned (junction search exceeded the spike's
-        // time budget without converging).
+        // The utility@10/s spike's (12,7)/(15,7)/(15,14) are NOT live
+        // pipeline targets: their recipes were deleted 2026-08-14 with
+        // the #632 A3 cull (waisted by construction — see the recipe
+        // list's record in balancer-gen). That demand needs a
+        // full-throughput design gated by scripts/balancer_cut_census.py.
     ];
 
     #[test]
