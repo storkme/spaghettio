@@ -2406,9 +2406,9 @@ fn tier5_processing_unit_from_ore_am3() {
 /// uranium-235 producer) with no uranium-235 input available — the
 /// solver has no choice but to route through the self-loop recipe. Rate
 /// and machine count (6 centrifuges) match the hand-derived netting
-/// arithmetic (formerly cross-checked by
-/// `kovarex_self_loop_net_flows_hand_derived` in the now-deleted
-/// `solver_netflow_parity.rs`, #632 A1).
+/// arithmetic cross-checked by `kovarex_self_loop_net_flows_hand_derived`
+/// in `tests/netflow_regression.rs` (formerly `solver_netflow_parity.rs`,
+/// split #632 A1).
 #[test]
 #[ntest::timeout(15000)]
 fn tier_kovarex_self_loop() {
@@ -7099,9 +7099,9 @@ fn diag_decomposition_signature_match() {
 
 /// Solve a Fulgora scrap chain via the net-flow solver with
 /// `allow_recycling` (the public `solve_with_exclusions` path used by the
-/// other e2e fixtures does NOT plumb recycling — RFC D4, Phase 4). Formerly
-/// mirrored `tests/solver_netflow_parity.rs::report_fulgora_spike`, deleted
-/// #632 A1 along with the rest of the parity suite.
+/// other e2e fixtures does NOT plumb recycling — RFC D4, Phase 4). Mirrors
+/// `tests/netflow_regression.rs::report_fulgora_spike` (formerly
+/// `solver_netflow_parity.rs`, split #632 A1).
 fn solve_fulgora(target: &str, rate: f64) -> SolverResult {
     use spaghettio_core::netflow::{solve_netflow_with_options, CostTable, NetflowOptions, RecipeScope};
     use spaghettio_core::recipe_db::MachinePalette;
