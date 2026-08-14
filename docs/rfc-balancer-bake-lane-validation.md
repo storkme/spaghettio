@@ -403,7 +403,12 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
   - *(6,3): compose-pipeline bake through audit-clean atoms,
     parallel((2,1),3) → (3,3) at 6×16, identity-junction, classified
     Balanced, 0-error/0-warning under the un-blinded lane audit. Its
-    stage crossings carry the full rated 3 belts.*
+    stage crossings carry the full rated 3 belts: the merge stage is
+    three single-splitter (2,1) atoms (mid cut exactly 3 = rated), and
+    the (3,3) atom is a NATIVE template (real source_blueprint, not in
+    the compose provenance list), so the waist class has nowhere to
+    hide. Measured on the shipped entities (review round 8): per-row-cut
+    census min cut 3 = rated (`scripts/balancer_cut_census.py`).*
   - *(6,4), first attempt (parallel((3,2),2) → (4,4) at 6×27): passed
     every gate — Balanced, 0/0 audit — and was WITHDRAWN on a 3/3-pass
     review finding, structurally confirmed: the library (3,2) atom is
@@ -421,9 +426,15 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
     library), dimension-swept for candidates — 6×11 and 6×12 solves
     audit lane-dirty (25 / 15 errors), 6×13 has 2 warnings, and the
     6×14 (61 entities) audits 0-error/0-warning and carries ≥4
-    south-flow tiles at every row cut (no waist; full rated
-    throughput by network construction). It keeps its real
-    source_blueprint, so it is NOT in COMPOSE_GENERATED_SHAPES.*
+    south-flow tiles at every row cut — counting surface south belts,
+    splitter tiles, AND underground spans (a UG pair crosses cuts
+    y1..y2 inclusive; the output tile itself emits across its own
+    cut). Counting surface belts alone reads false waists on this
+    template — a review-round-8 objection adjudicated by committing
+    the census as `scripts/balancer_cut_census.py`: measured min cut
+    4 = rated (no waist; full rated throughput by network
+    construction). It keeps its real source_blueprint, so it is NOT
+    in COMPOSE_GENERATED_SHAPES.*
   - *Both shapes removed from KNOWN_IMBALANCED (shrinks to the #334
     pair) and from the partial-saturation known_worst arms (a stale
     arm would have excluded the new (6,4) from 50%/75% coverage — bot
@@ -449,3 +460,20 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
     reads 30 poles and 18 IRD residuals — i.e. **both pin moves
     (30→31, 18→14) attribute to the (6,4) replacement alone**; the
     (6,3) swap moves neither pin.*
+  - *2026-08-14 — review round 8 (post-infra-rerun): the bot's major —
+    "(6,3) removed from KNOWN_IMBALANCED on model-only evidence, no
+    physics anchor for (6,3) specifically" — is answered structurally,
+    not simmed: the per-row-cut census (committed this round as
+    `scripts/balancer_cut_census.py`, the #631 instrument in script
+    form) measures min cut = rated on the shipped entities of BOTH new
+    shapes, so the waist class the model instruments are blind to is
+    excluded; balance is covered by the un-blinded audit + the
+    Gaussian-elim cross-check. A direct (6,3) sim anchor stays with
+    #631's census plan — no current e2e fixture deploys (6,3) (the
+    isolated substitution showed the swap moves no pin), so anchoring
+    it needs a synthetic fixture, out of this PR's scope. Two comment
+    fixes absorbed (kill-2 pole attribution now names (6,4) alone;
+    tree-wire pin notes it shares the kill-2 fixture's solve+layout so
+    the attribution carries). Sweep dividend handed to #631: with
+    rated correctly min(n,m), the full-library census reads 12
+    waist-capped shapes — the recorded class plus (8,6) and (15,7).*

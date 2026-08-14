@@ -7554,10 +7554,11 @@ fn quality_ec_45s_express_legendary_from_ore() {
     // rfc-043-pole-band-thinning kill criterion 2 pin: single-band mode at
     // Legendary (budget 4) — 31 medium poles vs 60 unthinned (48%
     // reduction; census 2026-07-20 read 30, re-pinned 2026-08-13/14 with
-    // the (6,3)/(6,4) lane-balance re-bake — the shipped shapes (6×16
-    // compose, 6×14 native solve) are taller than the originals and cost
-    // one pole; the same re-bake re-blessed the IRD census above 18→14,
-    // see that pin's comment). Exact pin so any placement change
+    // the lane-balance re-bake — isolated substitution attributes the
+    // extra pole to the (6,4) native re-solve alone (6×14 vs the
+    // original 6×10; the (6,3) swap moves neither pin — RFC-027 decision
+    // log); the same re-bake re-blessed the IRD census above 18→14, see
+    // that pin's comment). Exact pin so any placement change
     // renegotiates the number consciously.
     let poles = layout_result
         .entities
@@ -7803,8 +7804,10 @@ fn quality_ec_45s_legendary_tree_wire_differential() {
         .iter()
         .filter(|e| e.name == "medium-electric-pole")
         .count();
-    // Re-pinned 30→31 with the (6,3)/(6,4) lane-balance re-bake
-    // (2026-08-13) — same renegotiation as the kill-2 pin above.
+    // Re-pinned 30→31 with the lane-balance re-bake (2026-08-13) —
+    // same solve and layout as the kill-2 fixture above (only
+    // wire_mode differs, which does not touch balancer selection), so
+    // the (6,4)-alone attribution measured there carries.
     assert_eq!(poles, 31, "census pin (rfc-043)");
 
     let tree = layout_result.power_wires.as_deref().expect("stored wires").to_vec();
