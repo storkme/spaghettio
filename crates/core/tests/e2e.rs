@@ -501,17 +501,51 @@ fn assert_no_warnings_except(result: &E2EResult, skip_categories: &[&str]) {
 /// previously-clean fixture that now warns only on `inserter-throughput`
 /// (every template feeds/drains a machine with one ~0.84/s regular inserter,
 /// so any machine whose per-side rate exceeds that is inserter-bound).
-fn assert_warnings_exactly(result: &E2EResult, expected: &[(&str, usize)]) {
+/// Zero errors + the EXACT warning multiset by category, pinned in a
+/// committed golden at `tests/goldens/warnings/<test_name>.txt` (one
+/// `category count` line each; empty file = warning-free). Same recall
+/// as the inline `assert_warnings_exactly` pins this replaced (#632 B7 —
+/// those pins were the suite's single largest measured churn tax: 166
+/// hand-edited lines across 50 commits since June, 10–24 per validator
+/// change), but re-pinning is now mechanical:
+///
+///   SPAGHETTIO_WARNING_PINS=bless cargo test --test e2e
+///
+/// rewrites every file; commit the diff, which shows the change
+/// per-fixture like any golden. Unlike the deleted stress goldens these
+/// are ALWAYS enforced (CI included) — their values were CI-stable as
+/// inline pins, so the files inherit that stability.
+fn assert_warnings_golden(result: &E2EResult, test_name: &str) {
     assert_no_errors(result);
     let mut actual: std::collections::BTreeMap<&str, usize> = Default::default();
     for w in result.issues.iter().filter(|i| i.severity == Severity::Warning) {
         *actual.entry(w.category.as_str()).or_default() += 1;
     }
-    let expected_map: std::collections::BTreeMap<&str, usize> =
-        expected.iter().copied().collect();
+    let mut got = String::new();
+    for (cat, count) in &actual {
+        got.push_str(&format!("{cat} {count}\n"));
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/goldens/warnings")
+        .join(format!("{test_name}.txt"));
+    if std::env::var("SPAGHETTIO_WARNING_PINS").as_deref() == Ok("bless") {
+        std::fs::create_dir_all(path.parent().unwrap()).expect("create warnings goldens dir");
+        std::fs::write(&path, &got).expect("write warning pin");
+        eprintln!("blessed {}", path.display());
+        return;
+    }
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "{test_name}: no committed warning pin at {} ({e}). Bless with \
+             SPAGHETTIO_WARNING_PINS=bless and commit the file.",
+            path.display()
+        )
+    });
     assert_eq!(
-        actual, expected_map,
-        "warning breakdown mismatch: actual {actual:?} vs expected {expected_map:?}"
+        expected, got,
+        "{test_name}: warning breakdown drifted from the committed pin \
+         (expected left, got right). If intentional, re-bless with \
+         SPAGHETTIO_WARNING_PINS=bless and commit the diff."
     );
 }
 
@@ -733,7 +767,7 @@ fn tier1_iron_gear_wheel() {
     // for 10/s) × 2 inserter-bound sides — 2.0/s iron-plate in and 1.0/s gears out,
     // both over the 0.84/s regular-inserter cap. One regular inserter per side.
     // RFC rfc-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (20 -> 0).
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "tier1_iron_gear_wheel");
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel");
@@ -958,7 +992,7 @@ fn tier1_iron_gear_wheel_from_ore() {
     // RFC Phase 1: 14 inserter-bound machine-sides (gear + from-ore smelting chain;
     // every side's per-machine rate exceeds the 0.84/s regular-inserter cap).
     // RFC rfc-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (14 -> 0).
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "tier1_iron_gear_wheel_from_ore");
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_from_ore");
@@ -975,7 +1009,7 @@ fn tier1_iron_gear_wheel_20s() {
     // RFC Phase 1: 28 inserter-bound machine-sides at 20/s (more gear machines than
     // the 10/s case; each side > 0.84/s).
     // RFC rfc-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (28 -> 0).
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "tier1_iron_gear_wheel_20s");
     assert_produces(&result, "iron-gear-wheel", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_20s");
@@ -1105,7 +1139,7 @@ fn tier2_electronic_circuit() {
          assertion and the belt_detour_migration_differential_fast pin — \
          adjudicate both, don't just re-bless."
     );
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "tier2_electronic_circuit");
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -1183,10 +1217,7 @@ fn tier2_electronic_circuit_from_ore() {
     // rows' tail starvation the blessed sim baseline has recorded since
     // 2026-07-22 (ec10 FAIL at −50%, #352, "validator-clean") — the check
     // finally agrees with the measurement.
-    assert_warnings_exactly(
-        &result,
-        &[("input-rate-delivery", 3), ("row-input-belt-margin", 1)],
-    );
+    assert_warnings_golden(&result, "tier2_electronic_circuit_from_ore");
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -1236,7 +1267,7 @@ fn tier2_electronic_circuit_20s_from_ore() {
     // belt_detour.rs) flags one genuine detour here, past both its ratio
     // and excess floors — not yet root-caused, tolerated explicitly rather
     // than silently allowed.
-    assert_warnings_exactly(&result, &[("belt-detour", 1)]);
+    assert_warnings_golden(&result, "tier2_electronic_circuit_20s_from_ore");
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1358,7 +1389,7 @@ fn tier3_plastic_bar() {
     assert_no_errors(&result);
     // RFC Phase 1: 10 inserter-bound machine-sides (plastic-bar chemical plants —
     // petroleum arrives by pipe, but coal in and plastic out both exceed 0.84/s).
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "tier3_plastic_bar");
     assert_produces(&result, "plastic-bar", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier3_plastic_bar");
@@ -1378,7 +1409,7 @@ fn tier3_plastic_bar_from_crude() {
     assert_no_errors(&result);
     // RFC Phase 1: 10 inserter-bound machine-sides (plastic-bar from crude — same
     // chemical-plant sides over 0.84/s as the plate-fed variant).
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "tier3_plastic_bar_from_crude");
     assert_produces(&result, "plastic-bar", 10.0);
     assert_round_trip(&result);
 }
@@ -1459,10 +1490,7 @@ fn phase0e1_superconductor_electromagnetic_plant() {
     // are orphaned and their inserters undersized. Tracked separately; not this
     // unit's scope.
     assert_fluid_machine(&result, "electromagnetic-plant", false, spaghettio_core::models::EntityDirection::East);
-    assert_warnings_exactly(
-        &result,
-        &[("inserter-item-throughput", 4), ("orphan-belt-segment", 2)],
-    );
+    assert_warnings_golden(&result, "phase0e1_superconductor_electromagnetic_plant");
     assert_round_trip(&result);
 }
 
@@ -1488,7 +1516,7 @@ fn phase0e1_fusion_power_cell_cryogenic_plant() {
 
     // 0 errors (was 5 fluid-connectivity errors pre-fix), 0 warnings.
     assert_fluid_machine(&result, "cryogenic-plant", true, spaghettio_core::models::EntityDirection::North);
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "phase0e1_fusion_power_cell_cryogenic_plant");
     assert_round_trip(&result);
 }
 
@@ -1514,7 +1542,7 @@ fn phase0e1_molten_iron_foundry() {
 
     // 0 errors (was belt-dead-end + fluid-connectivity pre-fix), 0 warnings.
     assert_fluid_machine(&result, "foundry", true, spaghettio_core::models::EntityDirection::North);
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "phase0e1_molten_iron_foundry");
     assert_round_trip(&result);
 }
 
@@ -1543,7 +1571,7 @@ fn phase0e1_biolubricant_biochamber() {
         result.solver_result.machines.iter().map(|m| &m.entity).collect::<Vec<_>>()
     );
     assert_fluid_machine(&result, "biochamber", false, spaghettio_core::models::EntityDirection::North);
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "phase0e1_biolubricant_biochamber");
     assert_round_trip(&result);
 }
 
@@ -1794,7 +1822,7 @@ fn tier4_advanced_circuit_from_plates() {
     // the copper-cable UG entrance at (6,38) phantom-fed the turn tile.
     // Same family as the partitioned/pooled pins below; root-cause
     // tracked in docs/status.md "Open tracking issues".
-    assert_warnings_exactly(&result, &[("belt-detour", 1)]);
+    assert_warnings_golden(&result, "tier4_advanced_circuit_from_plates");
     assert_produces(&result, "advanced-circuit", 1.0);
     assert_round_trip(&result);
 }
@@ -1893,7 +1921,7 @@ fn tier4_advanced_circuit_partitioned() {
     // modeled trunk by a third. With seeding repaired both clear; the
     // copper-cable warning (the candidate true positive above) remains,
     // exactly as that adjudication predicted. Layout hash unchanged.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("belt-detour", 2)]);
+    assert_warnings_golden(&result, "tier4_advanced_circuit_partitioned");
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
@@ -2328,7 +2356,7 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // ((8,85)->(7,90) at 15/6 = 2.5x); measured whole, the true
     // balancer-weave journey is 20/11 = 1.82x — under the ratio floor by
     // the same rules that admitted the fragment. Artifact retired.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 11)]);
+    assert_warnings_golden(&result, "tier4_advanced_circuit_from_ore_am2");
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -2389,7 +2417,7 @@ fn tier5_processing_unit_from_ore_am3() {
     // copper-plate / copper-cable / plastic rows — the same uniform
     // −24% chain signature pu@3 sim-measured (RFC-060 K60-3, converged,
     // warmup-flat). The check now reports what the sim already proved.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 32)]);
+    assert_warnings_golden(&result, "tier5_processing_unit_from_ore_am3");
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -2449,7 +2477,7 @@ fn tier_kovarex_self_loop() {
     // floor (the quality-differential test's old comment recorded exactly
     // that number). Correctly measured; whether catalyst returns deserve
     // their own calibration class is noted follow-up work in the RFC log.
-    assert_warnings_exactly(&result, &[("belt-detour", 1)]);
+    assert_warnings_golden(&result, "tier_kovarex_self_loop");
     assert_produces(&result, "uranium-235", 0.1);
 
     let centrifuge_count = result
@@ -2752,7 +2780,7 @@ fn tier_pentapod_egg_self_loop() {
     // (`docs/rfc-inserter-sizing.md`'s accepted residue: nutrients demand
     // ~3/s per machine vs the reach-2 ceiling). Permanent, honest residue
     // per the user-accepted DoD, not a bug — stays at 2/2 through Phase 3.
-    assert_warnings_exactly(&result, &[("inserter-throughput", 2), ("inserter-item-throughput", 2)]);
+    assert_warnings_golden(&result, "tier_pentapod_egg_self_loop");
     assert_produces(&result, "pentapod-egg", 0.2);
 
     let biochamber_count =
@@ -2797,7 +2825,7 @@ fn tier_fish_breeding_self_loop() {
 
     assert_no_errors(&result);
     // RFC Phase 1: 1 inserter-bound machine-side (raw-fish self-loop).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 1), ("inserter-item-throughput", 1)]);
+    assert_warnings_golden(&result, "tier_fish_breeding_self_loop");
     assert_produces(&result, "raw-fish", 0.15);
 
     let chemical_plant_count =
@@ -2860,7 +2888,7 @@ fn tier_bacteria_self_loop_regression() {
     // RFC rfc-inserter-sizing.md Phase 3: self_loop_row's near_item ladder
     // (near_item = bioflux here) resolves the one remaining inserter-bound
     // side from Phase 1 — fully clean.
-    assert_warnings_exactly(&result, &[]);
+    assert_warnings_golden(&result, "tier_bacteria_self_loop_regression");
     assert_produces(&result, "iron-bacteria", 1.0);
 
     let biochamber_count =
@@ -10050,7 +10078,7 @@ fn belt_detour_differential_chunk(chunk: usize, chunks: usize) {
     // A decomposition regression (spurious boundary, dropped tile,
     // phantom verdict) violates one of these regardless of fixture
     // geometry. Per-fixture verdict COUNTS are separately pinned by each
-    // fixture's own `assert_warnings_exactly` in this same suite — that
+    // fixture's own `assert_warnings_golden` pin in this same suite — that
     // is where a legitimate future drift surfaces for adjudication (with
     // the RFC-065 decision log's 2026-08-06 entries as the worked
     // precedent: four true positives surfaced, one artifact retired).
