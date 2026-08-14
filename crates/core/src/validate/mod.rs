@@ -256,8 +256,8 @@ impl ValidatorSummary {
     /// - **This is not the engine's selection count.** `selection_warning_count`
     ///   — what `decomposition_search` ranks on and the e2e scoreboards
     ///   report — *excludes* [`SELECTION_EXCLUDED_WARNING_CATEGORIES`]
-    ///   (`belt-detour` plus the three #632 B6 demotions), which the engine
-    ///   treats as report-only. `ValidatorSummary` includes every category, so a
+    ///   (`belt-detour` plus the two #632 B6 demotions), which selection
+    ///   does not count. `ValidatorSummary` includes every category, so a
     ///   belt-detour-only layout is `is_clean() == false` here while the
     ///   engine considers it unremarkable. Two definitions of "warning"
     ///   coexist on purpose: selection needs the filtered one, an artifact
@@ -368,32 +368,47 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// report-only until a similar sim-anchoring case is made for letting it
 /// steer selection.
 ///
-/// `inserter-throughput`, `inserter-item-throughput`, and
-/// `row-output-lane-budget` (2026-08-14, #632 B6) are excluded by the
-/// same rule applied retroactively: none of the three has ever been
-/// sim-anchored in the steering direction (trust-table rows), so their
-/// participation was steering candidate selection on unvalidated
-/// evidence — the #519 lesson in standing form. They remain REPORTED
-/// unchanged; only ranking stops consuming them. The one receipt that
-/// looks like an anchor — big-electric-pole@1/am2, where a single
-/// `inserter-item-throughput` warning is the only validator signal on
-/// the layout that measured 0.51/s — does not depend on this count:
-/// that config ships the measured-good layout via RFC-059's
-/// `DiClaimOrder::Downstream` DEFAULT, pinned by its own teeth test
+/// `inserter-throughput` and `inserter-item-throughput` (2026-08-14,
+/// #632 B6) are excluded by the same rule applied retroactively:
+/// neither has ever been sim-anchored in the steering direction
+/// (trust-table rows), so their participation was steering candidate
+/// selection on unvalidated evidence — the #519 lesson in standing
+/// form. Both remain REPORTED unchanged; what stops consuming them is
+/// the selection contract — ranking AND the never-worse floors that
+/// share this count (they are one mechanism, #605). Transform-admission
+/// gates (the compaction fold gate, row_rotation's refusal) keep their
+/// own conservative policies and are NOT derived from this const —
+/// adjudicated on the B6 PR (#639 round 2): admission against a native
+/// status quo defaults to keep-native under an uncalibrated signal.
+///
+/// `row-output-lane-budget` was demoted with them for one review round
+/// and REINSTATED (#639 round 3): its "never sim-anchored" trust-table
+/// row was wrong — both its factors are measured (0.95/lane from the
+/// 7.40/7.5 cell; 2.0 bridged from the #431 declared-level sweep,
+/// 15.00/s at plan), making it threshold-calibrated like
+/// `input-rate-delivery`, not survey-guessed like `belt-detour`.
+///
+/// The one receipt that looks like an anchor for the demoted pair —
+/// big-electric-pole@1/am2, where a single `inserter-item-throughput`
+/// warning is the only validator signal on the layout that measured
+/// 0.51/s — does not depend on this count: that config ships the
+/// measured-good layout via RFC-059's `DiClaimOrder::Downstream`
+/// DEFAULT, pinned by its own teeth test
 /// (`di_claim_order_default_is_downstream_and_ships_the_working_big_pole`),
-/// which stayed green across this demotion.
+/// which stayed green across this demotion, and the explicit-Search
+/// path was probed post-demotion (ships the 1127-entity 1.10/s arm via
+/// the entity tie-break; receipt in validator-trust.md hole 2).
 ///
 /// Measured receipts for the demotion (#632 B6 PR): the full plain
 /// suite is green (1238/1238 — every active pin holds), and a
-/// 513-config layout-fingerprint sweep found SEVEN configs (1.4%,
-/// three config families) whose selected layout moves by ±2–3
-/// entities. All seven are knife-edge ties: re-built standalone (a
-/// different SAT-zone-cache history), each family selects identically
-/// with and without the demotion, and the calibrated channels (errors,
-/// `input-rate-delivery`) are unchanged on every flipped family. The
-/// stress GOLDENS were not usable as a receipt: check mode fails 8/8
-/// on clean main too — they have been stale on this host since their
-/// 2026-07-24 bless (recorded on #632; feeds the B7 pin diet).
+/// 513-config layout-fingerprint sweep bounds the shipped-geometry
+/// change — a handful of knife-edge configs move by ±2–3 entities,
+/// each selecting identically with and without the demotion when
+/// re-built standalone (a different SAT-zone-cache history), with the
+/// calibrated channels (errors, `input-rate-delivery`) unchanged on
+/// every flipped family. The stress GOLDENS were not usable as a
+/// receipt: check mode fails 8/8 on clean main too — stale on this
+/// host since their 2026-07-24 bless (recorded on #632; feeds B7).
 ///
 /// Public so e2e never-worse gates assert against THE canonical definition
 /// rather than re-typing the predicate. Three of them had re-typed it, kept a
@@ -401,11 +416,10 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// thereby stopped asserting what the engine enforces — a flux-channel
 /// regression would have passed them silently (review, #605). One definition,
 /// one place to change it.
-pub const SELECTION_EXCLUDED_WARNING_CATEGORIES: [&str; 4] = [
+pub const SELECTION_EXCLUDED_WARNING_CATEGORIES: [&str; 3] = [
     "belt-detour",
     "inserter-throughput",
     "inserter-item-throughput",
-    "row-output-lane-budget",
 ];
 
 pub fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
@@ -1163,6 +1177,25 @@ mod tests {
             height: 0,
             ..Default::default()
         }
+    }
+
+    /// Membership pin for the selection-exclusion set (#639 round-3 bot
+    /// finding: the e2e never-worse gates assert against this count by
+    /// design, so no test would notice a category silently entering or
+    /// leaving it). Changing this list is a selection-semantics change:
+    /// it requires a trust-table row update in the same PR, and either
+    /// demotion receipts (suite + fingerprint sweep; see the const's
+    /// doc) or an anchored lift case (hole 2's `input-rate-delivery`
+    /// pattern) — then update this pin with the receipt pointer.
+    #[test]
+    fn selection_exclusion_set_membership_is_deliberate() {
+        assert_eq!(
+            SELECTION_EXCLUDED_WARNING_CATEGORIES,
+            ["belt-detour", "inserter-throughput", "inserter-item-throughput"],
+            "the selection-exclusion set changed — this is a selection-semantics \
+             change, not a refactor. Update docs/validator-trust.md in the same \
+             PR and carry demotion/lift receipts (see the const's doc comment)."
+        );
     }
 
     /// Reconstructs the failure this check exists for: a transform moved the

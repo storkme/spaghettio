@@ -876,7 +876,7 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
         // that follows is kept as the record of WHY it was excluded and
         // what it cost, not as a description of current behaviour.
         // The `SELECTION_EXCLUDED_WARNING_CATEGORIES` set remains
-        // excluded (belt-detour, plus the three #632 B6 demotions).
+        // excluded (belt-detour, plus the two #632 B6 demotions).
         // Receipts: validator-trust.md
         // hole 2.
         // Honest scope statement (review finding on #525 corrected an
