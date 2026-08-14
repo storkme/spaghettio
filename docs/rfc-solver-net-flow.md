@@ -746,3 +746,22 @@ independent follow-ups with their own gates.
   gate asserts the recorded exit names a physical heavy-oil pipe and
   validates clean. Long Factorio re-measurement remains the acceptance
   oracle before closing #476.*
+- *2026-08-14 — **legacy recursive tree walk + parity suite DELETED**
+  (#632 A1, churn-reduction campaign). Free-mode net-flow has been the
+  default since Phase 3 (2026-07); the walk survived only as the
+  compat-mode A/B oracle (`solve_compat_with_palette_and_exclusions`,
+  zero non-test callers) and the reference `solver_netflow_parity.rs`
+  harness (1,040 lines) existed solely to compare the two. Ran the full
+  parity suite one final time as the deletion receipt — 11 passed, 0
+  failed, 3 ignored (perf/report-only gates) — then deleted `resolve()`,
+  `SolveState`, `solve_tree_walk_with_palette_and_exclusions`,
+  `solve_compat_with_palette_and_exclusions`, the now-dead
+  `SolverError::ZeroProduct` variant (only the walk ever constructed
+  it), and the parity test file outright. `solver.rs` is now a pure
+  wrapper layer over `netflow.rs`; every doc reference to a live
+  tree-walk oracle elsewhere in the codebase was swept in the same PR.
+  `RecipeScope::Restricted` in `netflow.rs` is now unreferenced (it
+  existed to serve compat mode) but was deliberately left in place —
+  removing it touches `netflow.rs`'s core solve loop, which is out of
+  scope for a deletion-only PR; flagged as a possible future
+  micro-cleanup, not claimed as done here. No behavior change.*

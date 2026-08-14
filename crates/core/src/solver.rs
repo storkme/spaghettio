@@ -1,10 +1,12 @@
-//! Recursive recipe solver: target item/rate → machine counts & flows.
+//! Solver public API: target item/rate → machine counts & flows. Every
+//! entry point routes to the net-flow LP in `netflow.rs` (default since
+//! Phase 3, 2026-07 — see `docs/rfc-solver-net-flow.md`). The legacy
+//! recursive tree walk that used to live here (and its compat-mode A/B
+//! path) was deleted 2026-08-14 (#632 A1) once the parity suite ran green
+//! one final time — see the RFC's decision log for the deletion receipt.
 
-use crate::models::{ItemFlow, MachineSpec, SolverResult};
-use crate::recipe_db::{
-    find_recipe_for_item_excluding, get_crafting_speed, machine_can_run_recipe,
-    machine_for_recipe_with_palette, MachineIncompatibility, MachinePalette,
-};
+use crate::models::SolverResult;
+use crate::recipe_db::{MachineIncompatibility, MachinePalette};
 use rustc_hash::FxHashSet;
 
 /// Marker prefix carried in `IncompatibleMachine` error strings across the
@@ -15,8 +17,6 @@ pub const INCOMPATIBLE_MACHINE_PREFIX: &str = "[INCOMPATIBLE_MACHINE] ";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SolverError {
-    #[error("recipe {recipe} produces 0 of {item}")]
-    ZeroProduct { recipe: String, item: String },
     #[error("no crafting speed for entity {entity}")]
     MissingCraftingSpeed { entity: String },
     /// Pre-flight rejection: the machine the palette resolved to can't run
@@ -54,29 +54,6 @@ pub enum SolverError {
     /// guarantees feasibility — so this indicates a bug worth reporting.
     #[error("net-flow solve failed for {target}: {detail}")]
     LpFailed { target: String, detail: String },
-}
-
-struct SolveState {
-    machines: Vec<MachineSpec>,
-    external_inputs: Vec<ItemFlow>, // keep insertion order, small N
-    dependency_order: Vec<String>,
-    resolving: FxHashSet<String>,
-}
-
-impl SolveState {
-    fn add_external(&mut self, item: &str, rate: f64, is_fluid: bool) {
-        if let Some(flow) = self.external_inputs.iter_mut().find(|f| f.item == item) {
-            flow.rate += rate;
-            flow.is_fluid = is_fluid;
-        } else {
-            self.external_inputs.push(ItemFlow {
-                item: item.to_string(),
-                rate,
-                is_fluid,
-                module_id: 0,
-            });
-        }
-    }
 }
 
 /// Compute machines needed to produce `target_item` at `target_rate` items/sec.
@@ -144,21 +121,19 @@ pub fn solve_with_exclusions(
 
 /// Combined variant: per-category palette + recipe exclusions.
 ///
-/// Since Phase 1 of docs/rfc-solver-net-flow.md this routes through the
-/// net-flow LP in **compatibility mode**: the legacy tree walk runs first
-/// to pick the recipe set (JSON-first per item, exclusions honored), then
-/// the LP re-derives flows over exactly that set — fixing byproduct
-/// crediting and fleet double-counting without changing recipe selection.
-/// Cycle-shaped selections return typed errors instead of the walk's
-/// silent nonsense externals.
+/// Routes through the net-flow LP with free cost-based recipe selection
+/// (docs/rfc-solver-net-flow.md Phase 3, the default since 2026-07). All
+/// non-excluded recipes are candidate LP columns; the frozen cost table
+/// picks the mix — raw-input efficiency first, so e.g.
+/// advanced-oil-processing + cracking replaces basic-oil-processing
+/// wherever byproducts can be credited, typically with zero surplus.
+/// Byproduct surplus and fluid targets route to the layout perimeter
+/// (Phase 2). Unsupported cycles return typed errors.
 ///
-/// Phase 3 (docs/rfc-solver-net-flow.md): free cost-based recipe
-/// selection is the default. All non-excluded recipes are candidate LP
-/// columns; the frozen cost table picks the mix — raw-input efficiency
-/// first, so e.g. advanced-oil-processing + cracking replaces
-/// basic-oil-processing wherever byproducts can be credited, typically
-/// with zero surplus. Byproduct surplus and fluid targets route to the
-/// layout perimeter (Phase 2). Unsupported cycles return typed errors.
+/// (Phase 1's compatibility mode — restricting the LP to the recipe set a
+/// legacy recursive tree walk would have picked — was removed 2026-08-14
+/// (#632 A1) once the parity suite proved free-mode selection matches;
+/// see the RFC's decision log.)
 pub fn solve_with_palette_and_exclusions(
     target_item: &str,
     target_rate: f64,
@@ -177,53 +152,14 @@ pub fn solve_with_palette_and_exclusions(
     )
 }
 
-/// Compatibility mode (Phase 1 behavior): the legacy tree walk picks the
-/// recipe set (JSON-first per item), then the LP re-derives flows over
-/// exactly that set. Kept for A/B comparison and the parity harness.
-///
-/// No quality support (rfc-build-quality): this entry always solves at
-/// `Normal`. Selection is quality-invariant so the walk needs nothing;
-/// if a future caller needs quality-scaled *counts* in compat mode,
-/// thread `NetflowOptions.quality` into the `solve_netflow` call below —
-/// see `solve_with_palette_exclusions_and_quality` for the free-mode
-/// shape.
-pub fn solve_compat_with_palette_and_exclusions(
-    target_item: &str,
-    target_rate: f64,
-    available_inputs: &FxHashSet<String>,
-    palette: &MachinePalette,
-    default_machine: &str,
-    excluded_recipes: &FxHashSet<String>,
-) -> Result<SolverResult, SolverError> {
-    let walk = solve_tree_walk_with_palette_and_exclusions(
-        target_item,
-        target_rate,
-        available_inputs,
-        palette,
-        default_machine,
-        excluded_recipes,
-    )?;
-    let recipe_set: FxHashSet<String> = walk.dependency_order.iter().cloned().collect();
-    crate::netflow::solve_netflow(
-        target_item,
-        target_rate,
-        available_inputs,
-        palette,
-        default_machine,
-        excluded_recipes,
-        crate::netflow::RecipeScope::Restricted(&recipe_set),
-        &crate::netflow::CostTable::default(),
-    )
-}
-
 /// Phase 3 free cost-based recipe selection: all non-excluded recipes are
 /// candidate columns and the frozen cost table picks the mix (raw-input
 /// efficiency first — e.g. advanced-oil-processing + cracking replaces
 /// basic-oil-processing wherever byproducts can be credited, typically
 /// with zero surplus). This is the default path every public entry point
-/// routes through; the compat (tree-walk-selected) mode is the opt-in A/B
-/// path. Solver-level behavior is fully verified (parity harness); the
-/// LAYOUT of dense oil complexes still has a known fluid-lane stagger gap.
+/// routes through — the only path, since #632 A1 deleted the compat
+/// (tree-walk-selected) A/B mode. The LAYOUT of dense oil complexes still
+/// has a known fluid-lane stagger gap.
 pub fn solve_free_with_palette_and_exclusions(
     target_item: &str,
     target_rate: f64,
@@ -358,178 +294,6 @@ pub fn solve_multi_with_palette_exclusions_quality_and_modules(
             ..Default::default()
         },
     )
-}
-
-/// The legacy recursive tree walk. Kept as the recipe-*selection* oracle
-/// for compatibility mode and as the parity-harness reference. Known-wrong
-/// flow accounting (no byproduct crediting, `resolving`-guard cycle punts,
-/// fleet double-counting) — do not add new callers; use [`solve`] /
-/// [`solve_with_palette_and_exclusions`] instead.
-///
-/// Deliberately quality-blind (rfc-build-quality Phase 1): recipe
-/// *selection* is quality-invariant (JSON-first / cost table, never
-/// speed), and this walk's counts are oracle-only — see
-/// `recipe_db::effective_crafting_speed` for the quality choke point.
-pub fn solve_tree_walk_with_palette_and_exclusions(
-    target_item: &str,
-    target_rate: f64,
-    available_inputs: &FxHashSet<String>,
-    palette: &MachinePalette,
-    default_machine: &str,
-    excluded_recipes: &FxHashSet<String>,
-) -> Result<SolverResult, SolverError> {
-    let mut state = SolveState {
-        machines: Vec::new(),
-        external_inputs: Vec::new(),
-        dependency_order: Vec::new(),
-        resolving: FxHashSet::default(),
-    };
-
-    resolve(
-        target_item,
-        target_rate,
-        false,
-        available_inputs,
-        palette,
-        default_machine,
-        excluded_recipes,
-        &mut state,
-    )?;
-
-    Ok(SolverResult {
-        machines: state.machines,
-        external_inputs: state.external_inputs,
-        external_outputs: vec![ItemFlow {
-            item: target_item.to_string(),
-            rate: target_rate,
-            is_fluid: false,
-            module_id: 0,
-        }],
-        surplus_outputs: Vec::new(),
-        dependency_order: state.dependency_order,
-        // The legacy tree walk cannot detect DI couplings — it has no
-        // per-pair flow data. The net-flow solver populates this.
-        di_couplings: Vec::new(),
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn resolve(
-    item: &str,
-    rate: f64,
-    is_fluid: bool,
-    available_inputs: &FxHashSet<String>,
-    palette: &MachinePalette,
-    default_machine: &str,
-    excluded_recipes: &FxHashSet<String>,
-    state: &mut SolveState,
-) -> Result<(), SolverError> {
-    if available_inputs.contains(item) {
-        state.add_external(item, rate, is_fluid);
-        return Ok(());
-    }
-
-    let recipe = match find_recipe_for_item_excluding(item, excluded_recipes) {
-        Some(r) => r,
-        None => {
-            state.add_external(item, rate, is_fluid);
-            return Ok(());
-        }
-    };
-
-    if state.resolving.contains(item) {
-        state.add_external(item, rate, is_fluid);
-        return Ok(());
-    }
-
-    state.resolving.insert(item.to_string());
-
-    let entity = machine_for_recipe_with_palette(recipe, palette, default_machine);
-    if let Err(reason) = machine_can_run_recipe(&entity, recipe) {
-        return Err(SolverError::IncompatibleMachine {
-            recipe: recipe.name.clone(),
-            machine: entity.clone(),
-            reason,
-        });
-    }
-    let crafting_speed = get_crafting_speed(&entity);
-    if crafting_speed <= 0.0 {
-        return Err(SolverError::MissingCraftingSpeed {
-            entity: entity.clone(),
-        });
-    }
-
-    let products_per_craft: f64 = recipe
-        .products
-        .iter()
-        .filter(|p| p.name == item)
-        .map(|p| p.amount * p.probability)
-        .sum();
-
-    if products_per_craft <= 0.0 {
-        return Err(SolverError::ZeroProduct {
-            recipe: recipe.name.clone(),
-            item: item.to_string(),
-        });
-    }
-
-    let crafts_per_sec = crafting_speed / recipe.energy;
-    let items_per_sec_per_machine = crafts_per_sec * products_per_craft;
-    let count = rate / items_per_sec_per_machine;
-
-    let input_flows: Vec<ItemFlow> = recipe
-        .ingredients
-        .iter()
-        .map(|ing| ItemFlow {
-            item: ing.name.clone(),
-            rate: ing.amount * crafts_per_sec,
-            is_fluid: ing.type_ == "fluid",
-            module_id: 0,
-        })
-        .collect();
-
-    let output_flows: Vec<ItemFlow> = recipe
-        .products
-        .iter()
-        .map(|prod| ItemFlow {
-            item: prod.name.clone(),
-            rate: prod.amount * prod.probability * crafts_per_sec,
-            is_fluid: prod.type_ == "fluid",
-            module_id: 0,
-        })
-        .collect();
-
-    if let Some(existing) = state.machines.iter_mut().find(|m| m.recipe == recipe.name) {
-        existing.count += count;
-    } else {
-        state.machines.push(MachineSpec {
-            entity,
-            recipe: recipe.name.clone(),
-            self_loop: vec![], voider: false, game_modules: Vec::new(),
-            count,
-            inputs: input_flows,
-            outputs: output_flows,
-        });
-        state.dependency_order.push(recipe.name.clone());
-    }
-
-    for ing in &recipe.ingredients {
-        let ingredient_rate = ing.amount * crafts_per_sec * count;
-        let ing_is_fluid = ing.type_ == "fluid";
-        resolve(
-            &ing.name,
-            ingredient_rate,
-            ing_is_fluid,
-            available_inputs,
-            palette,
-            default_machine,
-            excluded_recipes,
-            state,
-        )?;
-    }
-
-    state.resolving.remove(item);
-    Ok(())
 }
 
 #[cfg(test)]
@@ -860,26 +624,6 @@ mod tests {
             ec.unwrap(),
             cc.unwrap() + 1,
             "EC should be immediately after cable (DI co-location)"
-        );
-    }
-
-    /// The legacy tree walk has no per-pair flow data and must emit empty
-    /// di_couplings. This is the compatibility-mode contract.
-    #[test]
-    fn di_empty_for_tree_walk() {
-        let available = inputs_of(&["iron-plate", "copper-plate"]);
-        let result = solve_tree_walk_with_palette_and_exclusions(
-            "electronic-circuit",
-            10.0,
-            &available,
-            &MachinePalette::default(),
-            "assembling-machine-3",
-            &FxHashSet::default(),
-        )
-        .unwrap();
-        assert!(
-            result.di_couplings.is_empty(),
-            "tree walk must not emit DI couplings"
         );
     }
 

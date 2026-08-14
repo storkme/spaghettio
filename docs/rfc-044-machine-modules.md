@@ -211,7 +211,10 @@ Works on imported blueprints immediately; no solver dependency.
   not by harness: on the default path the walk isn't invoked at all (free
   mode), `solve_compat_*` has no non-test callers, and the parity harness
   only builds module-off configs, so module-on parity is out of scope by
-  construction.
+  construction. *(Note 2026-08-14: the tree walk, `solve_compat_*`, and
+  the parity harness were all deleted, #632 A1 — this bullet is historical
+  record of a design-time safety argument for code that no longer
+  exists.)*
 - **Stamping**: a layout post-pass fills `PlacedEntity.items` on eligible
   machines per the policy, mirroring the quality-stamping post-pass
   (machines only; never logistics).

@@ -122,8 +122,7 @@ pub struct SolverResult {
     /// byproduct surplus — `decomposition_search::compute_overproduction`
     /// and the step-7 output merger both assume entries here are targets.
     pub external_outputs: Vec<ItemFlow>,
-    /// Byproduct produced beyond internal demand (net-flow solver only;
-    /// always empty from the legacy tree walk). Routing these to the
+    /// Byproduct produced beyond internal demand. Routing these to the
     /// perimeter is Phase 2 of docs/rfc-solver-net-flow.md — until then a
     /// non-empty entry here means the layout physically strands the flow,
     /// which the port-extraction validator reports as an error.
@@ -135,8 +134,8 @@ pub struct SolverResult {
     /// consumer with no branching, surplus, or external supply. The placer
     /// MAY use these to co-locate rows and skip the bus lane; presence
     /// here does not force DI (the placer gates on geometric
-    /// feasibility). Empty under the legacy tree walk and when no pair
-    /// qualifies. See `docs/rfc-decomposition-search.md` Phase 3.
+    /// feasibility). Empty when no pair qualifies. See
+    /// `docs/rfc-decomposition-search.md` Phase 3.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub di_couplings: Vec<DICoupling>,
 }
