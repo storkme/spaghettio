@@ -60,8 +60,9 @@ use spaghettio_core::validate::Severity;
 /// compose replacement was withdrawn mid-review as structurally
 /// throughput-capped (waist class, #631; trail in
 /// rfc-balancer-bake-lane-validation.md's decision log). Both audit
-/// 0-error / 0-warning under the un-blinded walker, so the gate runs
-/// them like any other shape.
+/// 0-error / 0-warning under the un-blinded walker — the 0-error half
+/// is what this gate enforces; warning counts are printed, not
+/// asserted — so the gate runs them like any other shape.
 ///
 /// Flow census over all 77 templates (adversarial review of the #624
 /// fix): exactly four shapes' delivered/seeded flow changed — (6,3)

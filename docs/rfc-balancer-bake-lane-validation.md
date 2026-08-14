@@ -443,4 +443,9 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
     balance guard also on record: `balancer_cross_validation.rs`
     (classifier vs the all-fluid Gaussian-elim verifier) passes the
     new templates in the same suite run. Throughput anchoring for the
-    rest of the library stays with #631's census plan.*
+    rest of the library stays with #631's census plan. Census-delta
+    attribution (review round 7), measured by isolated substitution:
+    with the new (6,3) and the OLD (6,4) restored, the ec@45 fixture
+    reads 30 poles and 18 IRD residuals — i.e. **both pin moves
+    (30→31, 18→14) attribute to the (6,4) replacement alone**; the
+    (6,3) swap moves neither pin.*
