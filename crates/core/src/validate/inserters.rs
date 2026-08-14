@@ -977,10 +977,11 @@ pub fn check_row_output_lane_budget(
 /// #632 B5; the `belt_structural` twin predated it here) compares
 /// demand against capacity and 45 ≤ 45 passes.
 /// [`crate::validate::belt_flow::check_input_rate_delivery`] compares each
-/// machine's pickup-tile lane rate against that machine's OWN requirement
-/// — but the lane-rate propagation never subtracts what upstream machines
-/// on the same belt have already consumed, so the tail machine "sees" the
-/// full 45/s and looks fed. This check is the row-AGGREGATE counterpart:
+/// machine's pickup-tile lane rate against that machine's OWN requirement.
+/// (When this paragraph was written the walker never subtracted upstream
+/// consumption, so the tail machine "saw" the full 45/s and looked fed —
+/// #519's forward-consumption decrement fixed that; the residual gap this
+/// check covers is the aggregate one below.) This check is the row-AGGREGATE counterpart:
 /// it never asks what any single machine sees, only whether the belt has
 /// any margin left over for the tail at all.
 ///
