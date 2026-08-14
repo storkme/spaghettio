@@ -1,10 +1,10 @@
 # Trace Debug UI — Design Document
 
-The Rust pipeline emits 22 structured trace events during bus layout generation. This document describes a phased plan to surface those events in the web app as interactive visuals, performance data, and algorithm diagnostics — giving the developer insight into what's tunable and why layouts succeed or fail.
+The Rust pipeline emits **93** structured trace events during bus layout generation (this line originally said "22" — stale independent of this PR; verified count and methodology in footnote [1] below). This document describes a phased plan to surface those events in the web app as interactive visuals, performance data, and algorithm diagnostics — giving the developer insight into what's tunable and why layouts succeed or fail.
 
 ## Current State
 
-**Already visualized** in `web/src/renderer/traceOverlay.ts` (8 events):
+**Already visualized** in `web/src/renderer/traceOverlay.ts` (**13** events, not 8 — see footnote [1]):
 
 | Event | Visual |
 |---|---|
@@ -17,12 +17,21 @@ The Rust pipeline emits 22 structured trace events during bus layout generation.
 | MergerBlockPlaced | Gold horizontal merger bands |
 | Phase summary | Text overlay listing phases |
 
-**Not visualized** (14 events): `RouteFailure`, `CrossingZoneConflict`, `LaneConsolidated`, `RowSplit`, `LaneOrderOptimized`, `LaneSplit`, `LaneRouted`, `OutputMerged`, `PolesPlaced`, `PhaseTime`, `NegotiateComplete`, `SolverCompleted`, `LaneConsolidated`, `ValidationCompleted`
+This table itself is stale — see footnote [1] for the two rows it gets
+wrong (`CrossingZoneSolved`/`CrossingZoneSkipped`) and the six live events
+it's missing (`GhostSpecRouted`, `GhostSpecFailed`, `GhostRoutingComplete`,
+`GhostClusterSolved`, `GhostClusterFailed`, `GhostAxisOccupancy`); not
+reconciled row-by-row here since that's a separate, older drift this PR
+doesn't attempt to fully resolve.
 
-> **Amendment 2026-08-14 (issue #632 A4):** `RouteFailure` (listed above)
-> and its sibling `BridgeDropped` (not listed above — it was never
-> visualized either) were declared in `trace.rs` but never emitted by
-> production code, and have been deleted along with the overlay code that
+**Not visualized** (**80** events, not 14 — full list in footnote [1]).
+
+> **Amendment 2026-08-14 (issue #632 A4):** `RouteFailure` (formerly in the
+> "Not visualized" list above, before this footnote's numbers replaced it)
+> and its sibling `BridgeDropped` (never listed anywhere in this doc — it
+> was never visualized either) were declared in `trace.rs` but never
+> emitted by production code, and have been deleted along with the overlay
+> code that
 > had, in fact, already implemented §1.1 below (this "Current State"
 > section was stale on that point even before the deletion). Every
 > `RouteFailure` reference below — §1.1, the A* Routing panel, the
@@ -32,6 +41,66 @@ The Rust pipeline emits 22 structured trace events during bus layout generation.
 > (already visualized, `spec_key`/`from_x`/`from_y`/`to_x`/`to_y` — the
 > same shape `RouteFailure` had, minus `item`) is the nearest live
 > equivalent for "A* couldn't route this spec."
+>
+> **[1] The "22"/"8"/"14" counts above were already stale independent of
+> this deletion** — a second-opinion review round on #637 flagged the
+> arithmetic as suspicious and asked for verified current numbers rather
+> than "22 − 2" / "14 − 1" patched onto stale baselines. Counted directly
+> (2026-08-14):
+>
+> - **93** total `TraceEvent` variants over the enum body (all 93 are
+>   struct-style; none are unit or tuple variants). Repro:
+>   `grep -cE '^    [A-Z][A-Za-z0-9_]* \{' crates/core/src/trace.rs`
+> - **13**, not 8, are actually referenced by `.phase` in
+>   `traceOverlay.ts` today: `RowsPlaced`, `LanesPlanned`, `PhaseSnapshot`,
+>   `PhaseComplete`, `BalancerStamped`, `TapoffRouted`, `MergerBlockPlaced`,
+>   `GhostSpecRouted`, `GhostSpecFailed`, `GhostRoutingComplete`,
+>   `GhostClusterSolved`, `GhostClusterFailed`, `GhostAxisOccupancy`. Six of
+>   those (the `Ghost*` ones) were added to the renderer after this table
+>   was last updated and were never folded back in. Conversely,
+>   `CrossingZoneSolved`/`CrossingZoneSkipped` — claimed visualized in the
+>   table above — are **not** referenced by `.phase` in `traceOverlay.ts`
+>   at all. Repro:
+>   `grep -rln "CrossingZoneSolved\|CrossingZoneSkipped" web/src/renderer/`
+>   finds nothing. SAT-zone rendering now appears to be driven by
+>   `satZoneOverlay.ts` off a `BoundarySnapshot`/junction-debugger
+>   selection, not these trace events. That table-row claim predates this
+>   PR and is a separate, older doc/code drift this PR does not attempt to
+>   fully resolve — flagged here rather than silently left standing next to
+>   a "verified" footnote.
+> - **80** = 93 − 13 are therefore not rendered by `traceOverlay.ts` today:
+>   `BalancerCommitted`, `BalancerGenerated`, `BandPackingPlanned`,
+>   `BandPackingRefused`, `BridgeRetry`, `BridgeRetryExhausted`,
+>   `CrossingZoneConflict`, `CrossingZoneSkipped`, `CrossingZoneSolved`,
+>   `DecompositionCandidateScored`, `DecompositionChosen`,
+>   `DiBridgeShifted`, `DiClaimOrderChosen`, `DiCouplingClaimed`,
+>   `DiCouplingContended`, `DiCouplingRefused`, `EvictionAttempted`,
+>   `EvictionBudgetExhausted`, `EvictionRouteFailed`, `EvictionSatFailed`,
+>   `EvictionSucceeded`, `FeederBridgeUnbridgeable`, `FeederSpecsSkipped`,
+>   `FluidTrunkBreak`, `GhostNegotiationIteration`, `GhostResidueCleared`,
+>   `GhostResidueLeaked`, `GhostSpecCommitted`, `InserterSideCapped`,
+>   `InterRowBand`, `JunctionBlamedSpec`, `JunctionCandidateSolved`,
+>   `JunctionCommitted`, `JunctionGrowthCapped`, `JunctionGrowthIteration`,
+>   `JunctionGrowthStarted`, `JunctionSolved`, `JunctionStrategyAttempt`,
+>   `JunctionTemplateRejected`, `JunctionVariantChosen`, `K1ItemEnrolled`,
+>   `LaneConsolidated`, `LaneOrderOptimized`, `LaneRouted`, `LaneSplit`,
+>   `LayoutRetried`, `LumpyShardTap`, `MergeTapFallback`,
+>   `ModuleCapSplitApplied`, `ModulePartitioned`, `ModuleSizeSplitApplied`,
+>   `NegotiateComplete`, `OutputMerged`, `OutputMergerCommitted`,
+>   `PartitionRejectedByUtilization`, `PhaseTime`, `PipelineDiagnostics`,
+>   `PoleSlack`, `PolesCommitted`, `PolesPlaced`,
+>   `ReactivePassNotConverged`, `RegionWalkerVeto`, `RowLayoutSelected`,
+>   `RowSplit`, `SatBoundariesAsymmetric`, `SatCostDescent`,
+>   `SatImprovement`, `SatInvocation`, `SatOptimumProven`, `SatPruned`,
+>   `ShapeFixApplied`, `ShardSkipped`, `ShardSplit`, `SolverCompleted`,
+>   `SurplusRouted`, `TapBridgeUnbridgeable`, `TrunkBeltCommitted`,
+>   `ValidationCompleted`, `VoiderFallbackExport`, `VoiderSynthesized`.
+>   Note `RouteFailure`/`BridgeDropped` are correctly ABSENT from this
+>   list — they're deleted, not merely unvisualized. Repro (full variant
+>   census minus the 13 named above):
+>   `grep -oE '^    [A-Z][A-Za-z0-9_]* \{' crates/core/src/trace.rs | sed 's/ {$//' | sort`
+>   — the trailing ` \{` is load-bearing; without it this over-matches
+>   doc-comment text and other 4-space-indented identifiers (107, not 93).
 
 **Existing UI entry points:**
 - Debug checkbox (`main.ts`) — enables `buildLayoutTraced()` + shows overlay
