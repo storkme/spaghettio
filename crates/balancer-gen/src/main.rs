@@ -1561,29 +1561,24 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             perm: Perm::Identity,
             max_jh: 8,
         },
-        // (6, 4) — lane-balance re-bake (same #624 un-blinding; worst-lane
-        // 15.0/s, a full lane at 2× cap). Merge-then-balance would cap
-        // throughput at 3 of 4 rated belts. A Clos through
-        // parallel((1, 2), 6) → parallel((6, 2), 2) was tried first and
-        // ground out: the 12-lane clos_interleave junction returned
-        // INFEASIBLE/UNKNOWN at 600s per height through jh=13. This
-        // factorization needs only an IDENTITY junction: each (3, 2)
-        // atom merges-and-balances 3 inputs down to 2 mid-lanes (each
-        // input contributing 1/2 to each), and the (4, 4) balances the
-        // four mid-lanes — uniform 1/4 mix and min-cut 4 AT THE RATED
-        // SYMMETRIC POINT (classify re-verifies the composition).
-        // Group-asymmetric partial load degrades like the accepted
-        // (9, m) merge-then-balance family — TU is warned, never gated.
-        // At full audit drive the mid-lanes sit exactly at the 7.5/s
-        // per-lane cap (+0.01 tolerance), so the audit's 0-error verdict
-        // is a tight-margin property of the walker, not slack.
-        Recipe {
-            shape: (6, 4),
-            stage1: Stage::Parallel(3, 2, 2),
-            stage2: Stage::Lib(4, 4),
-            perm: Perm::Identity,
-            max_jh: 8,
-        },
+        // (6, 4) — NO compose recipe; adjudicated 2026-08-14 (#630/#631)
+        // and resolved OUTSIDE this pipeline as a native factorio-sat
+        // re-solve (6×14, lane-audit 0/0). The record, so nobody re-runs
+        // this loop: merge-then-balance factorizations are structurally
+        // throughput-capped below rated — parallel((3,2),2) → (4,4) caps
+        // at 2 of 4 belts because the library (3, 2) is the Lib(3,1) →
+        // Lib(1,2) compose whose entire flow crosses ONE south belt
+        // (classify's max-flow and the lane walker are both blind to the
+        // waist, #631); parallel((2,1),3) → (3,4) caps at 3 of 4. The
+        // only full-throughput compose, Clos parallel((1,2),6) →
+        // parallel((6,2),2) with clos_interleave(6,2), is
+        // solver-infeasible in practice: the constrained 12-lane
+        // junction returned INFEASIBLE (jh ≤ 9) then UNKNOWN through
+        // jh=24 at 1800s/height; the circuit encoding "solves" it fast
+        // but models a RELAXED problem (no UG-sideload constraints —
+        // every solution failed the lane gate 10–15×, and it called
+        // jh=9 OPTIMAL where the constrained model had PROVEN it
+        // infeasible).
         // (9, 2) — merge-then-balance via parallel((3, 1), 3) → (3, 2).
         Recipe {
             shape: (9, 2),

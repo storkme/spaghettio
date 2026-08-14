@@ -7541,9 +7541,13 @@ fn quality_ec_45s_express_legendary_from_ore() {
     // seeding approximation on this balancer-fed layout (merge-demand
     // over-attribution keeps the demand-weighted path gated off here —
     // the recorded #519 follow-up). Both shrink as calibration lands.
+    // Re-blessed 18 -> 14 (2026-08-14, #630): the native (6,4) balancer
+    // re-solve changed this layout's balancer-fed trunk provisioning and
+    // four residuals cleared; the surviving 14 are the same two classes
+    // (8 copper-ore + 4 iron-ore even-split rows, 2 copper-plate tails).
     assert!(
-        issues.len() == 18,
-        "expected the 18 adjudicated input-rate-delivery residuals (#519), got {}: {issues:?}",
+        issues.len() == 14,
+        "expected the 14 adjudicated input-rate-delivery residuals (#519), got {}: {issues:?}",
         issues.len()
     );
 
