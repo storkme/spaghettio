@@ -8,25 +8,147 @@
 //! helpers so the two views cannot silently drift.
 
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BTreeMap, BinaryHeap};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::bus::compaction::{ProductionEdge, ProductionSignature, RATE_SCALE};
 use crate::common::{
     dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter, is_machine_entity,
-    is_splitter, is_ug_belt, splitter_second_tile,
+    is_splitter, is_ug_belt, splitter_second_tile, QualityTier,
 };
 use crate::fluid_ports::fluid_ports;
-use crate::models::{EntityDirection, LayoutResult, SolverResult};
+use crate::models::{EntityDirection, ItemFlow, LayoutResult, ModuleItem, SolverResult};
 
 type Tile = (i32, i32);
 type Graph = FxHashMap<Tile, Vec<(Tile, i64)>>;
 
-// NOTE `RATE_SCALE` is imported from `compaction` above rather than
-// redeclared here: both sides of this conversion chain must rescale together
-// or the planned-rate and weighted-cost maths silently diverge (PR #582
-// review).
+// NOTE `RATE_SCALE` is declared below rather than imported: both sides of
+// this conversion chain must rescale together or the planned-rate and
+// weighted-cost maths silently diverge (PR #582 review).
+
+pub const RATE_SCALE: f64 = 1_000_000_000.0;
+
+fn fixed_rate(rate: f64) -> i64 {
+    (rate * RATE_SCALE).round() as i64
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProductionMachine {
+    pub recipe: String,
+    pub entity: String,
+    pub count: i64,
+    pub modules: Vec<(String, u32, Option<QualityTier>)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProductionEdge {
+    /// Canonical set of recipes capable of supplying this item in the solved
+    /// graph. Oil co-products and cracking legitimately create more than one.
+    pub producer_recipes: Vec<String>,
+    pub item: String,
+    pub consumer_recipe: String,
+    pub rate: i64,
+    pub is_fluid: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProductionBoundary {
+    pub item: String,
+    pub rate: i64,
+    pub is_fluid: bool,
+}
+
+/// Canonical logical topology. Rates and fractional counts use fixed-point
+/// nanounits so equality and hashing do not depend on `f64` ordering.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProductionSignature {
+    pub machines: Vec<ProductionMachine>,
+    pub edges: Vec<ProductionEdge>,
+    pub external_inputs: Vec<ProductionBoundary>,
+    pub target_outputs: Vec<ProductionBoundary>,
+    pub surplus_outputs: Vec<ProductionBoundary>,
+}
+
+impl ProductionSignature {
+    pub fn from_solver(sr: &SolverResult) -> Result<Self, String> {
+        let mut producers_of: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        for machine in &sr.machines {
+            for output in &machine.outputs {
+                let producers = producers_of.entry(output.item.as_str()).or_default();
+                if !producers.contains(&machine.recipe) {
+                    producers.push(machine.recipe.clone());
+                }
+            }
+        }
+        for producers in producers_of.values_mut() {
+            producers.sort();
+        }
+
+        let mut machines: Vec<_> = sr
+            .machines
+            .iter()
+            .map(|machine| ProductionMachine {
+                recipe: machine.recipe.clone(),
+                entity: machine.entity.clone(),
+                count: fixed_rate(machine.count),
+                modules: canonical_modules(&machine.game_modules),
+            })
+            .collect();
+        machines.sort();
+
+        let mut edges = Vec::new();
+        for consumer in &sr.machines {
+            for input in &consumer.inputs {
+                let Some(producer_recipes) = producers_of.get(input.item.as_str()) else {
+                    continue;
+                };
+                if producer_recipes.len() == 1 && producer_recipes[0] == consumer.recipe {
+                    continue;
+                }
+                edges.push(ProductionEdge {
+                    producer_recipes: producer_recipes.clone(),
+                    item: input.item.clone(),
+                    consumer_recipe: consumer.recipe.clone(),
+                    rate: fixed_rate(input.rate * consumer.count),
+                    is_fluid: input.is_fluid,
+                });
+            }
+        }
+        edges.sort();
+
+        Ok(Self {
+            machines,
+            edges,
+            external_inputs: canonical_boundaries(&sr.external_inputs),
+            target_outputs: canonical_boundaries(&sr.external_outputs),
+            surplus_outputs: canonical_boundaries(&sr.surplus_outputs),
+        })
+    }
+}
+
+fn canonical_modules(modules: &[ModuleItem]) -> Vec<(String, u32, Option<QualityTier>)> {
+    let mut result: Vec<_> = modules
+        .iter()
+        .map(|module| (module.item.clone(), module.count, module.quality))
+        .collect();
+    result.sort_by(|a, b| {
+        (&a.0, a.1, a.2.map(|q| q.level())).cmp(&(&b.0, b.1, b.2.map(|q| q.level())))
+    });
+    result
+}
+
+fn canonical_boundaries(flows: &[ItemFlow]) -> Vec<ProductionBoundary> {
+    let mut result: Vec<_> = flows
+        .iter()
+        .map(|flow| ProductionBoundary {
+            item: flow.item.clone(),
+            rate: fixed_rate(flow.rate),
+            is_fluid: flow.is_fluid,
+        })
+        .collect();
+    result.sort();
+    result
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeTransit {

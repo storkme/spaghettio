@@ -25,13 +25,11 @@
 //! - [`junction_sat_strategy`] — SAT-backed `JunctionStrategy` fallback
 //! - [`junction`] — `Junction` snapshot type consumed by strategies
 //! - [`decomposition_search`] — evaluates base-production `DecompositionCandidate`s, picks a winner
-//! - [`candidate_runner`] — RFC-064 P2b: general produce→transform→verdict→rank loop for post-layout `LayoutTransform`s (new, parallel entry point; not yet wired into `build_bus_layout`)
-//! - [`compaction`] — RFC-057 topology-preserving repacking (`compact_validated_geometry`, `search_snake_fold`)
+//! - [`candidate_runner`] — RFC-064 P2b: general produce→transform→verdict→rank loop for post-layout candidate evaluation (`run_candidate_field`; the celldb campaign's entry point)
 
 pub mod balancer;
 pub mod bands;
 pub mod cells;
-pub mod compaction;
 pub mod balancer_classify;
 pub mod balancer_generate;
 pub mod balancer_library;
