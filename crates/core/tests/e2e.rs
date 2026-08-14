@@ -6824,7 +6824,7 @@ fn stacking_ec_60s_red_one_belt_headline() {
     // unstacked red belt.
     let (l1, issues1) = run(1);
     let errors1: Vec<_> = issues1.iter().filter(|i| i.severity == Severity::Error).collect();
-    assert!(errors1.is_empty(), "S=1 baseline drifted from the stress golden: {errors1:?}");
+    assert!(errors1.is_empty(), "S=1 baseline drifted from the recorded stress ceiling: {errors1:?}");
     let over1 = family_over_one_belt(&l1, 1);
     assert!(
         !over1.is_empty(),

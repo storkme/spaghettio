@@ -226,10 +226,13 @@ reads as a two-file change and is not:
 
 - `crates/core/tests/e2e.rs:3071` — the stress scoreboard registers
   `("lane_throughput", … belt_structural::check_lane_throughput …)`. It must be
-  re-pointed, **and its baselines re-blessed**: the flip moves this scoreboard from
+  re-pointed, **and its baselines re-derived**: the flip moves this scoreboard from
   the model that fires on 5 of 504 layouts to the one that fires on 176. Treat any
-  scoreboard delta as expected-but-must-be-explained, per
-  `SPAGHETTIO_STRESS_GOLDEN=check/bless`.
+  scoreboard delta as expected-but-must-be-explained. (2026-08-15, #632 B7: the
+  committed-golden `check`/`bless` flow this bullet originally named is deleted —
+  the baselines to update are the always-on `StressBaseline` structs in `e2e.rs`
+  and the warning-pin goldens, with before/after `STRESSGOLD` hash captures as
+  the byte-stability record.)
 - Rustdoc cross-references at `crates/core/src/models.rs:253` and
   `crates/core/src/validate/inserters.rs:976` both name
   `belt_structural::check_lane_throughput` as intra-doc links and would dangle.
