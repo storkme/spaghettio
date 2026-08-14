@@ -9,6 +9,19 @@ web/tests/docs) by subagent sweep, followed by per-claim verification and three
 targeted triage investigations (merge-tap flip, solver fidelity gaps, headless
 Factorio verification). All file:line citations verified against `main@d468c68`.
 
+**Addendum 2026-08-14 — legacy recursive tree walk DELETED (#632 A1, PR
+#635).** Every mention below of "tree walk", "parity oracle", "compat
+oracle", or "parity harness" (Solver row in the stage table, GAP 3, GAP 4)
+describes code that no longer exists — `solve_tree_walk_with_palette_and_exclusions`,
+`solve_compat_with_palette_and_exclusions`, and the walk-vs-LP comparison
+tests were removed; netflow (`netflow.rs`) is the sole solve path. This
+note is deliberately the only edit: the body below is a point-in-time
+snapshot with file:line citations pinned against `main@d468c68` (see
+Provenance above), and rewriting it would falsify that pin. Read GAP 3(b)
+and GAP 4's "compat oracle" framing as historical — the LP-vs-walk
+comparison problems they describe are moot now that there's nothing to
+compare against.
+
 **Addendum 2026-07-22 — RFC-047 (lane-aware tap delivery) landed Complete.**
 Checked against this audit's findings: it resolves the EC@60/s legendary-express
 junction failure (now `stacking_ec_60s_express_legendary_s2`, zero errors;

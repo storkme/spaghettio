@@ -118,6 +118,9 @@ exactly the kind of off-by-one the differential tests target.
    `effective_crafting_speed(machine, quality)` used by both solvers,
    so the legacy tree walk (the recipe-selection oracle) and netflow
    cannot diverge. `get_crafting_speed` itself stays unchanged.
+   *(2026-08-14: the legacy tree walk named here was deleted, #632 A1 /
+   PR #635 — "both solvers" and "cannot diverge" describe a design-time
+   constraint for code that no longer exists.)*
    **Rounding hazard (review finding):** machine counts get ceil'd
    downstream; `×1.0` is bit-exact in IEEE 754, but the helper must be
    the *same code path* at Normal (no `if quality == Normal` fork), and
@@ -500,6 +503,9 @@ Per the CLAUDE.md layout-change protocol:
   with zero effect on any output; documented at the walk's doc
   comment. Phase 1 guard rail held: no URL codec entry, no UI
   surface.*
+  *(2026-08-14: the legacy tree walk and its doc comment referenced
+  above were deleted, #632 A1 / PR #635 — this bullet is historical
+  record of a Phase 1 deviation call for code that no longer exists.)*
 - *2026-07-20 — Phase 2 core landed. Quality-aware `inserter_throughput`
   + `supply_area_distance` (+1 radius/level) + `wire_reach` (+2/level,
   per-entity); ladder/`capped_limit`/`contest_favors_far` take the

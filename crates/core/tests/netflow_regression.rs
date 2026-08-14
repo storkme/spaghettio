@@ -433,7 +433,7 @@ fn golden_epsilon_sensitivity() {
 
 /// KILL CRITERION 4 — perf. Run explicitly in release:
 /// `cargo test --release --manifest-path crates/core/Cargo.toml \
-///    --test solver_netflow_parity -- kc4 --ignored --nocapture`
+///    --test netflow_regression -- kc4 --ignored --nocapture`
 #[test]
 #[ignore = "perf gate — run in release mode per kill criterion 4"]
 fn kc4_perf_sweep() {
@@ -556,7 +556,7 @@ fn print_machine_mix(r: &SolverResult) {
 
 /// Fulgora scrap-economy spike report (RFC decision log, 2026-07-11). Not a
 /// kill-criterion gate — run explicitly:
-///   cargo test --manifest-path crates/core/Cargo.toml --test solver_netflow_parity \
+///   cargo test --manifest-path crates/core/Cargo.toml --test netflow_regression \
 ///       report_fulgora_spike -- --ignored --nocapture
 #[test]
 #[ignore = "report only — run with --ignored --nocapture"]
