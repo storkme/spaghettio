@@ -1134,7 +1134,7 @@ pub fn validate(
         }),
         Box::new(|| belt_structural::check_belt_inserter_conflict(layout)),
         Box::new(|| check_belt_flow_reachability(layout, solver, layout_style)),
-        Box::new(|| belt_structural::check_lane_throughput(layout, solver)),
+        Box::new(|| belt_flow::check_lane_throughput(layout, solver)),
         Box::new(|| check_input_rate_delivery(layout, solver)),
         Box::new(|| check_balancer_template_coverage(layout)),
         Box::new(|| modules::check_module_slots(layout)),
