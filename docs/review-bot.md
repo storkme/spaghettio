@@ -150,10 +150,26 @@ Semantics that matter for forensics:
   `.rs` string literal whose changed line starts with `//` inside the
   quotes (none committed today).
 - **Escape hatch**: the `force-review` label disables the gate for the
-  PR. The gate's decision and reason are one log line in the
-  "Trivial-delta gate" step (`gate: trivial=... (reason)`).
+  PR — and applying it is itself a trigger (`labeled` event), so it
+  works even when there is nothing left to push. The gate's decision
+  and reason are one log line in the "Trivial-delta gate" step
+  (`gate: trivial=... (reason)`).
+- **Base retargets force a review.** The compare sees only head-side
+  commits, and a retarget rewrites the effective diff with no new head
+  SHA (the workflow's known `edited`-trigger gap) — pre-gate, the next
+  push healed that with a full review, and the gate must not turn that
+  push into a skip. Any `base_ref_changed` /
+  `automatic_base_change_succeeded` timeline event newer than the
+  anchor review forces a review; so does any failure to determine this.
+- **Same-head re-events** (reopened / ready_for_review / stray label)
+  on the already-reviewed head skip with NO notice — nothing to review,
+  nothing new to say, and no container spin.
 - Fork PRs bypass the gate entirely (kept on today's no-review,
   session-side-rule path).
+- **Tests**: `scripts/test_second_opinion_gate.py` extracts the gate's
+  bash and all three jq programs VERBATIM from the workflow and drives
+  them through ~24 fixtures. Not CI-wired; run it when touching the
+  gate.
 
 ## Failure-class history
 
