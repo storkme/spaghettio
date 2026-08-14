@@ -397,28 +397,37 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
   is diagnostic, not acceptance. Every other shape's audit drive is
   unchanged by the fix, which is the census-based form of the
   baseline-stands claim.*
-- *2026-08-13 — the recorded (6,3)/(6,4) follow-up is CLOSED by re-bake
-  (owner-directed, PR #630). Both python-derived templates replaced with
-  compose-pipeline bakes through audit-clean atoms — (6,3) =
-  parallel((2,1),3) → (3,3) at 6×16, (6,4) = parallel((3,2),2) → (4,4)
-  at 6×27, both identity-junction, classified Balanced, 0-error/
-  0-warning under the un-blinded lane audit — and removed from
-  KNOWN_IMBALANCED, which shrinks to the #334 pair. The conscious
-  trade, named: bbox grows 2.0× / 2.7× (48→96, 60→162 tiles) —
-  lane correctness bought with footprint, the same direction as this
-  RFC's original (7,2) re-bake, and the opposite of the #135 oversized-
-  template concern; the one measured downstream effect is +1 pole on
-  the quality_ec_45s fixture pair (still 48% under the unthinned
-  baseline). A 12-lane Clos factorization for (6,4) was tried first and
-  abandoned for solver cost (INFEASIBLE/UNKNOWN at 600s/height through
-  jh=13), recorded in the recipe comment. Audit-side notes: the lane
-  audit gates errors only — its warning counts are printed, not
-  asserted — so "0 warnings" here is a report, not a CI-enforced
-  invariant; the partial-saturation tripwire's known_worst arms for
-  (6,3)/(6,4) are removed with the re-bake (a 3/3-pass bot finding —
-  the stale (6,4)=15.0 arm would have excluded the new template from
-  50%/75% coverage); and at full drive the new (6,4)'s mid-lanes sit
-  exactly at the 7.5/s per-lane cap (+0.01 audit tolerance), so its
-  0-error verdict is a tight-margin walker property, deliberate but
-  worth knowing before blaming a future walker change for "breaking"
-  the template.*
+- *2026-08-13/14 — the recorded (6,3)/(6,4) follow-up is CLOSED by
+  re-bake (owner-directed, PR #630), by two different routes, and the
+  first (6,4) attempt was WITHDRAWN mid-review — the full trail:*
+  - *(6,3): compose-pipeline bake through audit-clean atoms,
+    parallel((2,1),3) → (3,3) at 6×16, identity-junction, classified
+    Balanced, 0-error/0-warning under the un-blinded lane audit. Its
+    stage crossings carry the full rated 3 belts.*
+  - *(6,4), first attempt (parallel((3,2),2) → (4,4) at 6×27): passed
+    every gate — Balanced, 0/0 audit — and was WITHDRAWN on a 3/3-pass
+    review finding, structurally confirmed: the library (3,2) atom is
+    itself the Lib(3,1) → Lib(1,2) compose whose entire flow crosses
+    one south belt, so the composition physically caps at 2 of 4 rated
+    belts. Every instrument in the bake path is blind to the waist
+    class (classify's max-flow, the lane walker, the one-sided audit) —
+    census and attack order in #631. The full-throughput Clos
+    alternative is solver-infeasible in practice (UNKNOWN through
+    jh=24 at 1800s/height; the circuit encoding solves a relaxed,
+    UG-unconstrained model). Both adjudications are recorded in the
+    bake recipe list as a comment.*
+  - *(6,4), shipped: NATIVE factorio-sat re-solve against the 6x4
+    network file (the pipeline that produced the whole original
+    library), dimension-swept for candidates — 6×11 and 6×12 solves
+    audit lane-dirty (25 / 15 errors), 6×13 has 2 warnings, and the
+    6×14 (61 entities) audits 0-error/0-warning and carries ≥4
+    south-flow tiles at every row cut (no waist; full rated
+    throughput by network construction). It keeps its real
+    source_blueprint, so it is NOT in COMPOSE_GENERATED_SHAPES.*
+  - *Both shapes removed from KNOWN_IMBALANCED (shrinks to the #334
+    pair) and from the partial-saturation known_worst arms (a stale
+    arm would have excluded the new (6,4) from 50%/75% coverage — bot
+    finding). Footprint trade, named: (6,3) 48→96 tiles, (6,4) 60→84 —
+    lane correctness bought with footprint. Audit-side note: the lane
+    audit gates errors only; warning counts are printed, not asserted,
+    so "0 warnings" is a report, not a CI-enforced invariant.*
