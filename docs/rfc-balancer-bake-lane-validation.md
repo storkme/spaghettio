@@ -486,3 +486,29 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
     claim that "(6,4) correctly maps to compose" was hallucinated —
     no such arm exists, and one would be wrong. Third minor = the
     round-8 major restated; stands as documented residual risk.*
+  - *2026-08-14 — **THE DEFECTIVE-TEMPLATE CULL** (#632 A3, supersedes
+    #631's re-bake plan and closes the #334 acceptance by deletion):
+    the usage census (`scripts/balancer_usage_census.py`, first run on
+    main @ cd7b4557 — suite 1239/0, 20 balancer-bearing snapshots, 62
+    BalancerStamped events, 28 distinct requested shapes) measured 21
+    of 77 templates consumed by the corpus, and ALL 13 defective
+    shapes — the 12 waist-capped (#631: (3,2) (7,2) (7,3) (8,6) (9,2)
+    (9,4..8) (12,7) (15,7)) plus lane-imbalanced (7,4) — as
+    corpus-unexercised. Resolution paths audited: direct, gcd
+    decomposition (width-guarded; blocked for every deleted shape),
+    and the runtime generator (self-contained atoms, consumes no
+    library templates). Adjudication: DELETE rather than re-bake or
+    keep — a defective template serving an exotic future request
+    silently at half-rate is worse than that request failing loudly as
+    unstampable (the walker and FeederSpecsSkipped report it), and a
+    genuine future need re-bakes on demand with the census + cut-check
+    instruments. Sound-but-unused templates are NOT deleted (lane
+    demand is rate-driven and unbounded; deleting working capability
+    buys nothing). Receipts: post-cull census shows all 21 consumed
+    shapes resolving identically over 64 remaining templates;
+    `scripts/balancer_cut_census.py` now exits 0 LIBRARY-WIDE — the
+    min-cut ≥ rated invariant holds everywhere, making it CI-armable
+    (#631's endgame; wiring is a follow-up). KNOWN_IMBALANCED is
+    empty, the partial-saturation tripwire fully armed, and the bake
+    recipes that produced the waisted composes are deleted with their
+    products.*

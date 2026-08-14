@@ -1463,18 +1463,6 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             perm: Perm::Clos(2, 3),
             max_jh: 16,
         },
-        // (7, 2) — re-bake via Lib(7, 1) → Lib(1, 2). The python-derived
-        // (7, 2) in balancer_library.rs sideloads a UG input (validator
-        // emits `belt sideloads into UG input — only one lane loaded`),
-        // which the new lane gate would have rejected. Re-baking with the
-        // gate active produces a clean composition.
-        Recipe {
-            shape: (7, 2),
-            stage1: Stage::Lib(7, 1),
-            stage2: Stage::Lib(1, 2),
-            perm: Perm::Identity,
-            max_jh: 4,
-        },
         // Re-bakes for python-derived shapes that have UG-sideload
         // warnings on the symmetric (n, m) ↔ (m, n) rotation. Each
         // recipe here decomposes through CLEAN library atoms so the
@@ -1488,28 +1476,12 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             perm: Perm::Identity,
             max_jh: 8,
         },
-        // (3, 2) — merge-then-balance via Lib(3, 1) → Lib(1, 2).
-        Recipe {
-            shape: (3, 2),
-            stage1: Stage::Lib(3, 1),
-            stage2: Stage::Lib(1, 2),
-            perm: Perm::Identity,
-            max_jh: 4,
-        },
         // (6, 2) — parallel((3, 1), 2) → Lib(2, 2). Avoids the dirty
         // (6, 1) python-derived atom by using two clean (3, 1)s.
         Recipe {
             shape: (6, 2),
             stage1: Stage::Parallel(3, 1, 2),
             stage2: Stage::Lib(2, 2),
-            perm: Perm::Identity,
-            max_jh: 4,
-        },
-        // (7, 3) — Lib(7, 1) → Lib(1, 3). (7, 1) is clean.
-        Recipe {
-            shape: (7, 3),
-            stage1: Stage::Lib(7, 1),
-            stage2: Stage::Lib(1, 3),
             perm: Perm::Identity,
             max_jh: 4,
         },
@@ -1540,15 +1512,6 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             perm: Perm::Identity,
             max_jh: 4,
         },
-        // (8, 6) — parallel((4, 1), 2) → Lib(2, 6). (2, 6) is a clean
-        // library atom.
-        Recipe {
-            shape: (8, 6),
-            stage1: Stage::Parallel(4, 1, 2),
-            stage2: Stage::Lib(2, 6),
-            perm: Perm::Identity,
-            max_jh: 4,
-        },
         // (6, 3) — lane-balance re-bake (#624 un-blinding: the python-
         // derived template's splitter-headed inputs had been audited at
         // near-zero flow; the un-blinded audit reads worst-lane 7.7/s on
@@ -1558,32 +1521,6 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             shape: (6, 3),
             stage1: Stage::Parallel(2, 1, 3),
             stage2: Stage::Lib(3, 3),
-            perm: Perm::Identity,
-            max_jh: 8,
-        },
-        // (6, 4) — NO compose recipe; adjudicated 2026-08-14 (#630/#631)
-        // and resolved OUTSIDE this pipeline as a native factorio-sat
-        // re-solve (6×14, lane-audit 0/0). The record, so nobody re-runs
-        // this loop: merge-then-balance factorizations are structurally
-        // throughput-capped below rated — parallel((3,2),2) → (4,4) caps
-        // at 2 of 4 belts because the library (3, 2) is the Lib(3,1) →
-        // Lib(1,2) compose whose entire flow crosses ONE south belt
-        // (classify's max-flow and the lane walker are both blind to the
-        // waist, #631); parallel((2,1),3) → (3,4) caps at 3 of 4. The
-        // only full-throughput compose, Clos parallel((1,2),6) →
-        // parallel((6,2),2) with clos_interleave(6,2), is
-        // solver-infeasible in practice: the constrained 12-lane
-        // junction returned INFEASIBLE (jh ≤ 9) then UNKNOWN through
-        // jh=24 at 1800s/height; the circuit encoding "solves" it fast
-        // but models a RELAXED problem (no UG-sideload constraints —
-        // every solution failed the lane gate 10–15×, and it called
-        // jh=9 OPTIMAL where the constrained model had PROVEN it
-        // infeasible).
-        // (9, 2) — merge-then-balance via parallel((3, 1), 3) → (3, 2).
-        Recipe {
-            shape: (9, 2),
-            stage1: Stage::Parallel(3, 1, 3),
-            stage2: Stage::Lib(3, 2),
             perm: Perm::Identity,
             max_jh: 8,
         },

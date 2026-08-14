@@ -337,10 +337,11 @@ mod tests {
         use crate::bus::balancer_classify::classify;
         use crate::bus::balancer_library::balancer_templates;
 
+        // (9,2)/(9,4..8) removed 2026-08-14 with the #632 A3 defective-
+        // template cull; (9,3) survives (min-cut sound).
         for &(m, n) in &[
             (1, 2), (2, 2), (1, 3), (2, 3), (4, 4), (3, 5), (4, 8),
-            (1, 9), (9, 1), (1, 10), (10, 1), (2, 9),
-            (9, 2), (9, 3), (9, 4), (9, 5), (9, 6), (9, 7), (9, 8),
+            (1, 9), (9, 1), (1, 10), (10, 1), (2, 9), (9, 3),
         ] {
             let t = &balancer_templates()[&(m, n)];
             let original = classify(t).unwrap();
