@@ -6957,7 +6957,9 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
             // sim-anchoring — this IS that follow-up. Leaving the filter in
             // would mean the gate no longer asserts what the engine
             // enforces, and a regression in the flux channel would pass it
-            // silently. Note `belt-detour` is still excluded engine-side.
+            // silently. Note the `SELECTION_EXCLUDED_WARNING_CATEGORIES`
+            // set (belt-detour + the #632 B6 demotions) is still excluded
+            // engine-side.
             validate::selection_warning_count(&issues),
             l.warnings.len(),
         )
@@ -7029,7 +7031,9 @@ fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
             // sim-anchoring — this IS that follow-up. Leaving the filter in
             // would mean the gate no longer asserts what the engine
             // enforces, and a regression in the flux channel would pass it
-            // silently. Note `belt-detour` is still excluded engine-side.
+            // silently. Note the `SELECTION_EXCLUDED_WARNING_CATEGORIES`
+            // set (belt-detour + the #632 B6 demotions) is still excluded
+            // engine-side.
             validate::selection_warning_count(&issues),
             l.warnings.len(),
         )
@@ -8172,7 +8176,9 @@ fn di_change_surface_sweep() {
             // sim-anchoring — this IS that follow-up. Leaving the filter in
             // would mean the gate no longer asserts what the engine
             // enforces, and a regression in the flux channel would pass it
-            // silently. Note `belt-detour` is still excluded engine-side.
+            // silently. Note the `SELECTION_EXCLUDED_WARNING_CATEGORIES`
+            // set (belt-detour + the #632 B6 demotions) is still excluded
+            // engine-side.
             validate::selection_warning_count(&issues),
             l.warnings.len(),
         )
