@@ -431,3 +431,16 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
     lane correctness bought with footprint. Audit-side note: the lane
     audit gates errors only; warning counts are printed, not asserted,
     so "0 warnings" is a report, not a CI-enforced invariant.*
+  - *2026-08-14 — **SIM ANCHOR** (review round 6 correctly objected
+    that every clearing instrument so far was from the model family
+    this PR proved waist-blind): headless run of the changed fixture
+    itself — ec@45/s legendary express from ore (`sim_export` +
+    `spaghettio-sim run`, warmup 288000) — measures
+    **electronic-circuit 45.50/s produced / 45.60 delivered vs 45.00
+    planned (+1.1%/+1.3%), OVERALL PASS** through the new (6,4). The
+    14 pinned input-rate-delivery warnings are thereby measured as
+    conservative model residuals, not physical deficits. Independent
+    balance guard also on record: `balancer_cross_validation.rs`
+    (classifier vs the all-fluid Gaussian-elim verifier) passes the
+    new templates in the same suite run. Throughput anchoring for the
+    rest of the library stays with #631's census plan.*
