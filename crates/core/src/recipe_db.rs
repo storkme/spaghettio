@@ -200,15 +200,14 @@ pub fn get_crafting_speed(entity: &str) -> f64 {
 
 /// [`get_crafting_speed`] scaled by build quality — THE choke point for
 /// quality-aware machine math (`docs/rfc-build-quality.md` Phase 1).
-/// Both net-flow modes (free and compat) read speeds through this via
+/// The net-flow solver reads speeds through this via
 /// `NetflowOptions.quality`; there is deliberately no `Normal` branch, so
 /// the default path exercises the same multiplication (kill criterion 2:
 /// `× 1.0` is bit-exact in IEEE 754, unit-tested in `quality_identity_*`).
 ///
-/// The legacy tree walk does NOT call this: it is a recipe-*selection*
-/// oracle and selection is quality-invariant (JSON-first per item / cost
-/// table — neither consults speed); its counts are documented known-wrong
-/// and never reach a `SolverResult` callers use.
+/// (The legacy recursive tree walk and its compat A/B mode never called
+/// this — selection was quality-invariant there too — and were deleted
+/// 2026-08-14, #632 A1.)
 pub fn effective_crafting_speed(entity: &str, quality: crate::common::QualityTier) -> f64 {
     get_crafting_speed(entity) * quality.multiplier()
 }

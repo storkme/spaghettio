@@ -120,7 +120,10 @@ walk**'s own construction, `solve_tree_walk_with_palette_and_exclusions`,
 oracle only (`solver.rs:308-317`, "do not add new callers") and is never
 exposed to multi-target callers — its hardcode is the same shape but does
 **not** need generalizing; it is listed here for completeness so a future
-reader doesn't mistake it for a missed site.
+reader doesn't mistake it for a missed site. *(Note 2026-08-14: the legacy
+walk and `solve_compat_*` named here were deleted, #632 A1 — this
+paragraph and its line numbers are historical record of a scoping call
+made while the walk still existed.)*
 
 **Correctness gap found in this RFC's research, must be closed before
 Phase 2 (layout) is trustworthy**: `detect_di_couplings`
