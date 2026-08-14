@@ -146,7 +146,8 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
-The full close-out narratives (855 lines, 2026-07-13 .. 2026-08-05) are
+The full close-out narratives (855 lines, 2026-07-13 .. 2026-08-05,
+with embedded corrections through 2026-08-08) are
 archived VERBATIM in
 [`archive/status-rfc-closeouts-2026-jul-aug.md`](archive/status-rfc-closeouts-2026-jul-aug.md)
 (#632 docs sweep, 2026-08-15) — each entry's canonical trail is its
@@ -174,6 +175,7 @@ RFC's own decision log. Index, verdict phrases quoted from the entries:
 | RFC-043 pole-band thinning | 2026-07-20 | close-out — quality-aware |
 | rfc-build-quality | 2026-07-20 | close-out — user-facing build quality |
 | rfc-inserter-sizing | 2026-07-13 | close-out — ladder-sized bus inserters |
+
 ## Open tracking issues (layout quality)
 
 - [#456 flow-preserving compaction / the spaghettifier](https://github.com/storkme/spaghettio/issues/456) — design split into competing [RFC-055 compact linear chains](rfc-055-compact-cell-chain.md) and [RFC-056 folded chains](rfc-056-folded-cell-chain.md); both make validated cell rotations first-class and share one measured decision gate

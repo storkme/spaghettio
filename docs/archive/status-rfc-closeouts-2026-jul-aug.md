@@ -1,10 +1,12 @@
-# Archived: RFC close-out narratives (2026-07-13 .. 2026-08-05)
+# Archived: RFC close-out narratives (2026-07-13 .. 2026-08-05, embedded corrections through 2026-08-08)
 
 Moved VERBATIM from `docs/status.md` §"Recent RFC close-outs" on
 2026-08-15 (#632 docs archive sweep) — the section had grown to 855
 lines of superseded-retracted-superseded narrative, 71% of the status
-ledger. The only edits made in the move: relative links re-prefixed
-`../` so they still resolve from this directory, and the "below"
+ledger. The only edits made in the move: relative MARKDOWN links re-prefixed
+`../` so they still resolve from this directory (inline-code path
+mentions like `docs/...` are prose, kept as written — they resolved
+from nowhere in particular before the move too), and the "below"
 cross-references to the deep-chain-warmup section (which STAYED in
 status.md) repointed there. Everything else reads exactly as it did
 in status.md, so embedded caveats remain valid-as-of-their-dates. Current state lives in `docs/status.md`; the

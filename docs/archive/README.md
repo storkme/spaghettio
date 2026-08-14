@@ -17,6 +17,7 @@ For the live pipeline reference see:
 
 | File | Status |
 |---|---|
+| `status-rfc-closeouts-2026-jul-aug.md` | Moved 2026-08-15 (#632 docs sweep) — the status ledger's RFC close-out narratives, 2026-07-13..08-05 (embedded corrections through 2026-08-08); index + current state stay in `../status.md`. |
 | `rfc-band-regions.md` | Rejected — SAT-on-bands produced cycles / phantom belts. Superseded by the junction solver. |
 | `rfc-belt-flow-aware-astar.md` | Aspirational — still-valid design for a future spaghetti-routing revival. |
 | `rfc-ghost-cluster-routing.md` | Implemented — ghost A* + union-find + cluster SAT (the current pipeline). |
