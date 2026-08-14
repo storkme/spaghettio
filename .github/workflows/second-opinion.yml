@@ -169,7 +169,13 @@ jobs:
             elif ! tl=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/timeline" --paginate 2>/dev/null); then
               reason="review:timeline-api-failed"
             else
-              retarget=$(jq -rn '[inputs] | add // [] | [.[] | select(.event == "base_ref_changed" or .event == "automatic_base_change_succeeded") | .created_at // "unknown-time"] | last // empty' <<<"$tl" 2>/dev/null) || retarget="jq-failed"
+              # max, not last: `last` silently assumes the timeline API
+              # returns events oldest-first (true today, but an ordering
+              # change would make `last` pick the OLDEST of several
+              # retargets and miss a recent one). ISO-8601 UTC max is
+              # chronological max regardless of order; "unknown-time"
+              # sorts above any date and keeps forcing review.
+              retarget=$(jq -rn '[inputs] | add // [] | [.[] | select(.event == "base_ref_changed" or .event == "automatic_base_change_succeeded") | .created_at // "unknown-time"] | max // empty' <<<"$tl" 2>/dev/null) || retarget="jq-failed"
               # The anchor timestamp is the review's POST time — up to a
               # full job budget (timeout-minutes: 90) after the diff was
               # actually fetched. A retarget landing DURING the in-flight

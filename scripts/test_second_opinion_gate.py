@@ -127,6 +127,25 @@ got = jq(timeline_jq, None, raw_input=json.dumps([{"event": "labeled"}]), null_i
 check("timeline: no retarget -> empty", got == "", f"got {got!r}")
 got = jq(timeline_jq, None, raw_input=json.dumps([{"event": "automatic_base_change_succeeded"}]), null_input=True)
 check("timeline: auto base change, no timestamp -> unknown-time", got == "unknown-time", f"got {got!r}")
+# max is order-independent: the newest of several retargets must win under
+# BOTH orderings (`last` assumed oldest-first and picked the oldest when
+# the order flipped — the post-merge round-6 critical).
+multi_old_first = json.dumps([
+    {"event": "base_ref_changed", "created_at": "2026-08-14T08:00:00Z"},
+    {"event": "base_ref_changed", "created_at": "2026-08-14T11:30:00Z"}])
+multi_new_first = json.dumps([
+    {"event": "base_ref_changed", "created_at": "2026-08-14T11:30:00Z"},
+    {"event": "base_ref_changed", "created_at": "2026-08-14T08:00:00Z"}])
+for label, payload in [("oldest-first", multi_old_first), ("newest-first", multi_new_first)]:
+    got = jq(timeline_jq, None, raw_input=payload, null_input=True)
+    check(f"timeline: multi-retarget {label} -> newest wins", got == "2026-08-14T11:30:00Z", f"got {got!r}")
+# A timestamp-less event mixed with dated ones must still force review:
+# "unknown-time" sorts above ISO dates, so max surfaces it.
+mixed = json.dumps([
+    {"event": "base_ref_changed", "created_at": "2026-08-14T08:00:00Z"},
+    {"event": "automatic_base_change_succeeded"}])
+got = jq(timeline_jq, None, raw_input=mixed, null_input=True)
+check("timeline: dated + timestamp-less -> unknown-time wins", got == "unknown-time", f"got {got!r}")
 
 # --- end-to-end orchestration harness (round-5 major: the bash between
 # the jq programs — label handling, anchor parsing, the retarget-margin
