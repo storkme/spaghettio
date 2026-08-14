@@ -96,7 +96,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 | `belt-junction` | E/W | yes | head-on = Error, else Warning |
 | `output-belt` | E | yes | |
 | `tap-priority` | E | yes | |
-| `underground-belt` | E/W | yes | pair/sideload lane rules per `factorio-mechanics.md`. NB `classify_errors` (decomposition_search.rs) matches `"underground-belt-sideload"`, which nothing emits — see hole 5 |
+| `underground-belt` | E/W | yes | pair/sideload lane rules per `factorio-mechanics.md`. `classify_errors`'s (decomposition_search.rs) dead `"underground-belt-sideload"` match arm was removed 2026-08-14, issue #632 A4 — see hole 5 |
 | `pipe-isolation` | E | yes | |
 | `fluid-connectivity` | E | yes | |
 | `fluid-network` | E | yes | |
@@ -120,7 +120,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
 | `shared-row-outflow-underclaim` | E | yes | RFC-062 Phase 0 observed a target export silently dropped with zero errors |
 | `record-effective-rows` | E | yes | RFC-065: machine footprints vs `effective_rows` bands, harm-calibrated |
 | `record-power-wires` | E | yes | RFC-065: stored wire endpoints must be in-bounds pole entities |
-| `connectivity-anomaly` | E | **not dispatched** | emitted by `connectivity::scan_graph_anomalies`, deliberately not wired into `validate()` in RFC-065 Phase 0 — a category that exists but reaches no consequence channel; consumed by tests only. Its one candidate consumer (an anomaly-scan reject prefilter on the fold path) was built, measured, and **killed on a pre-registered criterion** in Phase 2b (0.83% reject volume vs a ≥30% bar — see `search_snake_fold_with_stats`'s doc comment). The C3 prefilter is `error_certain_regression`, which reads the derived graph directly, not these issues |
+| `connectivity-anomaly` | — | **removed 2026-08-14** | **Tombstone.** Was emitted by `connectivity::scan_graph_anomalies`, deliberately never wired into `validate()` in RFC-065 Phase 0 — a category that existed but reached no consequence channel; consumed by tests only. Its one candidate consumer (an anomaly-scan reject prefilter on the fold path) was built, measured, and **killed on a pre-registered criterion** in Phase 2b (0.83% reject volume vs a ≥30% bar — see `search_snake_fold_with_stats`'s doc comment). With no dispatch path and no live consumer, the scan function and its test-only consumers were deleted, issue #632 A4. The C3 prefilter, `error_certain_regression`, reads the derived graph directly and never depended on these issues |
 
 ### Rate models (calibration status is the load-bearing column)
 
@@ -274,17 +274,22 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    (`LayoutStyle::default()` is Spaghetti, but nothing in production relies
    on it) — so the check rewritten after the #520 0.50-ratio incident
    cannot block the style of layout that incident shipped.
-5. **`classify_errors` string drift**: two of its match strings are dead —
+5. **`classify_errors` string drift**: two of its match strings were dead —
    `"underground-belt-sideload"` (the UG checks emit `"underground-belt"`,
-   so sideload errors silently fall through to the starvation `_` arm
-   instead of contamination) and `"pipe-to-ground"` (only ever an *entity
-   name* in `validate/`, so it contributes nothing to the structural arm —
-   which stays live via `entity-overlap`; real pipe errors emit as
+   so sideload errors were silently falling through to the starvation `_`
+   arm instead of contamination) and `"pipe-to-ground"` (only ever an
+   *entity name* in `validate/`, so it contributes nothing to the structural
+   arm — which stays live via `entity-overlap`; real pipe errors emit as
    `pipe-isolation`/`fluid-network`/`fluid-connectivity` and land in
-   contamination correctly). Consequence is bounded (only the scoped Pooled
+   contamination correctly). Consequence was bounded (only the scoped Pooled
    merge-tap quality comparison), but two dead strings in one match
-   expression is a live instance of category strings having no registry.
+   expression was a live instance of category strings having no registry.
    This table is now that registry.
+   **`"underground-belt-sideload"` removed 2026-08-14 (issue #632 A4)** —
+   the match arm never fired on anything (grep-verified zero emitters), so
+   its removal changes nothing: real `"underground-belt"` sideload errors
+   still land in starvation via the `_` arm, exactly as before. `"pipe-to-ground"`
+   remains dead and open — out of that PR's scope.
 6. **Severity has no "uncalibrated" tier**, so calibration firewalls are
    implemented as silent exclusions inside `selection_warning_count`. The
    #519 firewall's written exit condition ("lift once sim-anchored") lived

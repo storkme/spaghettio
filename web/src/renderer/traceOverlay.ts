@@ -9,7 +9,6 @@ type RowsPlaced   = Extract<TraceEvent, { phase: "RowsPlaced" }>;
 type LanesPlanned = Extract<TraceEvent, { phase: "LanesPlanned" }>;
 export type PhaseSnapshot = Extract<TraceEvent, { phase: "PhaseSnapshot" }>;
 export type PhaseComplete = Extract<TraceEvent, { phase: "PhaseComplete" }>;
-type RouteFailureEvent = Extract<TraceEvent, { phase: "RouteFailure" }>;
 type GhostSpecRoutedEvent = Extract<TraceEvent, { phase: "GhostSpecRouted" }>;
 type GhostSpecFailedEvent = Extract<TraceEvent, { phase: "GhostSpecFailed" }>;
 type GhostRoutingCompleteEvent = Extract<TraceEvent, { phase: "GhostRoutingComplete" }>;
@@ -117,31 +116,6 @@ export function renderTraceOverlay(
       .stroke({ width: 1, color: 0xffcc44, alpha: 0.4 });
     g.eventMode = "static";
     g.on("pointerenter", () => onHover(`Merger: ${d.item} (${d.lanes} lanes, y=${d.block_y}..${d.block_y + d.block_height})`));
-    g.on("pointerleave", () => onHover(null));
-    layer.addChild(g);
-  }
-
-  // --- Route failures (from RouteFailure) ---
-  for (const evt of events) {
-    if (evt.phase !== "RouteFailure") continue;
-    const d = (evt as RouteFailureEvent).data;
-    const cx = d.from_x * TILE_PX + TILE_PX / 2;
-    const cy = d.from_y * TILE_PX + TILE_PX / 2;
-    const halfSpan = 3;
-    const g = new Graphics();
-    g.label = "RouteFailure";
-    // Red ✕ cross at source tile
-    g.moveTo(cx - halfSpan, cy - halfSpan)
-      .lineTo(cx + halfSpan, cy + halfSpan)
-      .stroke({ width: 2, color: 0xff3333 });
-    g.moveTo(cx + halfSpan, cy - halfSpan)
-      .lineTo(cx - halfSpan, cy + halfSpan)
-      .stroke({ width: 2, color: 0xff3333 });
-    // Dashed red line from source to target
-    drawDashedLine(g, cx, cy, d.to_x * TILE_PX + TILE_PX / 2, d.to_y * TILE_PX + TILE_PX / 2,
-      6, 4, { width: 1, color: 0xff3333, alpha: 0.6 });
-    g.eventMode = "static";
-    g.on("pointerenter", () => onHover(`Route failed: ${d.item} (${d.from_x},${d.from_y})\u2192(${d.to_x},${d.to_y}) [${d.spec_key}]`));
     g.on("pointerleave", () => onHover(null));
     layer.addChild(g);
   }

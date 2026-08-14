@@ -27,10 +27,17 @@
 //!   re-stamp absorbed entities with bbox-corner `crossing:` ids), and no
 //!   consumer reads them as coordinates. See the RFC decision log,
 //!   2026-08-04.
-//! - [`scan_graph_anomalies`] — structural sanity over the derived graph
-//!   (unpaired underground halves, unbound inserter hands, head-on belt
-//!   contacts). On a validator-green layout this must be empty; that parity
-//!   is kill criterion K65-1.
+//!
+//! A third consumer, `scan_graph_anomalies` (structural sanity over the
+//! derived graph: unpaired underground halves, unbound inserter hands,
+//! head-on belt contacts), was built for Phase 0 but deliberately never
+//! wired into `validate()` — see the RFC decision log. Its one candidate
+//! consumer (an anomaly-scan reject prefilter on the fold path) was built,
+//! measured, and killed on a pre-registered criterion in Phase 2b (0.83%
+//! reject volume vs a ≥30% bar). With no dispatch path and no consumer, it
+//! was deleted 2026-08-14 (issue #632 A4) along with its test-only callers;
+//! `error_certain_regression` above is the surviving C3 prefilter and reads
+//! the derived graph directly, not anomaly issues.
 //!
 //! Since Phase 1 this module is the **home** of the shared derivation
 //! primitives, not a consumer of them: [`build_ug_pairs`] and
@@ -47,11 +54,13 @@
 //! `pos − dir·reach`, drop = `pos + dir·reach`.
 //!
 //! Two former fidelity gaps closed after the PR #574 bot review: head-on
-//! ANOMALIES are now same-carries-only (mirroring `check_belt_junctions`'s
-//! carries-inequality skip; the conflict itself stays recorded for `diff`),
-//! and a perpendicular feed onto a `UgExit` tile no longer produces a flow
-//! edge (sideloading is an entrance-side mechanic — U7; an exit-side edge
-//! would let `diff` bless game-impossible flow).
+//! contacts between different-carries belts are validator-tolerated
+//! (mirroring `check_belt_junctions`'s carries-inequality skip) — the
+//! conflict is still recorded for `diff` regardless of carries, only the
+//! now-deleted anomaly scan cared about the same-carries split — and a
+//! perpendicular feed onto a `UgExit` tile no longer produces a flow edge
+//! (sideloading is an entrance-side mechanic — U7; an exit-side edge would
+//! let `diff` bless game-impossible flow).
 //!
 //! Phase 0 scope: solid transport + inserters + machines. Pipes are a mesh,
 //! not a flow lattice, and stay with `validate::fluids` until a later phase;
@@ -462,8 +471,9 @@ pub fn derive_connectivity(layout: &LayoutResult) -> ConnectivityGraph {
             }
             NodeClass::UgEntrance => {
                 // Entrances flow underground only; an unpaired entrance
-                // simply has no out-edge (the absence is the signal
-                // `scan_graph_anomalies` reads).
+                // simply has no out-edge — the absence is a deliberate
+                // signal, not a bug (an entrance's own belt-flow validator
+                // check, not this module, is what reports it).
                 if let Some(&exit_tile) = ug_pairs.get(&(e.x, e.y)) {
                     if let Some(&dst) = occupancy.get(&exit_tile) {
                         edges.push(Edge { src: i, dst, kind: EdgeKind::UgSpan });
@@ -479,9 +489,9 @@ pub fn derive_connectivity(layout: &LayoutResult) -> ConnectivityGraph {
                 // in-game an inserter cannot pick from or drop onto a
                 // splitter's footprint (same exclusion `belt_detour` makes
                 // for its anchors). Binding one would bless a game-dead
-                // inserter with a healthy edge; leaving it unbound makes it
-                // a `scan_graph_anomalies` finding instead. The engine
-                // never places this geometry (0 instances corpus-wide).
+                // inserter with a healthy edge; leaving it unbound is the
+                // honest representation. The engine never places this
+                // geometry (0 instances corpus-wide).
                 let hand_target = |idx: usize| {
                     matches!(
                         classes[idx],
@@ -701,105 +711,6 @@ pub fn error_certain_regression(
         }
     }
     None
-}
-
-/// Structural sanity over the derived graph. On a validator-green layout
-/// this must return nothing (K65-1); each finding is one positioned issue
-/// per instance (`docs/validator-reporting.md` rule 1). Not wired into
-/// `validate()` in Phase 0.
-pub fn scan_graph_anomalies(
-    graph: &ConnectivityGraph,
-    layout: &LayoutResult,
-) -> Vec<ValidationIssue> {
-    let n = layout.entities.len();
-    let mut has_ug_out = vec![false; n];
-    let mut has_ug_in = vec![false; n];
-    let mut ins_pickup = vec![false; n];
-    let mut ins_drop = vec![false; n];
-    for edge in &graph.edges {
-        match edge.kind {
-            EdgeKind::UgSpan => {
-                has_ug_out[edge.src] = true;
-                has_ug_in[edge.dst] = true;
-            }
-            EdgeKind::InserterPickup => ins_pickup[edge.dst] = true,
-            EdgeKind::InserterDrop => ins_drop[edge.src] = true,
-            _ => {}
-        }
-    }
-
-    let mut issues = Vec::new();
-    for (i, e) in layout.entities.iter().enumerate() {
-        match graph.classes[i] {
-            NodeClass::UgEntrance if !has_ug_out[i] => {
-                issues.push(ValidationIssue::with_pos(
-                    Severity::Error,
-                    "connectivity-anomaly",
-                    format!(
-                        "underground entrance at ({},{}) facing {:?} has no paired exit in the derived graph",
-                        e.x, e.y, e.direction
-                    ),
-                    e.x,
-                    e.y,
-                ));
-            }
-            NodeClass::UgExit if !has_ug_in[i] => {
-                issues.push(ValidationIssue::with_pos(
-                    Severity::Error,
-                    "connectivity-anomaly",
-                    format!(
-                        "underground exit at ({},{}) facing {:?} is claimed by no entrance in the derived graph",
-                        e.x, e.y, e.direction
-                    ),
-                    e.x,
-                    e.y,
-                ));
-            }
-            NodeClass::Inserter if !ins_pickup[i] || !ins_drop[i] => {
-                let missing = match (ins_pickup[i], ins_drop[i]) {
-                    (false, false) => "pickup and drop",
-                    (false, true) => "pickup",
-                    _ => "drop",
-                };
-                issues.push(ValidationIssue::with_pos(
-                    Severity::Error,
-                    "connectivity-anomaly",
-                    format!(
-                        "inserter at ({},{}) facing {:?} has no {} binding in the derived graph",
-                        e.x, e.y, e.direction, missing
-                    ),
-                    e.x,
-                    e.y,
-                ));
-            }
-            _ => {}
-        }
-    }
-    for c in &graph.conflicts {
-        let e = &layout.entities[c.a];
-        let other = &layout.entities[c.b];
-        // Mirror `check_belt_junctions` exactly (belt_flow.rs — the
-        // carries-inequality skip): a head-on is an ERROR only when both
-        // sides carry the same item. Different-carries contacts are
-        // validator-tolerated geometry — the conflict stays recorded for
-        // `diff` visibility, but anomaly-erroring it would red a
-        // validator-green layout (the PR #574 bot review's 3/3-pass
-        // finding; the RI-2 false-positive class).
-        if e.carries != other.carries {
-            continue;
-        }
-        issues.push(ValidationIssue::with_pos(
-            Severity::Error,
-            "connectivity-anomaly",
-            format!(
-                "head-on belt contact between entities at ({},{}) and ({},{}) — no flow crosses there",
-                e.x, e.y, other.x, other.y
-            ),
-            e.x,
-            e.y,
-        ));
-    }
-    issues
 }
 
 /// Cross-check `LayoutResult`'s positional records against its geometry.
@@ -1084,27 +995,22 @@ mod tests {
             g.conflicts,
             vec![Conflict { a: 0, b: 1, kind: ConflictKind::HeadOn }]
         );
-        // Same carries (both iron-plate): the validator errors this, so the
-        // anomaly scan must too.
-        assert_eq!(scan_graph_anomalies(&g, &lr).len(), 1);
     }
 
     /// PR #574 bot review (3/3-pass finding): different-carries head-on
     /// contacts are validator-TOLERATED (`check_belt_junctions` skips
-    /// carries-unequal neighbors), so the anomaly scan must stay quiet on
-    /// them — the conflict remains recorded for `diff`.
+    /// carries-unequal neighbors) — the conflict is still recorded (for
+    /// `diff` visibility) regardless of carries. The anomaly-scan half of
+    /// this pin (the scan stayed quiet on tolerated contacts) was deleted
+    /// with `scan_graph_anomalies` 2026-08-14, issue #632 A4.
     #[test]
-    fn different_carries_head_on_is_not_an_anomaly() {
+    fn different_carries_head_on_is_still_a_conflict() {
         use EntityDirection::{East, West};
         let mut b2 = belt(1, 0, West);
         b2.carries = Some("copper-plate".to_string());
         let lr = layout(vec![belt(0, 0, East), b2]);
         let g = derive_connectivity(&lr);
         assert_eq!(g.conflicts.len(), 1, "conflict still recorded: {:?}", g.conflicts);
-        assert!(
-            scan_graph_anomalies(&g, &lr).is_empty(),
-            "validator-tolerated contact must not anomaly-error"
-        );
     }
 
     /// Phase 2 detector pins: each error-certain class fires; the cases
@@ -1556,7 +1462,6 @@ mod tests {
         assert!(edge(&g, 0, 1, EdgeKind::BeltFlow));
         assert!(edge(&g, 1, 2, EdgeKind::UgSpan));
         assert!(edge(&g, 2, 3, EdgeKind::BeltFlow));
-        assert!(scan_graph_anomalies(&g, &lr).is_empty());
     }
 
     /// U5 pin (Phase 1 unification): a yellow entrance never pairs a red
@@ -1577,23 +1482,10 @@ mod tests {
             "cross-tier pair must not form: {:?}",
             g.edges
         );
-        assert_eq!(scan_graph_anomalies(&g, &mixed).len(), 2, "both halves orphaned");
 
         let same = layout(vec![ug(0, 0, East, "input"), ug(4, 0, East, "output")]);
         let g2 = derive_connectivity(&same);
         assert!(edge(&g2, 0, 1, EdgeKind::UgSpan), "{:?}", g2.edges);
-    }
-
-    #[test]
-    fn unpaired_ug_halves_are_anomalies() {
-        use EntityDirection::East;
-        let lr = layout(vec![ug(1, 0, East, "input"), ug(10, 5, East, "output")]);
-        // Pairing requires same axis; these are on different rows, so both
-        // halves are orphans.
-        let g = derive_connectivity(&lr);
-        let anomalies = scan_graph_anomalies(&g, &lr);
-        assert_eq!(anomalies.len(), 2, "{anomalies:#?}");
-        assert!(anomalies.iter().all(|i| i.category == "connectivity-anomaly"));
     }
 
     #[test]
@@ -1633,7 +1525,6 @@ mod tests {
         let g = derive_connectivity(&lr);
         assert!(edge(&g, 0, 1, EdgeKind::InserterPickup));
         assert!(edge(&g, 1, 2, EdgeKind::InserterDrop));
-        assert!(scan_graph_anomalies(&g, &lr).is_empty());
     }
 
     #[test]
@@ -1736,7 +1627,7 @@ mod tests {
     }
 
     /// Review nit 4: an inserter over a splitter tile is game-dead — the
-    /// hand must stay UNBOUND (an anomaly), never blessed with an edge.
+    /// hand must stay UNBOUND, never blessed with an edge.
     #[test]
     fn inserter_over_splitter_tile_is_unbound() {
         use EntityDirection::East;
@@ -1756,11 +1647,6 @@ mod tests {
             !g.edges.iter().any(|e| e.kind == EdgeKind::InserterPickup),
             "{:?}",
             g.edges
-        );
-        let anomalies = scan_graph_anomalies(&g, &lr);
-        assert!(
-            anomalies.iter().any(|i| i.message.contains("pickup")),
-            "{anomalies:#?}"
         );
     }
 
