@@ -602,13 +602,18 @@ fn row_cut_capacities(
 /// registered template's min row-cut capacity must be at least
 /// `min(n_inputs, n_outputs)` (rated throughput — a (1, 4) delivering
 /// one belt is at rated, not waisted). This is the CI tripwire promised
-/// when #631's 12 waist-capped shapes were culled (#632 A3): a
-/// re-registered waisted shape fails this test, not an eprintln.
+/// when #631's 12 waist-capped shapes were culled (#632 A3).
 ///
-/// The verdict is one-sided, like the meter: "min cut < rated" is a
-/// structural throughput cap — believe it. "min cut ≥ rated" clears
-/// nothing on its own (lateral distribution can still under-use a cut);
-/// clearing takes the sim.
+/// Coverage honesty (bot review on the wiring PR): the census counts
+/// capacity POTENTIALS, so what this gate catches is exactly the
+/// cut-potential pinch class — which is the class every one of the 13
+/// culled defective shapes belongs to (each reads WAIST under this
+/// census; re-registering any of them fails CI). A throughput cap that
+/// does NOT narrow south-facing potential — an unreceived lane, lateral
+/// imbalance across a wide cut — passes. The verdict is one-sided, like
+/// the meter: "min cut < rated" is a structural throughput cap —
+/// believe it. "min cut ≥ rated" clears nothing on its own; clearing
+/// takes the sim.
 #[test]
 fn audit_min_cut_capacity() {
     let templates = balancer_templates();
@@ -627,7 +632,12 @@ fn audit_min_cut_capacity() {
         let t = &templates[shape];
         let rated = t.n_inputs.min(t.n_outputs);
         let (cuts, notes) = row_cut_capacities(t.entities, t.height);
-        // A single-row template has no internal cut to cap it.
+        // A single-row template has no internal cut and CANNOT pinch:
+        // every column is an independent south belt, and the m output
+        // tiles are themselves ≥ rated = min(n, m). The vacuous pass is
+        // physically sound, not a hole (bot review probed it). The
+        // Python predecessor crashed on this class (`min([])`), which is
+        // the second behavioral delta recorded in RFC-027's log.
         let min_cut = cuts.iter().copied().min().unwrap_or(rated);
         let verdict = if min_cut >= rated { "ok" } else { "WAIST" };
         eprintln!(

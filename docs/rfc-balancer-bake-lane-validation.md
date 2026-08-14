@@ -539,7 +539,16 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
     (`cut_census_reads_synthetic_waist`): a synthetic waist censuses
     [2, 1, 2], the UG-pair y1..y2-INCLUSIVE semantics are asserted
     exactly, and north-facing/unpaired entities pin to notes-not-counts.
-    One strictness delta over the script: an out-of-bounds counted
+    Two behavioral deltas over the script: an out-of-bounds counted
     entity now fails loudly (Python would have wrapped a negative index
-    into the LAST cut). The script is deleted; historical mentions in
-    this log describe runs that happened and stand as written.*
+    into the LAST cut), and a height<2 template passes vacuously where
+    Python crashed on `min([])` — sound, not a hole: a 1-row template
+    cannot pinch (every column is an independent south belt and its m
+    output tiles are themselves ≥ rated). Coverage honesty, from the
+    wiring PR's bot review: the census counts capacity POTENTIALS, so
+    the gate catches the cut-potential pinch class — the class all 13
+    culled shapes belong to — and cannot see caps that narrow nothing
+    (unreceived lanes, lateral imbalance); those remain sim territory,
+    per the one-sided-verdict rule. The script is deleted; historical
+    mentions in this log describe runs that happened and stand as
+    written.*
