@@ -64,7 +64,8 @@ the second part was the real one:
    independent of speed, schedule, and opt levels by construction.
    Refresh protocol lives in the `ci.yml` comment (copy the host cache in
    with any layout-moving change, like a golden re-bless). This is the
-   pinned-cache design from the goldens README, landed CI-side.
+   pinned-cache design from the (since-deleted) goldens README, landed
+   CI-side — the refresh protocol in ci.yml's comment is now its home.
 
 ### 2. Committed STRESSGOLD baseline (~90 s + a full-suite leg per work unit)
 
@@ -95,7 +96,9 @@ runs are 2.6× slower (174 s vs 67 s) *and* refresh the host cache in place
 (recording is unconditional). The always-on `StressBaseline` ceilings remain
 the portable gate. Follow-up if CI enforcement is ever wanted: pin the golden
 subset to a committed cache snapshot with ambient read/write disabled. Full
-rationale in `crates/core/tests/goldens/stress/README.md`.
+rationale lived in `crates/core/tests/goldens/stress/README.md`,
+readable at its pre-2026-08-15 blame point (deleted with the flow — see
+the closure entry below).
 
 ### 3. Debug-mode tax on SAT/A*-heavy tests (~3×) — measure, then decide
 

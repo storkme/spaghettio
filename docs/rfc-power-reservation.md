@@ -140,11 +140,12 @@ unchanged goldens under the real mechanisms (see Verification).
   iteration on any fixture (the reservation created new starvation, or
   routing consumed the band past substation fit) — stop; the reactive
   design oscillates, and the predictive/uniform trade-off goes to the user.
-- **Selectivity leak**: any currently-clean corpus layout's committed golden
-  hash or pinned warning set moves — evaluated under the goldens' documented
-  same-host/same-cache discipline (2 of 8 stress goldens are SAT-cache-
-  sensitive per `crates/core/tests/goldens/stress/README.md`; a cache-state
-  hash flap is not a trip) — stop; the trigger fired where it shouldn't.
+- **Selectivity leak**: any currently-clean corpus layout's byte-stability
+  hash (before/after `STRESSGOLD` capture on the same host/cache — the
+  committed stress goldens were deleted 2026-08-15, #632 B7) or pinned
+  warning set moves. Same-host/same-cache discipline still applies (2 of 8
+  stress fixtures were measured SAT-cache-sensitive; a cache-state hash
+  flap is not a trip) — stop; the trigger fired where it shouldn't.
 - **Shape failure**: any of the five gating fixtures' pinned count fails to
   reach 0 under widen-plus-substation — stop and re-derive from that
   fixture's tile map before writing more code.

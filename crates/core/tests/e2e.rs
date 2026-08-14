@@ -3223,9 +3223,9 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
     };
 
     // Phase 2 (RFC `docs/rfc-power-supply.md`): pole slack guardrail. Tally the
-    // per-pole PoleSlack events place_poles emits so the scoreboard surfaces
-    // power-placement fragility (zero-slack poles) in the golden diff — a
-    // future densification change that erodes pole slack moves these lines.
+    // per-pole PoleSlack events place_poles emits so the printed scoreboard
+    // surfaces power-placement fragility (zero-slack poles) — a future
+    // densification change that erodes pole slack moves these lines.
     let mut pole_slacks: Vec<i32> = result
         .trace_events
         .iter()
