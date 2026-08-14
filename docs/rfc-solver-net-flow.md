@@ -746,22 +746,35 @@ independent follow-ups with their own gates.
   gate asserts the recorded exit names a physical heavy-oil pipe and
   validates clean. Long Factorio re-measurement remains the acceptance
   oracle before closing #476.*
-- *2026-08-14 — **legacy recursive tree walk + parity suite DELETED**
-  (#632 A1, churn-reduction campaign). Free-mode net-flow has been the
-  default since Phase 3 (2026-07); the walk survived only as the
-  compat-mode A/B oracle (`solve_compat_with_palette_and_exclusions`,
-  zero non-test callers) and the reference `solver_netflow_parity.rs`
-  harness (1,040 lines) existed solely to compare the two. Ran the full
-  parity suite one final time as the deletion receipt — 11 passed, 0
-  failed, 3 ignored (perf/report-only gates) — then deleted `resolve()`,
-  `SolveState`, `solve_tree_walk_with_palette_and_exclusions`,
-  `solve_compat_with_palette_and_exclusions`, the now-dead
-  `SolverError::ZeroProduct` variant (only the walk ever constructed
-  it), and the parity test file outright. `solver.rs` is now a pure
-  wrapper layer over `netflow.rs`; every doc reference to a live
-  tree-walk oracle elsewhere in the codebase was swept in the same PR.
-  `RecipeScope::Restricted` in `netflow.rs` is now unreferenced (it
-  existed to serve compat mode) but was deliberately left in place —
-  removing it touches `netflow.rs`'s core solve loop, which is out of
-  scope for a deletion-only PR; flagged as a possible future
-  micro-cleanup, not claimed as done here. No behavior change.*
+- *2026-08-14 — **legacy recursive tree walk DELETED; parity suite SPLIT,
+  not deleted whole** (#632 A1, churn-reduction campaign; corrected within
+  the same PR, #635, after second-opinion review). Free-mode net-flow has
+  been the default since Phase 3 (2026-07); the walk survived only as the
+  compat-mode A/B oracle (`solve_compat_with_palette_and_exclusions`, zero
+  non-test callers). Ran the full parity suite one final time as the
+  deletion receipt — 11 passed, 0 failed, 3 ignored (perf/report-only
+  gates) — then deleted `resolve()`, `SolveState`,
+  `solve_tree_walk_with_palette_and_exclusions`,
+  `solve_compat_with_palette_and_exclusions`, and the now-dead
+  `SolverError::ZeroProduct` variant (only the walk ever constructed it).
+  `solver.rs` is now a pure wrapper layer over `netflow.rs`.
+  **First-pass error, caught by second-opinion review**: the initial
+  commit deleted `solver_netflow_parity.rs` (1,040 lines) whole, on the
+  premise the file existed solely to compare walk vs. LP. False — only 3
+  of its 14 tests referenced the walk
+  (`kc1_pinned_parity_on_gated_corpus`, `golden_rocket_fuel_compat_credits_byproducts`,
+  `report_unpinned_deltas`, plus walk-only helpers `GatedConfig`,
+  `GATED`, `compat_solve`, `walk_set`); the other 11 were netflow's own
+  regression coverage (whole-graph conservation, full-sweep determinism,
+  golden optima, Fulgora economics) with no walk dependency at all. Fixed
+  in the same PR: recovered the pre-deletion file from git history, cut
+  the 3 walk tests + their helpers, kept everything else (including the
+  shared `within_parity_tol` helper, which `golden_epsilon_sensitivity`
+  — a kept, walk-free test — also uses) as
+  `crates/core/tests/netflow_regression.rs` (11 tests: 9 passed, 0
+  failed, 2 ignored). Correction: `RecipeScope::Restricted` in
+  `netflow.rs` is NOT unreferenced — `kovarex_self_loop_net_flows_hand_derived`
+  and `voider_disposes_surplus_above_break_even_price`, both retained in
+  `netflow_regression.rs`, construct it directly; the earlier claim in
+  this entry that it was dead-but-left-in-place was itself wrong. No
+  behavior change.*
