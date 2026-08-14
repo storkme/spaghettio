@@ -155,16 +155,25 @@ Semantics that matter for forensics:
   pushes.
 - **Escape hatch**: the `force-review` label disables the gate for the
   PR — and applying it is itself a trigger (`labeled` event), so it
-  works even when there is nothing left to push. The gate's decision
-  and reason are one log line in the "Trivial-delta gate" step
-  (`gate: trivial=... (reason)`).
-- **Base retargets force a review.** The compare sees only head-side
-  commits, and a retarget rewrites the effective diff with no new head
-  SHA (the workflow's known `edited`-trigger gap) — pre-gate, the next
-  push healed that with a full review, and the gate must not turn that
-  push into a skip. Any `base_ref_changed` /
+  works even when there is nothing left to push, *provided the head was
+  previously skipped rather than reviewed* (an already-reviewed head
+  hits the action's own per-SHA gate, which no label can force — the
+  upstream force-input gap). **Remove the label after use**: it
+  disables the gate for every subsequent push while present. The
+  gate's decision and reason are one log line in the "Trivial-delta
+  gate" step (`gate: trivial=... (reason)`).
+- **Base retargets force a review on the next PUSH.** The compare sees
+  only head-side commits, and a retarget rewrites the effective diff
+  with no new head SHA (the workflow's known `edited`-trigger gap) —
+  pre-gate, the next push healed that with a full review, and the gate
+  must not turn that push into a skip. Any `base_ref_changed` /
   `automatic_base_change_succeeded` timeline event newer than the
-  anchor review forces a review; so does any failure to determine this.
+  anchor review **minus the 90-minute job budget** (a mid-review
+  retarget is older than the anchor yet unreviewed) forces a review;
+  so does any failure to determine this. A label event cannot heal a
+  retarget on an already-reviewed head (per-SHA gate, above), so the
+  residual gap is a retarget followed by no further push before
+  merge — re-review that case session-side.
 - **Same-head re-events** (reopened / ready_for_review / stray label)
   on the already-reviewed head skip with NO notice — nothing to review,
   nothing new to say, and no container spin.

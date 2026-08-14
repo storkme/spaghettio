@@ -24,11 +24,12 @@ on:
     # trigger wouldn't help: the runner's per-SHA marker comment would
     # suppress the re-review anyway, and the action exposes no force
     # input. The gate's timeline guard now forces a full review on the
-    # NEXT event after a retarget (push or label — apply `force-review`
-    # if there is nothing to push), so the residual gap is only a
-    # retarget followed by no further event before merge: re-review THAT
-    # case session-side (the stacked-PR retarget-to-main case is the one
-    # that occurs here).
+    # next PUSH after a retarget. A label event cannot heal it: the gate
+    # votes review, but the head SHA is unchanged and the runner's
+    # per-SHA gate suppresses the re-review (the force-input gap above).
+    # So the residual gap is a retarget followed by no further push
+    # before merge: re-review THAT case session-side (the stacked-PR
+    # retarget-to-main case is the one that occurs here).
 
 # One concurrency group per PR; cancellation is CONDITIONAL on the event.
 # Only `synchronize` — the one trigger that means "a new head SHA exists" —
@@ -260,12 +261,19 @@ jobs:
           set -euo pipefail
           # Dedup per head: a same-head re-event (reopened /
           # ready_for_review) re-runs the gate; don't re-post the notice.
-          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
-               --jq '.[].body' | grep -qF "<!-- second-opinion-skip sha=${HEAD_SHA} -->"; then
-            echo "skip notice already posted for ${HEAD_SHA:0:9}"
-            exit 0
-          fi
-          printf '<!-- second-opinion-skip sha=%s -->\n**Second opinion — skipped for %s**: the delta since the last reviewed head (%s) is docs-only / comment-only. Trivial deltas accumulate — the first push whose cumulative delta touches code gets a full-PR review. Apply the `force-review` label to force one.\n' \
+          # Capture-then-match, NOT a pipe into grep -q: -q closes the
+          # pipe on first match, the still-writing gh gets SIGPIPE (141),
+          # pipefail turns the hit into a non-zero condition, and the
+          # step falls through to re-post — the round-5 review
+          # demonstrated the race on long threads.
+          bodies=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+            --jq '.[].body' || true)
+          case "$bodies" in
+            *"<!-- second-opinion-skip sha=${HEAD_SHA} -->"*)
+              echo "skip notice already posted for ${HEAD_SHA:0:9}"
+              exit 0;;
+          esac
+          printf '<!-- second-opinion-skip sha=%s -->\n**Second opinion — skipped for %s**: the delta since the last reviewed head (%s) is docs-only / comment-only. Trivial deltas accumulate — the first push whose cumulative delta touches code gets a full-PR review. Apply the `force-review` label to force one (and remove it afterwards — the gate is disabled while it is present).\n' \
             "$HEAD_SHA" "${HEAD_SHA:0:9}" "${LAST:0:9}" > /tmp/skip-comment.md
           gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -F body=@/tmp/skip-comment.md >/dev/null
       - name: Second opinion review
