@@ -94,6 +94,9 @@ V = [
         {"filename": "x.rs", "status": "modified"}]}, "review:code-in-delta"),
     ("300 files -> truncated", {"status": "ahead", "files": [
         {"filename": f"f{i}.md", "status": "modified"} for i in range(300)]}, "review:file-list-truncated"),
+    ("oversized rs patch -> review (truncation insurance)", {"status": "ahead", "files": [
+        {"filename": "x.rs", "status": "modified",
+         "patch": "@@ -1,3000 +1,3000 @@\n" + "+// c\n" * 3000}]}, "review:code-in-delta"),
 ]
 for name, doc, exp in V:
     got = jq(verdict_jq, doc)
@@ -124,6 +127,92 @@ got = jq(timeline_jq, None, raw_input=json.dumps([{"event": "labeled"}]), null_i
 check("timeline: no retarget -> empty", got == "", f"got {got!r}")
 got = jq(timeline_jq, None, raw_input=json.dumps([{"event": "automatic_base_change_succeeded"}]), null_input=True)
 check("timeline: auto base change, no timestamp -> unknown-time", got == "unknown-time", f"got {got!r}")
+
+# --- end-to-end orchestration harness (round-5 major: the bash between
+# the jq programs — label handling, anchor parsing, the retarget-margin
+# date arithmetic, verdict dispatch — was untested; a reversed comparison
+# would have passed this suite green) ---
+import os
+import tempfile
+
+ANCHOR_SHA = "a" * 40
+
+
+def run_gate(labels, comments_out, timeline, compare_out,
+             timeline_fail=False):
+    with tempfile.TemporaryDirectory() as td:
+        fix = os.path.join(td, "fix")
+        os.mkdir(fix)
+        open(os.path.join(fix, "comments.out"), "w").write(comments_out)
+        if timeline_fail:
+            open(os.path.join(fix, "timeline.fail"), "w").write("")
+        else:
+            open(os.path.join(fix, "timeline.json"), "w").write(timeline)
+        open(os.path.join(fix, "compare.out"), "w").write(compare_out)
+        shim = os.path.join(td, "gh")
+        open(shim, "w").write(
+            '#!/bin/bash\nargs="$*"\ncase "$args" in\n'
+            '  *"/comments"*) cat "$FIXDIR/comments.out";;\n'
+            '  *"/timeline"*) [ -e "$FIXDIR/timeline.fail" ] && exit 1; cat "$FIXDIR/timeline.json";;\n'
+            '  *"/compare/"*) cat "$FIXDIR/compare.out";;\n'
+            '  *) echo "unexpected gh call: $args" >&2; exit 1;;\n'
+            'esac\n')
+        os.chmod(shim, 0o755)
+        event = os.path.join(td, "event.json")
+        open(event, "w").write(json.dumps(
+            {"pull_request": {"labels": [{"name": n} for n in labels]}}))
+        out = os.path.join(td, "output")
+        open(out, "w").write("")
+        env = dict(os.environ,
+                   PATH=td + os.pathsep + os.environ["PATH"],
+                   FIXDIR=fix, GITHUB_EVENT_PATH=event, GITHUB_OUTPUT=out,
+                   GH_TOKEN="test", PR="633", HEAD_SHA="d" * 40,
+                   GITHUB_REPOSITORY="storkme/spaghettio")
+        p = subprocess.run(["bash", "-c", script], env=env,
+                           capture_output=True, text=True)
+        outputs = dict(line.split("=", 1) for line in
+                       open(out).read().splitlines() if "=" in line)
+        return p, outputs
+
+
+E2E = [
+    # (name, labels, comments.out, timeline pages, compare.out,
+    #  timeline_fail, want_trivial, want_notice, want_reason_substr)
+    ("force-review label -> review", ["force-review"], "", "[]", "skip",
+     False, "false", "false", "force-review label present"),
+    ("no marker -> review", [], "", "[]", "skip",
+     False, "false", "false", "no prior review marker"),
+    ("trivial delta -> skip+notice", [],
+     f"{ANCHOR_SHA} 2026-08-14T10:00:00Z\n", "[]", "skip",
+     False, "true", "true", "docs/comment-only delta"),
+    ("retarget inside 90m margin -> review", [],
+     f"{ANCHOR_SHA} 2026-08-14T10:00:00Z\n",
+     json.dumps([{"event": "base_ref_changed",
+                  "created_at": "2026-08-14T09:30:00Z"}]), "skip",
+     False, "false", "false", "base-retargeted"),
+    ("ancient retarget -> skip", [],
+     f"{ANCHOR_SHA} 2026-08-14T10:00:00Z\n",
+     json.dumps([{"event": "base_ref_changed",
+                  "created_at": "2026-08-14T07:00:00Z"}]), "skip",
+     False, "true", "true", "docs/comment-only delta"),
+    ("identical head -> skip, no notice", [],
+     f"{ANCHOR_SHA} 2026-08-14T10:00:00Z\n", "[]", "identical",
+     False, "true", "false", "same-head re-event"),
+    ("timeline API failure -> review", [],
+     f"{ANCHOR_SHA} 2026-08-14T10:00:00Z\n", "", "skip",
+     True, "false", "false", "timeline-api-failed"),
+    ("code delta -> review", [],
+     f"{ANCHOR_SHA} 2026-08-14T10:00:00Z\n", "[]", "review:code-in-delta",
+     False, "false", "false", "review:code-in-delta"),
+]
+for name, labels, c, tl, cmp_out, tlf, w_triv, w_not, w_reason in E2E:
+    p, outputs = run_gate(labels, c, tl, cmp_out, timeline_fail=tlf)
+    ok = (p.returncode == 0
+          and outputs.get("trivial") == w_triv
+          and outputs.get("notice") == w_not
+          and w_reason in p.stdout)
+    check(f"e2e: {name}", ok,
+          f"rc={p.returncode} outputs={outputs} stdout={p.stdout!r} stderr={p.stderr!r}")
 
 print("ALL PASS" if not failures else f"{len(failures)} FAILURES: {failures}")
 sys.exit(1 if failures else 0)

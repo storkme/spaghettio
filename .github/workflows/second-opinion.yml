@@ -17,13 +17,18 @@ on:
     # via the gate's `identical` fast path with no container spin; a
     # skipped head re-skips with a deduped notice.
     types: [opened, synchronize, ready_for_review, reopened, labeled]
-    # KNOWN GAP (from this workflow's own first review, #561): no `edited`
-    # type, so a base-branch retarget — which rewrites the effective diff
-    # without a new head SHA — keeps the old SHA's green check. Adding the
-    # trigger wouldn't help yet: the runner's per-SHA marker comment would
-    # suppress the re-review anyway, and the action exposes no force input.
-    # Until upstream grows one, re-review base-retargeted PRs session-side
-    # (the stacked-PR retarget-to-main case is the one that occurs here).
+    # KNOWN GAP (from this workflow's own first review, #561), NARROWED by
+    # the trivial-delta gate (#633): no `edited` type, so a base-branch
+    # retarget — which rewrites the effective diff without a new head
+    # SHA — keeps the old SHA's green check *at retarget time*. Adding the
+    # trigger wouldn't help: the runner's per-SHA marker comment would
+    # suppress the re-review anyway, and the action exposes no force
+    # input. The gate's timeline guard now forces a full review on the
+    # NEXT event after a retarget (push or label — apply `force-review`
+    # if there is nothing to push), so the residual gap is only a
+    # retarget followed by no further event before merge: re-review THAT
+    # case session-side (the stacked-PR retarget-to-main case is the one
+    # that occurs here).
 
 # One concurrency group per PR; cancellation is CONDITIONAL on the event.
 # Only `synchronize` — the one trigger that means "a new head SHA exists" —
@@ -164,7 +169,19 @@ jobs:
               reason="review:timeline-api-failed"
             else
               retarget=$(jq -rn '[inputs] | add // [] | [.[] | select(.event == "base_ref_changed" or .event == "automatic_base_change_succeeded") | .created_at // "unknown-time"] | last // empty' <<<"$tl" 2>/dev/null) || retarget="jq-failed"
-              if [ -n "$retarget" ] && { [ "$retarget" = "jq-failed" ] || [ "$retarget" = "unknown-time" ] || [ -z "$last_at" ] || [[ "$retarget" > "$last_at" ]]; }; then
+              # The anchor timestamp is the review's POST time — up to a
+              # full job budget (timeout-minutes: 90) after the diff was
+              # actually fetched. A retarget landing DURING the in-flight
+              # review is older than the anchor yet unreviewed, so compare
+              # against anchor minus that budget (round-5 major). A false
+              # fire inside the margin costs one full review — the safe
+              # direction — and this also closes the same-second >-vs->=
+              # nit. date failure leaves threshold empty, forcing review.
+              threshold=""
+              if [ -n "$last_at" ]; then
+                threshold=$(date -u -d "${last_at} -90 minutes" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+              fi
+              if [ -n "$retarget" ] && { [ "$retarget" = "jq-failed" ] || [ "$retarget" = "unknown-time" ] || [ -z "$threshold" ] || [[ "$retarget" > "$threshold" ]]; }; then
                 reason="review:base-retargeted-since-anchor"
               else
               verdict=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${last}...${HEAD_SHA}" --jq '
@@ -187,12 +204,17 @@ jobs:
                   [ .files[] |
                     if .previous_filename then "code"
                     elif (.filename | test("\\.md$")) then "ok"
-                    elif (.filename | test("\\.rs$")) and .status == "modified" and (.patch != null) then
+                    elif (.filename | test("\\.rs$")) and .status == "modified" and (.patch != null) and ((.patch | length) < 10000) then
                       # Compare-API patches start at the first @@ hunk and
                       # carry NO +++/--- file headers — do not "skip" them:
                       # that exclusion misreads a genuine added line whose
                       # content begins with "++" (found in upstreaming,
                       # storkme/second-opinion#47).
+                      # The <10000-char cap is truncation insurance: a
+                      # partially-delivered patch could show only comment
+                      # lines while cut hunks hide code. Genuine
+                      # comment-only sweeps are small; a big patch is
+                      # "code" regardless of its visible lines.
                       if ([ .patch | split("\n")[] |
                             select(test("^[+-]")) |
                             select(test("^[+-][[:space:]]*(//.*)?$") | not)
