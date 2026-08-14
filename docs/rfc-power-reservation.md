@@ -150,10 +150,11 @@ unchanged goldens under the real mechanisms (see Verification).
   reach 0 under widen-plus-substation — stop and re-derive from that
   fixture's tile map before writing more code.
 - **Movement budget** (enforced by mechanisms that exist): for starved
-  layouts, every re-blessed golden must be explained in review as
-  "y-translation below inserted rows + power entities only" and verified at
-  tile level per the CLAUDE.md layout protocol; `assert_warnings_exactly`
-  pins on non-power categories must be unchanged. Any unexplained
+  layouts, every moved byte-stability hash (before/after `STRESSGOLD`
+  capture — the committed goldens were deleted 2026-08-15, #632 B7) must be
+  explained in review as "y-translation below inserted rows + power
+  entities only" and verified at tile level per the CLAUDE.md layout
+  protocol; warning pins on non-power categories must be unchanged. Any unexplained
   non-power, non-translation delta — stop. (Analog of the belt-tier rule:
   reservations may cost space, never semantics — machine counts, belt
   routing, and recipes are invariant.)
@@ -190,7 +191,7 @@ verified against game data via factorio-expert BEFORE implementation;
 (6) user browser eyeball on PU-am3 and kovarex; (7) the ultimate anchor:
 in-game import of one starved layout, carried as a user step alongside the
 inserter-sizing RFC's open KC5 anchors. If review-level tile audits of
-re-blessed goldens prove insufficient in practice, a translation-aware diff
+moved layouts prove insufficient in practice, a translation-aware diff
 helper is scoped as explicit 3a work — not assumed to exist.
 
 ## Phasing
