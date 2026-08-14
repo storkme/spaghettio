@@ -505,18 +505,11 @@ impl DecompositionCandidate for ModuleSizeSplit {
             // Inherited, not defaulted: a claim-order measurement that silently
             // reverted to P0 inside the partitioned path would report P0-vs-P0.
             di_claim_order: opts.di_claim_order.clone(),
-            compact_layout: false,
-            // Same discipline as compact_layout: folding is a whole-layout
-            // post-pass applied once by `build_bus_layout` around the
-            // winning candidate, not re-run inside every partitioned
-            // candidate's inner call.
-            fold_layout: false,
             // Inert at this depth (run_layout_with_retry does not
             // re-enter the search); carried for faithfulness.
             horizontal_candidate: opts.horizontal_candidate,
-            // Same discipline as compact_layout: the flag-gated RFC-058
-            // plan is emitted by the native pass, not re-emitted by every
-            // candidate variant's inner run.
+            // The flag-gated RFC-058 plan is emitted by the native pass,
+            // not re-emitted by every candidate variant's inner run.
             band_packing: false,
             band_pack_selection: None,
         };
