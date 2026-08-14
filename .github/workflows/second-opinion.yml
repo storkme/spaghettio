@@ -10,7 +10,13 @@ name: Second Opinion
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    # `labeled` exists for the trivial-delta gate's `force-review` escape
+    # hatch: after a docs-only skip there may be nothing left to push, so
+    # applying the label must itself trigger the review. Stray label
+    # events on quiet PRs are near-free: an already-reviewed head exits
+    # via the gate's `identical` fast path with no container spin; a
+    # skipped head re-skips with a deduped notice.
+    types: [opened, synchronize, ready_for_review, reopened, labeled]
     # KNOWN GAP (from this workflow's own first review, #561): no `edited`
     # type, so a base-branch retarget — which rewrites the effective diff
     # without a new head SHA — keeps the old SHA's green check. Adding the
@@ -117,6 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           trivial=false
+          notice=false
           last=""
           if jq -e '[.pull_request.labels[].name] | index("force-review")' "$GITHUB_EVENT_PATH" >/dev/null; then
             reason="force-review label present"
@@ -137,14 +144,37 @@ jobs:
             # for marker-less pages, but a blank line reaching tail -n1
             # would silently lose the baseline (fail-toward-review, so safe
             # but defeats the gate on long threads).
-            last=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
-              --jq '[.[] | select(.body | test("^<!-- second-opinion sha=[0-9a-f]{40} -->")) | select(.body | contains("### 🤖 Second opinion")) | .body | capture("sha=(?<s>[0-9a-f]{40})").s] | last // empty' \
+            anchor=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+              --jq '[.[] | select(.body | test("^<!-- second-opinion sha=[0-9a-f]{40} -->")) | select(.body | contains("### 🤖 Second opinion")) | {s: (.body | capture("sha=(?<s>[0-9a-f]{40})").s), t: .created_at}] | last // empty | "\(.s) \(.t)"' \
               | grep -v '^$' | tail -n1 || true)
+            last=${anchor%% *}
+            last_at=${anchor#* }
             if [ -z "$last" ]; then
               reason="no prior review marker on this PR"
+            # BASE-RETARGET GUARD (round-4 critical): the compare below sees
+            # only head-side commits. A base retarget rewrites the effective
+            # base...head diff with NO new head SHA — the workflow's known
+            # `edited`-trigger gap — and pre-gate, the next push healed it
+            # with a full review. The gate must not turn that push into a
+            # skip. Detect: any base_ref_changed (or automatic base change)
+            # timeline event NEWER than the anchor review forces a review.
+            # Every failure here (timeline API error, jq error, missing
+            # anchor timestamp) also forces a review.
+            elif ! tl=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/timeline" --paginate 2>/dev/null); then
+              reason="review:timeline-api-failed"
             else
+              retarget=$(jq -rn '[inputs] | add // [] | [.[] | select(.event == "base_ref_changed" or .event == "automatic_base_change_succeeded") | .created_at // "unknown-time"] | last // empty' <<<"$tl" 2>/dev/null) || retarget="jq-failed"
+              if [ -n "$retarget" ] && { [ "$retarget" = "jq-failed" ] || [ "$retarget" = "unknown-time" ] || [ -z "$last_at" ] || [[ "$retarget" > "$last_at" ]]; }; then
+                reason="review:base-retargeted-since-anchor"
+              else
               verdict=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${last}...${HEAD_SHA}" --jq '
-                if .status != "ahead" then "review:history-diverged"
+                # identical = a same-head re-event (reopened /
+                # ready_for_review / stray label) on the reviewed head:
+                # skip WITHOUT a notice, saving the container spin the
+                # action would burn reaching its own per-SHA gate. Do not
+                # "fix" this into history-diverged — nor vice versa.
+                if .status == "identical" then "identical"
+                elif .status != "ahead" then "review:history-diverged"
                 # null/absent .files is a malformed or partial response, NOT
                 # an empty delta — it must fail toward review (bot round-3
                 # major: null[] iterates to zero and read as "skip"). A
@@ -173,13 +203,19 @@ jobs:
                 end' 2>/dev/null || echo "review:compare-api-failed")
               if [ "$verdict" = "skip" ]; then
                 trivial=true
+                notice=true
                 reason="docs/comment-only delta since reviewed ${last:0:9}"
+              elif [ "$verdict" = "identical" ]; then
+                trivial=true
+                reason="head is already the reviewed head (same-head re-event)"
               else
                 reason="$verdict"
+              fi
               fi
             fi
           fi
           echo "trivial=$trivial" >> "$GITHUB_OUTPUT"
+          echo "notice=$notice" >> "$GITHUB_OUTPUT"
           echo "last=$last" >> "$GITHUB_OUTPUT"
           echo "gate: trivial=$trivial ($reason)"
       - name: Record skipped review
@@ -187,8 +223,12 @@ jobs:
         # the review marker (so the gate above keeps measuring against the
         # last real review), naming the baseline and the escape hatch. A
         # skip must never be silent — silence ≠ clean is this workflow's
-        # founding rule.
-        if: steps.delta.outputs.trivial == 'true'
+        # founding rule. Deliberately load-bearing: if this POST fails, the
+        # job fails — a green skip with no audit trail would be the silent
+        # clearance this workflow exists to prevent (same philosophy as
+        # fail-on-degraded). The `identical` fast path sets notice=false —
+        # nothing new to say about a head that already carries its review.
+        if: steps.delta.outputs.trivial == 'true' && steps.delta.outputs.notice == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
