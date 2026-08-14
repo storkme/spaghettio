@@ -1,5 +1,13 @@
 # Snake-fold followups
 
+**CLOSED 2026-08-14 (#632 A2, owner call).** `search_snake_fold`/`fold_snake`
+and the rest of `bus::compaction` are deleted — the relocation research this
+file tracks never shipped past three falsified attempts (RFC-057/058/064-P3
+decision logs). Every open item below, including "Fold transit pricing" at
+the end, is now moot: there is no fold candidate left to price, wire, or pick
+up. The measurements and failure-mode catalog stand as written — historical
+record, not a live backlog. Revival path: git history at the deletion PR.
+
 **Status (2026-07-30):** **multi-fold works and is Factorio-verified.**
 `chain-mil5ore` folds three times — 553×32 (17.3:1) → **153×141 (1.09:1)**,
 PASS at 5.016/s against 5.00/s planned (+0.3%), 146/146 machines, one pole network,

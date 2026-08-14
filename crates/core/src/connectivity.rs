@@ -321,7 +321,8 @@ impl ConnectivityGraph {
 
 /// Direction-aware footprint — the canonical
 /// [`crate::common::oriented_entity_dims`] (unified there after the PR #574
-/// bot review flagged the duplicate against `bus::compaction::entity_dims`).
+/// bot review flagged the duplicate against `bus::compaction::entity_dims`,
+/// itself deleted along with that module 2026-08-14, #632 A2).
 fn oriented_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
     crate::common::oriented_entity_dims(name, direction)
 }

@@ -1123,3 +1123,30 @@ make either experimental composer a production default.
   invariant by count and names every offending tile. Verified to fail without
   the fix (`gear5-plate: 2 tile(s) host terminals for more than one
   commodity`), not merely to pass with it.
+
+- **2026-08-14 — Killed; `bus::compaction` and every consumer deleted (#632
+  A2, owner call).** This RFC's own recommendation above ("do not pursue
+  tree-based local manifolds further; build the single-lane shared-trunk
+  tier first") was never funded — RFC-058 (band packing) and RFC-064 Phase
+  3 (row-granularity rigid packing, RFC-058 rescored) both tried adjacent
+  approaches and both fell short of their kill bars (see their own decision
+  logs); `compact_layout` (the surviving undergroundify-only shape of this
+  RFC's work) shipped opt-in, default false, and stayed unused. Three
+  falsified relocation attempts across three RFCs (this one, RFC-058,
+  RFC-064-P3) is the pattern the owner call weighed. Deleted: the entire
+  `crates/core/src/bus/compaction.rs` module (6,401 lines — machine-block
+  compaction, the local-manifold routing/balancer-tree machinery this
+  entry's diagnosis targets, `search_snake_fold`/`fold_snake`), the
+  `compact_layout`/`fold_layout` `LayoutOptions` flags and their
+  `build_bus_layout` branches, the `CompactTransform`/`FoldTransform`
+  `bus::candidate_runner::LayoutTransform` wrappers, the web UI's "Compact
+  layout"/"Fold layout" controls, and every test whose ONLY subject was
+  this transform (including `rfc057_island_placement_keeps_terminals_disjoint`
+  itself, and `rfc057_machine_constraint_baseline` /
+  `rfc057_strip_empty_columns_mil5ore` a few sections above). `ProductionEdge`/
+  `ProductionSignature`/`RATE_SCALE` — the only pieces of this module a
+  surviving consumer (`bus::transit`) still needed — were relocated there
+  first. `docs/compaction-retro-2026-07.md`, `docs/snake-fold-followups.md`,
+  and `docs/status.md` carry dated closure notes; `docs/rfcs.md`'s registry
+  row for this RFC is updated in place. Revival path: `git log --follow` on
+  the deleted file, or the deletion PR's diff, from this commit onward.

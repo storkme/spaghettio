@@ -1991,3 +1991,35 @@ nothing else cross-depends). A phase's kill does not cancel the others.
   `measure_belt_runs` (now graph-derived, seam runs measured
   honestly) is the calibrated channel for charging fold seams, not
   admission vetoes.
+
+- **2026-08-14 — Phases 1 and 2 killed; `bus::compaction` and every
+  consumer deleted (#632 A2, owner call).** Phase 1 (folding as a scored
+  candidate) and Phase 2 (undergroundify/`compact_layout` default-on,
+  the subject of the Phase 2 Stage B campaign above) are both moot: their
+  entire subject — `bus::compaction`, `compact_layout`, `fold_layout`,
+  `search_snake_fold`, `CompactTransform`/`FoldTransform` — is deleted.
+  This is the third falsified relocation attempt across three RFCs (this
+  one's Phases 1/2, RFC-057, RFC-058), which is what the owner call
+  weighed; `docs/compaction-retro-2026-07.md` has the cross-RFC
+  scoreboard. **What survives, unaffected:** Phase 0 (scoring-rule
+  calibration) — `objective.rs`'s `Composite(L)`/`AR_score`/transit
+  scoring is consumer-orphaned by the transforms' deletion in the sense
+  that its only src caller was the candidate-runner's ranking path, but
+  that path is itself still live via the RFC-068 celldb campaign
+  (`bus::candidate_runner::run_candidate_field`,
+  `crates/core/tests/celldb_template.rs`), so `objective.rs` stays.
+  `crate::verdict` (`never_worse`, `MatchTier`, `Policy::fold()`) also
+  survives for the same reason — celldb calls `run_candidate_field(...,
+  &Policy::fold())` with an empty transform chain, verdicted at
+  `MatchTier::Count`. Phase 3 (row-granularity rigid packing, RFC-058
+  rescored) is a separate mechanism (`bus::bands`, the `band_packing`
+  flag) and is untouched. Phases 4/5 (row-flipping, bidirectional
+  feeds) were spike-only and never implemented against compaction.
+  Deleted test surface: `crates/core/tests/fold_layout_knob.rs` (whole
+  file), the fold/compact parity tests in
+  `crates/core/tests/candidate_runner.rs`, the fold-ranks-above-native
+  calibration test in `crates/core/tests/objective.rs`, and the five
+  compaction-admission-filter tests in
+  `crates/core/tests/connectivity_parity.rs`. Revival path: `git log
+  --follow` on `crates/core/src/bus/compaction.rs`, or the deletion
+  PR's diff.

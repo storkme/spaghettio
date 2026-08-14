@@ -6,10 +6,12 @@
 //!
 //! Before this module the question was answered three incompatible ways:
 //! `bus::compaction::search_snake_fold`'s `profile` closure (per-category
-//! count diff — blind to intra-category churn), `bus::decomposition_search::
-//! score_layout` (a single hard-gated category, absolute `count > 0` rather
-//! than a comparison against any baseline), and ad-hoc corpus comparisons in
-//! RFC dry sweeps that never lived in-tree at all. [`never_worse`] is the
+//! count diff — blind to intra-category churn; `bus::compaction` itself was
+//! deleted 2026-08-14, #632 A2 — this is a historical example, not a live
+//! pointer), `bus::decomposition_search::score_layout` (a single hard-gated
+//! category, absolute `count > 0` rather than a comparison against any
+//! baseline), and ad-hoc corpus comparisons in RFC dry sweeps that never
+//! lived in-tree at all. [`never_worse`] is the
 //! structural fix: it always computes the same positioned new/resolved/
 //! matched breakdown ([`CategoryOutcome`]), and lets a per-category
 //! [`GatePolicy`] decide how that breakdown turns into a pass/fail —
@@ -31,27 +33,32 @@
 //! every transform in this codebase:
 //!
 //! - [`MatchTier::Provenance`]: the caller supplies a [`CorrespondenceMap`]
-//!   (built from the transform's own geometry, e.g. `bus::compaction::
-//!   fold_point_correspondence` for the snake fold) that maps a native tile
-//!   position to where that tile landed in the candidate. The most precise
-//!   tier, and the only one that survives a transform that both moves AND
-//!   reorients geometry.
+//!   (built from the transform's own geometry — `bus::compaction::
+//!   fold_point_correspondence`, for the now-deleted snake fold, #632 A2,
+//!   was the original motivating example) that maps a native tile position
+//!   to where that tile landed in the candidate. The most precise tier, and
+//!   the only one that survives a transform that both moves AND reorients
+//!   geometry.
 //! - [`MatchTier::Positional`]: no map, exact-position match. Correct only
 //!   for transforms that substitute IN PLACE — `bus::compaction::
-//!   undergroundify_straight_belts` is the verified example: entities that
-//!   survive the transform keep their exact `(x, y)` (only their entity type
-//!   changes, surface belt -> underground), and entities the transform
-//!   removes entirely (a run's interior tiles) have no candidate-side
-//!   counterpart, which correctly reads as "resolved" rather than a false
-//!   match. A transform that translates or mirrors geometry (the fold) is
-//!   NOT safe at this tier — the exact positions simply won't recur, so
-//!   every surviving issue would misread as new-plus-resolved.
+//!   undergroundify_straight_belts` (deleted along with the rest of that
+//!   module, #632 A2) was the verified example: entities that survive the
+//!   transform keep their exact `(x, y)` (only their entity type changes,
+//!   surface belt -> underground), and entities the transform removes
+//!   entirely (a run's interior tiles) have no candidate-side counterpart,
+//!   which correctly reads as "resolved" rather than a false match. A
+//!   transform that translates or mirrors geometry (the fold) is NOT safe
+//!   at this tier — the exact positions simply won't recur, so every
+//!   surviving issue would misread as new-plus-resolved.
 //! - [`MatchTier::Count`]: no position is consulted at all, every issue in
-//!   a category is fungible with every other. This is today's behavior in
-//!   both `search_snake_fold` and `score_layout`, kept as the explicit last
-//!   resort for transforms with neither a map nor an in-place guarantee —
-//!   which is most of them. It is also the tier that CANNOT see the churn
-//!   case this module exists to catch.
+//!   a category is fungible with every other. This was the historical
+//!   behavior of both `search_snake_fold` (deleted) and `score_layout`,
+//!   and remains the explicit last resort for transforms with neither a
+//!   map nor an in-place guarantee — which is most of them; it is what
+//!   `run_candidate_field` uses unconditionally now that no transform
+//!   supplies a tier at all (`bus::candidate_runner`'s module doc). It is
+//!   also the tier that CANNOT see the churn case this module exists to
+//!   catch.
 //!
 //! `never_worse` takes the tier as an explicit argument rather than
 //! inferring it from `Option<&CorrespondenceMap>` alone, because `None` is
@@ -122,8 +129,9 @@ use rustc_hash::FxHashMap;
 use crate::validate::ValidationIssue;
 
 /// Maps a tile position in one layout's coordinate frame to its position in
-/// another. Built by the transform itself (see `bus::compaction::
-/// fold_point_correspondence` for the snake fold), never guessed at by this
+/// another. Built by the transform itself (`bus::compaction::
+/// fold_point_correspondence`, for the snake fold, was the original
+/// example — that module is deleted, #632 A2), never guessed at by this
 /// module — a wrong entry here silently mismatches two unrelated issues.
 ///
 /// Exact tile lookup, no tolerance: every position this module deals with
@@ -232,16 +240,20 @@ impl Policy {
     /// `search_snake_fold`'s HISTORICAL (pre-refit) accept test: every
     /// category gated, compared by raw count, no positional information
     /// consulted. This preserved the semantics of the per-category count
-    /// profile that function used before it was refit onto this module —
-    /// in the same change that introduced this preset, so the old code no
-    /// longer exists; this preset is its record and its Count-tier
-    /// equivalent. `search_snake_fold` itself now gates STRICTER, at
-    /// `Policy::new(GatePolicy::GateInstances)` + [`MatchTier::Provenance`]
-    /// (see its call site in `bus::compaction`). Pairing THIS preset with a
-    /// positional tier changes NOTHING relative to [`MatchTier::Count`], by
-    /// construction — `GateCount` never consults the positioned breakdown
-    /// regardless of which tier computed it (see module docs) — which is
-    /// why the fold refit does not use it.
+    /// profile that function used before it was refit onto this module.
+    /// `search_snake_fold` and the rest of `bus::compaction` were deleted
+    /// 2026-08-14 (#632 A2, owner call) — this preset is now the ONLY
+    /// record of that history, kept alive because it is a reusable,
+    /// well-understood Count-tier gate shape (every category gated, no
+    /// positional information required) rather than because anything still
+    /// literally calls it "the fold policy". Current live consumer: the
+    /// RFC-068 celldb campaign
+    /// (`crates/core/tests/celldb_template.rs`) passes it to
+    /// `run_candidate_field`, whose transform-free candidates are always
+    /// verdicted at [`MatchTier::Count`] — the same tier this preset was
+    /// designed to pair with, so nothing about pairing it with a
+    /// positional tier not mattering (see the note that used to be here)
+    /// is exercised by that call site either.
     pub fn fold() -> Self {
         Self::new(GatePolicy::GateCount)
     }

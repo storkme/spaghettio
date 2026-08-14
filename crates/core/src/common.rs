@@ -240,8 +240,9 @@ pub fn non_machine_multi_tile_dims(entity: &str) -> Option<(u32, u32)> {
 /// Direction-aware tile footprint: the splitter orientation table first,
 /// otherwise [`entity_size`] with the width/height swap for E/W-facing
 /// non-square entities (the recycler is 2×4 and rotates). Canonical home
-/// (RFC-065): `bus::compaction::entity_dims` and
-/// `connectivity::oriented_dims` both delegate here.
+/// (RFC-065): `connectivity::oriented_dims` delegates here. (A second
+/// delegating caller, `bus::compaction::entity_dims`, was deleted along
+/// with that module 2026-08-14, #632 A2.)
 pub fn oriented_entity_dims(
     entity: &str,
     direction: crate::models::EntityDirection,

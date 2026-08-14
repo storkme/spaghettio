@@ -1515,3 +1515,30 @@ Per `CLAUDE.md` § verification protocol:
   the runtime one. (nit, ACCEPTED) D4's module doc now states the
   trade explicitly: possible misses across untagged segments in
   hand-built blueprints, never false claims.
+- **2026-08-14 — `bus::compaction` deleted; K65-1/K65-2 on the
+  compaction admission path lost, everywhere else untouched (#632
+  A2, owner call).** This RFC's own live bug (§Motivation 1) and the
+  "categorical fold exemption" carried standing above were both about
+  `compact_layout`/`fold_layout`'s specific relationship to
+  `effective_rows`/`check_record_integrity`; that relationship no
+  longer exists because the transforms don't. Deleted:
+  `phase2_prefilter_is_outcome_identical`,
+  `phase2_prefilter_identity_on_ug_normalizing_cut` (the K65-5
+  adversarial-review "span-loss" fixture),
+  `phase2_prefilter_rejects_engage_on_head_on_creating_cut`,
+  `phase2b_fold_prefilter_measurement`, and
+  `compaction_remaps_effective_rows` from
+  `crates/core/tests/connectivity_parity.rs` — all five pinned
+  `compact_validated_geometry`'s/`search_snake_fold`'s OWN internal
+  admission-filter correctness (the Phase 2/2b work this decision log
+  spends hundreds of lines on above), not K65-1/K65-2 in general.
+  **What survives, exactly as before:** `check_record_integrity`
+  (check #40) still dispatches inside every `validate()` call
+  regardless of which candidate produced the layout; the
+  `parity_*`/`detection_*`/`dispatched_validate_*` tests in
+  `connectivity_parity.rs`, including the exotic-row-kind pins
+  `parity_kovarex_self_loop` and `parity_uranium_voider`, exercise it
+  on every non-compaction path and are untouched. `bus::transit`
+  (RFC-064) and all of `bus::cells` remain live consumers of the
+  connectivity IR this RFC built. Revival path: `git log --follow` on
+  `crates/core/src/bus/compaction.rs`, or the deletion PR's diff.

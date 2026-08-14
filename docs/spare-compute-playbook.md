@@ -5,6 +5,15 @@ little frontier-agent budget — each executable by a basic local agent
 (qwen-class, e.g. the pi-coding-agent container in this repo) following the
 recipe verbatim. Written 2026-08-01. Status: none started.
 
+**2026-08-14 (#632 A2, owner call):** `bus::compaction` and the
+`compact_layout`/`fold_layout` `LayoutOptions` flags were deleted (the
+underlying RFC-057/064-P3 relocation research never shipped past three
+falsified attempts). Job 1's `compact=1`/`fold=1` grid cells, Job 2 in
+full, and Job 4 in full are VOID as written — none had started, so
+nothing to unwind, but do not run them verbatim. See the removal PR's
+diff or the RFC-064/RFC-057 decision logs for the revival path if this
+work is ever picked back up.
+
 ## Ground rules for the local agent (read first, apply to every job)
 
 - **Capture, don't interpret.** Save every raw output (JSON, logs, .fls,
@@ -29,8 +38,10 @@ per cell so scaling behavior becomes *visible*.
 
 **Grid**: ~10 representative recipes (gear, EC, AC, plastic, sulfur, PU,
 low-density-structure, chem/util science, mil science) × rates
-{1, 2, 5, 10, 15, 22, 30, 45, 60}/s × options {native, `compact=1`,
-`fold=1`} × belt tier per rate feasibility. ~800–1200 cells.
+{1, 2, 5, 10, 15, 22, 30, 45, 60}/s × options {native} × belt tier per
+rate feasibility. **VOID (2026-08-14, #632 A2): the `compact=1`/`fold=1`
+arms of this grid no longer exist** — drop them, run `native` only. ~500-800
+cells at `native` alone.
 
 **How**: a Rust driver modeled on
 `crates/core/examples/rfc064_phase2_dry_sweep.rs` (preserved on the dev
@@ -50,8 +61,15 @@ does it cost. Directly feeds RFC-064 Phases 3–5 targeting.
 
 ## Job 2 — Sim baseline bank (RFC-064 Phase 2 Stage B and beyond)
 
-**What**: the 68-run Phase 2 campaign (spec: RFC-064 decision log, "Stage
-B pick-up notes") and then measured native baselines for the full corpus.
+**VOID (2026-08-14, #632 A2)**: the 68-run Phase 2 Stage B campaign
+measured `compact_layout`, which is deleted — do not run this job as
+written. The "measured native baselines for the full corpus" half is
+still a reasonable idea but needs re-scoping without the compacted arm
+before anyone picks it up.
+
+**What** (original spec, kept for history): the 68-run Phase 2 campaign
+(spec: RFC-064 decision log, "Stage B pick-up notes") and then measured
+native baselines for the full corpus.
 Every run: `cargo run --release -p spaghettio_sim_harness -- run --bp ...
 --manifest ... --warmup <per spec> --out <dir>/fixture__variant.json`,
 ≤3 concurrent, poll report files to completion. Adjudication rows only
@@ -73,12 +91,16 @@ investment is aimed by data. A panic corpus with reproducers is gold.
 
 ## Job 4 — Fold + detour maps over the full DB
 
-**What**: (a) `search_snake_fold` admissibility over every recipe/rate in
-Job 3's grid (which shapes fold, dominant refusal otherwise — extends the
-14-fixture Phase 1 spike to the whole space); (b) belt-detour measurement
-(`measure_belt_runs`, on main once PR #565 merges) over the same grid —
-detour hotspot map by recipe/rate/strategy. Both are pure loops over
-existing pub APIs.
+**VOID, part (a) (2026-08-14, #632 A2)**: `search_snake_fold` is deleted
+along with `bus::compaction`. Part (b) (belt-detour measurement) is
+unaffected and can still run standalone.
+
+**What** (original spec, kept for history): (a) `search_snake_fold`
+admissibility over every recipe/rate in Job 3's grid (which shapes fold,
+dominant refusal otherwise — extends the 14-fixture Phase 1 spike to the
+whole space); (b) belt-detour measurement (`measure_belt_runs`, on main
+once PR #565 merges) over the same grid — detour hotspot map by
+recipe/rate/strategy. Both were pure loops over existing pub APIs.
 
 ## Job 5 — Community blueprint survey
 

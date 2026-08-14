@@ -328,8 +328,9 @@ Per the layout-engine protocol in
 - **N=1 pinning test** for kill criterion 5 — asserts byte-identical
   `SolverResult`/`LayoutResult` for a representative single-target fixture
   before and after the multi-target entry point lands, in the style of
-  `compact_layout_option_is_explicit_and_validated` / RFC-060's
-  never-degrades pin.
+  RFC-060's never-degrades pin. (The other style example this line
+  originally cited, `compact_layout_option_is_explicit_and_validated`, was
+  deleted 2026-08-14 along with `compact_layout` itself — #632 A2.)
 - **New EC+AC N=2 e2e fixture** added to `crates/core/tests/e2e.rs`,
   gated non-ignored once it clears validation.
 - **Per-instance positioned issues** for the new shared-row outflow
