@@ -165,6 +165,27 @@ goes to the owner before merge.
 
 ## Decision log
 
+- *2026-08-15 — tier5 router block DIAGNOSED (probe receipts; fix is
+  next session's unit).* The duty reshape multiplies crossings in the
+  deep chain's AC/PU region and the failures decompose into exactly
+  two classes: (1) **SAT var-ceiling refusals** — the 13×7 3-channel
+  crossing wants 1,547 vars vs `MAX_ZONE_SAT_VARS = 700`; raising the
+  ceiling to 1,600 in a local experiment cleared 4 of 5 unresolved
+  junctions at negligible wall-clock (the ceiling doc's own safe-raise
+  path applies — Timeout-cached refusals re-attempt at larger
+  budgets), but SHIPPING the raise needs a corpus timing sweep, so the
+  edit was reverted and only the receipt kept; (2) **one structural
+  68-tile cluster** near (25,185) that no budget clears — its
+  strategies all skip on item-conflict checks (ghost tiles carrying
+  two items: [copper-cable, electronic-circuit], [advanced-circuit,
+  electronic-circuit], …), and raising `MAX_REGION_TILES` 64→128
+  changed nothing. The mass of 19–72/s lane-throughput errors is
+  downstream of that cluster's orphan ghosts. Next unit: adjudicate
+  the SAT-ceiling raise properly (timing sweep), then the structural
+  fix for the interleaved-flow cluster — either junction-solver
+  capability or a placer-side change that stops stacking those flows
+  into one region.
+
 - *2026-08-15 — **OWNER CALL: correctness over footprint.*** The
   owner's direction (in-session, verbatim: "we should agree that
   correctness is more important than footprint") resolves K69-4's
