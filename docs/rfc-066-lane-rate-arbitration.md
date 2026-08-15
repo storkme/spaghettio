@@ -506,3 +506,21 @@ has them. An earlier draft of this RFC quoted a figure produced that way.
   because the second time I grepped for the effect instead of trusting the exit
   status). Any patch that reports success must be verified by grepping for its own
   effect before anything is written about it.*
+- *2026-08-15 — **EXECUTED AND CLOSED by #632 B5** (PRs #643/#646 + the
+  step-3 deletion PR; tracking issue #644). The arbitration resolved in
+  `belt_flow`'s favor exactly along this RFC's fault lines: three
+  false-positive classes fixed with anchored, mutation-checked receipts
+  (head-on feeder cycles — this RFC's "runaway"; the splitter-tier cap
+  fallback this RFC measured at ~57% artifact; the UG-input cap fallback),
+  the dispatch swapped with every corpus red adjudicated (26 → 7 → 0;
+  the surviving family is the REAL trunk under-provisioning deficit,
+  sim/meter-anchored on #644), and `belt_structural::compute_lane_rates` +
+  `check_lane_throughput` deleted with their tests. This RFC's consumer
+  sweep (the sixth-pass list above) was the deletion's checklist — every
+  item verified handled. The two committed comparison probes
+  (`probe_walkers.rs`, `probe_walker_shape.rs`) were deleted WITH the
+  model per the port-or-delete rule: their subject (the disagreement) no
+  longer exists, and survivor-vs-ground-truth instrumentation lives in
+  `crates/meter` (`check_one`, `sweep_corpus`) and the sim harness. The
+  dispatch also now computes the walker once per `validate()` and shares
+  it between both rate checks (the double-cost this RFC priced).*

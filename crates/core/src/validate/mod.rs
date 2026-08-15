@@ -32,7 +32,7 @@ use rustc_hash::FxHashSet;
 use belt_flow::{
     check_belt_connectivity, check_belt_flow_path,
     check_belt_flow_reachability, check_belt_junctions, check_belt_network_topology,
-    check_input_rate_delivery, check_underground_belt_entry_sideload,
+    check_underground_belt_entry_sideload,
     check_underground_belt_pairs, check_underground_belt_sideloading,
 };
 
@@ -483,7 +483,7 @@ pub(crate) fn is_di_cell_entity(seg: Option<&str>) -> bool {
 /// wherever partitioning never occurred. Shared across every `validate::`
 /// check that resolves a machine's spec by recipe name — see
 /// `belt_flow::compute_lane_rates_impl`, `belt_flow::check_input_rate_delivery`,
-/// `belt_structural::compute_lane_rates`, `inserters::check_inserter_throughput`,
+/// `inserters::check_inserter_throughput`,
 /// and `inserters::check_inserter_item_throughput`.
 pub(crate) fn resolve_row_spec<'a>(
     layout: &'a LayoutResult,
@@ -1070,6 +1070,10 @@ pub fn validate(
     // runs on the caller's thread after `par_iter` collects. If you
     // ever need per-check tracing, gather the data into the returned
     // `ValidationIssue` list and emit once from here.
+    // #632 B5 step 3: the belt_flow lane walker is the most expensive part
+    // of BOTH rate checks in the dispatch — compute it once and share.
+    let shared_lane_rates = belt_flow::compute_lane_rates(layout, solver);
+
     let checks: Vec<Box<dyn Fn() -> Vec<ValidationIssue> + Send + Sync>> = vec![
         Box::new(|| check_power_coverage(layout)),
         Box::new(|| check_pole_network_connectivity(layout)),
@@ -1134,8 +1138,8 @@ pub fn validate(
         }),
         Box::new(|| belt_structural::check_belt_inserter_conflict(layout)),
         Box::new(|| check_belt_flow_reachability(layout, solver, layout_style)),
-        Box::new(|| belt_flow::check_lane_throughput(layout, solver)),
-        Box::new(|| check_input_rate_delivery(layout, solver)),
+        Box::new(|| belt_flow::check_lane_throughput_with(layout, solver, &shared_lane_rates)),
+        Box::new(|| belt_flow::check_input_rate_delivery_with(layout, solver, &shared_lane_rates)),
         Box::new(|| check_balancer_template_coverage(layout)),
         Box::new(|| modules::check_module_slots(layout)),
         Box::new(|| modules::check_module_eligibility(layout)),

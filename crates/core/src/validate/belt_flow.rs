@@ -2125,9 +2125,20 @@ pub fn check_lane_throughput(
     layout: &LayoutResult,
     solver: Option<&SolverResult>,
 ) -> Vec<ValidationIssue> {
+    check_lane_throughput_with(layout, solver, &compute_lane_rates_impl(layout, solver))
+}
+
+/// [`check_lane_throughput`] against a caller-supplied rate map — the
+/// dispatch computes the walker ONCE per `validate()` and shares it with
+/// [`check_input_rate_delivery_with`] (#632 B5 step 3; the walk is the
+/// most expensive part of both checks).
+pub fn check_lane_throughput_with(
+    layout: &LayoutResult,
+    solver: Option<&SolverResult>,
+    lane_rates: &FxHashMap<(i32, i32), [f64; 2]>,
+) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
-    let lane_rates = compute_lane_rates_impl(layout, solver);
     if lane_rates.is_empty() {
         return issues;
     }
@@ -2139,10 +2150,8 @@ pub fn check_lane_throughput(
     // validator re-derives the family exemption independently instead of
     // trusting the planner's discipline (code-review finding, 2026-07-21).
     let stacking_ctx = crate::bus::stacking_ctx::StackingCtx::derive(sr, layout.stacking);
-    // NOTE: this cap map is deliberately RICHER than the one in
-    // belt_structural's twin (splitter tiles + BOTH UG halves): the twin
-    // is scheduled for deletion once this check takes the dispatch slot
-    // (#632 B5 step 3), so its gaps are not mirrored-fixed there.
+    // NOTE: splitter tiles + BOTH UG halves are covered here — gaps the
+    // deleted belt_structural twin had (#632 B5; deleted 2026-08-15).
     let mut belt_name_map: FxHashMap<(i32, i32), &str> = FxHashMap::default();
     let mut carries_map: FxHashMap<(i32, i32), &str> = FxHashMap::default();
     for e in &layout.entities {
@@ -2181,7 +2190,7 @@ pub fn check_lane_throughput(
         }
     }
 
-    for (&pos, &[left, right]) in &lane_rates {
+    for (&pos, &[left, right]) in lane_rates {
         let belt_name = belt_name_map.get(&pos).copied().unwrap_or("transport-belt");
         // Tiles without a `carries` attribution fall back to the layout-
         // wide value (pre-review behavior); engine-stamped belts all carry.
@@ -3565,12 +3574,21 @@ pub fn check_input_rate_delivery(
     layout: &LayoutResult,
     solver: Option<&SolverResult>,
 ) -> Vec<ValidationIssue> {
+    check_input_rate_delivery_with(layout, solver, &compute_lane_rates_impl(layout, solver))
+}
+
+/// [`check_input_rate_delivery`] against a caller-supplied rate map — see
+/// [`check_lane_throughput_with`].
+pub fn check_input_rate_delivery_with(
+    layout: &LayoutResult,
+    solver: Option<&SolverResult>,
+    lane_rates: &FxHashMap<(i32, i32), [f64; 2]>,
+) -> Vec<ValidationIssue> {
     let sr = match solver {
         Some(s) => s,
         None => return Vec::new(),
     };
 
-    let lane_rates = compute_lane_rates_impl(layout, solver);
     if lane_rates.is_empty() {
         return Vec::new();
     }

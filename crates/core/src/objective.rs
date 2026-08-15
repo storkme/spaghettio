@@ -489,7 +489,7 @@ fn non_pole_bbox(layout: &LayoutResult) -> Option<(i32, i32, i32, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{DICoupling, EntityDirection, ItemFlow, MachineSpec, PlacedEntity};
+    use crate::models::{EntityDirection, ItemFlow, MachineSpec, PlacedEntity};
 
     // -----------------------------------------------------------------
     // Formula-level tests (no layout construction needed)
@@ -877,13 +877,6 @@ mod tests {
     // measure(): realized solid-edge path length, hand-built geometry
     // -----------------------------------------------------------------
 
-    fn belt(x: i32, y: i32, dir: EntityDirection, item: &str) -> PlacedEntity {
-        PlacedEntity { name: "transport-belt".into(), x, y, direction: dir, carries: Some(item.into()), ..Default::default() }
-    }
-
-    fn inserter_at(x: i32, y: i32, dir: EntityDirection) -> PlacedEntity {
-        PlacedEntity { name: "inserter".into(), x, y, direction: dir, ..Default::default() }
-    }
     // `measure_solid_edge_realized_path_length` and
     // `measure_direct_insertion_edge_uses_manhattan_fallback` lived here.
     // Both pinned THIS module's own measurement, which is gone — RFC-064 §(b)
