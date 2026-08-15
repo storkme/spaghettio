@@ -3313,6 +3313,11 @@ pub fn route_bus_ghost(
                     existing.name != ent.name
                         || existing.direction != ent.direction
                         || existing.io_type != ent.io_type
+                        // carries too (review, 3/3): same shape carrying a
+                        // DIFFERENT item is the "solution built for other
+                        // surroundings" class this check exists for — a
+                        // shape-only match would dedup-drop it silently.
+                        || existing.carries != ent.carries
                 })
         });
         if context_conflict {
@@ -3324,6 +3329,14 @@ pub fn route_bus_ghost(
                     .to_string(),
             });
             cap_coords.push(cluster[0]);
+            // Mirror the capped-solve branch's bookkeeping (review): the
+            // cluster's tiles stay in remaining_crossings so the retry
+            // pass (or, failing that, the unresolved-junction reporter)
+            // owns them — without this a conflicting crossing would ship
+            // silently dropped.
+            for &t in cluster {
+                remaining_crossings.insert(t);
+            }
             continue;
         }
         let released_count =
