@@ -3482,7 +3482,6 @@ pub fn route_bus_ghost(
         ));
     }
 
-
     // Step 6: sync `entities` to Occupancy's released state.
     //
     // Templates and SAT write to both `entities` and Occupancy during
@@ -4284,8 +4283,27 @@ pub fn route_bus_ghost(
             .map(|(k, _)| k.as_str())
             .collect();
         let unresolved_seg = |seg: Option<&str>| -> bool {
-            seg.and_then(|s| s.strip_prefix("ghost:"))
-                .is_some_and(|k| unresolved_keys.contains(k))
+            let Some(k) = seg.and_then(|s| s.strip_prefix("ghost:")) else {
+                return false;
+            };
+            if unresolved_keys.contains(k) {
+                return true;
+            }
+            // Last-tap alias (#655 round 3): the unified-spec pass folds
+            // the last tap's `tap:{item}:{x}:{y}` key (and its trunk)
+            // into `flow:{item}:{x}` in `routed_paths`, but the tap's
+            // belts were stamped with the ORIGINAL key — without this
+            // alias a last-tap feeder is invisible to the spec-scoped
+            // clauses and only severs when it faces a crossing tile
+            // exactly.
+            if let Some(rest) = k.strip_prefix("tap:") {
+                let mut it = rest.rsplitn(2, ':');
+                let _y = it.next();
+                if let Some(item_x) = it.next() {
+                    return unresolved_keys.contains(format!("flow:{item_x}").as_str());
+                }
+            }
+            false
         };
         // Known scope gaps, deliberate (session-side review): only a
         // splitter's PRIMARY tile is keyed here (a feed into the second
@@ -4334,6 +4352,11 @@ pub fn route_bus_ghost(
             else {
                 return true;
             };
+            // A facing belt with NO carries stamp keeps the feed (round-3
+            // review): item difference is undecidable without a stamp, and
+            // severing on "unknown" would tidy legitimate joins. Belts are
+            // normally stamped; an unstamped mixing target still reaches
+            // the validator's adjacency checks.
             let Some(other) = target_carries.as_deref() else {
                 return true;
             };
