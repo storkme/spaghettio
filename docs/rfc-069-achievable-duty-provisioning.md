@@ -165,6 +165,19 @@ goes to the owner before merge.
 
 ## Decision log
 
+- *2026-08-15 — Phase 2 first family probe: ec60-red does NOT respond
+  to the block cap.* At duty 0.6 its EC stage reshapes (2×20 → 7×≤6)
+  yet the meter reads **90.8% produced — identical to its baseline**;
+  duty 0.3 builds byte-identically to 0.6 (unexplained — the cap
+  arithmetic should differ; suspect the candidate-selection path or
+  the effective in-lane cap resolution on fast belts, to be probed).
+  Two open questions for the next session: (a) ec60-red's actual
+  binding site (its own attribute/cable-probe pass — its cable rows of
+  10 and 48-furnace plate rows differ structurally from ec30's), and
+  (b) why 0.3 ≡ 0.6 on this fixture. K69-3's family-divergence
+  expectation is now a measurement: the ec30 lever is NOT the whole
+  family's lever.
+
 - *2026-08-15 — RFC opened.* Grounded in #648's re-attribution: the
   family's Error-level validator signal was retracted as a walker
   artifact; the sim/meter deficits stand. The #519 margin-probe
@@ -206,6 +219,35 @@ goes to the owner before merge.
   3,369 and the sprawl's 4,934). Gate: ec30 sims **≥ 96.0% delivered**
   at duty 0.9, else this lever stops too and the campaign escalates to
   RFC-061's pool-and-balance machinery.*
+- *2026-08-15 — Phase 1b at block=3 measured DEAD; the physics is the
+  per-pickup extraction fraction.* The 1b sim was invalidated by a
+  harness kit artifact (overlapping drain banks on adjacent same-item
+  exits — a rig-geometry limitation worth its own follow-up: the
+  colliding tiles don't even correspond to the manifest's two south
+  exits), but the meter refutes independently: **85.0% produced,
+  uniform down the chain**. The cable-probe occupancy gradient
+  explains why rows-of-3 fail where rows-of-2 succeed: an EC machine
+  draws 4.5/s ≈ 30% of a full yellow belt per pickup (vs a furnace's
+  4%), so a 3-machine block's tail extracts from a belt already
+  two-thirds depleted — the RFC-054 gappy-belt mechanism, 7× harsher
+  on EC than on furnace rows. Blocks of 2 kill the within-row
+  gradient; DI would kill it entirely.*
+- *2026-08-15 — **Phase 1c pre-registered** (entry written before its
+  sim returned): same code, `--duty 0.6` ⇒ HS block =
+  floor(15×0.6/4.5) = **2** ⇒ EC 10×2 with producer rows untouched —
+  the engine now deterministically reproduces the sprawl's shape
+  (dims/entities EXACT: 106×222 / 4,934; bp not byte-identical —
+  segment/routing deltas). Meter: **96.6% produced — IDENTICAL to the
+  sprawl's meter reading**, whose sim delivered 99.4%. Gate: this
+  artifact's own 432k sim ≥ 96.0% delivered.
+  **GATE CLEARED: 99.4% delivered (29.82/30, −0.6%), PASS — converged,
+  kit-clean, 168/170 working / 2 full-output.** The engine produces a
+  plan-attaining ec30 behind `planning_duty: 0.6`, +7.3pp over the
+  92.1% default. Phase 2 (family rollout) decides the shipping
+  semantics: 0.6 was fitted to give block=2 for EC-on-yellow
+  (4.5/s draw); whether the fraction generalizes (fast-belt EC →
+  block 4) or the rule should pin block ≤ 2 for high-fraction pickups
+  is a measurement question, not a design preference.*
 - *2026-08-15 — Phase-0 follow-up MEASURED: the phantom-era sprawl
   delivers 99.4%.* Reproduced from `decd63b5` and simmed (warmup 432k,
   converged, drift +0.6%, kit-clean): `ec30-sprawl` (106×222, 4,934
