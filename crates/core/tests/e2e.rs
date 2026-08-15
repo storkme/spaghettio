@@ -524,17 +524,10 @@ fn assert_no_warnings_except(result: &E2EResult, skip_categories: &[&str]) {
 /// checks going quiet without their problem being fixed — and only
 /// then bless, recording the adjudication where the change lives.
 fn assert_warnings_golden(result: &E2EResult, test_name: &str) {
+    // (The `_allow_errors` split for #644's adjudicated-error fixtures
+    // was folded back 2026-08-15 when the phantom-UG-source walker fix
+    // took its only caller, tier5, back to zero errors.)
     assert_no_errors(result);
-    assert_warnings_golden_allow_errors(result, test_name);
-}
-
-/// `assert_warnings_golden` without the zero-error precondition, for the
-/// fixtures that carry an ADJUDICATED known-deficit error ceiling of their
-/// own (#644): their error state is enforced by a category-scoped ceiling
-/// with a tighten advisory at the call site, so the warning golden pins
-/// warnings only. Never reach for
-/// this to silence an unadjudicated error.
-fn assert_warnings_golden_allow_errors(result: &E2EResult, test_name: &str) {
     let mut actual: std::collections::BTreeMap<&str, usize> = Default::default();
     for w in result.issues.iter().filter(|i| i.severity == Severity::Warning) {
         *actual.entry(w.category.as_str()).or_default() += 1;
@@ -2413,39 +2406,17 @@ fn tier5_processing_unit_from_ore_am3() {
     )
     .unwrap_or_else(|e| panic!("tier5_processing_unit_from_ore_am3: {e}"));
 
-    // 2026-08-15 (#632 B5 dispatch swap, #644): this fixture carries 70
-    // lane-throughput errors — a REAL deficit, meter-measured at 85.6%
-    // of plan (1.712/2.0 produced, uniform choke signature: cable 87.3%,
-    // EC 86.8%). The zero-error assert becomes a category-scoped CEILING:
-    // any NEW error category or a count above 70 fails loudly; a lower
-    // count prints a tighten advisory (exact counts of float-threshold
-    // tile flips would flake on CI). Drop back to `assert_no_errors`
-    // when #644's engine fix lands.
-    {
-        let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
-        for i in result.issues.iter().filter(|i| i.severity == Severity::Error) {
-            *by.entry(i.category.as_str()).or_default() += 1;
-        }
-        // Ceiling + tighten-advisory, not an exact pin (bot review on the
-        // swap PR): lane rates sit near a float threshold, so exact counts
-        // flake under the recorded CI nondeterminism; a ceiling fails on
-        // regression, and the advisory below keeps improvement visible.
-        let lane = by.get("lane-throughput").copied().unwrap_or(0);
-        let other: Vec<_> = by.keys().filter(|k| **k != "lane-throughput").collect();
-        assert!(
-            other.is_empty(),
-            "tier5 PU: error categories beyond the adjudicated #644 class: {other:?}"
-        );
-        assert!(
-            lane <= 70,
-            "tier5 PU known-deficit ceiling (#644) regressed: {lane} > 70"
-        );
-        if lane < 70 {
-            eprintln!(
-                "tier5 PU: lane-throughput improved ({lane} < 70) — tighten the                  ceiling (#644)"
-            );
-        }
-    }
+    // 2026-08-15 (#632 B5 dispatch swap): 70 lane-throughput errors,
+    // adjudicated as a real deficit against the meter's 85.6%-of-plan
+    // reading (1.712/2.0 produced, uniform choke signature).
+    // 2026-08-15 later the same day (#644 walker fix): 70 -> 0 — the
+    // error attribution is RETRACTED. The 70 were phantom-UG-source
+    // artifacts (see stress_ec_30s's baseline comment); the meter's
+    // 85.6% REMAINS TRUE and OPEN, reattributed to the #644
+    // zero-headroom class (uniform signature = one shared exactly-at-cap
+    // constraint propagating, per status.md's y=mx+c reading). The
+    // ceiling scaffolding is gone; back to the plain golden, which
+    // asserts zero errors.
     // RFC Phase 1: 129 inserter-bound machine-sides (processing-unit @2/s deep chain).
     // Demand-pull + the UG-crossing demand fix clear every prior belt-delivery false
     // positive across this layout's underground hops; the residual is purely
@@ -2473,9 +2444,7 @@ fn tier5_processing_unit_from_ore_am3() {
     // copper-plate / copper-cable / plastic rows — the same uniform
     // −24% chain signature pu@3 sim-measured (RFC-060 K60-3, converged,
     // warmup-flat). The check now reports what the sim already proved.
-    // Known-deficit fixture (#644): errors are pinned exactly above; the
-    // golden pins warnings only.
-    assert_warnings_golden_allow_errors(&result, "tier5_processing_unit_from_ore_am3");
+    assert_warnings_golden(&result, "tier5_processing_unit_from_ore_am3");
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -3583,24 +3552,35 @@ fn stress_electronic_circuit_30s_from_ore() {
             // The PR baseline of 10 belt-dead-end was probed before the
             // fluid-reservation filter + promote_blocked_encountered +
             // perimeter-boundary check landed.
-            // 2026-08-15 (#632 B5 dispatch swap, #644): 0 -> 140. The
-            // 30/s rate is where the from-ore family's deficit STARTS:
-            // the 22s/23s siblings genuinely clear under the same
-            // walker (their trunks provision adequately; verified by
-            // the full suite on this change), which is why their
-            // ceilings stay 0 — the discontinuity is physics, not an
-            // un-updated pin. The
-            // calibrated belt_flow walker took the lane-throughput slot
-            // and surfaces the real trunk under-provisioning this
-            // fixture ships: sim-measured 92.1% delivered (post-lift
-            // bank 2026-08-07/08), meter 91.9% on a fresh export; the
-            // 140 instances name the yellow trunk choke tiles at
-            // 7.8-10.0/s vs the 7.5/s cap. Tighten as #644's engine fix
-            // lands.
-            max_errors: 140,
+            // 2026-08-15 (#632 B5 dispatch swap): 0 -> 140 lane-throughput.
+            // 2026-08-15 later the same day (#644 walker fix): 140 -> 0.
+            // The 140 were PHANTOM-UG-SOURCE artifacts, not choke tiles:
+            // the walker's external seeding counted the ore taps' UG
+            // crossing exits as graph sources, which broke demand
+            // attribution (Σ 75 ≠ 45 for copper-ore) and forced the
+            // even-split fallback — real trunks under-seeded at 9/s
+            // instead of 15/s, and the crossing exits double-counted
+            // (seed + pair inheritance) to a fabricated 18/s. The TRUE
+            // lane rates on every ore trunk/tap/row-in here are exactly
+            // [7.5, 7.5] — AT the yellow cap, zero headroom, and the
+            // walker correctly does not flag at-cap. The 30-vs-22s
+            // "family boundary" was where layouts start needing UG
+            // crossings on ore taps, i.e. an artifact boundary.
+            // The fixture's sim-measured 92.1% delivered (post-lift bank
+            // 2026-08-07/08) REMAINS TRUE and OPEN: it is the
+            // zero-headroom class (#644) — exactly-at-cap belts lose
+            // ~8% to real belt physics the flow-conservation walker
+            // cannot see. Residual validator signal: the 8
+            // input-rate-delivery + 5 row-input-belt-margin warnings.
+            max_errors: 0,
             // RFC rfc-lane-demand-flow.md Phase 1: was 0; +104 inserter-throughput (100) + input-rate-delivery (4).
-            max_warnings: 104,
-            max_errors_by_category: [("lane-throughput".to_string(), 140)]
+            // 2026-08-15 (#644 walker fix): 104 -> 13 measured (8
+            // input-rate-delivery + 5 row-input-belt-margin) — the
+            // fabricated starvation reads went with the phantom sources.
+            max_warnings: 13,
+            // Pinned at 0 so ANY lane-throughput error reappearing here
+            // fails loudly — this fixture is the #644 artifact's anchor.
+            max_errors_by_category: [("lane-throughput".to_string(), 0)]
                 .into_iter()
                 .collect(),
         },
@@ -3940,52 +3920,25 @@ fn stress_electronic_circuit_30s_decomposed() {
     // After both fixes (lane_planner.rs:370 module_id propagation guard,
     // and ghost_router.rs decomposition-aware feeder generation), the
     // Pool and Decomposed paths both produced zero validator errors
-    // UNDER THE OLD LANE WALKER. K1-1's "validator-clean on the
-    // smallest gate-passing partition" was satisfied by that walker's
-    // blindness: belt_flow's dispatched check (#632 B5) surfaces the
-    // real trunk deficit both arms carry (#644), pinned below.
-    // 2026-08-15 (#632 B5 dispatch swap, #644): 0 -> 140 lane-throughput
-    // on the Pool arm — the same adjudicated trunk under-provisioning as
-    // the stress_ec_30s baseline (sim 92.1% delivered / meter 91.9%).
-    // Tighten as #644's engine fix lands.
+    // UNDER THE OLD LANE WALKER.
+    // 2026-08-15 (#632 B5 dispatch swap): 0 -> 140 lane-throughput on
+    // both arms. 2026-08-15 later the same day (#644 walker fix):
+    // 140 -> 0 on both — the 140 were phantom-UG-source artifacts (see
+    // the stress_ec_30s baseline comment for the mechanism), so the
+    // old walker's zero here was RIGHT for the wrong reason. Back to 0
+    // ceilings; the fixture's real deficit is the #644 zero-headroom
+    // class, invisible to flow conservation by construction.
     assert!(
-        pooled_errors <= 140,
-        "Pool errors on EC@30/s regressed past the #644 ceiling (140); got {pooled_errors}.",
+        pooled_errors == 0,
+        "Pool errors on EC@30/s regressed (expected 0 post-#644 walker fix); got {pooled_errors}.",
     );
-    if pooled_errors < 140 {
-        eprintln!("Pool EC@30/s improved ({pooled_errors} < 140) — tighten (#644)");
-    }
-    // 2026-08-15 (#632 B5 dispatch swap, #644): 0 -> 140, same class and
-    // same count as the Pool arm.
     assert!(
-        decomposed_errors <= 140,
-        "PartitionedDecomposed errors on EC@30/s regressed past the #644 ceiling (140); got {decomposed_errors}.",
+        decomposed_errors == 0,
+        "PartitionedDecomposed errors on EC@30/s regressed (expected 0 post-#644 walker fix); got {decomposed_errors}.",
     );
-    if decomposed_errors < 140 {
-        eprintln!("Decomposed EC@30/s improved ({decomposed_errors} < 140) — tighten (#644)");
-    }
-    // Category scoping (bot round 6, matching tier5's guard): the
-    // ceilings above are totals; any category beyond the adjudicated
-    // #644 class must fail loudly on either arm.
-    for (arm, issues) in [("Pool", &pooled.issues), ("Decomposed", &decomposed.issues)] {
-        let other: Vec<_> = issues
-            .iter()
-            .filter(|i| i.severity == Severity::Error && i.category != "lane-throughput")
-            .collect();
-        assert!(
-            other.is_empty(),
-            "{arm} EC@30/s: error categories beyond the adjudicated #644 class: {other:?}"
-        );
-    }
-    // K1-1 relative signal (bot round 4): the ceilings alone lost the
-    // arms' ranking — decomposition must never be WORSE than Pooled.
-    // +2 tolerance (round 6): both counts sit on float thresholds; a
-    // single-tile flip must not fail the ranking spuriously.
-    assert!(
-        decomposed_errors <= pooled_errors + 2,
-        "K1-1 regressed: PartitionedDecomposed ({decomposed_errors} errors) worse than \
-         Pooled ({pooled_errors})"
-    );
+    // (The #646-era category-scoping loop and K1-1 +2 ranking tolerance
+    // were deleted with the ceilings: both are unreachable behind the
+    // hard zeros above, which enforce the ranking exactly.)
 
     // ShardSplit must fire — the algorithm path is what we're gating on.
     let shard_split_events = decomposed.trace_events.iter().filter(|evt| {
@@ -4137,10 +4090,15 @@ fn partition_strategy_scoreboard() {
             // that was silently dead-ending is now padded to a stampable
             // nearby shape.
             row_layout: None,
-            // 2026-08-15 (#632 B5 dispatch swap, #644): (0, 3) ->
-            // (70, 66) lane-throughput — the meter-measured 85.6%-of-plan
-            // PU deficit (see tier5's pin). Tighten as #644 lands.
-            expected: (70, 66),
+            // 2026-08-15 (#632 B5 dispatch swap): (0, 3) -> (70, 66)
+            // lane-throughput. 2026-08-15 later the same day (#644
+            // walker fix): (70, 66) -> (0, 0) measured — the lane
+            // errors were phantom-UG-source artifacts (see
+            // stress_ec_30s's baseline comment). Note both arms now
+            // read strictly better than the pre-swap (0, 3). The
+            // meter's 85.6%-of-plan PU reading stays OPEN as #644
+            // zero-headroom (tier5's pin).
+            expected: (0, 0),
         },
         ScoreboardCase {
             name: "AC@5/s plates yellow",
@@ -4177,6 +4135,12 @@ fn partition_strategy_scoreboard() {
             // but isn't on CI. Loosened back to (4, 4) to unblock main
             // until the underlying nondeterminism source is found
             // (likely needs CI-side trace-event capture to localise).
+            // 2026-08-15 (#644 walker fix): local reads Pool 0 / P2 4;
+            // the advisory keeps printing Pool's improvement. NOT
+            // tightened to 0 — the 2026-05-02 CI flake above is exactly
+            // the nondeterminism an exact-tight pin here reds on. The
+            // P2 arm's surviving 4 predate the lane walkers entirely
+            // (junction-era) and are unrelated to #644.
             row_layout: None,
             expected: (4, 4),
         },
@@ -4619,11 +4583,13 @@ fn stress_electronic_circuit_60s_red_from_ore() {
         "stress_electronic_circuit_60s_red_from_ore",
         &result,
         StressBaseline {
-            // 2026-08-15 (#632 B5 dispatch swap, #644): 1 -> 218, all
-            // lane-throughput — the same trunk under-provisioning class
-            // as the 30s fixture, sim-measured 90.7% delivered
-            // (post-lift bank). Tighten as #644's engine fix lands.
-            max_errors: 218,
+            // 2026-08-15 (#632 B5 dispatch swap): 1 -> 218 lane-throughput.
+            // 2026-08-15 later the same day (#644 walker fix): 218 -> 0 —
+            // phantom-UG-source artifacts, same mechanism as the 30s
+            // fixture (see its baseline comment for the full account).
+            // The sim-measured 90.7% delivered (post-lift bank) REMAINS
+            // TRUE and OPEN as the #644 zero-headroom class.
+            max_errors: 0,
             // RFC rfc-lane-demand-flow.md Phase 1: was 0; +200 inserter-throughput.
             // RFC `docs/rfc-power-reservation.md` Phase 3a-ii (reactive power
             // repair): this red variant's only warnings were the 60 hard-limit
@@ -4660,8 +4626,12 @@ fn stress_electronic_circuit_60s_red_from_ore() {
             // reports across the same 100%-loaded smelter/cable rows (the
             // class the logistic/military sims measured at −40/−48% while
             // "validator-clean"). 5 -> 50; tighten as flux fixes land.
-            max_warnings: 50,
-            max_errors_by_category: [("lane-throughput".to_string(), 218)]
+            // 2026-08-15 (#644 walker fix): 50 -> 9 measured (4
+            // input-rate-delivery + 5 row-input-belt-margin) — the
+            // phantom-source under-seeding had fabricated most of the
+            // starvation reads.
+            max_warnings: 9,
+            max_errors_by_category: [("lane-throughput".to_string(), 0)]
                 .into_iter()
                 .collect(),
         },
@@ -4904,18 +4874,22 @@ fn stress_electronic_circuit_40s_from_ore() {
             // underlying issues have been present at this scoreboard
             // for a long time. Tighten when the upstream layout-pipeline
             // bugs (e.g. #297) get fixed.
-            // 2026-08-15 (#632 B5 dispatch swap, #644): 13 -> 201 —
-            // the 13 belt-dead-end are unchanged; +188 lane-throughput
-            // from the truth-telling walker on the same trunk
-            // under-provisioning class as the 30s/60s fixtures. Tighten
-            // as #644's engine fix lands.
-            max_errors: 201,
+            // 2026-08-15 (#632 B5 dispatch swap): 13 -> 201 (+188
+            // lane-throughput).
+            // 2026-08-15 later the same day (#644 walker fix): 201 -> 13
+            // — the 188 lane errors were phantom-UG-source artifacts
+            // (see the 30s baseline comment); the 13 belt-dead-end are
+            // unchanged and stay adjudicated.
+            max_errors: 13,
             // RFC rfc-lane-demand-flow.md Phase 1: was 195; now +inserter-throughput = 329 (belt-flow-reachability + input-rate-delivery unchanged).
             // RFC rfc-inserter-sizing.md Phase 2: +81 inserter-item-throughput (new per-item companion check) = 330.
-            max_warnings: 330,
+            // 2026-08-15 (#644 walker fix): 330 -> 283 measured (25
+            // belt-flow-path + 167 belt-flow-reachability + 87
+            // input-rate-delivery + 4 row-input-belt-margin).
+            max_warnings: 283,
             max_errors_by_category: [
                 ("belt-dead-end".to_string(), 13),
-                ("lane-throughput".to_string(), 188),
+                ("lane-throughput".to_string(), 0),
             ].into_iter().collect(),
         },
     );
@@ -6582,9 +6556,16 @@ fn quality_ec_45s_express_legendary_from_ore() {
     // re-solve changed this layout's balancer-fed trunk provisioning and
     // four residuals cleared; the surviving 14 are the same two classes
     // (8 copper-ore + 4 iron-ore even-split rows, 2 copper-plate tails).
+    // Re-adjudicated 14 -> 2 (2026-08-15, #644 walker fix): the 12
+    // ore-row residuals were exactly the even-split-seeding class the
+    // 2026-07-31 entry above already suspected — phantom UG-crossing
+    // sources broke this item's demand attribution and forced the even
+    // split; with them excluded the attribution reconciles and the ore
+    // rows read fed. The 2 surviving copper-plate tails are the honest
+    // internal-chain class (the ac@5-measured shape).
     assert!(
-        issues.len() == 14,
-        "expected the 14 adjudicated input-rate-delivery residuals (#519), got {}: {issues:?}",
+        issues.len() == 2,
+        "expected the 2 adjudicated input-rate-delivery residuals (#519/#644), got {}: {issues:?}",
         issues.len()
     );
 

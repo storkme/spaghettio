@@ -2727,6 +2727,27 @@ fn compute_lane_rates_impl(
                     continue;
                 }
             }
+            // A UG output whose paired entrance is fed from a graph tile
+            // is NOT a source: the topo sort's UG special case inherits
+            // the behind-the-entrance rates onto it, so seeding it too
+            // double-counts — and the phantom source breaks the item's
+            // demand attribution (Σ ≠ solver total), demoting every real
+            // trunk to the even-split fallback (#644: stress-ec30's two
+            // crossing exits read 18/s out of a 9/s tunnel while the real
+            // trunks under-seeded at 9/s instead of 15/s). Only an
+            // ORPHANED exit — no paired entrance, or nothing behind it —
+            // genuinely admits flow into the graph and keeps its seed.
+            if ug_output_tiles.contains(&pos) {
+                if let Some(&paired_input) = ug_output_to_input.get(&pos) {
+                    if let Some(&inp_d) = ug_input_dir.get(&paired_input) {
+                        let (idx, idy) = dir_to_vec(inp_d);
+                        let behind = (paired_input.0 - idx, paired_input.1 - idy);
+                        if belt_dir_map.contains_key(&behind) {
+                            continue;
+                        }
+                    }
+                }
+            }
             if let Some(Some(item)) = belt_carries.get(&pos) {
                 if external_rates.contains_key(item.as_str()) {
                     sources_by_item
@@ -4130,6 +4151,85 @@ mod tests {
         assert!(
             !flagged.is_empty(),
             "12/s per lane through a YELLOW UG must still flag over-cap"
+        );
+    }
+
+    /// A UG OUTPUT whose pair inherits flow must not ALSO count as an
+    /// external-input graph source. It has no surface feeder, so the
+    /// source scan picked it up; the phantom source then (a) broke the
+    /// item's demand attribution (Σ over the real trunks + phantoms no
+    /// longer reconciles with the solver total, forcing the even-split
+    /// fallback that under-seeds every real trunk) and (b) double-counted
+    /// at the exit — seed + pair inheritance (#644: two crossing exits on
+    /// stress-ec30 read 18/s out of a 9/s-in tunnel, and every tap/row
+    /// tile downstream of a crossing flagged over-cap on a layout whose
+    /// true lane rates sit exactly AT the yellow cap).
+    #[test]
+    fn ug_exit_with_fed_pair_is_not_an_external_source() {
+        let mut ug_in = ug_belt(3, 0, EntityDirection::East, "input");
+        ug_in.carries = Some("iron-plate".to_string());
+        let mut ug_out = ug_belt(6, 0, EntityDirection::East, "output");
+        ug_out.carries = Some("iron-plate".to_string());
+        let layout = LayoutResult {
+            entities: vec![
+                belt_carries(0, 0, EntityDirection::East, "iron-plate"),
+                belt_carries(1, 0, EntityDirection::East, "iron-plate"),
+                belt_carries(2, 0, EntityDirection::East, "iron-plate"),
+                ug_in,
+                ug_out,
+                belt_carries(7, 0, EntityDirection::East, "iron-plate"),
+                belt_carries(8, 0, EntityDirection::East, "iron-plate"),
+            ],
+            width: 12,
+            height: 3,
+            ..Default::default()
+        };
+        // simple_solver's external input is iron-plate at `input_rate`.
+        let sr = simple_solver(12.0, 1.0);
+        let rates = compute_lane_rates(&layout, Some(&sr));
+
+        let total = |pos: (i32, i32)| rates.get(&pos).map(|r| r[0] + r[1]).unwrap_or(0.0);
+        // The run's head must carry the FULL external rate: with the
+        // phantom exit source, the even split halved it (6.0 here).
+        assert!(
+            (total((0, 0)) - 12.0).abs() < 1e-6,
+            "head of the external run must seed the full 12/s, got {:.2}",
+            total((0, 0))
+        );
+        // Conservation through the pair: no pickups anywhere, so the
+        // exit-side tiles must carry exactly what the head carries.
+        assert!(
+            (total((8, 0)) - total((0, 0))).abs() < 1e-6,
+            "flow must be conserved through a straight UG pair: head {:.2} vs tail {:.2}",
+            total((0, 0)),
+            total((8, 0))
+        );
+    }
+
+    /// The guard's boundary: an ORPHANED UG exit (no paired entrance in
+    /// the graph — flow genuinely enters the layout underground) has no
+    /// inheritance to double-count and MUST keep seeding as a source.
+    #[test]
+    fn orphan_ug_exit_still_seeds_as_external_source() {
+        let mut ug_out = ug_belt(6, 0, EntityDirection::East, "output");
+        ug_out.carries = Some("iron-plate".to_string());
+        let layout = LayoutResult {
+            entities: vec![
+                ug_out,
+                belt_carries(7, 0, EntityDirection::East, "iron-plate"),
+                belt_carries(8, 0, EntityDirection::East, "iron-plate"),
+            ],
+            width: 12,
+            height: 3,
+            ..Default::default()
+        };
+        let sr = simple_solver(12.0, 1.0);
+        let rates = compute_lane_rates(&layout, Some(&sr));
+        let total = |pos: (i32, i32)| rates.get(&pos).map(|r| r[0] + r[1]).unwrap_or(0.0);
+        assert!(
+            (total((8, 0)) - 12.0).abs() < 1e-6,
+            "an orphan UG exit is the run's only source and must seed the full 12/s, got {:.2}",
+            total((8, 0))
         );
     }
 

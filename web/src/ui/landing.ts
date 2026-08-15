@@ -92,7 +92,7 @@ const SHOWCASE: ShowcaseEntry[] = [
     machine: "assembling-machine-2",
     tier: 4,
     status: "partial",
-    desc: "5+ recipes, mixed solid/fluid — still has lane-throughput warnings",
+    desc: "5+ recipes, mixed solid/fluid — a few delivery warnings remain",
   },
   {
     label: "Processing Unit",

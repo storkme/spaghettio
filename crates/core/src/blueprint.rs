@@ -633,8 +633,14 @@ mod tests {
     #[test]
     fn manifest_carries_per_category_validator_state() {
         use rustc_hash::FxHashSet;
-        let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
-        let solved = crate::solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-3")
+        // Fixture choice: needs a config that validates NON-clean (the
+        // reconciliation below is vacuous at 0 == 0) with more than one
+        // issue category. gear@10 served until the #644 phantom-UG-source
+        // fix took its lane-throughput artifacts to zero; ec@10 from ore
+        // carries input-rate-delivery + row-input-belt-margin warnings.
+        let inputs: FxHashSet<String> =
+            ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+        let solved = crate::solver::solve("electronic-circuit", 10.0, &inputs, "assembling-machine-2")
             .expect("solve");
         let layout = crate::bus::layout::build_bus_layout(
             &solved,
@@ -651,7 +657,7 @@ mod tests {
                 Err(e) => e.issues,
             };
         let (_bp, manifest) =
-            export_with_manifest_validated(&layout, &solved, "gear-validator", &issues);
+            export_with_manifest_validated(&layout, &solved, "ec-validator", &issues);
 
         let v = &manifest["validator"];
         assert!(!v.is_null(), "validator object must be present: {manifest}");
@@ -680,7 +686,7 @@ mod tests {
         // validate clean, and the map itself is compared key-for-key.
         assert!(
             !direct.by_category.is_empty(),
-            "gear@10 is expected to carry issues; if it ever validates clean \
+            "ec@10-from-ore is expected to carry issues; if it ever validates clean \
              this test stops discriminating and must be re-pointed"
         );
         let manifest_cats: std::collections::BTreeMap<String, (u64, u64)> = cats

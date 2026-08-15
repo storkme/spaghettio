@@ -530,3 +530,17 @@ has them. An earlier draft of this RFC quoted a figure produced that way.
   `crates/meter` (`check_one`, `sweep_corpus`) and the sim harness. The
   dispatch also now computes the walker once per `validate()` and shares
   it between both rate checks (the double-cost this RFC priced).*
+- *2026-08-15 (later the same day) — **the "surviving family" attribution
+  above is RETRACTED**. A fourth false-positive class was found the moment
+  #644's fix campaign probed the flagged tiles: the external seeding
+  counted UG crossing exits as graph sources (they have no surface feeder;
+  their flow arrives through the pair), which broke demand attribution
+  and forced the even-split fallback — under-seeding real trunks and
+  double-counting at the exits (seed + pair inheritance). With the
+  phantom sources excluded (mutation-checked conservation test), every
+  swap-era corpus red (140/218/188/70) reads zero. The sim/meter deficits
+  stay true and open on #644, reattributed to zero-headroom provisioning
+  — a class flow conservation correctly does not flag. The adjudication
+  arc's lesson: "the walker's flags predict the measured deficit" was
+  directionally right for the wrong mechanism; tile-level inspection of
+  the flags (this fix's first probe) is what the adjudication skipped.*
