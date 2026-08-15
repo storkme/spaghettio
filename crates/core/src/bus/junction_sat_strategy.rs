@@ -1664,11 +1664,54 @@ pub(crate) fn prune_dangling_sat_entities(
 
     let total = entities.len();
     let entities_dbg = entities.clone();
+    let keep = |e: &PlacedEntity| {
+        let t = (e.x, e.y);
+        reachable_from_input.contains(&t) && reachable_to_output.contains(&t)
+    };
+    // UG-PAIR ATOMICITY (#644 flip campaign): the tile-set keep test
+    // above can retain one half of a UG pair while pruning the other —
+    // a kept entrance whose exit died ships as an "Unpaired underground
+    // belt" validator Error (found on ac7-HS under the duty reshape,
+    // where the flake first reproduced deterministically enough to
+    // trace; the same memory-recorded prune_dangling suspect as the
+    // "SAT solved but item missing" class). A pair lives only if BOTH
+    // halves pass; a half whose partner fails is pruned with it.
+    let mut pair_ok: FxHashMap<(i32, i32), bool> = FxHashMap::default();
+    for e in &entities {
+        if e.io_type.as_deref() != Some("input") {
+            continue;
+        }
+        let (dx, dy) = dir_delta(e.direction);
+        let mut found_partner = false;
+        for dist in 1..=(max_reach as i32 + 1) {
+            let nt = (e.x + dx * dist, e.y + dy * dist);
+            if let Some(&ni) = by_tile.get(&nt) {
+                let n = &entities[ni];
+                if n.io_type.as_deref() == Some("output") && n.direction == e.direction {
+                    let both = keep(e) && keep(n);
+                    pair_ok.insert((e.x, e.y), both);
+                    pair_ok.insert(nt, both);
+                    found_partner = true;
+                    break;
+                }
+            }
+        }
+        if !found_partner {
+            // A UG-in whose partner was NEVER EMITTED (not merely
+            // pruned) is invalid geometry by construction — the ac7-HS
+            // flake shipped exactly this as a validator Error. Prune it;
+            // the flow it carried fails VISIBLY downstream instead.
+            pair_ok.insert((e.x, e.y), false);
+        }
+    }
     let pruned: Vec<PlacedEntity> = entities
         .into_iter()
         .filter(|e| {
-            let t = (e.x, e.y);
-            reachable_from_input.contains(&t) && reachable_to_output.contains(&t)
+            let base = keep(e);
+            match pair_ok.get(&(e.x, e.y)) {
+                Some(&both) => base && both,
+                None => base,
+            }
         })
         .collect();
     let kept = pruned.len();

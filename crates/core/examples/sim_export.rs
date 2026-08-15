@@ -134,7 +134,7 @@ fn main() {
     let mut di = DirectInsertion::Candidate;
     let mut claim: Option<DiClaimOrder> = None;
     let mut belt: Option<String> = None;
-    let mut duty: f64 = 1.0;
+    let mut duty: Option<f64> = None;
     let mut quality = QualityTier::Normal;
     let mut stacking: u8 = 1;
     let mut research_productivity: std::collections::BTreeMap<String, f64> =
@@ -171,11 +171,13 @@ fn main() {
             "--belt" => belt = Some(need(i)),
             // RFC-069 Phase 1: planning-duty knob for the K69-1 sim A/B.
             "--duty" => {
-                duty = need(i)
-                    .parse()
-                    .ok()
-                    .filter(|d: &f64| *d > 0.0 && *d <= 1.0)
-                    .unwrap_or_else(|| usage("--duty must be a float in (0, 1]"))
+                duty = Some(
+                    need(i)
+                        .parse()
+                        .ok()
+                        .filter(|d: &f64| *d > 0.0 && *d <= 1.0)
+                        .unwrap_or_else(|| usage("--duty must be a float in (0, 1]")),
+                )
             }
             "--quality" => {
                 let q = need(i);
@@ -272,18 +274,24 @@ fn main() {
     // --belt the cap resolves to the express default (belt_cap 45), so
     // --duty 0.6 silently computes the measured-DEAD block 6 instead of
     // the gate-clearing block 2. Require the tier to be explicit.
-    if duty < 1.0 && belt.is_none() {
+    if duty.is_some_and(|d| d < 1.0) && belt.is_none() {
         usage("--duty < 1 requires an explicit --belt (the fitted duty is tier-relative; the RFC-069 gate receipts are on transport-belt)");
     }
     let mut opts = LayoutOptions {
         direct_insertion: di,
         max_belt_tier: belt,
-        planning_duty: duty,
         quality,
         stacking,
         research_productivity,
         ..Default::default()
     };
+    // RFC-069 Phase 3: absent --duty means the ENGINE default (0.6
+    // post-flip), not a CLI-forced 1.0 — the flag exists to A/B, not to
+    // silently un-flip the default (found while flipping: the old
+    // unconditional `planning_duty: duty` would have done exactly that).
+    if let Some(d) = duty {
+        opts.planning_duty = d;
+    }
     if let Some(c) = claim {
         opts.di_claim_order = c;
     }

@@ -165,6 +165,33 @@ goes to the owner before merge.
 
 ## Decision log
 
+- *2026-08-15 — Phase-3 flip attempted; blast radius fully enumerated;
+  BLOCKED on one pre-existing router bug the reshape exposes.* On the
+  flip branch (default 0.6): celldb re-seeded cleanly per its own
+  stored-vs-current-engine contract (0 escape hatches; EC unit
+  15×24); two tests take duty-isolation pins (EC@15's refusal test —
+  the flip resolves its historical bus refusal NATIVELY — and the
+  celldb-template refusal test, whose incumbent breaks fold-transit
+  measurability under the reshape: **flip-consequence item for
+  RFC-068**, "consumer terminal unreachable"). **K69-2 canaries
+  measured: ec10 PASS at plan (+0.6%); ec22 measures at plan (+1.3%)
+  but formally NO DATA on the drain-bank overlap harness bug** (now
+  blocking two measurements — priority raised). The remaining red:
+  ac7-HS ships an unpaired-UG Error. Root-caused through five layers
+  (probe receipts): the zone-commit collision filter drops solution
+  entities tile-by-tile because **zones are solved against a STALE
+  occupancy view** (a sibling cluster commits between this zone's
+  solve and its commit), and the filter has no route awareness —
+  pair-level and route-level post-prunes at commit were both
+  prototyped and measured to only MOVE the invalid geometry
+  (orphan-UG → belt-dead-end → feeder dead-end cascade). The honest
+  fix is re-solving stale zones at commit time (or commit-order-aware
+  solving) — a scoped router unit, not a commit-site patch. Kept from
+  the spike: UG-pair atomicity + never-emitted-partner pruning in
+  `prune_dangling_sat_entities` (correct hardening regardless), and
+  the OppositePairUg span/axis/bbox guard in eviction. The flip
+  branch stays open until the router unit lands.
+
 - *2026-08-15 — **OWNER CALL: correctness over footprint.*** The
   owner's direction (in-session, verbatim: "we should agree that
   correctness is more important than footprint") resolves K69-4's

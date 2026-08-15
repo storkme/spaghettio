@@ -132,9 +132,15 @@ fn template_refuses_multi_group_solves_cleanly() {
     assert!(sr.machines.len() > 1);
     let incumbent = CandidatePlan::new("incumbent", FullSelectionCandidate);
     let field = vec![CandidatePlan::new("celldb-template", TemplateCandidate)];
+    // RFC-069 Phase 3: duty pinned at 1.0 — this test's subject is the
+    // multi-group REFUSAL semantics, and the duty-shaped incumbent at
+    // this config breaks fold-transit measurability ("consumer terminal
+    // unreachable"), recorded as a flip-consequence item in the RFC-069
+    // decision log (feeds RFC-068's self-stamp gate).
+    let duty_pinned = LayoutOptions { planning_duty: 1.0, ..Default::default() };
     let result = run_candidate_field(
         &sr,
-        &LayoutOptions::default(),
+        &duty_pinned,
         &incumbent,
         &field,
         &Policy::fold(),

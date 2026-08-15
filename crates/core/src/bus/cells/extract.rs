@@ -62,6 +62,12 @@ pub fn generate_cell_layout_with_capacity(
         // off an outer pass's knob would fork the registry. If the
         // duty default ever flips, cells decide their own duty story
         // as a cell-scoped call, not by inheritance.
+        // THE FLIP HAPPENED (RFC-069 Phase 3): the cell-scoped call is
+        // duty 1.0, pinned explicitly — cell geometry stays
+        // registry-stable, and cells don't have the belt fan-in
+        // problem the duty exists for (DI/fused constructions,
+        // separately sim-anchored at 101-109% of plan, RFC-053).
+        planning_duty: 1.0,
         cell_composition: super::CellComposition::Off,
         // Same recursion guard, for the same reason: a `Candidate` DI
         // default would spawn a DI candidate inside every cell sub-solve.

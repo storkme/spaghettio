@@ -246,7 +246,12 @@ impl Default for LayoutOptions {
             wire_mode: crate::power_wires::WireMode::default(),
             merge_tap: false,
             splitter_tap_spacers: false,
-            planning_duty: 1.0,
+            // RFC-069 Phase 3 (owner call 2026-08-15: correctness over
+            // footprint): duty-shaped provisioning ON by default. 0.6 is
+            // the gate-cleared value (ec30 99.4% / ec60-red 100.0%
+            // delivered, both 432k-warmup sims); 1.0 is the compact
+            // escape hatch.
+            planning_duty: 0.6,
             stacking: 1,
             research_productivity: Default::default(),
             // Default assumes L2 research (red+green science), not the raw

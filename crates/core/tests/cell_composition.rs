@@ -941,6 +941,12 @@ fn cell_candidate_resolves_ec15_refusal() {
         // RFC-060 made horizontal-stack a THIRD refusal-resolving
         // candidate; off for the same isolation reason as DI above.
         horizontal_candidate: false,
+        // RFC-069 Phase 3: duty pinned at 1.0 — the flipped default
+        // resolves this fixture's historical bus refusal NATIVELY
+        // (duty-shaped EC rows avoid the unstampable shape), so duty
+        // is a fourth refusal-resolving mechanism this test isolates
+        // away, same pattern as the DI/horizontal flags above.
+        planning_duty: 1.0,
         ..Default::default()
     };
     let off = layout::build_bus_layout(&sr, off_opts);
@@ -955,6 +961,12 @@ fn cell_candidate_resolves_ec15_refusal() {
         direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
         // Isolating the cell-composition arm (see off_opts note).
         horizontal_candidate: false,
+        // RFC-069 Phase 3: duty pinned at 1.0 — the flipped default
+        // resolves this fixture's historical bus refusal NATIVELY
+        // (duty-shaped EC rows avoid the unstampable shape), so duty
+        // is a fourth refusal-resolving mechanism this test isolates
+        // away, same pattern as the DI/horizontal flags above.
+        planning_duty: 1.0,
         ..Default::default()
     };
     let l = layout::build_bus_layout(&sr, opts).expect("candidate must resolve the refusal");

@@ -3494,7 +3494,7 @@
         "interior_tiles": 817,
         "entity_count": 433
       },
-      "provenance": "engine@d2a93e71 fixture=electronic-circuit@20",
+      "provenance": "engine@ae25af1caaf9fc1849cb2df319072a73d5a7d255 fixture=electronic-circuit@20",
       "sim_anchor": "unanchored"
     },
     {
@@ -5838,7 +5838,7 @@
         "interior_tiles": 545,
         "entity_count": 289
       },
-      "provenance": "engine@d2a93e71 fixture=electronic-circuit@20",
+      "provenance": "engine@ae25af1caaf9fc1849cb2df319072a73d5a7d255 fixture=electronic-circuit@20",
       "sim_anchor": "unanchored"
     },
     {
@@ -7338,7 +7338,7 @@
         "interior_tiles": 342,
         "entity_count": 182
       },
-      "provenance": "engine@d2a93e71 fixture=electronic-circuit@20",
+      "provenance": "engine@ae25af1caaf9fc1849cb2df319072a73d5a7d255 fixture=electronic-circuit@20",
       "sim_anchor": "unanchored"
     },
     {
@@ -7455,54 +7455,6 @@
         },
         {
           "name": "express-transport-belt",
-          "x": 13,
-          "y": 0,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 14,
-          "y": 0,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 15,
-          "y": 0,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 16,
-          "y": 0,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 17,
-          "y": 0,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 18,
-          "y": 0,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
           "x": 0,
           "y": 1,
           "direction": "East",
@@ -7622,54 +7574,6 @@
           "segment_id": "row:electronic-circuit:belt-in:copper-cable"
         },
         {
-          "name": "express-transport-belt",
-          "x": 15,
-          "y": 1,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 16,
-          "y": 1,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 17,
-          "y": 1,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 18,
-          "y": 1,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 19,
-          "y": 1,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 20,
-          "y": 1,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
           "name": "long-handed-inserter",
           "x": 0,
           "y": 2,
@@ -7750,38 +7654,6 @@
           "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
         },
         {
-          "name": "long-handed-inserter",
-          "x": 15,
-          "y": 2,
-          "direction": "South",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:inserter-in:iron-plate"
-        },
-        {
-          "name": "fast-inserter",
-          "x": 17,
-          "y": 2,
-          "direction": "South",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
-        },
-        {
-          "name": "long-handed-inserter",
-          "x": 18,
-          "y": 2,
-          "direction": "South",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:inserter-in:iron-plate"
-        },
-        {
-          "name": "fast-inserter",
-          "x": 20,
-          "y": 2,
-          "direction": "South",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
-        },
-        {
           "name": "assembling-machine-2",
           "x": 0,
           "y": 3,
@@ -7822,22 +7694,6 @@
           "segment_id": "row:electronic-circuit:machine"
         },
         {
-          "name": "assembling-machine-2",
-          "x": 15,
-          "y": 3,
-          "direction": "North",
-          "recipe": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:machine"
-        },
-        {
-          "name": "assembling-machine-2",
-          "x": 18,
-          "y": 3,
-          "direction": "North",
-          "recipe": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:machine"
-        },
-        {
           "name": "inserter",
           "x": 1,
           "y": 6,
@@ -7855,63 +7711,47 @@
         },
         {
           "name": "inserter",
-          "x": 7,
+          "x": 6,
           "y": 6,
           "direction": "South",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:inserter-out"
         },
         {
-          "name": "inserter",
+          "name": "transport-belt",
+          "x": 7,
+          "y": 6,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 8,
+          "y": 6,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
           "x": 9,
           "y": 6,
           "direction": "South",
           "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:inserter-out"
+          "segment_id": "row:electronic-circuit:belt-out"
         },
         {
-          "name": "transport-belt",
+          "name": "inserter",
           "x": 10,
-          "y": 6,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 11,
-          "y": 6,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 12,
           "y": 6,
           "direction": "South",
           "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
+          "segment_id": "row:electronic-circuit:inserter-out"
         },
         {
           "name": "inserter",
           "x": 13,
-          "y": 6,
-          "direction": "South",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:inserter-out"
-        },
-        {
-          "name": "inserter",
-          "x": 16,
-          "y": 6,
-          "direction": "South",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:inserter-out"
-        },
-        {
-          "name": "inserter",
-          "x": 19,
           "y": 6,
           "direction": "South",
           "carries": "electronic-circuit",
@@ -7977,7 +7817,7 @@
           "name": "transport-belt",
           "x": 7,
           "y": 7,
-          "direction": "East",
+          "direction": "North",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
         },
@@ -8001,7 +7841,7 @@
           "name": "transport-belt",
           "x": 10,
           "y": 7,
-          "direction": "North",
+          "direction": "East",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
         },
@@ -8032,54 +7872,6 @@
         {
           "name": "transport-belt",
           "x": 14,
-          "y": 7,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 15,
-          "y": 7,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 16,
-          "y": 7,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 17,
-          "y": 7,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 18,
-          "y": 7,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 19,
-          "y": 7,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 20,
           "y": 7,
           "direction": "East",
           "carries": "electronic-circuit",
@@ -8184,54 +7976,6 @@
         {
           "name": "express-transport-belt",
           "x": 12,
-          "y": 8,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 13,
-          "y": 8,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 14,
-          "y": 8,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 15,
-          "y": 8,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 16,
-          "y": 8,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 17,
-          "y": 8,
-          "direction": "East",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 18,
           "y": 8,
           "direction": "East",
           "carries": "iron-plate",
@@ -8358,54 +8102,6 @@
           "segment_id": "row:electronic-circuit:belt-in:copper-cable"
         },
         {
-          "name": "express-transport-belt",
-          "x": 15,
-          "y": 9,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 16,
-          "y": 9,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 17,
-          "y": 9,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 18,
-          "y": 9,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 19,
-          "y": 9,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
-          "name": "express-transport-belt",
-          "x": 20,
-          "y": 9,
-          "direction": "East",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
-        },
-        {
           "name": "long-handed-inserter",
           "x": 0,
           "y": 10,
@@ -8486,38 +8182,6 @@
           "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
         },
         {
-          "name": "long-handed-inserter",
-          "x": 15,
-          "y": 10,
-          "direction": "South",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:inserter-in:iron-plate"
-        },
-        {
-          "name": "fast-inserter",
-          "x": 17,
-          "y": 10,
-          "direction": "South",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
-        },
-        {
-          "name": "long-handed-inserter",
-          "x": 18,
-          "y": 10,
-          "direction": "South",
-          "carries": "iron-plate",
-          "segment_id": "row:electronic-circuit:inserter-in:iron-plate"
-        },
-        {
-          "name": "fast-inserter",
-          "x": 20,
-          "y": 10,
-          "direction": "South",
-          "carries": "copper-cable",
-          "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
-        },
-        {
           "name": "assembling-machine-2",
           "x": 0,
           "y": 11,
@@ -8558,22 +8222,6 @@
           "segment_id": "row:electronic-circuit:machine"
         },
         {
-          "name": "assembling-machine-2",
-          "x": 15,
-          "y": 11,
-          "direction": "North",
-          "recipe": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:machine"
-        },
-        {
-          "name": "assembling-machine-2",
-          "x": 18,
-          "y": 11,
-          "direction": "North",
-          "recipe": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:machine"
-        },
-        {
           "name": "inserter",
           "x": 1,
           "y": 14,
@@ -8591,63 +8239,47 @@
         },
         {
           "name": "inserter",
-          "x": 7,
+          "x": 6,
           "y": 14,
           "direction": "South",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:inserter-out"
         },
         {
-          "name": "inserter",
+          "name": "transport-belt",
+          "x": 7,
+          "y": 14,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 8,
+          "y": 14,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
           "x": 9,
           "y": 14,
           "direction": "South",
           "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:inserter-out"
+          "segment_id": "row:electronic-circuit:belt-out"
         },
         {
-          "name": "transport-belt",
+          "name": "inserter",
           "x": 10,
-          "y": 14,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 11,
-          "y": 14,
-          "direction": "East",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
-        },
-        {
-          "name": "transport-belt",
-          "x": 12,
           "y": 14,
           "direction": "South",
           "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:belt-out"
+          "segment_id": "row:electronic-circuit:inserter-out"
         },
         {
           "name": "inserter",
           "x": 13,
-          "y": 14,
-          "direction": "South",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:inserter-out"
-        },
-        {
-          "name": "inserter",
-          "x": 16,
-          "y": 14,
-          "direction": "South",
-          "carries": "electronic-circuit",
-          "segment_id": "row:electronic-circuit:inserter-out"
-        },
-        {
-          "name": "inserter",
-          "x": 19,
           "y": 14,
           "direction": "South",
           "carries": "electronic-circuit",
@@ -8713,7 +8345,7 @@
           "name": "transport-belt",
           "x": 7,
           "y": 15,
-          "direction": "East",
+          "direction": "North",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
         },
@@ -8737,7 +8369,7 @@
           "name": "transport-belt",
           "x": 10,
           "y": 15,
-          "direction": "North",
+          "direction": "East",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
         },
@@ -8774,49 +8406,425 @@
           "segment_id": "row:electronic-circuit:belt-out"
         },
         {
+          "name": "express-transport-belt",
+          "x": 0,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 1,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 2,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 3,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 4,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 5,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 6,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 7,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 8,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 9,
+          "y": 16,
+          "direction": "East",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:belt-in:iron-plate"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 0,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 1,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 2,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 3,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 4,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 5,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 6,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 7,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 8,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 9,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 10,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "express-transport-belt",
+          "x": 11,
+          "y": 17,
+          "direction": "East",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:belt-in:copper-cable"
+        },
+        {
+          "name": "long-handed-inserter",
+          "x": 0,
+          "y": 18,
+          "direction": "South",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:inserter-in:iron-plate"
+        },
+        {
+          "name": "fast-inserter",
+          "x": 2,
+          "y": 18,
+          "direction": "South",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
+        },
+        {
+          "name": "long-handed-inserter",
+          "x": 3,
+          "y": 18,
+          "direction": "South",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:inserter-in:iron-plate"
+        },
+        {
+          "name": "fast-inserter",
+          "x": 5,
+          "y": 18,
+          "direction": "South",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
+        },
+        {
+          "name": "long-handed-inserter",
+          "x": 6,
+          "y": 18,
+          "direction": "South",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:inserter-in:iron-plate"
+        },
+        {
+          "name": "fast-inserter",
+          "x": 8,
+          "y": 18,
+          "direction": "South",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
+        },
+        {
+          "name": "long-handed-inserter",
+          "x": 9,
+          "y": 18,
+          "direction": "South",
+          "carries": "iron-plate",
+          "segment_id": "row:electronic-circuit:inserter-in:iron-plate"
+        },
+        {
+          "name": "fast-inserter",
+          "x": 11,
+          "y": 18,
+          "direction": "South",
+          "carries": "copper-cable",
+          "segment_id": "row:electronic-circuit:inserter-in:copper-cable"
+        },
+        {
+          "name": "assembling-machine-2",
+          "x": 0,
+          "y": 19,
+          "direction": "North",
+          "recipe": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:machine"
+        },
+        {
+          "name": "assembling-machine-2",
+          "x": 3,
+          "y": 19,
+          "direction": "North",
+          "recipe": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:machine"
+        },
+        {
+          "name": "assembling-machine-2",
+          "x": 6,
+          "y": 19,
+          "direction": "North",
+          "recipe": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:machine"
+        },
+        {
+          "name": "assembling-machine-2",
+          "x": 9,
+          "y": 19,
+          "direction": "North",
+          "recipe": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:machine"
+        },
+        {
+          "name": "inserter",
+          "x": 1,
+          "y": 22,
+          "direction": "South",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:inserter-out"
+        },
+        {
+          "name": "inserter",
+          "x": 3,
+          "y": 22,
+          "direction": "South",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:inserter-out"
+        },
+        {
           "name": "transport-belt",
-          "x": 15,
-          "y": 15,
+          "x": 4,
+          "y": 22,
           "direction": "East",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
         },
         {
           "name": "transport-belt",
-          "x": 16,
-          "y": 15,
+          "x": 5,
+          "y": 22,
           "direction": "East",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
         },
         {
           "name": "transport-belt",
-          "x": 17,
-          "y": 15,
+          "x": 6,
+          "y": 22,
+          "direction": "South",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "inserter",
+          "x": 7,
+          "y": 22,
+          "direction": "South",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:inserter-out"
+        },
+        {
+          "name": "inserter",
+          "x": 10,
+          "y": 22,
+          "direction": "South",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:inserter-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 0,
+          "y": 23,
           "direction": "East",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
         },
         {
           "name": "transport-belt",
-          "x": 18,
-          "y": 15,
+          "x": 1,
+          "y": 23,
           "direction": "East",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
         },
         {
           "name": "transport-belt",
-          "x": 19,
-          "y": 15,
+          "x": 2,
+          "y": 23,
           "direction": "East",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
         },
         {
           "name": "transport-belt",
-          "x": 20,
-          "y": 15,
+          "x": 3,
+          "y": 23,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 4,
+          "y": 23,
+          "direction": "North",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 5,
+          "y": 23,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 6,
+          "y": 23,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 7,
+          "y": 23,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 8,
+          "y": 23,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 9,
+          "y": 23,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 10,
+          "y": 23,
+          "direction": "East",
+          "carries": "electronic-circuit",
+          "segment_id": "row:electronic-circuit:belt-out"
+        },
+        {
+          "name": "transport-belt",
+          "x": 11,
+          "y": 23,
           "direction": "East",
           "carries": "electronic-circuit",
           "segment_id": "row:electronic-circuit:belt-out"
@@ -8837,6 +8845,12 @@
         },
         {
           "dx": 0,
+          "dy": 16,
+          "kind": "belt-in",
+          "item": "iron-plate"
+        },
+        {
+          "dx": 0,
           "dy": 1,
           "kind": "belt-in",
           "item": "copper-cable"
@@ -8848,25 +8862,37 @@
           "item": "copper-cable"
         },
         {
-          "dx": 20,
+          "dx": 0,
+          "dy": 17,
+          "kind": "belt-in",
+          "item": "copper-cable"
+        },
+        {
+          "dx": 11,
+          "dy": 23,
+          "kind": "belt-out",
+          "item": "electronic-circuit"
+        },
+        {
+          "dx": 14,
           "dy": 7,
           "kind": "belt-out",
           "item": "electronic-circuit"
         },
         {
-          "dx": 20,
+          "dx": 14,
           "dy": 15,
           "kind": "belt-out",
           "item": "electronic-circuit"
         }
       ],
       "metrics": {
-        "bbox_w": 21,
-        "bbox_h": 16,
-        "interior_tiles": 296,
-        "entity_count": 184
+        "bbox_w": 15,
+        "bbox_h": 24,
+        "interior_tiles": 297,
+        "entity_count": 185
       },
-      "provenance": "engine@d2a93e71 fixture=electronic-circuit@20",
+      "provenance": "engine@ae25af1caaf9fc1849cb2df319072a73d5a7d255 fixture=electronic-circuit@20",
       "sim_anchor": "unanchored"
     },
     {
@@ -13302,7 +13328,7 @@
         "interior_tiles": 805,
         "entity_count": 549
       },
-      "provenance": "engine@d2a93e71 fixture=advanced-circuit@4",
+      "provenance": "engine@ae25af1caaf9fc1849cb2df319072a73d5a7d255 fixture=advanced-circuit@4",
       "sim_anchor": "unanchored"
     },
     {
