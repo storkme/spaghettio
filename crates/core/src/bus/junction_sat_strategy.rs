@@ -56,12 +56,16 @@ use crate::trace::{self, BoundarySnapshot, ExternalFeederSnapshot, SatProposedEn
 /// reuses any Timeout entry (a lookup at a strictly larger budget re-attempts).
 const MAX_ZONE_SAT_VARS: u32 = 700;
 
-/// Read the effective cost-descent budget from the environment.
+/// Read the effective descent-budget CLASSIFICATION threshold from the
+/// environment.
 ///
 /// `SPAGHETTIO_SAT_DESCENT_BUDGET_MS` overrides the per-strategy default.
-/// Intended for test runs: the cache handles known-UNSAT/timeout zones, so
-/// new SAT solves are rare and the descent loop can be kept short.  Web app
-/// and production paths leave this unset and use the strategy's own default.
+/// Since #652's determinism change this value no longer bounds the
+/// descent loop (the iteration cap is the sole budget); it survives only
+/// as the cache's UNSAT-vs-Timeout classification threshold — a refusal
+/// recorded as Timeout is re-attempted at larger budgets, one recorded
+/// as Unsat is permanent for the signature. Web app and production
+/// paths leave this unset and use the strategy's own default.
 ///
 /// Parsed once per process (via `OnceLock`) so it's cheap to call per solve.
 #[cfg(not(target_arch = "wasm32"))]
@@ -182,6 +186,9 @@ pub struct SatConstraints {
     /// Wall-clock budget (ms) for the descent loop, checked between
     /// iterations. Prevents pathological zones from blocking the
     /// solver for too long.
+    /// Since #652: CLASSIFICATION-only (UNSAT vs Timeout cache records)
+    /// — the descent loop itself is bounded by `cost_descent_max_iters`
+    /// alone, deterministically.
     pub cost_descent_budget_ms: u32,
     /// Whether to use per-channel native reaches (tight) or the
     /// zone's max tier reach (loose) for UG pairing.
@@ -1414,6 +1421,16 @@ impl JunctionStrategy for SatStrategy {
         // `effective_budget_ms` remains only as the cache's
         // UNSAT-vs-Timeout classification threshold (a bookkeeping
         // bias between two refusal flavors, noted on #652).
+        //
+        // Hang-risk rationale (review on the determinism PR): descent
+        // re-solves — including the UNSAT-terminal one — run on a zone
+        // that already passed the `MAX_ZONE_SAT_VARS` ≤ 700 gate, and
+        // that ceiling's own calibration found VARIABLE COUNT (not
+        // clause count) to be the hang discriminator: the observed hang
+        // was 756 vars / 7,871 clauses while 20k+-clause zones solved
+        // in milliseconds. Cost caps add only clauses. So descent
+        // solves sit inside the calibrated-safe var range; the residual
+        // risk is accepted and this note is the record.
         for descent_iter in 0..self.constraints.cost_descent_max_iters {
             let Some(cap) = best_cost.checked_sub(1) else {
                 break; // cost already zero — nothing to tighten

@@ -1,9 +1,13 @@
 //! Cost-descent helper for SAT-solved crossing zones.
 //!
-//! Shared between the in-layout descent pass (a tight ~50 ms budget run
-//! by `SatStrategy`) and the interactive "Improve region" pass exposed
-//! by `wasm-bindings` (up to 10 s, streams each improvement back to the
-//! browser so the user can watch the layout get cheaper).
+//! Shared between the in-layout descent pass (run by `SatStrategy`;
+//! since #652 bounded by ITERATION COUNT alone — deterministic, no
+//! wall-clock deadline) and the interactive "Improve region" pass
+//! exposed by `wasm-bindings` (up to 10 s wall-clock, streams each
+//! improvement back to the browser so the user can watch the layout
+//! get cheaper). The two callers deliberately stop differently —
+//! reproducibility for the pipeline, responsiveness for the
+//! interactive pass.
 //!
 //! Both callers want the same contract: start from a known-feasible
 //! entity list, repeatedly call `solve_crossing_zone_with_cost_cap` with
