@@ -1,9 +1,15 @@
 # RFC-066: Arbitrate the two lane-rate walkers against the meter
 
-**Status: proposed 2026-08-09.** Tracking issue: #609. No *engine* code written —
-no phase has started. The four `crates/core/examples/probe_*.rs` binaries listed
-in the verification plan are committed evidence instruments and touch nothing the
-engine dispatches.
+**Status: EXECUTED AND CLOSED 2026-08-15 by #632 B5** (PRs #643/#646/#647;
+tracking issues #609, #644 — full mapping in the decision log's closing
+entry). The body below is preserved as written for the record. Note for
+anyone following its reproduce commands: `probe_walkers.rs` and
+`probe_walker_shape.rs` were deleted with the losing model (their subject,
+the two-walker disagreement, no longer exists — readable at the
+pre-#647 blame point); the surviving instruments are
+`probe_overcap_triage.rs`, the meter (`crates/meter`), and the sim
+harness. *(Original status: proposed 2026-08-09; no engine code written at
+that time.)*
 
 ## Summary
 
