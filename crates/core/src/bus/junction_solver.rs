@@ -1037,8 +1037,17 @@ pub struct JunctionStrategyContext<'a> {
     /// size-hopeless for SAT", not "who emitted the refusal trace").
     /// When an iteration yields no candidates, no walker veto tiles,
     /// and EVERY SAT invocation was over-ceiling, growth is futile:
-    /// var count is monotonic in zone size (tier5 measured 935 -> 1547
-    /// while refused at 935 the whole way). The equality test (rather
+    /// var count is monotonic in zone size — tiles grow by
+    /// construction, and the channel count cannot DROP because an
+    /// absorbed/engulfed spec's flow is re-expressed as INTERIOR
+    /// boundaries (`interior: true` in the zone builder) which
+    /// `channel_info_from_boundaries` still counts; growth converts
+    /// perimeter crossings to interior ones, never removes a channel.
+    /// (Empirical check: 0 decreasing var-count steps across 463
+    /// (seed, variant) series on the tier5 probe. If zone construction
+    /// ever stops emitting interior boundaries for engulfed specs,
+    /// re-derive this lemma.) Tier5 measured 935 -> 1547 while refused
+    /// at 935 the whole way. The equality test (rather
     /// than any-refusal) matters because the SINGLE-SIDE VARIANT zones
     /// are one row/column larger than the primary — a variant can sit
     /// over the ceiling while the primary is under, and an
@@ -1308,7 +1317,8 @@ pub fn solve_crossing(
             // in the trace — a visible iter jump that marks the
             // ceiling-stop bonus round.
             //
-            // Two accepted asymmetries (session-side review): the
+            // Three accepted asymmetries (session-side review + round
+            // 3): the
             // bonus round re-runs the full-zone SAT rungs too (they
             // re-refuse at the ceiling pre-solve — four cheap checks,
             // duplicate skip events under the faked iter label; only
@@ -1319,7 +1329,11 @@ pub fn solve_crossing(
             // veto manufactured under the faked final-iter context
             // would contradict the stop's premise (measured: zero
             // discarded vetoes across all 15 bonus rounds on the tier5
-            // probe).
+            // probe). Third: the bonus round runs on the PRIMARY
+            // region only, not the four variants — eviction's value is
+            // shrinkage, and the primary is the smallest region on the
+            // table; variant regions are strictly larger, so their
+            // filtered zones are strictly less likely to fit.
             if iter + 1 < MAX_GROWTH_ITERS {
                 if let TryOutcome::Solved(sol) =
                     try_solve_on_region(&region, MAX_GROWTH_ITERS - 1, None, &solve_ctx)
