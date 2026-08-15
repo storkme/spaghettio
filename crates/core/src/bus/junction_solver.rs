@@ -1035,15 +1035,19 @@ pub struct JunctionStrategyContext<'a> {
     /// including warm-cache paths whose refusal was recorded on an
     /// earlier encounter — the count answers "is this zone
     /// size-hopeless for SAT", not "who emitted the refusal trace").
-    /// When an iteration
-    /// yields no candidates, no walker veto tiles, and EVERY SAT
-    /// invocation was over-ceiling, growth is futile: full-zone var
-    /// count is monotonic in zone size (tier5 measured 935 -> 1547
-    /// while refused at 935 the whole way). An UNDER-ceiling UNSAT —
-    /// eviction's filtered zone especially — justifies growth (a
-    /// default corpus fixture was measured regressing when the first
-    /// version of this rule stopped on the full-zone refusal alone:
-    /// its zone grew until eviction's filtered solve won).
+    /// When an iteration yields no candidates, no walker veto tiles,
+    /// and EVERY SAT invocation was over-ceiling, growth is futile:
+    /// var count is monotonic in zone size (tier5 measured 935 -> 1547
+    /// while refused at 935 the whole way). The equality test (rather
+    /// than any-refusal) matters because the SINGLE-SIDE VARIANT zones
+    /// are one row/column larger than the primary — a variant can sit
+    /// over the ceiling while the primary is under, and an
+    /// under-ceiling UNSAT can still become SAT with growth, so mixed
+    /// iterations keep growing. (An earlier claim here that the
+    /// any-refusal version measurably regressed a corpus fixture via
+    /// eviction was RETRACTED on the PR — the observed red was
+    /// environmental, and session-side review measured the veto guard,
+    /// not this clause, as the fixture's protection.)
     pub sat_ceiling_refusals: &'a std::cell::Cell<u32>,
 }
 
@@ -1177,14 +1181,19 @@ pub fn solve_crossing(
         // on this iter. Drives veto-directed growth when no candidate
         // is accepted. See `docs/archive/rfc-veto-directed-growth.md`.
         let mut veto_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
+        // True when any attempt this iteration DISCARDED a valid
+        // solution via the deferred-exit check — growth is the remedy
+        // there, so the ceiling stop is suppressed (#656 review).
+        let mut deferred_any = false;
 
         match try_solve_on_region(&region, iter, None, &solve_ctx) {
             TryOutcome::Solved(sol) => {
                 let c = crate::bus::junction_cost::solution_cost(&sol.entities);
                 candidates.push((c, sol, String::new()));
             }
-            TryOutcome::Continue { veto_tiles: vt } => {
+            TryOutcome::Continue { veto_tiles: vt, deferred: d } => {
                 veto_tiles.extend(vt);
+                deferred_any |= d;
             }
         }
 
@@ -1232,8 +1241,9 @@ pub fn solve_crossing(
                     let c = crate::bus::junction_cost::solution_cost(&sol.entities);
                     candidates.push((c, sol, (*label).to_string()));
                 }
-                TryOutcome::Continue { veto_tiles: vt } => {
+                TryOutcome::Continue { veto_tiles: vt, deferred: d } => {
                     veto_tiles.extend(vt);
+                    deferred_any |= d;
                 }
             }
         }
@@ -1257,22 +1267,29 @@ pub fn solve_crossing(
         // failure site caps for the layout-level retry and leaves the
         // fail-sever pass (#655) less to clean up.
         //
-        // The rule is deliberately three-way conservative. It defers
-        // to: (a) any candidate (moot), (b) any walker veto tile —
-        // growth directed toward a non-SAT win (absorbed item-conflict
-        // tile, template shape), and (c) any UNDER-ceiling SAT attempt
-        // — UNSAT can become SAT with growth, and eviction's FILTERED
-        // zones stay under the ceiling at sizes where the full zone is
-        // over it (the first version of this rule stopped on the
-        // full-zone refusal alone and measurably regressed a default
-        // corpus fixture whose zone grew until eviction's filtered
-        // solve won).
+        // The rule is deliberately conservative on four conditions
+        // plus a bonus round. It defers to: (a) any candidate (moot),
+        // (b) any walker veto tile — growth directed toward a non-SAT
+        // win (absorbed item-conflict tile), (c) any UNDER-ceiling SAT
+        // attempt — the single-side VARIANT zones are one row/column
+        // larger than the primary, so a variant can be over the
+        // ceiling while the primary is under, and an under-ceiling
+        // UNSAT can still become SAT with growth, (d) the seed-sized
+        // region (`iter >= 1` below). When all four pass, the bonus
+        // round below still opens the final-iteration gate before the
+        // stop is final. Measured blast radius (session-side review,
+        // tier5 probe): the rule fires 15 times across 10 cluster
+        // seeds — most in the retried pass-1 whose trace is truncated
+        // — with error AND warning populations byte-identical to
+        // pre-rule main; only the two clusters named in the #656
+        // receipts change their capped size/reason in the final trace.
         let sat_inv = solve_ctx.sat_invocations.get();
         // `iter >= 1`: never stop on the seed-sized region (review) —
         // local template strategies get at least one grown region
         // before the ceiling verdict is treated as final.
         if iter >= 1
             && veto_tiles.is_empty()
+            && !deferred_any
             && sat_inv > 0
             && solve_ctx.sat_ceiling_refusals.get() == sat_inv
         {
@@ -1290,6 +1307,19 @@ pub fn solve_crossing(
             // attempt round is emitted with iter = MAX_GROWTH_ITERS - 1
             // in the trace — a visible iter jump that marks the
             // ceiling-stop bonus round.
+            //
+            // Two accepted asymmetries (session-side review): the
+            // bonus round re-runs the full-zone SAT rungs too (they
+            // re-refuse at the ceiling pre-solve — four cheap checks,
+            // duplicate skip events under the faked iter label; only
+            // eviction's participation is the point), and a
+            // `Continue { veto_tiles }` from the bonus round is
+            // DISCARDED rather than grown on — this iteration already
+            // established no vetoes at the true iter, and growing on a
+            // veto manufactured under the faked final-iter context
+            // would contradict the stop's premise (measured: zero
+            // discarded vetoes across all 15 bonus rounds on the tier5
+            // probe).
             if iter + 1 < MAX_GROWTH_ITERS {
                 if let TryOutcome::Solved(sol) =
                     try_solve_on_region(&region, MAX_GROWTH_ITERS - 1, None, &solve_ctx)
@@ -1576,9 +1606,17 @@ enum TryOutcome {
     /// the union of walker break tiles (and/or item-conflict tiles)
     /// collected across all strategies tried on this region. Empty when
     /// every strategy was skipped/unsat with no walker involvement.
+    /// `deferred` is true when a strategy DID produce a valid solution
+    /// that was discarded by the deferred-exit check (its frontier
+    /// exits at another cluster's pending crossing) — growth is that
+    /// path's documented remedy, so the ceiling stop must not fire on
+    /// such an iteration (#656 review).
     /// Used by `solve_crossing` to direct the next bbox expansion
     /// toward the tiles the walker actually cared about.
-    Continue { veto_tiles: Vec<(i32, i32)> },
+    Continue {
+        veto_tiles: Vec<(i32, i32)>,
+        deferred: bool,
+    },
 }
 
 /// Scan the boundary list for a tile that carries more than one
@@ -1694,6 +1732,7 @@ fn try_solve_on_region(
     // determinism, but the caller unions them with the other variants'
     // sets and order is lost there — so we don't rely on it.
     let mut veto_tiles: Vec<(i32, i32)> = Vec::new();
+    let mut deferred = false;
 
     if let Some((cx, cy, items)) = conflict {
         trace::emit(TraceEvent::JunctionStrategyAttempt {
@@ -1710,7 +1749,7 @@ fn try_solve_on_region(
         // the conflict into the bbox interior where SAT can route UGs
         // around it.
         veto_tiles.push((cx, cy));
-        return TryOutcome::Continue { veto_tiles };
+        return TryOutcome::Continue { veto_tiles, deferred };
     }
 
     let strategy_ctx = JunctionStrategyContext {
@@ -1773,6 +1812,7 @@ fn try_solve_on_region(
                 detail: "spec exits at another unresolved crossing".to_string(),
                 elapsed_us,
             });
+            deferred = true;
             break; // skip this iter's solution; fall through to grow
         }
 
@@ -1912,7 +1952,7 @@ fn try_solve_on_region(
         return TryOutcome::Solved(sol);
     }
 
-    TryOutcome::Continue { veto_tiles }
+    TryOutcome::Continue { veto_tiles, deferred }
 }
 
 /// Every tile inside `bbox` (inclusive on the min side, exclusive on the

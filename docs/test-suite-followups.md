@@ -28,9 +28,15 @@ replay. Consequences:
   burned a session-hour attributing an environmental trip to a 60-line
   diff that provably never executed on the tripping fixture).
 - `ci.yml`'s comment justifying the pin ("fresh solutions are
-  wall-clock-budget shaped") is stale post-#654 (the descent deadline
-  is gone); the pin's live rationale is cache-content determinism, not
-  wall-clock. Fix the comment at the next workflow-file touch.
+  wall-clock-budget shaped") is MOSTLY stale post-#654: the SAT
+  descent deadline is gone (iteration-count bounded), so the pin's
+  main live rationale is cache-content determinism. One genuine
+  wall-clock input survives, though (session-side review on #656):
+  `eviction.rs` holds a live 200 ms recipe budget
+  (`total_budget_ms`) that gates how many eviction candidates reach
+  SAT, and eviction produces layout-changing solutions — so
+  slow-host fresh solves can still differ through that path. Fix the
+  comment (both halves) at the next workflow-file touch.
 
 Status: **all items resolved 2026-07-19** — items 2 and 3 landed, item 1
 landed with its CI gate (3 consecutive green Rust-touching runs) tracked on
