@@ -1137,8 +1137,12 @@ pub enum TraceEvent {
     // on that attempt. `satisfied=true` means SAT found a layout
     // within the cap (descent continues with a tighter cap);
     // `satisfied=false` means UNSAT (descent halts, prior best is
-    // optimal at this cap). Terminal: at most `cost_descent_max_iters`
-    // per winning SAT invocation.
+    // optimal at this cap — note `cap` may have been CLAMPED below
+    // `best_cost - 1` by the descent size breaker, in which case
+    // UNSAT proves nothing about the band between the clamped cap
+    // and the natural one; see the HONEST LIMIT note at the breaker
+    // in `junction_sat_strategy.rs`). Terminal: at most
+    // `cost_descent_max_iters` per winning SAT invocation.
     SatCostDescent {
         seed_x: i32,
         seed_y: i32,

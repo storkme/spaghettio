@@ -1480,6 +1480,20 @@ impl JunctionStrategy for SatStrategy {
             // The interactive "Improve region" pass (region_reimprove,
             // wall-clock-budgeted, preview-only) can still find those
             // layouts; it does not write back to the zone cache.
+            //
+            // DORMANCY (round 5, correct arithmetic): under today's
+            // base ceiling (MAX_ZONE_SAT_VARS = 700, gated before any
+            // solve) a zone that reaches this loop has ≤ ~63 tiles
+            // single-channel, so max_cap_for_bound ≈ 288 — far above
+            // any real crossing cost — and the clamp effectively
+            // never bites. The REAL aux bound in the reachable regime
+            // is therefore ~11·63·best_cost ≈ low tens of thousands,
+            // i.e. inside the empirically-exercised envelope; the
+            // loop's boundedness comes from the base ceiling + the
+            // iteration cap, its determinism from the deadline
+            // removal. This clamp's live role is backstopping a
+            // future raise of MAX_ZONE_SAT_VARS (which would
+            // otherwise silently widen descent encodings too).
             const MAX_DESCENT_AUX_VARS: u64 = 200_000;
             let tiles = zone.width as u64 * zone.height as u64;
             let max_cap_for_bound = (MAX_DESCENT_AUX_VARS / (11 * tiles.max(1))) as u32;
