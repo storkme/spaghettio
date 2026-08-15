@@ -117,7 +117,13 @@ pub struct LayoutOptions {
     /// default stays 1.0 because Phase 2 must first settle the family
     /// semantics (ec60-red/tier5 constructions don't consult this cap)
     /// and adjudicate the corpus-wide re-ranking a flip causes. Engine
-    /// policy, not a user axis.
+    /// policy, not a user axis. Two caller-owned caveats: the fitted
+    /// values are TIER-RELATIVE (the block budget prices off the
+    /// effective in-lane cap, so 0.6 means block 2 on yellow but block
+    /// 6 at the express default — sim_export refuses --duty without
+    /// --belt for exactly this trap), and the field itself is not
+    /// range-validated — out-of-range values degrade conservatively
+    /// (block clamps to ≥ 1) rather than failing.
     pub planning_duty: f64,
     pub max_belt_tier: Option<String>,
     pub row_layout: RowLayout,

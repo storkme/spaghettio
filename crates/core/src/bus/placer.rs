@@ -3153,7 +3153,12 @@ pub fn place_rows(
                     // ×S throughput).
                     let belt_budget =
                         effective_in_lane_cap(max_belt_tier) * 2.0 * planning_duty;
-                    let block = ((belt_budget / item0_rate).floor() as usize).max(1);
+                    // +1e-9 before floor: the fitted products land ON
+                    // integer boundaries (15×0.6/4.5 = 2.0000000000000004
+                    // only by ULP luck) and a slip DOWN would flip the
+                    // measured-good block 2 into the measured-dead 3
+                    // (bot review round 2).
+                    let block = (((belt_budget / item0_rate) + 1e-9).floor() as usize).max(1);
                     hs_cap.min(block)
                 } else {
                     hs_cap
@@ -3514,13 +3519,15 @@ mod tests {
         );
     }
 
-    /// RFC-069 Phase 1b: `planning_duty < 1` caps an HS dual-input row
-    /// at ONE input₀ trunk's block. EC-like spec (input₀ copper-cable
-    /// 4.5/s, input₁ iron-plate 1.5/s, out 1.5/s) on yellow: at duty
-    /// 1.0 the HS cap is output-bound at 10 machines/row (the banked
-    /// dense shape that sims 92.1%); at duty 0.9 the one-trunk block is
-    /// floor(15×0.9/4.5) = 3 machines/row (the fine-grained shape whose
-    /// 10×2 sprawl variant sims 99.4%).
+    /// RFC-069: `planning_duty < 1` caps an HS dual-input row at ONE
+    /// input₀ trunk's block. EC-like spec (input₀ copper-cable 4.5/s,
+    /// input₁ iron-plate 1.5/s, out 1.5/s) on yellow: at duty 1.0 the
+    /// HS cap is output-bound at 10 machines/row (the shape that sims
+    /// 92.1%); at duty 0.6 the one-trunk block is floor(15×0.6/4.5) =
+    /// **2** machines/row — the GATE-CLEARING config (99.4% delivered,
+    /// RFC-069 decision log). The dead intermediate (block 3, 85.0%
+    /// by meter) is deliberately NOT pinned — enshrining a
+    /// measured-dead shape in a test invites someone to preserve it.
     #[test]
     fn planning_duty_caps_hs_rows_at_one_trunk_block() {
         let spec = MachineSpec {
@@ -3553,11 +3560,11 @@ mod tests {
             baseline.iter().max().copied().unwrap_or(0), 10,
             "duty 1.0 must stay bit-identical: output-bound 10-machine HS rows, got {baseline:?}"
         );
-        let capped = run(0.9);
+        let capped = run(0.6);
         assert!(
-            capped.iter().all(|&c| c <= 3) && capped.iter().sum::<usize>() == 20,
-            "duty 0.9 must cap HS rows at the one-trunk block (3), preserving the \
-             total machine count; got {capped:?}"
+            capped.iter().all(|&c| c <= 2) && capped.iter().sum::<usize>() == 20,
+            "duty 0.6 must cap HS rows at the one-trunk block (2, the gate-clearing \
+             shape), preserving the total machine count; got {capped:?}"
         );
     }
 

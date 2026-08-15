@@ -56,6 +56,12 @@ pub fn generate_cell_layout_with_capacity(
     // (candidate → generate cell → candidate → …; found as a stack
     // overflow the moment the default flipped).
     let opts = layout::LayoutOptions {
+        // planning_duty deliberately NOT inherited (bot review round 2
+        // on the knob PR): cell geometry must be candidate-independent
+        // — derivation feeds the sim registry, and keying cell shapes
+        // off an outer pass's knob would fork the registry. If the
+        // duty default ever flips, cells decide their own duty story
+        // as a cell-scoped call, not by inheritance.
         cell_composition: super::CellComposition::Off,
         // Same recursion guard, for the same reason: a `Candidate` DI
         // default would spawn a DI candidate inside every cell sub-solve.

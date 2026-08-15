@@ -267,6 +267,14 @@ fn main() {
         std::process::exit(1);
     });
 
+    // The fitted duty values are TIER-RELATIVE (bot review round 2):
+    // block = floor(in_lane_cap(tier) × 2 × duty / rate), and with no
+    // --belt the cap resolves to the express default (belt_cap 45), so
+    // --duty 0.6 silently computes the measured-DEAD block 6 instead of
+    // the gate-clearing block 2. Require the tier to be explicit.
+    if duty < 1.0 && belt.is_none() {
+        usage("--duty < 1 requires an explicit --belt (the fitted duty is tier-relative; the RFC-069 gate receipts are on transport-belt)");
+    }
     let mut opts = LayoutOptions {
         direct_insertion: di,
         max_belt_tier: belt,
