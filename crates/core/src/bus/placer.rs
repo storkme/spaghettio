@@ -222,13 +222,15 @@ pub(crate) fn max_machines_for_belt(
     spec: &MachineSpec,
     belt_name: &str,
     max_belt_tier: Option<&str>,
-    duty: f64,
 ) -> usize {
-    // RFC-069: `duty` scales BOTH caps so a row cannot be sized to
-    // exactly 100% of a belt (the #644 zero-headroom shape). 1.0 is
-    // bit-identical to pre-RFC.
-    let out_lane_cap = lane_capacity(belt_name) * duty;
-    let in_lane_cap = effective_in_lane_cap(max_belt_tier) * duty;
+    // (RFC-069 Phase 1a briefly scaled both caps by planning_duty here;
+    // REVERTED after the K69-1 sim measured it harmful — ec30 at duty
+    // 0.9 delivered 84.4% vs the 92.1% baseline, and the sprawl
+    // measurement proved at-cap producer rows deliver fine. Duty now
+    // acts only at the HS consumer fan-in site; see the is_hs_dual
+    // branch in place_rows.)
+    let out_lane_cap = lane_capacity(belt_name);
+    let in_lane_cap = effective_in_lane_cap(max_belt_tier);
     let mut max_m: f64 = 999.0;
 
     for out in &spec.outputs {
@@ -282,14 +284,12 @@ pub(crate) fn max_machines_for_belt_both_lanes(
     belt_name: &str,
     max_belt_tier: Option<&str>,
     out_stack: u8,
-    duty: f64,
 ) -> usize {
-    // RFC-069: see `max_machines_for_belt` — duty scales both caps;
-    // 1.0 is bit-identical. This variant is the root #644 site: at
-    // duty 1.0, `floor(7.5/0.625)×2 = 24` copper furnaces draw exactly
-    // one full yellow belt.
-    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack) * duty;
-    let in_lane_cap = effective_in_lane_cap(max_belt_tier) * duty;
+    // (RFC-069 Phase 1a duty scaling reverted here too — see
+    // `max_machines_for_belt`. An exactly-at-cap 24-furnace row is the
+    // measured-fine shape: the sprawl artifact delivers 99.4% with it.)
+    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack);
+    let in_lane_cap = effective_in_lane_cap(max_belt_tier);
     let mut max_m: f64 = 999.0;
 
     for out in &spec.outputs {
@@ -325,12 +325,12 @@ pub(crate) fn max_machines_for_belt_horizontal_stack(
     belt_name: &str,
     max_belt_tier: Option<&str>,
     out_stack: u8,
-    duty: f64,
 ) -> usize {
-    // RFC-069: see `max_machines_for_belt` — duty scales both caps;
-    // 1.0 is bit-identical.
-    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack) * duty;
-    let in_lane_cap = effective_in_lane_cap(max_belt_tier) * duty;
+    // (RFC-069 Phase 1a duty scaling reverted — see
+    // `max_machines_for_belt`. The Phase 1b duty site is the
+    // one-trunk-per-row cap at the is_hs_dual branch of place_rows.)
+    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack);
+    let in_lane_cap = effective_in_lane_cap(max_belt_tier);
     let mut max_m: f64 = 999.0;
 
     for out in &spec.outputs {
@@ -3110,15 +3110,45 @@ pub fn place_rows(
         let out_stack = ctx.for_item(first_solid_output_item);
         let max_per_row = if single_lane {
             let ob = belt_entity_for_rate_stacked(output_rate * 2.0, max_belt_tier, out_stack);
-            max_machines_for_belt(spec, ob, max_belt_tier, planning_duty)
+            max_machines_for_belt(spec, ob, max_belt_tier)
         } else if is_hs_dual {
             // HS feeds input₀ via K stacked trunks, so only output and
             // input₁ constrain machines per row.
-            let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
-            max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier, out_stack, planning_duty)
+            let hs_cap = {
+                let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
+                max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier, out_stack)
+            };
+            if planning_duty < 1.0 {
+                // RFC-069 Phase 1b: ONE input₀ trunk per row. The #644
+                // family's measured deficit lives in the HS consumer
+                // fan-in (K trunks per big row + the collection fabric
+                // upstream): the banked dense ec30 (2×10 EC rows, K=4
+                // trunks each) delivers 92.1%, while the same layout
+                // with 10×2 EC rows delivers 99.4% (the "sprawl"
+                // measurement, RFC-069 decision log). Capping each HS
+                // row at one trunk's block removes the per-row fan-in
+                // entirely; duty scales the block's belt budget so the
+                // single feed also carries headroom.
+                let item0_rate = spec
+                    .inputs
+                    .iter()
+                    .filter(|i| !i.is_fluid && i.rate > 0.0)
+                    .map(|i| i.rate)
+                    .fold(0.0_f64, f64::max);
+                if item0_rate > 0.0 {
+                    let belt_budget =
+                        effective_in_lane_cap(max_belt_tier) * 2.0 * planning_duty;
+                    let block = ((belt_budget / item0_rate).floor() as usize).max(1);
+                    hs_cap.min(block)
+                } else {
+                    hs_cap
+                }
+            } else {
+                hs_cap
+            }
         } else {
             let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
-            max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack, planning_duty)
+            max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack)
         };
 
         // RFC-062 Phase 2: a final (target) item that is ALSO consumed by
@@ -3456,7 +3486,7 @@ mod tests {
     fn max_machines_single_output_yellow_belt() {
         // rate=1.0/machine, lane_cap=7.5 → floor(7.5/1.0)=7 machines
         let spec = iron_plate_spec();
-        assert_eq!(max_machines_for_belt(&spec, "transport-belt", None, 1.0), 7);
+        assert_eq!(max_machines_for_belt(&spec, "transport-belt", None), 7);
     }
 
     #[test]
@@ -3464,46 +3494,55 @@ mod tests {
         // per_lane = floor(7.5 / 1.0) = 7, both lanes = 14
         let spec = iron_plate_spec();
         assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "transport-belt", None, 1, 1.0),
+            max_machines_for_belt_both_lanes(&spec, "transport-belt", None, 1),
             14
         );
     }
 
-    /// RFC-069: `planning_duty` must forbid exactly-100% rows. The #644
-    /// zero-headroom shape: 0.625/s per machine on yellow gives
-    /// floor(7.5/0.625)×2 = 24 machines = exactly 15.0/s = exactly one
-    /// full belt at duty 1.0; at duty 0.9 the cap drops to
-    /// floor(6.75/0.625)×2 = 20 machines = 12.5/s = 83% of the belt.
-    /// Duty 1.0 is pinned bit-identical.
+    /// RFC-069 Phase 1b: `planning_duty < 1` caps an HS dual-input row
+    /// at ONE input₀ trunk's block. EC-like spec (input₀ copper-cable
+    /// 4.5/s, input₁ iron-plate 1.5/s, out 1.5/s) on yellow: at duty
+    /// 1.0 the HS cap is output-bound at 10 machines/row (the banked
+    /// dense shape that sims 92.1%); at duty 0.9 the one-trunk block is
+    /// floor(15×0.9/4.5) = 3 machines/row (the fine-grained shape whose
+    /// 10×2 sprawl variant sims 99.4%).
     #[test]
-    fn planning_duty_shrinks_zero_headroom_rows() {
+    fn planning_duty_caps_hs_rows_at_one_trunk_block() {
         let spec = MachineSpec {
-            entity: "electric-furnace".to_string(),
-            recipe: "copper-plate".to_string(),
+            entity: "assembling-machine-2".to_string(),
+            recipe: "electronic-circuit".to_string(),
             self_loop: vec![], voider: false, game_modules: Vec::new(),
-            count: 72.0,
-            inputs: vec![ItemFlow {
-                item: "copper-ore".to_string(),
-                rate: 0.625,
-                is_fluid: false,
-                module_id: 0,
-            }],
-            outputs: vec![ItemFlow {
-                item: "copper-plate".to_string(),
-                rate: 0.625,
-                is_fluid: false,
-                module_id: 0,
-            }],
+            count: 20.0,
+            inputs: vec![
+                ItemFlow { item: "copper-cable".to_string(), rate: 4.5, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "iron-plate".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+            ],
+            outputs: vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 1.5, is_fluid: false, module_id: 0 }],
         };
+        let run = |duty: f64| -> Vec<usize> {
+            let (_, spans, _, _) = place_rows(
+                &[spec.clone()],
+                &["electronic-circuit".to_string()],
+                0, 0,
+                Some("transport-belt"),
+                InserterTier::default(), QualityTier::Normal, 0,
+                None, None,
+                crate::bus::layout::RowLayout::HorizontalStack,
+                None, &[], &StackingCtx::unstacked(),
+                duty,
+            );
+            spans.iter().map(|r| r.machine_count).collect()
+        };
+        let baseline = run(1.0);
         assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "transport-belt", Some("transport-belt"), 1, 1.0),
-            24,
-            "duty 1.0 must stay bit-identical (the zero-headroom status quo)"
+            baseline.iter().max().copied().unwrap_or(0), 10,
+            "duty 1.0 must stay bit-identical: output-bound 10-machine HS rows, got {baseline:?}"
         );
-        assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "transport-belt", Some("transport-belt"), 1, 0.9),
-            20,
-            "duty 0.9 must cap the row below a full belt"
+        let capped = run(0.9);
+        assert!(
+            capped.iter().all(|&c| c <= 3) && capped.iter().sum::<usize>() == 20,
+            "duty 0.9 must cap HS rows at the one-trunk block (3), preserving the \
+             total machine count; got {capped:?}"
         );
     }
 
@@ -3523,21 +3562,21 @@ mod tests {
                 module_id: 0,
             }],
         };
-        assert_eq!(max_machines_for_belt(&spec, "transport-belt", None, 1.0), 1);
+        assert_eq!(max_machines_for_belt(&spec, "transport-belt", None), 1);
     }
 
     #[test]
     fn test_max_machines_red_belt() {
         // rate=1.0/machine, lane_cap=15.0 → floor(15.0/1.0)=15 machines
         let spec = iron_plate_spec();
-        assert_eq!(max_machines_for_belt(&spec, "fast-transport-belt", None, 1.0), 15);
+        assert_eq!(max_machines_for_belt(&spec, "fast-transport-belt", None), 15);
     }
 
     #[test]
     fn test_max_machines_blue_belt() {
         // rate=1.0/machine, lane_cap=22.5 → floor(22.5/1.0)=22 machines
         let spec = iron_plate_spec();
-        assert_eq!(max_machines_for_belt(&spec, "express-transport-belt", None, 1.0), 22);
+        assert_eq!(max_machines_for_belt(&spec, "express-transport-belt", None), 22);
     }
 
     #[test]
@@ -3547,7 +3586,7 @@ mod tests {
         // Output is the bottleneck → 30
         let spec = iron_plate_spec();
         assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None, 1, 1.0),
+            max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None, 1),
             30
         );
     }
