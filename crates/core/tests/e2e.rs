@@ -3580,6 +3580,14 @@ fn stress_electronic_circuit_30s_from_ore() {
             max_warnings: 13,
             // Pinned at 0 so ANY lane-throughput error reappearing here
             // fails loudly — this fixture is the #644 artifact's anchor.
+            // NOT float-fragile (bot review, refuted with this receipt):
+            // the check flags only `rate > cap + 0.01`, and this
+            // layout's lanes sit exactly AT cap — 0.01 below the
+            // threshold by construction, which no rounding wobble
+            // crosses. The #646-era ceilings guarded counts of
+            // above-cap tiles flipping near thresholds; that regime no
+            // longer exists here. (AC@5's (4,4) flake is junction-era
+            // layout nondeterminism — a different category entirely.)
             max_errors_by_category: [("lane-throughput".to_string(), 0)]
                 .into_iter()
                 .collect(),
@@ -6909,29 +6917,22 @@ fn stacking_ec_60s_red_one_belt_headline() {
             },
         )
         .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
-        // 2026-08-15 (#632 B5 dispatch swap, #644): the S=1 arm carries
-        // real lane-throughput errors (16.1-16.8/s on 15/s fast lanes —
-        // the trunk under-provisioning class; S=1 at 60/s is exactly
-        // where it binds). This is a TIER-SELECTION probe, not a
-        // validity gate, so the arms keep their issues; any NON
-        // lane-throughput error still panics.
-        let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
-            Ok(is) => is,
-            Err(e) => {
-                let other: Vec<_> = e
-                    .issues
-                    .iter()
-                    .filter(|i| {
-                        i.severity == Severity::Error && i.category != "lane-throughput"
-                    })
-                    .collect();
-                assert!(
-                    other.is_empty(),
-                    "S={stacking} validate: non-lane-throughput errors: {other:?}"
-                );
-                e.issues
-            }
-        };
+        // 2026-08-15 (#632 B5 dispatch swap): the S=1 arm read 70
+        // lane-throughput errors (16.1-16.8/s on 15/s fast lanes) and
+        // this block tolerated them as an adjudicated deficit.
+        // 2026-08-15 later the same day (#644 walker fix): those were
+        // phantom-UG-source artifacts; both arms measure ZERO errors
+        // (probe receipt on PR #648), so validate() must succeed again.
+        let issues = validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "S={stacking} validate errors (expected none post-#644 walker fix): {:?}",
+                    e.issues
+                        .iter()
+                        .filter(|i| i.severity == Severity::Error)
+                        .collect::<Vec<_>>()
+                )
+            });
         (layout, issues)
     };
 
