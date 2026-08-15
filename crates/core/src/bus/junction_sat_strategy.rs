@@ -1133,6 +1133,12 @@ impl JunctionStrategy for SatStrategy {
         // strategy rung won't produce a solution, so we fall through to None
         // immediately rather than re-running the solver.
         use crate::zone_cache::ZoneLookupResult;
+        // Effective budget (env override wins). Post-#652 this is the
+        // UNSAT-vs-Timeout CLASSIFICATION threshold only; computed here
+        // so the cache lookup's Timeout comparison uses the same value
+        // the record side writes.
+        let effective_budget_ms = env_descent_budget_ms()
+            .unwrap_or(self.constraints.cost_descent_budget_ms);
         let cache_result = crate::zone_cache::lookup_zone_result(
             &zone,
             &channel_reaches,
@@ -1147,7 +1153,11 @@ impl JunctionStrategy for SatStrategy {
             // Timeout: re-attempt only if we now have a larger budget;
             // otherwise treat as UNSAT-equivalent (won't finish anyway).
             ZoneLookupResult::Timeout { budget_ms }
-                if *budget_ms >= self.constraints.cost_descent_budget_ms =>
+                // Compare against the EFFECTIVE budget (env override
+                // included) — round-3 review: comparing against the
+                // strategy default made a lowered env budget re-solve
+                // its own Timeout records on every encounter.
+                if *budget_ms >= effective_budget_ms =>
             {
                 return None;
             }
@@ -1237,12 +1247,10 @@ impl JunctionStrategy for SatStrategy {
             }
         }
 
-        // Effective cost-descent budget: env override wins over strategy default.
-        // `SPAGHETTIO_SAT_DESCENT_BUDGET_MS` lets test runs use a shorter
-        // budget (e.g. 20ms) since the cache handles known-UNSAT/timeout zones.
-        // Web app and production binaries leave this unset.
-        let effective_budget_ms = env_descent_budget_ms()
-            .unwrap_or(self.constraints.cost_descent_budget_ms);
+        // (effective_budget_ms is computed before the cache lookup above;
+        // post-#652 it is CLASSIFICATION-only — the descent loop ignores
+        // it entirely. The stale "keeps the descent loop short" account
+        // was removed in round 3.)
 
         // Flow-balance pre-check: a channel with inputs but no outputs (or vice
         // versa) cannot conserve flow, so the zone is UNSAT — but varisat can
@@ -1416,8 +1424,12 @@ impl JunctionStrategy for SatStrategy {
         // for identical inputs (ac7-HS under the RFC-069 reshape), and
         // this is the recorded 2026-05-02 AC@5 CI-flake class. The
         // iteration cap (4) is the sole budget now: at most 4 extra
-        // solves per zone, each of the same class as the base solve
-        // that just succeeded — bounded AND reproducible.
+        // solves per zone — bounded AND reproducible. (The capped
+        // encodings are LARGER than the base solve — see the corrected
+        // hang note below — and additionally bounded by the graduated
+        // size breaker in the loop; round 3 removed this sentence's
+        // original "same class" claim, which the correction below had
+        // contradicted.)
         // `effective_budget_ms` remains only as the cache's
         // UNSAT-vs-Timeout classification threshold (a bookkeeping
         // bias between two refusal flavors, noted on #652).
@@ -1444,18 +1456,23 @@ impl JunctionStrategy for SatStrategy {
             let Some(cap) = best_cost.checked_sub(1) else {
                 break; // cost already zero — nothing to tighten
             };
-            // Deterministic size breaker (#654 round 2): the capped
-            // encoding adds ~11·tiles·cap Sinz auxiliaries. Skip
-            // descent when that blows past a generous bound — a pure
-            // function of zone size and cap, so reproducibility is
-            // untouched. Observed corpus instances sit well under this.
+            // Deterministic size breaker, GRADUATED (#654 rounds 2-3):
+            // the capped encoding adds ~11·tiles·cap Sinz auxiliaries.
+            // Rather than skipping descent outright when the natural
+            // cap (best_cost - 1) blows the bound, clamp the cap DOWN
+            // so the encoding fits — descent caps may jump (any value
+            // below best_cost is a valid tightening), so this attempts
+            // a deeper deterministic cut instead of giving up (the
+            // round-2 all-or-nothing version was a strict quality
+            // regression on oversized zones). Pure function of zone
+            // size and cost — reproducibility untouched.
             const MAX_DESCENT_AUX_VARS: u64 = 200_000;
-            let aux_estimate = 11u64
-                * (zone.width as u64 * zone.height as u64)
-                * cap as u64;
-            if aux_estimate > MAX_DESCENT_AUX_VARS {
-                break;
+            let tiles = zone.width as u64 * zone.height as u64;
+            let max_cap_for_bound = (MAX_DESCENT_AUX_VARS / (11 * tiles.max(1))) as u32;
+            if max_cap_for_bound == 0 {
+                break; // zone too large for ANY capped encoding in bound
             }
+            let cap = cap.min(max_cap_for_bound);
             let (next_opt, next_stats) =
                 crate::sat::solve_crossing_zone_per_channel_with_cost_cap(
                     &zone,
