@@ -165,6 +165,25 @@ goes to the owner before merge.
 
 ## Decision log
 
+- *2026-08-15 — reach-PR review round 2 tightened the gate, and it was
+  right to.* Two correct majors: the `solid_inputs >= 2` guard also
+  reached TripleInput and FluidDualInput rows (the kind has TWO solid
+  inputs — the "fluid+solid duals never enter" claim was structurally
+  wrong), and the "low-draw ⇒ no-op" arithmetic was wrong (for an
+  input-bound dual row, block ≈ duty × cap — it always bites at
+  duty < 1). The cap is now factored into ONE helper
+  (`duty_input0_block`) gated on exact `RowKind::DualInput` AND
+  input₀ draw ≥ 10% of the full-belt budget — a fitted threshold
+  sitting between the measured-win fractions (EC: 30% yellow, 15%
+  fast) and the measured-harm-when-shrunk class (2–7%); Phase 3 owns
+  its final form. The MEASURED artifacts are unconfounded either way
+  (ec30/ec60-red's only DualInput recipe is EC): re-export under the
+  tightened gate reproduces identical row structures and validator
+  state; the bytes differ by a 4-tile router micro-swap (3 surface
+  belts ↔ 1 UG pair) — the repo's recorded layout-nondeterminism
+  class, throughput-neutral, so the sim receipts attach to the
+  row-structure class.
+
 - *2026-08-15 — ec60-red's non-response ROOT-CAUSED by the scoring
   trace, and the reach fix pre-registered.* `DecompositionChosen`:
   at duty 1.0 the HS candidate wins (the 4,967-entity baseline); at
