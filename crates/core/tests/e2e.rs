@@ -8963,7 +8963,7 @@ fn probe_di_contention_corpus_sweep() {
                     &sr.machines, &sr.dependency_order, 0, 0, None,
                     InserterTier::default(), QualityTier::Normal, 0, None, None,
                     spaghettio_core::bus::layout::RowLayout::default(),
-                    Some(order), &sr.di_couplings, &StackingCtx::unstacked(),
+                    Some(order), &sr.di_couplings, &StackingCtx::unstacked(), 1.0,
                 );
                 let ev = spaghettio_core::trace::drain_events();
                 let detail: Vec<String> = ev.iter().filter_map(|e| match e {
@@ -9411,6 +9411,7 @@ fn probe_di_claim_order_shipped_corpus_verdict() {
             Some(order),
             &sr.di_couplings,
             &StackingCtx::unstacked(),
+            1.0,
         );
         spaghettio_core::trace::drain_events()
             .iter()
