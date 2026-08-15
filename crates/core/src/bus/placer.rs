@@ -3172,7 +3172,39 @@ pub fn place_rows(
             }
         } else {
             let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
-            max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack)
+            let cap = max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack);
+            // RFC-069: the input₀ block cap applies to DUAL-input rows on
+            // every candidate path, not just HS — otherwise the selection
+            // objective (density-scored, delivery-blind) routes around the
+            // duty shape by picking an uncapped candidate (measured on
+            // ec60-red: at duty 0.6 the capped HS variant balloons and
+            // NATIVE wins with uncapped 7×6 EC rows; decision log).
+            // Scope: ≥2 solid inputs only — the measured 1a harm was
+            // shrinking SINGLE-input producer rows, and the measured 1c
+            // win was capping dual-input consumers.
+            let solid_inputs = spec
+                .inputs
+                .iter()
+                .filter(|i| !i.is_fluid && i.rate > 0.0)
+                .count();
+            if planning_duty < 1.0 && solid_inputs >= 2 {
+                let item0_rate = spec
+                    .inputs
+                    .iter()
+                    .filter(|i| !i.is_fluid && i.rate > 0.0)
+                    .map(|i| i.rate)
+                    .fold(0.0_f64, f64::max);
+                if item0_rate > 0.0 {
+                    let belt_budget =
+                        effective_in_lane_cap(max_belt_tier) * 2.0 * planning_duty;
+                    let block = (((belt_budget / item0_rate) + 1e-9).floor() as usize).max(1);
+                    cap.min(block)
+                } else {
+                    cap
+                }
+            } else {
+                cap
+            }
         };
 
         // RFC-062 Phase 2: a final (target) item that is ALSO consumed by

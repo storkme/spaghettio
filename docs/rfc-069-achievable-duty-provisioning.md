@@ -165,6 +165,22 @@ goes to the owner before merge.
 
 ## Decision log
 
+- *2026-08-15 — ec60-red's non-response ROOT-CAUSED by the scoring
+  trace, and the reach fix pre-registered.* `DecompositionChosen`:
+  at duty 1.0 the HS candidate wins (the 4,967-entity baseline); at
+  duty 0.6 the capped HS variant balloons to 6,572 entities, its
+  density score loses, and NATIVE wins — whose vertical dual-input EC
+  rows (7×6) never consult the HS-branch cap. The lever's reach was
+  hostage to a delivery-blind density objective. Fix (post-#650, next
+  PR): the input₀ block cap now applies to DUAL-input rows on every
+  candidate path (≥2 solid inputs only — the measured 1a harm was
+  shrinking single-input producer rows; the measured 1c win was
+  capping dual-input consumers). First artifact: ec60-red at duty 0.6
+  = 6,355 entities / 176×207 (+28% entities, +64% bbox vs baseline —
+  K69-4 watch), 0 errors, meter **96.5% produced** (up from 90.8;
+  ec30's gate-clearing artifact metered 96.6 and simmed 99.4).
+  **Pre-registered gate: ec60-red 432k sim ≥ 96.0% delivered.***
+
 - *2026-08-15 — Phase 2 first family probe: ec60-red does NOT respond
   to the block cap.* At duty 0.6 its EC stage reshapes (2×20 → 7×≤6)
   yet the meter reads **90.8% produced — identical to its baseline**;
