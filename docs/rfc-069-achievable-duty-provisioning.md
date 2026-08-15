@@ -32,10 +32,13 @@ Sim/meter receipts, all on current engine output:
   exactly [7.5, 7.5] on yellow (verified tile-level, #648).
 - `stress_electronic_circuit_60s_red_from_ore`: sim **90.7% delivered**
   (same bank). Same construction at 2× rate on fast belts.
-- `tier5_processing_unit_from_ore_am3`: meter **85.6% produced**
-  (1.712/2.0), uniform choke signature across the chain — one shared
-  constraint propagating (status.md's y=mx+c reading). Sim anchor:
-  Phase 0 below.
+- `tier5_processing_unit_from_ore_am3`: sim **95.6% delivered**
+  (Phase 0, axis-declared, kit-clean — see the decision log). The
+  meter's earlier 85.6% receipt was measured on an UNDECLARED-axis
+  export and is retracted as this fixture's headline number; what
+  survives of it is the uniform choke signature (one shared constraint
+  propagating, status.md's y=mx+c reading), which the kit-clean sim
+  reproduces at ~−5.3% per mid-chain stage.
 - The zero-headroom scoping (status.md, 2026-08-07, solver-derived):
   **69/146 stages (47%) across 28/40 fixtures are exactly
   zero-headroom**; 63% sit under 2% headroom. Cost model already
@@ -68,7 +71,8 @@ currently assume nominal capacity is fully achievable:
 
 1. **`PLANNING_DUTY: f64`** in `common.rs` (initial value 0.9;
    Phase 1 calibrates against the sim — tier2's measured row duty was
-   90%, and the family's deficits cluster at 85–92%). Documented as
+   90%, and the family's sim-anchored deficits span 90.7–95.6% —
+   ec60-red, ec30, tier5-PU — against ec22's clean 99.4%). Documented as
    "the fraction of nominal belt throughput the planner treats as
    deliverable on a zero-buffer chain".
 2. **Row sizing** (`placer.rs`: the input-limit terms of
@@ -106,21 +110,26 @@ multiples that fit; their *belts* are the shared at-cap constraint).
 If Phase 1's sim gate shows belt-duty alone insufficient, the solver
 rule is the follow-up RFC, not a scope creep here.
 
-Expected shape of the diff: ec30 copper goes 3 trunks / 3×24-furnace
-rows → 4 trunks / 4×18-furnace rows (each at 11.25/s = 75% of a belt);
-footprint grows by roughly one row + one trunk column per over-tight
-item. Footprint cost is reported per fixture in the decision log —
-if it lands anywhere near the measured +10–75 entities/machine of the
-solver-side rule's scoping, the trade goes to the owner before merge.
+Expected shape of the diff, stated precisely (review round 1 caught
+the first draft conflating the two numbers): at duty 0.9 the CAP is
+`floor(7.5×0.9/0.625)×2 = 20` machines/row = 12.5/s = 83% of a belt;
+the REALIZED per-row load is then an even-split artifact below the cap
+— 72 furnaces over `ceil(72/20) = 4` rows = 18 each = 11.25/s = 75%.
+The cap guarantees ≤83%; the split delivers 75% here. Measured on the
+first Phase-1 artifact (ec30 at duty 0.9): 81×168 / 3,797 entities vs
+the baseline's 96×140 / 3,369 — **+12.7% entities, +1.3% bbox area** —
+validating 0 errors / 10 warnings. Footprint cost is reported per
+fixture in the decision log; if it approaches K69-4's bar, the trade
+goes to the owner before merge.
 
 ## Kill criteria
 
-- **K69-1 (mechanism)**: Phase 1's duty-provisioned `ec30` layout does
-  not improve sim delivered% by ≥ +4pp over the 92.1% baseline
-  (i.e. fails to reach ≥ 96%) at any duty in {0.85, 0.9} → the
-  dominant loss is not headroom on these chains; stop, return to the
-  loss-reduction lever (the pooled-vs-partitioned confound), and take
-  the probe evidence to #644.
+- **K69-1 (mechanism)**: Phase 1's duty-provisioned `ec30` layout
+  sims below **96.0% delivered** (the single number; the baseline is
+  92.1%, so the bar demands ≥ +3.9pp) at every duty in {0.85, 0.9} →
+  the dominant loss is not headroom on these chains; stop, return to
+  the loss-reduction lever (the pooled-vs-partitioned confound), and
+  take the probe evidence to #644.
 - **K69-2 (no regression)**: any previously at-plan fixture
   (`big-electric-pole@1` canary, `ac@5`, `ec@10`) sims below plan on
   the duty-provisioned engine → stop and bisect before touching
@@ -173,7 +182,10 @@ solver-side rule's scoping, the trade goes to the owner before merge.
   (e.g. `decd63b5`, `sim_export` ec30 with the same flags) in a
   throwaway worktree; worth one sim run early in Phase 1.
 - *2026-08-15 — Phase 0, tier5-PU sim (axis-declared, kit-clean): WARN
-  at 95.6% delivered* (1.91/2.00, warmup 432k, converged, drift +1.3%;
+  at 95.6% delivered* (harness delivered-d% = −4.4%, the authoritative
+  column — the table's 1.91/2.00 is the rounded display, per
+  meter-divergence.md's take-deltas-from-delta-columns rule; warmup
+  432k, converged, drift +1.3%;
   uniform ~−5.3% mid-chain; 262 working / 18 full-output / 4
   ingredient-short; report banked at
   `~/spaghettio-corpora/i644-phase0/tier5-pu2-am3-rp/`). The meter's
