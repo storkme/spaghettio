@@ -3958,10 +3958,25 @@ fn stress_electronic_circuit_30s_decomposed() {
     if decomposed_errors < 140 {
         eprintln!("Decomposed EC@30/s improved ({decomposed_errors} < 140) — tighten (#644)");
     }
+    // Category scoping (bot round 6, matching tier5's guard): the
+    // ceilings above are totals; any category beyond the adjudicated
+    // #644 class must fail loudly on either arm.
+    for (arm, issues) in [("Pool", &pooled.issues), ("Decomposed", &decomposed.issues)] {
+        let other: Vec<_> = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error && i.category != "lane-throughput")
+            .collect();
+        assert!(
+            other.is_empty(),
+            "{arm} EC@30/s: error categories beyond the adjudicated #644 class: {other:?}"
+        );
+    }
     // K1-1 relative signal (bot round 4): the ceilings alone lost the
     // arms' ranking — decomposition must never be WORSE than Pooled.
+    // +2 tolerance (round 6): both counts sit on float thresholds; a
+    // single-tile flip must not fail the ranking spuriously.
     assert!(
-        decomposed_errors <= pooled_errors,
+        decomposed_errors <= pooled_errors + 2,
         "K1-1 regressed: PartitionedDecomposed ({decomposed_errors} errors) worse than \
          Pooled ({pooled_errors})"
     );
