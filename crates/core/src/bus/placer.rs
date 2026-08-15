@@ -225,15 +225,22 @@ impl RowSpan {
 /// Returns Some(block) only when ALL of:
 ///  - `duty < 1.0` (default 1.0 = bit-identical pre-RFC);
 ///  - the row kind is exactly `DualInput` (two solid inputs, no fluid) —
-///    TripleInput / FluidDualInput / producers are UNMEASURED
-///    populations and excluded (round-2 review caught the `>= 2` gate
-///    reaching them);
+///    TripleInput / FluidDualInput are UNMEASURED populations and
+///    excluded (round-2 review caught the `>= 2` gate reaching them).
+///    Single-input rows are excluded by the kind gate; a DualInput row
+///    is capped regardless of producer/consumer role (the measured
+///    DualInput class is EC). Rows outside the two main paths escape by
+///    construction: multi-solid-output rows take the single_lane path,
+///    and cell/DI sub-solves deliberately don't inherit the knob;
 ///  - input₀'s per-machine draw is ≥ 10% of the full-belt budget — the
 ///    physics discriminator: the measured wins are EC at 30% (yellow)
 ///    and 15% (fast); the measured-harm-when-shrunk class (furnace-like
 ///    low-fraction rows) sits at 2–7%. The threshold is fitted between
 ///    the measured populations and is Phase 3's shipping-semantics
-///    question, recorded in the RFC decision log.
+///    question, recorded in the RFC decision log. NOTE: this threshold
+///    also TIGHTENS the Phase-1b HS behavior (which capped any
+///    item0_rate > 0 at duty < 1) — deliberate, same measured-scope
+///    principle, boundary pinned by `duty_input0_block_threshold`.
 ///
 /// KNOWN LIMITS (deliberate): stacking-blind (S>1 + duty<1 under-caps
 /// conservatively rather than crediting unmeasured ×S); +1e-9 before
@@ -278,8 +285,9 @@ pub(crate) fn max_machines_for_belt(
     // REVERTED after the K69-1 sim measured it harmful — ec30 at duty
     // 0.9 delivered 84.4% vs the 92.1% baseline, and the sprawl
     // measurement proved at-cap producer rows deliver fine. Duty now
-    // acts only at the HS consumer fan-in site; see the is_hs_dual
-    // branch in place_rows.)
+    // acts through `duty_input0_block` at BOTH DualInput sites — the
+    // is_hs_dual branch and the native both_lanes branch of
+    // place_rows' max_per_row selection.)
     let out_lane_cap = lane_capacity(belt_name);
     let in_lane_cap = effective_in_lane_cap(max_belt_tier);
     let mut max_m: f64 = 999.0;
@@ -302,8 +310,11 @@ pub(crate) fn max_machines_for_belt(
 ///
 /// Used for **standard 1- or 2-solid-input rows** where a sideload bridge is
 /// placed to fill both output lanes, effectively doubling output throughput.
-/// Input capacity is more conservative: the tap-off sideloads into the input
-/// belt, which (by B8) fills only one lane.
+/// (A stale line here used to claim the input side fills "only one lane" —
+/// contradicting this doc's own Input-limit paragraph and the code's ×2;
+/// the B7 straight-feed/both-lanes account below is the operative one,
+/// and `duty_input0_block`'s full-belt budget builds on it. Reconciled
+/// on the RFC-069 reach PR's review.)
 ///
 /// Mechanics rules relied on:
 /// - **B7** — straight feed into a belt loads both lanes normally.
@@ -3643,6 +3654,52 @@ mod tests {
             "duty 0.6 must cap NATIVE dual-input rows on fast at exactly the \
              block of 4 (the branch ec60-red's at-plan artifact shipped \
              through); got {capped:?}"
+        );
+    }
+
+    /// Pins the fitted 10%-of-budget threshold's boundary directly on
+    /// the helper (bot round 3: both row-level pins use EC, comfortably
+    /// above the line — an edit to the threshold would silently flip
+    /// row classes with no test guard). Yellow budget = 15.0, so the
+    /// line sits at item₀ = 1.5/s.
+    #[test]
+    fn duty_input0_block_threshold() {
+        let mk = |rate: f64| MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "probe".to_string(),
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            count: 10.0,
+            inputs: vec![
+                ItemFlow { item: "a".to_string(), rate, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "b".to_string(), rate: 0.5, is_fluid: false, module_id: 0 },
+            ],
+            outputs: vec![ItemFlow { item: "out".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+        };
+        let belt = Some("transport-belt");
+        assert_eq!(
+            duty_input0_block(&mk(1.4), RowKind::DualInput, belt, 0.6),
+            None,
+            "1.4/s draw is under the 10%-of-15 budget line — cap must not fire"
+        );
+        assert_eq!(
+            duty_input0_block(&mk(1.6), RowKind::DualInput, belt, 0.6),
+            Some(5),
+            "1.6/s draw is over the line: block floor(15×0.6/1.6) = 5"
+        );
+        assert_eq!(
+            duty_input0_block(&mk(4.5), RowKind::TripleInput, belt, 0.6),
+            None,
+            "kind gate: only DualInput is measured scope"
+        );
+        assert_eq!(
+            duty_input0_block(&mk(4.5), RowKind::DualInput, belt, 1.0),
+            None,
+            "duty 1.0 is bit-identical: no cap"
+        );
+        assert_eq!(
+            duty_input0_block(&mk(4.5), RowKind::DualInput, belt, f64::NAN),
+            None,
+            "NaN behaves as 1.0 by design"
         );
     }
 
