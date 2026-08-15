@@ -2293,9 +2293,7 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
     );
     // Anti-vacuity (review): the zero above must come from the fail-safe
     // actually engaging, not from the fixture drifting to a shape where
-    // nothing needed severing while merges ship elsewhere. Either every
-    // crossing resolved (no unresolved-junction errors — the fully-fixed
-    // future) or at least one feeder was severed.
+    // nothing needed severing while merges ship elsewhere.
     let unresolved = issues
         .iter()
         .filter(|i| i.severity == Severity::Error && i.category == "unresolved-junction")
@@ -2305,6 +2303,17 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
         "ac7-HS duty-0.6 has {unresolved} unresolved crossings but the \
          fail-sever pass dropped nothing — the zero-lane-error result is \
          vacuous (sever scope regressed?)"
+    );
+    // LIVENESS (session-side review): if this trips, the pin has stopped
+    // exercising the fail-safe path at all (duty stopped reaching the
+    // engine, or every crossing now resolves — ac7-HS at duty 1.0 has
+    // zero errors of ANY kind, so the lane assertion above is vacuous
+    // without this). Do NOT just delete it: re-point the pin at a shape
+    // that still produces unresolved crossings.
+    assert!(
+        severed > 0 || unresolved > 0,
+        "fail-safe pin no longer exercises the severed/unresolved path \
+         (severed=0, unresolved=0) — re-point it at a failing shape"
     );
 }
 
