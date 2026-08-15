@@ -171,7 +171,55 @@ goes to the owner before merge.
   rejection is explicitly discounted as instrument-contaminated (its
   warning-count penalty partly measured the phantom-source bug), while
   its geometric end-to-end insight is adopted as a design constraint.
-- *2026-08-15 — Phase-0 follow-up candidate: the phantom-era sprawls.*
+- *2026-08-15 — **K69-1 FIRED on the Phase-1a design** (duty in the
+  general row caps): ec30 at duty 0.9 sims **84.4% delivered**
+  (25.33/30, converged, drift +1.0%) — 7.7pp WORSE than the 92.1%
+  baseline. Census: 30 machines full_output, the stalled ones being
+  row HEADS at zero crafts — the extra producer rows fed a collection
+  fabric still provisioned at nominal, so backpressure parked at the
+  producers. The 0.85 arm (near-identical layout, different hash) is
+  in flight to close the criterion's letter; the design verdict does
+  not depend on it. Per the criterion: stop the rows-only lever.
+  **0.85 arm landed: identical — 84.4% delivered, same census (30
+  full-output / 3 short / 137 working). K69-1's letter is closed:
+  FIRED at both pre-registered duties.***
+- *2026-08-15 — mechanism REFRAMED by the three-artifact row census.*
+  dense (92.1%): plate 3×24 + iron 2×24, EC **2×10**; duty-1a (84.4%):
+  plate 4×18 + iron 3×16, EC 3×7/7/6; sprawl (99.4%): plate/iron
+  IDENTICAL to dense, EC **10×2**. At-cap producer rows are measured
+  FINE; the deficit lives in the **HS consumer fan-in** (dense EC rows
+  are output-bound at 10 machines = 45/s of input₀ cable per row via
+  K=4 nominal trunks + the collection fabric above them). The
+  validator's residual IRD warnings point at exactly these feeds
+  (cable 2.9–3.9/s modeled vs 4.5 needed at EC tails). The banked
+  dense run's census shows the same head-stall backpressure symptoms
+  plus scattered ingredient-shorts — the RFC-061 allocation-skew
+  class. The ore-row zero-margin warnings are measured benign for
+  delivery (sprawl receipt) — a calibration note for the margin
+  check's trust row.*
+- *2026-08-15 — **Phase 1b pre-registered** (entry written before its
+  sim returned): one input₀ trunk per HS consumer row, gated behind
+  the same `planning_duty` knob (duty < 1 ⇒ HS rows capped at
+  floor(belt_cap × duty / input₀_rate); the Phase-1a general-cap
+  scaling is REVERTED as measured-harmful). Artifact: EC 7×≤3 rows,
+  producer rows untouched, 4,161 entities / 100×206 (between dense's
+  3,369 and the sprawl's 4,934). Gate: ec30 sims **≥ 96.0% delivered**
+  at duty 0.9, else this lever stops too and the campaign escalates to
+  RFC-061's pool-and-balance machinery.*
+- *2026-08-15 — Phase-0 follow-up MEASURED: the phantom-era sprawl
+  delivers 99.4%.* Reproduced from `decd63b5` and simmed (warmup 432k,
+  converged, drift +0.6%, kit-clean): `ec30-sprawl` (106×222, 4,934
+  entities, 170 machines) delivers **29.82/30.0 = 99.4%** vs the
+  banked dense winner's 92.1% — the phantom-error steering was buying
+  **+7.3pp of delivery** by accident, through exactly this RFC's
+  mechanism (more, shorter rows → per-row ore demand below one belt →
+  headroom). Cost: +46% entities, +1.5× bbox vs dense. This is the
+  headroom hypothesis measured before any engine knob: K69-1's
+  question is now whether duty-0.9 buys comparable delivery at a
+  fraction of the sprawl's footprint (the duty-0.9 artifact is 3,797
+  entities / 81×168 — between the two). Report banked at
+  `~/spaghettio-corpora/i644-phase0/ec30-sprawl/`.
+- *(superseded by the entry above)* Phase-0 follow-up candidate note:
   For the three days the #646 walker phantoms steered selection, ec30
   shipped a 4964-entity 106×222 sprawl (vs the banked 3369-entity
   winner) that METERS at 96.6% produced vs the dense winner's 91.9%
