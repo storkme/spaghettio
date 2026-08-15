@@ -231,6 +231,8 @@ impl JunctionStrategy for EvictionStrategy {
                 strict_obstacles: ctx.strict_obstacles,
                 placed_entities: ctx.placed_entities,
                 unreleasable_obstacles: ctx.unreleasable_obstacles,
+                sat_invocations: ctx.sat_invocations,
+                sat_ceiling_refusals: ctx.sat_ceiling_refusals,
             };
 
             let sat_started = web_time::Instant::now();

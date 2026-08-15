@@ -1139,6 +1139,21 @@ impl JunctionStrategy for SatStrategy {
         // the record side writes.
         let effective_budget_ms = env_descent_budget_ms()
             .unwrap_or(self.constraints.cost_descent_budget_ms);
+        // Ceiling-aware growth-stop bookkeeping (#652): counted on EVERY
+        // encounter — including warm-cache paths that early-return below
+        // — so the growth loop behaves identically cold and warm (a
+        // flag set only on the cold path made growth depend on cache
+        // state, the #654 divergence class). The user-visible gate
+        // (trace event + synthetic-Timeout record + refusal) stays in
+        // its original place downstream of the cache lookup, so trace
+        // and cache behavior are byte-identical to before this unit.
+        ctx.sat_invocations.set(ctx.sat_invocations.get() + 1);
+        let sat_var_count = crate::sat::crossing_zone_sat_var_count(&zone);
+        if sat_var_count > MAX_ZONE_SAT_VARS {
+            ctx.sat_ceiling_refusals
+                .set(ctx.sat_ceiling_refusals.get() + 1);
+        }
+
         let cache_result = crate::zone_cache::lookup_zone_result(
             &zone,
             &channel_reaches,
@@ -1285,8 +1300,9 @@ impl JunctionStrategy for SatStrategy {
         // the structurally-infeasible zones, but a balanced-but-hard zone could
         // still hang the unbounded base solve. Refuse zones over the ceiling and
         // record a synthetic Timeout so re-encounters skip via the normal cache
-        // path. See MAX_ZONE_SAT_VARS.
-        let sat_var_count = crate::sat::crossing_zone_sat_var_count(&zone);
+        // path. (The growth-stop counters for this refusal are maintained in
+        // the pre-pass above the cache lookup — see there.) See
+        // MAX_ZONE_SAT_VARS.
         if sat_var_count > MAX_ZONE_SAT_VARS {
             trace::emit(TraceEvent::CrossingZoneSkipped {
                 tap_item: zone
