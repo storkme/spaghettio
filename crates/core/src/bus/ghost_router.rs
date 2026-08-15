@@ -3012,114 +3012,47 @@ pub fn route_bus_ghost(
             &pending_crossings,
         );
 
-        // CONFLICT-RETRY solve (#652 design half): `junction_hard` is
-        // snapshotted BEFORE this cluster loop, so a later cluster's
-        // zone can be built blind to entities earlier clusters
-        // committed — SAT then returns a solution that collides with
-        // committed geometry. The conflict check below (#653) detects
-        // that; the fix here re-solves ONCE with the conflicting tiles
-        // added to the strict obstacle set (an obstacle tile is exactly
-        // what UG spans tunnel under, so "taken" is expressible and the
-        // re-solve can still cross). A second conflicting attempt caps
-        // the cluster for the layout-level retry — which is what the
-        // pre-fix path did on the FIRST conflict; since the row-widened
-        // second layout pass hits the same stale-snapshot conflict
-        // deterministically, that shipped the crossing unresolved as a
-        // flat sideload-merge (the 2026-08-15 #652 diagnosis measured
-        // ~90 of ac7-HS-duty-0.6's 111 lane-throughput errors as the
-        // downstream shadow of ONE such merge at (9,97)).
-        // Identical-entity overlaps remain a benign dedup (skipped at
-        // stamping, as before); only DIFFERING overlaps
-        // (name/direction/io/carries — #653 review, 3/3) conflict.
-        let conflict_tiles = |sol_entities: &[crate::models::PlacedEntity],
-                              occ: &crate::bus::ghost_occupancy::Occupancy|
-         -> Vec<(i32, i32)> {
-            sol_entities
-                .iter()
-                .filter(|ent| {
-                    let tile = (ent.x, ent.y);
-                    let claimed = matches!(
-                        occ.claim_at(tile),
-                        Some(crate::bus::ghost_occupancy::Claim::Template { .. })
-                            | Some(crate::bus::ghost_occupancy::Claim::RowEntity { .. })
-                    );
-                    claimed
-                        && occ.entity_at(tile).is_some_and(|existing| {
-                            existing.name != ent.name
-                                || existing.direction != ent.direction
-                                || existing.io_type != ent.io_type
-                                || existing.carries != ent.carries
-                        })
-                })
-                .map(|ent| (ent.x, ent.y))
-                .collect()
-        };
-        let mut sol_opt: Option<junction_solver::JunctionSolution> = None;
-        let mut conflict_obstacles: FxHashSet<(i32, i32)> = FxHashSet::default();
-        for attempt in 0..2u8 {
-            let strict_aug;
-            let strict: &FxHashSet<(i32, i32)> = if conflict_obstacles.is_empty() {
-                &junction_hard
-            } else {
-                let mut aug = junction_hard.clone();
-                aug.extend(conflict_obstacles.iter().copied());
-                strict_aug = aug;
-                &strict_aug
-            };
-            let Some(s) = junction_solver::solve_crossing(
-                cluster.as_slice(),
-                &keys_at_tile,
-                &routed_paths,
-                &hard_for_junction,
-                strict,
-                &unreleasable_obstacles,
-                &spec_belt_tiers,
-                &spec_items,
-                &spec_exit_dirs,
-                &spec_kinds,
-                &entities,
-                strategies,
-                &pending_crossings,
-            ) else {
-                // Capped: `solve_crossing` returned `None`, matching the
-                // `JunctionGrowthCapped` event it emitted at this
-                // cluster's seed. Fall through to the cap below.
-                break;
-            };
-            let conflicts = conflict_tiles(&s.entities, &occupancy);
-            if conflicts.is_empty() {
-                sol_opt = Some(s);
-                break;
-            }
-            trace::emit(trace::TraceEvent::CrossingZoneSkipped {
-                tap_item: String::new(),
-                tap_x: s.footprint.x,
-                tap_y: s.footprint.y,
-                reason: {
-                    let mut sample = conflicts.clone();
-                    sample.truncate(4);
-                    if attempt == 0 {
-                        format!(
-                            "context-conflict at commit ({} tiles, {:?}); re-solving \
-                             with conflict tiles as strict obstacles",
-                            conflicts.len(),
-                            sample
-                        )
-                    } else {
-                        format!(
-                            "context-conflict persists after obstacle-augmented \
-                             re-solve ({} tiles, {:?}); cluster capped for retry",
-                            conflicts.len(),
-                            sample
-                        )
-                    }
-                },
-            });
-            conflict_obstacles.extend(conflicts);
-        }
-        let Some(sol) = sol_opt else {
-            // Solver refusal or twice-conflicted solution: record for the
-            // layout-level retry loop (control flow, not the trace stream).
+        // Solve, then CONTEXT-CONFLICT check (#652/#653): `junction_hard`
+        // is snapshotted before this cluster loop, so a later cluster's
+        // zone can be solved blind to entities earlier clusters
+        // committed — a solution entity landing on a Template/RowEntity-
+        // claimed tile whose existing entity DIFFERS
+        // (name/direction/io/carries) means the solution was produced
+        // for different surroundings. Identical-entity overlaps remain a
+        // benign dedup (skipped at stamping); CONFLICTING overlaps
+        // reject the whole cluster into the cap/retry machinery.
+        //
+        // NO local re-solve is attempted (review on the fail-safe PR
+        // measured the obvious one as a deterministic no-op): adding the
+        // conflict tiles to `strict_obstacles` is filtered back out by
+        // `refresh_forbidden`'s surface-belt exemption (SAT is allowed
+        // to re-stamp surface belts — the benign identical re-derivation
+        // depends on it), and the zone cache's signature excludes the
+        // obstacle sets, so an unchanged zone replays the identical
+        // cached solution. A retry with teeth needs a
+        // forbidden-regardless-of-kind override threaded through
+        // `GrowingRegion` plus a cache-signature extension — recorded on
+        // #652. Until then a conflicted cluster caps for the
+        // layout-level retry and, failing that, is owned by the
+        // unresolved-junction reporter + the fail-sever pass.
+        let Some(sol) = junction_solver::solve_crossing(
+            cluster.as_slice(),
+            &keys_at_tile,
+            &routed_paths,
+            &hard_for_junction,
+            &junction_hard,
+            &unreleasable_obstacles,
+            &spec_belt_tiers,
+            &spec_items,
+            &spec_exit_dirs,
+            &spec_kinds,
+            &entities,
+            strategies,
+            &pending_crossings,
+        ) else {
+            // Capped: `solve_crossing` returned `None`, matching the
+            // `JunctionGrowthCapped` event it emitted at this cluster's seed.
+            // Record it for the retry loop (control flow, not the trace stream).
             cap_coords.push(cluster[0]);
             // Diagnostic: when SPAGHETTIO_BLAME_JUNCTIONS=1 is set,
             // identify which spec's removal would let the cluster
@@ -3142,16 +3075,55 @@ pub fn route_bus_ghost(
                     &pending_crossings,
                 );
             }
-            // The cluster's tiles stay in remaining_crossings so the
-            // retry pass (or, failing that, the unresolved-junction
-            // reporter + the fail-sever pass in Step 6b) owns them —
-            // without this a conflicting crossing would ship silently
-            // dropped.
             for &t in cluster {
                 remaining_crossings.insert(t);
             }
             continue;
         };
+        let conflicts: Vec<(i32, i32)> = sol
+            .entities
+            .iter()
+            .filter(|ent| {
+                let tile = (ent.x, ent.y);
+                let claimed = matches!(
+                    occupancy.claim_at(tile),
+                    Some(crate::bus::ghost_occupancy::Claim::Template { .. })
+                        | Some(crate::bus::ghost_occupancy::Claim::RowEntity { .. })
+                );
+                claimed
+                    && occupancy.entity_at(tile).is_some_and(|existing| {
+                        existing.name != ent.name
+                            || existing.direction != ent.direction
+                            || existing.io_type != ent.io_type
+                            || existing.carries != ent.carries
+                    })
+            })
+            .map(|ent| (ent.x, ent.y))
+            .collect();
+        if !conflicts.is_empty() {
+            let mut sample = conflicts.clone();
+            sample.truncate(4);
+            trace::emit(trace::TraceEvent::CrossingZoneSkipped {
+                tap_item: String::new(),
+                tap_x: sol.footprint.x,
+                tap_y: sol.footprint.y,
+                reason: format!(
+                    "context-conflict at commit ({} tiles, {:?}): solution collides \
+                     with differing committed entities; cluster capped for retry",
+                    conflicts.len(),
+                    sample
+                ),
+            });
+            cap_coords.push(cluster[0]);
+            // The cluster's tiles stay in remaining_crossings so the
+            // retry pass (or, failing that, the unresolved-junction
+            // reporter + the fail-sever pass) owns them — without this a
+            // conflicting crossing would ship silently dropped.
+            for &t in cluster {
+                remaining_crossings.insert(t);
+            }
+            continue;
+        }
         // Every cluster member is now handled, regardless of whether
         // it sits inside the solution footprint.
         for &t in cluster {
@@ -3510,87 +3482,6 @@ pub fn route_bus_ghost(
         ));
     }
 
-    // FAIL-SEVERED fallback (#652 design half): an unresolved crossing
-    // must not ship as a flat sideload-merge. A feeder belt whose facing
-    // tile is an unresolved crossing tile occupied by a belt carrying a
-    // DIFFERENT item would, in game, dump its whole flow onto one lane
-    // of the crossed belt — mixing items and overloading the lane. The
-    // 2026-08-15 #652 diagnosis measured a single such merge fanning out
-    // as ~90 downstream lane-throughput errors (ac7-HS at duty 0.6) and
-    // tier5's accumulating 24→77/s cascade. Dropping the feeder makes
-    // the flow dead-end one tile short: starved consumers fail VISIBLY
-    // (input-rate-delivery, meter, sim) and the unresolved-junction
-    // region still reports the root cause. Scoped to unresolved-cluster
-    // tiles so item-mixing created by any OTHER path still reaches the
-    // validator (belt-item-isolation) instead of being silently tidied.
-    // (The severed tile's Occupancy claim is left in place — after this
-    // point only pole placement consults it, where "occupied" is safe.)
-    if !remaining_crossings.is_empty() {
-        // Specs whose routed path runs through an unresolved crossing:
-        // their ghost belts are the ones a failed crossing leaves
-        // pointing at (or crossing flat through) other flows. Mixing is
-        // severed anywhere along an unresolved spec's route (either
-        // side of the feed), not just at the cluster tiles — the ac7
-        // (15,124) cluster's failed specs mixed with EACH OTHER ten
-        // tiles below the cluster.
-        let unresolved_keys: FxHashSet<&str> = routed_paths
-            .iter()
-            .filter(|(_, path)| path.iter().any(|t| remaining_crossings.contains(t)))
-            .map(|(k, _)| k.as_str())
-            .collect();
-        let unresolved_seg = |seg: Option<&str>| -> bool {
-            seg.and_then(|s| s.strip_prefix("ghost:"))
-                .is_some_and(|k| unresolved_keys.contains(k))
-        };
-        let belt_carries_at: FxHashMap<(i32, i32), (Option<String>, bool)> = entities
-            .iter()
-            .filter(|e| {
-                e.name.ends_with("transport-belt")
-                    || e.name.ends_with("underground-belt")
-                    || e.name.ends_with("splitter")
-            })
-            .map(|e| {
-                (
-                    (e.x, e.y),
-                    (e.carries.clone(), unresolved_seg(e.segment_id.as_deref())),
-                )
-            })
-            .collect();
-        entities.retain(|e| {
-            let is_feeder = e.name.ends_with("transport-belt")
-                || (e.name.ends_with("underground-belt")
-                    && e.io_type.as_deref() == Some("output"));
-            if !is_feeder {
-                return true;
-            }
-            let Some(item) = e.carries.as_deref() else {
-                return true;
-            };
-            let (dx, dy) = crate::common::dir_to_vec(e.direction);
-            let facing = (e.x + dx, e.y + dy);
-            let Some((target_carries, target_unresolved)) = belt_carries_at.get(&facing)
-            else {
-                return true;
-            };
-            let differing = matches!(target_carries, Some(other) if other != item);
-            if !differing {
-                return true;
-            }
-            let in_scope = remaining_crossings.contains(&facing)
-                || *target_unresolved
-                || unresolved_seg(e.segment_id.as_deref());
-            if !in_scope {
-                return true;
-            }
-            trace::emit(trace::TraceEvent::CrossingSevered {
-                x: e.x,
-                y: e.y,
-                item: item.to_string(),
-                into_item: target_carries.clone().unwrap_or_default(),
-            });
-            false
-        });
-    }
 
     // Step 6: sync `entities` to Occupancy's released state.
     //
@@ -4358,6 +4249,101 @@ pub fn route_bus_ghost(
                 }
             }
         }
+    }
+
+    // FAIL-SEVERED fallback (#652 design half, FINAL pass — runs after
+    // Step 7 / tier renames so no later phase can stamp over a severed
+    // tile and resurrect the merge, and so `existing_tiles` snapshots
+    // taken from `entities` never disagree with it): an unresolved
+    // crossing must not ship as a flat sideload-merge. A GHOST feeder
+    // belt whose facing tile holds a belt carrying a DIFFERENT item
+    // would, in game, dump its whole flow onto one lane of the crossed
+    // belt — mixing items and overloading the lane. The 2026-08-15
+    // #652 diagnosis measured a single such merge fanning out as ~90
+    // downstream lane-throughput errors (ac7-HS at duty 0.6) and
+    // tier5's accumulating 24→77/s cascade. Dropping the feeder makes
+    // the flow dead-end one tile short: starved consumers fail VISIBLY
+    // (belt-dead-end, input-rate-delivery, meter, sim) and the
+    // unresolved-junction region still reports the root cause.
+    //
+    // Scope (review on the fail-safe PR tightened this): ONLY
+    // `ghost:`-segment entities are ever severed — committed trunk,
+    // balancer, tapoff, crossing and merger geometry is never dropped,
+    // however it mixes (mixing there still reaches the validator as
+    // belt-item-isolation; the balancer-over-trunk overlap is a
+    // recorded #652 residual). Within ghost geometry, a feed severs
+    // when it faces an unresolved-cluster tile or when either side
+    // belongs to a spec whose route runs through one (the ac7 (15,124)
+    // cluster's failed specs mixed with EACH OTHER ten tiles below the
+    // cluster). The severed tiles' Occupancy claims are left in place;
+    // nothing after this pass consults Occupancy for stamping.
+    if !remaining_crossings.is_empty() {
+        let unresolved_keys: FxHashSet<&str> = routed_paths
+            .iter()
+            .filter(|(_, path)| path.iter().any(|t| remaining_crossings.contains(t)))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        let unresolved_seg = |seg: Option<&str>| -> bool {
+            seg.and_then(|s| s.strip_prefix("ghost:"))
+                .is_some_and(|k| unresolved_keys.contains(k))
+        };
+        let belt_carries_at: FxHashMap<(i32, i32), (Option<String>, bool)> = entities
+            .iter()
+            .filter(|e| {
+                e.name.ends_with("transport-belt")
+                    || e.name.ends_with("underground-belt")
+                    || e.name.ends_with("splitter")
+            })
+            .map(|e| {
+                (
+                    (e.x, e.y),
+                    (e.carries.clone(), unresolved_seg(e.segment_id.as_deref())),
+                )
+            })
+            .collect();
+        entities.retain(|e| {
+            let is_ghost = e
+                .segment_id
+                .as_deref()
+                .is_some_and(|seg| seg.starts_with("ghost:"));
+            if !is_ghost {
+                return true;
+            }
+            let is_feeder = e.name.ends_with("transport-belt")
+                || (e.name.ends_with("underground-belt")
+                    && e.io_type.as_deref() == Some("output"));
+            if !is_feeder {
+                return true;
+            }
+            let Some(item) = e.carries.as_deref() else {
+                return true;
+            };
+            let (dx, dy) = crate::common::dir_to_vec(e.direction);
+            let facing = (e.x + dx, e.y + dy);
+            let Some((target_carries, target_unresolved)) = belt_carries_at.get(&facing)
+            else {
+                return true;
+            };
+            let Some(other) = target_carries.as_deref() else {
+                return true;
+            };
+            if other == item {
+                return true;
+            }
+            let in_scope = remaining_crossings.contains(&facing)
+                || *target_unresolved
+                || unresolved_seg(e.segment_id.as_deref());
+            if !in_scope {
+                return true;
+            }
+            trace::emit(trace::TraceEvent::CrossingSevered {
+                x: e.x,
+                y: e.y,
+                item: item.to_string(),
+                into_item: other.to_string(),
+            });
+            false
+        });
     }
 
     // -------------------------------------------------------------------------

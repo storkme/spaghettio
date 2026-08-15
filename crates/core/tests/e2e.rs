@@ -2261,6 +2261,7 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
         .collect();
     let sr = solver::solve("advanced-circuit", 7.0, &inputs, "assembling-machine-2")
         .expect("ac7 solves");
+    let _guard = spaghettio_core::trace::start_trace();
     let layout = build_bus_layout(
         &sr,
         LayoutOptions {
@@ -2271,6 +2272,10 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
         },
     )
     .expect("ac7 duty-0.6 lays out");
+    let severed = spaghettio_core::trace::drain_events()
+        .iter()
+        .filter(|e| matches!(e, spaghettio_core::trace::TraceEvent::CrossingSevered { .. }))
+        .count();
     let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
         Ok(v) => v,
         Err(e) => e.issues,
@@ -2285,6 +2290,21 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
          crossing is merging flows again (fail-severed regressed): {:#?}",
         lane_errors.len(),
         lane_errors.iter().take(5).collect::<Vec<_>>()
+    );
+    // Anti-vacuity (review): the zero above must come from the fail-safe
+    // actually engaging, not from the fixture drifting to a shape where
+    // nothing needed severing while merges ship elsewhere. Either every
+    // crossing resolved (no unresolved-junction errors — the fully-fixed
+    // future) or at least one feeder was severed.
+    let unresolved = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error && i.category == "unresolved-junction")
+        .count();
+    assert!(
+        unresolved == 0 || severed > 0,
+        "ac7-HS duty-0.6 has {unresolved} unresolved crossings but the \
+         fail-sever pass dropped nothing — the zero-lane-error result is \
+         vacuous (sever scope regressed?)"
     );
 }
 
