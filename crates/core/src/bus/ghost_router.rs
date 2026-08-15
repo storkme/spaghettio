@@ -3287,6 +3287,45 @@ pub fn route_bus_ghost(
         } else {
             Some(&preserve_fixed_tiles)
         };
+        // CONTEXT-CONFLICT check (#652, found via ac7-HS on the RFC-069
+        // flip): a solution entity landing on a Template/RowEntity-claimed
+        // tile whose existing entity DIFFERS (name/direction/io) means the
+        // solution was produced for different surroundings — a cache
+        // signature alias or a zone built against a stale claim view.
+        // The legacy behaviour silently dropped just those tiles, which
+        // mutilates routes (an orphaned UG entrance shipped as a
+        // validator Error; pair- and route-level post-prunes were
+        // prototyped and measured to only relocate the invalidity —
+        // RFC-069 decision log). Identical-entity overlaps remain a
+        // benign dedup (skipped below, as before); CONFLICTING overlaps
+        // reject the whole cluster into the existing cap/retry
+        // machinery, which re-lays with more room instead of committing
+        // a mutilated solution.
+        let context_conflict = sol.entities.iter().any(|ent| {
+            let tile = (ent.x, ent.y);
+            let claimed = matches!(
+                occupancy.claim_at(tile),
+                Some(crate::bus::ghost_occupancy::Claim::Template { .. })
+                    | Some(crate::bus::ghost_occupancy::Claim::RowEntity { .. })
+            );
+            claimed
+                && occupancy.entity_at(tile).is_some_and(|existing| {
+                    existing.name != ent.name
+                        || existing.direction != ent.direction
+                        || existing.io_type != ent.io_type
+                })
+        });
+        if context_conflict {
+            trace::emit(trace::TraceEvent::CrossingZoneSkipped {
+                tap_item: participating_keys.iter().next().cloned().unwrap_or_default().to_string(),
+                tap_x: footprint.x,
+                tap_y: footprint.y,
+                reason: "context-conflict at commit: solution collides with                          differing committed entities; cluster capped for retry"
+                    .to_string(),
+            });
+            cap_coords.push(cluster[0]);
+            continue;
+        }
         let released_count =
             occupancy.release_for_pertile_template(&release_rect, None, preserve_ref);
         trace::emit(trace::TraceEvent::GhostResidueCleared {
