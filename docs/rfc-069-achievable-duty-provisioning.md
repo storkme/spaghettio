@@ -176,7 +176,19 @@ goes to the owner before merge.
   10 and 48-furnace plate rows differ structurally from ec30's), and
   (b) why 0.3 ≡ 0.6 on this fixture. K69-3's family-divergence
   expectation is now a measurement: the ec30 lever is NOT the whole
-  family's lever.
+  family's lever. **(b) partially answered same day**: builds at duty
+  1.0 / 0.6 / 0.3 give 4,967 / 5,395 / 5,395 entities — the duty<1
+  winner is IDENTICAL across cap values, i.e. a candidate whose
+  construction never consults the cap; its EC 7×6 shape matches the
+  shard/partition module size, so the working hypothesis is a
+  partition-class candidate winning selection on ec60-red once the
+  HS-capped native variant changes the field. The meter's attribute
+  pass on its baseline shows the same allocation-skew class as ec30
+  (4 cable machines full-output while one EC block starves of cable),
+  so the *mechanism* transfers even though the lever's delivery path
+  does not. Next: trace which candidate wins and why, then either get
+  the capped HS candidate selected or cap the partition module size
+  by the same per-pickup rule.
 
 - *2026-08-15 — RFC opened.* Grounded in #648's re-attribution: the
   family's Error-level validator signal was retracted as a walker
