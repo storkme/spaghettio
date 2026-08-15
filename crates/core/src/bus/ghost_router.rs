@@ -4287,6 +4287,12 @@ pub fn route_bus_ghost(
             seg.and_then(|s| s.strip_prefix("ghost:"))
                 .is_some_and(|k| unresolved_keys.contains(k))
         };
+        // Known scope gaps, deliberate (session-side review): only a
+        // splitter's PRIMARY tile is keyed here (a feed into the second
+        // tile is invisible to this map), and row-template belts live
+        // in `row_entities`, not `entities`, so a ghost feed into a row
+        // belt cannot sever — the latter is fine per the owner-confirmed
+        // "the engine never side-feeds row input belts".
         let belt_carries_at: FxHashMap<(i32, i32), (Option<String>, bool)> = entities
             .iter()
             .filter(|e| {
@@ -4309,10 +4315,14 @@ pub fn route_bus_ghost(
             if !is_ghost {
                 return true;
             }
-            let is_feeder = e.name.ends_with("transport-belt")
-                || (e.name.ends_with("underground-belt")
-                    && e.io_type.as_deref() == Some("output"));
-            if !is_feeder {
+            // Surface belts ONLY (session-side review): severing a
+            // UG-output would orphan its input, and build_ug_pairs
+            // re-pairs greedily to the NEXT output down the lane —
+            // inventing a tunnel nobody designed, worse than the
+            // error. Measured across both duty-0.6 shapes: every
+            // sever decision was a plain transport-belt, so the
+            // UG-out arm bought nothing and carried the hazard.
+            if !e.name.ends_with("transport-belt") {
                 return true;
             }
             let Some(item) = e.carries.as_deref() else {
