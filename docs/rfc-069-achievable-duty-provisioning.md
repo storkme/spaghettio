@@ -179,7 +179,20 @@ goes to the owner before merge.
   = 6,355 entities / 176×207 (+28% entities, +64% bbox vs baseline —
   K69-4 watch), 0 errors, meter **96.5% produced** (up from 90.8;
   ec30's gate-clearing artifact metered 96.6 and simmed 99.4).
-  **Pre-registered gate: ec60-red 432k sim ≥ 96.0% delivered.***
+  **Pre-registered gate: ec60-red 432k sim ≥ 96.0% delivered.
+  GATE CLEARED — AT PLAN: 60.00/60.00 produced (+0.0%), 61.60
+  delivered (+2.7%, in-flight buffer), PASS, converged, 338/340
+  working / 2 ingredient-short. From 90.7% to 100.0%.***
+- *2026-08-15 — tier5 under the extended cap: promising but
+  ROUTER-BLOCKED.* At duty 0.6 the deep chain reshapes (6,190 → 6,970
+  entities) and the meter reads PU at **100% of plan** — but the
+  export carries **9 belt-dead-end + 1 unresolved-junction ERRORS**
+  (+56 reachability warnings): the ghost router failed to wire the
+  fragmented rows cleanly, and a meter reading on structurally broken
+  geometry clears nothing. tier5's lever is real but gated on router
+  capacity for the fragmented deep-chain shape — a known engineering
+  class (junction solver), not a provisioning question. Parked with
+  this receipt; the tier5 gate runs only on an error-free artifact.*
 
 - *2026-08-15 — Phase 2 first family probe: ec60-red does NOT respond
   to the block cap.* At duty 0.6 its EC stage reshapes (2×20 → 7×≤6)
