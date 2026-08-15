@@ -222,9 +222,13 @@ pub(crate) fn max_machines_for_belt(
     spec: &MachineSpec,
     belt_name: &str,
     max_belt_tier: Option<&str>,
+    duty: f64,
 ) -> usize {
-    let out_lane_cap = lane_capacity(belt_name);
-    let in_lane_cap = effective_in_lane_cap(max_belt_tier);
+    // RFC-069: `duty` scales BOTH caps so a row cannot be sized to
+    // exactly 100% of a belt (the #644 zero-headroom shape). 1.0 is
+    // bit-identical to pre-RFC.
+    let out_lane_cap = lane_capacity(belt_name) * duty;
+    let in_lane_cap = effective_in_lane_cap(max_belt_tier) * duty;
     let mut max_m: f64 = 999.0;
 
     for out in &spec.outputs {
@@ -278,9 +282,14 @@ pub(crate) fn max_machines_for_belt_both_lanes(
     belt_name: &str,
     max_belt_tier: Option<&str>,
     out_stack: u8,
+    duty: f64,
 ) -> usize {
-    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack);
-    let in_lane_cap = effective_in_lane_cap(max_belt_tier);
+    // RFC-069: see `max_machines_for_belt` — duty scales both caps;
+    // 1.0 is bit-identical. This variant is the root #644 site: at
+    // duty 1.0, `floor(7.5/0.625)×2 = 24` copper furnaces draw exactly
+    // one full yellow belt.
+    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack) * duty;
+    let in_lane_cap = effective_in_lane_cap(max_belt_tier) * duty;
     let mut max_m: f64 = 999.0;
 
     for out in &spec.outputs {
@@ -316,9 +325,12 @@ pub(crate) fn max_machines_for_belt_horizontal_stack(
     belt_name: &str,
     max_belt_tier: Option<&str>,
     out_stack: u8,
+    duty: f64,
 ) -> usize {
-    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack);
-    let in_lane_cap = effective_in_lane_cap(max_belt_tier);
+    // RFC-069: see `max_machines_for_belt` — duty scales both caps;
+    // 1.0 is bit-identical.
+    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack) * duty;
+    let in_lane_cap = effective_in_lane_cap(max_belt_tier) * duty;
     let mut max_m: f64 = 999.0;
 
     for out in &spec.outputs {
@@ -2704,6 +2716,9 @@ pub fn place_rows(
     direct_insertion: Option<crate::bus::di_cell::DiClaimOrder>,
     di_couplings: &[crate::models::DICoupling],
     ctx: &StackingCtx,
+    // RFC-069: fraction of nominal belt throughput the row-size caps
+    // treat as deliverable; 1.0 = bit-identical pre-RFC behavior.
+    planning_duty: f64,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut row_spans: Vec<RowSpan> = Vec::new();
@@ -3095,15 +3110,15 @@ pub fn place_rows(
         let out_stack = ctx.for_item(first_solid_output_item);
         let max_per_row = if single_lane {
             let ob = belt_entity_for_rate_stacked(output_rate * 2.0, max_belt_tier, out_stack);
-            max_machines_for_belt(spec, ob, max_belt_tier)
+            max_machines_for_belt(spec, ob, max_belt_tier, planning_duty)
         } else if is_hs_dual {
             // HS feeds input₀ via K stacked trunks, so only output and
             // input₁ constrain machines per row.
             let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
-            max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier, out_stack)
+            max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier, out_stack, planning_duty)
         } else {
             let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
-            max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack)
+            max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack, planning_duty)
         };
 
         // RFC-062 Phase 2: a final (target) item that is ALSO consumed by
@@ -3249,6 +3264,7 @@ pub fn place_rows_from_result(
     row_layout: RowLayout,
     direct_insertion: Option<crate::bus::di_cell::DiClaimOrder>,
     ctx: &StackingCtx,
+    planning_duty: f64,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     place_rows(
         &result.machines,
@@ -3265,6 +3281,7 @@ pub fn place_rows_from_result(
         direct_insertion,
         &result.di_couplings,
         ctx,
+        planning_duty,
     )
 }
 
@@ -3439,7 +3456,7 @@ mod tests {
     fn max_machines_single_output_yellow_belt() {
         // rate=1.0/machine, lane_cap=7.5 → floor(7.5/1.0)=7 machines
         let spec = iron_plate_spec();
-        assert_eq!(max_machines_for_belt(&spec, "transport-belt", None), 7);
+        assert_eq!(max_machines_for_belt(&spec, "transport-belt", None, 1.0), 7);
     }
 
     #[test]
@@ -3447,8 +3464,46 @@ mod tests {
         // per_lane = floor(7.5 / 1.0) = 7, both lanes = 14
         let spec = iron_plate_spec();
         assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "transport-belt", None, 1),
+            max_machines_for_belt_both_lanes(&spec, "transport-belt", None, 1, 1.0),
             14
+        );
+    }
+
+    /// RFC-069: `planning_duty` must forbid exactly-100% rows. The #644
+    /// zero-headroom shape: 0.625/s per machine on yellow gives
+    /// floor(7.5/0.625)×2 = 24 machines = exactly 15.0/s = exactly one
+    /// full belt at duty 1.0; at duty 0.9 the cap drops to
+    /// floor(6.75/0.625)×2 = 20 machines = 12.5/s = 83% of the belt.
+    /// Duty 1.0 is pinned bit-identical.
+    #[test]
+    fn planning_duty_shrinks_zero_headroom_rows() {
+        let spec = MachineSpec {
+            entity: "electric-furnace".to_string(),
+            recipe: "copper-plate".to_string(),
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            count: 72.0,
+            inputs: vec![ItemFlow {
+                item: "copper-ore".to_string(),
+                rate: 0.625,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            outputs: vec![ItemFlow {
+                item: "copper-plate".to_string(),
+                rate: 0.625,
+                is_fluid: false,
+                module_id: 0,
+            }],
+        };
+        assert_eq!(
+            max_machines_for_belt_both_lanes(&spec, "transport-belt", Some("transport-belt"), 1, 1.0),
+            24,
+            "duty 1.0 must stay bit-identical (the zero-headroom status quo)"
+        );
+        assert_eq!(
+            max_machines_for_belt_both_lanes(&spec, "transport-belt", Some("transport-belt"), 1, 0.9),
+            20,
+            "duty 0.9 must cap the row below a full belt"
         );
     }
 
@@ -3468,21 +3523,21 @@ mod tests {
                 module_id: 0,
             }],
         };
-        assert_eq!(max_machines_for_belt(&spec, "transport-belt", None), 1);
+        assert_eq!(max_machines_for_belt(&spec, "transport-belt", None, 1.0), 1);
     }
 
     #[test]
     fn test_max_machines_red_belt() {
         // rate=1.0/machine, lane_cap=15.0 → floor(15.0/1.0)=15 machines
         let spec = iron_plate_spec();
-        assert_eq!(max_machines_for_belt(&spec, "fast-transport-belt", None), 15);
+        assert_eq!(max_machines_for_belt(&spec, "fast-transport-belt", None, 1.0), 15);
     }
 
     #[test]
     fn test_max_machines_blue_belt() {
         // rate=1.0/machine, lane_cap=22.5 → floor(22.5/1.0)=22 machines
         let spec = iron_plate_spec();
-        assert_eq!(max_machines_for_belt(&spec, "express-transport-belt", None), 22);
+        assert_eq!(max_machines_for_belt(&spec, "express-transport-belt", None, 1.0), 22);
     }
 
     #[test]
@@ -3492,7 +3547,7 @@ mod tests {
         // Output is the bottleneck → 30
         let spec = iron_plate_spec();
         assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None, 1),
+            max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None, 1, 1.0),
             30
         );
     }
@@ -3553,7 +3608,7 @@ mod tests {
     fn place_rows_single_recipe_no_split() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked(), 1.0);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].machine_count, 1);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
@@ -3564,7 +3619,7 @@ mod tests {
         let (producer, consumer) = cell_pair();
         let machines = vec![consumer, producer];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked(), 1.0);
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
         assert_eq!(spans[1].spec.recipe, "iron-gear-wheel");
@@ -3575,7 +3630,7 @@ mod tests {
         // Second recipe starts at y_end_of_first + 2 (gap)
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked(), 1.0);
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].y_start, spans[0].y_end + 2);
     }
@@ -3584,7 +3639,7 @@ mod tests {
     fn place_rows_y_offset() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked(), 1.0);
         assert_eq!(spans[0].y_start, 5);
     }
 
@@ -3609,6 +3664,7 @@ mod tests {
             None,
             &[],
 &StackingCtx::unstacked(),
+            1.0,
         );
 
         // 4 distinct recipes → 4 rows (no splitting for these small counts)
@@ -3658,6 +3714,7 @@ mod tests {
             Some(crate::bus::di_cell::DiClaimOrder::Upstream), // direct_insertion ON
             &result.di_couplings,
             &StackingCtx::unstacked(),
+            1.0,
         );
 
         let recipe_order: Vec<&str> = spans.iter().map(|s| s.spec.recipe.as_str()).collect();
@@ -3705,6 +3762,7 @@ mod tests {
             None, // direct_insertion OFF
             &couplings,
             &StackingCtx::unstacked(),
+            1.0,
         );
 
         for span in &spans {
@@ -3753,6 +3811,7 @@ mod tests {
             None,
             &[],
 &StackingCtx::unstacked(),
+            1.0,
         );
         // 20 machines, max_per_row=14 → ceil(20/14) = 2 rows
         assert_eq!(spans.len(), 2, "Expected 2 rows due to belt lane capacity");
@@ -3821,6 +3880,7 @@ mod tests {
             None,
             &[],
 &StackingCtx::unstacked(),
+            1.0,
         );
 
         let gear_rows: Vec<_> = spans
@@ -3840,7 +3900,7 @@ mod tests {
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, total_height) =
-            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
+            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked(), 1.0);
 
         // Every span should have y_end > y_start
         for span in &spans {
@@ -3868,7 +3928,7 @@ mod tests {
         let dep_order = vec!["iron-plate".to_string()];
         let bus_width = 10;
         let (_, spans, max_width, _) =
-            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
+            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked(), 1.0);
 
         assert!(
             spans[0].row_width >= bus_width,
@@ -3899,8 +3959,9 @@ mod tests {
             None,
             &[],
 &StackingCtx::unstacked(),
+            1.0,
         );
-        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked());
+        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), None, &[], &StackingCtx::unstacked(), 1.0);
 
         // Second row should start 5 tiles later with gap
         assert_eq!(
@@ -4256,7 +4317,7 @@ mod tests {
         let (ents, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(), 1.0,
         );
         assert_eq!(spans.len(), 1, "producer + consumer must fuse into one cell row, got {:?}",
             spans.iter().map(|s| s.spec.recipe.as_str()).collect::<Vec<_>>());
@@ -4296,7 +4357,7 @@ mod tests {
         let (ents, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(), 1.0,
         );
         assert_eq!(spans.len(), 1, "guard: this asserts nothing unless a cell was actually fused");
         let y = spans[0].output_belt_y;
@@ -4347,7 +4408,7 @@ mod tests {
         let (ents, _spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &couplings, &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &couplings, &StackingCtx::unstacked(), 1.0,
         );
         // Since Phase 2 this pair legitimately fuses as a ROW cell (the
         // consumer is coupled east/west, leaving both faces free for its
@@ -4554,7 +4615,7 @@ mod tests {
         let (_, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            None, &gear_cell_couplings(), &StackingCtx::unstacked(),
+            None, &gear_cell_couplings(), &StackingCtx::unstacked(), 1.0,
         );
         assert_eq!(spans.len(), 2, "DI off must not fuse");
     }
@@ -4603,7 +4664,7 @@ mod tests {
         let (_, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::Regular, QualityTier::Normal,
             0, None, None, RowLayout::default(),
-            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(), 1.0,
         );
         assert_eq!(
             spans.len(), 2,
@@ -4625,7 +4686,7 @@ mod tests {
         let (ents, spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(), 1.0,
         );
         assert_eq!(spans.len(), 1, "guard: needs a fused cell to mean anything");
         let out_y = spans[0].output_belt_y;
@@ -4659,7 +4720,7 @@ mod tests {
             &machines, &dep_order, 0, 0, Some("express-transport-belt"),
             InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
-            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(),
+            Some(crate::bus::di_cell::DiClaimOrder::Upstream), &gear_cell_couplings(), &StackingCtx::unstacked(), 1.0,
         );
         assert_eq!(spans.len(), 1, "guard: needs a fused cell to mean anything");
         let in_y = spans[0].input_belt_y[0];

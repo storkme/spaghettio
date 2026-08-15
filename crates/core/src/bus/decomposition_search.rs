@@ -497,6 +497,9 @@ impl DecompositionCandidate for ModuleSizeSplit {
             quality: opts.quality,
             wire_mode: opts.wire_mode,
             merge_tap: opts.merge_tap,
+            // Inherited (RFC-069): candidate variants must plan at the
+            // same duty as the native pass or the comparison is skewed.
+            planning_duty: opts.planning_duty,
             stacking: opts.stacking,
             inserter_capacity: opts.inserter_capacity,
             cell_composition: opts.cell_composition,

@@ -134,6 +134,7 @@ fn main() {
     let mut di = DirectInsertion::Candidate;
     let mut claim: Option<DiClaimOrder> = None;
     let mut belt: Option<String> = None;
+    let mut duty: f64 = 1.0;
     let mut quality = QualityTier::Normal;
     let mut stacking: u8 = 1;
     let mut research_productivity: std::collections::BTreeMap<String, f64> =
@@ -168,6 +169,12 @@ fn main() {
                 })
             }
             "--belt" => belt = Some(need(i)),
+            // RFC-069 Phase 1: planning-duty knob for the K69-1 sim A/B.
+            "--duty" => {
+                duty = need(i)
+                    .parse()
+                    .unwrap_or_else(|_| usage("--duty must be a float in (0, 1]"))
+            }
             "--quality" => {
                 let q = need(i);
                 quality = QualityTier::from_name(&q)
@@ -261,6 +268,7 @@ fn main() {
     let mut opts = LayoutOptions {
         direct_insertion: di,
         max_belt_tier: belt,
+        planning_duty: duty,
         quality,
         stacking,
         research_productivity,

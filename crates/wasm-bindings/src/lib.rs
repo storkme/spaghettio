@@ -72,6 +72,9 @@ fn layout_options(
         // existed. Wiring a control is a separate change; defaulting here
         // keeps the boundary explicit rather than relying on `..Default`.
         research_productivity: Default::default(),
+        // RFC-069: the browser plans at the engine default (1.0 while the
+        // Phase-1 gate is open); no UI control until the default flips.
+        planning_duty: 1.0,
         max_belt_tier,
         row_layout,
         surplus_policy: SurplusPolicy::default(),
