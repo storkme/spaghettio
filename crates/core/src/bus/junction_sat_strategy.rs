@@ -1422,19 +1422,40 @@ impl JunctionStrategy for SatStrategy {
         // UNSAT-vs-Timeout classification threshold (a bookkeeping
         // bias between two refusal flavors, noted on #652).
         //
-        // Hang-risk rationale (review on the determinism PR): descent
-        // re-solves — including the UNSAT-terminal one — run on a zone
-        // that already passed the `MAX_ZONE_SAT_VARS` ≤ 700 gate, and
-        // that ceiling's own calibration found VARIABLE COUNT (not
-        // clause count) to be the hang discriminator: the observed hang
-        // was 756 vars / 7,871 clauses while 20k+-clause zones solved
-        // in milliseconds. Cost caps add only clauses. So descent
-        // solves sit inside the calibrated-safe var range; the residual
-        // risk is accepted and this note is the record.
+        // Hang-risk rationale, CORRECTED (review round 2 verified that
+        // this note's first version was factually wrong — `encode_cost_cap`
+        // feeds an 11·tiles literal list into the Sinz encoder, which
+        // allocates n·k AUXILIARY variables, so capped solves run at
+        // tens of thousands of vars and the base-encoding 756-var hang
+        // calibration does not apply to them in either direction). The
+        // correct account: the old wall-clock deadline was checked
+        // BETWEEN iterations only — it never interrupted a running
+        // solve (no thread watchdog natively, none possible in WASM) —
+        // so old and new both bound the NUMBER of capped solves
+        // attempted, never a single solve's duration. The iteration cap
+        // (4) bounds attempts deterministically at the same order the
+        // 25ms deadline allowed on release hardware. Residual exposure
+        // vs the old scheme: up to ~3 more attempts of an encoding
+        // class that has empirically never hung (corpus-wide, every
+        // capped solve — including 30k+-aux-var instances — completes
+        // in milliseconds; Sinz chains propagate cheaply). Plus the
+        // deterministic size breaker below.
         for descent_iter in 0..self.constraints.cost_descent_max_iters {
             let Some(cap) = best_cost.checked_sub(1) else {
                 break; // cost already zero — nothing to tighten
             };
+            // Deterministic size breaker (#654 round 2): the capped
+            // encoding adds ~11·tiles·cap Sinz auxiliaries. Skip
+            // descent when that blows past a generous bound — a pure
+            // function of zone size and cap, so reproducibility is
+            // untouched. Observed corpus instances sit well under this.
+            const MAX_DESCENT_AUX_VARS: u64 = 200_000;
+            let aux_estimate = 11u64
+                * (zone.width as u64 * zone.height as u64)
+                * cap as u64;
+            if aux_estimate > MAX_DESCENT_AUX_VARS {
+                break;
+            }
             let (next_opt, next_stats) =
                 crate::sat::solve_crossing_zone_per_channel_with_cost_cap(
                     &zone,
