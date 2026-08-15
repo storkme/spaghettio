@@ -634,8 +634,10 @@ mod tests {
     fn manifest_carries_per_category_validator_state() {
         use rustc_hash::FxHashSet;
         // Fixture choice: needs a config that validates NON-clean (the
-        // reconciliation below is vacuous at 0 == 0) with more than one
-        // issue category. gear@10 served until the #644 phantom-UG-source
+        // reconciliation below is vacuous at 0 == 0 — that is the only
+        // hard requirement, guarded by the non-empty assert); more than
+        // one issue category is preferred for stronger per-category
+        // discrimination. gear@10 served until the #644 phantom-UG-source
         // fix took its lane-throughput artifacts to zero; ec@10 from ore
         // carries input-rate-delivery + row-input-belt-margin warnings.
         let inputs: FxHashSet<String> =
