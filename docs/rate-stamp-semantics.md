@@ -138,8 +138,7 @@ carries more than its belt's capacity by either model.
   and `belt_structural::compute_lane_rates`. *(2026-08-15, #632 B5: the
   dispatch now runs the `belt_flow` model — the question below is SETTLED
   in its favor with sim/meter receipts, see `validator-trust.md`'s
-  lane-throughput row — and the `belt_structural` twin is scheduled for
-  deletion. The paragraphs below are kept as the record of the
+  lane-throughput row — and the `belt_structural` twin is deleted. The paragraphs below are kept as the record of the
   then-unresolved state.)* They disagreed: on the S=1 arms
   `belt_flow` puts 36/s through ore belts with a 30/s cap (96–109 tiles),
   where `belt_structural` reports nothing over capacity. Note that
@@ -171,8 +170,9 @@ carries more than its belt's capacity by either model.
    they say so at the call site. Even then it is not a physical invariant: a
    family exceeding one belt is perfectly legal when the planner realizes it
    as parallel belts.
-2. **For per-tile flow, use `validate::check_lane_throughput`** (or
-   `belt_structural::compute_lane_rates` directly). It walks the graph from
+2. **For per-tile flow, use `validate::belt_flow::check_lane_throughput`**
+   (or `belt_flow::compute_lane_rates` directly — the sole walker since
+   #632 B5 deleted the `belt_structural` twin). It walks the graph from
    machine specs; it does not trust the stamp.
 3. **Differing stamped values across tiles prove nothing** about the number
    being per-tile — parallel *paths* differ from one another while every
