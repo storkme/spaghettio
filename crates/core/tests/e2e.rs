@@ -2380,10 +2380,11 @@ fn tier4_advanced_circuit_from_ore_am2() {
 /// Deep chain — electronic-circuit + advanced-circuit + sulfuric-acid,
 /// with the whole plastic/sulfur/oil subtree upstream. Reached
 /// 0 errors / 0 warnings under the OLD lane walker (the recipe-ladder
-/// "tier 5 solved" bar); since #632 B5's truth-telling dispatch it
-/// carries the adjudicated #644 known-deficit ceiling below —
-/// "solved" meant validator-clean, and the validator was blind to the
-/// trunk deficit the meter measures at 85.6% of plan.
+/// "tier 5 solved" bar). The #632 B5 dispatch swap briefly pinned 70
+/// lane errors here; the #644 walker fix retracted them as
+/// phantom-UG-source artifacts (see the block below) — back to zero
+/// errors, while the meter's 85.6%-of-plan reading stays open on
+/// #644 as the zero-headroom class.
 ///
 /// URL repro:
 /// `?item=processing-unit&rate=2&machine=assembling-machine-3&in=coal,water,crude-oil,iron-ore,copper-ore&belt=fast-transport-belt`
@@ -6919,11 +6920,12 @@ fn stacking_ec_60s_red_one_belt_headline() {
         .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
         // 2026-08-15 (#632 B5 dispatch swap): the S=1 arm read 70
         // lane-throughput errors (16.1-16.8/s on 15/s fast lanes) and
-        // this block tolerated them as an adjudicated deficit.
+        // this closure tolerated them as an adjudicated deficit.
         // 2026-08-15 later the same day (#644 walker fix): those were
         // phantom-UG-source artifacts; both arms measure ZERO errors
-        // (probe receipt on PR #648), so validate() must succeed again.
-        let issues = validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
+        // (probe receipt on PR #648), so validate() must succeed and
+        // the issues need no per-arm screening.
+        validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
             .unwrap_or_else(|e| {
                 panic!(
                     "S={stacking} validate errors (expected none post-#644 walker fix): {:?}",
@@ -6933,7 +6935,7 @@ fn stacking_ec_60s_red_one_belt_headline() {
                         .collect::<Vec<_>>()
                 )
             });
-        (layout, issues)
+        layout
     };
 
     // TIER-SELECTION probe (NOT a physical audit — see the note on this
@@ -6980,20 +6982,7 @@ fn stacking_ec_60s_red_one_belt_headline() {
 
     // S=1: 0 validation errors, and the EC family total does NOT fit one
     // unstacked red belt.
-    let (l1, issues1) = run(1);
-    let errors1: Vec<_> = issues1.iter().filter(|i| i.severity == Severity::Error).collect();
-    // 2026-08-15 (#632 B5 dispatch swap, #644): the S=1 arm carries real
-    // lane-throughput errors (16.1-16.8/s on 15/s fast lanes — S=1 at
-    // 60/s is where the trunk under-provisioning binds hardest). Any
-    // OTHER error category is still a drift.
-    let non_lane1: Vec<_> = errors1
-        .iter()
-        .filter(|i| i.category != "lane-throughput")
-        .collect();
-    assert!(
-        non_lane1.is_empty(),
-        "S=1 baseline drifted beyond the adjudicated lane-throughput class (#644): {non_lane1:?}"
-    );
+    let l1 = run(1);
     let over1 = family_over_one_belt(&l1, 1);
     assert!(
         !over1.is_empty(),
@@ -7003,10 +6992,8 @@ fn stacking_ec_60s_red_one_belt_headline() {
     );
 
     // S=2: same plan, and stacking makes the family fit one belt.
-    let (l2, issues2) = run(2);
+    let l2 = run(2);
     assert_eq!(l2.stacking, 2, "layout must record its stack size");
-    let errors2: Vec<_> = issues2.iter().filter(|i| i.severity == Severity::Error).collect();
-    assert!(errors2.is_empty(), "expected 0 errors at S=2, got {errors2:?}");
     let over2 = family_over_one_belt(&l2, 2);
     assert!(over2.is_empty(), "family totals above one STACKED belt at S=2: {over2:?}");
 

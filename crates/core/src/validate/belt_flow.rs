@@ -2737,13 +2737,18 @@ fn compute_lane_rates_impl(
             // trunks under-seeded at 9/s instead of 15/s). Only an
             // ORPHANED exit — no paired entrance, or nothing behind it —
             // genuinely admits flow into the graph and keeps its seed.
-            // Mirrors the topo sort's inheritance wiring condition
-            // EXACTLY (behind ∈ belt_dir_map, behind != this exit —
-            // see `behind_to_ug_outputs`): the skip is sound only when
-            // inheritance will actually fire. Structural presence is
-            // the shared predicate by design — neither side checks
-            // that `behind` is fed or carries the tunnel's item, so a
-            // divergence here would de-seed without inheriting.
+            // Mirrors the topo sort's inheritance WIRING condition
+            // (behind ∈ belt_dir_map, behind != this exit — see
+            // `behind_to_ug_outputs`); the inheritance PROCESSING
+            // block itself carries no behind!=pos clause, but
+            // `build_ug_pairs` geometry keeps behind==pos unreachable
+            // (the exit sits strictly ahead of the entrance). The skip
+            // is sound only when inheritance will actually deliver.
+            // Structural presence is the shared predicate by design —
+            // neither side checks that `behind` is fed or carries the
+            // tunnel's item, so tightening only one side would create
+            // the de-seed-without-inherit divergence this guard
+            // exists to prevent.
             if ug_output_tiles.contains(&pos) {
                 if let Some(&paired_input) = ug_output_to_input.get(&pos) {
                     if let Some(&inp_d) = ug_input_dir.get(&paired_input) {
