@@ -122,12 +122,14 @@ pub struct LayoutOptions {
     /// effective in-lane cap, so 0.6 means block 2 on yellow but block
     /// 6 at the express default — sim_export refuses --duty without
     /// --belt for exactly this trap), and the field itself is not
-    /// range-validated — values ≤ 0 degrade conservatively (the block
-    /// clamps to ≥ 1), while values > 1 and NaN behave exactly as 1.0
+    /// range-validated — values ≤ 0 clamp the block to 1 — maximal
+    /// fragmentation (most per-feed headroom, most footprint; the
+    /// measured direction of safety for delivery, not for cost), while values > 1 and NaN behave exactly as 1.0
     /// (the `duty < 1.0` gate is false for both, so the cap is
-    /// skipped). The measured-dead intermediate shapes (e.g. block 3
-    /// on EC-yellow at duties in [0.675, 1.0)) are inherent to a
-    /// continuous knob over integer blocks — Phase 2's shipping
+    /// skipped). The measured-dead intermediate shapes (block 3
+    /// on EC-yellow at duties in [0.9, 1.0); the gate-clearing block 2
+    /// spans [0.6, 0.9)) are inherent to a continuous knob over
+    /// integer blocks — Phase 2's shipping
     /// semantics decide whether the shipped rule is a duty fraction
     /// or an explicit block bound.
     pub planning_duty: f64,

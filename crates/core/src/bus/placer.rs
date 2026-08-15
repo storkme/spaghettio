@@ -3155,9 +3155,13 @@ pub fn place_rows(
                         effective_in_lane_cap(max_belt_tier) * 2.0 * planning_duty;
                     // +1e-9 before floor: the fitted products land ON
                     // integer boundaries (15×0.6/4.5 = 2.0000000000000004
-                    // only by ULP luck) and a slip DOWN would flip the
-                    // measured-good block 2 into the measured-dead 3
-                    // (bot review round 2).
+                    // only by ULP luck), and a slip DOWN would floor the
+                    // gate-clearing block 2 to an UNMEASURED block 1
+                    // (bot round 2; round 4 corrected this comment's
+                    // original direction). The upward risk (a product
+                    // 1e-9 below an integer rounding up) has no real
+                    // belt/rate tuple behind it — adjudicated rounds
+                    // 3-4.
                     let block = (((belt_budget / item0_rate) + 1e-9).floor() as usize).max(1);
                     hs_cap.min(block)
                 } else {
