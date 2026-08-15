@@ -3523,7 +3523,8 @@ mod tests {
     /// input₀ trunk's block. EC-like spec (input₀ copper-cable 4.5/s,
     /// input₁ iron-plate 1.5/s, out 1.5/s) on yellow: at duty 1.0 the
     /// HS cap is output-bound at 10 machines/row (the shape that sims
-    /// 92.1%); at duty 0.6 the one-trunk block is floor(15×0.6/4.5) =
+    /// 92.1% — output and input₁ TIE at 10: floor(7.5/1.5)×2 both
+    /// ways); at duty 0.6 the one-trunk block is floor(15×0.6/4.5) =
     /// **2** machines/row — the GATE-CLEARING config (99.4% delivered,
     /// RFC-069 decision log). The dead intermediate (block 3, 85.0%
     /// by meter) is deliberately NOT pinned — enshrining a
@@ -3558,13 +3559,15 @@ mod tests {
         let baseline = run(1.0);
         assert_eq!(
             baseline.iter().max().copied().unwrap_or(0), 10,
-            "duty 1.0 must stay bit-identical: output-bound 10-machine HS rows, got {baseline:?}"
+            "duty 1.0 must stay bit-identical: 10-machine HS rows (output and \
+             input₁ tie at 10), got {baseline:?}"
         );
         let capped = run(0.6);
         assert!(
-            capped.iter().all(|&c| c <= 2) && capped.iter().sum::<usize>() == 20,
-            "duty 0.6 must cap HS rows at the one-trunk block (2, the gate-clearing \
-             shape), preserving the total machine count; got {capped:?}"
+            capped.iter().all(|&c| c == 2) && capped.iter().sum::<usize>() == 20,
+            "duty 0.6 must produce exactly 10×2 HS rows (the gate-clearing shape; \
+             `== 2` so a degenerate 20×1 sprawl cannot pass — bot round 3); \
+             got {capped:?}"
         );
     }
 
