@@ -1466,6 +1466,20 @@ impl JunctionStrategy for SatStrategy {
             // round-2 all-or-nothing version was a strict quality
             // regression on oversized zones). Pure function of zone
             // size and cost — reproducibility untouched.
+            //
+            // HONEST LIMIT (round 4): when the clamp actually bites
+            // (natural cap > max_cap_for_bound) and the clamped solve
+            // is UNSAT, that proves nothing about the unexplored band
+            // (max_cap_for_bound, best_cost-1] — the zone keeps its
+            // base cost even if a cheaper layout exists there. That
+            // band is unencodable within the bound, so no deterministic
+            // scheme can probe it; forfeiting descent depth on
+            // oversized zones is the accepted price of boundedness
+            // (on the UNSAT branch the graduated clamp gains nothing
+            // over an outright skip — its gain is the SAT branch).
+            // The interactive "Improve region" pass (region_reimprove,
+            // wall-clock-budgeted, preview-only) can still find those
+            // layouts; it does not write back to the zone cache.
             const MAX_DESCENT_AUX_VARS: u64 = 200_000;
             let tiles = zone.width as u64 * zone.height as u64;
             let max_cap_for_bound = (MAX_DESCENT_AUX_VARS / (11 * tiles.max(1))) as u32;

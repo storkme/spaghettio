@@ -11,10 +11,18 @@
 //! SatStrategy ran through this module — review round 2 caught that
 //! as stale.)
 //!
-//! Both callers want the same contract: start from a known-feasible
-//! entity list, repeatedly call `solve_crossing_zone_with_cost_cap` with
-//! `cap = current_cost - 1`, and report every strictly-cheaper layout
-//! until UNSAT (provably optimal), a deadline, or an iteration cap.
+//! Both callers share the same descent SHAPE — start from a
+//! known-feasible entity list, repeatedly re-solve with
+//! `cap = current_cost - 1`, keep every strictly-cheaper layout —
+//! but NOT the same bounds (round-4 review): this path stops on
+//! UNSAT (provably optimal), a deadline, or an iteration cap, and
+//! uses the natural cap; SatStrategy's inline loop additionally
+//! clamps its cap under a size bound, so there UNSAT can mean
+//! "none at or below the CLAMPED cap" — not proof of optimality.
+//! The interactive path may therefore find layouts the pipeline's
+//! bounded descent forfeits on oversized zones; that gap is the
+//! accepted price of pipeline determinism (its results are
+//! preview-only and are not written back to the zone cache).
 
 use web_time::Instant;
 
