@@ -173,7 +173,9 @@ fn main() {
             "--duty" => {
                 duty = need(i)
                     .parse()
-                    .unwrap_or_else(|_| usage("--duty must be a float in (0, 1]"))
+                    .ok()
+                    .filter(|d: &f64| *d > 0.0 && *d <= 1.0)
+                    .unwrap_or_else(|| usage("--duty must be a float in (0, 1]"))
             }
             "--quality" => {
                 let q = need(i);
