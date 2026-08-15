@@ -574,9 +574,10 @@ stop signal.
   y-range with a provably-inert recipe-keyed fallback.
   tier4_partitioned re-pinned 8→6 per the frozen contract; bonus:
   PU@2/s P2 scoreboard variant dropped 3→0 same-class false
-  positives. The identical recipe-keyed collapse exists at three
-  more sites (belt_structural lane rates @856; belt_flow lane
-  injection @2209 + input-rate-delivery @3180) — documented
+  positives. The identical recipe-keyed collapse exists at two
+  more sites (belt_flow lane injection + input-rate-delivery;
+  the third, belt_structural's lane rates, was deleted with that
+  walker 2026-08-15, #632 B5) — documented
   follow-ups, not fixed (no frozen baselines for their warning
   categories). Next: Phase 2 — attribution check in its own commit
   first, then dual/triple/quad/hstack ladders + the reassignment

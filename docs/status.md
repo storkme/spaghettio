@@ -93,8 +93,9 @@ on every push:
   config's EC family fits one stacked belt (in-fixture TIER-SELECTION probe
   — **not** a per-tile capacity audit, corrected 2026-08-07, see
   [`rate-stamp-semantics.md`](rate-stamp-semantics.md); per-tile standing
-  rests on `check_lane_throughput` plus the 96.0%-of-plan sim, with the
-  belt_flow/belt_structural disagreement still unarbitrated),
+  rests on `check_lane_throughput` plus the 96.0%-of-plan sim; the
+  belt_flow/belt_structural disagreement was arbitrated 2026-08-15,
+  #632 B5 — belt_flow dispatched, twin deleted),
   and the legendary-express@60 headline is gated
   (`stacking_ec_60s_express_legendary_s2`).
 - **Rate headroom caveat (S=1 only)** — **substantially retracted
