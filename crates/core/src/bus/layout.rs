@@ -108,13 +108,16 @@ pub struct LayoutOptions {
     /// blocks; default false — main-line zone machinery bridges the
     /// overlap and the geometry shift would break it).
     pub splitter_tap_spacers: bool,
-    /// RFC-069 Phase 1: fraction of nominal belt throughput the row-size
-    /// caps treat as deliverable on a zero-buffer chain. The default
-    /// `1.0` is bit-identical to pre-RFC (rows may land at exactly 100%
-    /// of a belt — the #644 zero-headroom shape); values below 1 shrink
-    /// rows so the whole external chain plans with headroom (trunks
-    /// follow rows 1:1 on that path). Engine policy, not a user axis;
-    /// stays default-off until K69-1's sim gate clears.
+    /// RFC-069: at values below 1, HS dual-input consumer rows are
+    /// capped at ONE input₀ trunk's block —
+    /// `floor(belt_cap × duty / input₀_rate)` machines per row (see the
+    /// `is_hs_dual` branch of `place_rows`). Default `1.0` is
+    /// bit-identical to pre-RFC. The ec30 gate CLEARED at 0.6 (99.4%
+    /// delivered vs the 92.1% default — RFC-069 decision log); the
+    /// default stays 1.0 because Phase 2 must first settle the family
+    /// semantics (ec60-red/tier5 constructions don't consult this cap)
+    /// and adjudicate the corpus-wide re-ranking a flip causes. Engine
+    /// policy, not a user axis.
     pub planning_duty: f64,
     pub max_belt_tier: Option<String>,
     pub row_layout: RowLayout,

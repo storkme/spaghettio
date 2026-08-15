@@ -3136,6 +3136,21 @@ pub fn place_rows(
                     .map(|i| i.rate)
                     .fold(0.0_f64, f64::max);
                 if item0_rate > 0.0 {
+                    // Budget = full-belt cap × duty, matching the HS
+                    // internals' own block arithmetic (`belt_cap =
+                    // in_lane_cap * 2.0` at the k_trunks site).
+                    // `item0_rate` = the max-rate solid input, which IS
+                    // input₀ by the HS convention (inputs sorted by rate
+                    // desc; the highest-rate one takes the trunks).
+                    // KNOWN LIMITS (bot review, documented not patched):
+                    // the duty VALUE is fitted (0.6 ⇒ block 2 for
+                    // EC-on-yellow, the measured 99.4% shape) — whether
+                    // the fraction generalizes is RFC-069 Phase 2's
+                    // measurement question; and the budget is
+                    // stacking-blind (S>1 + duty<1 is outside the
+                    // measured envelope — under-caps stacked trunks
+                    // conservatively rather than crediting unmeasured
+                    // ×S throughput).
                     let belt_budget =
                         effective_in_lane_cap(max_belt_tier) * 2.0 * planning_duty;
                     let block = ((belt_budget / item0_rate).floor() as usize).max(1);

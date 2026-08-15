@@ -72,8 +72,10 @@ fn layout_options(
         // existed. Wiring a control is a separate change; defaulting here
         // keeps the boundary explicit rather than relying on `..Default`.
         research_productivity: Default::default(),
-        // RFC-069: the browser plans at the engine default (1.0 while the
-        // Phase-1 gate is open); no UI control until the default flips.
+        // RFC-069: the browser plans at the engine default. Pinned 1.0
+        // pending Phase 2's family-semantics + default-flip adjudication
+        // (the ec30 gate itself CLEARED at 0.6 — see the RFC decision
+        // log); no UI control until the default flips.
         planning_duty: 1.0,
         max_belt_tier,
         row_layout,
