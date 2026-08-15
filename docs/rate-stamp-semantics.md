@@ -134,17 +134,19 @@ carries more than its belt's capacity by either model.
 
 ## Two things found on the way that are not the answer
 
-- **There are two parallel lane-rate models**, `belt_flow::compute_lane_rates`
-  and `belt_structural::compute_lane_rates`, and `validate/mod.rs:939`
-  dispatches the **`belt_structural`** one. They disagree: on the S=1 arms
+- **There were two parallel lane-rate models**, `belt_flow::compute_lane_rates`
+  and `belt_structural::compute_lane_rates`. *(2026-08-15, #632 B5: the
+  dispatch now runs the `belt_flow` model — the question below is SETTLED
+  in its favor with sim/meter receipts, see `validator-trust.md`'s
+  lane-throughput row — and the `belt_structural` twin is scheduled for
+  deletion. The paragraphs below are kept as the record of the
+  then-unresolved state.)* They disagreed: on the S=1 arms
   `belt_flow` puts 36/s through ore belts with a 30/s cap (96–109 tiles),
-  where `belt_structural` reports nothing over capacity. Only the dispatched
-  model's verdict is the validator's, and only it is corroborated by the sim.
-  The disagreement is unexplained and worth its own look — but note that
-  quoting the non-dispatched model as "actual flow" is the same error class
+  where `belt_structural` reports nothing over capacity. Note that
+  quoting a non-dispatched model as "actual flow" is the same error class
   this document exists to close.
 
-  **The disagreement is unresolved and it matters.** `belt_structural`'s
+  **The disagreement was unresolved and it mattered.** `belt_structural`'s
   global maximum lands exactly at capacity in every arm (30.00/s at S=1,
   60.00/s at S=2) and never above, which is what either a correctly-sized
   planner *or* a saturating model would produce — this document does not
