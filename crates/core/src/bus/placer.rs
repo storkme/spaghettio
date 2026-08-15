@@ -238,9 +238,18 @@ impl RowSpan {
 ///    low-fraction rows) sits at 2–7%. The threshold is fitted between
 ///    the measured populations and is Phase 3's shipping-semantics
 ///    question, recorded in the RFC decision log. NOTE: this threshold
-///    also TIGHTENS the Phase-1b HS behavior (which capped any
-///    item0_rate > 0 at duty < 1) — deliberate, same measured-scope
-///    principle, boundary pinned by `duty_input0_block_threshold`.
+///    NARROWS the fired population vs Phase-1b HS behavior (which
+///    capped any item0_rate > 0 at duty < 1): low-fraction HS rows
+///    return to pre-RFC sizing — unmeasured under either rule, and
+///    restoring the status quo outside measured scope is the
+///    principle (round-4 review corrected this note's original
+///    "TIGHTENS"). Ties fire (EC-on-express sits exactly AT 10% —
+///    an unmeasured tier for EC, pinned as-firing in the boundary
+///    test; Phase 3 owns whether the tie belongs in scope). "input₀"
+///    here means the MAX-RATE solid input (HS's input₀ by its sort);
+///    on the native path the positional first input may differ — the
+///    bound is on the binding input either way, so only the name is
+///    loose.
 ///
 /// KNOWN LIMITS (deliberate): stacking-blind (S>1 + duty<1 under-caps
 /// conservatively rather than crediting unmeasured ×S); +1e-9 before
@@ -3700,6 +3709,15 @@ mod tests {
             duty_input0_block(&mk(4.5), RowKind::DualInput, belt, f64::NAN),
             None,
             "NaN behaves as 1.0 by design"
+        );
+        // EC-on-express sits exactly AT the 10% line (4.5/45): ties
+        // FIRE under the current rule. Pinned so a threshold or
+        // comparison edit surfaces here; whether the tie SHOULD be in
+        // scope is Phase 3's call (express EC is unmeasured).
+        assert_eq!(
+            duty_input0_block(&mk(4.5), RowKind::DualInput, Some("express-transport-belt"), 0.6),
+            Some(6),
+            "the exact-10% tie fires: block floor(45×0.6/4.5) = 6"
         );
     }
 
