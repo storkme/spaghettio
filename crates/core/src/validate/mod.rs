@@ -1072,6 +1072,10 @@ pub fn validate(
     // `ValidationIssue` list and emit once from here.
     // #632 B5 step 3: the belt_flow lane walker is the most expensive part
     // of BOTH rate checks in the dispatch — compute it once and share.
+    // This halves the walker's CPU, not necessarily validate()'s latency:
+    // the single walk now runs serially before the rayon pool instead of
+    // (twice, redundantly) inside it. Suite wall-clock did not regress at
+    // the merge (bot review asked for the distinction to be stated).
     let shared_lane_rates = belt_flow::compute_lane_rates(layout, solver);
 
     let checks: Vec<Box<dyn Fn() -> Vec<ValidationIssue> + Send + Sync>> = vec![

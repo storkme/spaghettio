@@ -1251,6 +1251,223 @@ mod tests {
         assert!(check_output_belt_coverage(&lr, Some(&sr)).is_empty());
     }
 
+    // Restored after the walker deletion over-reached (bot review on
+    // the step-3 PR): these ten tests cover LIVE checks and helpers —
+    // check_tap_splitter_priority (dispatched, Error), check_belt_loops'
+    // :selfloop: exemption, and priority_output_tile (still called by
+    // the surviving belt_flow walker). They had been interleaved inside
+    // the deleted lane-test span.
+
+    #[test]
+    fn belt_loop_selfloop_tagged_segment_exempted() {
+        // Same 4-tile square cycle as `belt_loop_square_loop_detected`, but
+        // one tile carries a self-loop row segment tag (priority-splitter
+        // recirculation is intentional, not a bug) — no error expected.
+        let lr = layout(vec![
+            belt(0, 0, EntityDirection::East),
+            belt(1, 0, EntityDirection::South),
+            PlacedEntity {
+                segment_id: Some(
+                    "row:kovarex-enrichment-process:selfloop:uranium-235".to_string(),
+                ),
+                ..belt(1, 1, EntityDirection::West)
+            },
+            belt(0, 1, EntityDirection::North),
+        ]);
+        assert!(check_belt_loops(&lr).is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // check_tap_splitter_priority (RFC merge-tap-trunks D4)
+    // -----------------------------------------------------------------------
+
+    /// Build a tagged merge-tap feed belt one tile downstream of `(x,y)`.
+    fn tap_belt(x: i32, y: i32, dir: EntityDirection) -> PlacedEntity {
+        PlacedEntity {
+            segment_id: Some(format!("family:copper-cable{MERGE_TAP_SEGMENT_TAG}0")),
+            ..belt(x, y, dir)
+        }
+    }
+
+    #[test]
+    fn priority_output_tile_matches_lane_orientation() {
+        // docs/factorio-mechanics.md B3: left/right of a splitter relative to
+        // travel direction. Splitter at (3,3); main=(3,3), and second is
+        // (3,4) for E/W, (4,3) for N/S.
+        let at = |dir, op: &str| {
+            priority_output_tile(&PlacedEntity {
+                output_priority: Some(op.to_string()),
+                ..make_entity("splitter", 3, 3, dir)
+            })
+        };
+        use EntityDirection::*;
+        // East: left = north (main), right = south (second).
+        assert_eq!(at(East, "left"), Some((3, 3)));
+        assert_eq!(at(East, "right"), Some((3, 4)));
+        // West: left = south (second), right = north (main).
+        assert_eq!(at(West, "left"), Some((3, 4)));
+        assert_eq!(at(West, "right"), Some((3, 3)));
+        // North: left = west (main), right = east (second).
+        assert_eq!(at(North, "left"), Some((3, 3)));
+        assert_eq!(at(North, "right"), Some((4, 3)));
+        // South: left = east (second), right = west (main).
+        assert_eq!(at(South, "left"), Some((4, 3)));
+        assert_eq!(at(South, "right"), Some((3, 3)));
+        // No priority set.
+        assert_eq!(
+            priority_output_tile(&make_entity("splitter", 3, 3, East)),
+            None
+        );
+    }
+
+    #[test]
+    fn tap_splitter_correct_priority_passes() {
+        // East tap splitter: south output (second tile) feeds the row, north
+        // output continues the trunk. Priority "right" = south = feed branch.
+        let entities = vec![
+            PlacedEntity {
+                output_priority: Some("right".to_string()),
+                ..make_entity("splitter", 10, 0, EntityDirection::East)
+            },
+            tap_belt(11, 1, EntityDirection::East), // south output → feed
+            belt(11, 0, EntityDirection::East),     // north output → trunk
+        ];
+        let lr = layout(entities);
+        assert!(
+            check_tap_splitter_priority(&lr).is_empty(),
+            "correct tap should pass: {:?}",
+            check_tap_splitter_priority(&lr)
+        );
+    }
+
+    #[test]
+    fn tap_splitter_south_facing_correct_priority_passes() {
+        // Standard bus tap-off (mechanics S9): South splitter, east tile's
+        // output feeds the row, west tile continues south. For South facing,
+        // "left" is the east tile — priority must be "left".
+        let entities = vec![
+            PlacedEntity {
+                output_priority: Some("left".to_string()),
+                ..make_entity("splitter", 5, 5, EntityDirection::South)
+            },
+            tap_belt(6, 6, EntityDirection::South), // east output → feed
+            belt(5, 6, EntityDirection::South),     // west output → trunk
+        ];
+        let lr = layout(entities);
+        assert!(
+            check_tap_splitter_priority(&lr).is_empty(),
+            "south tap with priority at east(left) feed should pass: {:?}",
+            check_tap_splitter_priority(&lr)
+        );
+    }
+
+    #[test]
+    fn tap_splitter_backwards_priority_errors() {
+        // Same East tap, but priority "left" points at the north (trunk)
+        // continuation, not the south feed — the backwards-stamped tap.
+        let entities = vec![
+            PlacedEntity {
+                output_priority: Some("left".to_string()),
+                ..make_entity("splitter", 10, 0, EntityDirection::East)
+            },
+            tap_belt(11, 1, EntityDirection::East),
+            belt(11, 0, EntityDirection::East),
+        ];
+        let lr = layout(entities);
+        let issues = check_tap_splitter_priority(&lr);
+        assert_eq!(issues.len(), 1, "backwards tap must error: {issues:?}");
+        assert_eq!(issues[0].category, "tap-priority");
+        assert!(issues[0].message.contains("continuation"));
+    }
+
+    #[test]
+    fn tap_splitter_missing_priority_errors() {
+        // Tap splitter with no output_priority set at all: the exported
+        // splitter splits 50/50 while the walker models it as priority-fed.
+        let entities = vec![
+            make_entity("splitter", 10, 0, EntityDirection::East),
+            tap_belt(11, 1, EntityDirection::East),
+            belt(11, 0, EntityDirection::East),
+        ];
+        let lr = layout(entities);
+        let issues = check_tap_splitter_priority(&lr);
+        assert_eq!(issues.len(), 1, "missing priority must error: {issues:?}");
+        assert_eq!(issues[0].category, "tap-priority");
+        assert!(issues[0].message.contains("no output_priority"));
+    }
+
+    #[test]
+    fn tap_splitter_both_branches_tapped_errors() {
+        // Both outputs tagged as feed branches — ambiguous; the walker cannot
+        // assign a single priority output (containment discipline).
+        let entities = vec![
+            PlacedEntity {
+                output_priority: Some("right".to_string()),
+                ..make_entity("splitter", 10, 0, EntityDirection::East)
+            },
+            tap_belt(11, 0, EntityDirection::East),
+            tap_belt(11, 1, EntityDirection::East),
+        ];
+        let lr = layout(entities);
+        let issues = check_tap_splitter_priority(&lr);
+        assert_eq!(issues.len(), 1, "double-tap must error: {issues:?}");
+        assert!(issues[0].message.contains("both outputs"));
+    }
+
+    #[test]
+    fn selfloop_splitter_not_flagged_as_tap() {
+        // A :selfloop: priority splitter is not a :mergetap: tap — the tap
+        // check must leave it entirely alone (containment discipline).
+        let entities = vec![
+            PlacedEntity {
+                output_priority: Some("right".to_string()),
+                loop_priority_rate: Some(4.0),
+                ..make_entity("splitter", 10, 0, EntityDirection::East)
+            },
+            PlacedEntity {
+                segment_id: Some(
+                    "row:kovarex-enrichment-process:selfloop:uranium-235".to_string(),
+                ),
+                ..belt(11, 1, EntityDirection::East)
+            },
+            belt(11, 0, EntityDirection::East),
+        ];
+        let lr = layout(entities);
+        assert!(check_tap_splitter_priority(&lr).is_empty());
+    }
+
+    #[test]
+    fn generic_ghost_tap_not_flagged_as_priority_tap() {
+        // Regression / inertness guard (KC2): the ghost router's generic tap
+        // segments (`ghost:tap:*`) contain the substring `:tap:` but are plain
+        // 50/50 splitters — they must NOT be mistaken for merge-and-tap
+        // priority taps, which is why the marker is the distinct `:mergetap:`.
+        let entities = vec![
+            make_entity("splitter", 10, 0, EntityDirection::East),
+            PlacedEntity {
+                segment_id: Some("ghost:tap:iron-ore:3:143".to_string()),
+                ..belt(11, 1, EntityDirection::East)
+            },
+            belt(11, 0, EntityDirection::East),
+        ];
+        let lr = layout(entities);
+        assert!(
+            check_tap_splitter_priority(&lr).is_empty(),
+            "ghost:tap:* is a generic tap, not a priority tap"
+        );
+    }
+
+    #[test]
+    fn plain_splitter_not_flagged_as_tap() {
+        // Untagged splitter: the generic even-split model owns it.
+        let entities = vec![
+            make_entity("splitter", 10, 0, EntityDirection::East),
+            belt(11, 0, EntityDirection::East),
+            belt(11, 1, EntityDirection::East),
+        ];
+        let lr = layout(entities);
+        assert!(check_tap_splitter_priority(&lr).is_empty());
+    }
 }
 
 // ---------------------------------------------------------------------------
