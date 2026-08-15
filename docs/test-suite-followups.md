@@ -4,6 +4,34 @@ Deferred test-suite tooling work, from a session-time audit on 2026-07-19
 (originally `testing-time-audit.md`). Each item below has pick-up notes so a
 future session can start cold.
 
+## ⚠ Warning pins are CACHE-relative — local verification protocol (2026-08-15)
+
+Found while verifying the #652 growth unit: the e2e **warning-population
+pins** (`assert_warnings_golden`) are reproducible **only against the
+committed CI cache snapshot** (`crates/core/data/sat-zones-ci.bin`, the
+file `ci.yml` pins via `SPAGHETTIO_ZONE_CACHE_PATH` — refresh protocol in
+the workflow comment). Measured on `tier4_advanced_circuit_from_ore_am2`
+at main 308633b6: against the CI snapshot the pinned
+`input-rate-delivery 7` reproduces; against this host's drifted live
+cache **and** against a fresh path (embedded-cache baseline) the same
+source yields `belt-detour 1 + input-rate-delivery 8` — one belt of the
+layout differs. Nothing in the code changed; only which zone solutions
+replay. Consequences:
+
+- **A local full-suite run is pin-meaningful only with
+  `SPAGHETTIO_ZONE_CACHE_PATH=<copy of sat-zones-ci.bin>`** (a COPY —
+  tests write to the path). A bare `cargo test` verifies everything
+  else but can trip warning pins spuriously once the host cache drifts,
+  and today it does.
+- A pin trip in a bare local run is therefore weak evidence against a
+  change — re-run the CI way before investigating the diff (this unit
+  burned a session-hour attributing an environmental trip to a 60-line
+  diff that provably never executed on the tripping fixture).
+- `ci.yml`'s comment justifying the pin ("fresh solutions are
+  wall-clock-budget shaped") is stale post-#654 (the descent deadline
+  is gone); the pin's live rationale is cache-content determinism, not
+  wall-clock. Fix the comment at the next workflow-file touch.
+
 Status: **all items resolved 2026-07-19** — items 2 and 3 landed, item 1
 landed with its CI gate (3 consecutive green Rust-touching runs) tracked on
 the landing PR, item 4 measured and closed as not-worth-it host-side (open

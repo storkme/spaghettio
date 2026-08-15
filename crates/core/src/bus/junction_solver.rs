@@ -1025,6 +1025,22 @@ pub struct JunctionStrategyContext<'a> {
     /// relies on release-in-footprint for trunk/tapoff cleanup. Computed
     /// once per `solve_crossing` call by the caller.
     pub unreleasable_obstacles: &'a FxHashSet<(i32, i32)>,
+    /// SAT invocations this growth iteration (every `SatStrategy`
+    /// rung, INCLUDING eviction's filtered inner attempts). Paired with
+    /// `sat_ceiling_refusals` below to drive the ceiling-aware growth
+    /// stop (#652 mega-zone class). Reset by the growth loop per iter.
+    pub sat_invocations: &'a std::cell::Cell<u32>,
+    /// How many of those invocations REFUSED the zone because its SAT
+    /// variable count exceeds `MAX_ZONE_SAT_VARS`. When an iteration
+    /// yields no candidates, no walker veto tiles, and EVERY SAT
+    /// invocation was over-ceiling, growth is futile: full-zone var
+    /// count is monotonic in zone size (tier5 measured 935 -> 1547
+    /// while refused at 935 the whole way). An UNDER-ceiling UNSAT —
+    /// eviction's filtered zone especially — justifies growth (a
+    /// default corpus fixture was measured regressing when the first
+    /// version of this rule stopped on the full-zone refusal alone:
+    /// its zone grew until eviction's filtered solve won).
+    pub sat_ceiling_refusals: &'a std::cell::Cell<u32>,
 }
 
 /// A strategy that attempts to produce a `JunctionSolution` for a
@@ -1119,6 +1135,8 @@ pub fn solve_crossing(
 
     let protected_balancer_tiles = build_protected_balancer_tiles(placed_entities);
     let cluster_seeds: FxHashSet<(i32, i32)> = seeds.iter().copied().collect();
+    let sat_invocations = std::cell::Cell::new(0u32);
+    let sat_ceiling_refusals = std::cell::Cell::new(0u32);
     let solve_ctx = SolveCtx {
         initial_tile,
         routed_paths,
@@ -1134,9 +1152,13 @@ pub fn solve_crossing(
         pending_crossings,
         cluster_seeds: &cluster_seeds,
         protected_balancer_tiles: &protected_balancer_tiles,
+        sat_invocations: &sat_invocations,
+        sat_ceiling_refusals: &sat_ceiling_refusals,
     };
 
     for iter in 0..MAX_GROWTH_ITERS {
+        solve_ctx.sat_invocations.set(0);
+        solve_ctx.sat_ceiling_refusals.set(0);
         // Collect every walker-valid candidate across the primary
         // region and the four single-side expansions. The cheapest by
         // `junction_cost::solution_cost` wins — no early-return on
@@ -1219,6 +1241,41 @@ pub fn solve_crossing(
             region.tile_count(),
         ) {
             return Some(best);
+        }
+
+        // Ceiling-aware stop (#652 mega-zone class): FULL-zone SAT var
+        // count is monotonically increasing in zone size, so growing a
+        // zone whose every SAT attempt was refused for being OVER the
+        // var ceiling can never make SAT succeed — tier5's mega-zone
+        // grew 935 -> 1020 -> 1547 vars while refused at 935 the whole
+        // way, reaching the tile cap at 91 tiles and leaving a 68-tile
+        // orphan field. Stop instead of escalating: a smaller, earlier
+        // failure site caps for the layout-level retry and leaves the
+        // fail-sever pass (#655) less to clean up.
+        //
+        // The rule is deliberately three-way conservative. It defers
+        // to: (a) any candidate (moot), (b) any walker veto tile —
+        // growth directed toward a non-SAT win (absorbed item-conflict
+        // tile, template shape), and (c) any UNDER-ceiling SAT attempt
+        // — UNSAT can become SAT with growth, and eviction's FILTERED
+        // zones stay under the ceiling at sizes where the full zone is
+        // over it (the first version of this rule stopped on the
+        // full-zone refusal alone and measurably regressed a default
+        // corpus fixture whose zone grew until eviction's filtered
+        // solve won).
+        let sat_inv = solve_ctx.sat_invocations.get();
+        if veto_tiles.is_empty()
+            && sat_inv > 0
+            && solve_ctx.sat_ceiling_refusals.get() == sat_inv
+        {
+            trace::emit(TraceEvent::JunctionGrowthCapped {
+                tile_x: initial_tile.0,
+                tile_y: initial_tile.1,
+                iters: iter,
+                region_tiles: region.tile_count(),
+                reason: "sat_var_ceiling".to_string(),
+            });
+            return None;
         }
 
         // Veto-directed growth: if the walker flagged tiles outside the
@@ -1469,6 +1526,9 @@ struct SolveCtx<'a> {
     /// are in the middle of solving.
     cluster_seeds: &'a FxHashSet<(i32, i32)>,
     protected_balancer_tiles: &'a FxHashSet<(i32, i32)>,
+    /// See `JunctionStrategyContext::sat_invocations`.
+    sat_invocations: &'a std::cell::Cell<u32>,
+    sat_ceiling_refusals: &'a std::cell::Cell<u32>,
 }
 
 /// Outcome of one strategy attempt on a given region state.
@@ -1625,6 +1685,8 @@ fn try_solve_on_region(
         strict_obstacles: ctx.strict_obstacles,
         placed_entities: ctx.placed_entities,
         unreleasable_obstacles: ctx.unreleasable_obstacles,
+        sat_invocations: ctx.sat_invocations,
+        sat_ceiling_refusals: ctx.sat_ceiling_refusals,
     };
 
     for strategy in ctx.strategies {
