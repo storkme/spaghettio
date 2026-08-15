@@ -1804,7 +1804,9 @@ fn tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation() {
 
 // ---------------------------------------------------------------------------
 // Tier 4: advanced-circuit (5+ recipes, mixed solid/fluid)
-// Known issues: lane-throughput warnings from single-lane sideload bottleneck (#64)
+// (The historical "#64 single-lane sideload lane-throughput warnings"
+// note is retired — the fixtures below assert no errors and their
+// residual warnings are pinned per-fixture.)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -3891,10 +3893,10 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
 ///   - **K1-1 relative signal**: PartitionedDecomposed must never carry
 ///     MORE errors than the Pooled baseline at this rate. (Originally a
 ///     strict-improvement gate, 7 < 10; strictness lapsed when both
-///     arms reached 0 pre-#644, and the #644 lane-throughput class hits
-///     both arms equally — the shared trunk provisioning — so the
-///     enforceable truth today is never-worse plus the #644 ceiling.
-///     Restore strictly-fewer if #644's fix differentiates the arms.)
+///     arms reached 0. The #632-B5-era #644 ceilings and the ranking
+///     tolerance were retired 2026-08-15 when the #644 walker fix took
+///     both arms back to zero — the hard `== 0` asserts in the body
+///     now enforce equality exactly.)
 ///   - **ShardSplit fires** for copper-cable. Trace event presence
 ///     confirms the algorithm path executed.
 #[test]
