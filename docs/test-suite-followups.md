@@ -128,6 +128,17 @@ second, independent reason goldens must never be enforced cross-machine
 without pinning the cache: solutions depend not just on cache state but
 on host speed and build optimization level.
 
+**Update 2026-08-15 (#652/#654):** the wall-clock dependence described
+above is fixed — the in-layout descent loop dropped its 25 ms deadline
+and is bounded by iteration count + a size clamp alone, both pure
+functions of the input; debug and release builds were measured
+producing identical layouts on the previously-divergent case. The
+cross-machine golden warning itself still stands, for a narrower
+reason: the zone cache's UNSAT-vs-Timeout *labels* for refused zones
+still derive from measured solve time (recorded on #652), so cache
+content — and therefore warm-replay behavior — can still differ
+across hosts. Fresh solves no longer do.
+
 ### 4. (Low priority) Fresh-worktree compile cost for agents
 
 Worktree-isolated agents pay a from-scratch build (minutes; dominated one
