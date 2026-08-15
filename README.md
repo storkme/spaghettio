@@ -43,7 +43,7 @@ How far up the recipe tree we can currently produce an error-free blueprint. Tes
 |    1 | `iron-gear-wheel`           | Solved                                               |
 |    2 | `electronic-circuit`        | Solved (including from ores)                         |
 |    3 | `plastic-bar`               | Solved                                               |
-|    4 | `advanced-circuit`          | Solved (AM2 + yellow from ores); from plates still has lane-throughput warnings |
+|    4 | `advanced-circuit`          | Solved (AM2 + yellow from ores and from plates; a few delivery warnings remain) |
 |    5 | `processing-unit`           | In progress — scoped regression tests passing        |
 |    6 | `rocket-control-unit`       | Not attempted                                        |
 

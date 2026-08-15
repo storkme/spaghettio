@@ -2739,24 +2739,36 @@ fn compute_lane_rates_impl(
             // trunks under-seeded at 9/s instead of 15/s). Only an
             // ORPHANED exit — no paired entrance, or nothing behind it —
             // genuinely admits flow into the graph and keeps its seed.
-            // Mirrors the topo sort's inheritance WIRING condition
-            // (behind ∈ belt_dir_map, behind != this exit — see
-            // `behind_to_ug_outputs`); the inheritance PROCESSING
-            // block itself carries no behind!=pos clause, but
-            // `build_ug_pairs` geometry keeps behind==pos unreachable
-            // (the exit sits strictly ahead of the entrance). The skip
-            // is sound only when inheritance will actually deliver.
-            // Structural presence is the shared predicate by design —
-            // neither side checks that `behind` is fed or carries the
-            // tunnel's item, so tightening only one side would create
-            // the de-seed-without-inherit divergence this guard
-            // exists to prevent.
+            // Skip a UG exit as a source ONLY when the tile behind its
+            // paired entrance actually FEEDS the entrance — i.e. the
+            // behind belt's own direction steps onto the entrance tile.
+            // Structural presence alone is NOT enough (adversarial
+            // review on the fix PR, blocker 2): a perpendicular belt
+            // carrying a different item can occupy the behind tile
+            // without ever feeding the tunnel (the RFC-064 sci2
+            // rotation artifact does exactly this), and de-seeding on
+            // mere presence zeroed that layout's whole iron-ore run —
+            // its pre-fix attribution reconciled EXACTLY (Σ = 11.000 =
+            // solver total), so the seed it deleted was real. When the
+            // behind tile feeds the entrance, the topo sort's UG
+            // special case inherits its rates onto this exit and
+            // seeding it too double-counts (#644's phantom-source
+            // class); when it does not, inheritance delivers nothing
+            // meaningful and the exit must keep its seed. `behind !=
+            // pos` mirrors the inheritance wiring's degenerate-pair
+            // clause (unreachable via `build_ug_pairs` geometry, kept
+            // in lock-step deliberately).
             if ug_output_tiles.contains(&pos) {
                 if let Some(&paired_input) = ug_output_to_input.get(&pos) {
                     if let Some(&inp_d) = ug_input_dir.get(&paired_input) {
                         let (idx, idy) = dir_to_vec(inp_d);
                         let behind = (paired_input.0 - idx, paired_input.1 - idy);
-                        if belt_dir_map.contains_key(&behind) && behind != pos {
+                        let behind_feeds_entrance =
+                            belt_dir_map.get(&behind).is_some_and(|&bd| {
+                                let (bdx, bdy) = dir_to_vec(bd);
+                                (behind.0 + bdx, behind.1 + bdy) == paired_input
+                            });
+                        if behind_feeds_entrance && behind != pos {
                             continue;
                         }
                     }
@@ -4216,6 +4228,45 @@ mod tests {
             (total((8, 0)) - total((0, 0))).abs() < 1e-6,
             "flow must be conserved through a straight UG pair: head {:.2} vs tail {:.2}",
             total((0, 0)),
+            total((8, 0))
+        );
+    }
+
+    /// The guard must test FEEDING, not presence: a perpendicular belt
+    /// carrying a different item can occupy the tile behind a UG
+    /// entrance without ever feeding it (the RFC-064 sci2 rotation
+    /// artifact's shape — adversarial review blocker on the fix PR).
+    /// De-seeding on mere presence zeroed that layout's whole
+    /// externally-fed run; with the direction check, the exit keeps
+    /// its seed and the run carries the full external rate.
+    #[test]
+    fn ug_exit_behind_crossing_belt_still_seeds() {
+        let mut ug_in = ug_belt(3, 0, EntityDirection::East, "input");
+        ug_in.carries = Some("iron-plate".to_string());
+        let mut ug_out = ug_belt(6, 0, EntityDirection::East, "output");
+        ug_out.carries = Some("iron-plate".to_string());
+        let layout = LayoutResult {
+            entities: vec![
+                // Perpendicular crossing belt occupying the tile BEHIND
+                // the entrance — flows south, different item; it abuts
+                // the entrance tile but never feeds it.
+                belt_carries(2, 0, EntityDirection::South, "copper-plate"),
+                ug_in,
+                ug_out,
+                belt_carries(7, 0, EntityDirection::East, "iron-plate"),
+                belt_carries(8, 0, EntityDirection::East, "iron-plate"),
+            ],
+            width: 12,
+            height: 3,
+            ..Default::default()
+        };
+        let sr = simple_solver(12.0, 1.0);
+        let rates = compute_lane_rates(&layout, Some(&sr));
+        let total = |pos: (i32, i32)| rates.get(&pos).map(|r| r[0] + r[1]).unwrap_or(0.0);
+        assert!(
+            (total((8, 0)) - 12.0).abs() < 1e-6,
+            "a UG exit whose entrance is merely ABUTTED (not fed) by a crossing \
+             belt is this run's real source and must seed the full 12/s, got {:.2}",
             total((8, 0))
         );
     }
