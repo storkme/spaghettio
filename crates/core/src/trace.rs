@@ -452,6 +452,18 @@ pub enum TraceEvent {
         tap_y: i32,
         reason: String,
     },
+    /// #652 fail-sever: an unresolved crossing's feeder belt pointed
+    /// into a belt carrying a DIFFERENT item (a flat sideload-merge —
+    /// the shape that dumps one flow onto a lane of another and fans
+    /// out as mass downstream lane-throughput errors). The feeder was
+    /// dropped so the flow dead-ends visibly one tile short instead.
+    /// One event per severed feeder entity.
+    CrossingSevered {
+        x: i32,
+        y: i32,
+        item: String,
+        into_item: String,
+    },
     /// A balancer block was requested for a lane family. `template_found
     /// == false` is not necessarily a bug by itself — it means no direct
     /// template, gcd-decomposition, nor the runtime generator could

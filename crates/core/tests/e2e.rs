@@ -2237,6 +2237,57 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
     }
 }
 
+/// #652 fail-safe pin: ac7-HS at duty 0.6 (the RFC-069 flip shape) with
+/// unresolved crossings must fail SAFE, never merged. Pre-fix, one
+/// unrouted iron-plate crossing shipped as a flat sideload-merge into
+/// the copper-cable trunk and fanned out as ~90 downstream
+/// lane-throughput errors (111 total; #652 diagnosis 2026-08-15); the
+/// conflict-retry + fail-sever pass converts that to severed dead-ends
+/// plus the honest unresolved-junction reports. The pin is the
+/// invariant the fix guarantees — ZERO lane-throughput errors — which
+/// holds regardless of whether the crossings themselves later get
+/// resolved (then severs simply stop firing). Isolation errors are NOT
+/// pinned here: a residual balancer-over-trunk overlap (recorded on
+/// #652) still ships a handful, and that mechanism is out of this
+/// pin's scope.
+#[test]
+#[ntest::timeout(300000)]
+fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
+    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, RowLayout};
+
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "water", "crude-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve("advanced-circuit", 7.0, &inputs, "assembling-machine-2")
+        .expect("ac7 solves");
+    let layout = build_bus_layout(
+        &sr,
+        LayoutOptions {
+            max_belt_tier: Some("transport-belt".to_string()),
+            row_layout: RowLayout::HorizontalStack,
+            planning_duty: 0.6,
+            ..Default::default()
+        },
+    )
+    .expect("ac7 duty-0.6 lays out");
+    let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+        Ok(v) => v,
+        Err(e) => e.issues,
+    };
+    let lane_errors: Vec<&ValidationIssue> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error && i.category == "lane-throughput")
+        .collect();
+    assert!(
+        lane_errors.is_empty(),
+        "ac7-HS duty-0.6 shipped {} lane-throughput errors — an unresolved \
+         crossing is merging flows again (fail-severed regressed): {:#?}",
+        lane_errors.len(),
+        lane_errors.iter().take(5).collect::<Vec<_>>()
+    );
+}
+
 /// Regression test for the `place_poles` rightward-only probe bug.
 /// `processing-unit @ 2.5/s` HorizontalStack puts six AM3s tight in one
 /// row with a 3-tile sideload bridge below the middle pair. The pole
