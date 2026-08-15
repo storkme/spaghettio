@@ -479,15 +479,16 @@ fn route_evicted_spec(
     let path = match recipe {
         EvictionRecipe::OppositePairUg => {
             // 2-tile path triggers `render_path`'s UG-emission branch.
-            // GUARD (#644 flip campaign): render_path emits the pair for
-            // ANY span, but the game's UG reach bounds a legal jump —
-            // an over-reach "pair" ships as an unpaired-UG validator
-            // Error (found on ac7-HS under the duty reshape: the second
-            // hop's exit landed beyond reach, leaving an orphan
-            // entrance at the crossing). Also require both endpoints on
-            // one axis (a diagonal 2-tile "jump" is not a UG) and the
-            // exit inside the bbox. Refusing here falls through to the
-            // A* recipes, which route contiguously.
+            // DEFENSE-IN-DEPTH GUARD: `select_specs` →
+            // `opposite_pair_fits` already enforces span/axis validity
+            // for the specs that reach this recipe (review traced the
+            // active pipeline and found this guard currently
+            // unreachable) — it stays as a second line so a future
+            // change to spec selection cannot silently reopen the
+            // over-reach class: render_path emits the pair for ANY
+            // span, and an over-reach "pair" ships as an unpaired-UG
+            // validator Error. Refusing falls through to the A*
+            // recipes, which route contiguously.
             let span = (exit.0 - entry.0).abs() + (exit.1 - entry.1).abs();
             let axis_aligned = entry.0 == exit.0 || entry.1 == exit.1;
             let max_span = crate::common::ug_max_reach(belt_name) as i32 + 1;

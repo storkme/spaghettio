@@ -1716,6 +1716,30 @@ pub(crate) fn prune_dangling_sat_entities(
         .collect();
     let kept = pruned.len();
 
+    // Boundary-port hole guard (review on the hardening PR, 1/3 but
+    // right): if the prune removed an entity that SAT on a non-interior
+    // boundary tile, the perimeter check above (which ran on the
+    // pre-prune set) is retroactively violated — the port's flow entry
+    // vanishes with no downstream to fail visibly. Reject as degenerate
+    // (same semantics as the perimeter check itself): the caller falls
+    // through to the next strategy or caps for retry.
+    if kept < total {
+        let removed_boundary_port = boundaries.iter().any(|b| {
+            !b.interior
+                && by_tile.contains_key(&(b.x, b.y))
+                && !pruned.iter().any(|e| (e.x, e.y) == (b.x, b.y))
+        });
+        if removed_boundary_port {
+            trace::emit(trace::TraceEvent::SatPruned {
+                zone_x,
+                zone_y,
+                total,
+                kept: 0,
+            });
+            return Vec::new();
+        }
+    }
+
     if kept < total {
         if std::env::var("SPAGHETTIO_MEGA_DEBUG").is_ok() {
             for e in entities_dbg
@@ -1994,6 +2018,104 @@ mod tests {
             pruned.len(),
             4,
             "interior-boundary specs should retain their UG endpoints; got {pruned:#?}"
+        );
+    }
+
+    /// #652 hardening: a UG-in whose partner was NEVER EMITTED must be
+    /// pruned — shipping it is invalid geometry by construction (the
+    /// ac7-HS orphan class). The in sits mid-zone (not on a boundary
+    /// port), so the prune returns the rest of the flow rather than
+    /// rejecting the zone.
+    #[test]
+    fn prune_drops_partnerless_ug_in() {
+        let entities = vec![
+            // Valid pair carrying the flow boundary→boundary.
+            ug_in(2, 10, EntityDirection::East, "iron-plate"),
+            ug_out(5, 10, EntityDirection::East, "iron-plate"),
+            // Partner-less entrance on a side spur (never emitted out).
+            ug_in(3, 12, EntityDirection::South, "iron-plate"),
+        ];
+        let boundaries = vec![
+            ZoneBoundary {
+                x: 2, y: 10,
+                direction: EntityDirection::East,
+                item: "iron-plate".into(),
+                is_input: true,
+                interior: false,
+                belt_tier: None,
+                channel_id: 0,
+            },
+            ZoneBoundary {
+                x: 5, y: 10,
+                direction: EntityDirection::East,
+                item: "iron-plate".into(),
+                is_input: false,
+                interior: false,
+                belt_tier: None,
+                channel_id: 0,
+            },
+        ];
+        let pruned = prune_dangling_sat_entities(entities, &boundaries, 6, 0, 0);
+        assert!(
+            !pruned.iter().any(|e| (e.x, e.y) == (3, 12)),
+            "partner-less UG-in must be pruned; got {pruned:#?}"
+        );
+        assert_eq!(
+            pruned.len(),
+            2,
+            "the valid pair must survive; got {pruned:#?}"
+        );
+    }
+
+    /// #652 hardening (review round 1): if pruning would remove an
+    /// entity sitting ON a non-interior boundary port, the zone is
+    /// degenerate — losing the port's entity silently deletes the
+    /// item's entry with nothing downstream to fail visibly. The prune
+    /// must return EMPTY (the caller's degenerate-reject semantics)
+    /// rather than a set missing its port.
+    #[test]
+    fn prune_rejects_zone_when_boundary_port_entity_would_drop() {
+        let entities = vec![
+            // Partner-less UG-in ON the input boundary port itself.
+            ug_in(2, 10, EntityDirection::East, "iron-plate"),
+            // Unrelated valid pair for a second channel.
+            ug_in(2, 12, EntityDirection::East, "copper-cable"),
+            ug_out(5, 12, EntityDirection::East, "copper-cable"),
+        ];
+        let boundaries = vec![
+            ZoneBoundary {
+                x: 2, y: 10,
+                direction: EntityDirection::East,
+                item: "iron-plate".into(),
+                is_input: true,
+                interior: false,
+                belt_tier: None,
+                channel_id: 0,
+            },
+            ZoneBoundary {
+                x: 2, y: 12,
+                direction: EntityDirection::East,
+                item: "copper-cable".into(),
+                is_input: true,
+                interior: false,
+                belt_tier: None,
+                channel_id: 1,
+            },
+            ZoneBoundary {
+                x: 5, y: 12,
+                direction: EntityDirection::East,
+                item: "copper-cable".into(),
+                is_input: false,
+                interior: false,
+                belt_tier: None,
+                channel_id: 1,
+            },
+        ];
+        let pruned = prune_dangling_sat_entities(entities, &boundaries, 6, 0, 0);
+        assert!(
+            pruned.is_empty(),
+            "dropping a boundary-port entity must reject the whole zone as \
+             degenerate; got {pruned:#?}"
         );
     }
 
