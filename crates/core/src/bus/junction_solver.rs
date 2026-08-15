@@ -1030,8 +1030,12 @@ pub struct JunctionStrategyContext<'a> {
     /// `sat_ceiling_refusals` below to drive the ceiling-aware growth
     /// stop (#652 mega-zone class). Reset by the growth loop per iter.
     pub sat_invocations: &'a std::cell::Cell<u32>,
-    /// How many of those invocations REFUSED the zone because its SAT
-    /// variable count exceeds `MAX_ZONE_SAT_VARS`. When an iteration
+    /// How many of those invocations found the zone OVER the
+    /// `MAX_ZONE_SAT_VARS` ceiling (counted on every encounter,
+    /// including warm-cache paths whose refusal was recorded on an
+    /// earlier encounter — the count answers "is this zone
+    /// size-hopeless for SAT", not "who emitted the refusal trace").
+    /// When an iteration
     /// yields no candidates, no walker veto tiles, and EVERY SAT
     /// invocation was over-ceiling, growth is futile: full-zone var
     /// count is monotonic in zone size (tier5 measured 935 -> 1547
@@ -1264,10 +1268,44 @@ pub fn solve_crossing(
         // corpus fixture whose zone grew until eviction's filtered
         // solve won).
         let sat_inv = solve_ctx.sat_invocations.get();
-        if veto_tiles.is_empty()
+        // `iter >= 1`: never stop on the seed-sized region (review) —
+        // local template strategies get at least one grown region
+        // before the ceiling verdict is treated as final.
+        if iter >= 1
+            && veto_tiles.is_empty()
             && sat_inv > 0
             && solve_ctx.sat_ceiling_refusals.get() == sat_inv
         {
+            // Before stopping, give the FINAL-ITERATION-GATED strategies
+            // one attempt round at the CURRENT size (review on the
+            // growth PR): eviction — the only strategy that can SHRINK
+            // the SAT instance (its filtered zones can be under the
+            // ceiling at any region size) — is gated on
+            // `growth_iter + 1 >= MAX_GROWTH_ITERS`, so a plain stop
+            // here would deny it entirely and the rule would collapse
+            // into the naive stop-on-any-refusal it exists to avoid.
+            // Running it now, at the smallest refused size, is strictly
+            // more likely to succeed than after futile growth to the
+            // cap (the filtered zones grow with the region too). The
+            // attempt round is emitted with iter = MAX_GROWTH_ITERS - 1
+            // in the trace — a visible iter jump that marks the
+            // ceiling-stop bonus round.
+            if iter + 1 < MAX_GROWTH_ITERS {
+                if let TryOutcome::Solved(sol) =
+                    try_solve_on_region(&region, MAX_GROWTH_ITERS - 1, None, &solve_ctx)
+                {
+                    let c = crate::bus::junction_cost::solution_cost(&sol.entities);
+                    let mut bonus = vec![(c, sol, String::new())];
+                    if let Some(best) = pick_cheapest_candidate(
+                        &mut bonus,
+                        initial_tile,
+                        MAX_GROWTH_ITERS - 1,
+                        region.tile_count(),
+                    ) {
+                        return Some(best);
+                    }
+                }
+            }
             trace::emit(TraceEvent::JunctionGrowthCapped {
                 tile_x: initial_tile.0,
                 tile_y: initial_tile.1,
