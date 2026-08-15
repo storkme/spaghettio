@@ -1701,6 +1701,45 @@ pub(crate) fn prune_dangling_sat_entities(
             // pruned) is invalid geometry by construction — the ac7-HS
             // flake shipped exactly this as a validator Error. Prune it;
             // the flow it carried fails VISIBLY downstream instead.
+            //
+            // Unit-testability note (review round 2, confirmed by a
+            // mutation probe): for straight-line topologies this branch
+            // is SUBSUMED by base keep + the boundary-port guard (a
+            // partner-less in strands its downstream chain — this BFS
+            // deliberately doesn't walk sideloads — so a port dies and
+            // the zone degenerates first). Its live value is
+            // multi-channel zones where cross-channel propagation keeps
+            // a stranded entrance's tiles reachable (the ac7-HS field
+            // shape); parity_tier4_ac7_horizontal_stack is its
+            // regression anchor.
+            pair_ok.insert((e.x, e.y), false);
+        }
+    }
+    // Symmetric case (round-2 review): a UG-OUT whose entrance was never
+    // emitted can pass both BFS sets (an output boundary port seeds the
+    // upstream walk, and a preceding surface belt feeds the tile in the
+    // downstream walk) and would ship as the same unpaired-UG Error on
+    // the output side. Scan outs BACKWARD for their entrance.
+    for e in &entities {
+        if e.io_type.as_deref() != Some("output") {
+            continue;
+        }
+        if pair_ok.contains_key(&(e.x, e.y)) {
+            continue; // already adjudicated via its entrance's scan
+        }
+        let (dx, dy) = dir_delta(e.direction);
+        let mut found_partner = false;
+        for dist in 1..=(max_reach as i32 + 1) {
+            let nt = (e.x - dx * dist, e.y - dy * dist);
+            if let Some(&ni) = by_tile.get(&nt) {
+                let n = &entities[ni];
+                if n.io_type.as_deref() == Some("input") && n.direction == e.direction {
+                    found_partner = true;
+                    break;
+                }
+            }
+        }
+        if !found_partner {
             pair_ok.insert((e.x, e.y), false);
         }
     }
@@ -2018,52 +2057,6 @@ mod tests {
             pruned.len(),
             4,
             "interior-boundary specs should retain their UG endpoints; got {pruned:#?}"
-        );
-    }
-
-    /// #652 hardening: a UG-in whose partner was NEVER EMITTED must be
-    /// pruned — shipping it is invalid geometry by construction (the
-    /// ac7-HS orphan class). The in sits mid-zone (not on a boundary
-    /// port), so the prune returns the rest of the flow rather than
-    /// rejecting the zone.
-    #[test]
-    fn prune_drops_partnerless_ug_in() {
-        let entities = vec![
-            // Valid pair carrying the flow boundary→boundary.
-            ug_in(2, 10, EntityDirection::East, "iron-plate"),
-            ug_out(5, 10, EntityDirection::East, "iron-plate"),
-            // Partner-less entrance on a side spur (never emitted out).
-            ug_in(3, 12, EntityDirection::South, "iron-plate"),
-        ];
-        let boundaries = vec![
-            ZoneBoundary {
-                x: 2, y: 10,
-                direction: EntityDirection::East,
-                item: "iron-plate".into(),
-                is_input: true,
-                interior: false,
-                belt_tier: None,
-                channel_id: 0,
-            },
-            ZoneBoundary {
-                x: 5, y: 10,
-                direction: EntityDirection::East,
-                item: "iron-plate".into(),
-                is_input: false,
-                interior: false,
-                belt_tier: None,
-                channel_id: 0,
-            },
-        ];
-        let pruned = prune_dangling_sat_entities(entities, &boundaries, 6, 0, 0);
-        assert!(
-            !pruned.iter().any(|e| (e.x, e.y) == (3, 12)),
-            "partner-less UG-in must be pruned; got {pruned:#?}"
-        );
-        assert_eq!(
-            pruned.len(),
-            2,
-            "the valid pair must survive; got {pruned:#?}"
         );
     }
 
