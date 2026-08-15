@@ -2693,11 +2693,13 @@ fn compute_lane_rates_impl(
         .collect();
     if !external_rates.is_empty() {
         // First pass: group source tiles by the item they carry. A "source" is a
-        // belt tile that has no upstream feeder in the surface belt graph. We
-        // include UG outputs here too: although they inherit rate via the topo
-        // sort's UG special case, that inheritance relies on the "behind the UG
-        // input" surface tile being correctly seeded — for external inputs it's
-        // simpler and safer to seed every graph source independently.
+        // belt tile that has no upstream feeder in the surface belt graph.
+        // UG outputs qualify ONLY when orphaned (no paired entrance with a
+        // graph tile behind it): a paired exit inherits its flow via the
+        // topo sort's UG special case, and seeding it too double-counts —
+        // the #644 phantom-source class (this comment used to say "simpler
+        // and safer to seed every graph source independently"; that safety
+        // reasoning is exactly what #644 refuted, see the guard below).
         let mut sources_by_item: FxHashMap<&str, Vec<(i32, i32)>> = FxHashMap::default();
         for &pos in belt_dir_map.keys() {
             if feeders.contains_key(&pos) {
