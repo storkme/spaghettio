@@ -156,8 +156,8 @@ partial fix to a class with at least two independent causes.
 ### 2d. Two lane-rate models disagree
 
 `belt_flow::compute_lane_rates` and `belt_structural::compute_lane_rates`
-both exist; `validate/mod.rs` dispatched **`belt_structural`** when this
-handoff was written *(since 2026-08-15, #632 B5, it dispatches
+both existed when this handoff was written (the twin was deleted
+2026-08-15, #632 B5); `validate/mod.rs` dispatched **`belt_structural`** then *(since 2026-08-15, #632 B5, it dispatches
 `belt_flow` — settled, see `validator-trust.md`)*, while
 `bus/template_validate.rs` uses **`belt_flow`**. They disagree on the S=1 ore
 belts (36/s vs nothing over cap). Both are independent Python→Rust ports —
