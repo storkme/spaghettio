@@ -218,6 +218,57 @@ impl RowSpan {
 /// exists to prevent. Capping the output at the unstacked per-lane figure is
 /// the conservative-correct choice; the asymmetry with the both-lanes
 /// variant is intentional.
+/// RFC-069: the duty-derived input₀ block cap, shared by the HS and
+/// native dual-input paths so the formula, its guards, and its comment
+/// set exist ONCE (bot review on the reach PR).
+///
+/// Returns Some(block) only when ALL of:
+///  - `duty < 1.0` (default 1.0 = bit-identical pre-RFC);
+///  - the row kind is exactly `DualInput` (two solid inputs, no fluid) —
+///    TripleInput / FluidDualInput / producers are UNMEASURED
+///    populations and excluded (round-2 review caught the `>= 2` gate
+///    reaching them);
+///  - input₀'s per-machine draw is ≥ 10% of the full-belt budget — the
+///    physics discriminator: the measured wins are EC at 30% (yellow)
+///    and 15% (fast); the measured-harm-when-shrunk class (furnace-like
+///    low-fraction rows) sits at 2–7%. The threshold is fitted between
+///    the measured populations and is Phase 3's shipping-semantics
+///    question, recorded in the RFC decision log.
+///
+/// KNOWN LIMITS (deliberate): stacking-blind (S>1 + duty<1 under-caps
+/// conservatively rather than crediting unmeasured ×S); +1e-9 before
+/// floor stabilizes fitted products that land ON integer boundaries (a
+/// down-slip would floor the gate-clearing block 2 to an unmeasured
+/// block 1); DI-coupled consumers are also capped, which can fragment a
+/// producer past the DI-refusal fallback — pre-existing on the HS path,
+/// accepted and noted.
+fn duty_input0_block(
+    spec: &MachineSpec,
+    kind: RowKind,
+    max_belt_tier: Option<&str>,
+    duty: f64,
+) -> Option<usize> {
+    // partial_cmp keeps the designed NaN-behaves-as-1.0 semantics
+    // (NaN compares as None ≠ Less → no cap) without clippy's
+    // neg_cmp_op_on_partial_ord.
+    if duty.partial_cmp(&1.0) != Some(std::cmp::Ordering::Less)
+        || !matches!(kind, RowKind::DualInput)
+    {
+        return None;
+    }
+    let item0_rate = spec
+        .inputs
+        .iter()
+        .filter(|i| !i.is_fluid && i.rate > 0.0)
+        .map(|i| i.rate)
+        .fold(0.0_f64, f64::max);
+    let belt_budget = effective_in_lane_cap(max_belt_tier) * 2.0;
+    if item0_rate <= 0.0 || item0_rate < 0.1 * belt_budget {
+        return None;
+    }
+    Some((((belt_budget * duty / item0_rate) + 1e-9).floor() as usize).max(1))
+}
+
 pub(crate) fn max_machines_for_belt(
     spec: &MachineSpec,
     belt_name: &str,
@@ -3118,98 +3169,26 @@ pub fn place_rows(
                 let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
                 max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier, out_stack)
             };
-            if planning_duty < 1.0 {
-                // RFC-069 Phase 1b: ONE input₀ trunk per row. The #644
-                // family's measured deficit lives in the HS consumer
-                // fan-in (K trunks per big row + the collection fabric
-                // upstream): the banked dense ec30 (2×10 EC rows, K=4
-                // trunks each) delivers 92.1%, while the same layout
-                // with 10×2 EC rows delivers 99.4% (the "sprawl"
-                // measurement, RFC-069 decision log). Capping each HS
-                // row at one trunk's block removes the per-row fan-in
-                // entirely; duty scales the block's belt budget so the
-                // single feed also carries headroom.
-                let item0_rate = spec
-                    .inputs
-                    .iter()
-                    .filter(|i| !i.is_fluid && i.rate > 0.0)
-                    .map(|i| i.rate)
-                    .fold(0.0_f64, f64::max);
-                if item0_rate > 0.0 {
-                    // Budget = full-belt cap × duty, matching the HS
-                    // internals' own block arithmetic (`belt_cap =
-                    // in_lane_cap * 2.0` at the k_trunks site).
-                    // `item0_rate` = the max-rate solid input, which IS
-                    // input₀ by the HS convention (inputs sorted by rate
-                    // desc; the highest-rate one takes the trunks).
-                    // KNOWN LIMITS (bot review, documented not patched):
-                    // the duty VALUE is fitted (0.6 ⇒ block 2 for
-                    // EC-on-yellow, the measured 99.4% shape) — whether
-                    // the fraction generalizes is RFC-069 Phase 2's
-                    // measurement question; and the budget is
-                    // stacking-blind (S>1 + duty<1 is outside the
-                    // measured envelope — under-caps stacked trunks
-                    // conservatively rather than crediting unmeasured
-                    // ×S throughput).
-                    let belt_budget =
-                        effective_in_lane_cap(max_belt_tier) * 2.0 * planning_duty;
-                    // +1e-9 before floor: the fitted products land ON
-                    // integer boundaries (15×0.6/4.5 = 2.0000000000000004
-                    // only by ULP luck), and a slip DOWN would floor the
-                    // gate-clearing block 2 to an UNMEASURED block 1
-                    // (bot round 2; round 4 corrected this comment's
-                    // original direction). The upward risk (a product
-                    // 1e-9 below an integer rounding up) has no real
-                    // belt/rate tuple behind it — adjudicated rounds
-                    // 3-4.
-                    let block = (((belt_budget / item0_rate) + 1e-9).floor() as usize).max(1);
-                    hs_cap.min(block)
-                } else {
-                    hs_cap
-                }
-            } else {
-                hs_cap
+            match duty_input0_block(spec, kind, max_belt_tier, planning_duty) {
+                // RFC-069: ONE input₀ trunk per row — the gate-clearing
+                // lever (ec30 99.4% delivered at duty 0.6; full receipts
+                // in the RFC decision log). Guards + formula live in
+                // `duty_input0_block`.
+                Some(block) => hs_cap.min(block),
+                None => hs_cap,
             }
         } else {
             let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
             let cap = max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack);
-            // RFC-069: the input₀ block cap applies to DUAL-input rows on
-            // every candidate path, not just HS — otherwise the selection
-            // objective (density-scored, delivery-blind) routes around the
-            // duty shape by picking an uncapped candidate (measured on
-            // ec60-red: at duty 0.6 the capped HS variant balloons and
-            // NATIVE wins with uncapped 7×6 EC rows; decision log).
-            // Scope: ≥2 solid inputs only — the measured 1a harm was
-            // shrinking SINGLE-input rows (ore/plate producers), and the
-            // measured 1c/2 wins were capping dual-input rows with a
-            // high-draw input₀ (EC-class). For dual rows whose input₀
-            // draw is LOW the block computes large and the min() below
-            // is a no-op, so the unmeasured dual-row population is
-            // structurally untouched; fluid+solid dual rows have one
-            // SOLID input and never enter this branch (bot review on
-            // the reach PR).
-            let solid_inputs = spec
-                .inputs
-                .iter()
-                .filter(|i| !i.is_fluid && i.rate > 0.0)
-                .count();
-            if planning_duty < 1.0 && solid_inputs >= 2 {
-                let item0_rate = spec
-                    .inputs
-                    .iter()
-                    .filter(|i| !i.is_fluid && i.rate > 0.0)
-                    .map(|i| i.rate)
-                    .fold(0.0_f64, f64::max);
-                if item0_rate > 0.0 {
-                    let belt_budget =
-                        effective_in_lane_cap(max_belt_tier) * 2.0 * planning_duty;
-                    let block = (((belt_budget / item0_rate) + 1e-9).floor() as usize).max(1);
-                    cap.min(block)
-                } else {
-                    cap
-                }
-            } else {
-                cap
+            // RFC-069 Phase 2: the same input₀ block cap on the native
+            // path — ec60-red's winner routed around the HS-only cap via
+            // the density objective (DecompositionChosen trace; decision
+            // log). Guards + formula live in `duty_input0_block`; the
+            // measured fixtures' only DualInput recipe is EC, so the
+            // gate receipts are unconfounded by other row kinds.
+            match duty_input0_block(spec, kind, max_belt_tier, planning_duty) {
+                Some(block) => cap.min(block),
+                None => cap,
             }
         };
 

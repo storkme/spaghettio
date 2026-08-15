@@ -115,7 +115,8 @@ pub struct LayoutOptions {
     /// bit-identical to pre-RFC. The ec30 gate CLEARED at 0.6 (99.4%
     /// delivered vs the 92.1% default — RFC-069 decision log); the
     /// default stays 1.0 because Phase 2 must first settle the family
-    /// semantics (ec60-red/tier5 constructions don't consult this cap)
+    /// semantics (the cap now reaches every candidate path's DualInput
+    /// rows — Phase 2; tier5 remains router-blocked)
     /// and adjudicate the corpus-wide re-ranking a flip causes. Engine
     /// policy, not a user axis. Two caller-owned caveats: the fitted
     /// values are TIER-RELATIVE (the block budget prices off the
