@@ -3180,8 +3180,14 @@ pub fn place_rows(
             // ec60-red: at duty 0.6 the capped HS variant balloons and
             // NATIVE wins with uncapped 7×6 EC rows; decision log).
             // Scope: ≥2 solid inputs only — the measured 1a harm was
-            // shrinking SINGLE-input producer rows, and the measured 1c
-            // win was capping dual-input consumers.
+            // shrinking SINGLE-input rows (ore/plate producers), and the
+            // measured 1c/2 wins were capping dual-input rows with a
+            // high-draw input₀ (EC-class). For dual rows whose input₀
+            // draw is LOW the block computes large and the min() below
+            // is a no-op, so the unmeasured dual-row population is
+            // structurally untouched; fluid+solid dual rows have one
+            // SOLID input and never enter this branch (bot review on
+            // the reach PR).
             let solid_inputs = spec
                 .inputs
                 .iter()
@@ -3604,6 +3610,60 @@ mod tests {
             "duty 0.6 must produce exactly 10×2 HS rows (the gate-clearing shape; \
              `== 2` so a degenerate 20×1 sprawl cannot pass — bot round 3); \
              got {capped:?}"
+        );
+    }
+
+    /// RFC-069 Phase 2: the input₀ block cap must reach the NATIVE
+    /// (VerticalSplit) dual-input path too — ec60-red's winner routed
+    /// around the HS-only cap via the density objective until it did
+    /// (bot review on the reach PR demanded this pin: without it the
+    /// branch that produced the at-plan ec60-red is test-invisible).
+    /// Same EC-like spec as the HS pin but on FAST belts — the actual
+    /// ec60-red mechanism: the native dual path's EXISTING input limit
+    /// already caps at floor(in_lane/4.5)×2, which is 2 on yellow (no
+    /// input₀ exemption outside HS) but 6 on fast — the 7×6 shape the
+    /// density objective shipped. At duty 0.6 the block cap tightens
+    /// it to floor(30×0.6/4.5) = 4.
+    #[test]
+    fn planning_duty_caps_native_dual_rows_too() {
+        let spec = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "electronic-circuit".to_string(),
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            count: 24.0,
+            inputs: vec![
+                ItemFlow { item: "copper-cable".to_string(), rate: 4.5, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "iron-plate".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+            ],
+            outputs: vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 1.5, is_fluid: false, module_id: 0 }],
+        };
+        let run = |duty: f64| -> Vec<usize> {
+            let (_, spans, _, _) = place_rows(
+                &[spec.clone()],
+                &["electronic-circuit".to_string()],
+                0, 0,
+                Some("fast-transport-belt"),
+                InserterTier::default(), QualityTier::Normal, 0,
+                None, None,
+                crate::bus::layout::RowLayout::VerticalSplit,
+                None, &[], &StackingCtx::unstacked(),
+                duty,
+            );
+            spans.iter().map(|r| r.machine_count).collect()
+        };
+        let baseline = run(1.0);
+        assert_eq!(
+            baseline.iter().max().copied().unwrap_or(0), 6,
+            "duty 1.0 native-on-fast must stay bit-identical (24 machines fill \
+             4×6 under the existing cap — the routed-around ec60-red shape), \
+             got {baseline:?}"
+        );
+        let capped = run(0.6);
+        assert!(
+            capped.iter().all(|&c| c == 4) && capped.iter().sum::<usize>() == 24,
+            "duty 0.6 must cap NATIVE dual-input rows on fast at exactly the \
+             block of 4 (the branch ec60-red's at-plan artifact shipped \
+             through); got {capped:?}"
         );
     }
 
