@@ -165,6 +165,21 @@ goes to the owner before merge.
 
 ## Decision log
 
+- *2026-08-15 — **OWNER CALL: correctness over footprint.*** The
+  owner's direction (in-session, verbatim: "we should agree that
+  correctness is more important than footprint") resolves K69-4's
+  reserved trade-off and sets Phase 3's default direction: the
+  duty-shaped provisioning ships ON by default once the family
+  semantics settle (threshold form, tier generalization, tier5's
+  router unblock), accepting the measured footprint cost (+25–45%
+  entities on the affected fixtures) in exchange for plan attainment.
+  Compactness remains the SECONDARY objective — a "compact" escape
+  hatch (duty 1.0) stays available, and the selection objective's
+  density term will need re-weighing during the flip so it stops
+  punishing the correct shape. Phase 3's corpus adjudication
+  (pins/goldens/scoreboards re-blessed against sim receipts) is the
+  execution vehicle.
+
 - *2026-08-15 — reach-PR review round 2 tightened the gate, and it was
   right to.* Two correct majors: the `solid_inputs >= 2` guard also
   reached TripleInput and FluidDualInput rows (the kind has TWO solid
@@ -191,10 +206,14 @@ goes to the owner before merge.
   density score loses, and NATIVE wins — whose vertical dual-input EC
   rows (7×6) never consult the HS-branch cap. The lever's reach was
   hostage to a delivery-blind density objective. Fix (post-#650, next
-  PR): the input₀ block cap now applies to DUAL-input rows on every
-  candidate path (≥2 solid inputs only — the measured 1a harm was
-  shrinking single-input producer rows; the measured 1c win was
-  capping dual-input consumers). First artifact: ec60-red at duty 0.6
+  PR): the input₀ block cap now applies on every candidate path, gated
+  (after the reach PR's round-2/3 review tightening) on exact
+  `RowKind::DualInput` AND input₀ draw ≥ 10% of the full-belt budget —
+  NOT this entry's original "≥2 solid inputs" wording, which round 2
+  caught reaching TripleInput/FluidDualInput (wording corrected round
+  5; the code and the helper's doc are authoritative). The measured 1a
+  harm was shrinking single-input rows; the measured wins are the
+  high-draw DualInput class. First artifact: ec60-red at duty 0.6
   = 6,355 entities / 176×207 (+28% entities, +64% bbox vs baseline —
   K69-4 watch), 0 errors, meter **96.5% produced** (up from 90.8;
   ec30's gate-clearing artifact metered 96.6 and simmed 99.4).
