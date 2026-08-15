@@ -1396,17 +1396,25 @@ impl JunctionStrategy for SatStrategy {
             initial_cost.expect("entities_opt is Some here, so initial_cost is Some");
 
         // Cost descent: re-solve with a tighter cost cap until either
-        // UNSAT (current best is optimal at this cap), wall-clock
-        // budget runs out, or iter limit. Descent operates on RAW
-        // SAT output so the cap we compute lines up with what the
-        // encoder sees; pruning happens once at the end.
-        let deadline = web_time::Instant::now()
-            + std::time::Duration::from_millis(effective_budget_ms as u64);
-
+        // UNSAT (current best is optimal at this cap) or the iteration
+        // limit. Descent operates on RAW SAT output so the cap we
+        // compute lines up with what the encoder sees; pruning happens
+        // once at the end.
+        //
+        // DETERMINISM (#652): this loop used to ALSO carry a wall-clock
+        // deadline (`effective_budget_ms`), which made the number of
+        // completed descent iterations — and therefore the chosen
+        // layout — depend on machine speed and build profile. Measured
+        // directly: debug and release builds produced different layouts
+        // for identical inputs (ac7-HS under the RFC-069 reshape), and
+        // this is the recorded 2026-05-02 AC@5 CI-flake class. The
+        // iteration cap (4) is the sole budget now: at most 4 extra
+        // solves per zone, each of the same class as the base solve
+        // that just succeeded — bounded AND reproducible.
+        // `effective_budget_ms` remains only as the cache's
+        // UNSAT-vs-Timeout classification threshold (a bookkeeping
+        // bias between two refusal flavors, noted on #652).
         for descent_iter in 0..self.constraints.cost_descent_max_iters {
-            if web_time::Instant::now() >= deadline {
-                break;
-            }
             let Some(cap) = best_cost.checked_sub(1) else {
                 break; // cost already zero — nothing to tighten
             };
