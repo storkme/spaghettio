@@ -3584,6 +3584,12 @@ fn stress_electronic_circuit_30s_from_ore() {
             // fluid-reservation filter + promote_blocked_encountered +
             // perimeter-boundary check landed.
             // 2026-08-15 (#632 B5 dispatch swap, #644): 0 -> 140. The
+            // 30/s rate is where the from-ore family's deficit STARTS:
+            // the 22s/23s siblings genuinely clear under the same
+            // walker (their trunks provision adequately; verified by
+            // the full suite on this change), which is why their
+            // ceilings stay 0 — the discontinuity is physics, not an
+            // un-updated pin. The
             // calibrated belt_flow walker took the lane-throughput slot
             // and surfaces the real trunk under-provisioning this
             // fixture ships: sim-measured 92.1% delivered (post-lift
