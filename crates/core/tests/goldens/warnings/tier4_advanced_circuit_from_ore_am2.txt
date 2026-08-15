@@ -1,1 +1,1 @@
-input-rate-delivery 11
+input-rate-delivery 7
