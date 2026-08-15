@@ -2537,6 +2537,21 @@ fn compute_lane_rates_impl(
     // additional in_degree bump so UG-outputs don't dequeue before their
     // source is ready. `behind_to_ug_outputs` lets us decrement the UG-output's
     // counter once the "behind" tile is processed.
+    //
+    // KNOWN LIMIT (pre-existing; #644 follow-up): this edge — and the
+    // rate-add it drives at processing time — fires on structural
+    // presence of `behind`, without checking that the behind belt's
+    // direction actually feeds the entrance or that it carries the
+    // tunnel's item. A perpendicular crossing belt behind an entrance
+    // therefore leaks its rates onto the exit. The external-seeding
+    // guard (see `sources_by_item`) deliberately uses the STRICTER
+    // feeds-the-entrance predicate, so a kept-seed exit in that
+    // topology still receives this leak on top of its seed — same as
+    // it always did pre-#648. No engine layout has a non-feeding
+    // behind tile (UG census across the from-ore/PU family: zero);
+    // the RFC-064 sci2 rotation artifact has two. Tightening THIS
+    // edge to the feeds predicate is the symmetric fix, deferred
+    // because it changes walker behavior beyond #648's scope.
     let mut behind_to_ug_outputs: FxHashMap<(i32, i32), Vec<(i32, i32)>> =
         FxHashMap::default();
     for &ug_out in &ug_output_tiles {
