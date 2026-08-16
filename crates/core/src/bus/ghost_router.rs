@@ -3161,6 +3161,17 @@ pub fn route_bus_ghost(
             // observability is the CrossingConflictRetried summary
             // event below plus the SPAGHETTIO_DEBUG_CONFLICT_RETRY
             // diagnostics (eprintln, unaffected by trace muting).
+            //
+            // Trace reconciliation on a RESOLVED retry: the primary's
+            // solve series (including its terminal solved event)
+            // describes the DISCARDED conflicting geometry — the
+            // committed geometry is recorded by JunctionCommitted at
+            // stamping (which carries the actual entity list, i.e. the
+            // retry's), and CrossingConflictRetried{resolved: true}
+            // marks the provenance switch. Per-strategy/veto breakdown
+            // of the retry itself lives only in the env-gated
+            // diagnostics — deliberate until the #652 veto→pin unit
+            // gives retries a success path worth first-class tracing.
             let retry = trace::with_muted(|| {
                 junction_solver::solve_crossing(
                     cluster.as_slice(),
