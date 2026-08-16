@@ -257,6 +257,7 @@ pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
         &fixture.placed_entities,
         &strategies,
         &pending_crossings,
+        &FxHashSet::default(),
     );
     let events = trace::drain_events();
     drop(guard);

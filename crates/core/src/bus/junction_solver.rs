@@ -78,6 +78,22 @@ pub struct GrowingRegion {
     /// either non-participating spec paths or hard obstacles (machines,
     /// poles, row template belts, etc.) that the caller passed in.
     pub forbidden_tiles: FxHashSet<(i32, i32)>,
+    /// #652 retry-with-teeth: tiles forbidden REGARDLESS of entity
+    /// kind. `refresh_forbidden` filters obstacle tiles through the
+    /// surface-belt exemption (SAT may lift and re-stamp simple
+    /// surface belts) and the port exemption — both of which made the
+    /// obvious conflict-retry a measured no-op (see the context-
+    /// conflict branch in `ghost_router.rs`). Tiles in this set skip
+    /// both exemptions: they are inserted into `forbidden_tiles`
+    /// unconditionally on every refresh, so they reach the SAT zone's
+    /// `forced_empty` and thereby the cache signature's `|F:` section
+    /// (no cache aliasing — a retried zone is a DIFFERENT cached
+    /// problem). If an override tile coincides with a boundary port,
+    /// the encoder treats a non-interior boundary on a `forced_empty`
+    /// tile as perimeter and returns UNSAT, which forces the region to
+    /// grow past the tile (`sat.rs`, `ZoneBoundary::interior` docs) —
+    /// the "grow instead" fallback the retry needs for ports.
+    pub forbidden_override: FxHashSet<(i32, i32)>,
     /// Tight enclosing rectangle around `tiles`.
     pub bbox: Rect,
     /// Per-spec path-index range currently included. Inclusive on both
@@ -106,6 +122,7 @@ impl GrowingRegion {
         strict_obstacles: &FxHashSet<(i32, i32)>,
         placed_entities: &[PlacedEntity],
         spec_kinds: &FxHashMap<String, SpecKind>,
+        forbidden_override: &FxHashSet<(i32, i32)>,
     ) -> Self {
         assert!(!seeds.is_empty(), "from_crossings: seeds must be non-empty");
         let min_x = seeds.iter().map(|(x, _)| *x).min().unwrap();
@@ -144,6 +161,7 @@ impl GrowingRegion {
             encountered: Vec::new(),
             tiles,
             forbidden_tiles: FxHashSet::default(),
+            forbidden_override: forbidden_override.clone(),
             bbox,
             frontiers,
         };
@@ -570,6 +588,18 @@ impl GrowingRegion {
                 if forbidden_kind {
                     self.forbidden_tiles.insert(t);
                 }
+            }
+        }
+
+        // Retry-with-teeth override: forbidden regardless of entity
+        // kind, and regardless of the port exemption — see the field's
+        // docs for why both exemptions must lose here (the conflict
+        // tiles hold committed entities this zone must not re-stamp,
+        // and a port-coincident override resolves via encoder UNSAT +
+        // growth, not via placement).
+        for &t in &self.forbidden_override {
+            if self.bbox.contains(t.0, t.1) {
+                self.forbidden_tiles.insert(t);
             }
         }
     }
@@ -1101,6 +1131,11 @@ pub fn solve_crossing(
     // real entities; treating them as still-pending causes spurious
     // deferrals for zones whose exits happen to land on them.
     pending_crossings: &FxHashSet<(i32, i32)>,
+    // #652 retry-with-teeth: tiles forbidden regardless of entity kind
+    // (see `GrowingRegion::forbidden_override`). Empty on the primary
+    // attempt; the ghost router's context-conflict branch retries a
+    // conflicted cluster once with the conflict tiles here.
+    forbidden_override: &FxHashSet<(i32, i32)>,
 ) -> Option<JunctionSolution> {
     assert!(!seeds.is_empty(), "solve_crossing: seeds must be non-empty");
     let initial_tile = seeds[0];
@@ -1112,6 +1147,7 @@ pub fn solve_crossing(
         strict_obstacles,
         placed_entities,
         spec_kinds,
+        forbidden_override,
     );
 
     // Emit start-of-solve snapshot: seed, participating specs, and

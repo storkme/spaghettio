@@ -1153,6 +1153,40 @@ impl JunctionStrategy for SatStrategy {
             ctx.sat_ceiling_refusals
                 .set(ctx.sat_ceiling_refusals.get() + 1);
         }
+        if std::env::var("SPAGHETTIO_DEBUG_CONFLICT_RETRY").is_ok() {
+            let interior_n = zone.boundaries.iter().filter(|b| b.interior).count();
+            eprintln!(
+                "SAT-PREPASS seed {:?} iter {} strat {} zone {}x{}@({},{}) vars {} \
+                 forced_empty {} boundaries {} ({} interior)",
+                ctx.region.initial_tile,
+                ctx.growth_iter,
+                self.name(),
+                zone.width,
+                zone.height,
+                zone.x,
+                zone.y,
+                sat_var_count,
+                zone.forced_empty.len(),
+                zone.boundaries.len(),
+                interior_n,
+            );
+            if !zone.forced_empty.is_empty() {
+                for b in &zone.boundaries {
+                    eprintln!(
+                        "  B ({},{}) {:?} {} {} interior={} ch={} tier={:?}",
+                        b.x,
+                        b.y,
+                        b.direction,
+                        if b.is_input { "IN" } else { "OUT" },
+                        b.item,
+                        b.interior,
+                        b.channel_id,
+                        b.belt_tier,
+                    );
+                }
+                eprintln!("  forced_empty: {:?}", zone.forced_empty);
+            }
+        }
 
         let cache_result = crate::zone_cache::lookup_zone_result(
             &zone,

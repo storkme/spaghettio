@@ -3022,20 +3022,19 @@ pub fn route_bus_ghost(
         // benign dedup (skipped at stamping); CONFLICTING overlaps
         // reject the whole cluster into the cap/retry machinery.
         //
-        // NO local re-solve is attempted (review on the fail-safe PR
-        // measured the obvious one as a deterministic no-op): adding the
-        // conflict tiles to `strict_obstacles` is filtered back out by
-        // `refresh_forbidden`'s surface-belt exemption (SAT is allowed
-        // to re-stamp surface belts — the benign identical re-derivation
-        // depends on it), and the zone cache's signature excludes the
-        // obstacle sets, so an unchanged zone replays the identical
-        // cached solution. A retry with teeth needs a
-        // forbidden-regardless-of-kind override threaded through
-        // `GrowingRegion` plus a cache-signature extension — recorded on
-        // #652. Until then a conflicted cluster caps for the
-        // layout-level retry and, failing that, is owned by the
+        // On conflict, ONE retry-with-teeth is attempted (#652): the
+        // conflicting tiles are re-solved as a `forbidden_override` —
+        // forbidden regardless of entity kind, so neither
+        // `refresh_forbidden`'s surface-belt exemption nor the port
+        // exemption filters them back out (the exemptions are what made
+        // the naive strict-obstacles retry a measured no-op, together
+        // with cache-signature replay — the override reaches the zone's
+        // `forced_empty`, which IS in the signature, so the retried
+        // zone is a distinct cached problem). A cluster whose retry
+        // fails (no solution, or a solution that still conflicts) caps
+        // for the layout-level retry and, failing that, is owned by the
         // unresolved-junction reporter + the fail-sever pass.
-        let Some(sol) = junction_solver::solve_crossing(
+        let Some(mut sol) = junction_solver::solve_crossing(
             cluster.as_slice(),
             &keys_at_tile,
             &routed_paths,
@@ -3049,6 +3048,7 @@ pub fn route_bus_ghost(
             &entities,
             strategies,
             &pending_crossings,
+            &FxHashSet::default(),
         ) else {
             // Capped: `solve_crossing` returned `None`, matching the
             // `JunctionGrowthCapped` event it emitted at this cluster's seed.
@@ -3080,49 +3080,161 @@ pub fn route_bus_ghost(
             }
             continue;
         };
-        let conflicts: Vec<(i32, i32)> = sol
-            .entities
-            .iter()
-            .filter(|ent| {
-                let tile = (ent.x, ent.y);
-                let claimed = matches!(
-                    occupancy.claim_at(tile),
-                    Some(crate::bus::ghost_occupancy::Claim::Template { .. })
-                        | Some(crate::bus::ghost_occupancy::Claim::RowEntity { .. })
-                );
-                claimed
-                    && occupancy.entity_at(tile).is_some_and(|existing| {
-                        existing.name != ent.name
-                            || existing.direction != ent.direction
-                            || existing.io_type != ent.io_type
-                            || existing.carries != ent.carries
-                    })
-            })
-            .map(|ent| (ent.x, ent.y))
-            .collect();
+        let conflicts_of = |sol_entities: &[PlacedEntity]| -> Vec<(i32, i32)> {
+            sol_entities
+                .iter()
+                .filter(|ent| {
+                    let tile = (ent.x, ent.y);
+                    let claimed = matches!(
+                        occupancy.claim_at(tile),
+                        Some(crate::bus::ghost_occupancy::Claim::Template { .. })
+                            | Some(crate::bus::ghost_occupancy::Claim::RowEntity { .. })
+                    );
+                    claimed
+                        && occupancy.entity_at(tile).is_some_and(|existing| {
+                            existing.name != ent.name
+                                || existing.direction != ent.direction
+                                || existing.io_type != ent.io_type
+                                || existing.carries != ent.carries
+                        })
+                })
+                .map(|ent| (ent.x, ent.y))
+                .collect()
+        };
+        let mut conflicts = conflicts_of(&sol.entities);
         if !conflicts.is_empty() {
-            let mut sample = conflicts.clone();
-            sample.truncate(4);
-            trace::emit(trace::TraceEvent::CrossingZoneSkipped {
-                tap_item: String::new(),
-                tap_x: sol.footprint.x,
-                tap_y: sol.footprint.y,
-                reason: format!(
-                    "context-conflict at commit ({} tiles, {:?}): solution collides \
-                     with differing committed entities; cluster capped for retry",
-                    conflicts.len(),
-                    sample
-                ),
-            });
-            cap_coords.push(cluster[0]);
-            // The cluster's tiles stay in remaining_crossings so the
-            // retry pass (or, failing that, the unresolved-junction
-            // reporter + the fail-sever pass) owns them — without this a
-            // conflicting crossing would ship silently dropped.
-            for &t in cluster {
-                remaining_crossings.insert(t);
+            if std::env::var("SPAGHETTIO_DEBUG_CONFLICT_RETRY").is_ok() {
+                for ent in &sol.entities {
+                    if conflicts.contains(&(ent.x, ent.y)) {
+                        let existing = occupancy.entity_at((ent.x, ent.y));
+                        eprintln!(
+                            "PRIMARY-CONFLICT ({},{}): wants {} {:?} io={:?} carries={:?} | committed {:?}",
+                            ent.x,
+                            ent.y,
+                            ent.name,
+                            ent.direction,
+                            ent.io_type,
+                            ent.carries,
+                            existing.map(|e| format!(
+                                "{} {:?} io={:?} carries={:?}",
+                                e.name, e.direction, e.io_type, e.carries
+                            )),
+                        );
+                    }
+                }
             }
-            continue;
+            // Retry with teeth (#652): one re-solve with exactly the
+            // conflicting tiles as the forbidden-override. Bounded and
+            // deterministic — a retry that solves cleanly commits; one
+            // that conflicts again (same tiles or new ones) caps rather
+            // than iterating. If a fixture ever shows a
+            // resolves-on-second-retry shape, widen this to an
+            // accumulate-and-retry loop with a small cap.
+            //
+            // Measured on ac7-HS duty 0.6 (2026-08-16, the fixture the
+            // retry was built for): the override mechanism engages
+            // end-to-end — the forced tiles reach the zone's
+            // `forced_empty`, `topology_boundaries` re-expresses the
+            // ports on them as INTERIOR boundaries, and a direct
+            // encoder call proves the retry zone SAT — but the retry
+            // still returns None there, because the SAT solution
+            // reassigns which same-channel column carries which flow
+            // (channel flow is fungible; routed paths are not), the
+            // walker veto correctly rejects the broken path, and the
+            // veto's remedy (growth) pushes the zone over
+            // MAX_ZONE_SAT_VARS. The recorded next lever (#652) is a
+            // veto→pin re-solve: `sat::solve_crossing_zone_with_pins`
+            // exists, tested and unwired — pin the vetoed path's
+            // committed in-zone tiles and re-solve the SAME zone
+            // instead of growing. Diagnostics for all of this are
+            // env-gated under SPAGHETTIO_DEBUG_CONFLICT_RETRY.
+            let override_set: FxHashSet<(i32, i32)> =
+                conflicts.iter().copied().collect();
+            let retry = junction_solver::solve_crossing(
+                cluster.as_slice(),
+                &keys_at_tile,
+                &routed_paths,
+                &hard_for_junction,
+                &junction_hard,
+                &unreleasable_obstacles,
+                &spec_belt_tiers,
+                &spec_items,
+                &spec_exit_dirs,
+                &spec_kinds,
+                &entities,
+                strategies,
+                &pending_crossings,
+                &override_set,
+            );
+            let resolved = match retry {
+                Some(retry_sol) => {
+                    let retry_conflicts = conflicts_of(&retry_sol.entities);
+                    if std::env::var("SPAGHETTIO_DEBUG_CONFLICT_RETRY").is_ok() {
+                        eprintln!(
+                            "CONFLICT-RETRY seed {:?}: primary footprint {:?}, \
+                             retry footprint {:?}, retry conflicts {:?}",
+                            cluster[0], sol.footprint, retry_sol.footprint, retry_conflicts
+                        );
+                        for ent in &retry_sol.entities {
+                            if override_set.contains(&(ent.x, ent.y)) {
+                                eprintln!(
+                                    "  retry entity ON override tile ({},{}): {} dir {:?} carries {:?}",
+                                    ent.x, ent.y, ent.name, ent.direction, ent.carries
+                                );
+                            }
+                        }
+                    }
+                    if retry_conflicts.is_empty() {
+                        sol = retry_sol;
+                        true
+                    } else {
+                        conflicts = retry_conflicts;
+                        false
+                    }
+                }
+                None => {
+                    if std::env::var("SPAGHETTIO_DEBUG_CONFLICT_RETRY").is_ok() {
+                        eprintln!(
+                            "CONFLICT-RETRY seed {:?}: primary footprint {:?}, \
+                             retry returned None (capped)",
+                            cluster[0], sol.footprint
+                        );
+                    }
+                    false
+                }
+            };
+            trace::emit(trace::TraceEvent::CrossingConflictRetried {
+                x: cluster[0].0,
+                y: cluster[0].1,
+                conflict_tiles: override_set.len(),
+                resolved,
+            });
+            if !resolved {
+                let mut sample = conflicts.clone();
+                sample.truncate(4);
+                trace::emit(trace::TraceEvent::CrossingZoneSkipped {
+                    tap_item: String::new(),
+                    tap_x: sol.footprint.x,
+                    tap_y: sol.footprint.y,
+                    reason: format!(
+                        "context-conflict at commit ({} tiles, {:?}): solution \
+                         collides with differing committed entities and the \
+                         forbidden-override retry did not clear it; cluster \
+                         capped for retry",
+                        conflicts.len(),
+                        sample
+                    ),
+                });
+                cap_coords.push(cluster[0]);
+                // The cluster's tiles stay in remaining_crossings so the
+                // retry pass (or, failing that, the unresolved-junction
+                // reporter + the fail-sever pass) owns them — without this a
+                // conflicting crossing would ship silently dropped.
+                for &t in cluster {
+                    remaining_crossings.insert(t);
+                }
+                continue;
+            }
         }
         // Every cluster member is now handled, regardless of whether
         // it sits inside the solution footprint.
@@ -4765,6 +4877,7 @@ fn blame_unsolvable_cluster(
                 entities,
                 strategies,
                 pending_crossings,
+                &FxHashSet::default(),
             )
             .is_some()
         });

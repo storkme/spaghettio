@@ -464,6 +464,22 @@ pub enum TraceEvent {
         item: String,
         into_item: String,
     },
+    /// #652 retry-with-teeth: a cluster's solution collided with
+    /// differing committed entities (context-conflict at commit), and
+    /// the cluster was re-solved once with the conflicting tiles as a
+    /// forbidden-override (forbidden regardless of entity kind — the
+    /// surface-belt exemption does not apply). `resolved == true`
+    /// means the retry produced a conflict-free solution that was
+    /// committed; `false` means the retry failed (no solution, or a
+    /// solution that still conflicted) and the cluster fell through to
+    /// the cap/fail-sever machinery. One event per retried cluster,
+    /// tagged with the cluster's seed tile.
+    CrossingConflictRetried {
+        x: i32,
+        y: i32,
+        conflict_tiles: usize,
+        resolved: bool,
+    },
     /// A balancer block was requested for a lane family. `template_found
     /// == false` is not necessarily a bug by itself — it means no direct
     /// template, gcd-decomposition, nor the runtime generator could
