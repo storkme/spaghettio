@@ -3150,30 +3150,35 @@ pub fn route_bus_ghost(
             // env-gated under SPAGHETTIO_DEBUG_CONFLICT_RETRY.
             let override_set: FxHashSet<(i32, i32)> =
                 conflicts.iter().copied().collect();
-            // Trace-stream accounting: this second solve emits its own
-            // JunctionGrowthStarted / SatInvocation / (on failure)
-            // JunctionGrowthCapped series for the same seed — one extra
-            // growth series per conflicted cluster. Deliberately NOT
-            // muted: those events are the primary forensic record of
-            // WHY a retry failed. Consumers that count events per seed
-            // (stress scoreboards, replay tooling) can bracket retry
-            // series via the CrossingConflictRetried event below.
-            let retry = junction_solver::solve_crossing(
-                cluster.as_slice(),
-                &keys_at_tile,
-                &routed_paths,
-                &hard_for_junction,
-                &junction_hard,
-                &unreleasable_obstacles,
-                &spec_belt_tiers,
-                &spec_items,
-                &spec_exit_dirs,
-                &spec_kinds,
-                &entities,
-                strategies,
-                &pending_crossings,
-                &override_set,
-            );
+            // MUTED, per the blame_unsolvable_cluster precedent: the
+            // junction debugger (web/src/ui/junctionTrace.ts) groups
+            // growth series purely by seed tile, so an unmuted retry
+            // would OVERWRITE the primary's bbox/sat/veto records in
+            // place and the cluster's outcome would be whichever
+            // terminal event landed last — corrupting the primary's
+            // forensic record rather than adding to it (session-side
+            // adversary finding on this PR). The retry's own
+            // observability is the CrossingConflictRetried summary
+            // event below plus the SPAGHETTIO_DEBUG_CONFLICT_RETRY
+            // diagnostics (eprintln, unaffected by trace muting).
+            let retry = trace::with_muted(|| {
+                junction_solver::solve_crossing(
+                    cluster.as_slice(),
+                    &keys_at_tile,
+                    &routed_paths,
+                    &hard_for_junction,
+                    &junction_hard,
+                    &unreleasable_obstacles,
+                    &spec_belt_tiers,
+                    &spec_items,
+                    &spec_exit_dirs,
+                    &spec_kinds,
+                    &entities,
+                    strategies,
+                    &pending_crossings,
+                    &override_set,
+                )
+            });
             let mut retry_footprint = None;
             let resolved = match retry {
                 Some(retry_sol) => {
