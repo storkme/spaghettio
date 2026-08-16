@@ -2354,6 +2354,18 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
          fail-sever pass dropped nothing — the zero-lane-error result is \
          vacuous (sever scope regressed?)"
     );
+    // Positive half of the context_conflicts == 0 pin above (review:
+    // that zero is an absence). Pre-upgrade this fixture shipped 3
+    // unresolved-junction errors (two conflict-capped clusters + the
+    // iter-capped 21-tile mega-cluster); the flow-compatible upgrade
+    // commits the two conflicted ones. If the carve-out silently stops
+    // firing, the conflicted clusters cap again and this returns to 3.
+    assert!(
+        unresolved <= 1,
+        "ac7-HS duty-0.6 shipped {unresolved} unresolved-junction errors \
+         (expected <= 1) — formerly-upgradeable conflict clusters are \
+         capping again; check the flow-compatible upgrade path"
+    );
     // LIVENESS (session-side review): if this trips, the pin has stopped
     // exercising the fail-safe path at all (duty stopped reaching the
     // engine, or every crossing now resolves — ac7-HS at duty 1.0 has
