@@ -2250,6 +2250,12 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
 /// pinned here: a residual balancer-over-trunk overlap (recorded on
 /// #652) still ships a handful, and that mechanism is out of this
 /// pin's scope.
+///
+/// 2026-08-16 update: the context-conflict half of the fixture IS now
+/// resolved (flow-compatible commit upgrade — see the
+/// `context_conflicts == 0` assertion below); the sever/unresolved
+/// liveness path stays exercised by the remaining 21-tile iter-capped
+/// cluster near (15,123), the mega-zone class tracked on #652/#644.
 #[test]
 #[ntest::timeout(300000)]
 fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
@@ -2272,10 +2278,34 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
         },
     )
     .expect("ac7 duty-0.6 lays out");
-    let severed = spaghettio_core::trace::drain_events()
+    let events = spaghettio_core::trace::drain_events();
+    let severed = events
         .iter()
         .filter(|e| matches!(e, spaghettio_core::trace::TraceEvent::CrossingSevered { .. }))
         .count();
+    // #652 flow-compatible upgrade pin: the context-conflict class is
+    // RESOLVED on this fixture — both formerly-conflicted clusters
+    // (seeds (15,93)/(15,96), UG outputs surfacing onto committed
+    // same-item continuation belts) now commit via
+    // `flow_compatible_ug_upgrade`. A context-conflict skip reappearing
+    // here means the carve-out regressed (or a new, genuinely
+    // incompatible conflict shape arrived — either way, look).
+    let context_conflicts = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                spaghettio_core::trace::TraceEvent::CrossingZoneSkipped { reason, .. }
+                    if reason.starts_with("context-conflict")
+            )
+        })
+        .count();
+    assert_eq!(
+        context_conflicts, 0,
+        "ac7-HS duty-0.6 shipped {context_conflicts} context-conflict \
+         cluster skips — the #652 flow-compatible commit upgrade stopped \
+         clearing the UG-onto-continuation-belt conflict class"
+    );
     let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
         Ok(v) => v,
         Err(e) => e.issues,
