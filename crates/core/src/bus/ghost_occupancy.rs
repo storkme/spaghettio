@@ -359,6 +359,17 @@ impl Occupancy {
         Ok(idx)
     }
 
+    /// Drop the claim at `tile`, orphaning its entity (see `place`'s
+    /// orphan note — the backing entity stays in `self.entities` for
+    /// index stability but no claim points to it). Returns true if a
+    /// claim was removed. Used by the flow-compatible commit upgrade
+    /// (#652): a crossing-zone solution may replace a committed
+    /// same-item, same-direction, same-tier surface belt with the UG
+    /// output that continues the identical flow.
+    pub fn release_tile(&mut self, tile: (i32, i32)) -> bool {
+        self.claims.remove(&tile).is_some()
+    }
+
     /// Drop every `GhostSurface` claim whose tile lies inside `zone`.
     /// The corresponding entities become orphaned (see `place`'s note).
     /// Used by SAT before claiming tiles for its own solution.
