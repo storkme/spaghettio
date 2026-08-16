@@ -3589,6 +3589,16 @@ pub fn route_bus_ghost(
                 // it would clobber the just-stamped upgrade (bot
                 // round 2, defence-in-depth; the solver never emits
                 // overlapping entities today, `place` would panic).
+                //
+                // LOAD-BEARING INVARIANT (bot round 3): this guard's
+                // `matches!` runs against POST-release occupancy while
+                // `upgrades` was approved PRE-release — they agree
+                // only because `release_for_pertile_template` never
+                // drops Template/RowEntity claims. If the release pass
+                // is ever widened to drop Template claims, approved
+                // tiles stop matching here, the upgrade silently
+                // reverts to a skip, and the solution's UG output is
+                // stranded — re-derive this pairing before widening.
                 if !upgrades.remove(&tile) {
                     continue;
                 }
@@ -5217,13 +5227,17 @@ fn any_spec_turns_at(tile: (i32, i32), routed_paths: &FxHashMap<String, Vec<(i32
 /// shipped an unpaired-UG + belt-loop error pair).
 ///
 /// Guards, all conservative (false ⇒ the caller keeps the conflict).
-/// `released_at` mirrors what the commit's release pass will drop
-/// (`release_for_pertile_template` + `releasable_ghost_tiles`):
-/// GhostSurface claims on PARTICIPATING specs' paths and trunk
-/// Permanents; Template/RowEntity/SatSolved claims persist even
-/// inside the footprint, and balancer/tapoff Permanents may be
-/// preserved — all counted persistent here (a false "persistent"
-/// keeps the conflict, never mints an unsound upgrade).
+/// `released_at` under-approximates what the commit's release pass
+/// will drop: the actual release
+/// (`release_for_pertile_template(&release_rect, None, ..)`) clears
+/// ALL in-zone GhostSurface claims, while this mirror counts only
+/// PARTICIPATING specs' ghosts — deliberately stricter (bot round 3;
+/// relaxing to match is a recorded #652 nicety with no exhibiting
+/// fixture). Trunk Permanents (non-pipe) are released;
+/// Template/RowEntity/SatSolved claims persist even inside the
+/// footprint, and balancer/tapoff Permanents may be preserved — all
+/// counted persistent here (a false "persistent" keeps the conflict,
+/// never mints an unsound upgrade).
 /// - Behind tile (the UG exit's back — surface items cannot enter
 ///   it): must be inside the footprint and hold nothing persistent,
 ///   so no surviving committed flow can jam against it.
