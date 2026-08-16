@@ -3080,45 +3080,64 @@ pub fn route_bus_ghost(
             }
             continue;
         };
-        let conflicts_of = |sol_entities: &[PlacedEntity],
-                           footprint: crate::bus::junction::Rect|
-         -> Vec<(i32, i32)> {
-            sol_entities
-                .iter()
-                .filter(|ent| {
-                    let tile = (ent.x, ent.y);
-                    let claimed = matches!(
+        // Classify each solution entity landing on a committed
+        // Template/RowEntity tile: identical → benign dedupe (neither
+        // list), flow-compatible UG-output-over-continuation-belt on a
+        // Template claim → upgrade (see `flow_compatible_ug_upgrade`;
+        // RowEntity targets are never upgrades — row belts live in
+        // `row_entities` with no eviction path), anything else →
+        // conflict. Evaluated ONCE here — the stamping loop consumes
+        // the approved `upgrades` set instead of re-evaluating, because
+        // the release pass mutates occupancy between the two sites and
+        // a re-evaluation can flip (measured: a stamp-time flip dropped
+        // a UG output and shipped unpaired-UG + belt-loop errors).
+        let classify = |s: &junction_solver::JunctionSolution| -> (
+            Vec<(i32, i32)>,
+            FxHashSet<(i32, i32)>,
+        ) {
+            let mut conflicts: Vec<(i32, i32)> = Vec::new();
+            let mut upgrades: FxHashSet<(i32, i32)> = FxHashSet::default();
+            for ent in &s.entities {
+                let tile = (ent.x, ent.y);
+                let is_template = matches!(
+                    occupancy.claim_at(tile),
+                    Some(crate::bus::ghost_occupancy::Claim::Template { .. })
+                );
+                let claimed = is_template
+                    || matches!(
                         occupancy.claim_at(tile),
-                        Some(crate::bus::ghost_occupancy::Claim::Template { .. })
-                            | Some(crate::bus::ghost_occupancy::Claim::RowEntity { .. })
+                        Some(crate::bus::ghost_occupancy::Claim::RowEntity { .. })
                     );
-                    claimed
-                        && occupancy.entity_at(tile).is_some_and(|existing| {
-                            let differs = existing.name != ent.name
-                                || existing.direction != ent.direction
-                                || existing.io_type != ent.io_type
-                                || existing.carries != ent.carries;
-                            // #652 flow-compatible carve-out: a UG output
-                            // continuing a committed belt's identical flow
-                            // is an upgrade, not a conflict (see
-                            // `flow_compatible_ug_upgrade`). ac7 proof: the
-                            // walker-clean topology REQUIRES the UG to
-                            // surface exactly on the committed continuation
-                            // belt, and the pin/retry alternatives are
-                            // measured structurally unsolvable there.
-                            differs
-                                && !flow_compatible_ug_upgrade(
-                                    &occupancy,
-                                    existing,
-                                    ent,
-                                    footprint,
-                                )
-                        })
-                })
-                .map(|ent| (ent.x, ent.y))
-                .collect()
+                if !claimed {
+                    continue;
+                }
+                let Some(existing) = occupancy.entity_at(tile) else {
+                    continue;
+                };
+                let differs = existing.name != ent.name
+                    || existing.direction != ent.direction
+                    || existing.io_type != ent.io_type
+                    || existing.carries != ent.carries;
+                if !differs {
+                    continue;
+                }
+                if is_template
+                    && flow_compatible_ug_upgrade(
+                        &occupancy,
+                        existing,
+                        ent,
+                        s.footprint,
+                        &s.participating,
+                    )
+                {
+                    upgrades.insert(tile);
+                } else {
+                    conflicts.push(tile);
+                }
+            }
+            (conflicts, upgrades)
         };
-        let mut conflicts = conflicts_of(&sol.entities, sol.footprint);
+        let (mut conflicts, mut upgrades) = classify(&sol);
         if !conflicts.is_empty() {
             if std::env::var("SPAGHETTIO_DEBUG_CONFLICT_RETRY").is_ok() {
                 for ent in &sol.entities {
@@ -3210,8 +3229,7 @@ pub fn route_bus_ghost(
             let mut retry_footprint = None;
             let resolved = match retry {
                 Some(retry_sol) => {
-                    let retry_conflicts =
-                        conflicts_of(&retry_sol.entities, retry_sol.footprint);
+                    let (retry_conflicts, retry_upgrades) = classify(&retry_sol);
                     if std::env::var("SPAGHETTIO_DEBUG_CONFLICT_RETRY").is_ok() {
                         eprintln!(
                             "CONFLICT-RETRY seed {:?}: primary footprint {:?}, \
@@ -3229,6 +3247,7 @@ pub fn route_bus_ghost(
                     }
                     if retry_conflicts.is_empty() {
                         sol = retry_sol;
+                        upgrades = retry_upgrades;
                         true
                     } else {
                         retry_footprint = Some(retry_sol.footprint);
@@ -3551,28 +3570,21 @@ pub fn route_bus_ghost(
             //
             // EXCEPTION (#652 flow-compatible upgrade): a solution UG
             // output continuing a committed belt's identical flow
-            // replaces it — the conflict check accepted the tile via
-            // `flow_compatible_ug_upgrade`, so skipping here would
-            // strand the solution's flow underground (the UG-in would
-            // keep its half of the pair while the output vanished).
-            // Release the committed claim and purge the superseded
-            // belt from the entity list, then stamp normally.
+            // replaces it — the conflict check approved the tile into
+            // `upgrades` (evaluated ONCE, pre-release; re-evaluating
+            // here against post-release occupancy can flip and
+            // silently drop the UG output, stranding the solution's
+            // flow underground with an unpaired UG-in — measured on
+            // this PR's review round). Release the committed claim
+            // and purge the superseded entities at the tile from the
+            // entity list (the crossing belt plus any stale ghost
+            // orphan sharing the tile), then stamp normally.
             if matches!(
                 occupancy.claim_at(tile),
                 Some(crate::bus::ghost_occupancy::Claim::Template { .. })
                     | Some(crate::bus::ghost_occupancy::Claim::RowEntity { .. })
             ) {
-                let upgrade = occupancy.entity_at(tile).is_some_and(|existing| {
-                    let differs = existing.name != ent.name
-                        || existing.direction != ent.direction
-                        || existing.io_type != ent.io_type
-                        || existing.carries != ent.carries;
-                    differs
-                        && flow_compatible_ug_upgrade(
-                            &occupancy, existing, &ent, footprint,
-                        )
-                });
-                if !upgrade {
+                if !upgrades.contains(&tile) {
                     continue;
                 }
                 occupancy.release_tile(tile);
@@ -5174,49 +5186,56 @@ fn any_spec_turns_at(tile: (i32, i32), routed_paths: &FxHashMap<String, Vec<(i32
     false
 }
 
-/// Returns true if a UG-in/out at `tile` facing `bridge_dir` would receive
-/// a sideload from a perpendicular spec — either because the tile itself has
-/// a perpendicular spec passing through, or because an adjacent SIDE tile
-/// (perpendicular to the bridge axis) has a belt flowing INTO this tile.
-///
-/// In Factorio, sideloads onto UG-input belts only fill the far lane and
-/// can dump items wrong; we reject any template that would create one.
-///
-/// The check considers both (a) in-flight routed ghost specs and (b) already-
-/// placed physical entities (splitters, row belts, trunks placed in Step 2-3).
-/// Without (b), a splitter whose output drops straight into this tile from a
-/// perpendicular direction slips through — the splitter is stamped before
-/// ghost routing and never enters `routed_paths`.
-///
 /// #652 flow-compatible commit upgrade: is `wanted` (a crossing-zone
 /// solution entity) a legal REPLACEMENT for `existing` (a committed
-/// Template/RowEntity-claimed entity at the same tile)?
+/// `Claim::Template` entity at the same tile)? `RowEntity` targets are
+/// excluded by the caller — row-template belts live in `row_entities`,
+/// not the bus `entities` vec, so there is no eviction path for them
+/// (session-side review on this PR).
 ///
 /// The one shape accepted: a UG **output** replacing a plain surface
 /// belt of the same tier, same direction, same item. Flow topology is
 /// preserved exactly — the UG output expels the identical item stream
 /// onto the same downstream tile the belt fed; only the upstream
 /// delivery switches from surface to underground, which is the zone
-/// solution's job. This is the unique walker-clean topology for the
-/// ac7 conflict class: the crossing's UG must surface exactly ON the
-/// committed continuation belt (measured on #652 — the forbid-and-grow
-/// retry and the veto→pin re-solve are both structurally unsolvable
-/// for this shape).
+/// solution's job. On the ac7 conflict class this is the only
+/// walker-clean topology found (argued from dive-column occupancy on
+/// #652, not enumerated): the crossing's UG surfaces exactly ON the
+/// committed continuation belt, and the forbid-and-grow retry and the
+/// veto→pin re-solve were both measured unsolvable for the shape.
 ///
-/// Guards, both conservative (false ⇒ the caller keeps the conflict):
-/// - The tile directly behind the UG output must lie inside the
-///   solution footprint: the zone re-derives that upstream, so no
-///   committed surface flow can jam against the output's back (a UG
-///   exit cannot accept surface items from behind).
-/// - No committed entity outside the footprint may output INTO the
-///   tile from a side: sideloads onto a UG exit lose the near-side
-///   lane (docs/factorio-mechanics.md), so a side-fed continuation
-///   belt must not be silently downgraded.
+/// EVALUATED ONCE, AT CONFLICT-CHECK TIME. The caller carries the
+/// approved tile set to the stamping loop rather than re-evaluating
+/// there: between the two sites the commit's release pass mutates
+/// occupancy, and a re-evaluation can flip (measured on this PR's
+/// review round — a stamp-time flip silently dropped a UG output and
+/// shipped an unpaired-UG + belt-loop error pair).
+///
+/// Guards, all conservative (false ⇒ the caller keeps the conflict).
+/// `released_at` mirrors what the commit's release pass will drop
+/// (`release_for_pertile_template` + `releasable_ghost_tiles`):
+/// GhostSurface claims on PARTICIPATING specs' paths and trunk
+/// Permanents; Template/RowEntity/SatSolved claims persist even
+/// inside the footprint, and balancer/tapoff Permanents may be
+/// preserved — all counted persistent here (a false "persistent"
+/// keeps the conflict, never mints an unsound upgrade).
+/// - Behind tile (the UG exit's back — surface items cannot enter
+///   it): must be inside the footprint and hold nothing persistent,
+///   so no surviving committed flow can jam against it.
+/// - Side neighbors: no persistent entity may feed the tile — a
+///   belt-like entity outputting into it (conservative by analogy
+///   with U7 in docs/factorio-mechanics.md: sideloads interact with
+///   UG endpoints lane-asymmetrically; the exit case is not
+///   documented, so it is refused outright), nor any adjacent
+///   inserter (drop-side conventions are not modeled here). Splitter
+///   second tiles are resolved via `splitter_second_tile` — occupancy
+///   claims key on anchor tiles only.
 fn flow_compatible_ug_upgrade(
     occupancy: &crate::bus::ghost_occupancy::Occupancy,
     existing: &PlacedEntity,
     wanted: &PlacedEntity,
     footprint: crate::bus::junction::Rect,
+    participating: &[String],
 ) -> bool {
     if wanted.io_type.as_deref() != Some("output") {
         return false;
@@ -5240,6 +5259,49 @@ fn flow_compatible_ug_upgrade(
     if existing.carries.is_none() || existing.carries != wanted.carries {
         return false;
     }
+
+    let released_at = |tile: (i32, i32)| -> bool {
+        if !footprint.contains(tile.0, tile.1) {
+            return false;
+        }
+        match occupancy.claim_at(tile) {
+            Some(crate::bus::ghost_occupancy::Claim::GhostSurface { .. }) => occupancy
+                .entity_at(tile)
+                .and_then(|e| e.segment_id.as_deref())
+                .and_then(|s| s.strip_prefix("ghost:"))
+                .is_some_and(|key| participating.iter().any(|p| p == key)),
+            Some(crate::bus::ghost_occupancy::Claim::Permanent { .. }) => occupancy
+                .entity_at(tile)
+                .and_then(|e| e.segment_id.as_deref())
+                .is_some_and(|s| s.starts_with("trunk:")),
+            Some(_) => false,
+            None => true,
+        }
+    };
+    // Anchor-or-splitter-second-tile lookup: a splitter is 2 wide and
+    // only its anchor carries a claim, so a covering splitter must be
+    // found via its possible anchor positions.
+    let entity_covering = |tile: (i32, i32)| -> Option<&PlacedEntity> {
+        if let Some(e) = occupancy.entity_at(tile) {
+            return Some(e);
+        }
+        for (ax, ay) in [
+            (tile.0 - 1, tile.1),
+            (tile.0 + 1, tile.1),
+            (tile.0, tile.1 - 1),
+            (tile.0, tile.1 + 1),
+        ] {
+            if let Some(e) = occupancy.entity_at((ax, ay)) {
+                if crate::common::is_splitter(&e.name)
+                    && crate::common::splitter_second_tile(e) == tile
+                {
+                    return Some(e);
+                }
+            }
+        }
+        None
+    };
+
     let (dx, dy) = match wanted.direction {
         EntityDirection::North => (0, -1),
         EntityDirection::South => (0, 1),
@@ -5250,23 +5312,36 @@ fn flow_compatible_ug_upgrade(
     if !footprint.contains(behind.0, behind.1) {
         return false;
     }
-    // Side neighbors (not behind, not ahead): reject if a committed
-    // belt-like entity outside the footprint outputs into this tile.
+    if entity_covering(behind).is_some() && !released_at(behind) {
+        return false;
+    }
     for (nx, ny) in [
         (wanted.x + dy, wanted.y + dx),
         (wanted.x - dy, wanted.y - dx),
     ] {
-        if footprint.contains(nx, ny) {
+        if released_at((nx, ny)) {
             continue;
         }
-        if let Some(n) = occupancy.entity_at((nx, ny)) {
+        if let Some(n) = entity_covering((nx, ny)) {
+            if n.name.contains("inserter") {
+                return false;
+            }
             let (ndx, ndy) = match n.direction {
                 EntityDirection::North => (0, -1),
                 EntityDirection::South => (0, 1),
                 EntityDirection::East => (1, 0),
                 EntityDirection::West => (-1, 0),
             };
-            let outputs_into_tile = (nx + ndx, ny + ndy) == (wanted.x, wanted.y);
+            // For a splitter the flow crosses its whole 2-wide body in
+            // its facing direction, so anchor-based delta still answers
+            // "does it output into our tile" for the covering tile.
+            let outputs_into_tile = if crate::common::is_splitter(&n.name) {
+                let second = crate::common::splitter_second_tile(n);
+                (n.x + ndx, n.y + ndy) == (wanted.x, wanted.y)
+                    || (second.0 + ndx, second.1 + ndy) == (wanted.x, wanted.y)
+            } else {
+                (nx + ndx, ny + ndy) == (wanted.x, wanted.y)
+            };
             let belt_like = n.name.contains("transport-belt")
                 || n.name.contains("underground-belt")
                 || n.name.contains("splitter");
@@ -5278,6 +5353,20 @@ fn flow_compatible_ug_upgrade(
     true
 }
 
+/// Returns true if a UG-in/out at `tile` facing `bridge_dir` would receive
+/// a sideload from a perpendicular spec — either because the tile itself has
+/// a perpendicular spec passing through, or because an adjacent SIDE tile
+/// (perpendicular to the bridge axis) has a belt flowing INTO this tile.
+///
+/// In Factorio, sideloads onto UG-input belts only fill the far lane and
+/// can dump items wrong; we reject any template that would create one.
+///
+/// The check considers both (a) in-flight routed ghost specs and (b) already-
+/// placed physical entities (splitters, row belts, trunks placed in Step 2-3).
+/// Without (b), a splitter whose output drops straight into this tile from a
+/// perpendicular direction slips through — the splitter is stamped before
+/// ghost routing and never enters `routed_paths`.
+///
 /// Returns `None` if the tile is fine, or `Some(reason)` identifying the
 /// first conflict found. The caller tags the reason with the endpoint
 /// it was checking (UG-in vs UG-out).

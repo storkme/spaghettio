@@ -2279,6 +2279,26 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
     )
     .expect("ac7 duty-0.6 lays out");
     let events = spaghettio_core::trace::drain_events();
+    // Vacuity guard for the trace-derived assertions below (session-side
+    // review on #658): if trace collection breaks, `events` is empty and
+    // `context_conflicts == 0` passes for the wrong reason while the
+    // liveness assert is still satisfied by validator-derived
+    // `unresolved`. Pin a positive trace signal: zone commits always
+    // happen on this fixture (25 at the time of writing).
+    let committed = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                spaghettio_core::trace::TraceEvent::JunctionCommitted { .. }
+            )
+        })
+        .count();
+    assert!(
+        committed > 0,
+        "no JunctionCommitted events collected — trace stream is broken, \
+         every trace-derived assertion in this test is vacuous"
+    );
     let severed = events
         .iter()
         .filter(|e| matches!(e, spaghettio_core::trace::TraceEvent::CrossingSevered { .. }))
