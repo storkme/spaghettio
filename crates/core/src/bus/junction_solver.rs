@@ -2560,6 +2560,91 @@ mod tests {
         );
     }
 
+    /// #652 retry-with-teeth: the `forbidden_override` must defeat BOTH
+    /// exemptions in `refresh_forbidden` — the surface-belt exemption
+    /// (SAT may normally lift/re-stamp plain belts) and the port
+    /// exemption (frontier endpoints are normally never forbidden).
+    /// It must also be bbox-scoped: an override tile outside the
+    /// current bbox contributes nothing until growth expands the bbox
+    /// over it, at which point the refresh re-inserts it.
+    #[test]
+    fn forbidden_override_defeats_exemptions_and_tracks_growth() {
+        let mut routed_paths: FxHashMap<String, Vec<(i32, i32)>> = FxHashMap::default();
+        routed_paths.insert("a".into(), (9..=13).map(|x| (x, 10)).collect());
+        let placed: Vec<PlacedEntity> = (9..=13)
+            .map(|x| belt(x, 10, EntityDirection::East, "iron-plate"))
+            .collect();
+        // Both tiles sit in an obstacle set, but both hold plain surface
+        // belts — and (11,10) is the spec's frontier seed, i.e. a port.
+        let strict: FxHashSet<(i32, i32)> = [(11, 10), (12, 10)].into_iter().collect();
+        let hard = FxHashSet::default();
+        let spec_kinds: FxHashMap<String, SpecKind> = FxHashMap::default();
+
+        // Control: without an override, the exemptions win.
+        let region = GrowingRegion::from_crossings(
+            &[(11, 10)],
+            &["a"],
+            &routed_paths,
+            &hard,
+            &strict,
+            &placed,
+            &spec_kinds,
+            &FxHashSet::default(),
+        );
+        assert!(
+            !region.forbidden_tiles.contains(&(11, 10)),
+            "control: port + surface-belt exemptions must keep (11,10) free"
+        );
+
+        // Override: (11,10) in-bbox (port + surface belt) → forbidden;
+        // (12,10) and (99,99) outside the 1x1 bbox → not yet.
+        let override_set: FxHashSet<(i32, i32)> =
+            [(11, 10), (12, 10), (99, 99)].into_iter().collect();
+        let mut region = GrowingRegion::from_crossings(
+            &[(11, 10)],
+            &["a"],
+            &routed_paths,
+            &hard,
+            &strict,
+            &placed,
+            &spec_kinds,
+            &override_set,
+        );
+        assert!(
+            region.forbidden_tiles.contains(&(11, 10)),
+            "override must defeat both the port and surface-belt exemptions"
+        );
+        assert!(
+            !region.forbidden_tiles.contains(&(12, 10)),
+            "override tile outside the bbox must not be forbidden yet"
+        );
+        assert!(!region.forbidden_tiles.contains(&(99, 99)));
+
+        // Growth: expand right so (12,10) enters the bbox — the refresh
+        // must re-insert it from the persisted override.
+        let grew = region.expand_bbox(
+            0,
+            0,
+            1,
+            0,
+            &routed_paths,
+            &hard,
+            &strict,
+            &placed,
+            &FxHashSet::default(),
+            &spec_kinds,
+        );
+        assert!(grew, "expand_bbox right by 1 must succeed");
+        assert!(
+            region.forbidden_tiles.contains(&(12, 10)),
+            "override tile newly inside the bbox must become forbidden on growth"
+        );
+        assert!(
+            region.forbidden_tiles.contains(&(11, 10)),
+            "original override tile must survive the growth refresh"
+        );
+    }
+
     #[test]
     fn trim_path_keeps_bbox_span_only() {
         // Path runs east across 20 tiles; bbox covers x=10..=12. Trim
