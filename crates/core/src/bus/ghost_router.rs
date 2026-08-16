@@ -3150,6 +3150,14 @@ pub fn route_bus_ghost(
             // env-gated under SPAGHETTIO_DEBUG_CONFLICT_RETRY.
             let override_set: FxHashSet<(i32, i32)> =
                 conflicts.iter().copied().collect();
+            // Trace-stream accounting: this second solve emits its own
+            // JunctionGrowthStarted / SatInvocation / (on failure)
+            // JunctionGrowthCapped series for the same seed — one extra
+            // growth series per conflicted cluster. Deliberately NOT
+            // muted: those events are the primary forensic record of
+            // WHY a retry failed. Consumers that count events per seed
+            // (stress scoreboards, replay tooling) can bracket retry
+            // series via the CrossingConflictRetried event below.
             let retry = junction_solver::solve_crossing(
                 cluster.as_slice(),
                 &keys_at_tile,
@@ -3166,6 +3174,7 @@ pub fn route_bus_ghost(
                 &pending_crossings,
                 &override_set,
             );
+            let mut retry_footprint = None;
             let resolved = match retry {
                 Some(retry_sol) => {
                     let retry_conflicts = conflicts_of(&retry_sol.entities);
@@ -3188,6 +3197,7 @@ pub fn route_bus_ghost(
                         sol = retry_sol;
                         true
                     } else {
+                        retry_footprint = Some(retry_sol.footprint);
                         conflicts = retry_conflicts;
                         false
                     }
@@ -3212,6 +3222,22 @@ pub fn route_bus_ghost(
             if !resolved {
                 let mut sample = conflicts.clone();
                 sample.truncate(4);
+                // Provenance: on a still-conflicting retry the sampled
+                // tiles are the RETRY solution's conflicts (its
+                // footprint is named in the reason); on a retry that
+                // returned no solution they are the PRIMARY's. tap_x/y
+                // always report the primary footprint — the committed
+                // geometry the forensics will find in the snapshot.
+                let retry_note = match retry_footprint {
+                    Some(r) => format!(
+                        "retry solution (footprint {},{} {}x{}) still \
+                         conflicted at the sampled tiles",
+                        r.x, r.y, r.w, r.h
+                    ),
+                    None => "retry returned no solution; sampled tiles \
+                             are the primary's"
+                        .to_string(),
+                };
                 trace::emit(trace::TraceEvent::CrossingZoneSkipped {
                     tap_item: String::new(),
                     tap_x: sol.footprint.x,
@@ -3219,8 +3245,8 @@ pub fn route_bus_ghost(
                     reason: format!(
                         "context-conflict at commit ({} tiles, {:?}): solution \
                          collides with differing committed entities and the \
-                         forbidden-override retry did not clear it; cluster \
-                         capped for retry",
+                         forbidden-override retry did not clear it ({retry_note}); \
+                         cluster capped for retry",
                         conflicts.len(),
                         sample
                     ),
