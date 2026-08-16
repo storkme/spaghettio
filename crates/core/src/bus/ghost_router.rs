@@ -3584,7 +3584,12 @@ pub fn route_bus_ghost(
                 Some(crate::bus::ghost_occupancy::Claim::Template { .. })
                     | Some(crate::bus::ghost_occupancy::Claim::RowEntity { .. })
             ) {
-                if !upgrades.contains(&tile) {
+                // Consume (remove, not test): a second solution entity
+                // at the same tile must NOT re-apply the release —
+                // it would clobber the just-stamped upgrade (bot
+                // round 2, defence-in-depth; the solver never emits
+                // overlapping entities today, `place` would panic).
+                if !upgrades.remove(&tile) {
                     continue;
                 }
                 occupancy.release_tile(tile);
@@ -5230,6 +5235,17 @@ fn any_spec_turns_at(tile: (i32, i32), routed_paths: &FxHashMap<String, Vec<(i32
 ///   inserter (drop-side conventions are not modeled here). Splitter
 ///   second tiles are resolved via `splitter_second_tile` — occupancy
 ///   claims key on anchor tiles only.
+///
+/// Two adjacencies are deliberately NOT guarded here because other
+/// layers own them: (a) the FORWARD tile the output expels onto — a
+/// solution UG-out's downstream flow is part of SAT's own model
+/// (in-zone: the adjacency rules require a receiving entity or an
+/// interior sink; zone-edge: off-grid output is only legal at
+/// boundary ports, where the committed continuation persists), and
+/// the walker re-walks the composite before any candidate reaches
+/// the conflict check; (b) SOLUTION entities beside/behind the tile —
+/// this predicate reads committed occupancy only, and solution-
+/// internal shapes are the encoder's + walker's jurisdiction.
 fn flow_compatible_ug_upgrade(
     occupancy: &crate::bus::ghost_occupancy::Occupancy,
     existing: &PlacedEntity,
@@ -5272,8 +5288,17 @@ fn flow_compatible_ug_upgrade(
                 .is_some_and(|key| participating.iter().any(|p| p == key)),
             Some(crate::bus::ghost_occupancy::Claim::Permanent { .. }) => occupancy
                 .entity_at(tile)
-                .and_then(|e| e.segment_id.as_deref())
-                .is_some_and(|s| s.starts_with("trunk:")),
+                .is_some_and(|e| {
+                    // Pipes are refused by the release pass regardless
+                    // of segment (`release_for_pertile_template` —
+                    // fluid trunks are inviolable), so a trunk: pipe
+                    // PERSISTS and must not count as released here
+                    // (bot round 2 on this PR).
+                    !matches!(e.name.as_str(), "pipe" | "pipe-to-ground")
+                        && e.segment_id
+                            .as_deref()
+                            .is_some_and(|s| s.starts_with("trunk:"))
+                }),
             Some(_) => false,
             None => true,
         }
