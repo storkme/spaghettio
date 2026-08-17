@@ -553,8 +553,39 @@ pub fn plan_bus_lanes(
                 && neighbor_overlaps_splitter(&lanes[i], &lanes[i + 1])
         })
         .collect();
+    // #652: reserve the balancer stamp's WIDTH, not only its height.
+    // A family's stamp is aligned by `balancer_origin_x` and can be
+    // wider than the family's own trunk columns, spilling onto the
+    // neighbouring family's — see `balancer::family_stamp_x_pad` for
+    // the mechanism and the measured case. The spill columns are
+    // reserved here as empty columns flanking the family's block, so
+    // the neighbour is assigned a column the stamp cannot reach.
+    // Within-family columns stay contiguous (the pads go strictly
+    // outside the block), which the check below still enforces.
+    let (pad_west, pad_east) = {
+        let mut west = vec![0i32; lanes.len()];
+        let mut east = vec![0i32; lanes.len()];
+        let mut first: FxHashMap<usize, usize> = FxHashMap::default();
+        let mut last: FxHashMap<usize, usize> = FxHashMap::default();
+        for (i, ln) in lanes.iter().enumerate() {
+            let Some(fid) = ln.family_id else { continue };
+            first.entry(fid).or_insert(i);
+            last.insert(fid, i);
+        }
+        for (fid, fam) in families.iter().enumerate() {
+            let (w, e) = crate::bus::balancer::family_stamp_x_pad(fam);
+            if let Some(&i) = first.get(&fid) {
+                west[i] += w;
+            }
+            if let Some(&i) = last.get(&fid) {
+                east[i] += e;
+            }
+        }
+        (west, east)
+    };
     let mut extra = 0i32;
     for (i, lane) in lanes.iter_mut().enumerate() {
+        extra += pad_west[i];
         lane.x = (i + 1) as i32 + extra;
         if lane.perimeter_exit_y.is_some() && lane.consumer_rows.is_empty() {
             extra += 1;
@@ -562,6 +593,7 @@ pub fn plan_bus_lanes(
         if spacer_after[i] {
             extra += 1;
         }
+        extra += pad_east[i];
     }
 
     // Fluid lanes surface (plain pipe) at their ANCHOR rows: port taps,
@@ -1461,12 +1493,26 @@ fn find_tap_off_ys(lane: &BusLane, row_spans: &[RowSpan]) -> Vec<i32> {
 }
 
 /// Return the total bus width needed for the given lanes.
-pub fn bus_width_for_lanes(lanes: &[BusLane]) -> i32 {
+///
+/// #652: `families` is consulted because the x-assignment loop reserves
+/// a family's eastern stamp spill by shifting the lanes that follow it —
+/// and the EASTMOST family has none to shift. Its spill columns exist
+/// only here, so the width must reach `last_lane_x + east_pad` or the
+/// stamp lands outside the declared bus and into pass-2 row placement.
+pub fn bus_width_for_lanes(lanes: &[BusLane], families: &[LaneFamily]) -> i32 {
     // Derived from the max assigned column, not the lane count — surplus
     // lanes insert spacer columns (see the x-assignment loop), so count
     // and extent can differ. Identical to the old `len + 2` when columns
-    // are gapless.
-    match lanes.iter().map(|l| l.x).max() {
+    // are gapless and no family spills.
+    let lane_max = lanes.iter().map(|l| l.x).max();
+    let stamp_max = families
+        .iter()
+        .filter_map(|fam| {
+            let last = *fam.lane_xs.last()?;
+            Some(last + crate::bus::balancer::family_stamp_x_pad(fam).1)
+        })
+        .max();
+    match lane_max.into_iter().chain(stamp_max).max() {
         None => 2,
         Some(max_x) => max_x + 2,
     }
@@ -1518,7 +1564,7 @@ mod tests {
 
     #[test]
     fn test_bus_width_for_lanes_empty() {
-        assert_eq!(bus_width_for_lanes(&[]), 2);
+        assert_eq!(bus_width_for_lanes(&[], &[]), 2);
     }
 
     #[test]
@@ -1530,7 +1576,7 @@ mod tests {
             x: 1,
             ..Default::default()
         };
-        assert_eq!(bus_width_for_lanes(&[lane]), 3);
+        assert_eq!(bus_width_for_lanes(&[lane], &[]), 3);
     }
 
     #[test]
@@ -1544,7 +1590,7 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        assert_eq!(bus_width_for_lanes(&lanes), 5);
+        assert_eq!(bus_width_for_lanes(&lanes, &[]), 5);
     }
 
     #[test]
@@ -1555,7 +1601,7 @@ mod tests {
             .iter()
             .map(|&x| BusLane { item: format!("item-{x}"), x, ..Default::default() })
             .collect();
-        assert_eq!(bus_width_for_lanes(&lanes), 6);
+        assert_eq!(bus_width_for_lanes(&lanes, &[]), 6);
     }
 
     #[test]

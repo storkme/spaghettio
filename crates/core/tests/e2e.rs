@@ -2237,28 +2237,45 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
     }
 }
 
-/// #652 fail-safe pin: ac7-HS at duty 0.6 (the RFC-069 flip shape) with
-/// unresolved crossings must fail SAFE, never merged. Pre-fix, one
-/// unrouted iron-plate crossing shipped as a flat sideload-merge into
-/// the copper-cable trunk and fanned out as ~90 downstream
-/// lane-throughput errors (111 total; #652 diagnosis 2026-08-15); the
-/// conflict-retry + fail-sever pass converts that to severed dead-ends
-/// plus the honest unresolved-junction reports. The pin is the
-/// invariant the fix guarantees — ZERO lane-throughput errors — which
-/// holds regardless of whether the crossings themselves later get
-/// resolved (then severs simply stop firing). Isolation errors are NOT
-/// pinned here: a residual balancer-over-trunk overlap (recorded on
-/// #652) still ships a handful, and that mechanism is out of this
-/// pin's scope.
+/// #652: ac7-HS at duty 0.6 (the RFC-069 flip shape) lays out CLEAN.
 ///
-/// 2026-08-16 update: the context-conflict half of the fixture IS now
-/// resolved (flow-compatible commit upgrade — see the
-/// `context_conflicts == 0` assertion below); the sever/unresolved
-/// liveness path stays exercised by the remaining 21-tile iter-capped
-/// cluster near (15,123), the mega-zone class tracked on #652/#644.
+/// This pin has inverted twice and the history is the point of the
+/// comment — it is the record of what each fix actually bought:
+///
+///   * #652 diagnosis (2026-08-15): 111 errors. One unrouted
+///     iron-plate crossing shipped as a flat sideload-merge into the
+///     copper-cable trunk, and ~90 lane-throughput errors were its
+///     downstream shadow.
+///   * Conflict-retry + fail-sever (#655/#657) converted the merge to
+///     severed dead-ends plus honest unresolved-junction reports;
+///     flow-compatible commit upgrade (#658) cleared the
+///     context-conflict half. 14 errors: 7 belt-dead-end,
+///     6 belt-item-isolation, 1 unresolved-junction.
+///   * Balancer-width reservation (this change) removes the CAUSE.
+///     Electronic-circuit's `(5,2)` template is 6 columns wide over 2
+///     trunk columns, and nothing reserved the spill: it swallowed the
+///     plastic-bar trunk at x=18-19, severing it and stranding
+///     fragments inside the template's holes. All 6 isolation errors
+///     were that spill (including the one at (18,76), which #652
+///     recorded as a separate seam class — it is the copper-cable
+///     `(6,7)`, width 10 over 7 columns, spilling onto the same
+///     plastic column). Reserving the spill drops the fixture to ZERO
+///     errors, and the 21-tile iter-capped mega-cluster near (15,123)
+///     — which #652 called the campaign's one open design problem —
+///     resolves with it, because plastic no longer has to route
+///     around a balancer wall.
+///
+/// **The sever pass is now uncovered.** This test used to carry the
+/// only liveness assert for #655's fail-sever machinery
+/// (`severed > 0 || unresolved > 0`). It is gone because the fixture
+/// no longer severs anything, and a 7-fixture sweep on this same code
+/// path found no remaining exhibitor anywhere. Do NOT read its absence
+/// as the machinery being fine — a synthetic pin for it is tracked on
+/// #652. (Renamed from `tier4_ac7_duty06_unresolved_crossings_fail_safe`,
+/// which is the name #652's comments refer to.)
 #[test]
 #[ntest::timeout(300000)]
-fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
+fn tier4_ac7_duty06_lays_out_clean() {
     use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, RowLayout};
 
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "water", "crude-oil"]
@@ -2279,12 +2296,12 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
     )
     .expect("ac7 duty-0.6 lays out");
     let events = spaghettio_core::trace::drain_events();
-    // Vacuity guard for the trace-derived assertions below (session-side
+    // Vacuity guard for the trace-derived assertion below (session-side
     // review on #658): if trace collection breaks, `events` is empty and
-    // `context_conflicts == 0` passes for the wrong reason while the
-    // liveness assert is still satisfied by validator-derived
-    // `unresolved`. Pin a positive trace signal: zone commits always
-    // happen on this fixture (25 at the time of writing).
+    // `context_conflicts == 0` passes for the wrong reason. Pin a
+    // positive trace signal: zone commits always happen on this fixture
+    // (32 after the width reservation, up from 25 — the reservation
+    // frees the router to solve crossings it previously capped on).
     let committed = events
         .iter()
         .filter(|e| {
@@ -2299,15 +2316,8 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
         "no JunctionCommitted events collected — trace stream is broken, \
          every trace-derived assertion in this test is vacuous"
     );
-    let severed = events
-        .iter()
-        .filter(|e| matches!(e, spaghettio_core::trace::TraceEvent::CrossingSevered { .. }))
-        .count();
     // #652 flow-compatible upgrade pin: the context-conflict class is
-    // RESOLVED on this fixture — both formerly-conflicted clusters
-    // (seeds (15,93)/(15,96), UG outputs surfacing onto committed
-    // same-item continuation belts) now commit via
-    // `flow_compatible_ug_upgrade`. A context-conflict skip reappearing
+    // RESOLVED on this fixture. A context-conflict skip reappearing
     // here means the carve-out regressed (or a new, genuinely
     // incompatible conflict shape arrived — either way, look).
     let context_conflicts = events
@@ -2330,52 +2340,20 @@ fn tier4_ac7_duty06_unresolved_crossings_fail_safe() {
         Ok(v) => v,
         Err(e) => e.issues,
     };
-    let lane_errors: Vec<&ValidationIssue> = issues
-        .iter()
-        .filter(|i| i.severity == Severity::Error && i.category == "lane-throughput")
-        .collect();
+    let errors: Vec<&ValidationIssue> =
+        issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    // The whole-fixture pin. Deliberately NOT scoped to a category:
+    // every previous version of this test tolerated some class it had
+    // decided was out of scope, and the balancer spill hid inside that
+    // tolerance for a full campaign round. Zero means zero.
     assert!(
-        lane_errors.is_empty(),
-        "ac7-HS duty-0.6 shipped {} lane-throughput errors — an unresolved \
-         crossing is merging flows again (fail-severed regressed): {:#?}",
-        lane_errors.len(),
-        lane_errors.iter().take(5).collect::<Vec<_>>()
-    );
-    // Anti-vacuity (review): the zero above must come from the fail-safe
-    // actually engaging, not from the fixture drifting to a shape where
-    // nothing needed severing while merges ship elsewhere.
-    let unresolved = issues
-        .iter()
-        .filter(|i| i.severity == Severity::Error && i.category == "unresolved-junction")
-        .count();
-    assert!(
-        unresolved == 0 || severed > 0,
-        "ac7-HS duty-0.6 has {unresolved} unresolved crossings but the \
-         fail-sever pass dropped nothing — the zero-lane-error result is \
-         vacuous (sever scope regressed?)"
-    );
-    // Positive half of the context_conflicts == 0 pin above (review:
-    // that zero is an absence). Pre-upgrade this fixture shipped 3
-    // unresolved-junction errors (two conflict-capped clusters + the
-    // iter-capped 21-tile mega-cluster); the flow-compatible upgrade
-    // commits the two conflicted ones. If the carve-out silently stops
-    // firing, the conflicted clusters cap again and this returns to 3.
-    assert!(
-        unresolved <= 1,
-        "ac7-HS duty-0.6 shipped {unresolved} unresolved-junction errors \
-         (expected <= 1) — formerly-upgradeable conflict clusters are \
-         capping again; check the flow-compatible upgrade path"
-    );
-    // LIVENESS (session-side review): if this trips, the pin has stopped
-    // exercising the fail-safe path at all (duty stopped reaching the
-    // engine, or every crossing now resolves — ac7-HS at duty 1.0 has
-    // zero errors of ANY kind, so the lane assertion above is vacuous
-    // without this). Do NOT just delete it: re-point the pin at a shape
-    // that still produces unresolved crossings.
-    assert!(
-        severed > 0 || unresolved > 0,
-        "fail-safe pin no longer exercises the severed/unresolved path \
-         (severed=0, unresolved=0) — re-point it at a failing shape"
+        errors.is_empty(),
+        "ac7-HS duty-0.6 shipped {} errors (expected 0). If a balancer \
+         family regained a spill onto a neighbouring trunk, look at \
+         `balancer::family_stamp_x_pad` and the lane planner's column \
+         reservation first: {:#?}",
+        errors.len(),
+        errors.iter().take(12).collect::<Vec<_>>()
     );
 }
 

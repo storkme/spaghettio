@@ -29,6 +29,7 @@
 //!   --di off|candidate|forced        direct insertion (default candidate)
 //!   --claim up|down|search           DI claim order (default: engine default)
 //!   --belt <entity>        max belt tier (default: engine picks by rate)
+//!   --row-layout <kind>    native (default) | horizontal-stack
 //!   --quality <name>       normal|uncommon|rare|epic|legendary (default normal)
 //!   --stacking <1..4>      belt stacking (default 1)
 //!   --research-productivity <recipe=bonus,...>   declared research
@@ -53,7 +54,7 @@
 
 use rustc_hash::FxHashSet;
 use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
-use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
+use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, RowLayout};
 use spaghettio_core::common::QualityTier;
 use spaghettio_core::recipe_db::MachinePalette;
 use spaghettio_core::validate::{self, LayoutStyle, Severity};
@@ -140,6 +141,7 @@ fn main() {
     let mut research_productivity: std::collections::BTreeMap<String, f64> =
         Default::default();
     let mut inserter_cap: Option<u8> = None;
+    let mut row_layout = RowLayout::default();
     let mut inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
     let mut label: Option<String> = None;
     let mut out = std::env::var("SIM_PROBE_OUT").unwrap_or_else(|_| "/tmp".to_string());
@@ -169,6 +171,19 @@ fn main() {
                 })
             }
             "--belt" => belt = Some(need(i)),
+            // #652: without this the tracked generator cannot express a
+            // horizontal-stack fixture at all, so the corpus's HS class
+            // (ac7-HS and friends) had no supported route to a
+            // blueprint+manifest pair and could not be sim-anchored.
+            "--row-layout" => {
+                row_layout = match need(i).as_str() {
+                    "native" | "default" => RowLayout::default(),
+                    "horizontal-stack" | "hs" => RowLayout::HorizontalStack,
+                    other => usage(&format!(
+                        "--row-layout must be native|horizontal-stack (got {other})"
+                    )),
+                }
+            }
             // RFC-069 Phase 1: planning-duty knob for the K69-1 sim A/B.
             "--duty" => {
                 duty = need(i)
@@ -279,6 +294,7 @@ fn main() {
         direct_insertion: di,
         max_belt_tier: belt,
         planning_duty: duty,
+        row_layout,
         quality,
         stacking,
         research_productivity,
