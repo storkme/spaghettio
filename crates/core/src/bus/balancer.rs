@@ -661,9 +661,22 @@ mod tests {
     /// happened never to spill.
     #[test]
     fn family_stamp_x_pad_covers_every_stamped_shape() {
+        // The grid bound is DERIVED from the library, not hardcoded
+        // (round-3 review). Today every key is within 1..=10, so a
+        // literal 10 would sweep everything — but a regeneration that
+        // adds an (11, k) would then ship un-swept, which is precisely
+        // the case the reviewer was worried about. Deriving it means
+        // the sweep grows with the library instead of silently falling
+        // behind it.
+        let hi = crate::bus::balancer_library::balancer_templates()
+            .keys()
+            .flat_map(|&(n, m)| [n, m])
+            .max()
+            .unwrap_or(10)
+            .max(10);
         let mut checked = 0usize;
         let mut spilling = 0usize;
-        for (n, m) in (1..=10u32).flat_map(|n| (1..=10u32).map(move |m| (n, m))) {
+        for (n, m) in (1..=hi).flat_map(|n| (1..=hi).map(move |m| (n, m))) {
             let fam = library_family(n, m, 100);
             let (west, east) = family_stamp_x_pad(&fam);
             let ents = stamp_family_balancer(&fam, None, &StackingCtx::unstacked())

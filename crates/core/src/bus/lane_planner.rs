@@ -589,14 +589,18 @@ pub fn plan_bus_lanes(
             // downstream contiguous-`lane_xs` check would eventually
             // Err, but only after the layout collapsed; catch it here,
             // where the cause is.
-            debug_assert!(
-                (lo..=hi).all(|i| lanes[i].family_id == Some(fid)),
-                "family {fid} ({}, shape {:?}) has non-contiguous lanes at \
-                 indices {lo}..={hi} — the stamp pads ({w},{e}) would be \
-                 reserved at the wrong columns",
-                fam.item,
-                fam.shape
-            );
+            // A real check, not a `debug_assert` (round-3 review): this
+            // is the guard for a RELEASE/WASM-shipped geometry
+            // invariant, and a debug-only one compiles out exactly
+            // where the silent mis-reservation would ship.
+            if !(lo..=hi).all(|i| lanes[i].family_id == Some(fid)) {
+                return Err(format!(
+                    "Balancer family for item {} shape {:?} has non-contiguous \
+                     lanes at indices {lo}..={hi} — its stamp pads ({w},{e}) \
+                     would be reserved at the wrong columns",
+                    fam.item, fam.shape
+                ));
+            }
             west[lo] += w;
             east[hi] += e;
         }

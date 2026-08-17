@@ -2321,26 +2321,27 @@ fn tier4_ac7_duty06_lays_out_clean() {
     // committed crossings 25 → 32, but `committed > 0` would hold at 3
     // while that claim was false.
     //
-    // This floor is a deliberate TRIPWIRE, not a stable invariant
-    // (round-2 review, which called 30-against-32 fragile — correctly:
-    // zone-commit count is input-sensitive and a legitimate engine
-    // change could land at 29 with zero errors). It is set just under
-    // the observed 32 on purpose, because the failure it exists to
-    // catch — the router "solving" the fixture by no longer attempting
-    // crossings — shows up as a COLLAPSE, and a floor loose enough to
-    // never false-positive would not catch that either.
+    // The floor is the PRE-FIX value, 25, not the observed 32. Rounds 2
+    // and 3 both objected to a floor of 30 as an input-sensitive magic
+    // number two under the observation — a legitimate engine change
+    // landing at 29 with zero errors would red CI and block unrelated
+    // merges. They are right, and 25 keeps the property that actually
+    // matters while removing the flap window: the failure this guards
+    // against is the router "solving" the fixture by no longer
+    // ATTEMPTING crossings, which is a collapse to single digits, not a
+    // drift of three.
     //
-    // If it fires: check the error count first. Still zero errors and a
-    // count in the high 20s is a re-adjudication (move the floor, note
-    // the new number here). Zero errors with a count in the single
-    // digits is the real thing.
+    // So this pins "never worse than before the fix" rather than the
+    // exact 25 -> 32 improvement. The improvement itself is recorded in
+    // the doc comment and its receipts are on #659; pinning 32 exactly
+    // would be pinning a number no invariant protects.
     assert!(
-        committed >= 30,
-        "ac7-HS duty-0.6 committed only {committed} junction zones \
-         (expected >= 30; 25 before the balancer-width reservation, 32 \
-         after). The router has stopped solving crossings the \
-         reservation freed up — the zero-error result below may be \
-         hiding a shape that simply stopped trying."
+        committed >= 25,
+        "ac7-HS duty-0.6 committed only {committed} junction zones — fewer \
+         than the 25 it managed BEFORE the balancer-width reservation (32 \
+         after). The router has stopped attempting crossings, so the \
+         zero-error result below may be a shape that simply stopped \
+         trying rather than one that succeeded."
     );
     // #652 flow-compatible upgrade pin: the context-conflict class is
     // RESOLVED on this fixture. A context-conflict skip reappearing
