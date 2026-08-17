@@ -2316,12 +2316,24 @@ fn tier4_ac7_duty06_lays_out_clean() {
         "no JunctionCommitted events collected — trace stream is broken, \
          every trace-derived assertion in this test is vacuous"
     );
-    // ...and pin the CLAIM, not just its vacuity guard (review
-    // finding): the comment above asserts the reservation RAISED
+    // ...and pin the CLAIM, not just its vacuity guard (round-1
+    // review): the comment above asserts the reservation RAISED
     // committed crossings 25 → 32, but `committed > 0` would hold at 3
-    // while that claim was false. A floor between the two numbers
-    // fails if the reservation stops freeing the router, which is the
-    // mechanism this fixture exists to protect.
+    // while that claim was false.
+    //
+    // This floor is a deliberate TRIPWIRE, not a stable invariant
+    // (round-2 review, which called 30-against-32 fragile — correctly:
+    // zone-commit count is input-sensitive and a legitimate engine
+    // change could land at 29 with zero errors). It is set just under
+    // the observed 32 on purpose, because the failure it exists to
+    // catch — the router "solving" the fixture by no longer attempting
+    // crossings — shows up as a COLLAPSE, and a floor loose enough to
+    // never false-positive would not catch that either.
+    //
+    // If it fires: check the error count first. Still zero errors and a
+    // count in the high 20s is a re-adjudication (move the floor, note
+    // the new number here). Zero errors with a count in the single
+    // digits is the real thing.
     assert!(
         committed >= 30,
         "ac7-HS duty-0.6 committed only {committed} junction zones \
@@ -2586,19 +2598,40 @@ fn tier5_processing_unit_from_ore_am3() {
     // because the golden itself is a bare category tally and a re-bless
     // with no reachable reasoning is indistinguishable from paperwork.
     //
-    // The reservation gives a balancer family the columns its template
-    // actually spans, which widens this layout's bus by 4 columns
-    // (165 -> 169) and adds ~160 entities. One copper-cable run then
-    // measures 105 tiles for a 52-tile separation and clears
-    // `belt-detour`'s paired floors (ratio >= 2.0 AND excess >= 8).
+    // TRACED, not inferred (round-2 review asked for exactly this, and
+    // the traced answer corrected the first guess). Instrument:
+    // `measure_belt_runs` — the check's own decomposition — walked tile
+    // by tile on both arms.
     //
-    // ACCEPTED, with its limit stated: errors stay 0 and
-    // input-rate-delivery is unchanged at 13, and the check is
-    // diagnostic-only by construction (never promotes to Error). What is
-    // NOT established is the tile-level path — the mechanism above is
-    // inferred from the width delta, not traced. If this fixture ever
-    // gains a SECOND detour, or an error, treat that inference as due for
-    // a snapshot before re-blessing again.
+    // The flagged run is (42,106) -> (43,157): 105 tiles for a 52-tile
+    // separation, ratio 2.02. Its path is a U, and an entirely ordinary
+    // one for a bus:
+    //     West  26 tiles along y=106,  x=42 -> x=16   (row out to trunk)
+    //     South 51 tiles down  x=16,   y=106 -> y=157 (down the trunk)
+    //     East  24 tiles along y=157,  x=16 -> x=43   (trunk to consumer)
+    // `direct` is only 52 because entry and exit are nearly vertically
+    // aligned (x=42 vs 43), so both lateral legs count as pure excess.
+    //
+    // MECHANISM: the reservation widens the bus 165 -> 169, which adds
+    // ~4 tiles to EACH lateral leg of every row->trunk->row U while
+    // leaving `direct` untouched. Measured across the six
+    // highest-excess runs, every ratio rose: 1.42->1.47, 1.53->1.59,
+    // 1.38->1.43, 1.47->1.54, 1.53->1.61, 1.60->1.70. This run was
+    // already sitting just under the floor and crossed it. Pre-fix the
+    // fixture flags ZERO runs; post-fix, exactly this one.
+    //
+    // It is NOT the layout's worst detour: six runs carry MORE excess
+    // (57-83 vs 53) and none trip, because their ratios are 1.43-1.70.
+    // This one trips only because its small `direct` makes the
+    // denominator small — a property of the check's paired-floor design
+    // (ratio >= 2.0 AND excess >= 8), not evidence that this particular
+    // belt is newly pathological.
+    //
+    // ACCEPTED: errors stay 0, input-rate-delivery is unchanged at 13,
+    // and the check is diagnostic-only by construction (never promotes
+    // to Error). A SECOND detour appearing here would mean the width
+    // grew again — re-trace with the same instrument rather than
+    // re-blessing.
     assert_warnings_golden(&result, "tier5_processing_unit_from_ore_am3");
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);

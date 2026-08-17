@@ -598,11 +598,47 @@ mod tests {
 
     /// A merge-tap family's merge tree puts its single output at the
     /// tree's EAST edge, so the whole body is a western spill.
+    ///
+    /// Check-stamps every tree size rather than asserting the pad value
+    /// on one isolated family (round-2 review: the value alone leaves
+    /// the "output at east edge, body all-west" geometry premise
+    /// unverified, so a merge-tree change would ship an adjacent-trunk
+    /// overlap unnoticed — and the shape sweep below cannot reach this
+    /// branch because it builds `merge_tap: false` families).
     #[test]
     fn family_stamp_x_pad_covers_the_merge_tree() {
-        let mut fam = library_family(4, 1, 20);
-        fam.merge_tap = true;
-        assert_eq!(family_stamp_x_pad(&fam), (3, 0));
+        assert_eq!(
+            family_stamp_x_pad(&{
+                let mut f = library_family(4, 1, 20);
+                f.merge_tap = true;
+                f
+            }),
+            (3, 0)
+        );
+
+        for n in 1..=10u32 {
+            let mut fam = library_family(n, 1, 100);
+            fam.merge_tap = true;
+            let (west, east) = family_stamp_x_pad(&fam);
+            let ents = stamp_merge_tap_family(&fam, None, &StackingCtx::unstacked());
+            assert!(!ents.is_empty(), "merge tree n={n} stamped nothing");
+            let trunk = fam.lane_xs[0];
+            let (lo, hi) = (trunk - west, trunk + east);
+            for e in &ents {
+                let spans_x = e.name.contains("splitter")
+                    && matches!(e.direction, EntityDirection::North | EntityDirection::South);
+                let e_hi = if spans_x { e.x + 1 } else { e.x };
+                assert!(
+                    e.x >= lo && e_hi <= hi,
+                    "merge tree n={n}: {} at x {}..{} escapes the reserved \
+                     span {lo}..{hi} (pad west={west} east={east}) — a K-group \
+                     sibling trunk would be overlapped",
+                    e.name,
+                    e.x,
+                    e_hi
+                );
+            }
+        }
     }
 
     /// #652: the reservation must cover the stamp's ACTUAL extent for
