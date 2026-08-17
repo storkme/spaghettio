@@ -165,6 +165,34 @@ goes to the owner before merge.
 
 ## Decision log
 
+- *2026-08-17 — the tier5 router-block receipt is NOT reproducible on
+  the direct path, and one of its two blockers was a balancer defect.*
+  #652's lever 1 (PR #659) reserves a balancer stamp's WIDTH, not just
+  its height: `family_stamp_plan` guarded template width against output
+  count on the decomposed and generated paths but never on `Direct`,
+  and 31 library templates are wider than their output count, so a
+  family's stamp spilled onto its neighbour's trunk columns. Two
+  consequences for this RFC:
+  - **ac7-HS at duty 0.6 — the flip shape — goes from 14 errors to
+    ZERO**, and its 21-tile iter-capped mega-cluster resolves with the
+    spill. Meter A/B on the same instrument: pre-fix `produced {}`
+    (nothing at all — the spill had severed the plastic trunk, and
+    plastic is an AC ingredient); post-fix advanced-circuit **64.3% of
+    plan**, uniform down the chain. Still below plan, and believed as
+    such: this removes a structural break, it does not reach plan.
+  - **The 2026-08-15 tier5 entry below ("9 belt-dead-end + 1
+    unresolved-junction") does not reproduce through
+    `build_bus_layout`**, which reports 18 belt-dead-end and **0**
+    unresolved-junction on that fixture — and reports them
+    IDENTICALLY with and without the balancer fix (175×255, 7057
+    entities, both arms). The two numbers came from different export
+    paths. The entry stands as the record of what the sim-export
+    artifact carried; it should NOT be cited as the direct-path
+    baseline, and tier5's gate-on-an-error-free-artifact is still open
+    against the 18-dead-end shape. Whoever resumes it re-diagnoses
+    against that, not against the "68-tile / 1547-var" mega-zone
+    figures.
+
 - *2026-08-15 — **OWNER CALL: correctness over footprint.*** The
   owner's direction (in-session, verbatim: "we should agree that
   correctness is more important than footprint") resolves K69-4's
