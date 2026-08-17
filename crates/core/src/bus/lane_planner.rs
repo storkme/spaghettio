@@ -574,12 +574,31 @@ pub fn plan_bus_lanes(
         }
         for (fid, fam) in families.iter().enumerate() {
             let (w, e) = crate::bus::balancer::family_stamp_x_pad(fam);
-            if let Some(&i) = first.get(&fid) {
-                west[i] += w;
-            }
-            if let Some(&i) = last.get(&fid) {
-                east[i] += e;
-            }
+            let (Some(&lo), Some(&hi)) = (first.get(&fid), last.get(&fid)) else {
+                continue;
+            };
+            // The pads are keyed by the family's FIRST and LAST index in
+            // this array, which reserves its true bus-front/back edges
+            // only while the family's lanes are contiguous here. That
+            // holds for both of today's family producers (balancer
+            // splits and merge-tap trunks share a perimeter-exit status,
+            // so neither `optimize_lane_order` nor the perimeter sort
+            // separates them) — but nothing upstream PROMISES it, and a
+            // future ordering change that interleaves two families would
+            // silently pad the wrong columns (round-2 review). The
+            // downstream contiguous-`lane_xs` check would eventually
+            // Err, but only after the layout collapsed; catch it here,
+            // where the cause is.
+            debug_assert!(
+                (lo..=hi).all(|i| lanes[i].family_id == Some(fid)),
+                "family {fid} ({}, shape {:?}) has non-contiguous lanes at \
+                 indices {lo}..={hi} — the stamp pads ({w},{e}) would be \
+                 reserved at the wrong columns",
+                fam.item,
+                fam.shape
+            );
+            west[lo] += w;
+            east[hi] += e;
         }
         (west, east)
     };
@@ -754,14 +773,23 @@ pub fn plan_bus_lanes(
             total_rate: f.total_rate,
             producer_rows: f.producer_rows.clone(),
         }).collect(),
-        // #652 (review finding): this must agree with
-        // `bus_width_for_lanes`, which the layout actually sizes on. A
-        // family's eastern stamp spill lives only in the width — never
-        // in a lane's `x` — so a max-over-`l.x` under-reports it, and
-        // the snapshot debugger grids on THIS field: a spilling layout
-        // (exactly the class #652 is about) would render its stamp
-        // clipped off the east edge. Derive both from the same helper
-        // rather than keeping two definitions of one number.
+        // #652: this field must COVER the eastmost family's stamp
+        // spill. The spill lives only in the width — never in a lane's
+        // `x`, because the reservation works by shifting the lanes that
+        // FOLLOW a family and the eastmost has none — so the old
+        // `max(l.x) + 1` under-reported it, and the snapshot debugger
+        // grids on THIS field: a spilling layout (exactly the class
+        // #652 is about) rendered its stamp clipped off the east edge.
+        //
+        // The `- 1` is deliberate and must stay (round-2 review caught
+        // an earlier version of this comment claiming the two values
+        // are now IDENTICAL — they are not, and that wording invited a
+        // future "fix" that would re-break the grid). Two different
+        // quantities, one source:
+        //   `bus_width_for_lanes` = an allocation WIDTH  (max_x + 2)
+        //   this field            = a grid EXTENT        (max_x + 1)
+        // Deriving the extent as `width - 1` keeps the old convention
+        // while picking up the spill, which is the whole fix.
         bus_width: lanes
             .iter()
             .map(|l| l.x)
