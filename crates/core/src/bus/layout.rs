@@ -986,6 +986,19 @@ fn layout_pass(
     // 1's value, so the width may grow but must never shrink under
     // them. The equal-width fast path above skips pass 2 entirely, so
     // this is a no-op there.
+    //
+    // Residual, stated because three review passes asked (and the
+    // answer is that it is NOT silent): if pass 2's eastmost family
+    // needs more width than pass 1 measured, the rows have already been
+    // placed against the smaller value, so the grown columns are
+    // reserved in the ghost grid but not in the row layout. That
+    // resolves one of two ways, never quietly — the spill either lands
+    // in empty space (benign, nothing to collide with) or it lands on a
+    // row entity, which `belt_structural::check_entity_overlaps`
+    // reports (dispatched from `validate/mod.rs`). Fixing it properly
+    // means re-placing rows, i.e. a third pass; not worth it for a
+    // condition with no exhibiting fixture and a validator that catches
+    // the harmful half.
     let actual_bw = actual_bw.max(bus_width_for_lanes(&lanes, &families));
 
     crate::trace::emit(crate::trace::TraceEvent::PhaseComplete {
