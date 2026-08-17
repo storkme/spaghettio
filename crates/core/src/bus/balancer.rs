@@ -220,11 +220,19 @@ pub(crate) fn family_stamp_plan(
 /// their output count, so this is a shape property, not a fixture one.
 ///
 /// `Decomposed` and `Generated` are guarded at *selection* time
-/// (`sub.width <= sub_m` / `generated.width <= m`), which forces both
-/// pads to zero; they are derived here rather than assumed so the
-/// guard and this reservation cannot drift apart. `Direct` — the
-/// exact-shape library hit — has never had such a guard, and is the
-/// path that spills.
+/// (`sub.width <= sub_m` / `generated.width <= m`). Be precise about
+/// what that buys, because it is less than it looks (review finding):
+/// the guard directly forces only the EAST pad to zero. The west pad
+/// is `d0`, which the width guard does not mention — it reaches zero
+/// only via the additional premise that a template's outputs lie
+/// inside its own width (`d0 + m <= width`), which with `width <= m`
+/// gives `d0 <= 0`. Both pads are therefore zero on those paths today,
+/// but as a *consequence of two facts*, not one. They are derived here
+/// rather than hardcoded so a library regeneration that breaks either
+/// premise is picked up instead of silently mis-reserving.
+///
+/// `Direct` — the exact-shape library hit — has never had such a
+/// guard, and is the path that spills.
 pub(crate) fn family_stamp_x_pad(fam: &LaneFamily) -> (i32, i32) {
     /// `width` minus the contiguous run of output columns, split
     /// around the run's offset. Output tiles are sorted by x and
@@ -598,20 +606,28 @@ mod tests {
     }
 
     /// #652: the reservation must cover the stamp's ACTUAL extent for
-    /// every shape the library serves — not just the one that
-    /// exhibited the bug. Stamps each shape at a known lane block and
-    /// asserts every emitted tile falls inside
-    /// `[lane_xs[0] - west, lane_xs.last() + east]`.
+    /// every shape — not just the one that exhibited the bug. Stamps
+    /// each shape at a known lane block and asserts every emitted tile
+    /// falls inside `[lane_xs[0] - west, lane_xs.last() + east]`.
+    ///
+    /// Sweeps the whole 1..=10 x 1..=10 grid rather than the library's
+    /// key set (review finding): iterating only library shapes means
+    /// `family_stamp_plan` returns `Direct` every time, so the
+    /// Decomposed and Generated pad branches — whose pads are zero
+    /// today only as a consequence of the selection guard AND outputs
+    /// fitting inside their template width — are never stamped and
+    /// verified. Shapes off the library's key set are exactly the ones
+    /// that reach them.
     ///
     /// Both anti-vacuity guards matter: without the first the loop
     /// could stamp nothing and pass, and without the second a pad
     /// that always returned `(0, 0)` would pass on a library that
     /// happened never to spill.
     #[test]
-    fn family_stamp_x_pad_covers_every_library_stamp() {
+    fn family_stamp_x_pad_covers_every_stamped_shape() {
         let mut checked = 0usize;
         let mut spilling = 0usize;
-        for (&(n, m), _) in crate::bus::balancer_library::balancer_templates().iter() {
+        for (n, m) in (1..=10u32).flat_map(|n| (1..=10u32).map(move |m| (n, m))) {
             let fam = library_family(n, m, 100);
             let (west, east) = family_stamp_x_pad(&fam);
             let ents = stamp_family_balancer(&fam, None, &StackingCtx::unstacked())

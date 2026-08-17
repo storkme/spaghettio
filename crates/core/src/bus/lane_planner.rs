@@ -754,7 +754,20 @@ pub fn plan_bus_lanes(
             total_rate: f.total_rate,
             producer_rows: f.producer_rows.clone(),
         }).collect(),
-        bus_width: lanes.iter().map(|l| l.x).max().map(|x| x + 1).unwrap_or(0),
+        // #652 (review finding): this must agree with
+        // `bus_width_for_lanes`, which the layout actually sizes on. A
+        // family's eastern stamp spill lives only in the width — never
+        // in a lane's `x` — so a max-over-`l.x` under-reports it, and
+        // the snapshot debugger grids on THIS field: a spilling layout
+        // (exactly the class #652 is about) would render its stamp
+        // clipped off the east edge. Derive both from the same helper
+        // rather than keeping two definitions of one number.
+        bus_width: lanes
+            .iter()
+            .map(|l| l.x)
+            .max()
+            .map(|_| bus_width_for_lanes(&lanes, &families) - 1)
+            .unwrap_or(0),
     });
 
     Ok((lanes, families))
@@ -1602,6 +1615,44 @@ mod tests {
             .map(|&x| BusLane { item: format!("item-{x}"), x, ..Default::default() })
             .collect();
         assert_eq!(bus_width_for_lanes(&lanes, &[]), 6);
+    }
+
+    /// #652 (review finding): the `stamp_max` branch is the whole
+    /// point of the width change and every other unit test here passes
+    /// `&[]` for families, so without this the ONLY coverage of the
+    /// eastmost-family spill was a 300-second e2e.
+    ///
+    /// A `(5,2)` family is a width-6 template over 2 trunk columns with
+    /// its outputs at x-offsets 1..2 — 3 columns of eastern spill.
+    /// Nothing shifts past the last lane, so the width must reach
+    /// `lane_xs.last() + 3 + 2`, not `lane_xs.last() + 2`.
+    #[test]
+    fn bus_width_for_lanes_reserves_the_eastmost_family_spill() {
+        let lanes: Vec<BusLane> = [10i32, 11]
+            .iter()
+            .map(|&x| BusLane { item: "electronic-circuit".to_string(), x, ..Default::default() })
+            .collect();
+        let fam = LaneFamily {
+            item: "electronic-circuit".to_string(),
+            module_id: 0,
+            shape: (5, 2),
+            producer_rows: (0..5).collect(),
+            lane_xs: vec![10, 11],
+            balancer_y_start: 0,
+            balancer_y_end: 9,
+            total_rate: 20.0,
+            merge_tap: false,
+            demand_skewed: false,
+        };
+        // Sanity: this shape really does spill east, or the assertion
+        // below would hold for the wrong reason.
+        assert_eq!(crate::bus::balancer::family_stamp_x_pad(&fam), (1, 3));
+        assert_eq!(bus_width_for_lanes(&lanes, &[]), 13, "lanes alone");
+        assert_eq!(
+            bus_width_for_lanes(&lanes, std::slice::from_ref(&fam)),
+            16,
+            "the (5,2) stamp reaches x=14, so the bus must be 16 wide"
+        );
     }
 
     #[test]

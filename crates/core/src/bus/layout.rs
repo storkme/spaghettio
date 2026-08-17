@@ -971,6 +971,23 @@ fn layout_pass(
             (re, rs, rw, th, nl, nf)
         };
 
+    // #652 (review finding): pass 2 RE-PLANS the lanes, and its families
+    // can differ from pass 1's — different `lane_xs`, or a different
+    // family ending up eastmost. `actual_bw` above was measured on pass
+    // 1, and a family's eastern stamp spill is the one quantity that
+    // exists ONLY in the bus width and never in any lane's `x` (the
+    // reservation works by shifting the lanes that FOLLOW a family, and
+    // the eastmost has none to shift). So a stale `actual_bw` would
+    // leave pass 2's eastmost spill unreserved and re-introduce exactly
+    // the overlap this change exists to prevent.
+    //
+    // Re-measure against the lanes actually being routed. `max` and not
+    // plain assignment: pass 2's rows were already placed against pass
+    // 1's value, so the width may grow but must never shrink under
+    // them. The equal-width fast path above skips pass 2 entirely, so
+    // this is a no-op there.
+    let actual_bw = actual_bw.max(bus_width_for_lanes(&lanes, &families));
+
     crate::trace::emit(crate::trace::TraceEvent::PhaseComplete {
         phase: "rows_placed".into(),
         entity_count: row_entities.len(),

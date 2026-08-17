@@ -2316,6 +2316,20 @@ fn tier4_ac7_duty06_lays_out_clean() {
         "no JunctionCommitted events collected — trace stream is broken, \
          every trace-derived assertion in this test is vacuous"
     );
+    // ...and pin the CLAIM, not just its vacuity guard (review
+    // finding): the comment above asserts the reservation RAISED
+    // committed crossings 25 → 32, but `committed > 0` would hold at 3
+    // while that claim was false. A floor between the two numbers
+    // fails if the reservation stops freeing the router, which is the
+    // mechanism this fixture exists to protect.
+    assert!(
+        committed >= 30,
+        "ac7-HS duty-0.6 committed only {committed} junction zones \
+         (expected >= 30; 25 before the balancer-width reservation, 32 \
+         after). The router has stopped solving crossings the \
+         reservation freed up — the zero-error result below may be \
+         hiding a shape that simply stopped trying."
+    );
     // #652 flow-compatible upgrade pin: the context-conflict class is
     // RESOLVED on this fixture. A context-conflict skip reappearing
     // here means the carve-out regressed (or a new, genuinely
@@ -2567,6 +2581,24 @@ fn tier5_processing_unit_from_ore_am3() {
     // copper-plate / copper-cable / plastic rows — the same uniform
     // −24% chain signature pu@3 sim-measured (RFC-060 K60-3, converged,
     // warmup-flat). The check now reports what the sim already proved.
+    // 2026-08-17 (#652 balancer-width reservation, PR #659) — ADJUDICATION
+    // for the `belt-detour 1` line in this fixture's golden, recorded here
+    // because the golden itself is a bare category tally and a re-bless
+    // with no reachable reasoning is indistinguishable from paperwork.
+    //
+    // The reservation gives a balancer family the columns its template
+    // actually spans, which widens this layout's bus by 4 columns
+    // (165 -> 169) and adds ~160 entities. One copper-cable run then
+    // measures 105 tiles for a 52-tile separation and clears
+    // `belt-detour`'s paired floors (ratio >= 2.0 AND excess >= 8).
+    //
+    // ACCEPTED, with its limit stated: errors stay 0 and
+    // input-rate-delivery is unchanged at 13, and the check is
+    // diagnostic-only by construction (never promotes to Error). What is
+    // NOT established is the tile-level path — the mechanism above is
+    // inferred from the width delta, not traced. If this fixture ever
+    // gains a SECOND detour, or an error, treat that inference as due for
+    // a snapshot before re-blessing again.
     assert_warnings_golden(&result, "tier5_processing_unit_from_ore_am3");
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
