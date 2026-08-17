@@ -200,6 +200,64 @@ pub(crate) fn family_stamp_plan(
     }
 }
 
+/// Columns a family's stamp needs BEYOND its own trunk columns, as
+/// `(west, east)`.
+///
+/// Every stamping path aligns by [`balancer_origin_x`] — output tile 0
+/// onto `lane_xs[0]` — so a template whose width exceeds its output
+/// count spills west of the family's first trunk column (by the output
+/// tiles' own x-offset) and east of its last (by whatever width is
+/// left over). Nothing downstream moves out of the way: the lane
+/// planner has always reserved the stamp's HEIGHT (`balancer_y_end`,
+/// so trunks skip the zone) and never its WIDTH, so the spill lands on
+/// whichever family was assigned the neighbouring columns.
+///
+/// That is #652's balancer-over-trunk overlap. On ac7-HS at duty 0.6
+/// the electronic-circuit family's `(5,2)` is width 6 over 2 trunk
+/// columns — 1 west + 3 east — and the eastern spill swallowed the
+/// plastic-bar trunk at x=18–19, severing it and stranding fragments
+/// inside the template's holes. 31 library templates are wider than
+/// their output count, so this is a shape property, not a fixture one.
+///
+/// `Decomposed` and `Generated` are guarded at *selection* time
+/// (`sub.width <= sub_m` / `generated.width <= m`), which forces both
+/// pads to zero; they are derived here rather than assumed so the
+/// guard and this reservation cannot drift apart. `Direct` — the
+/// exact-shape library hit — has never had such a guard, and is the
+/// path that spills.
+pub(crate) fn family_stamp_x_pad(fam: &LaneFamily) -> (i32, i32) {
+    /// `width` minus the contiguous run of output columns, split
+    /// around the run's offset. Output tiles are sorted by x and
+    /// contiguous (see [`balancer_origin_x`]'s debug asserts), and may
+    /// repeat an x when a template has two output rows.
+    fn pad_of(width: u32, output_tiles: &[(i32, i32)]) -> (i32, i32) {
+        let Some(&(d0, _)) = output_tiles.first() else {
+            return (0, 0);
+        };
+        let mut cols: Vec<i32> = output_tiles.iter().map(|t| t.0).collect();
+        cols.dedup();
+        let m = cols.len() as i32;
+        (d0.max(0), (width as i32 - d0 - m).max(0))
+    }
+
+    let n = fam.shape.0 as u32;
+    if fam.merge_tap {
+        // The merge tree's single output sits at its EAST edge
+        // (`(n-1, 2n-2)`), so its whole body is a western spill.
+        let t = crate::bus::balancer_generate::merge_tree(n);
+        return pad_of(t.width, &t.output_tiles);
+    }
+    match family_stamp_plan(fam) {
+        FamilyStampPlan::Passthrough | FamilyStampPlan::Unresolvable => (0, 0),
+        FamilyStampPlan::Direct(t) => pad_of(t.width, t.output_tiles),
+        FamilyStampPlan::Generated(g) => pad_of(g.width, &g.output_tiles),
+        // Sub-stamps sit side by side, each aligned onto its own lane
+        // chunk: the westmost chunk owns the west pad, the eastmost
+        // the east pad, and both are the sub-template's.
+        FamilyStampPlan::Decomposed { sub, .. } => pad_of(sub.width, sub.output_tiles),
+    }
+}
+
 /// Predicate: would `stamp_family_balancer((n, m), …)` find a template
 /// to use, either directly or via decomposition?
 ///
@@ -500,6 +558,97 @@ mod tests {
                 "template ({n},{m}): outputs {actual:?} should equal lane_xs {lane_xs:?} after origin shift"
             );
         }
+    }
+
+    /// Build a family that will take the LIBRARY path for `(n, m)`.
+    /// An unskewed square would shortcut to passthrough and never
+    /// stamp a template at all, so squares are marked demand-skewed.
+    fn library_family(n: u32, m: u32, lane_x0: i32) -> LaneFamily {
+        LaneFamily {
+            item: "iron-plate".to_string(),
+            module_id: 0,
+            shape: (n as usize, m as usize),
+            producer_rows: (0..n as usize).collect(),
+            lane_xs: (lane_x0..lane_x0 + m as i32).collect(),
+            balancer_y_start: 10,
+            balancer_y_end: 60,
+            total_rate: 20.0,
+            merge_tap: false,
+            demand_skewed: n == m,
+        }
+    }
+
+    /// #652 anchor: the shape that exhibited the balancer-over-trunk
+    /// overlap. `(5,2)` is a width-6 template over 2 trunk columns
+    /// whose outputs sit at x-offsets 1..2 — 1 column of spill west,
+    /// 3 east. Documented explicitly so a library regeneration that
+    /// changes T_5_2's geometry has to come past this number.
+    #[test]
+    fn family_stamp_x_pad_anchors_the_5x2_spill() {
+        assert_eq!(family_stamp_x_pad(&library_family(5, 2, 16)), (1, 3));
+    }
+
+    /// A merge-tap family's merge tree puts its single output at the
+    /// tree's EAST edge, so the whole body is a western spill.
+    #[test]
+    fn family_stamp_x_pad_covers_the_merge_tree() {
+        let mut fam = library_family(4, 1, 20);
+        fam.merge_tap = true;
+        assert_eq!(family_stamp_x_pad(&fam), (3, 0));
+    }
+
+    /// #652: the reservation must cover the stamp's ACTUAL extent for
+    /// every shape the library serves — not just the one that
+    /// exhibited the bug. Stamps each shape at a known lane block and
+    /// asserts every emitted tile falls inside
+    /// `[lane_xs[0] - west, lane_xs.last() + east]`.
+    ///
+    /// Both anti-vacuity guards matter: without the first the loop
+    /// could stamp nothing and pass, and without the second a pad
+    /// that always returned `(0, 0)` would pass on a library that
+    /// happened never to spill.
+    #[test]
+    fn family_stamp_x_pad_covers_every_library_stamp() {
+        let mut checked = 0usize;
+        let mut spilling = 0usize;
+        for (&(n, m), _) in crate::bus::balancer_library::balancer_templates().iter() {
+            let fam = library_family(n, m, 100);
+            let (west, east) = family_stamp_x_pad(&fam);
+            let ents = stamp_family_balancer(&fam, None, &StackingCtx::unstacked())
+                .unwrap_or_else(|e| panic!("({n},{m}) stamp: {e}"));
+            if ents.is_empty() {
+                continue;
+            }
+            let lo = fam.lane_xs[0] - west;
+            let hi = *fam.lane_xs.last().unwrap() + east;
+            for e in &ents {
+                // A splitter is 2 tiles wide across its facing axis;
+                // `x` records only its west tile.
+                let spans_x = e.name.contains("splitter")
+                    && matches!(e.direction, EntityDirection::North | EntityDirection::South);
+                let e_hi = if spans_x { e.x + 1 } else { e.x };
+                assert!(
+                    e.x >= lo && e_hi <= hi,
+                    "({n},{m}): stamped {} at x {}..{} escapes the reserved span {lo}..{hi} \
+                     (pad west={west} east={east}, lane_xs {:?}) — the lane planner would \
+                     hand those columns to the next family",
+                    e.name,
+                    e.x,
+                    e_hi,
+                    fam.lane_xs
+                );
+            }
+            checked += 1;
+            if west + east > 0 {
+                spilling += 1;
+            }
+        }
+        assert!(checked > 0, "vacuous: no library shape stamped anything");
+        assert!(
+            spilling > 0,
+            "vacuous: no library shape spills past its trunk columns, so a \
+             pad of (0,0) would satisfy this test — re-point it"
+        );
     }
 
     /// `shape_is_stampable` must agree with what `stamp_family_balancer`

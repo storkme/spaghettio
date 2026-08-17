@@ -900,7 +900,7 @@ fn layout_pass(
         phase: "plan_bus_lanes_1".to_string(),
         duration_ms: t_plan1.elapsed().as_millis() as u64,
     });
-    let actual_bw = bus_width_for_lanes(&lanes_1);
+    let actual_bw = bus_width_for_lanes(&lanes_1, &families_1);
     let balancer_gaps = compute_extra_gaps(&families_1);
 
     // Pass 2: re-place rows with the real bus width + any balancer
