@@ -175,11 +175,21 @@ goes to the owner before merge.
   consequences for this RFC:
   - **ac7-HS at duty 0.6 — the flip shape — goes from 14 errors to
     ZERO**, and its 21-tile iter-capped mega-cluster resolves with the
-    spill. Meter A/B on the same instrument: pre-fix `produced {}`
-    (nothing at all — the spill had severed the plastic trunk, and
-    plastic is an AC ingredient); post-fix advanced-circuit **64.3% of
-    plan**, uniform down the chain. Still below plan, and believed as
-    such: this removes a structural break, it does not reach plan.
+    spill. **SIM-ANCHORED A/B** (both arms 432k warmup, axis declared,
+    kit-clean): pre-fix produces **0.00/s on every stage, −100%, not
+    converged, zero machines working** (49 producers backed up, 63
+    consumers starved — the severed plastic trunk, and plastic is an AC
+    ingredient); post-fix **4.51/7.00 = 64.4% of plan**, converged,
+    75 machines working. Both arms still FAIL. This removes a
+    structural break; it does not make the fixture attain plan, and the
+    residual −35.6% is uniform across every stage — one shared
+    constraint, i.e. this RFC's own zero-headroom/duty territory rather
+    than a router question.
+  - Calibration row worth banking: the fast meter read **64.3%** where
+    the sim reads **64.4%** on the post-fix artifact, on a fluid chain
+    where the meter has a known gap (#570). The meter's below-plan half
+    held to 0.1pp; its `produced {}` on the pre-fix arm was likewise
+    confirmed by the sim's −100%.
   - **The 2026-08-15 tier5 entry below ("9 belt-dead-end + 1
     unresolved-junction") does not reproduce through
     `build_bus_layout`**, which reports 18 belt-dead-end and **0**
