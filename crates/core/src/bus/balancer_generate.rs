@@ -747,15 +747,27 @@ mod service_boundary {
     /// Note the review named exactly these three (20->10, 18->9, 24->12) as
     /// the service worth keeping; they are the ones worth losing.
     ///
-    /// GENUINELY lost (24) — the n>m fan-outs (9,18)..(16,32) and the
-    /// squares (17,17)..(32,32). Their in-bound siblings ARE served, so
-    /// these are real shapes we can no longer stamp. Not repaired here: no
-    /// layout requests them. A census of all 51 corpus snapshots tops out
-    /// at (10,14) / (3,14) — nothing reaches 16 on either side. Refusing an
-    /// unverifiable shape is also the conservative direction, and
-    /// `FamilyStampPlan::Unresolvable` is an already-live state (4 corpus
-    /// shapes sit in it today). Tracked in #667, which also records why the
-    /// cheap fix (verify the atom, infer the replica) does NOT work: MX2's
+    /// Lost from THIS API only (24) — the n>m fan-outs (9,18)..(16,32) and
+    /// the squares (17,17)..(32,32). An earlier version of this note called
+    /// them "genuinely lost" shapes the pipeline can no longer stamp. That
+    /// was wrong, and the #662 review caught it: `generate` is the FOURTH
+    /// step of `family_stamp_plan`, not the first, so most of these never
+    /// reach it. Resolved against the live registry:
+    ///
+    ///   (9,18)..(16,32)   -> Decomposed g=m sub=(1,2)   [never reaches generate]
+    ///   (17,17)..(32,32)  -> Passthrough                [early return, or the tail]
+    ///   (18,9)..(32,16)   -> generate -> None -> Unresolvable
+    ///
+    /// So the only shapes whose PIPELINE outcome this guard changes are the
+    /// eight merges — the eight that were falsely cleared. Squares reach
+    /// `FamilyStampPlan::Passthrough` either through the early return or
+    /// through the tail (`is_passthrough_shape` is `n == m && n >= 2`), and
+    /// what `generate` used to hand them was `passthrough(m)`: the same
+    /// construct. The service loss measured in rounds 6-7 is real for this
+    /// function's contract and near-nil for the layout.
+    ///
+    /// Tracked in #667, corrected to match. It also records why the cheap
+    /// fix (verify the atom, infer the replica) does NOT work: MX2's
     /// expected value is `min(|S|, n)` with a GLOBAL `n`, so it does not
     /// decompose over disjoint components.
     ///
