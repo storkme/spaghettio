@@ -2239,9 +2239,10 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
 
 /// #652: ac7-HS at duty 0.6 (the RFC-069 flip shape) ships zero
 /// validation ERRORS. That is all it says. The fixture is NOT healthy:
-/// it sims at 64.4% of plan and pins 14 input-rate-delivery warnings —
-/// see the guard at the end of this test, which exists to stop the zero
-/// below being cited as health.
+/// it sims at 64.4% of plan and pins 14 input-rate-delivery warnings (10 of
+/// them belts reading 0.0/s, measured 2026-08-20). The NAME is what stops
+/// the zero below being cited as health; see the note at the end of this
+/// test for why an assertion is not.
 ///
 /// This pin has inverted twice and the history is the point of the
 /// comment — it is the record of what each fix actually bought:
@@ -2406,37 +2407,29 @@ fn tier4_ac7_duty06_has_no_severed_connections() {
     // so that a future reader cannot mistake the zero above for health and
     // so that anyone who genuinely fixes delivery has to come here and say
     // so deliberately rather than silently inheriting a green test.
-    let ird: Vec<&ValidationIssue> = issues
-        .iter()
-        .filter(|i| i.category == "input-rate-delivery")
-        .collect();
-    let ird_zero = ird
-        .iter()
-        .filter(|i| i.message.contains("delivers 0.0/s"))
-        .count();
-    // Pinned EXACTLY, not as `> 0` (#663 review, 3/3). A floor lets a partial
-    // regression through silently — 14 -> 2 would still "pass" while every
-    // specific claim in the comment above went stale, which is the precise
-    // failure mode docs/validator-reporting.md catalogues. Both directions
-    // trip: a fix and a worsening are equally things the comment must be
-    // re-measured for.
+    // NO ASSERT HERE, DELIBERATELY — a guard was tried twice and removed.
     //
-    // Yes, this reds CI when the deficit is FIXED. That is deliberate and is
-    // not the `committed >= 25` hazard this file rejected earlier: that was an
-    // incidental byproduct count that drifts under unrelated work. These two
-    // numbers move only when someone changes provisioning for this fixture on
-    // purpose (RFC-069 / #519), and when they do, the fixture needs
-    // re-measuring and this comment needs rewriting — which is exactly what a
-    // failure here forces.
-    assert_eq!(
-        (ird.len(), ird_zero),
-        (14, 10),
-        "ac7-HS duty-0.6 input-rate-delivery census moved — (total, at-0.0/s) \
-         is printed above; the expected pair was measured 2026-08-20 against a \
-         64.4%-of-plan sim. If this is an IMPROVEMENT that is GOOD NEWS — \
-         re-measure the fixture, rewrite the comment at the top of this test, \
-         and re-point these numbers. Do not just delete the guard."
-    );
+    // v1 pinned `ird > 0`; v2 pinned the exact census `(14, 10)`. Both red CI
+    // when the deficit IMPROVES, and the #663 review's decisive point is that
+    // they also red it when nothing about this fixture changes at all: the
+    // census is an ENGINE OUTPUT, not a property of the provisioning, so it
+    // drifts with belt stitching, inserter margins, lane-rate arbitration and
+    // the walker model. This repo has the receipt — #644's phantom-UG-source
+    // walker fix moved input-rate-delivery counts 32 -> 13 on pu2-am3 and
+    // 11 -> 7 on ac-from-ore AM2 (docs/status.md), touching no provisioning.
+    // My argument that these numbers "move only on purpose" was simply wrong.
+    //
+    // It is the same hazard this file already conceded for the `committed`
+    // floor a few hundred lines up, and conceding it there and not here would
+    // be inconsistent.
+    //
+    // The residual risk is real and accepted: a comment cannot fail, so the
+    // "NOT healthy" note above can rot. The mitigation is the test NAME —
+    // `has_no_severed_connections` cannot be cited as evidence the fixture
+    // works, which is what the old `lays_out_clean` invited and is the whole
+    // reason this test was renamed. If you want enforcement, pin the SIM
+    // number (RFC-069's A/B), not the validator's model of it: that is the
+    // claim being made, and it is the one a warning census does not measure.
 }
 
 /// Regression test for the `place_poles` rightward-only probe bug.
