@@ -164,8 +164,15 @@ fn auto_label(base: &str, ax: &LabelAxes<'_>) -> String {
     // `--claim` and `--inserter-cap` compare against the ENGINE default, not
     // against "was a flag passed": passing the default value produces a
     // byte-identical artifact and must not fork the directory.
+    // `DiClaimOrder::default()`, never a hardcoded variant (#661 round 4,
+    // BLOCKER): the default is `Downstream` (RFC-059's sim close-out), and
+    // this compared against `Upstream`. That inverted the contract BOTH
+    // ways — `--claim up`, a genuine non-default, produced no tag and
+    // collided with the default artifact, while `--claim down`, the actual
+    // default, forked a redundant directory. Deriving it from the type
+    // means a future default flip cannot desynchronise this again.
     if let Some(c) = ax.claim {
-        if !matches!(c, DiClaimOrder::Upstream) {
+        if *c != DiClaimOrder::default() {
             tags.push(format!("claim{c:?}").to_lowercase());
         }
     }
@@ -177,10 +184,18 @@ fn auto_label(base: &str, ax: &LabelAxes<'_>) -> String {
 
     // List-valued axes: a stable short digest, so they cannot collide without
     // spelling an ingredient list into a path component.
+    // Compared and digested as a SET, sorted, because the solve consumes
+    // `--inputs` as an `FxHashSet` (#661 round 4). Comparing by order forked
+    // the directory for a reordering of the same six ores, whose artifact is
+    // byte-identical.
     let mut listy = String::new();
-    let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
-    if ax.inputs != default_inputs.as_slice() {
-        listy.push_str(&ax.inputs.join(","));
+    let mut given: Vec<&str> = ax.inputs.iter().map(|s| s.as_str()).collect();
+    given.sort_unstable();
+    given.dedup();
+    let mut default_inputs: Vec<&str> = DEFAULT_INPUTS.to_vec();
+    default_inputs.sort_unstable();
+    if given != default_inputs {
+        listy.push_str(&given.join(","));
     }
     for (k, v) in ax.research_productivity {
         listy.push_str(&format!(";{k}={v}"));
@@ -546,6 +561,53 @@ mod tests {
 
     static EMPTY_RP: std::sync::LazyLock<std::collections::BTreeMap<String, f64>> =
         std::sync::LazyLock::new(std::collections::BTreeMap::new);
+    static DEFAULT_CLAIM: std::sync::LazyLock<DiClaimOrder> =
+        std::sync::LazyLock::new(DiClaimOrder::default);
+    static NON_DEFAULT_CLAIM: std::sync::LazyLock<DiClaimOrder> =
+        std::sync::LazyLock::new(|| {
+            // Whichever arm is NOT the default, derived rather than named, so
+            // a default flip does not silently make this test vacuous.
+            if DiClaimOrder::default() == DiClaimOrder::Upstream {
+                DiClaimOrder::Downstream
+            } else {
+                DiClaimOrder::Upstream
+            }
+        });
+
+    /// The blocker from round 4: the default arm must not tag, and the
+    /// non-default arm MUST — checked against `DiClaimOrder::default()` so
+    /// neither direction can silently invert if the default changes.
+    #[test]
+    fn claim_tags_track_the_real_default() {
+        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
+        let mk = |c| {
+            let mut ax = axes();
+            ax.inputs = &default_inputs;
+            ax.claim = Some(c);
+            auto_label("ec-5", &ax)
+        };
+        assert_eq!(mk(&DEFAULT_CLAIM), "ec-5", "the default claim order must not fork the path");
+        assert_ne!(
+            mk(&NON_DEFAULT_CLAIM),
+            "ec-5",
+            "a non-default claim order changes the artifact and must tag"
+        );
+    }
+
+    /// `--inputs` is consumed as an unordered set, so a reordering of the
+    /// same items is the same artifact and must share a directory.
+    #[test]
+    fn input_order_does_not_fork_the_path() {
+        let fwd: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
+        let mut rev = fwd.clone();
+        rev.reverse();
+        let mut a = axes();
+        a.inputs = &fwd;
+        let mut b = axes();
+        b.inputs = &rev;
+        assert_eq!(auto_label("ec-5", &a), auto_label("ec-5", &b));
+        assert_eq!(auto_label("ec-5", &a), "ec-5", "the default set must not tag at all");
+    }
 
     /// The contract: default config keeps the pre-#661 path byte-identical.
     #[test]
@@ -614,7 +676,7 @@ mod tests {
         let mut ax = axes();
         ax.inputs = &default_inputs;
         ax.inserter_cap = Some(spaghettio_core::common::DEFAULT_INSERTER_CAPACITY);
-        ax.claim = Some(&DiClaimOrder::Upstream);
+        ax.claim = Some(&DEFAULT_CLAIM);
         assert_eq!(
             auto_label("ec-5", &ax),
             "ec-5",
