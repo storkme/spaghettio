@@ -74,8 +74,20 @@ impl MachineModuleEffects {
 /// epsilon absorbs f64 representation error on products that land
 /// exactly on a step (steps are a full 1.0 apart in percent space, so it
 /// can never jump one).
-fn quality_scaled(base: f64, quality: QualityTier) -> f64 {
+pub(crate) fn quality_scaled(base: f64, quality: QualityTier) -> f64 {
     (base * (1.0 + 0.3 * quality.level() as f64) * 100.0 + 1e-9).floor() / 100.0
+}
+
+/// RFC-044 game-rule model applied to one module's effect component:
+/// beneficial (positive) effects scale with the module's quality; harmful
+/// ones are quality-flat. Shared with `analysis`'s reverse
+/// blueprint-analysis path so the forward planner and the analyzer agree
+/// (B1 on the offpath campaign, 2026-08-20 — analysis was quality-blind).
+pub(crate) fn effect_component_scaled(base: f64, quality: Option<QualityTier>) -> f64 {
+    match quality {
+        Some(q) if base > 0.0 => quality_scaled(base, q),
+        _ => base,
+    }
 }
 
 /// Prototype name for a family + tier (tier 1 has no suffix).
