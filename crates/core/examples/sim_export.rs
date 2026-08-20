@@ -39,9 +39,9 @@
 //!   --inserter-cap <n>     inserter capacity level (default: engine default)
 //!   --inputs a,b,c         raw inputs (default: the six-ore set)
 //!   --label <name>         output subdirectory + manifest label
+//!                          REQUIRED whenever any layout-changing flag is used
 //!   --force                regenerate over an existing <out>/<label>/
 //!                          (NOT needed for a fresh --label; only for reusing one)
-//!                          REQUIRED whenever any layout-changing flag is used
 //!   --out <dir>            parent output dir (default $SIM_PROBE_OUT or /tmp)
 //! ```
 //!
@@ -160,6 +160,22 @@ fn default_label(targets: &[(String, f64)]) -> String {
 /// limit: it cannot tell two runs apart that pass the SAME axis with
 /// DIFFERENT values under one `--label`. That case is caught at the write
 /// instead, where the artifact is.
+/// Which already-written artifacts should block this run.
+///
+/// Split out from `main` so the overwrite policy is testable (#661 round 8:
+/// "the core overwrite guard has no tests" — the filesystem call is not the
+/// part worth testing, the decision is).
+///
+/// Empty means proceed. Three ways to get there: `--force`, no axis flag
+/// (a re-run with the same configuration writes the same bytes, so there is
+/// no A/B to get wrong), or nothing on disk yet.
+fn overwrite_blocked_by(axis_flags_seen: &[String], force: bool, present: &[String]) -> Vec<String> {
+    if force || axis_flags_seen.is_empty() {
+        return Vec::new();
+    }
+    present.to_vec()
+}
+
 fn label_required(axis_flags_seen: &[String], label: &Option<String>) -> bool {
     !axis_flags_seen.is_empty() && label.is_none()
 }
@@ -401,14 +417,22 @@ fn main() {
     // Both artifacts count, not just `bp.txt`: an interrupted earlier run
     // can leave a directory holding only `manifest-real.json`, and
     // overwriting that is the same silent loss (#661 round 7).
+    //
+    // Scoped to runs that passed an axis (#661 round 8). A plain
+    // `sim_export iron-ore 10` re-run produces the SAME artifact — there is
+    // no A/B to get wrong — so refusing it broke a workflow that was fine,
+    // which is a worse outcome than the one being prevented. The guard
+    // exists for the case where two runs under one label can DIFFER, and
+    // that requires an axis flag.
     {
         let dir = format!("{out}/{label}");
-        let existing: Vec<String> = ["bp.txt", "manifest-real.json"]
+        let present: Vec<String> = ["bp.txt", "manifest-real.json"]
             .iter()
             .map(|f| format!("{dir}/{f}"))
             .filter(|p| std::path::Path::new(p).exists())
             .collect();
-        if !force && !existing.is_empty() {
+        let existing = overwrite_blocked_by(&axis_flags_seen, force, &present);
+        if !existing.is_empty() {
             eprintln!(
                 "error: {} already {} — refusing to overwrite.\n\
                  \n\
@@ -575,6 +599,99 @@ mod tests {
     ///
     /// `--label`, `--out` and `--multi` are excluded deliberately: they name
     /// or select the output, they do not change it.
+    /// Every flag named in the module's usage block, axis or not.
+    fn documented_flags(src: &str) -> Vec<String> {
+        src.lines()
+            .filter(|l| l.trim_start().starts_with("//!   --"))
+            .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
+            .filter(|f| f.starts_with("--"))
+            .collect()
+    }
+
+    /// The overwrite policy, which the filesystem check only executes.
+    #[test]
+    fn overwrite_policy() {
+        let axis = vec!["--strategy".to_string()];
+        let none: Vec<String> = vec![];
+        let present = vec!["out/x/bp.txt".to_string()];
+
+        assert_eq!(
+            overwrite_blocked_by(&axis, false, &present),
+            present,
+            "an axis run must not silently overwrite a previous run's artifact"
+        );
+        assert!(
+            overwrite_blocked_by(&axis, true, &present).is_empty(),
+            "--force is the escape hatch"
+        );
+        assert!(
+            overwrite_blocked_by(&none, false, &present).is_empty(),
+            "a plain re-run writes the same bytes, so it must stay idempotent \
+             (#661 round 8 — scoping this to axis runs is the fix for that)"
+        );
+        assert!(
+            overwrite_blocked_by(&axis, false, &[]).is_empty(),
+            "nothing on disk, nothing to block"
+        );
+
+        // The interrupted-run case: only the manifest survived.
+        let manifest_only = vec!["out/x/manifest-real.json".to_string()];
+        assert_eq!(
+            overwrite_blocked_by(&axis, false, &manifest_only),
+            manifest_only,
+            "a half-written directory is still a collision"
+        );
+    }
+
+    /// Every flag the PARSER accepts must be documented.
+    ///
+    /// The bidirectional pin below compares `AXIS_FLAGS` against the doc
+    /// block, and both live in this file — so a flag added to the parser and
+    /// omitted from BOTH sails through undetected (#661 round 8, 3/3). This
+    /// one reads the parser's own match arms, which is the source that
+    /// cannot be forgotten: adding a flag means adding an arm.
+    #[test]
+    fn every_parsed_flag_is_documented() {
+        let src = include_str!("sim_export.rs");
+        let documented = documented_flags(src);
+        // Only the real code: this module's own examples mention flag-shaped
+        // strings in comments, and scanning them made the test fail on
+        // `"--flag"` from its own docstring.
+        let code = src.split("\nmod tests {").next().expect("module splits");
+
+        let mut parsed: Vec<String> = Vec::new();
+        for line in code.lines() {
+            let t = line.trim();
+            // `"--flag" => ...` and `if args[i] == "--flag"`.
+            let candidate = t
+                .strip_prefix('"')
+                .and_then(|r| r.split_once('"').map(|(f, _)| f))
+                .filter(|_| t.contains("=>"))
+                .or_else(|| {
+                    t.split_once("args[i] == \"")
+                        .and_then(|(_, r)| r.split_once('"').map(|(f, _)| f))
+                });
+            if let Some(f) = candidate {
+                if f.starts_with("--") && !parsed.contains(&f.to_string()) {
+                    parsed.push(f.to_string());
+                }
+            }
+        }
+
+        assert!(
+            parsed.len() > 10,
+            "flag extraction found only {parsed:?} — the parser's shape changed and \
+             this test stopped reading it, which would make it pass vacuously"
+        );
+
+        let undocumented: Vec<&String> =
+            parsed.iter().filter(|f| !documented.contains(&f.to_string())).collect();
+        assert!(
+            undocumented.is_empty(),
+            "flags accepted by the parser but absent from the usage block: {undocumented:?}"
+        );
+    }
+
     #[test]
     fn axis_flag_list_and_docs_agree_both_ways() {
         // Not axes: these change WHERE a run writes, or WHETHER it may,
