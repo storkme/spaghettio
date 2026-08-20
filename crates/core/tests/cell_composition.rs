@@ -1422,7 +1422,16 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
         "eb9e1796a1f53695",
         "EC@15 default (L2) geometry changed — re-verify and re-bless"
     );
-    let inserter_warns = |cap: u8| -> usize {
+    // RE-INSTRUMENTED 2026-08-21 (offpath item 9): this test's original
+    // proof — L0 warns / L2 is clean, counted from the inserter-throughput
+    // check pair — died when the owner deleted that never-sim-anchored
+    // pair. What remains provable without it: the capacity axis still
+    // SIZES differently (the #383 fix's mechanism is ladder sizing, and
+    // L0-vs-L2 geometry divergence is its observable), and both builds
+    // stay Error-free. The premise-guard survives in geometry form: if
+    // these hashes ever converge, capacity stopped affecting the chain
+    // and this test no longer proves anything — investigate, don't bless.
+    let build = |cap: u8| {
         let l = compose_chain_with_capacity(&sr, cap).unwrap();
         let issues =
             validate::validate(&l, Some(&sr)).unwrap_or_else(|e| e.issues);
@@ -1430,27 +1439,12 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
             issues.iter().all(|i| i.severity != Severity::Error),
             "EC@15 L{cap} must have no errors: {issues:?}"
         );
-        issues
-            .iter()
-            // #519: input-rate-delivery dropped from this count — the L2
-            // gate proves the #383 INSERTER bind clears at the default
-            // capacity, and the decremented walker's flux reports are a
-            // different mechanism (belt tail starvation, sim-measured
-            // −3.6% on this chain), adjudicated in the sibling fixture.
-            .filter(|i| i.category.contains("inserter"))
-            .count()
+        format!("{:016x}", geometry_hash(&l))
     };
-    // L0 (raw unresearched) still shows the #383 input bind — guards the
-    // premise: if L0 stops warning, this test no longer proves anything.
-    assert!(
-        inserter_warns(0) > 0,
-        "L0 must still exhibit the #383 input-inserter bind"
-    );
-    // The L2 engine default (red+green research) clears them all.
-    assert_eq!(
-        inserter_warns(DEFAULT_INSERTER_CAPACITY),
-        0,
-        "EC@15 chain must be inserter-clean at the engine default (#383 fix)"
+    assert_ne!(
+        build(0),
+        build(DEFAULT_INSERTER_CAPACITY),
+        "L0 and the L2 default must size differently (#383 capacity axis)"
     );
 }
 

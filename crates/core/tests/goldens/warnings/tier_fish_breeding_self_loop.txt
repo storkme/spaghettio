@@ -1,2 +1,0 @@
-inserter-item-throughput 1
-inserter-throughput 1
