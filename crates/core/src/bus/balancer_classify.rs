@@ -131,15 +131,38 @@ const SUBSET_ENUM_MAX: usize = 16;
 /// composition solve is [`ClassifyError::Singular`].
 pub fn throughput_tier(graph: &SplitterGraph) -> ThroughputTier {
     let (m, n) = (graph.n_inputs, graph.n_outputs);
-    // Bound check FIRST. Both helpers return `None` when they bail on size,
-    // which reads identically to "searched, found nothing" — so asking them
-    // about an oversized graph and believing the answer is a false clearance.
     if m > SUBSET_ENUM_MAX || n > SUBSET_ENUM_MAX {
         return ThroughputTier::Unknown;
     }
-    if check_input_subsets(graph, m, n).is_some() {
+    let mx2a = check_input_subsets(graph, m, n);
+    let mx2b = if mx2a.is_none() {
+        check_output_subsets(graph, m, n)
+    } else {
+        None
+    };
+    throughput_tier_from(m, n, &mx2a, &mx2b)
+}
+
+/// The tier, given subset-check results already computed for an `(m, n)`
+/// graph. The single place the tier is decided — `throughput_tier` and
+/// `classify_graph` both route through here so they cannot disagree
+/// (#662 round 2: they did, and the one with the guard had no callers).
+///
+/// The bound check is FIRST and is not optional: both subset helpers return
+/// `None` when they bail on size, which reads identically to "searched,
+/// found nothing", so believing them about an oversized graph is a false
+/// clearance rather than a missing feature.
+fn throughput_tier_from(
+    m: usize,
+    n: usize,
+    mx2a: &Option<Mx2Counterexample>,
+    mx2b: &Option<Mx2Counterexample>,
+) -> ThroughputTier {
+    if m > SUBSET_ENUM_MAX || n > SUBSET_ENUM_MAX {
+        ThroughputTier::Unknown
+    } else if mx2a.is_some() {
         ThroughputTier::Limited
-    } else if check_output_subsets(graph, m, n).is_some() {
+    } else if mx2b.is_some() {
         ThroughputTier::BalancedRate
     } else {
         ThroughputTier::Unlimited
@@ -412,13 +435,16 @@ pub fn classify_graph(graph: &SplitterGraph) -> Result<ClassificationReport, Cla
     } else {
         None
     };
-    let throughput = if mx2a_counterexample.is_some() {
-        ThroughputTier::Limited
-    } else if mx2b_counterexample.is_some() {
-        ThroughputTier::BalancedRate
-    } else {
-        ThroughputTier::Unlimited
-    };
+    // ONE source of truth for the tier (#662 round 2, 3/3 x2). The first
+    // version of this change put the SUBSET_ENUM_MAX guard in
+    // `throughput_tier()` — which has zero callers — and left this path
+    // computing the tier inline without it. So the false clearance the
+    // `Unknown` variant exists to prevent was still being emitted by the
+    // primary path (`classify`/`classify_graph`, used by import_balancer,
+    // balancer_generate and balancer_topology), and the two public surfaces
+    // contradicted each other for the same graph. Delegating means they
+    // cannot drift.
+    let throughput = throughput_tier_from(m, n, &mx2a_counterexample, &mx2b_counterexample);
 
     let target = 1.0 / n as f64;
     let is_mx3 = composition
@@ -1233,14 +1259,56 @@ mod tests {
              that gives every template the same answer is not measuring \
              anything"
         );
-        // No registered template exceeds the enumeration bound; if one ever
-        // does, its tier is Unknown and that must be a deliberate decision
-        // rather than a silent false clearance.
+        // No registered template exceeds the enumeration bound. NOTE this
+        // assertion is weak on purpose and must not be mistaken for coverage
+        // of the Unknown path (#662 round 2): every shape here is within the
+        // bound, so it could not fail. The reachability of Unknown is pinned
+        // separately, below.
         assert_eq!(
             unknown, 0,
             "a registered template exceeds SUBSET_ENUM_MAX ({SUBSET_ENUM_MAX}) \
              and its throughput is unanalysed"
         );
+    }
+
+    /// An oversized graph must report `Unknown` on BOTH public surfaces.
+    ///
+    /// This is the test the first version of the change was missing, and its
+    /// absence hid a real defect: the bound guard had been put in
+    /// `throughput_tier()` — which has no callers — while `classify_graph`,
+    /// the path everything actually uses, computed the tier inline without
+    /// it. So the false clearance was still being emitted, and the two
+    /// surfaces disagreed for the same graph.
+    #[test]
+    fn oversized_graphs_report_unknown_on_both_surfaces() {
+        // 17 straight-through belts: past SUBSET_ENUM_MAX, and well-formed
+        // enough for the composition solve (it is the identity).
+        let k = SUBSET_ENUM_MAX + 1;
+        let graph = SplitterGraph {
+            n_inputs: k,
+            n_outputs: k,
+            n_splitters: 0,
+            edges: (0..k)
+                .map(|i| (NodeId::InputPort(i), NodeId::OutputPort(i)))
+                .collect(),
+        };
+
+        assert_eq!(
+            throughput_tier(&graph),
+            ThroughputTier::Unknown,
+            "free function must not certify an unanalysed graph"
+        );
+
+        let report = classify_graph(&graph).expect("identity graph classifies");
+        assert_eq!(
+            report.throughput,
+            ThroughputTier::Unknown,
+            "classify_graph is the path import_balancer/balancer_generate use — \
+             it must not report Unlimited for a graph no subset check ran on"
+        );
+
+        // ...and the two must agree, which is the property that failed before.
+        assert_eq!(report.throughput, throughput_tier(&graph));
     }
 
     /// A Balanced template that is NOT throughput-unlimited must carry its
