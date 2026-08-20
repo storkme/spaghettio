@@ -57,7 +57,7 @@ cargo run --release --example sim_export -- <item> <rate> [flags]
   --inputs a,b,c        raw inputs (default: the six-ore set)
   --row-layout <kind>   native (default) | horizontal-stack
   --strategy <kind>     pooled (default) | partitioned-decomposed
-  --duty <0..1>         planning duty (default 1.0)
+  --duty <0..1>         planning duty (default 1.0; <1 needs --belt)
   --research-productivity <recipe=bonus,...>   declared research
   --label <name>        output subdir + manifest label
   --out <dir>           parent dir (default $SIM_PROBE_OUT, else /tmp)
@@ -76,10 +76,22 @@ encoded no configuration, so a second run silently overwrote the first's
 whose whole purpose is A/B. Encoding each axis into the name was tried and
 abandoned: it needs every axis enumerated and every engine default stated
 correctly, and five review rounds each found another one wrong. Requiring
-the label makes collisions impossible by construction and consults no
-defaults, so a future default flip cannot invert it.
+the label makes collisions between runs that differ only by an axis
+impossible by construction, and consults no defaults, so a future default
+flip cannot invert it. Reusing the same `--label` twice still collides —
+that is a deliberate escape hatch, not an oversight.
 
 A run with no axis flags keeps the old `{item}-{rate}` path unchanged.
+
+The check is **syntactic**: it fires on the PRESENCE of an axis flag, not on
+whether the value differs from the engine default. So `--tier
+assembling-machine-3` or `--strategy pooled` requires a `--label` even
+though neither changes the artifact. This is deliberate — deciding
+"is this value the default?" is exactly the defaults-tracking the encoding
+scheme was abandoned for, and it is the half that kept being wrong. The cost
+is that a previously-valid invocation passing an axis at its default now
+needs a label; no in-tree caller does, and the failure is a loud refusal
+with the required flag named, not a silent overwrite.
 
 It writes `<out>/<label>/bp.txt` and `<out>/<label>/manifest-real.json`,
 and prints the ready-to-paste `run` command. Unknown flags are an error
