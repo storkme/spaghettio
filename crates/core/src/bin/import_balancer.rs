@@ -66,10 +66,31 @@ fn normalize_belt_name(name: &str) -> &str {
     }
 }
 
+/// Factorio 2.0 doubled the direction encoding: 1.0/1.1 blueprints use the
+/// 8-way values this tool's `N`/`E`/`S`/`W` constants assume (0/2/4/6),
+/// while 2.0 exports use 16-way (0/4/8/12 for the cardinals). Detecting
+/// that by inspecting the VALUES is ambiguous — a 1.0 blueprint using only
+/// north and south is byte-identical to a 2.0 one using only north and
+/// east — so key off the blueprint's own `version` field, whose top 16
+/// bits are the major version.
+///
+/// Without this, a 2.0 source imports "successfully" and emits a template
+/// carrying `direction: 8`/`12`, which `BalancerTemplateEntity::
+/// entity_direction` panics on at stamp time; the cardinals that survive
+/// the u8 range (0, 4) silently mean something else (16-way 4 is EAST,
+/// 1.0 4 is SOUTH), so the shape detector mis-reads the topology rather
+/// than failing. Raynquist's fall-2025 book is 2.0, which is why every
+/// shape in it looked unimportable.
+fn direction_scale(data: &Value) -> u64 {
+    let version = data["blueprint"]["version"].as_u64().unwrap_or(0);
+    if (version >> 48) >= 2 { 2 } else { 1 }
+}
+
 fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
     let entities = data["blueprint"]["entities"]
         .as_array()
         .ok_or("No 'blueprint.entities' array in JSON")?;
+    let scale = direction_scale(data);
     let mut result = Vec::new();
     for ent in entities {
         let raw_name = ent["name"].as_str().ok_or("Entity missing 'name'")?;
@@ -80,7 +101,22 @@ fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
         let y = ent["position"]["y"]
             .as_f64()
             .ok_or("Entity missing position.y")?;
-        let direction = ent["direction"].as_u64().unwrap_or(0) as u8;
+        let raw_dir = ent["direction"].as_u64().unwrap_or(0);
+        if raw_dir % scale != 0 {
+            return Err(format!(
+                "entity {raw_name} at ({x}, {y}) has direction {raw_dir}, which is not \
+                 a cardinal under the detected {}-way encoding — diagonal belts are \
+                 not representable as a balancer template",
+                if scale == 2 { 16 } else { 8 }
+            ));
+        }
+        let direction = (raw_dir / scale) as u8;
+        if !matches!(direction, N | E | S | W) {
+            return Err(format!(
+                "entity {raw_name} at ({x}, {y}) normalised to direction {direction}, \
+                 which is not one of N/E/S/W (0/2/4/6)"
+            ));
+        }
         let io_type = ent["type"].as_str().map(|s| s.to_owned());
         let input_priority = ent["input_priority"].as_str().map(|s| s.to_owned());
         let output_priority = ent["output_priority"].as_str().map(|s| s.to_owned());
