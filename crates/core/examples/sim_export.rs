@@ -77,7 +77,9 @@ const DEFAULT_TIER: &str = "assembling-machine-3";
 /// Rather than encode each axis into the name — which needs every axis
 /// enumerated and every engine default stated correctly, and which took five
 /// review rounds without converging — passing any of these simply REQUIRES an
-/// explicit `--label`. Collisions become impossible by construction, and the
+/// explicit `--label`. Collisions between runs that differ only by an axis
+/// become impossible by construction — reusing the same `--label` twice
+/// still collides, and deliberately so — and the
 /// check consults no defaults, so a future default flip cannot invert it.
 ///
 /// Slightly over-strict on purpose: `--strategy pooled` is the default value
@@ -139,6 +141,20 @@ fn parse_target_token(tok: &str) -> (String, f64) {
 ///
 /// Note what it does NOT take: any value, and any default. It is a question
 /// about the command line, not about the configuration.
+/// The label a run falls back to when `--label` is absent.
+///
+/// One definition, because the refusal message quotes it: when these were
+/// two expressions the message described `{item}-{rate}` while a --multi
+/// run actually used the joined list (#661 review).
+fn default_label(targets: &[(String, f64)]) -> String {
+    targets
+        .iter()
+        .map(|(item, rate)| format!("{item}-{rate}"))
+        .collect::<Vec<_>>()
+        .join("_")
+        .replace('.', "_")
+}
+
 fn label_required(axis_flags_seen: &[String], label: &Option<String>) -> bool {
     !axis_flags_seen.is_empty() && label.is_none()
 }
@@ -255,7 +271,12 @@ fn main() {
             // from here.
             "--strategy" => {
                 strategy = match need(i).as_str() {
-                    "pooled" | "default" => LayoutStrategy::Pooled,
+                    "pooled" => LayoutStrategy::Pooled,
+                    // Delegate, matching `--row-layout`'s "native"|"default"
+                    // (#661 review). Hardcoding Pooled here meant a change to
+                    // the #[default] would silently stop being what
+                    // `--strategy default` selects.
+                    "default" => LayoutStrategy::default(),
                     "partitioned-decomposed" | "pd" => LayoutStrategy::PartitionedDecomposed,
                     other => usage(&format!(
                         "--strategy must be pooled|default|partitioned-decomposed|pd (got {other})"
@@ -321,24 +342,32 @@ fn main() {
             .collect::<Vec<_>>()
             .join(" + ")
     };
+    // The fitted duty values are TIER-RELATIVE (bot review round 2):
+    // block = floor(in_lane_cap(tier) × 2 × duty / rate), and with no
+    // --belt the cap resolves to the express default (belt_cap 45), so
+    // --duty 0.6 silently computes the measured-DEAD block 6 instead of
+    // the gate-clearing block 2. Require the tier to be explicit.
+    if duty < 1.0 && belt.is_none() {
+        usage("--duty < 1 requires an explicit --belt (the fitted duty is tier-relative; the RFC-069 gate receipts are on transport-belt)");
+    }
+
     // Any axis flag without an explicit label is refused, because the label
     // is the output directory and `{item}-{rate}` cannot distinguish the runs.
     if label_required(&axis_flags_seen, &label) {
+        // Name the directory this run would ACTUALLY have used. The
+        // default label is `{item}-{rate}` only for a single target; under
+        // --multi it is the joined list, so the old hardcoded
+        // `<out>/{item}-{rate}/` described the wrong path back to anyone
+        // hitting this in multi mode (#661 review).
         usage(&format!(
             "{} changes the exported layout, so `--label <name>` is required: \
-             without it this run writes to <out>/{{item}}-{{rate}}/ and silently \
-             overwrites any other run of the same target",
-            axis_flags_seen.join(", ")
+             without it this run writes to <out>/{}/ and silently overwrites \
+             any other run of the same target",
+            axis_flags_seen.join(", "),
+            default_label(&targets)
         ));
     }
-    let label = label.unwrap_or_else(|| {
-        targets
-            .iter()
-            .map(|(item, rate)| format!("{item}-{rate}"))
-            .collect::<Vec<_>>()
-            .join("_")
-            .replace('.', "_")
-    });
+    let label = label.unwrap_or_else(|| default_label(&targets));
 
     let input_set: FxHashSet<String> = inputs.iter().cloned().collect();
 
@@ -371,14 +400,6 @@ fn main() {
         std::process::exit(1);
     });
 
-    // The fitted duty values are TIER-RELATIVE (bot review round 2):
-    // block = floor(in_lane_cap(tier) × 2 × duty / rate), and with no
-    // --belt the cap resolves to the express default (belt_cap 45), so
-    // --duty 0.6 silently computes the measured-DEAD block 6 instead of
-    // the gate-clearing block 2. Require the tier to be explicit.
-    if duty < 1.0 && belt.is_none() {
-        usage("--duty < 1 requires an explicit --belt (the fitted duty is tier-relative; the RFC-069 gate receipts are on transport-belt)");
-    }
     let mut opts = LayoutOptions {
         direct_insertion: di,
         max_belt_tier: belt,
