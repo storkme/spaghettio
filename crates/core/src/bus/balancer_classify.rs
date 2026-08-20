@@ -1479,10 +1479,18 @@ mod tests {
              free function must not discard it because the OTHER side is \
              oversized"
         );
+        // Compare against the OTHER PUBLIC SURFACE, not against the shared
+        // core (#662 review). The previous assertion here compared
+        // `throughput_tier` to `throughput_tier_from` — but the former
+        // delegates to the latter, so it compared a function with itself
+        // and a regression inside `classify_graph` passed it untouched.
+        // The test is named for two surfaces agreeing; it now uses two.
+        let report = classify_graph(&graph).expect("in-bound input evidence is decisive");
+        assert_eq!(report.throughput, ThroughputTier::Limited);
         assert_eq!(
-            throughput_tier(&graph),
-            throughput_tier_from(2, n_big, &check_input_subsets(&graph, 2, n_big), &None),
-            "the free function and the shared core must not drift"
+            report.class,
+            BalancerClass::ThroughputLimited,
+            "classify_graph must reach the same verdict as throughput_tier"
         );
     }
 
