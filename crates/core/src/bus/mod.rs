@@ -48,13 +48,15 @@ pub(crate) mod junction_sat_strategy;
 pub(crate) mod junction_solver;
 pub mod region_reimprove;
 pub(crate) mod region_walker;
+// `row_rotation` (the RFC-064 rotation-aware rigid-row spike, retracted in
+// that RFC's decision log) was deleted 2026-08-20 — offpath-code-followups
+// Tier 1.
 pub(crate) mod lane_order;
 pub mod lane_planner;
 pub mod layout;
 pub mod output_merger;
 pub mod partitioner;
 pub mod placer;
-pub mod row_rotation;
 pub mod stacking_ctx;
 pub(crate) mod shape_fix;
 pub mod tapoff_search;

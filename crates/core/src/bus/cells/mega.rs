@@ -655,7 +655,8 @@ fn adapt_with_spacing(
         width,
         height,
         stacking: l.stacking,
-        // Declared axes travel with the rebuilt result — see row_rotation.
+        // Declared axes travel with the rebuilt result (a rebuilt
+        // LayoutResult must re-declare stacking/productivity/capacity).
         research_productivity: l.research_productivity.clone(),
         inserter_capacity: l.inserter_capacity,
         boundary_inputs: b_in,

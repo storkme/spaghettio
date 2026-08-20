@@ -333,63 +333,6 @@ pub fn build_bus_layout(
     }
 }
 
-/// RFC-064 follow-up: build the inert Science-2 rotation-aware row-macro
-/// experiment from the native placer's rows.
-///
-/// This is intentionally a separate entry point rather than a `LayoutOptions`
-/// flag or decomposition candidate.  It cannot affect defaults, and the
-/// completed horizontal Phase-3 result remains reproducible through
-/// `band_packing`.  The row-rotation builder itself fails closed unless the
-/// final artifact has zero validator issues and measurable realized transit.
-pub fn build_rotation_aware_row_layout(
-    solver_result: &SolverResult,
-    mut opts: LayoutOptions,
-) -> Result<LayoutResult, String> {
-    if opts.band_packing || opts.band_pack_selection.is_some() {
-        return Err("rotation-aware row packing cannot be combined with band packing".into());
-    }
-    opts.band_packing = false;
-    opts.band_pack_selection = None;
-    let (native, rows, caps, uncovered) = layout_pass(solver_result, &opts, None, None, 0, None)?;
-    if !caps.is_empty() || !uncovered.is_empty() {
-        return Err(format!(
-            "rotation-aware source pass is not stable: {} capped junctions, {} uncovered power subjects",
-            caps.len(),
-            uncovered.len()
-        ));
-    }
-    crate::bus::row_rotation::build_rotation_aware_layout(&rows, &native, solver_result)
-}
-
-/// Explicit-selection companion to [`build_rotation_aware_row_layout`].
-/// Used by the focused regression so the normal suite does not pay for the
-/// entire bounded search on every run.
-pub fn build_rotation_aware_row_layout_selected(
-    solver_result: &SolverResult,
-    mut opts: LayoutOptions,
-    selection: &crate::bus::row_rotation::RotationSelection,
-) -> Result<LayoutResult, String> {
-    if opts.band_packing || opts.band_pack_selection.is_some() {
-        return Err("rotation-aware row packing cannot be combined with band packing".into());
-    }
-    opts.band_packing = false;
-    opts.band_pack_selection = None;
-    let (native, rows, caps, uncovered) = layout_pass(solver_result, &opts, None, None, 0, None)?;
-    if !caps.is_empty() || !uncovered.is_empty() {
-        return Err(format!(
-            "rotation-aware source pass is not stable: {} capped junctions, {} uncovered power subjects",
-            caps.len(),
-            uncovered.len()
-        ));
-    }
-    crate::bus::row_rotation::build_rotation_aware_layout_selected(
-        &rows,
-        &native,
-        solver_result,
-        selection,
-    )
-}
-
 /// Today's `build_bus_layout` body — the retry orchestrator that
 /// invokes `layout_pass`, reads the junction-cap tiles it returns,
 /// computes retry gaps, and runs a second pass if needed. Extracted

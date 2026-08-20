@@ -1,6 +1,7 @@
 # Off-path code followups — the golden-path deletion backlog
 
-**Status (2026-08-20)**: audit COMPLETE; nothing deleted yet. Tier 1 below is
+**Status (2026-08-20)**: audit COMPLETE; execution started — Tier 1 item 1
+(row_rotation) in flight as PR #670. Tier 1 below is
 actionable by any session without further evidence. Tiers 2–3 each name the
 single owner decision that unlocks them. Bugs and stale-docs findings at the
 bottom are independent of any deletion.

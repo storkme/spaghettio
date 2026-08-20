@@ -376,11 +376,13 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// form. Both remain REPORTED unchanged; what stops consuming them is
 /// the selection contract — ranking AND the never-worse floors that
 /// share this count (they are one mechanism, #605). Transform-admission
-/// gates (`row_rotation`'s refusal; the compaction fold gate this
-/// sentence used to also name was deleted 2026-08-14, #632 A2) keep
-/// their own conservative policies and are NOT derived from this const —
-/// adjudicated on the B6 PR (#639 round 2): admission against a native
-/// status quo defaults to keep-native under an uncalibrated signal.
+/// gates keep their own conservative policies and are NOT derived from
+/// this const — adjudicated on the B6 PR (#639 round 2): admission
+/// against a native status quo defaults to keep-native under an
+/// uncalibrated signal. (Both gates this sentence once named as examples
+/// are since deleted — the compaction fold gate 2026-08-14 #632 A2,
+/// row_rotation's refusal 2026-08-20 offpath Tier 1 — the precedent
+/// stands for any future transform-admission gate.)
 ///
 /// `row-output-lane-budget` was demoted with them for one review round
 /// and REINSTATED (#639 round 3): its "never sim-anchored" trust-table

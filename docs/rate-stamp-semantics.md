@@ -31,8 +31,11 @@ docstring has always said what it is:
 
 ## Stamp-site census
 
-The handoff estimated 76 sites in three files. The real census is **89 sites
-across eight files** — 87 sites in the six files that stamp a value, plus 2 that only ever write `None` —
+The handoff estimated 76 sites in three files. The census at the time was
+**89 sites across eight files** — now **87 across seven** since
+`bus/row_rotation.rs`'s 2 sites were deleted with the module (2026-08-20,
+offpath Tier 1) — 85 sites in the five files that stamp a value, plus 2
+that only ever write `None` —
 and the two highest-volume ones are *mutation* sites the handoff's method
 would have missed entirely, because it enumerated struct literals only.
 
@@ -45,7 +48,6 @@ different field. Count on a word boundary.)
 | `bus/templates.rs` | 64 | `minor_total`, `major_loop_rate`, `near_total`, `far_total`, `major_total`, `sushi_total`, `major_export_rate`, `input_total_rate` | family/row totals — every expression is a `*_total` or an explicit loop/export rate |
 | `bus/ghost_router.rs` | 10 | `lane.rate`, `tail.rate` | the `BusLane` total, verbatim |
 | `bus/output_merger.rs` | 9 | `total_rate` | the merger cascade's total, stamped on **every** tile it emits — input limbs, south columns, splitters, and pass-through belts for *uninvolved* columns |
-| `bus/row_rotation.rs` | 2 | `edge.rate` | rotation-graph edge total |
 | `blueprint_parser.rs`, `sat.rs` | 2 | `None` | never stamped |
 | **`bus/placer.rs:1543`** | **1 (mutation)** | `f.rate * count` | **the row's aggregate for that item**, written onto every row entity carrying it |
 | **`bus/trunk_renderer.rs:121`** | **1 (mutation)** | the caller's `rate` arg | broadcasts one value across a whole rendered path |
