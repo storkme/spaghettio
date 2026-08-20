@@ -68,6 +68,50 @@ pub enum BalancerClass {
     Balanced,
 }
 
+/// Throughput tier, reported independently of [`BalancerClass`].
+///
+/// [`BalancerClass`] is a single ordered ladder that places `Balanced`
+/// (MX3, uniform composition) *above* `ThroughputUnlimited` (MX2b), and
+/// [`classify_graph`] returns on the first match. A template whose
+/// composition matrix is uniform therefore short-circuits before the
+/// Menger subset checks ever run, and can never be labelled TU no matter
+/// how good it is.
+///
+/// That is not a hypothetical: measured 2026-08-19 across the 68
+/// registered templates, 66 classify `Balanced` and the registry contains
+/// **zero** templates certified `ThroughputUnlimited` — including every
+/// shape whose provenance advertises "Raynquist (TU)".
+///
+/// Balance and throughput are independent properties: a template can mix
+/// every input into every output in equal proportion (MX3) and still fail
+/// to reroute around a blocked output subset (not MX2b). This enum
+/// reports the throughput axis on its own, and is always computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ThroughputTier {
+    /// MX1 — some input subset cannot achieve `min(|S|, n)` flow.
+    Limited,
+    /// MX2a — full flow over every input subset, but some output subset
+    /// falls short. Sufficient for the bus's homogeneous consumer rows.
+    BalancedRate,
+    /// MX2b — full max-flow over input *and* output subsets. The real
+    /// "throughput-unlimited" property.
+    Unlimited,
+}
+
+/// The throughput tier of a graph, computed without reference to its
+/// composition matrix — so it is available even for templates whose
+/// composition solve is [`ClassifyError::Singular`].
+pub fn throughput_tier(graph: &SplitterGraph) -> ThroughputTier {
+    let (m, n) = (graph.n_inputs, graph.n_outputs);
+    if check_input_subsets(graph, m, n).is_some() {
+        ThroughputTier::Limited
+    } else if check_output_subsets(graph, m, n).is_some() {
+        ThroughputTier::BalancedRate
+    } else {
+        ThroughputTier::Unlimited
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ClassifyError {
     /// Belt walk fell off the template footprint.
@@ -106,6 +150,9 @@ pub enum Mx2Direction {
 #[derive(Debug, Clone)]
 pub struct ClassificationReport {
     pub class: BalancerClass,
+    /// Throughput tier, computed independently of `class` — see
+    /// [`ThroughputTier`] for why `class` alone cannot express it.
+    pub throughput: ThroughputTier,
     /// `composition[output_idx][input_idx]` = fraction of input k that
     /// reaches output j under the saturated 50/50 splitter model.
     pub composition: Vec<Vec<f64>>,
@@ -321,6 +368,24 @@ pub fn classify_graph(graph: &SplitterGraph) -> Result<ClassificationReport, Cla
     let m = graph.n_inputs;
     let n = graph.n_outputs;
 
+    // Run the Menger checks unconditionally. `class` still returns on its
+    // first match below (unchanged, so the pins that read it are stable),
+    // but the throughput axis is independent of balance and must not be
+    // hidden by an MX3 short-circuit — see `ThroughputTier`.
+    let mx2a_counterexample = check_input_subsets(graph, m, n);
+    let mx2b_counterexample = if mx2a_counterexample.is_none() {
+        check_output_subsets(graph, m, n)
+    } else {
+        None
+    };
+    let throughput = if mx2a_counterexample.is_some() {
+        ThroughputTier::Limited
+    } else if mx2b_counterexample.is_some() {
+        ThroughputTier::BalancedRate
+    } else {
+        ThroughputTier::Unlimited
+    };
+
     let target = 1.0 / n as f64;
     let is_mx3 = composition
         .iter()
@@ -328,21 +393,21 @@ pub fn classify_graph(graph: &SplitterGraph) -> Result<ClassificationReport, Cla
     if is_mx3 {
         return Ok(ClassificationReport {
             class: BalancerClass::Balanced,
+            throughput,
             composition,
             mx2_counterexample: None,
         });
     }
 
-    let mx2a_counterexample = check_input_subsets(graph, m, n);
     if mx2a_counterexample.is_some() {
         return Ok(ClassificationReport {
             class: BalancerClass::ThroughputLimited,
+            throughput,
             composition,
             mx2_counterexample: mx2a_counterexample,
         });
     }
 
-    let mx2b_counterexample = check_output_subsets(graph, m, n);
     let class = if mx2b_counterexample.is_none() {
         BalancerClass::ThroughputUnlimited
     } else {
@@ -350,6 +415,7 @@ pub fn classify_graph(graph: &SplitterGraph) -> Result<ClassificationReport, Cla
     };
     Ok(ClassificationReport {
         class,
+        throughput,
         composition,
         mx2_counterexample: mx2b_counterexample,
     })
