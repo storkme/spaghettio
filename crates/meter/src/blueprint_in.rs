@@ -97,6 +97,14 @@ pub struct RawEntity {
     pub recipe: Option<String>,
     /// Underground-belt half: `"input"` (entrance) or `"output"` (exit).
     pub io_type: Option<String>,
+    /// Blueprint `mirror` flag (Factorio 2.0, fluid-box machines). Absent
+    /// means false ON THE WIRE — but note the engine exporter never emits
+    /// it for oil-refinery/foundry/cryogenic-plant (their mirror is
+    /// encoded as a tile-identical 180° rotation instead), so absence is
+    /// NOT proof of unmirroredness for those three; `factory.rs` keeps
+    /// its name heuristic for them. Parsed 2026-08-21 (offpath B2) so an
+    /// EXPLICIT community `mirror: true` is honored on any machine.
+    pub mirror: bool,
 }
 
 impl RawEntity {
@@ -137,6 +145,8 @@ struct Entity {
     recipe: Option<String>,
     #[serde(default, rename = "type")]
     io_type: Option<String>,
+    #[serde(default)]
+    mirror: bool,
 }
 
 #[derive(Deserialize)]
@@ -188,6 +198,7 @@ pub fn decode(bp: &str) -> Result<Vec<RawEntity>, String> {
             direction: dir,
             recipe: e.recipe,
             io_type: e.io_type,
+            mirror: e.mirror,
         });
     }
     if !unknown.is_empty() {
@@ -232,6 +243,7 @@ mod tests {
             direction: Dir::North,
             recipe: None,
             io_type: None,
+            mirror: false,
         };
         // Facing north => picks from the tile to the north, drops south.
         assert_eq!(ins.inserter_pickup_tile(1), (10, 9));

@@ -771,3 +771,31 @@ in-fixture AC reads −3.9%).
   fixtures are uncompared (no sim baseline), so this divergence is unverifiable
   and would only matter if a sim-baselined byproduct-loop fixture joined the
   corpus. Revisit then; recorded so the call is explicit. (2026-08-03)
+
+## 2026-08-21 — curve chirality ADJUDICATED (meter cleared); mirror flag parsed
+
+- **Curve chirality**: the domain-physics audit accused this meter's
+  `LaneMap` (no swap variant; every curve lane-for-lane) of being unable
+  to represent the chirality-dependent lane swap `validate/belt_flow.rs`
+  implemented. Adjudicated against game rule B11 (expert-confirmed: lane
+  contents never jump lanes through a turn, either chirality) plus both
+  models' handed seeding conventions: **the meter was CORRECT and is
+  cleared; the swap was core's bug**, fixed in `belt_flow` the same day
+  (its corpus consequence: one fabricated `input-rate-delivery` reading
+  on ac-am2-ore, pin re-blessed 7→6 with position forensics). Both
+  chiralities are now locked by tests on BOTH sides. Model-comparison
+  lesson recorded in `domain-physics-audit-2026-08.md`: a divergence
+  identifies a disagreement, not the guilty side.
+- **Fluid-port mirroring**: the decoder now parses the blueprint
+  `mirror` flag, so an explicit community `mirror: true` is honored on
+  any machine. The three engine-mirrored machines keep the name
+  heuristic: the engine encodes their mirror as a tile-identical 180°
+  rotation and omits the flag, so on the wire an engine-mirrored
+  refinery and a genuinely unmirrored community one are
+  **indistinguishable** — that residual (unmirrored single instance,
+  multi-fluid face) is undecidable from the artifact and stays
+  documented, not guessed.
+- **UG turbo tier**: core's `ug_max_reach` gained an explicit
+  `turbo-transport-belt => 10` arm (was falling to the yellow-4
+  fallback), closing the meter/core tier-table asymmetry for imported
+  blueprints.

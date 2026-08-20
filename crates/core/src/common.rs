@@ -438,6 +438,11 @@ pub fn ug_max_reach(belt: &str) -> u32 {
         "transport-belt" => 4,
         "fast-transport-belt" => 6,
         "express-transport-belt" => 8,
+        // Space Age turbo tier: the engine never PLACES it, but imported
+        // blueprints can carry it and the meter models it — before
+        // 2026-08-21 (offpath B2) it fell through to the yellow fallback,
+        // one data change away from a silent 4-vs-10 misreach.
+        "turbo-transport-belt" => 10,
         _ => 4,
     }
 }

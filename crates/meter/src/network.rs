@@ -661,6 +661,7 @@ mod tests {
             direction: dir,
             recipe: None,
             io_type: None,
+            mirror: false,
         }
     }
 
@@ -672,6 +673,7 @@ mod tests {
             direction: dir,
             recipe: None,
             io_type: None,
+            mirror: false,
         }
     }
 
@@ -815,6 +817,7 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
             direction: dir,
             recipe: None,
             io_type: Some(io.into()),
+            mirror: false,
         }
     }
 
@@ -846,6 +849,25 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
         let net = NetworkBuilder::build(&ents);
         let d = net.tiles[net.tile_at((0, 0)).unwrap()].downstream.unwrap();
         assert_eq!(d.lanes, LaneMap::Straight);
+    }
+
+    /// The OPPOSITE chirality must also be lane-for-lane. Locked
+    /// 2026-08-21 after the domain-physics audit's chirality
+    /// adjudication: this model (identity on curves, both directions)
+    /// was accused of being unable to represent a chirality swap and
+    /// was CLEARED — game rule B11 has no swap, and the swap lived in
+    /// core's belt_flow walker instead (fixed there the same day).
+    /// One test per chirality so neither arm can regress toward the
+    /// walker's old bug.
+    #[test]
+    fn lone_side_feed_opposite_chirality_also_curves() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East), // feeds (1,0)
+            belt("transport-belt", 1, 0, Dir::North), // turns NORTH (other handedness)
+        ];
+        let net = NetworkBuilder::build(&ents);
+        let d = net.tiles[net.tile_at((0, 0)).unwrap()].downstream.unwrap();
+        assert_eq!(d.lanes, LaneMap::Straight, "B11: no chirality-dependent swap");
     }
 
     /// With a back feed present too, the side feeder becomes a genuine
