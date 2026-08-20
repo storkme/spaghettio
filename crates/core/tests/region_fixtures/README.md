@@ -143,7 +143,7 @@ The capture filters `routed_paths`, obstacles, and `placed_entities` to a 20-til
 
 | | `sat_fixtures/` | `region_fixtures/` (this dir) |
 |---|---|---|
-| Target | `solve_crossing_zone_with_stats` (SAT encoder) | `solve_crossing` (full region solver) |
+| Target | `solve_crossing_zone_with_pins` (empty pin set) (SAT encoder) | `solve_crossing` (full region solver) |
 | Tests | boundary handling, UG budget, encoding correctness | growth loop, walker veto, DeferredExit, strategy fallback |
 | Inputs | `CrossingZone` (just boundaries + bbox) | `RegionFixture` (every solve_crossing argument) |
 | Size on disk | small (1–3 KB typical) | larger (10–50 KB typical — routed_paths and placed_entities dominate) |

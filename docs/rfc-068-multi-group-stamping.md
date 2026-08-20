@@ -336,6 +336,53 @@ registry row if it stays within the size norm.
   checklist items; K68-3 calibration note added (an epsilon-scraping
   pass is weak evidence, the reopening cleared the bar 18–22×).
   Tracking: work proceeds under #629.*
+- *2026-08-20 — **P0 EXECUTED AND PASSED** (K68-1; K68-2's unit half).
+  The self-stamp probe (`crates/core/tests/rfc068_p0_selfstamp.rs` — a
+  standing ~4s regression, not a one-shot) adjudicates: on both seed
+  fixtures and all five engine seeds (both band roles —
+  copper-plate/iron-plate/copper-cable intermediates, ec and ac finals),
+  a RowSpan-semantics adapter written in the probe from the STORE ENTRY
+  ALONE (ports + entities + motif — never the native band's row
+  bookkeeping) reproduces the native band's per-item input-belt ys,
+  output ys, port-edge/role admissibility, and the continuous-coverage →
+  `output_feed_x_min = None` branch (guarded: a count-sufficient but
+  left-sparse drop set now REFUSES rather than guesses) — anchored three
+  ways: a fresh `extract_unit` re-extraction (drift isolation); a
+  run-head/exit re-derivation sharing no code with the extractor; and,
+  for input heads, an OUTSIDE-FEEDER anchor — a different METHOD (which
+  belt-family entity feeds the tile from outside the band, valid on the
+  owner-confirmed no-sideload-into-row-inputs invariant), added when
+  #672's round-2 review correctly showed the code-independent anchor
+  still shares the extractor's run-boundary heuristic. Honest residual:
+  belt-out exits have no second method (boundary-scan both times),
+  corroborated by the fragment-side port-edge/direction contract; P1's
+  byte-identical control is the router-facing exit instrument. The
+  feeder anchor's first run also caught a real subtlety worth recording:
+  machine-feeding inserters' direction vectors land on the run and must
+  not count as feeders — feeder ≡ belt-family. Index-preserving
+  substitution
+  (power-wire records reference entity indices) then bijects the band
+  exactly, and the validator verdict is fully parity-checked
+  (issue-list + detail equality). Honest weighting, from the same
+  review: GIVEN the bijection, verdict parity follows necessarily — the
+  parity asserts are harness sanity, and the ADJUDICATING evidence is
+  the adapter-field anchors plus the bijection. Escape hatches: ZERO.
+  Known limits, recorded: the `output_feed_x_min = Some(...)` arm is
+  dead code on engine seeds (P2's donors exercise it under meter/sim);
+  schedule-INDEX equivalence vs the native RowSpan vector is P1's
+  byte-identical control (per-item ys are anchored; index positions are
+  not observable from a `LayoutResult`); the role predicate mirrors
+  `place_rows`' `is_final` exactly (external AND not internally
+  consumed, voiders excluded) though no current seed exercises the
+  dual-purpose class. One probe-harness bug (not a contract escape
+  hatch) found en route: judging run flow by per-tile direction refuses
+  real runs containing corner/UG tiles; the RFC's port-EDGE criterion
+  is the correct test and is what the probe implements. Context:
+  executed on the owner's resume-vs-kill check (2026-08-20) after the
+  campaign sat 7 days idle; the off-path audit
+  (docs/offpath-code-followups.md) had queued ~3.7k lines of this
+  campaign's entry-path plumbing behind exactly this gate. **P1 is
+  unblocked.***
 - *2026-08-13 — third review round, verdict "no blocker/major": three
   minors absorbed — the relocation distinction now claimed against the
   three relocation deaths specifically (wide-row splitting and folding

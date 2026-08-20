@@ -298,8 +298,8 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   A focused test asserts this. (The style example this line originally cited,
   `compact_layout_option_is_explicit_and_validated`, was deleted 2026-08-14
   along with `compact_layout` itself — #632 A2; `rfc058_band_packing_premise_holds`
-  in `cell_composition.rs`, this RFC's own surviving CI guard, is the
-  in-tree pattern to follow now.)
+  in `cell_composition.rs`, was this RFC's surviving CI guard until the
+  2026-08-20 deletion — see the final decision-log entry.)
 - **Per-fixture validation parity**, reported **per issue with a position**,
   never as a count in prose — `docs/validator-reporting.md` records nine
   instances of that failure mode, one of which concealed a total failure in
@@ -803,3 +803,19 @@ clears. Rationale in the decision log.
   (self-contained by design) — with the parity test and the guard holding
   them together; consolidation would couple the oracle to the thing it
   checks.
+
+- *2026-08-20 — DELETED FROM TREE (owner call, offpath-code-followups
+  Tier 2, PR pending): the flag-gated `bus::bands` builder, its
+  `band_packing`/`band_pack_selection` `LayoutOptions` seam, the
+  `BandPackingPlanned`/`BandPackingRefused` trace events, the
+  `rfc064_packed_router.rs` gates, and the RFC-058/RFC-064-P3 probe
+  section in `cell_composition.rs` (~4.4k lines total). Rationale: the
+  2026-07-31 close-out kept the builder as "the reproducible record",
+  and all three consumers subsequently arranged for it — this RFC's own
+  phase 4, RFC-063 Phase C, RFC-064 Phase 3 — have since run and
+  concluded/failed, so the 2026-08-20 golden-path audit put it to the
+  owner, who extended the #632 A2 precedent (which deleted the sibling
+  retracted spike `bus::compaction` outright). THIS decision log is now
+  the falsification record; the KC1 numbers, phase verdicts, and the
+  code itself remain recoverable from git history at this entry's
+  date.*

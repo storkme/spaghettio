@@ -13,7 +13,7 @@
 
 use spaghettio_core::bus::junction_cost::solution_cost;
 use spaghettio_core::fixture::{build_zone, Fixture};
-use spaghettio_core::sat::solve_crossing_zone_with_stats;
+use spaghettio_core::sat::solve_crossing_zone_with_pins;
 use std::path::Path;
 
 #[test]
@@ -68,8 +68,12 @@ fn sat_fixtures() {
         let zone = build_zone(&fixture);
         let belt_name: &str = &fixture.belt_tier;
 
+        // Empty pin set ≡ the deleted legacy `solve_crossing_zone_with_stats`
+        // wrapper (offpath Tier 1, 2026-08-20) — the identity the sat_pins
+        // suite itself asserts; the pins entry is also the production
+        // (WASM re-solve) path, so fixtures now exercise the live API.
         let (result, _stats) =
-            solve_crossing_zone_with_stats(&zone, fixture.max_reach, belt_name, None);
+            solve_crossing_zone_with_pins(&zone, &[], fixture.max_reach, belt_name, None);
 
         match fixture.expected.mode.as_str() {
             "solve" => match result {

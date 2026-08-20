@@ -511,10 +511,6 @@ impl DecompositionCandidate for ModuleSizeSplit {
             // Inert at this depth (run_layout_with_retry does not
             // re-enter the search); carried for faithfulness.
             horizontal_candidate: opts.horizontal_candidate,
-            // The flag-gated RFC-058 plan is emitted by the native pass,
-            // not re-emitted by every candidate variant's inner run.
-            band_packing: false,
-            band_pack_selection: None,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
@@ -1311,7 +1307,7 @@ pub fn select_best_decomposition(
             // artifacts across two suites (stacking per-tile audits,
             // cell registry hashes, EC fixtures). Horizontal displaces
             // native only where native has issues to fix; clean layouts
-            // stay bit-identical. Revisit alongside RFC-058 packing
+            // stay bit-identical. Revisit if a future packing workstream reopens (RFC-058 deleted 2026-08-20)
             // (RFC-060 decision log, 2026-07-30).
             (hs_score.accepted && strictly_better_issues).then_some(H_IDX)
         });

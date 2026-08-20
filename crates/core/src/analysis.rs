@@ -645,12 +645,9 @@ pub struct NamedAnalysis {
     pub analysis: BlueprintAnalysis,
 }
 
-/// Parse a blueprint string and analyze it in one step.
-pub fn analyze_blueprint_string(bp: &str) -> Result<(LayoutResult, BlueprintAnalysis), String> {
-    let layout = blueprint_parser::parse_blueprint_string(bp)?;
-    let analysis = analyze(&layout);
-    Ok((layout, analysis))
-}
+// (The singular analyze_blueprint_string wrapper was deleted 2026-08-20,
+// offpath Tier 1 — mining-cli, the only production consumer, calls the
+// `_any` form exclusively for book support.)
 
 /// Parse a blueprint string (single or book) and analyze all blueprints.
 pub fn analyze_blueprint_string_any(bp: &str) -> Result<Vec<NamedAnalysis>, String> {
@@ -748,7 +745,7 @@ mod tests {
     fn round_trip_analysis() {
         let layout = make_test_layout();
         let bp = blueprint::export(&layout, "test");
-        let (_, analysis) = analyze_blueprint_string(&bp).unwrap();
+        let analysis = analyze_blueprint_string_any(&bp).unwrap().remove(0).analysis;
         assert_eq!(analysis.machine_count, 2);
         assert!(analysis.final_products.contains(&"iron-gear-wheel".to_string()));
     }

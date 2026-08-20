@@ -28,7 +28,10 @@
 //! - [`candidate_runner`] — RFC-064 P2b: general produce→transform→verdict→rank loop for post-layout candidate evaluation (`run_candidate_field`; the celldb campaign's entry point)
 
 pub mod balancer;
-pub mod bands;
+// `bands` (RFC-058's flag-gated band-packing builder, kept post-kill as
+// the falsification record) was deleted 2026-08-20 — owner extended the
+// #632 A2 precedent (offpath-code-followups Tier 2); the record lives in
+// RFC-058's decision log.
 pub mod cells;
 pub mod balancer_classify;
 pub mod balancer_generate;
