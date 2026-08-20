@@ -358,8 +358,16 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
     // The asymmetry is intended — analysis here is transient and re-runnable,
     // while an import bakes a permanently wrong template into the library —
     // and it is noted on both sides so the divergence reads as a decision
-    // rather than an inconsistency. Note the shared half: both treat a
-    // major of 0 as a REAL major (pre-1.0 Factorio), not as a missing one.
+    // rather than an inconsistency.
+    //
+    // They agree on a NON-ZERO version whose major is 0 — Factorio 0.x —
+    // which both read as a real pre-1.0 version and therefore 8-way. They
+    // do NOT agree on the packed-0 sentinel, which is the boundary case:
+    // this function maps it to `None` and falls toward modern/16-way, while
+    // the importer refuses. An earlier version of this comment called the
+    // major-0 handling a "shared half" without excluding packed-0, which
+    // overstated the agreement at exactly the point the divergence is
+    // about (#664 review).
     let is_legacy = matches!(blueprint_major_version(bp_data.version), Some(major) if major < 2);
     let mut entities: Vec<PlacedEntity> = Vec::with_capacity(bp_data.entities.len());
     // entity_number (explicit, else positional 1-based) → 0-based index in
