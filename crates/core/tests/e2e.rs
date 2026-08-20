@@ -2275,7 +2275,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
 /// which is the name #652's comments refer to.)
 #[test]
 #[ntest::timeout(300000)]
-fn tier4_ac7_duty06_lays_out_clean() {
+fn tier4_ac7_duty06_has_no_severed_connections() {
     use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, RowLayout};
 
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "water", "crude-oil"]
@@ -2369,10 +2369,20 @@ fn tier4_ac7_duty06_lays_out_clean() {
     };
     let errors: Vec<&ValidationIssue> =
         issues.iter().filter(|i| i.severity == Severity::Error).collect();
-    // The whole-fixture pin. Deliberately NOT scoped to a category:
+    // The whole-fixture ERROR pin. Deliberately NOT scoped to a category:
     // every previous version of this test tolerated some class it had
     // decided was out of scope, and the balancer spill hid inside that
     // tolerance for a full campaign round. Zero means zero.
+    //
+    // WHAT ZERO ERRORS DOES NOT MEAN (read this before citing the test):
+    // this fixture is NOT healthy. It sims at 64.4% of plan (4.51/7.00,
+    // converged, kit-clean, 2026-08-17) and carries input-rate-delivery
+    // warnings including SIX belts whose modelled delivery is 0.0/s. Those
+    // belts are physically connected — each was walked 159-195 tiles
+    // upstream to a real source — so they are a provisioning deficit
+    // (RFC-069 / #519 territory), not a routing one, and nothing in this
+    // test touches them. The name says what it pins: no SEVERED
+    // connections. It does not say the layout works.
     assert!(
         errors.is_empty(),
         "ac7-HS duty-0.6 shipped {} errors (expected 0). If a balancer \
@@ -2381,6 +2391,22 @@ fn tier4_ac7_duty06_lays_out_clean() {
          reservation first: {:#?}",
         errors.len(),
         errors.iter().take(12).collect::<Vec<_>>()
+    );
+
+    // Anti-gospel guard. The fixture's KNOWN deficiency must stay visible,
+    // so that a future reader cannot mistake the zero above for health and
+    // so that anyone who genuinely fixes delivery has to come here and say
+    // so deliberately rather than silently inheriting a green test.
+    let ird = issues
+        .iter()
+        .filter(|i| i.category == "input-rate-delivery")
+        .count();
+    assert!(
+        ird > 0,
+        "ac7-HS duty-0.6 reports no input-rate-delivery warnings — it had 14, \
+         including six belts at 0.0/s, against a 64.4%-of-plan sim. If that is \
+         genuinely fixed this is GOOD NEWS: re-measure the fixture, update the \
+         comment above, and re-point this guard. Do not just delete it."
     );
 }
 
