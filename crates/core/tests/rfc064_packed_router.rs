@@ -202,4 +202,12 @@ fn packed_selected_layout_preserves_planning_metadata_and_wire_mode() {
 // The two RFC-064 rotation-aware tests that closed this file were deleted
 // 2026-08-20 with `bus::row_rotation` itself (offpath-code-followups Tier 1);
 // the exhaustive-search refusal they pinned is recorded in RFC-064's
-// decision log.
+// decision log. The pinned coordinates, preserved here so the record is
+// reconstructible without git archaeology: selected member = rotation mask
+// (1<<2)|(1<<4)|(1<<7) (rows iron-plate, transport-belt, logistic-science-
+// pack), gap 6, target_width 67, HeightDescending, route_priority
+// iron-gear-wheel — retracted at 18 validation warnings (0 Errors); full
+// search = "no shape-clearing, zero-issue, transit-measurable candidate
+// among 99 structural plans / 1089 route orders" (46 routed, 46
+// validation-rejected, 0 transit-rejected) on logistic-science-pack@2/s
+// from ores, AM2.
