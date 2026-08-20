@@ -136,9 +136,16 @@ const SUBSET_ENUM_MAX: usize = 16;
 /// composition solve is [`ClassifyError::Singular`].
 pub fn throughput_tier(graph: &SplitterGraph) -> ThroughputTier {
     let (m, n) = (graph.n_inputs, graph.n_outputs);
-    if m > SUBSET_ENUM_MAX || n > SUBSET_ENUM_MAX {
-        return ThroughputTier::Unknown;
-    }
+    // NO early return here (#664-era round 4). An `||` gate used to sit above
+    // this and short-circuit before the delegation below — so the per-side
+    // semantics lived in `throughput_tier_from` while this surface still
+    // answered `Unknown` whenever EITHER side was oversized, and the two
+    // public surfaces disagreed on the same graph. The comment claiming they
+    // "cannot drift" was false precisely because of that gate.
+    //
+    // Both subset helpers bail cheaply on size and return `None`, so calling
+    // them unconditionally costs nothing; `throughput_tier_from` is the one
+    // place that decides what a `None` means on each side.
     let mx2a = check_input_subsets(graph, m, n);
     let mx2b = if mx2a.is_none() {
         check_output_subsets(graph, m, n)
@@ -1367,6 +1374,47 @@ mod tests {
             }
             other => panic!("expected Unanalysable, got {other:?}"),
         }
+    }
+
+    /// The two public surfaces must agree on an ASYMMETRIC graph — the case
+    /// that exposed the `||` gate in `throughput_tier`, which the previous
+    /// per-side test missed by calling `throughput_tier_from` directly and
+    /// never the free function.
+    #[test]
+    fn both_surfaces_agree_when_only_one_side_is_oversized() {
+        let n_big = SUBSET_ENUM_MAX + 4;
+        // m within bound, n far outside it, AND a genuine input-side
+        // counterexample: both inputs funnel into output 0, so subset {0,1}
+        // cannot achieve min(2, n) = 2.
+        //
+        // The counterexample is the whole point. A straight-through graph
+        // here proves nothing — both surfaces answer `Unknown` for the
+        // output side and agree trivially, which is how the first version of
+        // this test passed with the `||` gate still in place. Positive
+        // evidence on the IN-BOUND side is what makes the gate observable:
+        // per-side semantics say `Limited`, the gate says `Unknown`.
+        let graph = SplitterGraph {
+            n_inputs: 2,
+            n_outputs: n_big,
+            n_splitters: 0,
+            edges: vec![
+                (NodeId::InputPort(0), NodeId::OutputPort(0)),
+                (NodeId::InputPort(1), NodeId::OutputPort(0)),
+            ],
+        };
+
+        assert_eq!(
+            throughput_tier(&graph),
+            ThroughputTier::Limited,
+            "an input counterexample on the in-bound side is definitive; the \
+             free function must not discard it because the OTHER side is \
+             oversized"
+        );
+        assert_eq!(
+            throughput_tier(&graph),
+            throughput_tier_from(2, n_big, &check_input_subsets(&graph, 2, n_big), &None),
+            "the free function and the shared core must not drift"
+        );
     }
 
     /// The bound is PER-SIDE. An input check that ran and found a
