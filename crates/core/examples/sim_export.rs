@@ -31,6 +31,7 @@
 //!   --belt <entity>        max belt tier (default: engine picks by rate)
 //!   --row-layout <kind>    native (default) | horizontal-stack
 //!   --strategy <kind>      pooled (default) | partitioned-decomposed
+//!   --duty <0..1>          planning duty (default 1.0; <1 needs --belt)
 //!   --quality <name>       normal|uncommon|rare|epic|legendary (default normal)
 //!   --stacking <1..4>      belt stacking (default 1)
 //!   --research-productivity <recipe=bonus,...>   declared research
@@ -488,32 +489,40 @@ mod tests {
         }
     }
 
-    /// Every flag that reaches `LayoutOptions` or the solve must be in
-    /// `AXIS_FLAGS`. This is the one place the list can go stale, so it is
-    /// pinned against the usage text rather than left to review.
+    /// `AXIS_FLAGS` and the documented flag list must agree, BOTH ways.
     ///
-    /// `--label` and `--out` are excluded deliberately: they name the output,
-    /// they do not change it.
+    /// One direction catches "a new axis was added and forgotten", which is
+    /// the failure that produced five review rounds. The other catches the
+    /// hole this test itself shipped with: `--duty` was in `AXIS_FLAGS` but
+    /// missing from the usage block, so the pin could not see it and would
+    /// have passed while `--duty` silently lost its guard.
+    ///
+    /// `--label`, `--out` and `--multi` are excluded deliberately: they name
+    /// or select the output, they do not change it.
     #[test]
-    fn axis_flag_list_covers_every_documented_flag() {
+    fn axis_flag_list_and_docs_agree_both_ways() {
+        const NOT_AXES: &[&str] = &["--label", "--out", "--multi"];
         let doc = include_str!("sim_export.rs");
         let documented: Vec<String> = doc
             .lines()
             .filter(|l| l.trim_start().starts_with("//!   --"))
             .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
-            .filter(|f| f.starts_with("--"))
+            .filter(|f| f.starts_with("--") && !NOT_AXES.contains(&f.as_str()))
             .collect();
         assert!(!documented.is_empty(), "usage block not found");
 
-        const NOT_AXES: &[&str] = &["--label", "--out", "--multi"];
         for f in &documented {
-            if NOT_AXES.contains(&f.as_str()) {
-                continue;
-            }
             assert!(
                 AXIS_FLAGS.contains(&f.as_str()),
                 "{f} is documented but missing from AXIS_FLAGS, so passing it \
                  would not demand a label and two runs could collide"
+            );
+        }
+        for f in AXIS_FLAGS {
+            assert!(
+                documented.iter().any(|d| d == f),
+                "{f} is in AXIS_FLAGS but undocumented, so the check above \
+                 cannot see it — the guard would decay silently"
             );
         }
     }
