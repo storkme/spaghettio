@@ -100,8 +100,13 @@ pub enum ThroughputTier {
     /// MX2b — full max-flow over input *and* output subsets. The real
     /// "throughput-unlimited" property.
     Unlimited,
-    /// Not analysed: the graph exceeds the subset-enumeration bound of 16
-    /// inputs or outputs, so neither Menger check ran (#662 review).
+    /// Not analysed: the Menger check whose answer was NEEDED could not run,
+    /// because its side of the graph exceeds the subset-enumeration bound
+    /// (#662 review).
+    ///
+    /// Per-side, deliberately: an oversized `n` does not invalidate an input
+    /// check that ran and found a counterexample, so that case reports
+    /// `Limited` on the evidence rather than `Unknown`.
     ///
     /// This exists because the alternative is a FALSE CLEARANCE.
     /// `check_input_subsets`/`check_output_subsets` return `None` — "no
@@ -158,19 +163,48 @@ fn throughput_tier_from(
     mx2a: &Option<Mx2Counterexample>,
     mx2b: &Option<Mx2Counterexample>,
 ) -> ThroughputTier {
-    if m > SUBSET_ENUM_MAX || n > SUBSET_ENUM_MAX {
-        ThroughputTier::Unknown
-    } else if mx2a.is_some() {
-        ThroughputTier::Limited
-    } else if mx2b.is_some() {
-        ThroughputTier::BalancedRate
-    } else {
-        ThroughputTier::Unlimited
+    // PER-SIDE, not "either dimension is over the bound" (#662 round 3). The
+    // input check enumerates subsets of the m inputs and the output check of
+    // the n outputs, so they go out of range independently. Gating on either
+    // discarded evidence that had actually been computed: for m <= MAX with a
+    // real input counterexample the verdict is definitively Limited, however
+    // large n is, and reporting Unknown there contradicted `class` — which
+    // says ThroughputLimited on the same object — while the docstring
+    // claimed "neither Menger check ran".
+    let input_ran = m <= SUBSET_ENUM_MAX;
+    let output_ran = n <= SUBSET_ENUM_MAX;
+
+    // A found counterexample is positive evidence and settles it outright.
+    if input_ran && mx2a.is_some() {
+        return ThroughputTier::Limited;
     }
+    // A clean input check is only meaningful if it RAN; `None` from a bailed
+    // check is "not searched", not "searched and found nothing".
+    if !input_ran {
+        return ThroughputTier::Unknown;
+    }
+    if output_ran && mx2b.is_some() {
+        return ThroughputTier::BalancedRate;
+    }
+    if !output_ran {
+        return ThroughputTier::Unknown;
+    }
+    ThroughputTier::Unlimited
 }
 
 #[derive(Debug, Clone)]
 pub enum ClassifyError {
+    /// The graph is too large for the Menger subset enumeration, so no
+    /// throughput verdict is available — and `BalancerClass`'s throughput
+    /// arms would otherwise assert one anyway (#662 round 3).
+    ///
+    /// This is deliberately an ERROR and not a quiet `ThroughputUnlimited`:
+    /// `balancer_generate` and `import_balancer` gate on `class`, so a
+    /// silent optimistic answer here is a false clearance that ships a
+    /// template nothing verified. A caller that only wants the composition
+    /// (which IS computed for such graphs) can use `throughput_tier`, which
+    /// reports `Unknown` rather than failing.
+    Unanalysable { m: usize, n: usize, bound: usize },
     /// Belt walk fell off the template footprint.
     DanglingBelt { from: (i32, i32) },
     /// Underground-belt input has no matching output downstream.
@@ -472,6 +506,19 @@ pub fn classify_graph(graph: &SplitterGraph) -> Result<ClassificationReport, Cla
             throughput,
             composition,
             mx2_counterexample: mx2a_counterexample,
+        });
+    }
+
+    // Past this point every remaining `class` arm asserts a THROUGHPUT
+    // property, and if the checks could not run there is nothing behind the
+    // assertion. `Balanced` above is exempt on purpose: it is a composition
+    // verdict, computed independently of the subset checks, and is sound for
+    // a graph of any size.
+    if throughput == ThroughputTier::Unknown {
+        return Err(ClassifyError::Unanalysable {
+            m,
+            n,
+            bound: SUBSET_ENUM_MAX,
         });
     }
 
@@ -1068,6 +1115,12 @@ mod tests {
                 Err(ClassifyError::Overlap { .. }) => overlap += 1,
                 Err(ClassifyError::Malformed(_)) => malformed += 1,
                 Err(ClassifyError::Singular) => singular += 1,
+                // No registered template reaches the enumeration bound
+                // (registry maxes at (10,10)); if one ever does, this must be
+                // a deliberate decision rather than a quiet miscount.
+                Err(ClassifyError::Unanalysable { m, n, bound }) => {
+                    panic!("registered template ({m},{n}) exceeds the subset bound {bound}")
+                }
             }
         }
         assert!(ok > 0, "no templates classified");
@@ -1271,27 +1324,34 @@ mod tests {
         );
     }
 
-    /// An oversized graph must report `Unknown` on BOTH public surfaces.
-    ///
-    /// This is the test the first version of the change was missing, and its
-    /// absence hid a real defect: the bound guard had been put in
-    /// `throughput_tier()` — which has no callers — while `classify_graph`,
-    /// the path everything actually uses, computed the tier inline without
-    /// it. So the false clearance was still being emitted, and the two
-    /// surfaces disagreed for the same graph.
-    #[test]
-    fn oversized_graphs_report_unknown_on_both_surfaces() {
-        // 17 straight-through belts: past SUBSET_ENUM_MAX, and well-formed
-        // enough for the composition solve (it is the identity).
-        let k = SUBSET_ENUM_MAX + 1;
-        let graph = SplitterGraph {
-            n_inputs: k,
-            n_outputs: k,
+    /// Build a straight-through `(m, n)` identity-ish graph of the given
+    /// dimensions: enough structure for the composition solve, with the
+    /// dimensions the subset checks actually gate on.
+    fn straight_through(m: usize, n: usize) -> SplitterGraph {
+        let k = m.min(n);
+        SplitterGraph {
+            n_inputs: m,
+            n_outputs: n,
             n_splitters: 0,
             edges: (0..k)
                 .map(|i| (NodeId::InputPort(i), NodeId::OutputPort(i)))
                 .collect(),
-        };
+        }
+    }
+
+    /// An oversized graph must not be handed an optimistic throughput verdict
+    /// on EITHER surface.
+    ///
+    /// This is the test the first version of the change was missing, and its
+    /// absence hid a real defect twice over: the bound guard first went into
+    /// `throughput_tier()` — which has no callers — while `classify_graph`
+    /// computed the tier inline without it; and then `class` kept asserting a
+    /// throughput property even once `.throughput` said `Unknown`, which is
+    /// the surface `balancer_generate` and `import_balancer` actually gate on.
+    #[test]
+    fn oversized_graphs_are_never_falsely_cleared() {
+        let k = SUBSET_ENUM_MAX + 1;
+        let graph = straight_through(k, k);
 
         assert_eq!(
             throughput_tier(&graph),
@@ -1299,22 +1359,55 @@ mod tests {
             "free function must not certify an unanalysed graph"
         );
 
-        let report = classify_graph(&graph).expect("identity graph classifies");
-        assert_eq!(
-            report.throughput,
-            ThroughputTier::Unknown,
-            "classify_graph is the path import_balancer/balancer_generate use — \
-             it must not report Unlimited for a graph no subset check ran on"
-        );
-
-        // ...and the two must agree, which is the property that failed before.
-        assert_eq!(report.throughput, throughput_tier(&graph));
+        // `class` must REFUSE rather than answer, because every remaining arm
+        // asserts a throughput property nothing verified.
+        match classify_graph(&graph) {
+            Err(ClassifyError::Unanalysable { m, n, bound }) => {
+                assert_eq!((m, n, bound), (k, k, SUBSET_ENUM_MAX));
+            }
+            other => panic!("expected Unanalysable, got {other:?}"),
+        }
     }
 
-    /// A Balanced template that is NOT throughput-unlimited must carry its
-    /// witness — the two axes are reported separately precisely so that
-    /// combination is expressible, and a verdict with its evidence dropped
-    /// is what the #662 review caught on the `is_mx3` return path.
+    /// The bound is PER-SIDE. An input check that ran and found a
+    /// counterexample is definitive however large the other side is, and
+    /// must not be thrown away as `Unknown`.
+    #[test]
+    fn the_enumeration_bound_is_per_side() {
+        // m within bound and a real input counterexample, n far outside it.
+        let mx2a = Some(Mx2Counterexample {
+            direction: Mx2Direction::InputSubset,
+            subset: vec![0],
+            realized: 0,
+            expected: 1,
+        });
+        assert_eq!(
+            throughput_tier_from(2, SUBSET_ENUM_MAX + 5, &mx2a, &None),
+            ThroughputTier::Limited,
+            "an input counterexample is evidence, whatever n is"
+        );
+
+        // No input evidence and the input side is out of range: genuinely
+        // unknown, regardless of what the output side would say.
+        assert_eq!(
+            throughput_tier_from(SUBSET_ENUM_MAX + 1, 2, &None, &None),
+            ThroughputTier::Unknown
+        );
+
+        // Input clean and in range, output side out of range: the clean
+        // input result cannot upgrade to Unlimited on its own.
+        assert_eq!(
+            throughput_tier_from(2, SUBSET_ENUM_MAX + 1, &None, &None),
+            ThroughputTier::Unknown
+        );
+
+        // Both in range and clean: the only case that earns Unlimited.
+        assert_eq!(
+            throughput_tier_from(2, 2, &None, &None),
+            ThroughputTier::Unlimited
+        );
+    }
+
     #[test]
     fn balanced_but_limited_templates_keep_their_counterexample() {
         let mut checked = 0usize;
