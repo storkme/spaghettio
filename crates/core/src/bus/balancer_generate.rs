@@ -12,7 +12,7 @@
 //! returned. A generator bug that produces an MX1 layout fails loudly
 //! (panics in tests; logs in release).
 
-use crate::bus::balancer_classify::{classify_ref, BalancerClass, BalancerTemplateRef};
+use crate::bus::balancer_classify::{classify_ref, BalancerClass, BalancerTemplateRef, ThroughputTier};
 use crate::bus::balancer_library::BalancerTemplateEntity;
 use crate::models::PlacedEntity;
 
@@ -107,6 +107,16 @@ pub fn generate(m: u32, n: u32) -> Option<OwnedTemplate> {
     // Self-verify. A generator bug that yields anything weaker than the
     // intended class is unacceptable.
     let report = classify_ref(candidate.as_ref()).ok()?;
+
+    // Gate on BOTH axes (#662 round 6, 3/3). Gating on `class` alone
+    // reintroduces the conflation this PR exists to remove: `Balanced` is a
+    // COMPOSITION verdict, and a Balanced template can still be
+    // throughput-`Limited` — that is precisely why the two are reported
+    // separately now. Latent today, because only Unlimited atoms reach the
+    // Balanced arm, but "latent" is how the last three defects here started.
+    if report.throughput == ThroughputTier::Limited {
+        return None;
+    }
     match report.class {
         BalancerClass::Balanced
         | BalancerClass::ThroughputUnlimited
@@ -745,6 +755,40 @@ mod service_boundary {
     /// This test exists so that boundary is a pinned fact rather than an
     /// emergent one — the previous change to it was invisible until a
     /// reviewer went looking.
+    /// Why the new `throughput != Limited` gate is latent, asserted rather
+    /// than assumed.
+    ///
+    /// The review's point was that gating on `class` alone would accept a
+    /// `Balanced`-but-`Limited` candidate. That cannot happen today, and
+    /// this is the reason: every shape the generator actually serves
+    /// classifies throughput-clean. If a future atom breaks that, this test
+    /// fails and says so, instead of the gate quietly becoming load-bearing
+    /// in production with no coverage.
+    #[test]
+    fn every_served_shape_is_throughput_clean() {
+        use crate::bus::balancer_classify::{classify_ref, ThroughputTier};
+
+        let mut checked = 0;
+        for m in 1u32..=16 {
+            for n in 1u32..=16 {
+                let Some(tpl) = super::generate(m, n) else { continue };
+                let report = classify_ref(tpl.as_ref()).expect("served shape classifies");
+                assert_ne!(
+                    report.throughput,
+                    ThroughputTier::Limited,
+                    "({m}, {n}) is served but throughput-limited"
+                );
+                assert_ne!(
+                    report.throughput,
+                    ThroughputTier::Unknown,
+                    "({m}, {n}) is served without its throughput ever being measured"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 24, "the served set changed; see the boundary test");
+    }
+
     #[test]
     fn generate_serves_exactly_these_shapes() {
         let mut served = Vec::new();

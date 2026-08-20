@@ -90,7 +90,15 @@ pub enum BalancerClass {
 ///
 /// It is computed for every graph within the subset-enumeration bound and
 /// reports [`ThroughputTier::Unknown`] outside it — see that variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// Deliberately NOT `Ord` (#662 round 6). The three real tiers do form a
+/// ladder, but `Unknown` is not a rung on it — it means "not measured" —
+/// and a derived ordering put it at the TOP, so a future `tier >=
+/// Unlimited` would have read an unanalysed graph as better than a verified
+/// one. That is the same false-clearance shape this enum exists to prevent,
+/// so the ordering is removed rather than reordered: there is no correct
+/// place to rank an absence. Nothing compares tiers today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThroughputTier {
     /// MX1 — some input subset cannot achieve `min(|S|, n)` flow.
     Limited,
@@ -114,7 +122,7 @@ pub enum ThroughputTier {
     /// from having searched and found nothing, so a 20-input community
     /// balancer would report `Unlimited` without a single subset being
     /// tested. No library template reaches this (the registry maxes at
-    /// (10,10)), but `throughput_tier` is public and `import_balancer` can
+    /// (1,10)/(10,1)), but `throughput_tier` is public and `import_balancer` can
     /// be pointed at anything.
     ///
     /// [`BalancerClass`] does NOT diverge here: `classify_graph` refuses an
@@ -132,7 +140,10 @@ pub enum ThroughputTier {
 
 /// Largest input/output count the Menger subset checks will enumerate.
 /// Both walk every subset (`2^k` masks over a `u64`), so this bounds work
-/// and keeps the shift well-defined. The registry maxes at (10,10); the
+/// and keeps the shift well-defined. No registered shape has a side above
+/// 10 — the largest are (1,10), (10,1) and (9,3), and (10,10) is NOT
+/// registered (#662 round 6: "maxes at (10,10)" read as a shape when it was
+/// only a per-axis maximum); the
 /// bound exists for arbitrary imported graphs.
 const SUBSET_ENUM_MAX: usize = 16;
 
@@ -202,6 +213,17 @@ fn throughput_tier_from(
     }
     // A clean input check is only meaningful if it RAN; `None` from a bailed
     // check is "not searched", not "searched and found nothing".
+    //
+    // This bail sits ABOVE the mx2b arm on purpose, and the asymmetry with
+    // the input rule above is not an oversight (#662 round 6 asked for it to
+    // be made symmetric). Evidence of the WORST tier is definitive: an input
+    // counterexample proves `Limited`, and nothing found later can make a
+    // graph better than its worst witness. Evidence of a MIDDLE tier is not:
+    // `mx2b` bounds the graph above by `BalancedRate`, but an unrun input
+    // check could still be hiding a counterexample that makes it `Limited`.
+    // Returning `BalancedRate` on output evidence alone would therefore
+    // assert a tier we have not earned — a false clearance of exactly the
+    // kind this function exists to refuse, just one rung further down.
     if !input_ran {
         return ThroughputTier::Unknown;
     }
@@ -223,9 +245,16 @@ pub enum ClassifyError {
     /// This is deliberately an ERROR and not a quiet `ThroughputUnlimited`:
     /// `balancer_generate` and `import_balancer` gate on `class`, so a
     /// silent optimistic answer here is a false clearance that ships a
-    /// template nothing verified. A caller that only wants the composition
-    /// (which IS computed for such graphs) can use `throughput_tier`, which
-    /// reports `Unknown` rather than failing.
+    /// template nothing verified. A caller that wants the throughput axis
+    /// alone can use `throughput_tier`, which reports `Unknown` rather than
+    /// failing.
+    ///
+    /// The composition matrix IS computed before this refusal, but it is
+    /// not reachable once we return `Err`: `throughput_tier` yields only a
+    /// tier and `compute_composition_matrix` is private. An earlier draft
+    /// of this comment offered `throughput_tier` as the way to retrieve the
+    /// composition, which it has never been (#662 round 6). If a caller
+    /// ever needs it, that wants a real accessor, not a rewording.
     Unanalysable { m: usize, n: usize, bound: usize },
     /// Belt walk fell off the template footprint.
     DanglingBelt { from: (i32, i32) },
@@ -1146,7 +1175,7 @@ mod tests {
                 Err(ClassifyError::Malformed(_)) => malformed += 1,
                 Err(ClassifyError::Singular) => singular += 1,
                 // No registered template reaches the enumeration bound
-                // (registry maxes at (10,10)); if one ever does, this must be
+                // (no registered shape has a side above 10); if one ever does, this must be
                 // a deliberate decision rather than a quiet miscount.
                 Err(ClassifyError::Unanalysable { m, n, bound }) => {
                     panic!("registered template ({m},{n}) exceeds the subset bound {bound}")
