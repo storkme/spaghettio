@@ -742,7 +742,7 @@ through the bar-tightening rule in kill criterion 1.
 
   **Method.** No new packing code was written. This spike reuses RFC-058's
   own phase-4 real-planner builder (`bus::bands`, gated by
-  `LayoutOptions.band_packing`, in-tree and frozen since RFC-058's
+  `LayoutOptions.band_packing` (DELETED from tree 2026-08-20 with bus::bands — offpath Tier 2; git history at that date), frozen since RFC-058's
   2026-07-31 close-out) unmodified, and reuses `probe_packed_kc1_real_planner`'s
   exact structure (RFC-058's own real-planner KC1 re-measure) with one
   change: `direct_insertion: DirectInsertion::Forced` in place of `Off`, on

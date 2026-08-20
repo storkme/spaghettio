@@ -1131,12 +1131,10 @@ mod tests {
     ///
     /// `compatible` returned `carries.is_none_or(...)`, so a tile with no
     /// `carries` was a universal shortcut: usable by any item, in both the
-    /// solid and fluid graphs. That is not hypothetical on this path —
-    /// `bands.rs` stamps band belt rows with
-    /// `carries: tag_items.then(...)` where `tag_items =
-    /// explicit_selection.is_some()`, so the **legacy RFC-058 `None` path
-    /// leaves every band belt row unlabelled**, and the metric would route
-    /// every net through every row.
+    /// solid and fluid graphs. (The concrete producer of unlabelled rows
+    /// this doc once cited — `bands.rs`'s legacy `None` path — was deleted
+    /// 2026-08-20 with RFC-058's builder; the property this test pins is
+    /// general and stands on its own.)
     ///
     /// A decision-log entry previously downgraded this to "inert, 0 of 1889
     /// belt-ish entities unlabelled". That census covered the six *recorded*

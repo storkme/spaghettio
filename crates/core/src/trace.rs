@@ -699,32 +699,6 @@ pub enum TraceEvent {
         recipes: Vec<String>,
     },
 
-    /// RFC-058 phase 2 (flag-gated, default off): the band packer planned
-    /// a 2D arrangement for the placer's row bands. Positions land HERE
-    /// and nowhere else — nothing consumes them yet, so this event is the
-    /// phase-2 deliverable and the diagnosable record of what the packer
-    /// would do. `band_rects` is the placer-native extraction (phase 1);
-    /// `positions` is index-aligned with it.
-    BandPackingPlanned {
-        /// As-placed (x, y, w, h) per band, extraction order.
-        band_rects: Vec<(i32, i32, i32, i32)>,
-        control_w: i32,
-        control_h: i32,
-        packed_w: i32,
-        packed_h: i32,
-        /// Achieved aspect in tenths — integral, like the fold search score.
-        aspect10: i64,
-        /// Planned packed origin per band, index-aligned with `band_rects`.
-        positions: Vec<(i32, i32)>,
-    },
-
-    /// RFC-058 phase 2: the packer ran and refused — too few bands, or a
-    /// width-dominant band no swept target width fits under the aspect cap.
-    BandPackingRefused {
-        bands: usize,
-        widest_band: i32,
-        reason: String,
-    },
 
     /// The reactive power-repair pass (RFC `docs/rfc-power-reservation.md`
     /// Phase 3a-ii / 3b) re-ran the full pipeline with widened substation bands,
