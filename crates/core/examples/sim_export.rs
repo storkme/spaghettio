@@ -39,7 +39,8 @@
 //!   --inserter-cap <n>     inserter capacity level (default: engine default)
 //!   --inputs a,b,c         raw inputs (default: the six-ore set)
 //!   --label <name>         output subdirectory + manifest label
-//!   --force                overwrite an existing <out>/<label>/bp.txt
+//!   --force                regenerate over an existing <out>/<label>/
+//!                          (NOT needed for a fresh --label; only for reusing one)
 //!                          REQUIRED whenever any layout-changing flag is used
 //!   --out <dir>            parent output dir (default $SIM_PROBE_OUT or /tmp)
 //! ```
@@ -381,6 +382,47 @@ fn main() {
     }
     let label = label.unwrap_or_else(|| default_label(&targets));
 
+    // The label guard is necessary but NOT sufficient (#661 review, major).
+    // It reasons about flag PRESENCE, so it cannot separate two runs that
+    // pass the same axis with different VALUES under one `--label` —
+    // `--strategy pd --label x` then `--strategy pooled --label x` both
+    // satisfy it, and the second silently overwrote the first. That is the
+    // original wrong-A/B bug, reachable through the guard added to prevent
+    // it. Presence is knowable at parse time; artifact identity is not, so
+    // the second half of the invariant is enforced against the filesystem.
+    //
+    // Checked HERE, before the solve, and not at the write (#661 round 7,
+    // 3/3): everything between is minutes of layout and validation, and a
+    // refusal the user could have been given immediately is a bad trade for
+    // a `Path::exists` call. Nothing between here and the write can change
+    // the answer — the paths depend only on `out` and `label`, both already
+    // final.
+    //
+    // Both artifacts count, not just `bp.txt`: an interrupted earlier run
+    // can leave a directory holding only `manifest-real.json`, and
+    // overwriting that is the same silent loss (#661 round 7).
+    {
+        let dir = format!("{out}/{label}");
+        let existing: Vec<String> = ["bp.txt", "manifest-real.json"]
+            .iter()
+            .map(|f| format!("{dir}/{f}"))
+            .filter(|p| std::path::Path::new(p).exists())
+            .collect();
+        if !force && !existing.is_empty() {
+            eprintln!(
+                "error: {} already {} — refusing to overwrite.\n\
+                 \n\
+                 A previous run wrote this label. If that run used different \
+                 flags, overwriting it is the silent wrong-A/B this tool exists \
+                 to avoid; give this run its own --label. If you are \
+                 deliberately regenerating the same configuration, pass --force.",
+                existing.join(" and "),
+                if existing.len() == 1 { "exists" } else { "exist" }
+            );
+            std::process::exit(2);
+        }
+    }
+
     let input_set: FxHashSet<String> = inputs.iter().cloned().collect();
 
     // RFC-062 Phase 3: always the multi-target entry point, even for N=1
@@ -453,27 +495,6 @@ fn main() {
     let dir = format!("{out}/{label}");
     let bp_path = format!("{dir}/bp.txt");
     let mf_path = format!("{dir}/manifest-real.json");
-
-    // The label guard is necessary but NOT sufficient (#661 review, major).
-    // It reasons about flag PRESENCE, so it cannot separate two runs that
-    // pass the same axis with different values under one `--label` —
-    // `--strategy pd --label x` then `--strategy pooled --label x` both
-    // satisfy it and the second silently overwrote the first. That is the
-    // original wrong-A/B bug, reachable through the guard added to prevent
-    // it. Presence is knowable at parse time; artifact identity is only
-    // knowable here, so the second half of the invariant belongs at the
-    // write.
-    if !force && std::path::Path::new(&bp_path).exists() {
-        eprintln!(
-            "error: {bp_path} already exists — refusing to overwrite it.\n\
-             \n\
-             A previous run wrote this label. If that run used different flags, \
-             overwriting it is the silent wrong-A/B this tool exists to avoid; \
-             give this run its own --label. If you are deliberately \
-             regenerating the same configuration, pass --force."
-        );
-        std::process::exit(1);
-    }
 
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
         eprintln!("cannot create {dir}: {e}");
