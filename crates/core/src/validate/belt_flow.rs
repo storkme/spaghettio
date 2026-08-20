@@ -3201,7 +3201,6 @@ fn lane_transfer(
     if from_dir == to_dir {
         return from_rates;
     }
-    let (fdx, fdy) = dir_to_vec(from_dir);
     let (tdx, tdy) = dir_to_vec(to_dir);
     let behind_to = (to_pos.0 - tdx, to_pos.1 - tdy);
     if from_pos == behind_to {
@@ -3220,12 +3219,16 @@ fn lane_transfer(
             [0.0, total]
         }
     } else {
-        let cross = fdx * tdy - fdy * tdx;
-        if cross > 0 {
-            [from_rates[1], from_rates[0]]
-        } else {
-            [from_rates[0], from_rates[1]]
-        }
+        // B11 (expert-confirmed 2026-08-21): a 90° turn preserves lane
+        // IDENTITY for both chiralities — in this walker's handed indexing
+        // (index 0 seeded from LANE_LEFT) that is lane-for-lane, always.
+        // The previous chirality-dependent swap (cross-product on the
+        // turn direction) contradicted the game rule on exactly one
+        // chirality; it was invisible on the corpus because symmetric
+        // lane rates make a swap a no-op, and was found when the
+        // domain-physics audit's meter-vs-walker comparison was
+        // adjudicated (the meter's identity handling is the correct one).
+        [from_rates[0], from_rates[1]]
     }
 }
 
@@ -4751,6 +4754,45 @@ mod tests {
     // the lane-throughput twin in the other direction) and were deleted
     // with their tests here; belt_structural::tests carries the live
     // coverage.
+
+    // --- lane_transfer: B11 curve chirality (2026-08-21 finding) ---
+
+    /// Rule B11 (factorio-mechanics.md, expert-confirmed 2026-08-21):
+    /// a 90° turn preserves lane IDENTITY for BOTH chiralities — inner
+    /// stays inner, i.e. in this walker's handed indexing (index 0 is
+    /// seeded from LANE_LEFT) a curve is lane-for-lane, never a swap.
+    /// Found by the domain-physics audit's model comparison: the meter's
+    /// curve handling was accused, adjudicated, and CLEARED — this
+    /// walker's chirality-dependent swap was the divergent one, invisible
+    /// on the corpus because symmetric lane rates make a swap a no-op.
+    /// Both chiralities asserted so neither arm can regress silently.
+    #[test]
+    fn lane_transfer_curves_preserve_lanes_both_chiralities() {
+        // North-facing feeder at (0,1) into (0,0): dir_to_vec(North) is
+        // (0,-1), so (0,1) + (0,-1) = (0,0) — a genuine ahead-feed that
+        // renders as a turn (no straight feeder on the target).
+        let asym = [5.0, 0.0];
+        // Chirality 1: North → East.
+        let out_e = lane_transfer(
+            (0, 1),
+            EntityDirection::North,
+            asym,
+            (0, 0),
+            EntityDirection::East,
+            false,
+        );
+        assert_eq!(out_e, asym, "N->E curve must preserve lane identity (B11)");
+        // Chirality 2: North → West.
+        let out_w = lane_transfer(
+            (0, 1),
+            EntityDirection::North,
+            asym,
+            (0, 0),
+            EntityDirection::West,
+            false,
+        );
+        assert_eq!(out_w, asym, "N->W curve must preserve lane identity (B11)");
+    }
 
     // --- check_lane_throughput ---
 
