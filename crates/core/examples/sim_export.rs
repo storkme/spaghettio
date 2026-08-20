@@ -157,8 +157,18 @@ const CONFIG_FILE: &str = ".sim-export-config";
 /// Sorted, so flag order does not matter, and built from the axis flags and
 /// their VALUES — which is the part every previous version of this guard
 /// could not see.
-fn config_fingerprint(axis_args: &[(String, String)]) -> String {
-    let mut pairs: Vec<String> = axis_args.iter().map(|(f, v)| format!("{f}={v}")).collect();
+fn config_fingerprint(targets: &[(String, f64)], axis_args: &[(String, String)]) -> String {
+    // The TARGETS are configuration too (#661 round 11, 3/3). Leaving them
+    // out meant `ec 5 --strategy pd --label x` and `copper-cable 20
+    // --strategy pd --label x` fingerprinted identically, so the second
+    // silently overwrote the first — the same wrong-A/B, in the fourth
+    // direction this guard has been caught from. The artifact depends on
+    // what is being built, not only on how.
+    let mut pairs: Vec<String> = targets
+        .iter()
+        .map(|(item, rate)| format!("target:{item}={rate}"))
+        .collect();
+    pairs.extend(axis_args.iter().map(|(f, v)| format!("{f}={v}")));
     pairs.sort();
     pairs.join("\n")
 }
@@ -454,20 +464,18 @@ fn main() {
     // the answer — the paths depend only on `out` and `label`, both already
     // final.
     //
-    // Both artifacts count, not just `bp.txt`. The justification given in
-    // round 7 — an interrupted run leaving only the manifest — is NOT
-    // producible, since `bp.txt` is written first (#661 review). The real
-    // reason is narrower and still worth it: either file present means the
-    // directory is claimed, and keying on one of two artifacts invites the
-    // write order becoming load-bearing later.
+    // Either artifact present means the directory is claimed. Which one
+    // arrives first is deliberately not load-bearing: this diff put the
+    // config file ahead of both, so an interrupted run leaves its
+    // provenance readable rather than a fixture nobody can attribute.
     //
-    // Scoped to runs with an EXPLICIT --label (#661 round 9). A plain
-    // `sim_export iron-ore 10` re-run derives its label from the target and
-    // writes the same bytes, so refusing it broke a workflow that was fine.
-    // Keying on the axis flags instead — round 8's attempt at that — let
-    // `--label x` with no axis flag overwrite an axis run's fixture, which
-    // is the wrong-A/B this exists to stop.
-    let fingerprint = config_fingerprint(&axis_args);
+    // Applies to EVERY run, explicit label or not. Earlier rounds scoped
+    // this by axis flags and then by label-explicitness; both were proxies
+    // for artifact identity and both leaked. The verdict now comes from
+    // comparing recorded configurations, so no scoping is needed — an
+    // identical re-run is allowed because it IS identical, not because of
+    // how it was invoked.
+    let fingerprint = config_fingerprint(&targets, &axis_args);
     {
         let dir = format!("{out}/{label}");
         let any_artifact = ["bp.txt", "manifest-real.json"]
@@ -683,9 +691,10 @@ mod tests {
     /// wrong from a different direction each time.
     #[test]
     fn overwrite_policy() {
-        let pd = config_fingerprint(&[("--strategy".into(), "pd".into())]);
-        let pooled = config_fingerprint(&[("--strategy".into(), "pooled".into())]);
-        let plain = config_fingerprint(&[]);
+        let ec = vec![("electronic-circuit".to_string(), 5.0)];
+        let pd = config_fingerprint(&ec, &[("--strategy".into(), "pd".into())]);
+        let pooled = config_fingerprint(&ec, &[("--strategy".into(), "pooled".into())]);
+        let plain = config_fingerprint(&ec, &[]);
 
         // Same configuration, so the re-run writes the same bytes.
         assert_eq!(
@@ -711,11 +720,11 @@ mod tests {
         );
 
         // Flag ORDER is not configuration.
-        let a = config_fingerprint(&[
+        let a = config_fingerprint(&ec, &[
             ("--strategy".into(), "pd".into()),
             ("--belt".into(), "fast".into()),
         ]);
-        let b = config_fingerprint(&[
+        let b = config_fingerprint(&ec, &[
             ("--belt".into(), "fast".into()),
             ("--strategy".into(), "pd".into()),
         ]);
@@ -729,6 +738,26 @@ mod tests {
             overwrite_verdict(None, &pd, false, true),
             OverwriteVerdict::UnknownProvenance,
             "a fixture with no recorded config cannot be assumed to match"
+        );
+
+        // The TARGETS are configuration too (#661 round 11, 3/3). Same
+        // flags, same label, different thing being built.
+        let cable = vec![("copper-cable".to_string(), 20.0)];
+        let cable_pd = config_fingerprint(&cable, &[("--strategy".into(), "pd".into())]);
+        assert_ne!(cable_pd, pd, "different targets are different configurations");
+        assert_eq!(
+            overwrite_verdict(Some(&pd), &cable_pd, false, true),
+            OverwriteVerdict::DifferentConfig,
+            "a different target must not overwrite an earlier fixture's directory"
+        );
+
+        // ...including a differing RATE for the same item.
+        let ec_faster = vec![("electronic-circuit".to_string(), 30.0)];
+        let faster_pd = config_fingerprint(&ec_faster, &[("--strategy".into(), "pd".into())]);
+        assert_eq!(
+            overwrite_verdict(Some(&pd), &faster_pd, false, true),
+            OverwriteVerdict::DifferentConfig,
+            "the rate changes the artifact, so it changes the fingerprint"
         );
     }
 
