@@ -320,8 +320,11 @@ pub fn analyze(layout: &LayoutResult) -> BlueprintAnalysis {
             let mut prod = 0.0;
             for mi in &e.items {
                 let eff = common::module_effect(&mi.item);
-                speed += eff.speed * mi.count as f64;
-                prod += eff.productivity * mi.count as f64;
+                // Same quality rule as the machine-internal loop (B1).
+                speed += crate::module_policy::effect_component_scaled(eff.speed, mi.quality)
+                    * mi.count as f64;
+                prod += crate::module_policy::effect_component_scaled(eff.productivity, mi.quality)
+                    * mi.count as f64;
             }
             beacons.push(BeaconInfo {
                 cx,
@@ -362,13 +365,21 @@ pub fn analyze(layout: &LayoutResult) -> BlueprintAnalysis {
             None => continue,
         };
 
-        // Internal module bonuses
+        // Internal module bonuses. Per-module quality scales beneficial
+        // effects (harmful ones are quality-flat) — the same RFC-044 rule
+        // the forward planner applies; this path was quality-blind until
+        // 2026-08-20 (offpath B1) and underestimated quality-module
+        // blueprints.
         let mut speed_bonus = 0.0f64;
         let mut prod_bonus = 0.0f64;
         for mi in &e.items {
             let eff = common::module_effect(&mi.item);
-            speed_bonus += eff.speed * mi.count as f64;
-            prod_bonus += eff.productivity * mi.count as f64;
+            speed_bonus +=
+                crate::module_policy::effect_component_scaled(eff.speed, mi.quality)
+                    * mi.count as f64;
+            prod_bonus +=
+                crate::module_policy::effect_component_scaled(eff.productivity, mi.quality)
+                    * mi.count as f64;
         }
 
         // Beacon bonuses: check which beacons are in range
@@ -818,6 +829,86 @@ mod tests {
             (*gear_rate - 3.15).abs() < 0.1,
             "expected ~3.15/s, got {}",
             gear_rate
+        );
+    }
+
+    /// B1 (offpath campaign, 2026-08-20): module QUALITY must scale
+    /// beneficial effects in the reverse-analysis path exactly as the
+    /// forward planner scales them — this path was quality-blind.
+    /// Discriminating by construction: every expectation below differs
+    /// from the quality-blind value (prod 1.00 vs 0.40; speed 3.50 vs
+    /// 2.00), so the pre-fix code cannot pass this test.
+    #[test]
+    fn module_quality_scales_analysis_effects() {
+        use crate::common::QualityTier;
+        use crate::models::ModuleItem;
+        let machine = |name: &str, x: i32, recipe: &str, items: Vec<ModuleItem>| PlacedEntity {
+            name: name.into(),
+            x,
+            y: 0,
+            direction: EntityDirection::North,
+            recipe: Some(recipe.into()),
+            items,
+            ..Default::default()
+        };
+        let layout = LayoutResult {
+            entities: vec![
+                // 4x legendary productivity-module-3: +0.10 each scales
+                // ×2.5 (level 5) → +0.25 each → prod bonus 1.00. The
+                // −0.15 speed PENALTY is quality-flat → mult
+                // max(0.2, 1 − 0.60) = 0.40.
+                machine(
+                    "assembling-machine-3",
+                    0,
+                    "iron-gear-wheel",
+                    vec![ModuleItem {
+                        item: "productivity-module-3".into(),
+                        count: 4,
+                        quality: Some(QualityTier::Legendary),
+                    }],
+                ),
+                // 2x legendary speed-module-3: +0.50 each scales ×2.5 →
+                // +1.25 each → mult 1 + 2.50 = 3.50.
+                machine(
+                    "assembling-machine-3",
+                    10,
+                    "copper-cable",
+                    vec![ModuleItem {
+                        item: "speed-module-3".into(),
+                        count: 2,
+                        quality: Some(QualityTier::Legendary),
+                    }],
+                ),
+            ],
+            width: 20,
+            height: 10,
+            ..Default::default()
+        };
+        let analysis = analyze(&layout);
+        let gear = analysis
+            .recipe_groups
+            .iter()
+            .find(|g| g.recipe == "iron-gear-wheel")
+            .unwrap();
+        assert!(
+            (gear.productivity_bonus - 1.00).abs() < 0.01,
+            "legendary prod modules must scale: got {}",
+            gear.productivity_bonus
+        );
+        assert!(
+            (gear.effective_speed_multiplier - 0.40).abs() < 0.01,
+            "speed PENALTY must stay quality-flat: got {}",
+            gear.effective_speed_multiplier
+        );
+        let cable = analysis
+            .recipe_groups
+            .iter()
+            .find(|g| g.recipe == "copper-cable")
+            .unwrap();
+        assert!(
+            (cable.effective_speed_multiplier - 3.50).abs() < 0.01,
+            "legendary speed modules must scale: got {}",
+            cable.effective_speed_multiplier
         );
     }
 }
