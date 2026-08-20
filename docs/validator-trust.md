@@ -211,9 +211,7 @@ Severity `E/W` = both emitted, condition-dependent. "Sel" = counts in
    the measured-good arm is also the denser one here. The unguarded
    residue: a config where the measured-BAD arm is denser and the good
    arm's only distinguishing signal is a demoted category — no known
-   instance, but nothing pins its absence; a future anchored re-lift of
-   `inserter-item-throughput` (this hole's own pattern for
-   `input-rate-delivery`) is the durable fix.
+   instance, but nothing pins its absence; the pair was DELETED 2026-08-21 (owner call, offpath item 9, #684); any future re-introduction of an inserter-capacity model must arrive sim-anchored, per this hole's own standard.
 
    **LIFT LANDED (2026-08-07).** `input-rate-delivery` now counts in
    `selection_warning_count`. The exemption's own stated exit condition —
