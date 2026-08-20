@@ -3,9 +3,10 @@
 //! Port of the belt-check functions from `src/validate.py`:
 //! - `check_belt_connectivity`
 //! - `check_belt_flow_path`
-//! - `check_belt_network_topology`
 //! - `check_belt_junctions`
 //! - `check_belt_flow_reachability`
+//!   (`check_belt_network_topology`, the Spaghetti-only member of this
+//!   list, was deleted 2026-08-20 with `LayoutStyle` — offpath Tier 2.)
 //!   Plus underground-belt helpers used by those checks.
 
 use std::collections::VecDeque;

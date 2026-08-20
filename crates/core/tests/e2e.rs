@@ -7349,7 +7349,7 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
         let issues = spaghettio_core::validate::validate(
             l,
             Some(sr),
-            )
+        )
         .unwrap_or_else(|e| e.issues);
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
@@ -7422,7 +7422,7 @@ fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
         let issues = spaghettio_core::validate::validate(
             l,
             Some(sr),
-            )
+        )
         .unwrap_or_else(|e| e.issues);
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
@@ -8565,7 +8565,7 @@ fn di_change_surface_sweep() {
         let issues = spaghettio_core::validate::validate(
             l,
             Some(sr),
-            )
+        )
         .unwrap_or_else(|e| e.issues);
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),

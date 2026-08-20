@@ -1080,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn chemical_plant_with_input_pipe_ok_spaghetti() {
+    fn chemical_plant_with_input_pipe_ok() {
         // plastic-bar has no fluid output so only input check applies
         // chemical-plant at (0,0): input port at (0,-1)
         let lr = layout(vec![
