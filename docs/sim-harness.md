@@ -63,27 +63,23 @@ cargo run --release --example sim_export -- <item> <rate> [flags]
   --out <dir>           parent dir (default $SIM_PROBE_OUT, else /tmp)
 ```
 
-The auto label encodes every **non-default** axis that changes the exported
-artifact — strategy, row layout, duty, belt tier, machine tier, quality,
-stacking, DI mode, claim order, inserter capacity, and a short digest for
-`--inputs` / `--research-productivity`. The label is also the output
-directory, so without this two runs differing only by an axis write to the
-same place and the second silently overwrites the first — a wrong-A/B
-generator, and A/B is what these flags exist for. For example:
+Passing any flag that changes the exported layout — `--strategy`,
+`--row-layout`, `--duty`, `--belt`, `--tier`, `--quality`, `--stacking`,
+`--di`, `--claim`, `--inserter-cap`, `--inputs`,
+`--research-productivity` — **requires an explicit `--label`**, and the tool
+refuses without one.
 
-```
-electronic-circuit-5                  (all defaults)
-electronic-circuit-5-pd               --strategy partitioned-decomposed
-electronic-circuit-5-duty0_6-yellow   --duty 0.6 --belt transport-belt
-electronic-circuit-5-duty0_6-fast     --duty 0.6 --belt fast-transport-belt
-```
+The label is also the output directory, so two runs differing by any of
+those must not share it. They used to: the label was `{item}-{rate}` and
+encoded no configuration, so a second run silently overwrote the first's
+`bp.txt` and `manifest-real.json` — a wrong-A/B generator, in the tool
+whose whole purpose is A/B. Encoding each axis into the name was tried and
+abandoned: it needs every axis enumerated and every engine default stated
+correctly, and five review rounds each found another one wrong. Requiring
+the label makes collisions impossible by construction and consults no
+defaults, so a future default flip cannot invert it.
 
-Default-axis paths are byte-identical to before, and an explicit `--label`
-overrides all of it. Two caveats worth knowing: `--inputs` and
-`--research-productivity` are folded in as a 64-bit FNV-1a digest rather
-than spelled out, and an explicit `--belt` always tags even when the engine
-would have auto-picked that same tier — so it can fork a redundant
-directory, which is the safe direction (never a shared one).
+A run with no axis flags keeps the old `{item}-{rate}` path unchanged.
 
 It writes `<out>/<label>/bp.txt` and `<out>/<label>/manifest-real.json`,
 and prints the ready-to-paste `run` command. Unknown flags are an error

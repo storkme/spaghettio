@@ -38,6 +38,7 @@
 //!   --inserter-cap <n>     inserter capacity level (default: engine default)
 //!   --inputs a,b,c         raw inputs (default: the six-ore set)
 //!   --label <name>         output subdirectory + manifest label
+//!                          REQUIRED whenever any layout-changing flag is used
 //!   --out <dir>            parent output dir (default $SIM_PROBE_OUT or /tmp)
 //! ```
 //!
@@ -60,9 +61,41 @@ use spaghettio_core::common::QualityTier;
 use spaghettio_core::recipe_db::MachinePalette;
 use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
-/// Default crafting machine — the one `--tier` overrides. Named so the
-/// label logic and the parser default cannot drift apart.
+/// Default crafting machine — the one `--tier` overrides.
 const DEFAULT_TIER: &str = "assembling-machine-3";
+
+/// Flags that change the exported artifact, and therefore make the default
+/// `{item}-{rate}` label ambiguous.
+///
+/// The label IS the output directory (`<out>/<label>/`), so two runs that
+/// differ by any of these must not share it. The original bug (#661) was that
+/// the label encoded none of them and the second run silently overwrote the
+/// first's `bp.txt` and `manifest-real.json` — a wrong-A/B generator, in the
+/// tool whose whole purpose is A/B.
+///
+/// Rather than encode each axis into the name — which needs every axis
+/// enumerated and every engine default stated correctly, and which took five
+/// review rounds without converging — passing any of these simply REQUIRES an
+/// explicit `--label`. Collisions become impossible by construction, and the
+/// check consults no defaults, so a future default flip cannot invert it.
+///
+/// Slightly over-strict on purpose: `--strategy pooled` is the default value
+/// and still demands a label. Erring toward "be explicit" costs a flag; erring
+/// the other way silently corrupts a measurement.
+const AXIS_FLAGS: &[&str] = &[
+    "--tier",
+    "--di",
+    "--claim",
+    "--belt",
+    "--row-layout",
+    "--strategy",
+    "--duty",
+    "--quality",
+    "--stacking",
+    "--research-productivity",
+    "--inserter-cap",
+    "--inputs",
+];
 
 const DEFAULT_INPUTS: &[&str] = &[
     "iron-ore",
@@ -96,138 +129,17 @@ fn parse_target_token(tok: &str) -> (String, f64) {
 }
 
 
-/// Every axis that changes the exported artifact, as one value — so the
-/// label logic is a pure function and can be tested (#661 round 3: it was
-/// the PR's entire purpose and had no coverage, which is the same class of
-/// gap that produced the collision in the first place).
-struct LabelAxes<'a> {
-    strategy: LayoutStrategy,
-    row_layout: RowLayout,
-    duty: f64,
-    tier: &'a str,
-    belt: Option<&'a str>,
-    quality: QualityTier,
-    stacking: u8,
-    di: DirectInsertion,
-    claim: Option<&'a DiClaimOrder>,
-    inserter_cap: Option<u8>,
-    inputs: &'a [String],
-    research_productivity: &'a std::collections::BTreeMap<String, f64>,
-}
-
-/// The auto label, which is also the OUTPUT DIRECTORY (`<out>/<label>/`).
+/// Does this invocation need an explicit `--label`?
 ///
-/// Two runs whose artifacts differ must not share it. They did: the label
-/// was `{item}-{rate}` and encoded no configuration at all, so
-/// `--strategy pooled X 5` and `--strategy partitioned-decomposed X 5`
-/// both wrote `<out>/X-5/` and the second silently overwrote the first
-/// (#661). That is a wrong-A/B generator, and A/B is why this binary takes
-/// these flags.
+/// True when any artifact-changing flag was passed. Kept as a pure function
+/// so the rule is testable — the previous design put per-axis default
+/// comparisons inline in `main()`, where nothing exercised them and five
+/// review rounds each found another axis compared against the wrong default.
 ///
-/// Suffixes are emitted only where the value differs from the ENGINE
-/// default — not merely where a flag was passed (#661 round 3) — so
-/// `--inserter-cap 2` and a default run share a directory, because they
-/// produce the same artifact. Default paths stay byte-identical to
-/// pre-#661.
-fn auto_label(base: &str, ax: &LabelAxes<'_>) -> String {
-    // Every "is this at default?" test compares against the ENGINE's own
-    // default, never a literal (#661 round 5). Round 4 fixed only `claim`
-    // this way, after hardcoding `Upstream` inverted the contract when the
-    // real default turned out to be `Downstream`. Every other axis had the
-    // same latent bug: this repo flips defaults on measurement (RFC-051,
-    // RFC-053, RFC-059, RFC-060 all did), and a flip would silently
-    // reintroduce the collision this whole function exists to prevent.
-    //
-    // `LayoutOptions::default()` IS the reference, so the comparison cannot
-    // drift from the thing it is describing.
-    let d = LayoutOptions::default();
-    let mut tags: Vec<String> = Vec::new();
-
-    if ax.strategy != d.strategy {
-        tags.push("pd".to_string());
-    }
-    if ax.row_layout != d.row_layout {
-        tags.push(format!("{:?}", ax.row_layout).to_lowercase());
-    }
-    // Exact float comparison, not epsilon (#661 round 2) and not a formatted
-    // string (round 3): `1.0` never tags, `0.9999999999999999` does.
-    if ax.duty != d.planning_duty {
-        tags.push(format!("duty{}", format!("{}", ax.duty).replace('.', "_")));
-    }
-    if ax.tier != DEFAULT_TIER {
-        tags.push(ax.tier.replace("assembling-machine-", "am").replace('-', ""));
-    }
-    // NOTE the asymmetry, stated because it breaks the "only non-default"
-    // rule on purpose: `max_belt_tier: None` means "engine picks by rate", so
-    // an explicit `--belt` matching what the engine would have picked yields a
-    // byte-identical artifact in a separate directory. That over-forks, which
-    // is the SAFE direction (a redundant dir, never a shared one); resolving
-    // it properly needs the rate-dependent `belt_entity_for_rate`, which the
-    // label does not have. Documented rather than silently tolerated.
-    if ax.belt != d.max_belt_tier.as_deref() {
-        if let Some(b) = ax.belt {
-            tags.push(b.replace("-transport-belt", "").replace("transport-belt", "yellow"));
-        }
-    }
-    if ax.quality != d.quality {
-        tags.push(format!("{:?}", ax.quality).to_lowercase());
-    }
-    if ax.stacking != d.stacking {
-        tags.push(format!("stack{}", ax.stacking));
-    }
-    if ax.di != d.direct_insertion {
-        tags.push(format!("di{:?}", ax.di).to_lowercase());
-    }
-    if let Some(c) = ax.claim {
-        if *c != d.di_claim_order {
-            tags.push(format!("claim{c:?}").to_lowercase());
-        }
-    }
-    if let Some(ic) = ax.inserter_cap {
-        if ic != d.inserter_capacity {
-            tags.push(format!("icap{ic}"));
-        }
-    }
-
-    // List-valued axes, compared and digested as SETS because the solve
-    // consumes `--inputs` as an `FxHashSet` (#661 round 4).
-    let mut listy = String::new();
-    let mut given: Vec<&str> = ax.inputs.iter().map(|s| s.as_str()).collect();
-    given.sort_unstable();
-    given.dedup();
-    let mut default_inputs: Vec<&str> = DEFAULT_INPUTS.to_vec();
-    default_inputs.sort_unstable();
-    let inputs_differ = given != default_inputs;
-    if inputs_differ {
-        listy.push_str(&given.join(","));
-    }
-    for (k, v) in ax.research_productivity {
-        listy.push_str(&format!(";{k}={v}"));
-    }
-    // Keyed on "does it DIFFER", not on "is the digest string non-empty"
-    // (#661 round 5): `--inputs ""` parses to `[""]`, which differs from the
-    // default set but joins to the empty string, so the old test skipped the
-    // tag and dropped the run into the DEFAULT directory — the exact
-    // collision, at the empty edge.
-    if inputs_differ || !ax.research_productivity.is_empty() {
-        // FNV-1a 64-bit (#661 round 5). The 32-bit version could alias two
-        // distinct sets onto one directory, which made the "cannot collide"
-        // claim false; 64 bits makes it true for any realistic number of
-        // fixture configs. Deterministic across runs and platforms, which
-        // `DefaultHasher` explicitly is not.
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in listy.as_bytes() {
-            h ^= *byte as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        tags.push(format!("cfg{h:016x}"));
-    }
-
-    if tags.is_empty() {
-        base.to_string()
-    } else {
-        format!("{base}-{}", tags.join("-"))
-    }
+/// Note what it does NOT take: any value, and any default. It is a question
+/// about the command line, not about the configuration.
+fn label_required(axis_flags_seen: &[String], label: &Option<String>) -> bool {
+    !axis_flags_seen.is_empty() && label.is_none()
 }
 
 fn main() {
@@ -284,6 +196,7 @@ fn main() {
     let mut strategy = LayoutStrategy::default();
     let mut inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
     let mut label: Option<String> = None;
+    let mut axis_flags_seen: Vec<String> = Vec::new();
     let mut out = std::env::var("SIM_PROBE_OUT").unwrap_or_else(|_| "/tmp".to_string());
 
     while i < args.len() {
@@ -292,6 +205,14 @@ fn main() {
                 .cloned()
                 .unwrap_or_else(|| usage(&format!("{} needs a value", args[i])))
         };
+        // Purely SYNTACTIC: was the flag passed? This deliberately does not
+        // look at the VALUE or compare it to any default — see
+        // `AXIS_FLAGS`. Five review rounds went into getting per-axis
+        // default comparisons right and each one found another axis I had
+        // wrong; not consulting a default at all is the fix.
+        if AXIS_FLAGS.contains(&args[i].as_str()) {
+            axis_flags_seen.push(args[i].clone());
+        }
         match args[i].as_str() {
             "--tier" => tier = need(i),
             "--di" => {
@@ -399,30 +320,23 @@ fn main() {
             .collect::<Vec<_>>()
             .join(" + ")
     };
+    // Any axis flag without an explicit label is refused, because the label
+    // is the output directory and `{item}-{rate}` cannot distinguish the runs.
+    if label_required(&axis_flags_seen, &label) {
+        usage(&format!(
+            "{} changes the exported layout, so `--label <name>` is required: \
+             without it this run writes to <out>/{{item}}-{{rate}}/ and silently \
+             overwrites any other run of the same target",
+            axis_flags_seen.join(", ")
+        ));
+    }
     let label = label.unwrap_or_else(|| {
-        let base = targets
+        targets
             .iter()
             .map(|(item, rate)| format!("{item}-{rate}"))
             .collect::<Vec<_>>()
             .join("_")
-            .replace('.', "_");
-        auto_label(
-            &base,
-            &LabelAxes {
-                strategy,
-                row_layout,
-                duty,
-                tier: &tier,
-                belt: belt.as_deref(),
-                quality,
-                stacking,
-                di,
-                claim: claim.as_ref(),
-                inserter_cap,
-                inputs: &inputs,
-                research_productivity: &research_productivity,
-            },
-        )
+            .replace('.', "_")
     });
 
     let input_set: FxHashSet<String> = inputs.iter().cloned().collect();
@@ -553,183 +467,54 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn axes<'a>() -> LabelAxes<'a> {
-        // Every field taken FROM `LayoutOptions::default()` rather than named
-        // (#661 round 5) — a fixture that hardcodes defaults goes stale the
-        // same way the production code did, and then passes anyway.
-        let d = LayoutOptions::default();
-        LabelAxes {
-            strategy: d.strategy,
-            row_layout: d.row_layout,
-            duty: d.planning_duty,
-            tier: DEFAULT_TIER,
-            belt: None,
-            quality: d.quality,
-            stacking: d.stacking,
-            di: d.direct_insertion,
-            claim: None,
-            inserter_cap: None,
-            inputs: &[],
-            research_productivity: &EMPTY_RP,
+    /// The rule: any artifact-changing flag demands an explicit `--label`.
+    #[test]
+    fn axis_flags_require_a_label() {
+        let none: Option<String> = None;
+        let some = Some("ac7hs-duty06-pd".to_string());
+
+        // No axis flags: the `{item}-{rate}` default is unambiguous.
+        assert!(!label_required(&[], &none));
+        assert!(!label_required(&[], &some));
+
+        // Any axis flag without a label is refused...
+        for f in AXIS_FLAGS {
+            assert!(
+                label_required(&[f.to_string()], &none),
+                "{f} changes the artifact and must demand a label"
+            );
+            // ...and is fine with one.
+            assert!(!label_required(&[f.to_string()], &some), "{f} with a label");
         }
     }
 
-    static EMPTY_RP: std::sync::LazyLock<std::collections::BTreeMap<String, f64>> =
-        std::sync::LazyLock::new(std::collections::BTreeMap::new);
-    static DEFAULT_CLAIM: std::sync::LazyLock<DiClaimOrder> =
-        std::sync::LazyLock::new(DiClaimOrder::default);
-    static NON_DEFAULT_CLAIM: std::sync::LazyLock<DiClaimOrder> =
-        std::sync::LazyLock::new(|| {
-            // Whichever arm is NOT the default, derived rather than named, so
-            // a default flip does not silently make this test vacuous.
-            if DiClaimOrder::default() == DiClaimOrder::Upstream {
-                DiClaimOrder::Downstream
-            } else {
-                DiClaimOrder::Upstream
+    /// Every flag that reaches `LayoutOptions` or the solve must be in
+    /// `AXIS_FLAGS`. This is the one place the list can go stale, so it is
+    /// pinned against the usage text rather than left to review.
+    ///
+    /// `--label` and `--out` are excluded deliberately: they name the output,
+    /// they do not change it.
+    #[test]
+    fn axis_flag_list_covers_every_documented_flag() {
+        let doc = include_str!("sim_export.rs");
+        let documented: Vec<String> = doc
+            .lines()
+            .filter(|l| l.trim_start().starts_with("//!   --"))
+            .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
+            .filter(|f| f.starts_with("--"))
+            .collect();
+        assert!(!documented.is_empty(), "usage block not found");
+
+        const NOT_AXES: &[&str] = &["--label", "--out", "--multi"];
+        for f in &documented {
+            if NOT_AXES.contains(&f.as_str()) {
+                continue;
             }
-        });
-
-    /// The blocker from round 4: the default arm must not tag, and the
-    /// non-default arm MUST — checked against `DiClaimOrder::default()` so
-    /// neither direction can silently invert if the default changes.
-    #[test]
-    fn claim_tags_track_the_real_default() {
-        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
-        let mk = |c| {
-            let mut ax = axes();
-            ax.inputs = &default_inputs;
-            ax.claim = Some(c);
-            auto_label("ec-5", &ax)
-        };
-        assert_eq!(mk(&DEFAULT_CLAIM), "ec-5", "the default claim order must not fork the path");
-        assert_ne!(
-            mk(&NON_DEFAULT_CLAIM),
-            "ec-5",
-            "a non-default claim order changes the artifact and must tag"
-        );
-    }
-
-    /// `--inputs` is consumed as an unordered set, so a reordering of the
-    /// same items is the same artifact and must share a directory.
-    #[test]
-    fn input_order_does_not_fork_the_path() {
-        let fwd: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
-        let mut rev = fwd.clone();
-        rev.reverse();
-        let mut a = axes();
-        a.inputs = &fwd;
-        let mut b = axes();
-        b.inputs = &rev;
-        assert_eq!(auto_label("ec-5", &a), auto_label("ec-5", &b));
-        assert_eq!(auto_label("ec-5", &a), "ec-5", "the default set must not tag at all");
-    }
-
-    /// The contract: default config keeps the pre-#661 path byte-identical.
-    #[test]
-    fn defaults_produce_the_bare_base() {
-        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
-        let mut ax = axes();
-        ax.inputs = &default_inputs;
-        assert_eq!(auto_label("electronic-circuit-5", &ax), "electronic-circuit-5");
-    }
-
-    /// The bug this PR exists to fix: two strategies must not share a path.
-    #[test]
-    fn strategy_separates_the_two_arms() {
-        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
-        let mut pooled = axes();
-        pooled.inputs = &default_inputs;
-        let mut pd = axes();
-        pd.inputs = &default_inputs;
-        pd.strategy = LayoutStrategy::PartitionedDecomposed;
-
-        let a = auto_label("ec-5", &pooled);
-        let b = auto_label("ec-5", &pd);
-        assert_ne!(a, b, "pooled and partitioned-decomposed collided: {a}");
-        assert_eq!(b, "ec-5-pd");
-    }
-
-    /// The cross-comparison the round-2 review named: `--duty < 1` requires an
-    /// explicit `--belt`, so duty fixtures always pin a belt tier and the two
-    /// belt tiers must still separate.
-    #[test]
-    fn duty_and_belt_separate_together() {
-        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
-        let mk = |belt| {
-            let mut ax = axes();
-            ax.inputs = &default_inputs;
-            ax.duty = 0.6;
-            ax.belt = Some(belt);
-            auto_label("ec-5", &ax)
-        };
-        let yellow = mk("transport-belt");
-        let fast = mk("fast-transport-belt");
-        assert_ne!(yellow, fast, "duty/belt cross-comparison collided");
-        assert_eq!(yellow, "ec-5-duty0_6-yellow");
-    }
-
-    /// Exact float comparison, not epsilon: a duty a hair under 1.0 lays out
-    /// differently and must not share the default's directory.
-    #[test]
-    fn near_one_duty_still_tags() {
-        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
-        let mut ax = axes();
-        ax.inputs = &default_inputs;
-        ax.duty = 0.9999999999999999;
-        assert_ne!(
-            auto_label("ec-5", &ax),
-            "ec-5",
-            "a duty within f64::EPSILON of 1.0 collided with the default"
-        );
-    }
-
-    /// Passing a flag whose value IS the engine default must not fork the
-    /// directory — the artifact is identical, so the path should be too.
-    #[test]
-    fn explicit_default_values_do_not_fork_the_path() {
-        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
-        let mut ax = axes();
-        ax.inputs = &default_inputs;
-        ax.inserter_cap = Some(spaghettio_core::common::DEFAULT_INSERTER_CAPACITY);
-        ax.claim = Some(&DEFAULT_CLAIM);
-        assert_eq!(
-            auto_label("ec-5", &ax),
-            "ec-5",
-            "explicitly passing the DEFAULT inserter-cap and claim order \
-             produces the default artifact and must not create a second \
-             directory for it"
-        );
-    }
-
-    /// `--inputs ""` parses to `[""]` — a NON-default set that joins to the
-    /// empty string. Keying the tag on "digest string is non-empty" dropped
-    /// it into the default directory; keying on "does the set differ" does
-    /// not (#661 round 5).
-    #[test]
-    fn empty_input_string_does_not_collapse_onto_the_default() {
-        let empty: Vec<String> = vec![String::new()];
-        let mut ax = axes();
-        ax.inputs = &empty;
-        assert_ne!(
-            auto_label("ec-5", &ax),
-            "ec-5",
-            "an empty-string input set differs from the default and must tag"
-        );
-    }
-
-    /// Non-default list-valued axes are digested rather than spelled out, but
-    /// must still separate.
-    #[test]
-    fn custom_inputs_digest_and_separate() {
-        let a_in: Vec<String> = vec!["iron-plate".into()];
-        let b_in: Vec<String> = vec!["copper-plate".into()];
-        let mut a = axes();
-        a.inputs = &a_in;
-        let mut b = axes();
-        b.inputs = &b_in;
-        let la = auto_label("ec-5", &a);
-        let lb = auto_label("ec-5", &b);
-        assert_ne!(la, lb, "different input sets collided");
-        assert!(la.contains("-cfg"), "expected a digest tag, got {la}");
+            assert!(
+                AXIS_FLAGS.contains(&f.as_str()),
+                "{f} is documented but missing from AXIS_FLAGS, so passing it \
+                 would not demand a label and two runs could collide"
+            );
+        }
     }
 }
