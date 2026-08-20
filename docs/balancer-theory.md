@@ -53,7 +53,7 @@ explicitly rather than smoothing it over.
 
 | File | Role |
 |------|------|
-| `crates/core/src/bus/balancer_library.rs` | 64 baked templates keyed `(n_inputs, n_outputs)` (count at `39a587f2`); `template_provenance()` |
+| `crates/core/src/bus/balancer_library.rs` | 64 baked templates keyed `(n_inputs, n_outputs)` (count at `51fea377`, the merge-base of this document; it was 77 at `39a587f2`, before the #632 A3 defective-template cull); `template_provenance()` |
 | `crates/core/src/bus/balancer_generate.rs` | `generate(n, m)` runtime generator; `merge_tree(n)` |
 | `crates/core/src/bus/balancer_topology.rs` | `SplitterGraph` combinators: `parallel`, `series_permuted`, `clos_interleave` |
 | `crates/core/src/bus/balancer_classify.rs` | `classify_ref()` → the MX class lattice |
@@ -62,11 +62,18 @@ explicitly rather than smoothing it over.
 | `crates/core/tests/balancer_lane_audit.rs` | `audit_min_cut_capacity` — the CI waist gate |
 | `crates/balancer-gen/src/main.rs` | `bake_missing_shapes()` and its `Recipe` grammar |
 
-A change is in flight in `balancer_library.rs` at the time of writing
-which imports five book shapes — `(3,2) (7,2) (7,3) (7,4) (8,6)` —
-raising the registry to 69. All *counts* below are from `HEAD`; the
-in-flight import is discussed in §9.5 because it is the cheapest
-resolution of the fan-in holes and it changes the recommendations.
+All *counts* below are from this document's merge-base, `51fea377`
+(registry = 64). A separate PR (#664) imports FOUR book shapes —
+`(3,2) (7,2) (7,3) (7,4)` — raising the registry to 68. It is discussed
+in §9.5 because it is the cheapest resolution of the fan-in holes and it
+changes the recommendations there.
+
+`(8,6)` is deliberately NOT among them: it failed two existing library
+gates, so importing it would have meant weakening them. An earlier draft
+of this document said five shapes and 69, written against a working tree
+rather than a merged state — the number was wrong before it was ever
+true, which is worth noting in a document that is otherwise about
+trusting counts.
 
 ### 1.3 Notation
 
@@ -449,6 +456,18 @@ output `j` = `Σ_t i_t / M`. Every output is the same uniform `1/M`
 combination of every input — MX3 by construction, for **any** `N, M`,
 with no divisibility precondition.
 
+> **This is MX3 in the classifier's fluid model, and for fan-in
+> (`N > M`) that is not the same as physical MX3.** With every input
+> saturated the expression above gives `N/M > 1` belts per output, which
+> one belt cannot carry; the stage-2 `(N, 1)` merger saturates each
+> output at 1 instead. The *proportions* are right — every output is the
+> same mixture — but the *rate* is capped by belt physics the linear
+> model does not represent. This is §3.2's consequence 3 ("superposing
+> `k` unit flows … physics does not permit") reappearing, and it is the
+> mechanism behind the culled `(8,6)`: MX3 verdict, waisted in practice.
+> The fan-in rows of the table below — `(3,2) (7,2) (7,3) (8,6)` — are
+> exactly the shapes where the sandwich's balance is model-only.
+
 **Throughput (tier C, true TU).** For any `S`, `T`: each `(t, j)` pair is
 joined by exactly one unit-capacity path, so the middle is a complete
 bipartite `S × T` of unit edges. Max-flow over it is `min(|S|, |T|)`,
@@ -793,6 +812,13 @@ at step 6.
 Balanced and TU by §5.5's proof, waist-free, `N·(2^⌈log₂M⌉ − 1) +
 M·(2^⌈log₂N⌉ − 1)` splitters, `N·M` middle. **This step always
 succeeds.** It is the reason "arbitrary `(N, M)`" is answerable.
+
+Read "always succeeds" precisely: it always yields a *topology* with the
+claimed graph properties. Two things it does not promise, both of which
+bite in practice — for fan-in (`N > M`) the balance is MX3 in the fluid
+model only, because saturated inputs imply `N/M > 1` belts per output
+and the mergers cap each at 1 (§5.5's note); and the placement may be
+infeasible at the sizes below.
 
 **Step 7 — compaction, optional.** Apply §5.8's substitutions to shrink
 the result. This is where the book's designs come from and it is not
