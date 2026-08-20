@@ -1214,6 +1214,47 @@ mod tests {
         }
     }
 
+    /// END-TO-END against a REAL Factorio 2.0 blueprint, not synthetic JSON.
+    ///
+    /// The #664 review's fair complaint was that nothing in the delivered
+    /// tree exercises the decode against a genuine 2.0 source — the four
+    /// book templates that would have done so were dropped as dead
+    /// inventory, leaving a refusal path with no positive capability to
+    /// show for it.
+    ///
+    /// This is Raynquist's "1-1 TU lane corner balancer", trimmed to
+    /// version + entities. Its raw directions are [0,4,4,4,4,8,4,0,0] — the
+    /// `8` is the point: it is a valid 16-way SOUTH and is not representable
+    /// at all under 8-way, so the pre-fix code panicked on this exact
+    /// blueprint in `entity_direction()`, and the `4`s silently meant SOUTH
+    /// instead of EAST.
+    #[test]
+    fn real_two_point_zero_blueprint_decodes() {
+        let raw = include_str!("fixtures/raynquist-1-1-lane-corner-2.0.json");
+        let data: Value = serde_json::from_str(raw).expect("fixture parses");
+
+        assert_eq!(direction_scale(&data), Ok(2), "book blueprints are 2.0");
+
+        let ents = extract_entities(&data).expect("real 2.0 blueprint imports");
+        assert_eq!(ents.len(), 9);
+
+        // Every direction is a legal 8-way cardinal after normalisation —
+        // nothing survives as 8 or 12, which is what used to reach the
+        // stamper and panic.
+        for e in &ents {
+            assert!(
+                matches!(e.direction, N | E | S | W),
+                "{} at ({},{}) decoded to {}, not a cardinal",
+                e.name, e.x, e.y, e.direction
+            );
+        }
+
+        // And the mapping is the RIGHT one, not merely legal: raw 8 -> S,
+        // raw 4 -> E. Under the old 8-way assumption raw 4 would have been S.
+        let dirs: Vec<u8> = ents.iter().map(|e| e.direction).collect();
+        assert_eq!(dirs, vec![N, E, E, E, E, S, E, N, N]);
+    }
+
     /// Packed 0 is the ABSENT sentinel (`blueprint_parser::
     /// blueprint_major_version` maps it to `None`), not a real major-0
     /// version — reading it as 1.x is how a version-stripped 2.0 blueprint
