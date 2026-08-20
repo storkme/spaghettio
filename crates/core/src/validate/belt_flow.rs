@@ -3229,7 +3229,13 @@ fn lane_transfer(
         // chirality; it was invisible on the corpus because symmetric
         // lane rates make a swap a no-op, and was found when the
         // domain-physics audit's meter-vs-walker comparison was
-        // adjudicated (the meter's identity handling is the correct one).
+        // adjudicated against game rule B11 (the meter merely AGREED —
+        // being lane-identity-blind in throughput terms it could not
+        // itself discriminate; the rule + both models' handed seeding
+        // decided it). Label caveat: this walker's LANE_LEFT vector
+        // (-dy,dx) is geometrically the game's RIGHT side under
+        // screen-y-down (B3 flip) — harmless because lane-for-lane is
+        // label-independent, but do not "fix" the label into a swap.
         [from_rates[0], from_rates[1]]
     }
 }

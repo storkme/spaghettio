@@ -206,12 +206,13 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
   silently underestimates any quality-module blueprint (legendary speed
   module: +50% vs the planner's +125%). Affects the analysis tool only, not
   generated layouts.
-- **Meter lane-map chirality gap** (VERIFIED structurally): `crates/meter`'s
-  `LaneMap` has no swap variant, so the chirality-dependent lane swap on 90°
-  turns (implemented correctly in `belt_flow.rs:3413-3419` per mechanics B11)
-  is unrepresentable — every meter curve is lane-preserving, one chirality of
-  which is wrong under the validator's model, and untested. Belongs in
-  `meter-divergence.md` at minimum.
+- **Curve chirality — ADJUDICATED 2026-08-21, attribution INVERTED**
+  (see `domain-physics-audit-2026-08.md` finding 1 and #683): the meter
+  was accused and CLEARED — its identity-on-curves matches game rule
+  B11; the chirality-dependent swap lived in `belt_flow::lane_transfer`
+  and was the bug (fixed #683, one fabricated ac-am2-ore warning
+  re-blessed with position forensics). Do NOT "fix" the meter toward a
+  swap; both models now agree with the game and both are test-locked.
 - **Meter mirror-flag blindness** (self-documented, `meter/factory.rs:192-210`):
   refinery/foundry/cryo ports assumed always-mirrored; an unmirrored instance
   would mis-bind.
@@ -253,8 +254,9 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
    candidate evaluations (not just winners), so "this check never fires" can
    be distinguished from "this check silently vetoes losers". Blocks any
    structural-check deletion beyond Tier 2 item 9.
-2. **Meter chirality test**: a two-chirality curve fixture pinning meter lane
-   mapping against `belt_flow`'s model (would have caught the LaneMap gap).
+2. **Meter chirality test** — DONE 2026-08-21 (#685), but note the
+   premise inverted first: the test locks the meter's CORRECT identity
+   handling (see the adjudicated bullet above), it does not fix a gap.
 
 ## Artifacts
 
