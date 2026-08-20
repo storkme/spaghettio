@@ -77,15 +77,19 @@ pub enum BalancerClass {
 /// Menger subset checks ever run, and can never be labelled TU no matter
 /// how good it is.
 ///
-/// That is not a hypothetical: measured 2026-08-19 across the 68
-/// registered templates, 66 classify `Balanced` and the registry contains
-/// **zero** templates certified `ThroughputUnlimited` — including every
-/// shape whose provenance advertises "Raynquist (TU)".
+/// That is not a hypothetical: before this split, across the 64 registered
+/// templates the registry contained **zero** certified
+/// `ThroughputUnlimited` — including every shape whose provenance
+/// advertises "Raynquist (TU)". Not a fact about the library: the balanced
+/// test returned before the throughput checks ran.
 ///
 /// Balance and throughput are independent properties: a template can mix
 /// every input into every output in equal proportion (MX3) and still fail
-/// to reroute around a blocked output subset (not MX2b). This enum
-/// reports the throughput axis on its own, and is always computed.
+/// to reroute around a blocked output subset (not MX2b). This enum reports
+/// the throughput axis on its own.
+///
+/// It is computed for every graph within the subset-enumeration bound and
+/// reports [`ThroughputTier::Unknown`] outside it — see that variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ThroughputTier {
     /// MX1 — some input subset cannot achieve `min(|S|, n)` flow.
@@ -96,13 +100,43 @@ pub enum ThroughputTier {
     /// MX2b — full max-flow over input *and* output subsets. The real
     /// "throughput-unlimited" property.
     Unlimited,
+    /// Not analysed: the graph exceeds the subset-enumeration bound of 16
+    /// inputs or outputs, so neither Menger check ran (#662 review).
+    ///
+    /// This exists because the alternative is a FALSE CLEARANCE.
+    /// `check_input_subsets`/`check_output_subsets` return `None` — "no
+    /// counterexample" — when they bail on size, which is indistinguishable
+    /// from having searched and found nothing, so a 20-input community
+    /// balancer would report `Unlimited` without a single subset being
+    /// tested. No library template reaches this (the registry maxes at
+    /// (10,10)), but `throughput_tier` is public and `import_balancer` can
+    /// be pointed at anything.
+    ///
+    /// NOTE the deliberate divergence: [`BalancerClass`] still returns its
+    /// pre-existing optimistic answer for such graphs. That overclaim is
+    /// older than this enum and fixing it would move `class` for real
+    /// inputs, which this change is specifically avoiding; it is recorded
+    /// here rather than silently inherited by the new axis.
+    Unknown,
 }
+
+/// Largest input/output count the Menger subset checks will enumerate.
+/// Both walk every subset (`2^k` masks over a `u64`), so this bounds work
+/// and keeps the shift well-defined. The registry maxes at (10,10); the
+/// bound exists for arbitrary imported graphs.
+const SUBSET_ENUM_MAX: usize = 16;
 
 /// The throughput tier of a graph, computed without reference to its
 /// composition matrix — so it is available even for templates whose
 /// composition solve is [`ClassifyError::Singular`].
 pub fn throughput_tier(graph: &SplitterGraph) -> ThroughputTier {
     let (m, n) = (graph.n_inputs, graph.n_outputs);
+    // Bound check FIRST. Both helpers return `None` when they bail on size,
+    // which reads identically to "searched, found nothing" — so asking them
+    // about an oversized graph and believing the answer is a false clearance.
+    if m > SUBSET_ENUM_MAX || n > SUBSET_ENUM_MAX {
+        return ThroughputTier::Unknown;
+    }
     if check_input_subsets(graph, m, n).is_some() {
         ThroughputTier::Limited
     } else if check_output_subsets(graph, m, n).is_some() {
@@ -395,7 +429,14 @@ pub fn classify_graph(graph: &SplitterGraph) -> Result<ClassificationReport, Cla
             class: BalancerClass::Balanced,
             throughput,
             composition,
-            mx2_counterexample: None,
+            // NOT `None` (#662 review, 3/3). A Balanced template can still be
+            // throughput-Limited — that is the whole point of reporting the
+            // two axes separately — and when it is, the failing subset was
+            // already computed in this same invocation. Returning `None` here
+            // handed the caller a verdict with its evidence thrown away.
+            // `mx2a` is the input-side witness and takes precedence, matching
+            // the ThroughputLimited arm below.
+            mx2_counterexample: mx2a_counterexample.or(mx2b_counterexample),
         });
     }
 
@@ -869,7 +910,7 @@ fn check_input_subsets(
     m: usize,
     n: usize,
 ) -> Option<Mx2Counterexample> {
-    if m > 16 {
+    if m > SUBSET_ENUM_MAX {
         return None;
     }
     let (base, inputs, outputs) = build_flow_graph(graph);
@@ -895,7 +936,7 @@ fn check_output_subsets(
     m: usize,
     n: usize,
 ) -> Option<Mx2Counterexample> {
-    if n > 16 {
+    if n > SUBSET_ENUM_MAX {
         return None;
     }
     let (base, inputs, outputs) = build_flow_graph(graph);
@@ -1150,6 +1191,84 @@ mod tests {
     /// fixes it should empty this list (the second assert forces that
     /// bookkeeping), and a field failure implicating the shape reopens
     /// the issue.
+    /// The throughput axis, pinned (#662 review, 3/3 — it had zero tests
+    /// and zero consumers, so a regression re-introducing the early return
+    /// this change removes would have passed the whole suite).
+    ///
+    /// Pins the DISTRIBUTION rather than a per-shape list: the point of the
+    /// fix is that the tier is actually computed, and the sharpest evidence
+    /// of that is a non-degenerate spread. Before the fix this test could
+    /// not have been written — every template answered `Limited`, because
+    /// the balanced test returned first.
+    #[test]
+    fn throughput_tier_is_actually_computed() {
+        let mut limited = 0usize;
+        let mut balanced_rate = 0usize;
+        let mut unlimited = 0usize;
+        let mut unknown = 0usize;
+        for (_, t) in balancer_templates() {
+            let Ok(r) = classify(t) else { continue };
+            match r.throughput {
+                ThroughputTier::Limited => limited += 1,
+                ThroughputTier::BalancedRate => balanced_rate += 1,
+                ThroughputTier::Unlimited => unlimited += 1,
+                ThroughputTier::Unknown => unknown += 1,
+            }
+        }
+
+        // The regression this guards: if `classify_graph` ever returns before
+        // the Menger checks again, `unlimited` collapses to 0.
+        assert!(
+            unlimited > 0,
+            "no template certified ThroughputUnlimited — the throughput \
+             checks are being skipped again (that was the bug: the MX3 \
+             balanced test returned before they ran)"
+        );
+        // ...and the converse: a tier that answers `Unlimited` for everything
+        // is equally uninformative, so pin that the axis discriminates.
+        assert!(
+            limited > 0 && balanced_rate > 0,
+            "throughput tier is not discriminating: limited={limited}, \
+             balanced_rate={balanced_rate}, unlimited={unlimited} — a tier \
+             that gives every template the same answer is not measuring \
+             anything"
+        );
+        // No registered template exceeds the enumeration bound; if one ever
+        // does, its tier is Unknown and that must be a deliberate decision
+        // rather than a silent false clearance.
+        assert_eq!(
+            unknown, 0,
+            "a registered template exceeds SUBSET_ENUM_MAX ({SUBSET_ENUM_MAX}) \
+             and its throughput is unanalysed"
+        );
+    }
+
+    /// A Balanced template that is NOT throughput-unlimited must carry its
+    /// witness — the two axes are reported separately precisely so that
+    /// combination is expressible, and a verdict with its evidence dropped
+    /// is what the #662 review caught on the `is_mx3` return path.
+    #[test]
+    fn balanced_but_limited_templates_keep_their_counterexample() {
+        let mut checked = 0usize;
+        for ((m, n), t) in balancer_templates() {
+            let Ok(r) = classify(t) else { continue };
+            if r.class == BalancerClass::Balanced && r.throughput != ThroughputTier::Unlimited {
+                assert!(
+                    r.mx2_counterexample.is_some(),
+                    "({m},{n}) is Balanced/{:?} but reports no failing subset — \
+                     the counterexample was computed and then discarded",
+                    r.throughput
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "no Balanced-but-not-Unlimited template in the registry — this \
+             test stopped covering anything"
+        );
+    }
+
     #[test]
     fn known_throughput_limited_shapes_are_pinned() {
         const KNOWN_THROUGHPUT_LIMITED: [(u32, u32); 1] = [(5, 8)];
