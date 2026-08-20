@@ -96,6 +96,113 @@ fn parse_target_token(tok: &str) -> (String, f64) {
 }
 
 
+/// Every axis that changes the exported artifact, as one value — so the
+/// label logic is a pure function and can be tested (#661 round 3: it was
+/// the PR's entire purpose and had no coverage, which is the same class of
+/// gap that produced the collision in the first place).
+struct LabelAxes<'a> {
+    strategy: LayoutStrategy,
+    row_layout: RowLayout,
+    duty: f64,
+    tier: &'a str,
+    belt: Option<&'a str>,
+    quality: QualityTier,
+    stacking: u8,
+    di: DirectInsertion,
+    claim: Option<&'a DiClaimOrder>,
+    inserter_cap: Option<u8>,
+    inputs: &'a [String],
+    research_productivity: &'a std::collections::BTreeMap<String, f64>,
+}
+
+/// The auto label, which is also the OUTPUT DIRECTORY (`<out>/<label>/`).
+///
+/// Two runs whose artifacts differ must not share it. They did: the label
+/// was `{item}-{rate}` and encoded no configuration at all, so
+/// `--strategy pooled X 5` and `--strategy partitioned-decomposed X 5`
+/// both wrote `<out>/X-5/` and the second silently overwrote the first
+/// (#661). That is a wrong-A/B generator, and A/B is why this binary takes
+/// these flags.
+///
+/// Suffixes are emitted only where the value differs from the ENGINE
+/// default — not merely where a flag was passed (#661 round 3) — so
+/// `--inserter-cap 2` and a default run share a directory, because they
+/// produce the same artifact. Default paths stay byte-identical to
+/// pre-#661.
+fn auto_label(base: &str, ax: &LabelAxes<'_>) -> String {
+    let mut tags: Vec<String> = Vec::new();
+
+    match ax.strategy {
+        LayoutStrategy::Pooled => {}
+        LayoutStrategy::PartitionedDecomposed => tags.push("pd".to_string()),
+    }
+    if !matches!(ax.row_layout, RowLayout::VerticalSplit) {
+        tags.push(format!("{:?}", ax.row_layout).to_lowercase());
+    }
+    // Exact float comparison, deliberately, and NOT a formatted-string test
+    // (#661 round 3) nor an epsilon one (#661 round 2). Exact `!=` gives both
+    // properties at once: `1.0` never tags, and `0.9999999999999999` — which
+    // an epsilon test would swallow — does.
+    if ax.duty != 1.0 {
+        tags.push(format!("duty{}", format!("{}", ax.duty).replace('.', "_")));
+    }
+    if ax.tier != DEFAULT_TIER {
+        tags.push(ax.tier.replace("assembling-machine-", "am").replace('-', ""));
+    }
+    if let Some(b) = ax.belt {
+        tags.push(b.replace("-transport-belt", "").replace("transport-belt", "yellow"));
+    }
+    if !matches!(ax.quality, QualityTier::Normal) {
+        tags.push(format!("{:?}", ax.quality).to_lowercase());
+    }
+    if ax.stacking != 1 {
+        tags.push(format!("stack{}", ax.stacking));
+    }
+    if !matches!(ax.di, DirectInsertion::Candidate) {
+        tags.push(format!("di{:?}", ax.di).to_lowercase());
+    }
+    // `--claim` and `--inserter-cap` compare against the ENGINE default, not
+    // against "was a flag passed": passing the default value produces a
+    // byte-identical artifact and must not fork the directory.
+    if let Some(c) = ax.claim {
+        if !matches!(c, DiClaimOrder::Upstream) {
+            tags.push(format!("claim{c:?}").to_lowercase());
+        }
+    }
+    if let Some(ic) = ax.inserter_cap {
+        if ic != spaghettio_core::common::DEFAULT_INSERTER_CAPACITY {
+            tags.push(format!("icap{ic}"));
+        }
+    }
+
+    // List-valued axes: a stable short digest, so they cannot collide without
+    // spelling an ingredient list into a path component.
+    let mut listy = String::new();
+    let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
+    if ax.inputs != default_inputs.as_slice() {
+        listy.push_str(&ax.inputs.join(","));
+    }
+    for (k, v) in ax.research_productivity {
+        listy.push_str(&format!(";{k}={v}"));
+    }
+    if !listy.is_empty() {
+        // FNV-1a 32-bit: deterministic across runs and platforms, which
+        // `DefaultHasher` explicitly is not.
+        let mut h: u32 = 0x811c_9dc5;
+        for byte in listy.as_bytes() {
+            h ^= *byte as u32;
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        tags.push(format!("cfg{h:08x}"));
+    }
+
+    if tags.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}-{}", tags.join("-"))
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
@@ -265,28 +372,6 @@ fn main() {
             .collect::<Vec<_>>()
             .join(" + ")
     };
-    // The auto label is also the OUTPUT DIRECTORY (`<out>/<label>/`), so two
-    // runs whose artifacts differ must not share it. They did: `{item}-{rate}`
-    // encoded no configuration at all, so `--strategy pooled X 5` and
-    // `--strategy partitioned-decomposed X 5` both wrote `<out>/X-5/` and the
-    // second silently overwrote the first's `bp.txt` and `manifest-real.json`
-    // (#661 review). That is a wrong-A/B generator, and A/B is the entire
-    // reason this binary takes these flags.
-    //
-    // EVERY axis that changes the artifact is encoded, not a hand-picked few
-    // (#661 round 2, 3/3 — the first attempt covered strategy/row-layout/duty
-    // and claimed in docs to cover "any non-default axis", which was an
-    // overclaim: `--belt`, `--quality`, `--stacking`, `--tier`, the DI pair,
-    // `--inserter-cap`, `--inputs` and `--research-productivity` all still
-    // collided). The concrete case that makes this not-hypothetical: `--duty
-    // < 1` REQUIRES an explicit `--belt`, so the K69-1 duty fixtures this
-    // binary exists to produce necessarily pin a belt tier, and a duty/belt
-    // cross-comparison collided.
-    //
-    // Suffixes are emitted ONLY for non-default values, so every existing
-    // default-axis path is byte-identical to before. List-valued axes are
-    // hashed rather than spelled out, to keep the directory name usable.
-    // An explicit `--label` overrides all of it.
     let label = label.unwrap_or_else(|| {
         let base = targets
             .iter()
@@ -294,73 +379,23 @@ fn main() {
             .collect::<Vec<_>>()
             .join("_")
             .replace('.', "_");
-
-        let mut tags: Vec<String> = Vec::new();
-        match strategy {
-            LayoutStrategy::Pooled => {}
-            LayoutStrategy::PartitionedDecomposed => tags.push("pd".to_string()),
-        }
-        if !matches!(row_layout, RowLayout::VerticalSplit) {
-            tags.push(format!("{row_layout:?}").to_lowercase());
-        }
-        // Not an epsilon compare (#661 round 2): `--duty 0.9999999999999999`
-        // is within f64::EPSILON of 1.0 and would have collided with a
-        // default run despite producing a different layout. The formatted
-        // value IS the identity — if it renders differently, it tags
-        // differently.
-        let duty_s = format!("{duty}");
-        if duty_s != "1" {
-            tags.push(format!("duty{}", duty_s.replace('.', "_")));
-        }
-        if tier != DEFAULT_TIER {
-            tags.push(tier.replace("assembling-machine-", "am").replace('-', ""));
-        }
-        if let Some(b) = &belt {
-            tags.push(b.replace("-transport-belt", "").replace("transport-belt", "yellow"));
-        }
-        if !matches!(quality, QualityTier::Normal) {
-            tags.push(format!("{quality:?}").to_lowercase());
-        }
-        if stacking != 1 {
-            tags.push(format!("stack{stacking}"));
-        }
-        if !matches!(di, DirectInsertion::Candidate) {
-            tags.push(format!("di{:?}", di).to_lowercase());
-        }
-        if let Some(c) = claim.as_ref() {
-            tags.push(format!("claim{c:?}").to_lowercase());
-        }
-        if let Some(ic) = inserter_cap {
-            tags.push(format!("icap{ic}"));
-        }
-        // List-valued axes: a stable short digest, so they cannot collide
-        // without spelling a whole ingredient list into a path component.
-        let mut listy = String::new();
-        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
-        if inputs != default_inputs {
-            listy.push_str(&inputs.join(","));
-        }
-        if !research_productivity.is_empty() {
-            for (k, v) in &research_productivity {
-                listy.push_str(&format!(";{k}={v}"));
-            }
-        }
-        if !listy.is_empty() {
-            // FNV-1a, 32-bit — deterministic across runs and platforms, which
-            // `DefaultHasher` is explicitly NOT.
-            let mut h: u32 = 0x811c_9dc5;
-            for byte in listy.as_bytes() {
-                h ^= *byte as u32;
-                h = h.wrapping_mul(0x0100_0193);
-            }
-            tags.push(format!("cfg{h:08x}"));
-        }
-
-        if tags.is_empty() {
-            base
-        } else {
-            format!("{base}-{}", tags.join("-"))
-        }
+        auto_label(
+            &base,
+            &LabelAxes {
+                strategy,
+                row_layout,
+                duty,
+                tier: &tier,
+                belt: belt.as_deref(),
+                quality,
+                stacking,
+                di,
+                claim: claim.as_ref(),
+                inserter_cap,
+                inputs: &inputs,
+                research_productivity: &research_productivity,
+            },
+        )
     });
 
     let input_set: FxHashSet<String> = inputs.iter().cloned().collect();
@@ -484,4 +519,123 @@ fn main() {
     println!(
         "  cargo run --release -p spaghettio_sim_harness -- run \\\n    --bp {bp_path} --manifest {mf_path} --warmup 288000"
     );
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn axes<'a>() -> LabelAxes<'a> {
+        // Every field at its ENGINE default: this must produce the bare base.
+        LabelAxes {
+            strategy: LayoutStrategy::Pooled,
+            row_layout: RowLayout::VerticalSplit,
+            duty: 1.0,
+            tier: DEFAULT_TIER,
+            belt: None,
+            quality: QualityTier::Normal,
+            stacking: 1,
+            di: DirectInsertion::Candidate,
+            claim: None,
+            inserter_cap: None,
+            inputs: &[],
+            research_productivity: &EMPTY_RP,
+        }
+    }
+
+    static EMPTY_RP: std::sync::LazyLock<std::collections::BTreeMap<String, f64>> =
+        std::sync::LazyLock::new(std::collections::BTreeMap::new);
+
+    /// The contract: default config keeps the pre-#661 path byte-identical.
+    #[test]
+    fn defaults_produce_the_bare_base() {
+        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
+        let mut ax = axes();
+        ax.inputs = &default_inputs;
+        assert_eq!(auto_label("electronic-circuit-5", &ax), "electronic-circuit-5");
+    }
+
+    /// The bug this PR exists to fix: two strategies must not share a path.
+    #[test]
+    fn strategy_separates_the_two_arms() {
+        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
+        let mut pooled = axes();
+        pooled.inputs = &default_inputs;
+        let mut pd = axes();
+        pd.inputs = &default_inputs;
+        pd.strategy = LayoutStrategy::PartitionedDecomposed;
+
+        let a = auto_label("ec-5", &pooled);
+        let b = auto_label("ec-5", &pd);
+        assert_ne!(a, b, "pooled and partitioned-decomposed collided: {a}");
+        assert_eq!(b, "ec-5-pd");
+    }
+
+    /// The cross-comparison the round-2 review named: `--duty < 1` requires an
+    /// explicit `--belt`, so duty fixtures always pin a belt tier and the two
+    /// belt tiers must still separate.
+    #[test]
+    fn duty_and_belt_separate_together() {
+        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
+        let mk = |belt| {
+            let mut ax = axes();
+            ax.inputs = &default_inputs;
+            ax.duty = 0.6;
+            ax.belt = Some(belt);
+            auto_label("ec-5", &ax)
+        };
+        let yellow = mk("transport-belt");
+        let fast = mk("fast-transport-belt");
+        assert_ne!(yellow, fast, "duty/belt cross-comparison collided");
+        assert_eq!(yellow, "ec-5-duty0_6-yellow");
+    }
+
+    /// Exact float comparison, not epsilon: a duty a hair under 1.0 lays out
+    /// differently and must not share the default's directory.
+    #[test]
+    fn near_one_duty_still_tags() {
+        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
+        let mut ax = axes();
+        ax.inputs = &default_inputs;
+        ax.duty = 0.9999999999999999;
+        assert_ne!(
+            auto_label("ec-5", &ax),
+            "ec-5",
+            "a duty within f64::EPSILON of 1.0 collided with the default"
+        );
+    }
+
+    /// Passing a flag whose value IS the engine default must not fork the
+    /// directory — the artifact is identical, so the path should be too.
+    #[test]
+    fn explicit_default_values_do_not_fork_the_path() {
+        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
+        let mut ax = axes();
+        ax.inputs = &default_inputs;
+        ax.inserter_cap = Some(spaghettio_core::common::DEFAULT_INSERTER_CAPACITY);
+        ax.claim = Some(&DiClaimOrder::Upstream);
+        assert_eq!(
+            auto_label("ec-5", &ax),
+            "ec-5",
+            "--inserter-cap 2 / --claim up produce the default artifact and must \
+             not create a second directory for it"
+        );
+    }
+
+    /// Non-default list-valued axes are digested rather than spelled out, but
+    /// must still separate.
+    #[test]
+    fn custom_inputs_digest_and_separate() {
+        let a_in: Vec<String> = vec!["iron-plate".into()];
+        let b_in: Vec<String> = vec!["copper-plate".into()];
+        let mut a = axes();
+        a.inputs = &a_in;
+        let mut b = axes();
+        b.inputs = &b_in;
+        let la = auto_label("ec-5", &a);
+        let lb = auto_label("ec-5", &b);
+        assert_ne!(la, lb, "different input sets collided");
+        assert!(la.contains("-cfg"), "expected a digest tag, got {la}");
+    }
 }

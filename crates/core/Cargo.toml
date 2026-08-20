@@ -32,3 +32,12 @@ web-time = "1"
 [dev-dependencies]
 ntest = "0.9"
 sha2 = "0.10"
+
+# sim_export is the tracked fixture generator; its label logic decides the
+# OUTPUT DIRECTORY, so a regression there silently re-collides A/B fixtures
+# (#661). Declared explicitly with `test = true` so its unit tests actually
+# RUN — `cargo test` builds examples but does not run their tests by default.
+[[example]]
+name = "sim_export"
+path = "examples/sim_export.rs"
+test = true
