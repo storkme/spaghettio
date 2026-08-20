@@ -790,27 +790,51 @@ fn assert_round_trip(result: &E2EResult) {
 /// web app accepts arbitrary rates, so a shape crossing the bound would ship
 /// as silent under-delivery.
 ///
-/// This is that census, executed, on every corpus layout the suite already
-/// builds — which is both broader and free, versus a standalone test
-/// rebuilding a hand-picked handful.
+/// This runs on every corpus layout the suite already builds — broader and
+/// free, versus a standalone test rebuilding a hand-picked handful.
+///
+/// Be precise about what it is worth. On today's corpus it is INERT: the
+/// widest requested side is 8 against a bound of 16, and nothing trips it.
+/// That makes it a tripwire for future corpus growth, not evidence that the
+/// bound is correctly placed — and calling it the latter would be the
+/// "a check going quiet is not evidence" mistake in CLAUDE.md. What it does
+/// buy is that the failure mode becomes a named test failure at the moment a
+/// layout first crosses the bound, instead of under-delivery nobody
+/// attributes.
 fn assert_balancer_shapes_are_verifiable(test_name: &str, events: &[TraceEvent]) {
     use spaghettio_core::bus::balancer_classify::SUBSET_ENUM_MAX;
 
-    let over: Vec<(usize, usize)> = events
+    // Oversized AND unstamped, not merely oversized (#662 round 9, 3/3).
+    // The first version flagged every shape with a side > the bound, on the
+    // premise that classify refusing it means nothing gets stamped. That
+    // premise is false, and my own round-9 correction is what showed it:
+    // `generate` is the FOURTH step of `family_stamp_plan`, so a square
+    // >= 17 is served by `Passthrough` and a fan-out (9,18)..(16,32) by
+    // `Decomposed { sub: (1,2) }` — both stamp successfully and neither
+    // consults `generate` at all. Flagging those would have failed the suite
+    // on legitimate corpus growth.
+    //
+    // `template_found: false` alone is not the condition either: four corpus
+    // shapes sit there today for unrelated reasons ((3,14), (4,9), (10,14),
+    // (11,10)). The regression this guards is the CONJUNCTION — a shape the
+    // classifier cannot verify AND which consequently did not stamp.
+    let unstamped_oversized: Vec<(usize, usize)> = events
         .iter()
         .filter_map(|e| match e {
-            TraceEvent::BalancerStamped { shape, .. } => Some(*shape),
+            TraceEvent::BalancerStamped { shape, template_found, .. } => {
+                (!template_found).then_some(*shape)
+            }
             _ => None,
         })
         .filter(|(m, n)| *m > SUBSET_ENUM_MAX || *n > SUBSET_ENUM_MAX)
         .collect();
 
     assert!(
-        over.is_empty(),
-        "{test_name}: requested balancer shapes {over:?} exceed SUBSET_ENUM_MAX \
-         ({SUBSET_ENUM_MAX}), which classify refuses — so nothing is stamped and \
-         this layout silently under-delivers. Either the shape is wrong, or the \
-         bound now has to buy its keep (see #667)."
+        unstamped_oversized.is_empty(),
+        "{test_name}: balancer shapes {unstamped_oversized:?} exceed SUBSET_ENUM_MAX \
+         ({SUBSET_ENUM_MAX}), which classify refuses, AND did not stamp — so this \
+         layout silently under-delivers. Either the shape is wrong, or the bound \
+         now has to buy its keep (see #667)."
     );
 }
 
