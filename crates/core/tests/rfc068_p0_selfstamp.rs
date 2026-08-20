@@ -17,12 +17,26 @@
 //!      the STORE ENTRY ALONE (ports + entities + motif — never the native
 //!      band's row bookkeeping) — input belt ys per the spec's input
 //!      schedule, output edge/flow vs the slot's band role,
-//!      `output_feed_x_min` from drop coverage — and check every field two
-//!      ways: against a fresh `extract_unit` of the same layout (drift
-//!      isolation), and against an INDEPENDENT re-derivation of the band's
-//!      run heads/exits that shares no code with `extract_unit` (#672
-//!      review: without the second anchor, adapter-vs-fresh is circular
-//!      through the extraction logic that also produced the store).
+//!      `output_feed_x_min` from drop coverage — and check every field
+//!      three ways: against a fresh `extract_unit` of the same layout
+//!      (drift isolation); against a re-derivation of run heads/exits
+//!      that shares no CODE with `extract_unit` (anchor A); and, for
+//!      input heads, against the OUTSIDE-FEEDER anchor (anchor B) — a
+//!      different METHOD entirely (who feeds the tile, from outside the
+//!      band), since anchor A shares the extractor's run-boundary
+//!      heuristic and would reproduce a systematic bug in it (#672
+//!      rounds 1-2). Honest residual: the belt-out EXIT derivation has
+//!      no second method here — it shares the boundary-scan approach —
+//!      and is corroborated instead by the fragment-side port-edge +
+//!      exit-direction contract; the router-facing instrument for exits
+//!      is P1's byte-identical control.
+//!
+//!      The probe's NOVEL margin, stated precisely (#672 round 2): the
+//!      RowSpan-semantics interpretation of the ports plus these
+//!      geometry anchors. The bijection and verdict-parity steps below
+//!      are guarded consequences of the celldb drift test and serve as
+//!      harness-sanity checks (they catch probe-side translation/index
+//!      bugs), not as adjudicating evidence.
 //!   4. Substitute the fragment at the band's native slot with an
 //!      index-preserving swap (`LayoutResult` power-wire records reference
 //!      entity indices; reordering would fabricate a record-integrity
@@ -51,7 +65,10 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use spaghettio_core::bus::layout::{self, LayoutOptions};
 use spaghettio_core::celldb::{self, CellEntry, Motif, PortKind};
-use spaghettio_core::common::{dir_to_vec, is_machine_entity, oriented_entity_dims};
+use spaghettio_core::common::{
+    dir_to_vec, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
+    oriented_entity_dims,
+};
 use spaghettio_core::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 use spaghettio_core::solver;
 use spaghettio_core::validate::{self, LayoutStyle, Severity, ValidationIssue};
@@ -100,10 +117,12 @@ fn band_indices(entities: &[PlacedEntity], recipe: &str) -> Vec<usize> {
 }
 
 /// Identity key: the full serialized entity with rate stripped and
-/// coordinates normalized to the band origin. "Identical modulo entity
-/// id/order" (RFC P0 verification bullet) — rate is additionally excluded
-/// because the store strips it at extraction (rates are derived, never
-/// stored) and the substitution restores the native stamp.
+/// coordinates normalized to the band origin. The RFC's "identical modulo
+/// entity id/order" phrase covers exporters that assign ids —
+/// `PlacedEntity` itself carries none, so concretely this is "modulo
+/// order and rate": rate because the store strips it at extraction
+/// (rates are derived, never stored) and the substitution restores the
+/// native stamp.
 fn identity_key(e: &PlacedEntity, origin: (i32, i32)) -> String {
     let mut n = e.clone();
     n.rate = None;
@@ -235,8 +254,39 @@ fn adapt(
     if drops.is_empty() {
         return Err("no inserter-out drops; cannot derive output coverage".into());
     }
+    // Continuity needs geometry, not just a count (#672 round 2): a
+    // count-sufficient but left-sparse drop set would misclassify. Require
+    // the leftmost drop within one machine-width of the run start; a
+    // count-sufficient set that fails that is AMBIGUOUS → refuse (K67-1:
+    // loud refusal, never a guessed field).
+    let machine_w = entry
+        .entities
+        .iter()
+        .find(|e| is_machine_entity(&e.name))
+        .map(|e| oriented_entity_dims(&e.name, e.direction).0)
+        .unwrap_or(3);
+    let run_min_x = entry
+        .entities
+        .iter()
+        .filter(|e| {
+            e.segment_id
+                .as_deref()
+                .is_some_and(|s| s.split(':').nth(2) == Some("belt-out"))
+        })
+        .map(|e| e.x)
+        .min()
+        .ok_or("no belt-out run tiles")?;
+    let min_drop_x = drops.iter().map(|e| e.x).min().unwrap();
     let output_feed_x_min = if drops.len() >= machine_count {
-        None // continuous — the ordinary-row shape
+        if min_drop_x <= run_min_x + machine_w {
+            None // continuous from the run start — the ordinary-row shape
+        } else {
+            return Err(format!(
+                "drop coverage ambiguous: {} drops but leftmost at x={min_drop_x} \
+                 vs run start x={run_min_x} — refusing to guess output_feed_x_min",
+                drops.len()
+            ));
+        }
     } else {
         Some(slot.0 + drops.iter().map(|e| e.x).max().unwrap())
     };
@@ -354,7 +404,9 @@ fn probe_fixture(
         expect_out.sort();
         got_out.sort();
         assert_eq!(got_out, expect_out, "{recipe}: output belt ys diverge from native");
-        assert_eq!(out.output_east, role_final, "{recipe}: output flow vs band role");
+        // (output_east == role_final is enforced inside adapt(); the
+        // redundant re-assert here was removed on #672 round 2.)
+        let _ = out.output_east;
 
         // --- INDEPENDENT native-geometry anchor (#672 review, majors 1/
         // minors 4-5: the fresh-extraction comparisons above tie the
@@ -374,11 +426,15 @@ fn probe_fixture(
                 p.get(3).map(|i| (*i).to_string()).unwrap_or_else(|| (*recipe).to_string()),
             ))
         };
+        let band_idx_set: FxHashSet<usize> = idx.iter().copied().collect();
         for (item, adapter_ys) in &out.input_ys {
             let run: Vec<&&PlacedEntity> = band
                 .iter()
                 .filter(|e| seg_kind_item(e) == Some(("belt-in".to_string(), item.clone())))
                 .collect();
+            // Anchor A — run-head derivation (independent implementation,
+            // SAME method as extract_unit's; see the honest-scope note in
+            // the module doc).
             let mut heads: Vec<i32> = run
                 .iter()
                 .filter(|t| {
@@ -390,11 +446,44 @@ fn probe_fixture(
                 .map(|t| t.y)
                 .collect();
             heads.sort();
+            // Anchor B — OUTSIDE-FEEDER derivation (independent METHOD,
+            // #672 round-2 review): a head is the run tile some NON-band
+            // entity feeds head-on. Rests on the owner-confirmed invariant
+            // that the engine never sideloads into a row input belt —
+            // external feeders (trunk taps, bridges, UG exits) hit heads
+            // head-on only, so "externally fed run tile" ≡ "head" by a
+            // route the extractor's topology heuristic never takes.
+            let mut fed_heads: Vec<i32> = run
+                .iter()
+                .filter(|t| {
+                    native.entities.iter().enumerate().any(|(fi, f)| {
+                        if band_idx_set.contains(&fi) {
+                            return false;
+                        }
+                        // A FEEDER is belt-family — belts flow items onto
+                        // the head. Inserters along the run also point at
+                        // it (pickup side) and must not count; first run
+                        // of this anchor caught exactly that class.
+                        if !(is_surface_belt(&f.name) || is_ug_belt(&f.name) || is_splitter(&f.name))
+                        {
+                            return false;
+                        }
+                        let (dx, dy) = dir_to_vec(f.direction);
+                        (f.x + dx, f.y + dy) == (t.x, t.y)
+                    })
+                })
+                .map(|t| t.y)
+                .collect();
+            fed_heads.sort();
             let mut got = adapter_ys.clone();
             got.sort();
             assert_eq!(
                 got, heads,
-                "{recipe}: adapter input ys for '{item}' diverge from independently-derived run heads"
+                "{recipe}: adapter input ys for '{item}' diverge from run-head derivation"
+            );
+            assert_eq!(
+                got, fed_heads,
+                "{recipe}: adapter input ys for '{item}' diverge from the outside-feeder anchor"
             );
         }
         let mut band_occ: FxHashSet<(i32, i32)> = FxHashSet::default();

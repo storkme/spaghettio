@@ -345,11 +345,22 @@ registry row if it stays within the size norm.
   ALONE (ports + entities + motif — never the native band's row
   bookkeeping) reproduces the native band's per-item input-belt ys,
   output ys, port-edge/role admissibility, and the continuous-coverage →
-  `output_feed_x_min = None` branch — anchored BOTH against a fresh
-  `extract_unit` re-extraction AND against an independent run-head/exit
-  derivation sharing no code with the extractor (added on the #672
-  review, which correctly showed the first anchor alone is circular
-  through shared extraction logic). Index-preserving substitution
+  `output_feed_x_min = None` branch (guarded: a count-sufficient but
+  left-sparse drop set now REFUSES rather than guesses) — anchored three
+  ways: a fresh `extract_unit` re-extraction (drift isolation); a
+  run-head/exit re-derivation sharing no code with the extractor; and,
+  for input heads, an OUTSIDE-FEEDER anchor — a different METHOD (which
+  belt-family entity feeds the tile from outside the band, valid on the
+  owner-confirmed no-sideload-into-row-inputs invariant), added when
+  #672's round-2 review correctly showed the code-independent anchor
+  still shares the extractor's run-boundary heuristic. Honest residual:
+  belt-out exits have no second method (boundary-scan both times),
+  corroborated by the fragment-side port-edge/direction contract; P1's
+  byte-identical control is the router-facing exit instrument. The
+  feeder anchor's first run also caught a real subtlety worth recording:
+  machine-feeding inserters' direction vectors land on the run and must
+  not count as feeders — feeder ≡ belt-family. Index-preserving
+  substitution
   (power-wire records reference entity indices) then bijects the band
   exactly, and the validator verdict is fully parity-checked
   (issue-list + detail equality). Honest weighting, from the same
