@@ -306,3 +306,17 @@ After each phase:
   for `(4, 4)` requires underground-belt cross-wiring (the library
   `(4, 4)` is 4×10 with UG belts) — phase 4's UG support handles
   both shapes.*
+
+- *2026-08-20 — CLOSED BY DELETION (owner call, offpath-code-followups
+  Tier 2, PR #677; entry added in the D1 docs sweep after the deletion
+  PR omitted it — the one close-out this campaign initially missed).
+  Deleted: `balancer/placement/cp_sat.rs`, the env-gated
+  `cp_sat_round_trip` suite, `scripts/cp_sat_placer.py`,
+  `scripts/bake_cp_sat_runner.py`, `scripts/bake_cp_sat_report.py`,
+  `scripts/bake_overnight.sh`, and `docs/bake-overnight-results.md`.
+  This RFC's Phase 2 (2026-05-01) ended at "the CpSat engine is
+  build-time only; runtime path is unaffected unless we explicitly wire
+  it in (separate RFC)" — that RFC never happened, and the supposedly
+  interim `crates/balancer-gen/scripts/place.py` became (and is now
+  documented as) the canonical placer. Revival path: git history at
+  this entry's date.*
