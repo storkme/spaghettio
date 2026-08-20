@@ -45,6 +45,26 @@ def leaves(node, out):
         out.append(node["blueprint"])
 
 
+def usable_version(version):
+    """Mirror import_balancer's `direction_scale` predicate exactly.
+
+    A version is usable if it is a non-zero integer. Packed 0 is the ABSENT
+    sentinel; everything else states a version, and the importer decodes
+    what is stated (>= 2.0 is 16-way, below it 8-way).
+
+    NOT `(version >> 48) != 0`. A #664 review reading suggested tightening
+    both this predicate and the importer to require a non-zero MAJOR --
+    tried, and wrong in both places. Factorio 0.x packs
+    `0 << 48 | minor << 32 | ...`, so 0.15/0.16 blueprints have major 0
+    legitimately, and the strict predicate reports 31 of this corpus's 6120
+    as unusable when the importer accepts every one of them. The point of
+    this script is to mirror the importer, so it mirrors the importer.
+    """
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version != 0
+
+
 def main(dirs):
     total = 0
     missing = []
@@ -72,9 +92,7 @@ def main(dirs):
             leaves(node, found)
             for bp in found:
                 total += 1
-                # Packed 0 is the ABSENT sentinel, not a real major-0
-                # version -- the same convention import_balancer uses.
-                if not bp.get("version"):
+                if not usable_version(bp.get("version")):
                     missing.append((path, bp.get("label", "<unlabelled>")))
 
     print(f"files parsed as blueprints: {files}")
