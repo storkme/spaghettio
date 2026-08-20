@@ -306,9 +306,6 @@ pub fn build_bus_layout(
     solver_result: &SolverResult,
     opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
-    if opts.band_pack_selection.is_some() && !opts.band_packing {
-        return Err("band_pack_selection requires band_packing = true".to_string());
-    }
     // RFC-046: belts cannot stack without stack inserters (BS2), so a
     // stacked layout under a lower inserter cap is an incoherent config —
     // refuse by name, never degrade silently (the recorded
@@ -320,17 +317,10 @@ pub fn build_bus_layout(
             opts.stacking, opts.max_inserter_tier
         ));
     }
-    // RFC-058 (concluded): band_packing is a measurement instrument, not a
-    // candidate — flag-on runs the native pass directly so the packed
-    // takeover (or its typed refusal) is what ships, never outcompeted by
-    // K1/cell/DI variants. Without this, a scoring flip mislabels a
-    // native-shaped winner as "packed" in the KC1 probe (#523 review
-    // fallout, caught when pole clamping shifted the score).
-    if opts.band_packing {
-        crate::bus::layout::run_layout_with_retry(solver_result, &opts)
-    } else {
-        crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)
-    }
+    // (RFC-058's band_packing measurement path was deleted 2026-08-20 —
+    // owner extended the #632 A2 precedent, offpath-code-followups Tier 2;
+    // the falsification record lives in the RFC's decision log.)
+    crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)
 }
 
 /// Today's `build_bus_layout` body — the retry orchestrator that
@@ -1478,62 +1468,6 @@ fn layout_pass(
             })
         })
         .collect();
-
-    // RFC-058 phase 4: flag-gated packed build. The plan event still fires
-    // (diagnosability), then the packed builder either takes over — its
-    // LayoutResult replaces the native one — or refuses with a typed
-    // reason and the native result below ships untouched.
-    if opts.band_packing {
-        crate::bus::bands::plan_band_packing(&row_spans, &all_entities);
-        let packed = match opts.band_pack_selection {
-            Some(selection) => crate::bus::bands::build_packed_layout_selected(
-                &row_spans,
-                &all_entities,
-                solver_result,
-                opts.max_belt_tier.as_deref(),
-                selection,
-            ),
-            None => crate::bus::bands::build_packed_layout(
-                &row_spans,
-                &all_entities,
-                solver_result,
-                opts.max_belt_tier.as_deref(),
-            ),
-        };
-        match packed {
-            Ok(mut packed) => {
-                // Packed materialization replaces geometry only.  It must
-                // retain the caller's declared planning world, just as the
-                // native return below does: downstream validation, export,
-                // and simulation interpret stacking/capacity from these
-                // fields, while wire mode determines the stored graph.
-                packed.wire_mode = opts.wire_mode;
-                packed.stacking = opts.stacking;
-                packed.inserter_capacity = opts.inserter_capacity;
-                packed.power_wires = Some(crate::power_wires::compute_pole_wires(
-                    &packed.entities,
-                    packed.wire_mode,
-                ));
-                return Ok((packed, row_spans, Vec::new(), Vec::new()));
-            }
-            Err(reason) => {
-                // An explicit RFC-064 measurement request is asking for one
-                // particular artifact. Returning the native layout here would
-                // silently score a refusal as if the selected candidate had
-                // materialized, so fail closed. The legacy `None` path keeps
-                // RFC-058's native fallback exactly as before.
-                if opts.band_pack_selection.is_some() {
-                    return Err(reason);
-                }
-                let bands = crate::bus::bands::extract_bands(&row_spans, &all_entities);
-                crate::trace::emit(crate::trace::TraceEvent::BandPackingRefused {
-                    bands: bands.len(),
-                    widest_band: bands.iter().map(|b| b.w).max().unwrap_or(0),
-                    reason,
-                });
-            }
-        }
-    }
 
     Ok((
         LayoutResult {
