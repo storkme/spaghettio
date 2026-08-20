@@ -231,7 +231,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 |-------------|----------|
 | Project status (complexity ladder, residual warnings, open issues) | [`docs/status.md`](docs/status.md) |
 | Recipe data | `crates/core/data/recipes.json` (embedded via `include_str!`) |
-| Balancer templates | `crates/core/src/bus/balancer_library.rs`. Regenerate: `python scripts/generate_balancer_library.py` (needs Factorio-SAT on `PATH`). |
+| Balancer templates | `crates/core/src/bus/balancer_library.rs`. Regenerate via either live pipeline: `python scripts/generate_balancer_library.py` (Factorio-SAT on `PATH`; drives `sync_balancer_to_rust.py` + `import_balancer`) or `crates/balancer-gen` (Clos composition via its own `scripts/place.py` — the canonical placer). A third, CP-SAT pipeline was deleted 2026-08-20 (#677). |
 | How to CONSTRUCT an (N,M) balancer (theory, proofs, decision procedure) | [`docs/balancer-theory.md`](docs/balancer-theory.md) |
 | Belt tier thresholds | `crates/core/src/common.rs` (`belt_entity_for_rate`, `ug_max_reach`) |
 | Entity sizes | `crates/core/src/common.rs` (`entity_size`) |

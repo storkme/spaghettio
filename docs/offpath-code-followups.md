@@ -258,8 +258,14 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
 
 ## Artifacts
 
-Coverage data, classified function TSV, and run logs live in the session
-scratchpad (not committed); the method section above is sufficient to
-regenerate from scratch. Companion audit of domain-physics factoring
-(9 mechanic families, verdicts per encoding site) reported in-session
-2026-08-20; its two live bugs are the first two bullets above.
+The per-file coverage summary and the classified off-path function list
+are committed beside this doc
+([`offpath-audit-2026-08-20-coverage-summary.txt`](offpath-audit-2026-08-20-coverage-summary.txt),
+[`offpath-audit-2026-08-20-offpath-functions.tsv`](offpath-audit-2026-08-20-offpath-functions.tsv)
+— gap 3 of the documentation audit, closed 2026-08-20); the raw llvm-cov
+JSON stays uncommitted, and the method section above regenerates it from
+scratch. Companion audit of domain-physics factoring:
+[`domain-physics-audit-2026-08.md`](domain-physics-audit-2026-08.md)
+(9 mechanic families, verdicts per encoding site — committed 2026-08-20,
+gap 2 of the documentation audit); its two live bugs are the first two
+bullets above.
