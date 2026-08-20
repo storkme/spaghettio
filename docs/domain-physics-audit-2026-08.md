@@ -11,7 +11,8 @@ got a verdict — SINGLE-SOURCE / DUPLICATED-CONSISTENT /
 DUPLICATED-DIVERGENT / UNCLEAR. `crates/sim-harness` is ground truth, not
 a model, and is excluded from duplication counts. The two
 DUPLICATED-DIVERGENT live findings were re-verified at source in-session
-before being reported.
+before being reported; finding 1 was subsequently adjudicated against
+game truth and its attribution INVERTED — see its entry.
 
 ## Headline
 
@@ -44,15 +45,21 @@ off-path deletion campaign drained.
 
 ## Findings (ranked)
 
-1. **Meter lane-chirality gap** (family 1; **verified at source** — B2 on
-   #675). `factorio-mechanics.md` B11: 90° turns preserve inner/outer
-   lane identity, which flips relative to a fixed lane index by turn
-   chirality. `validate/belt_flow.rs` implements this (cross-product +
-   swap on CW). `crates/meter/src/network.rs::LaneMap` has **no swap
-   variant** — every curve is index-preserving, one chirality of which is
-   wrong under the validator's model, and the meter's single curve test
-   covered one chirality only. Candidate contributor to unexplained
-   meter-vs-sim divergence on layouts with turns.
+1. **Curve-chirality divergence — ADJUDICATED 2026-08-21, and the
+   original attribution here was INVERTED.** The audit accused the
+   meter's `LaneMap` (no swap variant, every curve index-preserving) of
+   diverging from `belt_flow`'s chirality-dependent swap. Adjudication
+   against game truth (B11, expert-confirmed: lane contents never jump
+   lanes through a turn, either chirality) plus both models' seeding
+   conventions (BOTH are handed — meter via `left_of`/`near_lane_from`,
+   belt_flow via `LANE_LEFT` → index 0) shows identity-on-curves is
+   CORRECT and the swap was the bug: **the meter is cleared;
+   `belt_flow::lane_transfer`'s cross-product swap contradicted B11 on
+   one chirality**, invisible on the corpus because symmetric lane rates
+   make a swap a no-op. Fixed with a both-chirality discrimination test
+   (failed exactly [0,5]-vs-[5,0] on N→E pre-fix). A model-comparison
+   lesson: divergence identifies a disagreement, not the guilty side —
+   adjudicate against game truth before attributing.
 2. **Two more divergences**: (a) `analysis.rs`'s module speed/prod
    aggregation is quality-blind — it never reads the `ModuleItem::quality`
    field `module_policy.rs` sets and scales by, so `blueprint-analyze`
