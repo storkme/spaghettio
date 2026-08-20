@@ -78,8 +78,8 @@ abandoned: it needs every axis enumerated and every engine default stated
 correctly, and five review rounds each found another one wrong. Requiring
 the label makes collisions between runs that differ only by an axis
 impossible by construction, and consults no defaults, so a future default
-flip cannot invert it. Reusing the same `--label` twice still collides —
-that is a deliberate escape hatch, not an oversight.
+flip cannot invert it. Reusing the same `--label` for a DIFFERENT configuration is refused by the
+provenance check below; reusing it for the same one is idempotent.
 
 A run with no axis flags keeps the old `{item}-{rate}` path unchanged.
 
@@ -96,9 +96,40 @@ with the required flag named, not a silent overwrite.
 
 That guard reasons about which flags were PASSED, which is all that is
 knowable before the solve — so it cannot tell two runs apart that pass the
-same axis with different VALUES under one `--label`. Closing that needs the
-artifact's own provenance rather than a question about the command line, and
-it is a separate change (branch `feat/sim-export-overwrite-provenance`).
+same axis with different VALUES under one `--label`. That half is answered
+from the artifact instead. Each fixture directory carries a
+`.sim-export-config` recording what it was built from, and a run compares
+its own configuration against the stored one:
+
+- **same config** — proceeds, so re-running a fixture is idempotent;
+- **different config** — refuses, printing both configurations;
+- **no `.sim-export-config`** — refuses; a fixture written by hand, or before
+  this existed, cannot be assumed to match;
+- `--force` — replaces it regardless.
+
+The recorded configuration is the **targets** (item and rate) plus the axis
+flags and their values, sorted, so flag order does not matter.
+
+Three things it deliberately does not do. It compares values
+**syntactically**, so `--strategy pd` and `--strategy partitioned-decomposed`
+read as different configurations; a fixture predating the provenance file is
+refused rather than assumed to match; and the **engine revision is not part
+of the configuration**, so a fixture regenerated after a layout-engine change
+is treated as a match even though the bytes differ. The first two err toward
+refusing a safe run, which `--force` covers. The third is the one that errs
+the other way: after an engine change, regenerate deliberately rather than
+trusting idempotence.
+
+For the same reason `--strategy default` and `--row-layout default` are
+refused outright. They record the spelling, not the resolved value, so they
+would fingerprint identically either side of a change to the engine's
+`#[default]` while producing different bytes — the one direction this guard
+must never fail in. Name the strategy or layout instead.
+
+Earlier versions of the guard asked about the command line instead (refuse if
+anything exists / if this run passed an axis flag / if the label was
+explicit). Each leaked, from a different direction, because the question that
+matters is about the artifact and cannot be answered from flags.
 
 It writes `<out>/<label>/bp.txt` and `<out>/<label>/manifest-real.json`,
 and prints the ready-to-paste `run` command. Unknown flags are an error

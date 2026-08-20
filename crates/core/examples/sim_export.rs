@@ -29,8 +29,8 @@
 //!   --di off|candidate|forced        direct insertion (default candidate)
 //!   --claim up|down|search           DI claim order (default: engine default)
 //!   --belt <entity>        max belt tier (default: engine picks by rate)
-//!   --row-layout <kind>    native (default) | horizontal-stack
-//!   --strategy <kind>      pooled (aka default) | partitioned-decomposed (aka pd)
+//!   --row-layout <kind>    native aka vertical-split | horizontal-stack
+//!   --strategy <kind>      pooled | partitioned-decomposed (aka pd)
 //!   --duty <0..1>          planning duty (default 1.0; <1 needs --belt)
 //!   --quality <name>       normal|uncommon|rare|epic|legendary (default normal)
 //!   --stacking <1..4>      belt stacking (default 1)
@@ -40,6 +40,8 @@
 //!   --inputs a,b,c         raw inputs (default: the six-ore set)
 //!   --label <name>         output subdirectory + manifest label
 //!                          REQUIRED whenever any layout-changing flag is used
+//!   --force                replace a fixture built from a DIFFERENT config
+//!                          (re-running the SAME config never needs it)
 //!   --out <dir>            parent output dir (default $SIM_PROBE_OUT or /tmp)
 //! ```
 //!
@@ -146,6 +148,76 @@ fn default_label(targets: &[(String, f64)]) -> String {
         .replace('.', "_")
 }
 
+/// The name of the provenance file written beside each fixture.
+const CONFIG_FILE: &str = ".sim-export-config";
+
+/// A canonical description of everything about this invocation that changes
+/// the exported artifact.
+///
+/// Sorted, so flag order does not matter, and built from the axis flags and
+/// their VALUES — which is the part every previous version of this guard
+/// could not see.
+fn config_fingerprint(targets: &[(String, f64)], axis_args: &[(String, String)]) -> String {
+    // The TARGETS are configuration too (#661 round 11, 3/3). Leaving them
+    // out meant `ec 5 --strategy pd --label x` and `copper-cable 20
+    // --strategy pd --label x` fingerprinted identically, so the second
+    // silently overwrote the first — the same wrong-A/B, in the fourth
+    // direction this guard has been caught from. The artifact depends on
+    // what is being built, not only on how.
+    let mut pairs: Vec<String> = targets
+        .iter()
+        .map(|(item, rate)| format!("target:{item}={rate}"))
+        .collect();
+    pairs.extend(axis_args.iter().map(|(f, v)| format!("{f}={v}")));
+    pairs.sort();
+    pairs.join("\n")
+}
+
+/// Should this run refuse rather than overwrite what is already there?
+///
+/// Compares the stored fingerprint of the existing artifact against this
+/// run's. Same configuration means a re-run producing the same bytes, which
+/// is idempotent and allowed; a different one means the two fixtures would
+/// silently become one, which is the wrong-A/B this tool exists to prevent.
+///
+/// This replaces three rounds of flag-shaped heuristics, each of which was a
+/// proxy for artifact identity and each of which leaked:
+///
+///   round 7  refuse whenever anything exists
+///            -> broke plain re-runs, which are idempotent
+///   round 8  refuse only when THIS run passed an axis flag
+///            -> `--strategy pd --label x` then `--label x` overwrote it
+///   round 9  refuse only when the label was EXPLICIT
+///            -> `--strategy pd --label ec-5` then a plain `ec 5` (whose
+///               derived label is also `ec-5`) overwrote it
+///
+/// Every one of those asks a question about the COMMAND LINE. The question
+/// that actually matters is about the ARTIFACT, and it cannot be answered
+/// from flags alone — which is what the #661 reviews kept demonstrating,
+/// from a different direction each time. So it is answered from the
+/// artifact.
+///
+/// `Unknown` provenance (files present, no fingerprint) is refused too: it
+/// means a fixture written before this existed, or by hand, and assuming it
+/// matches is the same guess in a new place.
+fn overwrite_verdict(stored: Option<&str>, current: &str, force: bool, any_artifact: bool) -> OverwriteVerdict {
+    if force || !any_artifact {
+        return OverwriteVerdict::Proceed;
+    }
+    match stored {
+        Some(prev) if prev == current => OverwriteVerdict::Proceed,
+        Some(_) => OverwriteVerdict::DifferentConfig,
+        None => OverwriteVerdict::UnknownProvenance,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum OverwriteVerdict {
+    Proceed,
+    DifferentConfig,
+    UnknownProvenance,
+}
+
 /// Does this invocation need an explicit `--label`?
 ///
 /// True when any artifact-changing flag was passed. Kept as a pure function
@@ -156,8 +228,8 @@ fn default_label(targets: &[(String, f64)]) -> String {
 /// Note what it does NOT take: any value, and any default. It is a question
 /// about the command line, not about the configuration — which is also its
 /// limit: it cannot separate two runs that pass the SAME axis with DIFFERENT
-/// values under one `--label`. Closing that needs artifact provenance, which
-/// is a separate change (branch `feat/sim-export-overwrite-provenance`).
+/// values under one `--label`. That is what `overwrite_verdict` is for, and
+/// why this predicate is necessary but not sufficient on its own.
 fn label_required(axis_flags_seen: &[String], label: &Option<String>) -> bool {
     !axis_flags_seen.is_empty() && label.is_none()
 }
@@ -216,7 +288,9 @@ fn main() {
     let mut strategy = LayoutStrategy::default();
     let mut inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
     let mut label: Option<String> = None;
+    let mut force = false;
     let mut axis_flags_seen: Vec<String> = Vec::new();
+    let mut axis_args: Vec<(String, String)> = Vec::new();
     let mut out = std::env::var("SIM_PROBE_OUT").unwrap_or_else(|_| "/tmp".to_string());
 
     while i < args.len() {
@@ -232,6 +306,20 @@ fn main() {
         // wrong; not consulting a default at all is the fix.
         if AXIS_FLAGS.contains(&args[i].as_str()) {
             axis_flags_seen.push(args[i].clone());
+            // The VALUE too, for the artifact fingerprint. The label guard
+            // deliberately ignores values (see `label_required`); the
+            // overwrite guard deliberately does not.
+            axis_args.push((
+                args[i].clone(),
+                args.get(i + 1).cloned().unwrap_or_default(),
+            ));
+        }
+        // The one valueless flag, so it advances by 1 rather than the 2
+        // every other branch assumes.
+        if args[i] == "--force" {
+            force = true;
+            i += 1;
+            continue;
         }
         match args[i].as_str() {
             "--tier" => tier = need(i),
@@ -258,10 +346,19 @@ fn main() {
             // blueprint+manifest pair and could not be sim-anchored.
             "--row-layout" => {
                 row_layout = match need(i).as_str() {
-                    "native" | "default" => RowLayout::default(),
+                    // Pinned to the CONCRETE variant, not `RowLayout::default()`.
+                    // `native` was an alias for the default, so it carried the
+                    // same defect as `default`: identical provenance either
+                    // side of a `#[default]` change, different bytes.
+                    "native" | "vertical-split" => RowLayout::VerticalSplit,
+                    "default" => usage(
+                        "--row-layout default is not accepted: it would record the same \
+                         provenance for two different layouts if the engine default \
+                         changes. Name the layout — native | horizontal-stack.",
+                    ),
                     "horizontal-stack" | "hs" => RowLayout::HorizontalStack,
                     other => usage(&format!(
-                        "--row-layout must be native|horizontal-stack (got {other})"
+                        "--row-layout must be native|vertical-split|horizontal-stack (got {other})"
                     )),
                 }
             }
@@ -275,11 +372,18 @@ fn main() {
             "--strategy" => {
                 strategy = match need(i).as_str() {
                     "pooled" => LayoutStrategy::Pooled,
-                    // Delegate, matching `--row-layout`'s "native"|"default"
-                    // (#661 review). Hardcoding Pooled here meant a change to
-                    // the #[default] would silently stop being what
-                    // `--strategy default` selects.
-                    "default" => LayoutStrategy::default(),
+                    // `default` is REFUSED, not resolved. The fingerprint
+                    // records the spelling you typed, so "default" would
+                    // fingerprint identically before and after a change to
+                    // the engine's `#[default]` while producing different
+                    // bytes — an under-refusal, and the only direction this
+                    // guard must never fail in. Naming the strategy costs
+                    // nothing and makes the fixture self-describing.
+                    "default" => usage(
+                        "--strategy default is not accepted: it would record the same \
+                         provenance for two different layouts if the engine default \
+                         changes. Name the strategy — pooled | partitioned-decomposed.",
+                    ),
                     "partitioned-decomposed" | "pd" => LayoutStrategy::PartitionedDecomposed,
                     other => usage(&format!(
                         "--strategy must be pooled|default|partitioned-decomposed|pd (got {other})"
@@ -371,6 +475,73 @@ fn main() {
         ));
     }
     let label = label.unwrap_or_else(|| default_label(&targets));
+
+    // The label guard is necessary but NOT sufficient (#661 review, major).
+    // It reasons about flag PRESENCE, so it cannot separate two runs that
+    // pass the same axis with different VALUES under one `--label` —
+    // `--strategy pd --label x` then `--strategy pooled --label x` both
+    // satisfy it, and the second silently overwrote the first. That is the
+    // original wrong-A/B bug, reachable through the guard added to prevent
+    // it. Presence is knowable at parse time; artifact identity is not, so
+    // the second half of the invariant is enforced against the filesystem.
+    //
+    // Checked HERE, before the solve, and not at the write (#661 round 7,
+    // 3/3): everything between is minutes of layout and validation, and a
+    // refusal the user could have been given immediately is a bad trade for
+    // a `Path::exists` call. Nothing between here and the write can change
+    // the answer — the paths depend only on `out` and `label`, both already
+    // final.
+    //
+    // Either artifact present means the directory is claimed. Which one
+    // arrives first is deliberately not load-bearing: this diff put the
+    // config file ahead of both, so an interrupted run leaves its
+    // provenance readable rather than a fixture nobody can attribute.
+    //
+    // Applies to EVERY run, explicit label or not. Earlier rounds scoped
+    // this by axis flags and then by label-explicitness; both were proxies
+    // for artifact identity and both leaked. The verdict now comes from
+    // comparing recorded configurations, so no scoping is needed — an
+    // identical re-run is allowed because it IS identical, not because of
+    // how it was invoked.
+    let fingerprint = config_fingerprint(&targets, &axis_args);
+    {
+        let dir = format!("{out}/{label}");
+        let any_artifact = ["bp.txt", "manifest-real.json"]
+            .iter()
+            .any(|f| std::path::Path::new(&format!("{dir}/{f}")).exists());
+        let stored = std::fs::read_to_string(format!("{dir}/{CONFIG_FILE}")).ok();
+        match overwrite_verdict(stored.as_deref(), &fingerprint, force, any_artifact) {
+            OverwriteVerdict::Proceed => {}
+            OverwriteVerdict::DifferentConfig => {
+                eprintln!(
+                    "error: {dir}/ holds a fixture built from a DIFFERENT configuration \
+                     — refusing to overwrite it.\n\
+                     \n\
+                     existing: {}\n\
+                     this run: {}\n\
+                     \n\
+                     Overwriting would silently turn two fixtures into one, which is the \
+                     wrong-A/B this tool exists to prevent. Give this run its own \
+                     --label, or pass --force if you meant to replace it.",
+                    stored.as_deref().unwrap_or("<none>").replace('\n', ", "),
+                    fingerprint.replace('\n', ", "),
+                );
+                std::process::exit(2);
+            }
+            OverwriteVerdict::UnknownProvenance => {
+                eprintln!(
+                    "error: {dir}/ already holds a fixture, and carries no {CONFIG_FILE} \
+                     recording how it was built — refusing to overwrite it.\n\
+                     \n\
+                     It predates this check or was written by hand, so whether it matches \
+                     this run cannot be determined. Give this run its own --label, or \
+                     pass --force if you know it is safe to replace."
+                );
+                std::process::exit(2);
+            }
+        }
+    }
+
     let input_set: FxHashSet<String> = inputs.iter().cloned().collect();
 
     // RFC-062 Phase 3: always the multi-target entry point, even for N=1
@@ -443,9 +614,17 @@ fn main() {
     let dir = format!("{out}/{label}");
     let bp_path = format!("{dir}/bp.txt");
     let mf_path = format!("{dir}/manifest-real.json");
+    let cfg_path = format!("{dir}/{CONFIG_FILE}");
 
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
         eprintln!("cannot create {dir}: {e}");
+        std::process::exit(1);
+    });
+    // Provenance first, so an interrupted run cannot leave artifacts whose
+    // configuration is unrecorded — which the guard would then have to
+    // refuse as unknown.
+    std::fs::write(&cfg_path, &fingerprint).unwrap_or_else(|e| {
+        eprintln!("cannot write {cfg_path}: {e}");
         std::process::exit(1);
     });
     std::fs::write(&bp_path, &bp).unwrap_or_else(|e| {
@@ -532,6 +711,83 @@ mod tests {
             .collect()
     }
 
+    /// The overwrite policy, which the filesystem check only executes.
+    ///
+    /// Keyed on the artifact's recorded configuration, so every case below
+    /// is a statement about what is ON DISK, not about the command line —
+    /// which is what three rounds of flag-shaped heuristics kept getting
+    /// wrong from a different direction each time.
+    #[test]
+    fn overwrite_policy() {
+        let ec = vec![("electronic-circuit".to_string(), 5.0)];
+        let pd = config_fingerprint(&ec, &[("--strategy".into(), "pd".into())]);
+        let pooled = config_fingerprint(&ec, &[("--strategy".into(), "pooled".into())]);
+        let plain = config_fingerprint(&ec, &[]);
+
+        // Same configuration, so the re-run writes the same bytes.
+        assert_eq!(
+            overwrite_verdict(Some(&pd), &pd, false, true),
+            OverwriteVerdict::Proceed,
+            "a re-run of the same configuration is idempotent"
+        );
+
+        // The round-8 hole: an axis fixture, then a run with no axis flags
+        // reusing its directory.
+        assert_eq!(
+            overwrite_verdict(Some(&pd), &plain, false, true),
+            OverwriteVerdict::DifferentConfig,
+            "a plain run must not overwrite an axis run's fixture"
+        );
+
+        // The round-9 hole, the same collision in the other direction: an
+        // explicit --label that happens to equal the derived name.
+        assert_eq!(
+            overwrite_verdict(Some(&pd), &pooled, false, true),
+            OverwriteVerdict::DifferentConfig,
+            "two different axis VALUES are two different fixtures"
+        );
+
+        // Flag ORDER is not configuration.
+        let a = config_fingerprint(&ec, &[
+            ("--strategy".into(), "pd".into()),
+            ("--belt".into(), "fast".into()),
+        ]);
+        let b = config_fingerprint(&ec, &[
+            ("--belt".into(), "fast".into()),
+            ("--strategy".into(), "pd".into()),
+        ]);
+        assert_eq!(a, b, "the same run written two ways is one configuration");
+        assert_eq!(overwrite_verdict(Some(&a), &b, false, true), OverwriteVerdict::Proceed);
+
+        // Escape hatch, empty directory, and unrecorded provenance.
+        assert_eq!(overwrite_verdict(Some(&pd), &pooled, true, true), OverwriteVerdict::Proceed);
+        assert_eq!(overwrite_verdict(None, &pd, false, false), OverwriteVerdict::Proceed);
+        assert_eq!(
+            overwrite_verdict(None, &pd, false, true),
+            OverwriteVerdict::UnknownProvenance,
+            "a fixture with no recorded config cannot be assumed to match"
+        );
+
+        // The TARGETS are configuration too (#661 round 11, 3/3). Same
+        // flags, same label, different thing being built.
+        let cable = vec![("copper-cable".to_string(), 20.0)];
+        let cable_pd = config_fingerprint(&cable, &[("--strategy".into(), "pd".into())]);
+        assert_ne!(cable_pd, pd, "different targets are different configurations");
+        assert_eq!(
+            overwrite_verdict(Some(&pd), &cable_pd, false, true),
+            OverwriteVerdict::DifferentConfig,
+            "a different target must not overwrite an earlier fixture's directory"
+        );
+
+        // ...including a differing RATE for the same item.
+        let ec_faster = vec![("electronic-circuit".to_string(), 30.0)];
+        let faster_pd = config_fingerprint(&ec_faster, &[("--strategy".into(), "pd".into())]);
+        assert_eq!(
+            overwrite_verdict(Some(&pd), &faster_pd, false, true),
+            OverwriteVerdict::DifferentConfig,
+            "the rate changes the artifact, so it changes the fingerprint"
+        );
+    }
 
     /// Every flag the PARSER accepts must be documented.
     ///
@@ -585,8 +841,10 @@ mod tests {
     #[test]
     fn axis_flag_list_and_docs_agree_both_ways() {
         // Not axes: these change WHERE a run writes, or WHETHER it may,
-        // never WHAT it exports.
-        const NOT_AXES: &[&str] = &["--label", "--out", "--multi"];
+        // never WHAT it exports. `--force` joined them when the overwrite
+        // guard landed — and this test caught the omission on its first
+        // run, which is the whole reason it is bidirectional.
+        const NOT_AXES: &[&str] = &["--label", "--out", "--multi", "--force"];
         let doc = include_str!("sim_export.rs");
         let documented: Vec<String> = doc
             .lines()
