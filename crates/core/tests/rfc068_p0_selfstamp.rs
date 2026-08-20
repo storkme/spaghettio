@@ -14,12 +14,15 @@
 //!      which would silently void the isolation premise (RFC-068 decision
 //!      log, review round 1, item 3).
 //!   3. Run the adapter: derive the band's `RowSpan`-shaped contract from
-//!      the entry's DECLARED PORTS alone — input belt ys ordered by the
-//!      spec's input schedule, output edge/flow vs the slot's band role,
-//!      `output_feed_x_min` from drop coverage — and check every field
-//!      against the native band's actual geometry (via a fresh
-//!      `extract_unit` of the same layout, which the celldb drift test
-//!      independently pins to the store).
+//!      the STORE ENTRY ALONE (ports + entities + motif — never the native
+//!      band's row bookkeeping) — input belt ys per the spec's input
+//!      schedule, output edge/flow vs the slot's band role,
+//!      `output_feed_x_min` from drop coverage — and check every field two
+//!      ways: against a fresh `extract_unit` of the same layout (drift
+//!      isolation), and against an INDEPENDENT re-derivation of the band's
+//!      run heads/exits that shares no code with `extract_unit` (#672
+//!      review: without the second anchor, adapter-vs-fresh is circular
+//!      through the extraction logic that also produced the store).
 //!   4. Substitute the fragment at the band's native slot with an
 //!      index-preserving swap (`LayoutResult` power-wire records reference
 //!      entity indices; reordering would fabricate a record-integrity
@@ -29,18 +32,26 @@
 //!      path re-stamps them via normal lane planning.
 //!   5. Validator verdict diff: K68-1's bar is Error-parity; identity
 //!      makes full issue-list parity the expectation, so both are
-//!      asserted. Stated limit (RFC): this gate cannot catch the
-//!      `output_feed_x_min` throughput class — that is P2/P3's meter/sim
-//!      obligation.
+//!      asserted. Honest weighting (#672 review, major 1): GIVEN the
+//!      bijection in step 4, verdict parity follows necessarily — these
+//!      asserts are harness sanity (the splice does not perturb records),
+//!      and the ADJUDICATING evidence is steps 3-4: the adapter-field
+//!      anchors and the entity bijection. Stated limits (RFC): this gate
+//!      cannot catch the `output_feed_x_min` throughput class (the
+//!      `Some(...)` arm is DEAD CODE on P0's seeds — P2's donors exercise
+//!      it under meter/sim instruments), and schedule-INDEX equivalence
+//!      against the native `RowSpan` vector is P1's byte-identical
+//!      control, not provable here (the per-item ys are anchored; their
+//!      index positions are not observable from a `LayoutResult`).
 //!
 //! Escape hatches used (K68-2 unit half): ZERO — every unmappable port,
 //! schedule item without a port, or unfilled field is a hard failure here,
 //! never a workaround.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use spaghettio_core::bus::layout::{self, LayoutOptions};
 use spaghettio_core::celldb::{self, CellEntry, Motif, PortKind};
-use spaghettio_core::common::is_machine_entity;
+use spaghettio_core::common::{dir_to_vec, is_machine_entity, oriented_entity_dims};
 use spaghettio_core::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 use spaghettio_core::solver;
 use spaghettio_core::validate::{self, LayoutStyle, Severity, ValidationIssue};
@@ -56,11 +67,17 @@ fn error_count(issues: &[ValidationIssue]) -> usize {
     issues.iter().filter(|i| i.severity == Severity::Error).count()
 }
 
-/// Compact issue fingerprint for parity diffs.
+/// Compact issue fingerprint for parity diffs — includes `detail` so the
+/// full-parity claim is literal (#672 review, minor 7).
 fn fingerprint(issues: &[ValidationIssue]) -> Vec<String> {
     let mut v: Vec<String> = issues
         .iter()
-        .map(|i| format!("{:?}|{}|{:?},{:?}|{}", i.severity, i.category, i.x, i.y, i.message))
+        .map(|i| {
+            format!(
+                "{:?}|{}|{:?},{:?}|{}|{:?}",
+                i.severity, i.category, i.x, i.y, i.message, i.detail
+            )
+        })
         .collect();
     v.sort();
     v
@@ -207,9 +224,12 @@ fn adapt(
         .entities
         .iter()
         .filter(|e| {
-            e.segment_id
-                .as_deref()
-                .is_some_and(|s| s.split(':').nth(2) == Some("inserter-out"))
+            e.segment_id.as_deref().is_some_and(|s| {
+                // inserter-out2 is the lane-split second drop row
+                // (templates.rs) — no current seed carries it; included so
+                // a future one is counted, not miscounted (#672 review).
+                matches!(s.split(':').nth(2), Some("inserter-out") | Some("inserter-out2"))
+            })
         })
         .collect();
     if drops.is_empty() {
@@ -281,11 +301,34 @@ fn probe_fixture(
             .filter(|f| !f.is_fluid)
             .map(|f| f.item.clone())
             .collect();
-        let role_final = sr.external_outputs.iter().any(|o| &o.item == recipe);
+        // Mirror `place_rows`' actual is_final predicate (placer.rs:3227):
+        // external solid output AND not internally consumed by a non-voider
+        // machine. A naive "is an external output" test is wrong for the
+        // RFC-062 dual-purpose class (target with an internal consumer →
+        // west-flowing band) — #672 review, major 2. No current seed is
+        // dual-purpose; mirrored so a future one adjudicates instead of
+        // false-failing.
+        let internally_consumed: FxHashSet<&str> = sr
+            .machines
+            .iter()
+            .filter(|m| !m.voider)
+            .flat_map(|m| m.inputs.iter())
+            .filter(|f| !f.is_fluid)
+            .map(|f| f.item.as_str())
+            .collect();
+        let role_final = spec.outputs.iter().any(|o| {
+            !o.is_fluid
+                && sr.external_outputs.iter().any(|x| x.item == o.item)
+                && !internally_consumed.contains(o.item.as_str())
+        });
 
         // --- adapter under test ---
-        let out = adapt(entry, slot, &schedule, role_final)
-            .unwrap_or_else(|e| panic!("{recipe}: adapter refusal (K68-2 escape hatch): {e}"));
+        let out = adapt(entry, slot, &schedule, role_final).unwrap_or_else(|e| {
+            panic!(
+                "{recipe}: adapter refusal — a real contract gap OR a legitimate \
+                 engine shape change; re-adjudicate, don't override (K68-2): {e}"
+            )
+        });
 
         // Field checks against native geometry, via the fresh extraction's
         // port coordinates (slot-relative → slot-absolute).
@@ -312,6 +355,84 @@ fn probe_fixture(
         got_out.sort();
         assert_eq!(got_out, expect_out, "{recipe}: output belt ys diverge from native");
         assert_eq!(out.output_east, role_final, "{recipe}: output flow vs band role");
+
+        // --- INDEPENDENT native-geometry anchor (#672 review, majors 1/
+        // minors 4-5: the fresh-extraction comparisons above tie the
+        // adapter to native geometry only THROUGH `extract_unit`, which
+        // also produced the store — circular against a shared extraction
+        // bug). This block re-derives the band's belt-in run heads and
+        // belt-out exits directly from the native entities, sharing no
+        // code with `extract_unit`, and is what makes the parity verdict
+        // below evidence rather than tautology: a shared-extraction defect
+        // now fails HERE even though both port lists agree.
+        let band: Vec<&PlacedEntity> = idx.iter().map(|&i| &native.entities[i]).collect();
+        let seg_kind_item = |e: &PlacedEntity| -> Option<(String, String)> {
+            let s = e.segment_id.as_deref()?;
+            let p: Vec<&str> = s.split(':').collect();
+            Some((
+                (*p.get(2)?).to_string(),
+                p.get(3).map(|i| (*i).to_string()).unwrap_or_else(|| (*recipe).to_string()),
+            ))
+        };
+        for (item, adapter_ys) in &out.input_ys {
+            let run: Vec<&&PlacedEntity> = band
+                .iter()
+                .filter(|e| seg_kind_item(e) == Some(("belt-in".to_string(), item.clone())))
+                .collect();
+            let mut heads: Vec<i32> = run
+                .iter()
+                .filter(|t| {
+                    !run.iter().any(|f| {
+                        let (dx, dy) = dir_to_vec(f.direction);
+                        (f.x + dx, f.y + dy) == (t.x, t.y)
+                    })
+                })
+                .map(|t| t.y)
+                .collect();
+            heads.sort();
+            let mut got = adapter_ys.clone();
+            got.sort();
+            assert_eq!(
+                got, heads,
+                "{recipe}: adapter input ys for '{item}' diverge from independently-derived run heads"
+            );
+        }
+        let mut band_occ: FxHashSet<(i32, i32)> = FxHashSet::default();
+        for e in &band {
+            let (w, h) = oriented_entity_dims(&e.name, e.direction);
+            for dx in 0..w {
+                for dy in 0..h {
+                    band_occ.insert((e.x + dx, e.y + dy));
+                }
+            }
+        }
+        let out_run: Vec<&&PlacedEntity> = band
+            .iter()
+            .filter(|e| seg_kind_item(e).is_some_and(|(k, _)| k == "belt-out"))
+            .collect();
+        let exits: Vec<&&PlacedEntity> = out_run
+            .iter()
+            .filter(|t| {
+                let (dx, dy) = dir_to_vec(t.direction);
+                !band_occ.contains(&(t.x + dx, t.y + dy))
+            })
+            .copied()
+            .collect();
+        let mut exit_ys: Vec<i32> = exits.iter().map(|t| t.y).collect();
+        exit_ys.sort();
+        assert_eq!(
+            got_out, exit_ys,
+            "{recipe}: adapter output ys diverge from independently-derived run exits"
+        );
+        let expect_exit_dir =
+            if role_final { EntityDirection::East } else { EntityDirection::West };
+        for t in &exits {
+            assert_eq!(
+                t.direction, expect_exit_dir,
+                "{recipe}: native exit tile at ({}, {}) contradicts the band role",
+                t.x, t.y
+            );
+        }
         assert_eq!(
             out.output_feed_x_min, None,
             "{recipe}: engine seed derived a discrete-drop coverage; expected continuous"

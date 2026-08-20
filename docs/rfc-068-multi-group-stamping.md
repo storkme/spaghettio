@@ -341,21 +341,34 @@ registry row if it stays within the size norm.
   standing ~4s regression, not a one-shot) adjudicates: on both seed
   fixtures and all five engine seeds (both band roles —
   copper-plate/iron-plate/copper-cable intermediates, ec and ac finals),
-  a ports→RowSpan adapter written in the probe FROM DECLARED PORTS ALONE
-  reproduces the native band's input-belt ys in schedule order, output
-  ys, edge/role admissibility, and the continuous-coverage →
-  `output_feed_x_min = None` branch; index-preserving substitution
-  (power-wire records reference entity indices) reaches FULL validator
-  verdict parity — issue-list equality, stronger than the Error-parity
-  bar. Escape hatches: ZERO. Scope, honestly: with identity proven,
-  verdict parity cannot probe the router *reacting* to a differing
-  stamp — that instrument arrives with P1's byte-identical controls and
-  P2's donors, as this RFC designed. One probe-harness bug (not a
-  contract escape hatch) found en route: judging run flow by per-tile
-  direction refuses real runs containing corner/UG tiles; the RFC's
-  port-EDGE criterion is the correct test and is what the probe
-  implements. Context: executed on the owner's resume-vs-kill check
-  (2026-08-20) after the campaign sat 7 days idle; the off-path audit
+  a RowSpan-semantics adapter written in the probe from the STORE ENTRY
+  ALONE (ports + entities + motif — never the native band's row
+  bookkeeping) reproduces the native band's per-item input-belt ys,
+  output ys, port-edge/role admissibility, and the continuous-coverage →
+  `output_feed_x_min = None` branch — anchored BOTH against a fresh
+  `extract_unit` re-extraction AND against an independent run-head/exit
+  derivation sharing no code with the extractor (added on the #672
+  review, which correctly showed the first anchor alone is circular
+  through shared extraction logic). Index-preserving substitution
+  (power-wire records reference entity indices) then bijects the band
+  exactly, and the validator verdict is fully parity-checked
+  (issue-list + detail equality). Honest weighting, from the same
+  review: GIVEN the bijection, verdict parity follows necessarily — the
+  parity asserts are harness sanity, and the ADJUDICATING evidence is
+  the adapter-field anchors plus the bijection. Escape hatches: ZERO.
+  Known limits, recorded: the `output_feed_x_min = Some(...)` arm is
+  dead code on engine seeds (P2's donors exercise it under meter/sim);
+  schedule-INDEX equivalence vs the native RowSpan vector is P1's
+  byte-identical control (per-item ys are anchored; index positions are
+  not observable from a `LayoutResult`); the role predicate mirrors
+  `place_rows`' `is_final` exactly (external AND not internally
+  consumed, voiders excluded) though no current seed exercises the
+  dual-purpose class. One probe-harness bug (not a contract escape
+  hatch) found en route: judging run flow by per-tile direction refuses
+  real runs containing corner/UG tiles; the RFC's port-EDGE criterion
+  is the correct test and is what the probe implements. Context:
+  executed on the owner's resume-vs-kill check (2026-08-20) after the
+  campaign sat 7 days idle; the off-path audit
   (docs/offpath-code-followups.md) had queued ~3.7k lines of this
   campaign's entry-path plumbing behind exactly this gate. **P1 is
   unblocked.***
