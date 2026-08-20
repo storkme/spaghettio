@@ -110,6 +110,16 @@ fn direction_scale(data: &Value) -> Result<u64, String> {
     //   * 2 and 6 are 8-way E/W or 16-way NE/SE, and 1/3/5/7 are diagonals
     //     under BOTH encodings, so neither discriminates.
     // A tool whose job is refusing ambiguous input should not be guessing.
+    //
+    // Re-raised in review as a user-facing capability regression, on the
+    // grounds that version-less 1.x books are common from forum copies.
+    // Measured against the corpus in `scripts/blueprints/`: 6087 blueprints
+    // across 172 files, of which 0 lack a usable version. `version` lives
+    // INSIDE the blueprint JSON, so copying a blueprint string carries it
+    // along; only hand-authored JSON can arrive without one. The regression
+    // is real but its population is empty here, and the recovery is to
+    // re-export from the game rather than to add an `--assume` flag whose
+    // wrong setting is silent.
     Err("blueprint has no usable `version` field (absent, or the packed-0 \
          sentinel), so its direction encoding is undetermined: every value \
          below 8 means something different under 8-way (1.x) and 16-way \
@@ -139,7 +149,13 @@ fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
         // message branching on 8-vs-16-way, while 8-way diagonals (1/3/5/7)
         // fell through to a DIFFERENT message — the same defect reported
         // under two labels.
-        if raw_dir % scale != 0 || !matches!((raw_dir / scale) as u8, N | E | S | W) {
+        // Range-check BEFORE the `as u8` cast (#664 review). `as u8`
+        // truncates modulo 256, so a corrupt 512 under 16-way divided to 256
+        // and truncated to 0 == NORTH: the exact "corrupt value mis-decodes
+        // silently" case this change exists to close, reintroduced by the
+        // cast that implements it. Both encodings top out well under 16, so
+        // anything above that is malformed however you read it.
+        if raw_dir > 15 || raw_dir % scale != 0 || !matches!((raw_dir / scale) as u8, N | E | S | W) {
             return Err(format!(
                 "entity {raw_name} at ({x}, {y}) has direction {raw_dir}, which is \
                  not a cardinal under the detected {}-way encoding — diagonal \
@@ -469,7 +485,19 @@ struct Template {
 
 fn validate_and_build(bp: &str) -> Result<Template, String> {
     let data = decode_blueprint(bp)?;
-    let raw = extract_entities(&data)?;
+    build_from_value(&data, bp)
+}
+
+/// The whole import pipeline below the base64 envelope.
+///
+/// Split out so tests can drive it from a decoded JSON fixture (#664
+/// review): the first version of `real_two_point_zero_blueprint_decodes`
+/// stopped at `extract_entities`, which proved the directions were legal
+/// but nothing about whether the topology they describe survives
+/// `normalize_to_south_flow` / `identify_ports`. A decode that is legal and
+/// geographically wrong passed it.
+fn build_from_value(data: &Value, bp: &str) -> Result<Template, String> {
+    let raw = extract_entities(data)?;
 
     let non_belt: Vec<_> = raw.iter().filter(|e| !BELT_ENTITIES.contains(&e.name.as_str())).collect();
     if !non_belt.is_empty() {
@@ -1253,6 +1281,77 @@ mod tests {
         // raw 4 -> E. Under the old 8-way assumption raw 4 would have been S.
         let dirs: Vec<u8> = ents.iter().map(|e| e.direction).collect();
         assert_eq!(dirs, vec![N, E, E, E, E, S, E, N, N]);
+
+        // ...and the decoded topology actually survives the REST of the
+        // pipeline (#664 review). Stopping at `extract_entities` proved the
+        // directions were legal, not that they were right: rotation and
+        // port identification are where a legal-but-wrong decode shows up,
+        // because a mis-read cardinal moves a belt's flow axis and the
+        // SOUTH-facing top/bottom rows stop being found.
+        // NOTE this fixture is a lane CORNER, so it deliberately stops
+        // here: its flow turns, so it has no south-flow port pair and
+        // `identify_ports` refuses it on shape. It pins the DECODE. The
+        // end-to-end claim is carried by the (2,8) balancer below, on a
+        // separate fixture, because a corner cannot carry it.
+    }
+
+    /// The end-to-end claim: a real 2.0 balancer from the book imports all
+    /// the way to a `Template` with the right port counts.
+    ///
+    /// The first version of this PR's coverage stopped at
+    /// `extract_entities` (#664 review) — which proves directions are legal
+    /// cardinals, and nothing about whether the topology they describe
+    /// survives `normalize_to_south_flow` / `identify_ports`. That gap was
+    /// not hypothetical: writing this test is what showed the corner
+    /// fixture cannot reach the end of the pipeline at all.
+    ///
+    /// This shape is the right instrument because it uses raw directions 4
+    /// and 8. Under the old 8-way reading 4 was SOUTH (not EAST) and 8 was
+    /// out of range entirely, so a decode regression cannot pass it
+    /// quietly — it fails at the ports, exactly as the corner does.
+    #[test]
+    fn real_two_point_zero_balancer_imports_end_to_end() {
+        let raw = include_str!("fixtures/raynquist-2-8-balancer-2.0.json");
+        let data: Value = serde_json::from_str(raw).expect("fixture parses");
+        assert_eq!(direction_scale(&data), Ok(2));
+
+        let tpl = build_from_value(&data, "<fixture>").expect("real 2.0 balancer imports");
+        assert_eq!(
+            (tpl.n_inputs, tpl.n_outputs),
+            (2, 8),
+            "the book calls this a 2-8 balancer; the import must agree"
+        );
+        assert_eq!(tpl.entities.len(), 21);
+    }
+
+    /// A direction too large for either encoding must be refused, not
+    /// truncated into a legal one.
+    ///
+    /// `as u8` wraps modulo 256, so before the range check `512` under
+    /// 16-way became `256 as u8` == 0 == NORTH and imported silently. The
+    /// values here are the two that land exactly on a cardinal after
+    /// wrapping, which is what makes the bug quiet rather than loud.
+    #[test]
+    fn out_of_range_directions_are_refused_not_truncated() {
+        for (raw, packed_version) in [(512u64, 2u64 << 48), (256, 2 << 48), (256, 1 << 48)] {
+            let data = serde_json::json!({
+                "blueprint": {
+                    "version": packed_version,
+                    "entities": [{
+                        "name": "transport-belt",
+                        "position": {"x": 0.5, "y": 0.5},
+                        "direction": raw,
+                    }],
+                }
+            });
+            let err = extract_entities(&data).expect_err(
+                "direction {raw} is out of range for every encoding and must be refused",
+            );
+            assert!(
+                err.contains(&raw.to_string()),
+                "refusal should name the offending value, got: {err}"
+            );
+        }
     }
 
     /// Packed 0 is the ABSENT sentinel (`blueprint_parser::
