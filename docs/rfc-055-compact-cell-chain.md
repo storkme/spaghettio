@@ -325,3 +325,13 @@ introduced.
   backward rate, weighted cuts, and estimated footprint, and the first
   deterministic competitor performs best-improving adjacent swaps to a local
   optimum. Tile routing remains unchanged.
+
+- *2026-08-20 — DELETED FROM TREE (owner call extending #632 A2;
+  offpath-code-followups Tier 2, tracking #675): `cells/placement.rs`
+  (the linear/fold placement estimator), `ChainOrder::Compact` and its
+  `compose_chain_compact` entry, and the three `#[ignore]`d experiments
+  in `cell_composition.rs`. The compact order never left opt-in status
+  and its only callers were those experiments; the shipped
+  `ChainOrder::Current` path is unchanged (each removed arm was
+  Compact-gated — verified against the full suite on the deletion PR).
+  Revival path: git history at this entry's date.*

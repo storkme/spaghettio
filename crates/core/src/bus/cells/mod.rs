@@ -10,7 +10,9 @@ pub mod chain;
 pub mod compose;
 pub mod extract;
 pub mod mega;
-pub mod placement;
+// `placement` (RFC-057's linear/fold placement estimator, kept for the
+// RFC-055 compact-order experiments) was deleted 2026-08-20 with
+// ChainOrder::Compact — owner extended #632 A2 (offpath Tier 2, #675).
 pub mod registry;
 
 /// Cell-composition mode (RFC-051). `Off` = production pipeline
