@@ -81,16 +81,51 @@ fn normalize_belt_name(name: &str) -> &str {
 /// 1.0 4 is SOUTH), so the shape detector mis-reads the topology rather
 /// than failing. Raynquist's fall-2025 book is 2.0, which is why every
 /// shape in it looked unimportable.
-fn direction_scale(data: &Value) -> u64 {
-    let version = data["blueprint"]["version"].as_u64().unwrap_or(0);
-    if (version >> 48) >= 2 { 2 } else { 1 }
+fn direction_scale(data: &Value) -> Result<u64, String> {
+    if let Some(version) = data["blueprint"]["version"].as_u64() {
+        return Ok(if (version >> 48) >= 2 { 2 } else { 1 });
+    }
+    // No version field. Infer from the direction VALUES, and refuse when they
+    // are genuinely ambiguous (#664 review, 3/3): the previous `unwrap_or(0)`
+    // silently assumed 1.x, so a stripped-version 2.0 blueprint using only
+    // north and east (0 and 4) passed every guard and was read as
+    // north/SOUTH — exactly the silent mis-read this function exists to
+    // prevent, just moved one step back.
+    let dirs: Vec<u64> = data["blueprint"]["entities"]
+        .as_array()
+        .map(|es| es.iter().filter_map(|e| e["direction"].as_u64()).collect())
+        .unwrap_or_default();
+    if dirs.iter().any(|d| d % 2 == 1) {
+        // Odd values exist only in the 16-way encoding's diagonals... which we
+        // reject anyway, but their presence proves the encoding.
+        return Ok(2);
+    }
+    if dirs.iter().any(|&d| d == 8 || d == 12) {
+        return Ok(2); // 8/12 are cardinals only under 16-way
+    }
+    if dirs.iter().any(|&d| d == 2 || d == 6) {
+        return Ok(1); // 2/6 are cardinals only under 8-way
+    }
+    // Everything is 0 or 4: identical bytes under both encodings, meaning
+    // north/south (8-way) or north/east (16-way). Genuinely undecidable.
+    if dirs.contains(&4) {
+        return Err(
+            "blueprint has no `version` field and uses only directions 0 and 4, \
+             which is byte-identical under the 8-way (1.x) and 16-way (2.0) \
+             encodings — north/south vs north/east. Re-export the blueprint \
+             from the game so it carries a version, rather than have this tool \
+             guess the topology."
+                .to_string(),
+        );
+    }
+    Ok(1) // all-north: the two encodings agree
 }
 
 fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
     let entities = data["blueprint"]["entities"]
         .as_array()
         .ok_or("No 'blueprint.entities' array in JSON")?;
-    let scale = direction_scale(data);
+    let scale = direction_scale(data)?;
     let mut result = Vec::new();
     for ent in entities {
         let raw_name = ent["name"].as_str().ok_or("Entity missing 'name'")?;
@@ -1106,5 +1141,82 @@ fn main() {
     if let Err(e) = patch_rust_library(&lib_path, &template) {
         eprintln!("Error: {e}");
         process::exit(1);
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn bp(version: Option<u64>, dirs: &[u64]) -> Value {
+        let entities: Vec<Value> = dirs
+            .iter()
+            .map(|d| json!({"name": "splitter", "position": {"x": 0.0, "y": 0.0}, "direction": d}))
+            .collect();
+        let mut b = json!({"entities": entities});
+        if let Some(v) = version {
+            b["version"] = json!(v);
+        }
+        json!({"blueprint": b})
+    }
+
+    /// 2.0 doubled the encoding; the top 16 bits of `version` are the major.
+    #[test]
+    fn version_field_picks_the_scale() {
+        // 2.0.x -> major 2 -> 16-way
+        assert_eq!(direction_scale(&bp(Some(2u64 << 48), &[0])), Ok(2));
+        // 1.1.x -> major 1 -> 8-way
+        assert_eq!(direction_scale(&bp(Some(1u64 << 48), &[0])), Ok(1));
+    }
+
+    /// The regression that made the whole 2025 book look unimportable: a 2.0
+    /// source must normalise 0/4/8/12 down to 0/2/4/6, not pass them through.
+    #[test]
+    fn two_point_zero_cardinals_normalise() {
+        let data = bp(Some(2u64 << 48), &[0, 4, 8, 12]);
+        let ents = extract_entities(&data).expect("2.0 cardinals import");
+        let got: Vec<u8> = ents.iter().map(|e| e.direction).collect();
+        assert_eq!(got, vec![N, E, S, W]);
+    }
+
+    /// ...and a 1.x source must be left alone.
+    #[test]
+    fn one_x_cardinals_pass_through() {
+        let data = bp(Some(1u64 << 48), &[0, 2, 4, 6]);
+        let ents = extract_entities(&data).expect("1.x cardinals import");
+        let got: Vec<u8> = ents.iter().map(|e| e.direction).collect();
+        assert_eq!(got, vec![N, E, S, W]);
+    }
+
+    /// Diagonals are not representable as a balancer template and must fail
+    /// by name rather than truncate into a cardinal. Both refusal paths are
+    /// covered: 16-way 2 (north-east) survives the `% scale` check and is
+    /// caught by the N/E/S/W test; 8-way 1 is caught by `% scale` itself.
+    #[test]
+    fn diagonal_directions_are_refused() {
+        let ne = extract_entities(&bp(Some(2u64 << 48), &[2])).unwrap_err();
+        assert!(ne.contains("N/E/S/W"), "16-way diagonal: {ne}");
+
+        let odd = extract_entities(&bp(Some(2u64 << 48), &[3])).unwrap_err();
+        assert!(odd.contains("cardinal"), "odd raw direction: {odd}");
+    }
+
+    /// The silent-default hole: no version, and directions that mean different
+    /// things under each encoding. Guessing here mis-reads the topology, so it
+    /// must refuse instead.
+    #[test]
+    fn missing_version_with_ambiguous_directions_refuses() {
+        let r = direction_scale(&bp(None, &[0, 4]));
+        assert!(r.is_err(), "0/4 with no version is undecidable, got {r:?}");
+    }
+
+    /// ...but where the values themselves settle it, infer rather than refuse.
+    #[test]
+    fn missing_version_infers_when_unambiguous() {
+        assert_eq!(direction_scale(&bp(None, &[0, 8])), Ok(2), "8 is 16-way only");
+        assert_eq!(direction_scale(&bp(None, &[0, 2])), Ok(1), "2 is 8-way only");
+        assert_eq!(direction_scale(&bp(None, &[0, 0])), Ok(1), "all-north agrees");
     }
 }
