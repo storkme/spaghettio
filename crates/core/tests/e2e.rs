@@ -2384,11 +2384,18 @@ fn tier4_ac7_duty06_has_no_severed_connections() {
     // WHAT ZERO ERRORS DOES NOT MEAN (read this before citing the test):
     // this fixture is NOT healthy. It sims at 64.4% of plan (4.51/7.00,
     // converged, kit-clean, 2026-08-17) and carries input-rate-delivery
-    // warnings, TEN of which are belts whose modelled delivery is 0.0/s.
-    // (An earlier version of this comment said six. It was never
-    // measured; the count below is, and the assert now pins it so the
-    // next wrong number fails instead of ageing quietly.) Those belts
-    // are physically connected — each was walked 159-195 tiles upstream
+    // 14 input-rate-delivery warnings, TEN of which are belts whose
+    // modelled delivery is 0.0/s (measured 2026-08-20).
+    //
+    // Both numbers are UNENFORCED, and that is a deliberate choice rather
+    // than an oversight — see the note at the end of this test. An earlier
+    // draft of this comment said "six" from memory and was wrong, which is
+    // the honest argument for enforcement; the argument against is that the
+    // only quantity available to assert on here is the validator's model,
+    // which drifts under unrelated engine work. Re-measure before citing
+    // these figures anywhere that matters.
+    //
+    // Those belts are physically connected — each was walked 159-195 tiles upstream
     // to a real source — so they are a provisioning deficit (RFC-069 /
     // #519 territory), not a routing one, and nothing in this test
     // touches them. The name says what it pins: no SEVERED connections.
