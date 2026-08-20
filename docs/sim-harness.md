@@ -56,7 +56,7 @@ cargo run --release --example sim_export -- <item> <rate> [flags]
   --stacking <1..4>     belt stacking      --inserter-cap <n> capacity level
   --inputs a,b,c        raw inputs (default: the six-ore set)
   --row-layout <kind>   native (default) | horizontal-stack
-  --strategy <kind>     pooled (default) | partitioned-decomposed
+  --strategy <kind>     pooled (aka default) | partitioned-decomposed (aka pd)
   --duty <0..1>         planning duty (default 1.0; <1 needs --belt)
   --research-productivity <recipe=bonus,...>   declared research
   --label <name>        output subdir + manifest label
@@ -90,8 +90,16 @@ though neither changes the artifact. This is deliberate — deciding
 "is this value the default?" is exactly the defaults-tracking the encoding
 scheme was abandoned for, and it is the half that kept being wrong. The cost
 is that a previously-valid invocation passing an axis at its default now
-needs a label; no in-tree caller does, and the failure is a loud refusal
+needs a label; no automation caller does — some hand-run repro commands in
+older RFCs did, and were updated — and the failure is a loud refusal
 with the required flag named, not a silent overwrite.
+
+The guard reasons about which flags were PASSED, which is all that is
+knowable at parse time — so it cannot separate two runs that pass the same
+axis with different values under one `--label`. That half is enforced at the
+write instead: an existing `<out>/<label>/bp.txt` is a refusal, and
+`--force` is the escape hatch for deliberately regenerating the same
+configuration.
 
 It writes `<out>/<label>/bp.txt` and `<out>/<label>/manifest-real.json`,
 and prints the ready-to-paste `run` command. Unknown flags are an error
