@@ -155,9 +155,13 @@ verification protocol (suite green + clippy + WASM build), not just compile.
 `bus/template_candidate.rs` (200 + 149 tests) are all kept alive, by name, in
 RFC-064's 2026-08-14 decision log *solely* as the RFC-068 celldb campaign's
 entry path (`run_candidate_field` → `objective::measure` → Transit scoring).
-RFC-068 status as of 2026-08-20: PR #628 (docs-only) merged 2026-08-13, P0
-never started, no branch, tracking #629 silent — stalled 7 days, not
-confirmed dead. `celldb.rs` (617) + `data/celldb.json` (20,775 lines)
+**RESOLVED 2026-08-20: RFC-068 is ALIVE — Tier 3 is KEEP-CAMPAIGN.** The
+owner's status check ran P0 the same day; it PASSED (K68-1, full verdict
+parity, zero escape hatches — RFC-068 decision log). The five modules
+stay, now with a live consumer again; this tier re-opens only if a later
+kill criterion (K68-2 donor half, K68-3) fires. Original stall evidence,
+kept for the record: PR #628 (docs-only) merged 2026-08-13, P0 not
+started, tracking #629 silent for 7 days. `celldb.rs` (617) + `data/celldb.json` (20,775 lines)
 additionally carry RFC-067's independent "measured baseline" retention and
 survive even if RFC-068 dies; `preview.rs` likewise (K67-2 killed its
 consumer but the RFC forbids rebuilding without a decision-log amendment and
