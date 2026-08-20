@@ -117,11 +117,16 @@ pub enum ThroughputTier {
     /// (10,10)), but `throughput_tier` is public and `import_balancer` can
     /// be pointed at anything.
     ///
-    /// NOTE the deliberate divergence: [`BalancerClass`] still returns its
-    /// pre-existing optimistic answer for such graphs. That overclaim is
-    /// older than this enum and fixing it would move `class` for real
-    /// inputs, which this change is specifically avoiding; it is recorded
-    /// here rather than silently inherited by the new axis.
+    /// [`BalancerClass`] does NOT diverge here: `classify_graph` refuses an
+    /// `Unknown`-tier graph outright with [`ClassifyError::Unanalysable`],
+    /// so no class is issued without a subset check having run. (Earlier
+    /// drafts of this comment described a deliberate divergence in which
+    /// `class` kept its optimistic answer. Round 5 removed that divergence
+    /// and this note outlived it by a round — #662 review, 3/3.)
+    ///
+    /// The two surfaces therefore differ only in SEVERITY, not verdict:
+    /// `throughput_tier` reports `Unknown` and lets the caller decide;
+    /// `classify_graph` refuses, because its callers gate on `class`.
     Unknown,
 }
 
@@ -143,9 +148,19 @@ pub fn throughput_tier(graph: &SplitterGraph) -> ThroughputTier {
     // public surfaces disagreed on the same graph. The comment claiming they
     // "cannot drift" was false precisely because of that gate.
     //
-    // Both subset helpers bail cheaply on size and return `None`, so calling
-    // them unconditionally costs nothing; `throughput_tier_from` is the one
-    // place that decides what a `None` means on each side.
+    // Both subset helpers bail cheaply on size and return `None`, so removing
+    // the gate costs nothing ON THIS SURFACE; `throughput_tier_from` is the
+    // one place that decides what a `None` means on each side.
+    //
+    // "Costs nothing" is true here and was WRONG when this comment's twin
+    // claimed it for `classify_graph` (#662 review). There the checks moved
+    // in front of an MX3 early-return that used to skip them for every
+    // balanced template, which is 62 of the registry's 64. Measured over the
+    // registry, 20 passes each: 11.3us -> 198.2us per template, a 17.6x
+    // slowdown. Kept anyway — the throughput axis cannot be computed without
+    // running them, which is the entire point of the change — and the
+    // absolute cost is sub-millisecond per family stamp. Recorded so the
+    // next person reads a number instead of a reassurance.
     let mx2a = check_input_subsets(graph, m, n);
     let mx2b = if mx2a.is_none() {
         check_output_subsets(graph, m, n)
@@ -1354,6 +1369,23 @@ mod tests {
         }
     }
 
+    /// Every input merged into a single output. Unlike `straight_through`,
+    /// whose composition is the IDENTITY, this graph's composition matrix is
+    /// uniformly `1/n` (`n == 1`, so every entry is 1.0) — so it satisfies
+    /// `is_mx3` and actually reaches the `Balanced` arm. That is the whole
+    /// point: `straight_through(k, k)` can never reach it, so a test built on
+    /// that helper cannot pin where the guard sits relative to it.
+    fn all_into_one(m: usize) -> SplitterGraph {
+        SplitterGraph {
+            n_inputs: m,
+            n_outputs: 1,
+            n_splitters: 0,
+            edges: (0..m)
+                .map(|i| (NodeId::InputPort(i), NodeId::OutputPort(0)))
+                .collect(),
+        }
+    }
+
     /// An oversized graph must not be handed an optimistic throughput verdict
     /// on EITHER surface.
     ///
@@ -1441,10 +1473,26 @@ mod tests {
     #[test]
     fn oversized_uniform_graphs_do_not_classify_as_balanced() {
         let k = SUBSET_ENUM_MAX + 1;
-        let graph = straight_through(k, k);
+        let graph = all_into_one(k);
+
+        // The premise this test rests on, asserted rather than assumed: the
+        // graph really is uniform, so it really would take the `Balanced`
+        // arm. `straight_through(k, k)` — what this test used in round 5 —
+        // is the identity, fails `is_mx3`, and so passed whether the guard
+        // sat above or below that branch. It pinned nothing (#662 round 6).
+        let target = 1.0 / graph.n_outputs as f64;
+        assert!(
+            compute_composition_matrix(&graph)
+                .expect("composition solve")
+                .iter()
+                .all(|row| row.iter().all(|&v| (v - target).abs() < 1e-9)),
+            "test premise broken: graph is not uniform, so it never reaches \
+             the Balanced arm and this test cannot discriminate"
+        );
+
         match classify_graph(&graph) {
             Err(ClassifyError::Unanalysable { m, n, bound }) => {
-                assert_eq!((m, n, bound), (k, k, SUBSET_ENUM_MAX));
+                assert_eq!((m, n, bound), (k, 1, SUBSET_ENUM_MAX));
             }
             Ok(r) => panic!(
                 "oversized graph classified as {:?} with throughput {:?} — no \
