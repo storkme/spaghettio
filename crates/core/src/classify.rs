@@ -894,7 +894,8 @@ mod tests {
             ..Default::default()
         };
         let bp = blueprint::export(&layout, "di-test");
-        let (imported, analysis) = crate::analysis::analyze_blueprint_string(&bp).unwrap();
+        let parsed = crate::analysis::analyze_blueprint_string_any(&bp).unwrap().remove(0);
+        let (imported, analysis) = (parsed.layout, parsed.analysis);
         let f = classify(&imported, &analysis);
         assert_eq!(f.direct_insertion, 1, "round-trip should preserve DI");
     }

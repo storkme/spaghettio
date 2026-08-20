@@ -110,18 +110,12 @@ static LOOKUP_HIT_UNSAT: AtomicUsize = AtomicUsize::new(0);
 /// Subset of hits that were `Timeout` cache entries — caller saved a SAT call.
 static LOOKUP_HIT_TIMEOUT: AtomicUsize = AtomicUsize::new(0);
 
-/// Return `(total, hits, misses)` across all `lookup_zone` calls so far.
-/// Counters use `Relaxed` ordering — eventual consistency only, no guarantees
-/// about cross-thread visibility at any exact instant. Good enough for stats.
-pub fn cache_stats() -> (usize, usize, usize) {
-    (
-        LOOKUP_TOTAL.load(Ordering::Relaxed),
-        LOOKUP_HIT.load(Ordering::Relaxed),
-        LOOKUP_MISS.load(Ordering::Relaxed),
-    )
-}
+// (cache_stats deleted 2026-08-20, offpath Tier 1 — superseded by
+// cache_stats_extended, the copy everything calls.)
 
 /// Extended stats: `(total, hits_solved, hits_unsat, hits_timeout, misses)`.
+/// Counters use `Relaxed` ordering — eventual consistency only, no guarantees
+/// about cross-thread visibility at any exact instant. Good enough for stats.
 pub fn cache_stats_extended() -> (usize, usize, usize, usize, usize) {
     let total  = LOOKUP_TOTAL.load(Ordering::Relaxed);
     let hits   = LOOKUP_HIT.load(Ordering::Relaxed);

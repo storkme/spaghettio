@@ -12,7 +12,7 @@ the solver behaves as expected.
 
 `crates/core/tests/sat_fixtures.rs` reads every `*.json` in this directory,
 deserialises each into a `Fixture` struct, constructs a `CrossingZone`, calls
-`solve_crossing_zone_with_stats`, and compares the result against
+`solve_crossing_zone_with_pins` (empty pin set), and compares the result against
 `expected.mode`. Failures are accumulated and reported together at the end.
 
 Run the suite:

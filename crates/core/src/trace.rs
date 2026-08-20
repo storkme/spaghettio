@@ -1155,8 +1155,11 @@ pub enum TraceEvent {
         elapsed_us: u64,
     },
 
-    /// Emitted by the SAT strategy every time `solve_crossing_zone` is
-    /// called, with the full invocation signature. This is enough to
+    /// Emitted by the SAT strategy every time the SAT solver is invoked
+    /// (`solve_crossing_zone_per_channel` / `_with_cost_cap` — the legacy
+    /// `solve_crossing_zone` wrapper this comment once named was deleted
+    /// 2026-08-20, offpath Tier 1), with the full invocation signature.
+    /// This is enough to
     /// replay a single SAT solve in isolation (outside the larger
     /// junction solver). Complements JunctionStrategyAttempt with
     /// SAT-specific numbers.

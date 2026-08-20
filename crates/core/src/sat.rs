@@ -1740,43 +1740,6 @@ pub fn ug_name_for_tier(belt_tier: &str) -> &str {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Solve a crossing zone, returning placed entities or None if unsatisfiable.
-/// Unrestricted: both surface and underground-belt entities are allowed,
-/// no UG budget. Callers that want to cost-shape the solver should use
-/// `solve_crossing_zone_with_stats` directly with a `max_ug_ins` cap.
-pub fn solve_crossing_zone(
-    zone: &CrossingZone,
-    max_ug_reach: u32,
-    belt_tier: &str,
-) -> Option<CrossingZoneSolution> {
-    let (entities, stats) =
-        solve_crossing_zone_with_stats(zone, max_ug_reach, belt_tier, None);
-    entities.map(|ents| CrossingZoneSolution { entities: ents, stats })
-}
-
-/// Same as `solve_crossing_zone` but always returns the encoder/solver
-/// stats, even on UNSAT. Callers doing instrumentation (trace events,
-/// diagnostics) use this so variables/clauses/solve_time are still
-/// surfaced when the solver couldn't find a satisfying assignment.
-///
-/// `max_ug_ins`: optional cap on the number of UG corridors.
-/// - `None`: unlimited (original behaviour).
-/// - `Some(0)`: hard-forbid UG entities (surface-only routing).
-/// - `Some(k)` for `k ≥ 1`: at most `k` UG-in tiles, used to find the
-///   simplest layout that still routes (e.g. spend exactly one UG on a
-///   real crossing and keep every other item on the surface).
-pub fn solve_crossing_zone_with_stats(
-    zone: &CrossingZone,
-    max_ug_reach: u32,
-    belt_tier: &str,
-    max_ug_ins: Option<u32>,
-) -> (Option<Vec<PlacedEntity>>, CrossingZoneStats) {
-    let channel_info = channel_info_from_boundaries(&zone.boundaries);
-    let n_channels = channel_info.len() as u32;
-    let channel_reaches: Vec<u32> = vec![max_ug_reach; n_channels.max(1) as usize];
-    solve_crossing_zone_per_channel(zone, &channel_reaches, belt_tier, max_ug_ins)
-}
-
 /// If any channel's boundaries are all sources or all sinks, the zone cannot
 /// conserve flow and is therefore UNSAT — return a short human-readable
 /// reason (`"chN Xin/Yout"`). `None` means every channel has at least one
@@ -2054,6 +2017,24 @@ pub fn solve_crossing_zone_with_pins(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test-local stand-in for the deleted legacy `solve_crossing_zone`
+    /// wrapper (offpath-code-followups Tier 1, 2026-08-20; its
+    /// `_with_stats` sibling went with it) — production calls
+    /// `solve_crossing_zone_per_channel` directly, and these tests keep
+    /// the old single-reach convenience shape.
+    fn solve_crossing_zone(
+        zone: &CrossingZone,
+        max_ug_reach: u32,
+        belt_tier: &str,
+    ) -> Option<CrossingZoneSolution> {
+        let channel_info = channel_info_from_boundaries(&zone.boundaries);
+        let n_channels = channel_info.len() as u32;
+        let channel_reaches: Vec<u32> = vec![max_ug_reach; n_channels.max(1) as usize];
+        let (entities, stats) =
+            solve_crossing_zone_per_channel(zone, &channel_reaches, belt_tier, None);
+        entities.map(|ents| CrossingZoneSolution { entities: ents, stats })
+    }
 
     fn simple_crossing_zone(width: u32, height: u32) -> CrossingZone {
         let mid_x = width / 2;
