@@ -1313,7 +1313,8 @@ needed to look at the result, not a UI feature.
   fix attempts within budget.*
 
   **Fixture.** `sim_export --multi electronic-circuit:10
-  advanced-circuit:3 --tier assembling-machine-2` (native mechanism,
+  advanced-circuit:3 --tier assembling-machine-2 --label kc3-am2` (native
+  mechanism,
   default candidate search — the same shipped-default engine
   `ec_ac_default_options_candidate_choice` pins as choosing `native`):
   159×96, 2169 entities, 139 machines, **0 validation errors, 4
@@ -1501,8 +1502,8 @@ needed to look at the result, not a UI feature.
   origin-centered paste's own edge), is the actual discriminator — a
   live, reproducible repro now exists for whoever picks this up (this
   exact fixture, `sim_export --multi electronic-circuit:10
-  advanced-circuit:3 --tier assembling-machine-2`, then `spaghettio-sim
-  run --warmup 288000`) — tracked as a followup, below.
+  advanced-circuit:3 --tier assembling-machine-2 --label kc3-am2`, then
+  `spaghettio-sim run --warmup 288000`) — tracked as a followup, below.
 
   **Verdict, precisely stated**: KC3's own bar ("zero validation errors
   AND sim-measured at plan on BOTH targets") is **not met** — this is a

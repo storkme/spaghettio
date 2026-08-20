@@ -30,7 +30,7 @@
 //!   --claim up|down|search           DI claim order (default: engine default)
 //!   --belt <entity>        max belt tier (default: engine picks by rate)
 //!   --row-layout <kind>    native (default) | horizontal-stack
-//!   --strategy <kind>      pooled (default) | partitioned-decomposed
+//!   --strategy <kind>      pooled (aka default) | partitioned-decomposed (aka pd)
 //!   --duty <0..1>          planning duty (default 1.0; <1 needs --belt)
 //!   --quality <name>       normal|uncommon|rare|epic|legendary (default normal)
 //!   --stacking <1..4>      belt stacking (default 1)
@@ -39,6 +39,7 @@
 //!   --inserter-cap <n>     inserter capacity level (default: engine default)
 //!   --inputs a,b,c         raw inputs (default: the six-ore set)
 //!   --label <name>         output subdirectory + manifest label
+//!   --force                overwrite an existing <out>/<label>/bp.txt
 //!                          REQUIRED whenever any layout-changing flag is used
 //!   --out <dir>            parent output dir (default $SIM_PROBE_OUT or /tmp)
 //! ```
@@ -132,15 +133,6 @@ fn parse_target_token(tok: &str) -> (String, f64) {
 }
 
 
-/// Does this invocation need an explicit `--label`?
-///
-/// True when any artifact-changing flag was passed. Kept as a pure function
-/// so the rule is testable — the previous design put per-axis default
-/// comparisons inline in `main()`, where nothing exercised them and five
-/// review rounds each found another axis compared against the wrong default.
-///
-/// Note what it does NOT take: any value, and any default. It is a question
-/// about the command line, not about the configuration.
 /// The label a run falls back to when `--label` is absent.
 ///
 /// One definition, because the refusal message quotes it: when these were
@@ -155,6 +147,18 @@ fn default_label(targets: &[(String, f64)]) -> String {
         .replace('.', "_")
 }
 
+/// Does this invocation need an explicit `--label`?
+///
+/// True when any artifact-changing flag was passed. Kept as a pure function
+/// so the rule is testable — the previous design put per-axis default
+/// comparisons inline in `main()`, where nothing exercised them and five
+/// review rounds each found another axis compared against the wrong default.
+///
+/// Note what it does NOT take: any value, and any default. It is a question
+/// about the command line, not about the configuration — which is also its
+/// limit: it cannot tell two runs apart that pass the SAME axis with
+/// DIFFERENT values under one `--label`. That case is caught at the write
+/// instead, where the artifact is.
 fn label_required(axis_flags_seen: &[String], label: &Option<String>) -> bool {
     !axis_flags_seen.is_empty() && label.is_none()
 }
@@ -213,6 +217,7 @@ fn main() {
     let mut strategy = LayoutStrategy::default();
     let mut inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
     let mut label: Option<String> = None;
+    let mut force = false;
     let mut axis_flags_seen: Vec<String> = Vec::new();
     let mut out = std::env::var("SIM_PROBE_OUT").unwrap_or_else(|_| "/tmp".to_string());
 
@@ -229,6 +234,13 @@ fn main() {
         // wrong; not consulting a default at all is the fix.
         if AXIS_FLAGS.contains(&args[i].as_str()) {
             axis_flags_seen.push(args[i].clone());
+        }
+        // The one valueless flag, so it advances by 1 rather than the 2
+        // every other branch assumes.
+        if args[i] == "--force" {
+            force = true;
+            i += 1;
+            continue;
         }
         match args[i].as_str() {
             "--tier" => tier = need(i),
@@ -439,12 +451,34 @@ fn main() {
         &layout, &solved, &label, &issues,
     );
     let dir = format!("{out}/{label}");
+    let bp_path = format!("{dir}/bp.txt");
+    let mf_path = format!("{dir}/manifest-real.json");
+
+    // The label guard is necessary but NOT sufficient (#661 review, major).
+    // It reasons about flag PRESENCE, so it cannot separate two runs that
+    // pass the same axis with different values under one `--label` —
+    // `--strategy pd --label x` then `--strategy pooled --label x` both
+    // satisfy it and the second silently overwrote the first. That is the
+    // original wrong-A/B bug, reachable through the guard added to prevent
+    // it. Presence is knowable at parse time; artifact identity is only
+    // knowable here, so the second half of the invariant belongs at the
+    // write.
+    if !force && std::path::Path::new(&bp_path).exists() {
+        eprintln!(
+            "error: {bp_path} already exists — refusing to overwrite it.\n\
+             \n\
+             A previous run wrote this label. If that run used different flags, \
+             overwriting it is the silent wrong-A/B this tool exists to avoid; \
+             give this run its own --label. If you are deliberately \
+             regenerating the same configuration, pass --force."
+        );
+        std::process::exit(1);
+    }
+
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
         eprintln!("cannot create {dir}: {e}");
         std::process::exit(1);
     });
-    let bp_path = format!("{dir}/bp.txt");
-    let mf_path = format!("{dir}/manifest-real.json");
     std::fs::write(&bp_path, &bp).unwrap_or_else(|e| {
         eprintln!("cannot write {bp_path}: {e}");
         std::process::exit(1);
@@ -522,7 +556,11 @@ mod tests {
     /// or select the output, they do not change it.
     #[test]
     fn axis_flag_list_and_docs_agree_both_ways() {
-        const NOT_AXES: &[&str] = &["--label", "--out", "--multi"];
+        // Not axes: these change WHERE a run writes, or WHETHER it may,
+        // never WHAT it exports. `--force` joined them when the overwrite
+        // guard landed — and this test caught the omission on its first
+        // run, which is the whole reason it is bidirectional.
+        const NOT_AXES: &[&str] = &["--label", "--out", "--multi", "--force"];
         let doc = include_str!("sim_export.rs");
         let documented: Vec<String> = doc
             .lines()
