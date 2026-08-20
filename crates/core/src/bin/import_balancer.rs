@@ -113,13 +113,27 @@ fn direction_scale(data: &Value) -> Result<u64, String> {
     //
     // Re-raised in review as a user-facing capability regression, on the
     // grounds that version-less 1.x books are common from forum copies.
-    // Measured against the corpus in `scripts/blueprints/`: 6087 blueprints
-    // across 172 files, of which 0 lack a usable version. `version` lives
-    // INSIDE the blueprint JSON, so copying a blueprint string carries it
-    // along; only hand-authored JSON can arrive without one. The regression
-    // is real but its population is empty here, and the recovery is to
-    // re-export from the game rather than to add an `--assume` flag whose
-    // wrong setting is silent.
+    // Measured: 6120 blueprints across 177 files, of which 0 lack a usable
+    // version. `version` lives INSIDE the blueprint JSON, so copying a
+    // blueprint string carries it along; only hand-authored JSON can arrive
+    // without one. The regression is real but its population is empty here,
+    // and the recovery is to re-export from the game rather than to add an
+    // `--assume` flag whose wrong setting is silent.
+    //
+    // On REPRODUCING that number: the corpus it was measured over lives in
+    // `scripts/blueprints/`, which is GITIGNORED (.gitignore:20), so a
+    // reader cannot re-run it from a clean checkout — a fair hit from the
+    // #664 review, which read the citation as pointing at something that
+    // does not exist. It exists locally; it is just not shipped. The data
+    // cannot be committed, but the method can, so the count is now produced
+    // by a tracked script:
+    //
+    //     python3 scripts/count_blueprint_versions.py <blueprint-dir>
+    //
+    // Point it at any collection to check the claim against a different
+    // population. (An earlier ad-hoc count said 6087/172; the script parses
+    // more file shapes and finds 6120/177. Both agree on the number that
+    // matters, which is zero.)
     Err("blueprint has no usable `version` field (absent, or the packed-0 \
          sentinel), so its direction encoding is undetermined: every value \
          below 8 means something different under 8-way (1.x) and 16-way \
@@ -173,12 +187,17 @@ fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
         // an out-of-range value a "diagonal" points the reader at the wrong
         // problem: 512 is not a direction this game has, whereas 3 is a real
         // direction we cannot represent.
+        // The threshold is per-ENCODING, not a flat 15 (#664 review). Under
+        // 8-way there is no direction 8..=15 at all, so calling one a
+        // "diagonal we cannot represent" is the same mislabelling this
+        // split was made to fix, one encoding over.
         let ways = if scale == 2 { 16 } else { 8 };
-        if raw_dir > 15 {
+        let max_dir = ways - 1;
+        if raw_dir > max_dir {
             return Err(format!(
                 "entity {raw_name} at ({x}, {y}) has direction {raw_dir}, which is out \
-                 of range for every Factorio encoding (8-way tops out at 7, 16-way at \
-                 15) — the blueprint is malformed, not merely unrepresentable"
+                 of range for the detected {ways}-way encoding (max {max_dir}) — the \
+                 blueprint is malformed, not merely unrepresentable"
             ));
         }
         if raw_dir % scale != 0 || !matches!((raw_dir / scale) as u8, N | E | S | W) {
@@ -1363,6 +1382,16 @@ mod tests {
         // produces; the N/W pair is a real internal weave, not a decode
         // artifact — (4,2)W -> (3,2)N -> (3,1)W -> (2,1)S is a coherent
         // detour path, checked entity-by-entity when this was pinned.
+        if hist != (1, 0, 18, 2) {
+            // Print the decode before failing (#664 review): a bare tuple
+            // mismatch says a regression happened, not where.
+            for e in &tpl.entities {
+                eprintln!(
+                    "  {:24} ({:2},{:2}) dir={} io={:?}",
+                    e.name, e.x, e.y, e.direction, e.io_type
+                );
+            }
+        }
         assert_eq!(hist, (1, 0, 18, 2), "decoded direction histogram (N,E,S,W) changed");
     }
 
@@ -1413,7 +1442,16 @@ mod tests {
     /// wrapping, which is what makes the bug quiet rather than loud.
     #[test]
     fn out_of_range_directions_are_refused_not_truncated() {
-        for (raw, packed_version) in [(512u64, 2u64 << 48), (256, 2 << 48), (256, 1 << 48)] {
+        // 8..=15 are in range for 16-way and OUT of range for 8-way, which
+        // is why the threshold has to be scale-aware; 256/512 wrap onto a
+        // cardinal under the `as u8` cast and are the quiet case.
+        for (raw, packed_version) in [
+            (512u64, 2u64 << 48),
+            (256, 2 << 48),
+            (256, 1 << 48),
+            (8, 1 << 48),
+            (15, 1 << 48),
+        ] {
             let data = serde_json::json!({
                 "blueprint": {
                     "version": packed_version,
@@ -1427,8 +1465,16 @@ mod tests {
             let err = extract_entities(&data).expect_err(
                 "direction {raw} is out of range for every encoding and must be refused",
             );
+            // Assert the CLASS, not just that the number appears: for
+            // raw=8 under 8-way, `contains("8")` also matches the phrase
+            // "8-way" in the diagonal message, so the weaker check passed
+            // even when the value was routed to the wrong branch.
             assert!(
-                err.contains(&raw.to_string()),
+                err.contains("out of range"),
+                "raw {raw} must be refused as out-of-range, not as a diagonal: {err}"
+            );
+            assert!(
+                err.contains(&format!("direction {raw}")),
                 "refusal should name the offending value, got: {err}"
             );
         }
