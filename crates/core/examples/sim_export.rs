@@ -60,6 +60,10 @@ use spaghettio_core::common::QualityTier;
 use spaghettio_core::recipe_db::MachinePalette;
 use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
+/// Default crafting machine — the one `--tier` overrides. Named so the
+/// label logic and the parser default cannot drift apart.
+const DEFAULT_TIER: &str = "assembling-machine-3";
+
 const DEFAULT_INPUTS: &[&str] = &[
     "iron-ore",
     "copper-ore",
@@ -132,7 +136,7 @@ fn main() {
     // rather than ignored: a silently-dropped `--belt` would export a
     // layout the caller did not ask for and then be simmed as though it
     // had.
-    let mut tier = "assembling-machine-3".to_string();
+    let mut tier = DEFAULT_TIER.to_string();
     let mut di = DirectInsertion::Candidate;
     let mut claim: Option<DiClaimOrder> = None;
     let mut belt: Option<String> = None;
@@ -198,7 +202,7 @@ fn main() {
                     "pooled" | "default" => LayoutStrategy::Pooled,
                     "partitioned-decomposed" | "pd" => LayoutStrategy::PartitionedDecomposed,
                     other => usage(&format!(
-                        "--strategy must be pooled|partitioned-decomposed (got {other})"
+                        "--strategy must be pooled|default|partitioned-decomposed|pd (got {other})"
                     )),
                 }
             }
@@ -261,17 +265,28 @@ fn main() {
             .collect::<Vec<_>>()
             .join(" + ")
     };
-    // The auto label is also the OUTPUT DIRECTORY (`<out>/<label>/`), so it
-    // has to separate runs that differ only by a layout axis. It did not:
-    // `{item}-{rate}` encoded neither strategy, row layout, nor duty, so
-    // `--strategy pooled X 5` and `--strategy partitioned-decomposed X 5`
-    // both wrote `<out>/X-5/` and the second silently overwrote the first's
-    // `bp.txt` and `manifest-real.json` (#661 review). That is a wrong-A/B
-    // generator, and A/B is the entire reason this binary takes these flags.
+    // The auto label is also the OUTPUT DIRECTORY (`<out>/<label>/`), so two
+    // runs whose artifacts differ must not share it. They did: `{item}-{rate}`
+    // encoded no configuration at all, so `--strategy pooled X 5` and
+    // `--strategy partitioned-decomposed X 5` both wrote `<out>/X-5/` and the
+    // second silently overwrote the first's `bp.txt` and `manifest-real.json`
+    // (#661 review). That is a wrong-A/B generator, and A/B is the entire
+    // reason this binary takes these flags.
+    //
+    // EVERY axis that changes the artifact is encoded, not a hand-picked few
+    // (#661 round 2, 3/3 — the first attempt covered strategy/row-layout/duty
+    // and claimed in docs to cover "any non-default axis", which was an
+    // overclaim: `--belt`, `--quality`, `--stacking`, `--tier`, the DI pair,
+    // `--inserter-cap`, `--inputs` and `--research-productivity` all still
+    // collided). The concrete case that makes this not-hypothetical: `--duty
+    // < 1` REQUIRES an explicit `--belt`, so the K69-1 duty fixtures this
+    // binary exists to produce necessarily pin a belt tier, and a duty/belt
+    // cross-comparison collided.
     //
     // Suffixes are emitted ONLY for non-default values, so every existing
-    // default-axis path is byte-identical to before. An explicit `--label`
-    // still overrides everything, which is how you opt out.
+    // default-axis path is byte-identical to before. List-valued axes are
+    // hashed rather than spelled out, to keep the directory name usable.
+    // An explicit `--label` overrides all of it.
     let label = label.unwrap_or_else(|| {
         let base = targets
             .iter()
@@ -279,20 +294,75 @@ fn main() {
             .collect::<Vec<_>>()
             .join("_")
             .replace('.', "_");
-        let mut suffix = String::new();
+
+        let mut tags: Vec<String> = Vec::new();
         match strategy {
             LayoutStrategy::Pooled => {}
-            LayoutStrategy::PartitionedDecomposed => suffix.push_str("-pd"),
+            LayoutStrategy::PartitionedDecomposed => tags.push("pd".to_string()),
         }
-        match row_layout {
-            RowLayout::HorizontalStack => suffix.push_str("-hs"),
-            _ => {}
+        if !matches!(row_layout, RowLayout::VerticalSplit) {
+            tags.push(format!("{row_layout:?}").to_lowercase());
         }
-        if (duty - 1.0).abs() > f64::EPSILON {
-            suffix.push_str(&format!("-duty{}", format!("{duty}").replace('.', "_")));
+        // Not an epsilon compare (#661 round 2): `--duty 0.9999999999999999`
+        // is within f64::EPSILON of 1.0 and would have collided with a
+        // default run despite producing a different layout. The formatted
+        // value IS the identity — if it renders differently, it tags
+        // differently.
+        let duty_s = format!("{duty}");
+        if duty_s != "1" {
+            tags.push(format!("duty{}", duty_s.replace('.', "_")));
         }
-        format!("{base}{suffix}")
+        if tier != DEFAULT_TIER {
+            tags.push(tier.replace("assembling-machine-", "am").replace('-', ""));
+        }
+        if let Some(b) = &belt {
+            tags.push(b.replace("-transport-belt", "").replace("transport-belt", "yellow"));
+        }
+        if !matches!(quality, QualityTier::Normal) {
+            tags.push(format!("{quality:?}").to_lowercase());
+        }
+        if stacking != 1 {
+            tags.push(format!("stack{stacking}"));
+        }
+        if !matches!(di, DirectInsertion::Candidate) {
+            tags.push(format!("di{:?}", di).to_lowercase());
+        }
+        if let Some(c) = claim.as_ref() {
+            tags.push(format!("claim{c:?}").to_lowercase());
+        }
+        if let Some(ic) = inserter_cap {
+            tags.push(format!("icap{ic}"));
+        }
+        // List-valued axes: a stable short digest, so they cannot collide
+        // without spelling a whole ingredient list into a path component.
+        let mut listy = String::new();
+        let default_inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
+        if inputs != default_inputs {
+            listy.push_str(&inputs.join(","));
+        }
+        if !research_productivity.is_empty() {
+            for (k, v) in &research_productivity {
+                listy.push_str(&format!(";{k}={v}"));
+            }
+        }
+        if !listy.is_empty() {
+            // FNV-1a, 32-bit — deterministic across runs and platforms, which
+            // `DefaultHasher` is explicitly NOT.
+            let mut h: u32 = 0x811c_9dc5;
+            for byte in listy.as_bytes() {
+                h ^= *byte as u32;
+                h = h.wrapping_mul(0x0100_0193);
+            }
+            tags.push(format!("cfg{h:08x}"));
+        }
+
+        if tags.is_empty() {
+            base
+        } else {
+            format!("{base}-{}", tags.join("-"))
+        }
     });
+
     let input_set: FxHashSet<String> = inputs.iter().cloned().collect();
 
     // RFC-062 Phase 3: always the multi-target entry point, even for N=1

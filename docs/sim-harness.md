@@ -63,12 +63,23 @@ cargo run --release --example sim_export -- <item> <rate> [flags]
   --out <dir>           parent dir (default $SIM_PROBE_OUT, else /tmp)
 ```
 
-The auto label encodes any **non-default** layout axis (`-pd`, `-hs`,
-`-duty0_6`), because the label is also the output directory: without that,
-two runs differing only by strategy or duty write to the same place and the
-second silently overwrites the first — a wrong-A/B generator, and A/B is
-what these flags exist for. Default-axis paths are unchanged, and an
-explicit `--label` still overrides.
+The auto label encodes every **non-default** axis that changes the exported
+artifact — strategy, row layout, duty, belt tier, machine tier, quality,
+stacking, DI mode, claim order, inserter capacity, and a short digest for
+`--inputs` / `--research-productivity`. The label is also the output
+directory, so without this two runs differing only by an axis write to the
+same place and the second silently overwrites the first — a wrong-A/B
+generator, and A/B is what these flags exist for. For example:
+
+```
+electronic-circuit-5                  (all defaults)
+electronic-circuit-5-pd               --strategy partitioned-decomposed
+electronic-circuit-5-duty0_6-yellow   --duty 0.6 --belt transport-belt
+electronic-circuit-5-duty0_6-fast     --duty 0.6 --belt fast-transport-belt
+```
+
+Default-axis paths are byte-identical to before, and an explicit `--label`
+overrides all of it.
 
 It writes `<out>/<label>/bp.txt` and `<out>/<label>/manifest-real.json`,
 and prints the ready-to-paste `run` command. Unknown flags are an error
