@@ -298,8 +298,8 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   A focused test asserts this. (The style example this line originally cited,
   `compact_layout_option_is_explicit_and_validated`, was deleted 2026-08-14
   along with `compact_layout` itself — #632 A2; `rfc058_band_packing_premise_holds`
-  in `cell_composition.rs`, this RFC's own surviving CI guard, is the
-  in-tree pattern to follow now.)
+  in `cell_composition.rs`, was this RFC's surviving CI guard until the
+  2026-08-20 deletion — see the final decision-log entry.)
 - **Per-fixture validation parity**, reported **per issue with a position**,
   never as a count in prose — `docs/validator-reporting.md` records nine
   instances of that failure mode, one of which concealed a total failure in
