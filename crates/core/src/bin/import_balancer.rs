@@ -143,7 +143,21 @@ fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
         let y = ent["position"]["y"]
             .as_f64()
             .ok_or("Entity missing position.y")?;
-        let raw_dir = ent["direction"].as_u64().unwrap_or(0);
+        // ABSENT means north; PRESENT-BUT-MALFORMED means refuse (#664
+        // review). `as_u64()` returns None for a float, a negative, or a
+        // value past u64, and `unwrap_or(0)` mapped every one of them to
+        // NORTH — the same silent mis-decode the range check below exists to
+        // stop, one line earlier. Absence is the only case that may default.
+        let raw_dir = match ent.get("direction") {
+            None | Some(Value::Null) => 0,
+            Some(v) => v.as_u64().ok_or_else(|| {
+                format!(
+                    "entity {raw_name} at ({x}, {y}) has a `direction` of {v}, which is \
+                     not a non-negative integer — refusing rather than defaulting it to \
+                     north"
+                )
+            })?,
+        };
         // ONE refusal path (#664 review, 3/3). The old `% scale` pre-check
         // was unreachable for 8-way (`% 1` is always 0) yet formatted a
         // message branching on 8-vs-16-way, while 8-way diagonals (1/3/5/7)
@@ -155,12 +169,23 @@ fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
         // silently" case this change exists to close, reintroduced by the
         // cast that implements it. Both encodings top out well under 16, so
         // anything above that is malformed however you read it.
-        if raw_dir > 15 || raw_dir % scale != 0 || !matches!((raw_dir / scale) as u8, N | E | S | W) {
+        // Two distinct failure classes, two messages (#664 review). Calling
+        // an out-of-range value a "diagonal" points the reader at the wrong
+        // problem: 512 is not a direction this game has, whereas 3 is a real
+        // direction we cannot represent.
+        let ways = if scale == 2 { 16 } else { 8 };
+        if raw_dir > 15 {
+            return Err(format!(
+                "entity {raw_name} at ({x}, {y}) has direction {raw_dir}, which is out \
+                 of range for every Factorio encoding (8-way tops out at 7, 16-way at \
+                 15) — the blueprint is malformed, not merely unrepresentable"
+            ));
+        }
+        if raw_dir % scale != 0 || !matches!((raw_dir / scale) as u8, N | E | S | W) {
             return Err(format!(
                 "entity {raw_name} at ({x}, {y}) has direction {raw_dir}, which is \
-                 not a cardinal under the detected {}-way encoding — diagonal \
-                 belts are not representable as a balancer template",
-                if scale == 2 { 16 } else { 8 }
+                 not a cardinal under the detected {ways}-way encoding — diagonal \
+                 belts are not representable as a balancer template"
             ));
         }
         let direction = (raw_dir / scale) as u8;
@@ -1322,6 +1347,61 @@ mod tests {
             "the book calls this a 2-8 balancer; the import must agree"
         );
         assert_eq!(tpl.entities.len(), 21);
+
+        // Pin the decoded directions too (#664 review). Port counts and an
+        // entity count describe the FRAME; a decode regression that swapped
+        // internal belt directions while keeping 2-in/8-out would satisfy
+        // both. This is the assertion that notices.
+        let count = |want: u8| tpl.entities.iter().filter(|e| e.direction == want).count();
+        let hist = (count(N), count(E), count(S), count(W));
+        assert_eq!(
+            hist.0 + hist.1 + hist.2 + hist.3,
+            21,
+            "every entity must hold a cardinal after decode"
+        );
+        // Mostly south, because that is what `normalize_to_south_flow`
+        // produces; the N/W pair is a real internal weave, not a decode
+        // artifact — (4,2)W -> (3,2)N -> (3,1)W -> (2,1)S is a coherent
+        // detour path, checked entity-by-entity when this was pinned.
+        assert_eq!(hist, (1, 0, 18, 2), "decoded direction histogram (N,E,S,W) changed");
+    }
+
+    /// A `direction` that is present but not a non-negative integer must be
+    /// refused, not defaulted to north.
+    #[test]
+    fn malformed_direction_values_are_refused_not_defaulted() {
+        for bad in [serde_json::json!(1.5), serde_json::json!(-4), serde_json::json!("north")] {
+            let data = serde_json::json!({
+                "blueprint": {
+                    "version": 2u64 << 48,
+                    "entities": [{
+                        "name": "transport-belt",
+                        "position": {"x": 0.5, "y": 0.5},
+                        "direction": bad,
+                    }],
+                }
+            });
+            let err = extract_entities(&data)
+                .expect_err("a malformed direction must not silently become north");
+            assert!(
+                err.contains("not a non-negative integer"),
+                "wrong refusal for {bad}: {err}"
+            );
+        }
+
+        // ...but an ABSENT direction still means north, which is the
+        // convention the whole corpus relies on.
+        let data = serde_json::json!({
+            "blueprint": {
+                "version": 2u64 << 48,
+                "entities": [{
+                    "name": "transport-belt",
+                    "position": {"x": 0.5, "y": 0.5},
+                }],
+            }
+        });
+        let ents = extract_entities(&data).expect("absent direction is legal");
+        assert_eq!(ents[0].direction, N);
     }
 
     /// A direction too large for either encoding must be refused, not
