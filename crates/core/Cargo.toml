@@ -36,7 +36,15 @@ sha2 = "0.10"
 # sim_export is the tracked fixture generator; its label logic decides the
 # OUTPUT DIRECTORY, so a regression there silently re-collides A/B fixtures
 # (#661). Declared explicitly with `test = true` so its unit tests actually
-# RUN — `cargo test` builds examples but does not run their tests by default.
+# RUN: `cargo test` BUILDS examples but does not RUN their tests by default.
+#
+# Measured, because a review disputed it (#661 round 5) — plain
+# `cargo test`, grepping for two of the label tests by name:
+#   stanza removed  -> 0 matches
+#   stanza present  -> 2 matches
+# Not a no-op. Note the distinction that makes it easy to get wrong:
+# `cargo test --example sim_export` runs them either way, because naming a
+# target selects it; the default target set is what the stanza changes.
 [[example]]
 name = "sim_export"
 path = "examples/sim_export.rs"

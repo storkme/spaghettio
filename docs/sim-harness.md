@@ -79,7 +79,11 @@ electronic-circuit-5-duty0_6-fast     --duty 0.6 --belt fast-transport-belt
 ```
 
 Default-axis paths are byte-identical to before, and an explicit `--label`
-overrides all of it.
+overrides all of it. Two caveats worth knowing: `--inputs` and
+`--research-productivity` are folded in as a 64-bit FNV-1a digest rather
+than spelled out, and an explicit `--belt` always tags even when the engine
+would have auto-picked that same tier — so it can fork a redundant
+directory, which is the safe direction (never a shared one).
 
 It writes `<out>/<label>/bp.txt` and `<out>/<label>/manifest-real.json`,
 and prints the ready-to-paste `run` command. Unknown flags are an error
