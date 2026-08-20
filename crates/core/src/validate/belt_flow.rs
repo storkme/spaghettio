@@ -3189,7 +3189,9 @@ fn compute_lane_rates_impl(
 ///   a belt that turns).
 /// - **`to` has a straight feeder** (`to_has_straight_feeder=true`) →
 ///   sideload: all flow goes onto the lane closest to `from`.
-/// - **Otherwise** → 90-degree turn: lanes swap on CW, preserve on CCW.
+/// - **Otherwise** → 90-degree turn: lanes preserved, BOTH chiralities
+///   (B11, expert-confirmed 2026-08-21 — the former CW-swap here was the
+///   bug this contract line nearly reintroduced; see the body comment).
 fn lane_transfer(
     from_pos: (i32, i32),
     from_dir: EntityDirection,
@@ -4771,7 +4773,9 @@ mod tests {
         // North-facing feeder at (0,1) into (0,0): dir_to_vec(North) is
         // (0,-1), so (0,1) + (0,-1) = (0,0) — a genuine ahead-feed that
         // renders as a turn (no straight feeder on the target).
-        let asym = [5.0, 0.0];
+        // Both lanes populated asymmetrically so EACH arm discriminates a
+        // swap ([5,2] -> [2,5]); historically only N->E carried the bug.
+        let asym = [5.0, 2.0];
         // Chirality 1: North → East.
         let out_e = lane_transfer(
             (0, 1),
