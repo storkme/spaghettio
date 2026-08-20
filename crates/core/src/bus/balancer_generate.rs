@@ -705,3 +705,91 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod service_boundary {
+    /// Which `(m, n)` the generator will actually serve, pinned exactly.
+    ///
+    /// `generate` self-verifies with `classify_ref(..).ok()?`, so the
+    /// `SUBSET_ENUM_MAX` refusal added in #662 silently narrows this set:
+    /// a shape whose side exceeds the bound now classifies as
+    /// `Unanalysable` and is dropped to `None`. The #662 review called that
+    /// a regression; measuring it splits the loss in two, and only one half
+    /// is one.
+    ///
+    /// Enumerated over `1..=32` squared, the set went 56 -> 24 shapes.
+    ///
+    /// CORRECT to lose (8) — the m>n merges (18,9) (20,10) (22,11) (24,12)
+    /// (26,13) (28,14) (30,15) (32,16). Every in-bound merge sibling —
+    /// (4,2), (6,3), ... (16,8) — is ALREADY refused as throughput-limited,
+    /// and rightly: `replicate_horizontally(two_to_one, k)` gives k disjoint
+    /// components, so a subset taking both inputs of one component can only
+    /// realize 1 unit against an expected `min(|S|, n)` of 2. The large ones
+    /// were served solely because `check_input_subsets` bails to `None`
+    /// above the bound. That is the false clearance this PR exists to stop.
+    /// Note the review named exactly these three (20->10, 18->9, 24->12) as
+    /// the service worth keeping; they are the ones worth losing.
+    ///
+    /// GENUINELY lost (24) — the n>m fan-outs (9,18)..(16,32) and the
+    /// squares (17,17)..(32,32). Their in-bound siblings ARE served, so
+    /// these are real shapes we can no longer stamp. Not repaired here: no
+    /// layout requests them. A census of all 51 corpus snapshots tops out
+    /// at (10,14) / (3,14) — nothing reaches 16 on either side. Refusing an
+    /// unverifiable shape is also the conservative direction, and
+    /// `FamilyStampPlan::Unresolvable` is an already-live state (4 corpus
+    /// shapes sit in it today). Tracked in #667, which also records why the
+    /// cheap fix (verify the atom, infer the replica) does NOT work: MX2's
+    /// expected value is `min(|S|, n)` with a GLOBAL `n`, so it does not
+    /// decompose over disjoint components.
+    ///
+    /// This test exists so that boundary is a pinned fact rather than an
+    /// emergent one — the previous change to it was invisible until a
+    /// reviewer went looking.
+    #[test]
+    fn generate_serves_exactly_these_shapes() {
+        let mut served = Vec::new();
+        for m in 1u32..=32 {
+            for n in 1u32..=32 {
+                if super::generate(m, n).is_some() {
+                    served.push((m, n));
+                }
+            }
+        }
+
+        let expected: Vec<(u32, u32)> = vec![
+            (1, 2),
+            (2, 1),
+            (2, 2),
+            (2, 4),
+            (3, 3),
+            (3, 6),
+            (4, 4),
+            (4, 8),
+            (5, 5),
+            (5, 10),
+            (6, 6),
+            (6, 12),
+            (7, 7),
+            (7, 14),
+            (8, 8),
+            (8, 16),
+            (9, 9),
+            (10, 10),
+            (11, 11),
+            (12, 12),
+            (13, 13),
+            (14, 14),
+            (15, 15),
+            (16, 16),
+        ];
+        assert_eq!(served, expected);
+
+        // The bound is what makes this set finite: nothing above it is
+        // served, on either side.
+        assert!(
+            served.iter().all(|&(m, n)| m <= 16 && n <= 16),
+            "a shape beyond SUBSET_ENUM_MAX was served, so it was cleared \
+             without a subset check ever running"
+        );
+    }
+}
