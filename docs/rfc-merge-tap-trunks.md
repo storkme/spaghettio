@@ -63,7 +63,9 @@ The engine can now verify what humans build.
   of arbitrary balancer shapes — 3/8 round-trips, stalled on greedy
   slot assignment for coprime back-loop shapes; the later (4,9)
   Clos attempt died on memory exhaustion. Separately, **the
-  Factorio-SAT offline bake wall** (docs/bake-overnight-results.md,
+  Factorio-SAT offline bake wall** (recorded in
+  docs/bake-overnight-results.md until its generator's CP-SAT cluster
+  was deleted 2026-08-20 — offpath Tier 2, git history at that date;
   behind #136): 0/32 overnight seeds on (1,9)/(1,10). Two different
   tools, two different failure modes, one conclusion: the "make
   balancers harder" direction is researched and parked. This RFC is

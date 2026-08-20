@@ -11,9 +11,11 @@
 //!   engines that *do* place.
 //! - **Factorio-SAT** — wraps the existing Python subprocess; same external
 //!   tool that produced today's library entries. Subprocess + JSON.
-//! - **CP-SAT** — Google OR-tools constraint solver (`cp_sat` Rust crate);
-//!   no Python in the new path. `no_overlap_2d` + `circuit` + table
-//!   constraints encode the spatial-routing problem natively.
+//!
+//! (A third engine, **CP-SAT**, was built to RFC-023's Phase 2 and deleted
+//! 2026-08-20 — offpath-code-followups Tier 2, owner call: its wire-in RFC
+//! never happened and the live regen paths — Factorio-SAT + balancer-gen —
+//! never consumed it. Recoverable from git history at that date.)
 //!
 //! ## Trait shape
 //!
@@ -26,7 +28,6 @@
 //! [`PlacementResult`] is the owned counterpart of [`BalancerTemplate`]
 //! plus engine metadata (id, wall-clock).
 
-pub mod cp_sat;
 pub mod library_lookup;
 
 use std::time::Duration;
@@ -159,8 +160,8 @@ impl PlacedTemplate {
 pub struct PlacementResult {
     pub template: PlacedTemplate,
     pub solve_wall_ms: u64,
-    /// Stable engine id, e.g. `"library_lookup"`, `"factorio_sat"`,
-    /// `"cp_sat"`. Used for bench reports.
+    /// Stable engine id, e.g. `"library_lookup"`, `"factorio_sat"`.
+    /// Used for bench reports.
     pub engine_id: &'static str,
 }
 

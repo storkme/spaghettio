@@ -2,7 +2,9 @@
 
 **Status (2026-08-20, end of day)**: audit COMPLETE; execution underway —
 tracking issue **#675** is the live queue. Tier 1 item 1 (row_rotation)
-MERGED (#670); items 2–4 in flight (#674, this doc's own PR). Owner
+MERGED (#670); items 2–4 MERGED (#674); Tier 2 item 5 (bands) MERGED
+(#676); item 7 (CP-SAT, grown to a seven-file cluster in execution)
+MERGED (#677). Owner
 decisions taken 2026-08-20: Tier 2 items 5–8 all APPROVED for deletion;
 item 9 (inserter-check pair) still open; Tier 3 resolved KEEP-CAMPAIGN
 (RFC-068 P0 ran and PASSED, #672). Tier 1 below is
@@ -117,7 +119,7 @@ verification protocol (suite green + clippy + WASM build), not just compile.
    "in-tree, default-off, as the reproducible record" — but all three named
    future consumers (RFC-058, RFC-063 Phase C, RFC-064 Phase 3) have since
    run and concluded/failed. Same shape as what #632 A2 deleted; it just
-   wasn't named. **Decision: extend the A2 precedent to `bus::bands`?**
+   wasn't named. **Decision TAKEN 2026-08-20: yes — DELETED, #676.**
 6. **`bus/cells/placement.rs` + `ChainOrder::Compact`** (~1,000 lines):
    RFC-057 leftover the A2 sweep missed; `Compact` is a private enum variant
    constructed only by `compose_chain_compact`, called only by 3 `#[ignore]`d
@@ -131,8 +133,10 @@ verification protocol (suite green + clippy + WASM build), not just compile.
    while the supposedly non-canonical `balancer-gen` path was actively
    extended. Bundle: drop the `placement/` re-exports, and consider inlining
    `PlacementEngine`/`library_lookup` into `balancer_engine_bench.rs` (the
-   trait exists only for the CP-SAT plug-in that never landed). **Fix
-   regardless of the call**: `crates/balancer-gen/scripts/place.py`'s
+   trait exists only for the CP-SAT plug-in that never landed). **EXECUTED 2026-08-20 (#677)**, cluster grown to seven files
+   (bake_cp_sat_report.py, bake_overnight.sh, bake-overnight-results.md
+   found by reference sweeps). Including the fix done with it:
+   `crates/balancer-gen/scripts/place.py`'s
    docstring still names the dead script "canonical" and itself "NOT
    canonical" — inverted reality.
 8. **`LayoutStyle::Spaghetti` arms** (~470+ lines): every production caller

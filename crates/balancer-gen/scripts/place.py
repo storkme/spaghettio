@@ -3,19 +3,19 @@
 # requires-python = ">=3.10"
 # dependencies = ["ortools>=9.10"]
 # ///
-"""Phase 3.2A — flow-conservation belt routing for splitter layouts (older spike, NOT canonical).
+"""Phase 3.2A — flow-conservation belt routing for splitter layouts (the live placer).
 
-Canonical placer: `scripts/cp_sat_placer.py` at the repo root. That
-script is the one consumed by `crates/core/src/balancer/placement/cp_sat.rs`
-and the `cp_sat_round_trip` test suite.
+THIS is the placer the live bake pipeline uses — `crates/balancer-gen`
+phase 3.4 (`bake_missing_shapes`) and phase 4 (`compose_parallel` /
+`compose_series`). It handles UG belts, mixed splitter directions, and
+edge-aware routing.
 
-This script is the older spike (more general — handles UG belts, mixed
-splitter directions, edge-aware routing) used by the bake pipeline in
-`crates/balancer-gen` for phase 3.4 (`bake_missing_shapes`) and phase 4
-(`compose_parallel` / `compose_series`). It will be migrated onto
-`scripts/cp_sat_placer.py` once the canonical placer covers the same
-shape repertoire. Until then both live on disk; the canonical one is
-the one to extend.
+(History: this docstring long called `scripts/cp_sat_placer.py` "canonical"
+and this script the spike to be migrated. Reality inverted that — this
+script was actively extended for months while the "canonical" one sat
+untouched since RFC-023 Phase 2; the whole CP-SAT branch was deleted
+2026-08-20, offpath-code-followups Tier 2, owner call. This script is
+canonical; extend it here.)
 
 Run via `uv run --no-project crates/balancer-gen/scripts/place.py` (the
 PEP 723 inline metadata above pins `ortools` so first-run dep resolution
