@@ -55,9 +55,20 @@ cargo run --release --example sim_export -- <item> <rate> [flags]
   --belt <entity>       max belt tier      --quality <name>   normal..legendary
   --stacking <1..4>     belt stacking      --inserter-cap <n> capacity level
   --inputs a,b,c        raw inputs (default: the six-ore set)
+  --row-layout <kind>   native (default) | horizontal-stack
+  --strategy <kind>     pooled (default) | partitioned-decomposed
+  --duty <0..1>         planning duty (default 1.0)
+  --research-productivity <recipe=bonus,...>   declared research
   --label <name>        output subdir + manifest label
   --out <dir>           parent dir (default $SIM_PROBE_OUT, else /tmp)
 ```
+
+The auto label encodes any **non-default** layout axis (`-pd`, `-hs`,
+`-duty0_6`), because the label is also the output directory: without that,
+two runs differing only by strategy or duty write to the same place and the
+second silently overwrites the first — a wrong-A/B generator, and A/B is
+what these flags exist for. Default-axis paths are unchanged, and an
+explicit `--label` still overrides.
 
 It writes `<out>/<label>/bp.txt` and `<out>/<label>/manifest-real.json`,
 and prints the ready-to-paste `run` command. Unknown flags are an error

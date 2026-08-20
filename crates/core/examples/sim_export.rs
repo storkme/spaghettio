@@ -261,13 +261,37 @@ fn main() {
             .collect::<Vec<_>>()
             .join(" + ")
     };
+    // The auto label is also the OUTPUT DIRECTORY (`<out>/<label>/`), so it
+    // has to separate runs that differ only by a layout axis. It did not:
+    // `{item}-{rate}` encoded neither strategy, row layout, nor duty, so
+    // `--strategy pooled X 5` and `--strategy partitioned-decomposed X 5`
+    // both wrote `<out>/X-5/` and the second silently overwrote the first's
+    // `bp.txt` and `manifest-real.json` (#661 review). That is a wrong-A/B
+    // generator, and A/B is the entire reason this binary takes these flags.
+    //
+    // Suffixes are emitted ONLY for non-default values, so every existing
+    // default-axis path is byte-identical to before. An explicit `--label`
+    // still overrides everything, which is how you opt out.
     let label = label.unwrap_or_else(|| {
-        targets
+        let base = targets
             .iter()
             .map(|(item, rate)| format!("{item}-{rate}"))
             .collect::<Vec<_>>()
             .join("_")
-            .replace('.', "_")
+            .replace('.', "_");
+        let mut suffix = String::new();
+        match strategy {
+            LayoutStrategy::Pooled => {}
+            LayoutStrategy::PartitionedDecomposed => suffix.push_str("-pd"),
+        }
+        match row_layout {
+            RowLayout::HorizontalStack => suffix.push_str("-hs"),
+            _ => {}
+        }
+        if (duty - 1.0).abs() > f64::EPSILON {
+            suffix.push_str(&format!("-duty{}", format!("{duty}").replace('.', "_")));
+        }
+        format!("{base}{suffix}")
     });
     let input_set: FxHashSet<String> = inputs.iter().cloned().collect();
 
