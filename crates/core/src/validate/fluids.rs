@@ -405,7 +405,7 @@ fn fluid_supply_tiles(
 ///
 /// For each machine with fluid ports, verifies:
 /// 1. At least one input port has an adjacent pipe.
-/// 2. (`Bus` style only) At least one input pipe is reachable from the bus
+/// 2. At least one input pipe is reachable from the bus
 ///    via BFS.
 /// 3. At least one output port has an adjacent pipe (only if the recipe
 ///    actually produces a fluid).

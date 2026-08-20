@@ -8723,7 +8723,7 @@ fn merge_tap_does_not_shadow_di_on_pooled_yellow() {
         let issues = spaghettio_core::validate::validate(
             l,
             Some(&sr),
-            )
+        )
         .unwrap_or_else(|e| e.issues);
         (
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
@@ -9527,7 +9527,7 @@ fn di_jammed_cell_is_visible_and_therefore_refused() {
         let issues = spaghettio_core::validate::validate(
             &l,
             Some(&sr),
-            )
+        )
         .unwrap_or_else(|e| e.issues);
         (l.entities.len(), issues)
     };
@@ -9683,7 +9683,7 @@ fn probe_di_claim_order_shipped_corpus_verdict() {
         let issues = spaghettio_core::validate::validate(
             &l,
             Some(sr),
-            )
+        )
         .unwrap_or_else(|e| e.issues);
         Some((
             issues.iter().filter(|i| i.severity == Severity::Error).count(),
