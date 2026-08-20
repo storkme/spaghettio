@@ -352,6 +352,14 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
     // legacy 8-way direction encoding; a missing version field (packed 0,
     // see `blueprint_major_version`) fails toward "modern" to keep prior
     // behavior for blueprints that don't carry a version at all.
+    //
+    // `import_balancer` deliberately answers the SAME input differently: it
+    // REFUSES a version-less blueprint rather than assuming modern (#664).
+    // The asymmetry is intended — analysis here is transient and re-runnable,
+    // while an import bakes a permanently wrong template into the library —
+    // and it is noted on both sides so the divergence reads as a decision
+    // rather than an inconsistency. Note the shared half: both treat a
+    // major of 0 as a REAL major (pre-1.0 Factorio), not as a missing one.
     let is_legacy = matches!(blueprint_major_version(bp_data.version), Some(major) if major < 2);
     let mut entities: Vec<PlacedEntity> = Vec::with_capacity(bp_data.entities.len());
     // entity_number (explicit, else positional 1-based) → 0-based index in

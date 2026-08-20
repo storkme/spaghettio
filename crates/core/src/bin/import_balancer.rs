@@ -88,6 +88,20 @@ fn direction_scale(data: &Value) -> Result<u64, String> {
     // blueprint as 8-way (#664 review).
     let version = data["blueprint"]["version"].as_u64().unwrap_or(0);
     if version != 0 {
+        // A major of 0 is a REAL major, not a missing one — and the review
+        // that asked for it to be refused (#664 round 6, 3/3) was wrong.
+        // Factorio 0.x packs `0 << 48 | minor << 32 | ...`, so 0.15 and
+        // 0.16 blueprints have major 0 legitimately. Refusing them rejects
+        // 31 blueprints in the corpus outright: versions 68722819072
+        // (0.16.51), 64424902656 (0.15.6) and 64426344449 (0.15.28.1).
+        //
+        // The finding's example, a hand-authored `"version": 2`, unpacks to
+        // 0.0.0.2 — a valid packed version, and genuinely below 2.0, so
+        // 8-way is the CORRECT reading of what the file claims rather than
+        // a guess about it. If such a file really holds 16-way directions,
+        // the file contradicts itself; decoding what it states is the
+        // honest response, and any 16-way-only value (8..=15) is then
+        // refused by the range check downstream.
         return Ok(if (version >> 48) >= 2 { 2 } else { 1 });
     }
 
@@ -163,7 +177,11 @@ fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
         // NORTH — the same silent mis-decode the range check below exists to
         // stop, one line earlier. Absence is the only case that may default.
         let raw_dir = match ent.get("direction") {
-            None | Some(Value::Null) => 0,
+            // `null` is PRESENT and malformed, not absent (#664 review,
+            // 3/3). Grouping it with the missing case was the one
+            // unparseable value still defaulting to north, which is the
+            // rule this match exists to enforce.
+            None => 0,
             Some(v) => v.as_u64().ok_or_else(|| {
                 format!(
                     "entity {raw_name} at ({x}, {y}) has a `direction` of {v}, which is \
@@ -1395,11 +1413,54 @@ mod tests {
         assert_eq!(hist, (1, 0, 18, 2), "decoded direction histogram (N,E,S,W) changed");
     }
 
+    /// Factorio 0.x versions have a major of 0 LEGITIMATELY, and must
+    /// decode as 8-way rather than being refused.
+    ///
+    /// Round 6 briefly refused them, on a review finding that read major-0
+    /// as "no major present". The corpus disagrees: 31 blueprints carry
+    /// 0.15/0.16 versions, and refusing those is a real regression where
+    /// the finding described a hypothetical one.
+    #[test]
+    fn zero_major_versions_are_real_and_decode_as_eight_way() {
+        // Genuine values taken from the corpus.
+        for (packed_v, what) in [
+            (68722819072u64, "0.16.51"),
+            (64424902656, "0.15.6"),
+            (64426344449, "0.15.28.1"),
+            (2, "0.0.0.2, the hand-authored case"),
+        ] {
+            let data = serde_json::json!({
+                "blueprint": { "version": packed_v, "entities": [] }
+            });
+            assert_eq!(
+                direction_scale(&data),
+                Ok(1),
+                "{what} is below 2.0, so it is 8-way"
+            );
+        }
+
+        assert_eq!(direction_scale(&packed(2)), Ok(2), "2.0 is 16-way");
+        assert_eq!(direction_scale(&packed(1)), Ok(1), "1.x is 8-way");
+    }
+
+    fn packed(major: u64) -> Value {
+        serde_json::json!({
+            "blueprint": { "version": major << 48, "entities": [] }
+        })
+    }
+
     /// A `direction` that is present but not a non-negative integer must be
     /// refused, not defaulted to north.
     #[test]
     fn malformed_direction_values_are_refused_not_defaulted() {
-        for bad in [serde_json::json!(1.5), serde_json::json!(-4), serde_json::json!("north")] {
+        for bad in [
+            serde_json::json!(1.5),
+            serde_json::json!(-4),
+            serde_json::json!("north"),
+            // `null` is present and unparseable — the case that was still
+            // defaulting to north (#664 review).
+            serde_json::json!(null),
+        ] {
             let data = serde_json::json!({
                 "blueprint": {
                     "version": 2u64 << 48,
