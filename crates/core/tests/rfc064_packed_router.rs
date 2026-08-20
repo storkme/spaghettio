@@ -10,7 +10,6 @@ use spaghettio_core::bus::bands::{PackOrder, PackSelection};
 use spaghettio_core::bus::cells::CellComposition;
 use spaghettio_core::bus::di_cell::DirectInsertion;
 use spaghettio_core::bus::layout::{self, LayoutOptions};
-use spaghettio_core::bus::row_rotation::{RotationOrder, RotationSelection};
 use spaghettio_core::bus::transit::measure_realized_transit;
 use spaghettio_core::common::QualityTier;
 use spaghettio_core::models::SolverResult;
@@ -200,56 +199,7 @@ fn packed_selected_layout_preserves_planning_metadata_and_wire_mode() {
     );
 }
 
-#[test]
-fn sci2_rotation_aware_selected_is_retracted_for_validation_warnings() {
-    let solver_result = solve(
-        "logistic-science-pack",
-        2.0,
-        &["iron-ore", "copper-ore"],
-        "assembling-machine-2",
-    );
-    // Source rows 2, 4, and 7 are iron-plate, transport-belt, and
-    // logistic-science-pack.  Rotating those three is the stable best
-    // shape-clearing member of the bounded search recorded in RFC-064.
-    let refusal = layout::build_rotation_aware_row_layout_selected(
-        &solver_result,
-        router_options(None),
-        &RotationSelection {
-            rotation_mask: (1 << 2) | (1 << 4) | (1 << 7),
-            gap: 6,
-            target_width: 67,
-            order: RotationOrder::HeightDescending,
-            route_priority: Some("iron-gear-wheel".to_string()),
-        },
-    )
-    .expect_err("the formerly selected layout has 18 validator warnings and must be retracted");
-    assert!(
-        refusal.contains("18 validation issues (0 Errors, 18 Warnings)"),
-        "{refusal}"
-    );
-    assert!(refusal.contains("first underground-belt"), "{refusal}");
-}
-
-#[test]
-#[ignore = "RFC-064 rotation-aware row search probe; the focused refusal above is the regression"]
-fn probe_sci2_rotation_aware_row_search_finds_no_warning_free_candidate() {
-    let solver_result = solve(
-        "logistic-science-pack",
-        2.0,
-        &["iron-ore", "copper-ore"],
-        "assembling-machine-2",
-    );
-    let refusal = layout::build_rotation_aware_row_layout(&solver_result, router_options(None))
-        .expect_err("all routed rotation-aware plans carry validator warnings and must refuse");
-    assert!(
-        refusal.contains(
-            "no shape-clearing, zero-issue, transit-measurable candidate among 99 structural plans / 1089 route orders"
-        ),
-        "{refusal}"
-    );
-    assert!(
-        refusal.contains("46 routed, 46 validation-rejected, 0 transit-rejected"),
-        "{refusal}"
-    );
-    println!("{refusal}");
-}
+// The two RFC-064 rotation-aware tests that closed this file were deleted
+// 2026-08-20 with `bus::row_rotation` itself (offpath-code-followups Tier 1);
+// the exhaustive-search refusal they pinned is recorded in RFC-064's
+// decision log.
