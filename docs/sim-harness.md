@@ -94,12 +94,24 @@ needs a label; no automation caller does — some hand-run repro commands in
 older RFCs did, and were updated — and the failure is a loud refusal
 with the required flag named, not a silent overwrite.
 
-The guard reasons about which flags were PASSED, which is all that is
-knowable at parse time — so it cannot separate two runs that pass the same
-axis with different values under one `--label`. That half is enforced at the
-write instead: an existing `<out>/<label>/bp.txt` is a refusal, and
-`--force` is the escape hatch for deliberately regenerating the same
-configuration.
+That guard reasons about which flags were PASSED, which is all that is
+knowable before the solve — so it cannot tell two runs apart that pass the
+same axis with different VALUES. That half is answered from the artifact
+instead. Each fixture directory carries a `.sim-export-config` recording the
+axis flags and values it was built from, and a run refuses when the stored
+configuration differs from its own:
+
+- **same config** — proceeds, so re-running a fixture is idempotent;
+- **different config** — refuses, naming both configurations;
+- **no `.sim-export-config`** — refuses, because a fixture written by hand or
+  before this existed cannot be assumed to match;
+- `--force` — replaces it regardless.
+
+Three earlier versions of this guard asked about the command line instead
+(refuse if anything exists / if this run passed an axis flag / if the label
+was explicit). Each one leaked, from a different direction, because the
+question that matters is about the artifact and cannot be answered from
+flags.
 
 It writes `<out>/<label>/bp.txt` and `<out>/<label>/manifest-real.json`,
 and prints the ready-to-paste `run` command. Unknown flags are an error

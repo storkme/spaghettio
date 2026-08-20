@@ -1314,6 +1314,8 @@ needed to look at the result, not a UI feature.
 
   **Fixture.** `sim_export --multi electronic-circuit:10
   advanced-circuit:3 --tier assembling-machine-2 --label kc3-am2`
+  (re-running this exact command is idempotent; add `--force` only if you
+  change a flag and still want the same label)
   (native mechanism, default candidate search — the same shipped-default engine
   `ec_ac_default_options_candidate_choice` pins as choosing `native`):
   159×96, 2169 entities, 139 machines, **0 validation errors, 4
