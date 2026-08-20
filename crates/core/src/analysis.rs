@@ -367,9 +367,12 @@ pub fn analyze(layout: &LayoutResult) -> BlueprintAnalysis {
 
         // Internal module bonuses. Per-module quality scales beneficial
         // effects (harmful ones are quality-flat) — the same RFC-044 rule
-        // the forward planner applies; this path was quality-blind until
-        // 2026-08-20 (offpath B1) and underestimated quality-module
-        // blueprints.
+        // the forward planner applies to MODULE effects; this path was
+        // quality-blind until 2026-08-20 (offpath B1). Scope (#681
+        // review): parity is module-effect-only — the analyzer still
+        // credits neither the machine's built-in base_effect_productivity
+        // nor entity-quality crafting speed (both pre-existing analyzer
+        // gaps, recorded on #675).
         let mut speed_bonus = 0.0f64;
         let mut prod_bonus = 0.0f64;
         for mi in &e.items {
@@ -909,6 +912,56 @@ mod tests {
             (cable.effective_speed_multiplier - 3.50).abs() < 0.01,
             "legendary speed modules must scale: got {}",
             cable.effective_speed_multiplier
+        );
+    }
+
+    /// #681 review: the BEACON aggregation path must also quality-scale
+    /// (it shares the fix but was untested). One machine + one adjacent
+    /// beacon carrying 2x legendary speed-module-3: beacon contribution =
+    /// 2 × 1.25 × 0.5 (transmission) = +1.25 → multiplier 2.25.
+    /// Quality-blind value would be 2 × 0.50 × 0.5 = +0.50 → 1.50, so the
+    /// expectation discriminates.
+    #[test]
+    fn beacon_module_quality_scales() {
+        use crate::common::QualityTier;
+        use crate::models::ModuleItem;
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity {
+                    name: "assembling-machine-3".into(),
+                    x: 0,
+                    y: 0,
+                    direction: EntityDirection::North,
+                    recipe: Some("iron-gear-wheel".into()),
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "beacon".into(),
+                    x: 3,
+                    y: 0,
+                    direction: EntityDirection::North,
+                    items: vec![ModuleItem {
+                        item: "speed-module-3".into(),
+                        count: 2,
+                        quality: Some(QualityTier::Legendary),
+                    }],
+                    ..Default::default()
+                },
+            ],
+            width: 10,
+            height: 5,
+            ..Default::default()
+        };
+        let analysis = analyze(&layout);
+        let gear = analysis
+            .recipe_groups
+            .iter()
+            .find(|g| g.recipe == "iron-gear-wheel")
+            .unwrap();
+        assert!(
+            (gear.effective_speed_multiplier - 2.25).abs() < 0.01,
+            "legendary beacon modules must scale: got {}",
+            gear.effective_speed_multiplier
         );
     }
 }
