@@ -27,7 +27,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::models::{ItemFlow, MachineSpec, SolverResult};
+use crate::models::{MachineSpec, SolverResult};
 use crate::trace::{self, TraceEvent};
 
 /// Per-belt-tier per-lane (belt-side) capacity in items/s. Mirrors
@@ -66,52 +66,9 @@ pub fn lane_capacity(max_belt_tier: Option<&str>) -> f64 {
     }
 }
 
-/// `lane_rate / (capacity * 0.75)` — the saturation fraction relative
-/// to the utilization ceiling. Returns `> 1.0` when the lane busts the
-/// 75% gate. Phase 1 partitioner emits
-/// `TraceEvent::PartitionRejectedByUtilization` and produces an invalid
-/// layout when this happens, instead of silently falling back to
-/// `Pooled`.
-pub fn lane_utilization(lane_rate: f64, max_belt_tier: Option<&str>) -> f64 {
-    let cap = lane_capacity(max_belt_tier);
-    if cap <= 0.0 {
-        return f64::INFINITY;
-    }
-    lane_rate / (cap * UTILIZATION_CEILING)
-}
-
-/// Per-item count of consuming recipe-rows. The partitioner uses this
-/// to decide which items need K>1 modules under
-/// `PartitionedDecomposed`. Iteration over `solver_result.machines` is
-/// the right unit because the placer turns each `MachineSpec` into one
-/// or more `RowSpan` instances; the count of unique consuming
-/// recipes is a conservative under-estimate of consuming rows
-/// (post-`placer.rs` row-splitting can multiply this further). For PR1's
-/// K=1-vs-K>1 fan-out check, the conservative count is sufficient
-/// because it can only over-detect K=1 cases (false negatives for
-/// partitioning), never the other way around.
-pub fn consumers_per_item(solver_result: &SolverResult) -> FxHashMap<String, u32> {
-    let mut counts: FxHashMap<String, u32> = FxHashMap::default();
-    for m in &solver_result.machines {
-        for inp in &m.inputs {
-            *counts.entry(inp.item.clone()).or_insert(0) += 1;
-        }
-    }
-    counts
-}
-
-/// Items that the partitioner would produce K>1 modules for. Under
-/// `PartitionedDecomposed`, these are the items whose handling diverges
-/// from `Pooled`.
-pub fn multi_consumer_items(solver_result: &SolverResult) -> Vec<String> {
-    let mut items: Vec<String> = consumers_per_item(solver_result)
-        .into_iter()
-        .filter(|(_, k)| *k > 1)
-        .map(|(item, _)| item)
-        .collect();
-    items.sort();
-    items
-}
+// (lane_utilization, consumers_per_item, and multi_consumer_items were
+// deleted 2026-08-20, offpath-code-followups Tier 1 — zero callers;
+// plan_partitioning derives utilization inline.)
 
 /// Per-recipe partition assignment. Under `PartitionedDecomposed`,
 /// item X with K consuming recipes gets K modules, indexed by the
@@ -162,19 +119,8 @@ impl PartitionPlan {
         self.modules.is_empty()
     }
 
-    /// Look up a module by `(item, consumer_recipe)`. Returns `None`
-    /// if the item is not partitioned (i.e. K=1 or fluid).
-    pub fn module_for_consumer(&self, item: &str, consumer_recipe: &str) -> Option<&ModuleAssignment> {
-        self.modules
-            .iter()
-            .find(|m| m.item == item && m.consumer_recipe == consumer_recipe)
-    }
-
-    /// Number of modules allocated for `item`. `0` when not
-    /// partitioned (treat as Pooled / module_id 0).
-    pub fn modules_for_item(&self, item: &str) -> u32 {
-        self.modules.iter().filter(|m| m.item == item).count() as u32
-    }
+    // (module_for_consumer and modules_for_item deleted 2026-08-20,
+    // offpath Tier 1 — zero callers.)
 
     /// The plan's `lane_count` for `(item, module_id)`, or `None` if no
     /// module is recorded. The lane planner consults this as a lower
@@ -979,17 +925,14 @@ pub(crate) fn apply_cap_driven_split(
     new_modules
 }
 
-/// Convenience helper: an `ItemFlow` constructor that fills in `module_id: 0`.
-/// Used by call sites that don't care about partitioning.
-pub fn pooled_flow(item: impl Into<String>, rate: f64, is_fluid: bool) -> ItemFlow {
-    ItemFlow { item: item.into(), rate, is_fluid, module_id: 0 }
-}
+// (pooled_flow deleted 2026-08-20, offpath Tier 1 — its doc-claimed call
+// sites did not exist.)
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::bus::layout::LayoutStrategy;
-    use crate::models::MachineSpec;
+    use crate::models::{ItemFlow, MachineSpec};
 
     #[test]
     fn lane_capacity_falls_back_to_fastest_tier() {
@@ -1000,16 +943,6 @@ mod tests {
         assert_eq!(lane_capacity(Some("express-transport-belt")), 22.5);
         // Unknown tier → fastest.
         assert_eq!(lane_capacity(Some("not-a-belt")), 22.5);
-    }
-
-    #[test]
-    fn utilization_ceiling_at_75_percent() {
-        // Yellow belt: 7.5/s per side × 0.75 = 5.625 ceiling.
-        assert!((lane_utilization(5.625, Some("transport-belt")) - 1.0).abs() < 1e-9);
-        // Just over → > 1.0.
-        assert!(lane_utilization(5.7, Some("transport-belt")) > 1.0);
-        // Just under → < 1.0.
-        assert!(lane_utilization(5.5, Some("transport-belt")) < 1.0);
     }
 
     fn flow(item: &str, rate: f64) -> ItemFlow {

@@ -167,12 +167,9 @@ impl LayoutSnapshot {
         std::fs::write(path, encoded)
     }
 
-    /// Read and decode a snapshot from a file.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn read_from_file(path: &Path) -> Result<Self, SnapshotError> {
-        let contents = std::fs::read_to_string(path).map_err(SnapshotError::Io)?;
-        Self::decode(&contents)
-    }
+    // (read_from_file deleted 2026-08-20, offpath Tier 1 — zero callers;
+    // the documented .fls read-back is the shell pipeline in
+    // docs/layout-snapshot-debugger.md.)
 }
 
 /// Errors that can occur during snapshot encode/decode.

@@ -252,11 +252,8 @@ impl SatConstraints {
     }
 }
 
-impl Default for SatConstraints {
-    fn default() -> Self {
-        Self::unrestricted()
-    }
-}
+// (impl Default for SatConstraints deleted 2026-08-20, offpath Tier 1 —
+// every site uses the named constructors.)
 
 pub struct SatStrategy {
     name: &'static str,

@@ -114,8 +114,10 @@ fn pin_on_forbidden_tile_rejects() {
     assert!(result.is_none(), "pin on forbidden tile must reject");
 }
 
-/// Empty pin set must behave identically to `solve_crossing_zone_with_stats`
-/// — i.e. the sample fixture solves to the known 2-belt layout.
+/// Empty pin set must behave identically to the unpinned solve (formerly
+/// the `solve_crossing_zone_with_stats` wrapper, deleted 2026-08-20,
+/// offpath Tier 1) — i.e. the sample fixture solves to the known 2-belt
+/// layout.
 #[test]
 fn empty_pins_solves_like_baseline() {
     let fixture = load_sample_fixture();

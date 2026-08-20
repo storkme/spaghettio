@@ -13,9 +13,10 @@
 //!   representing the range of path tiles currently in the region,
 //! - and a cached tile set so "is this tile in the region?" is O(1).
 //!
-//! Each iteration of `grow()` advances both ends of each frontier by
-//! one step. The bbox is the tight enclosing rectangle of the accumulated
-//! tile set. Tiles inside the bbox that belong to non-participating
+//! Each growth iteration (`expand_bbox`; the per-frontier `grow()`
+//! primitive it superseded was deleted 2026-08-20, offpath Tier 1)
+//! widens the region. The bbox is the tight enclosing rectangle of the
+//! accumulated tile set. Tiles inside the bbox that belong to non-participating
 //! specs' paths are marked forbidden — strategies must avoid them. If
 //! a future strategy wants to also rewrite one of those specs, it can
 //! be promoted to participating in a later pass (not yet implemented —
@@ -243,9 +244,10 @@ impl GrowingRegion {
     /// the SAT encoder with specs that aren't part of the actual
     /// crossing being resolved.
     ///
-    /// This is the growth primitive used by the CEGAR loop: unlike
-    /// `grow()` (which walks each spec's frontier by one step along
-    /// its own axis), `expand_bbox` grows perpendicular to spec axes
+    /// This is the growth primitive used by the CEGAR loop: unlike the
+    /// deleted per-frontier `grow()` (which walked each spec's frontier
+    /// one step along its own axis), `expand_bbox` grows perpendicular
+    /// to spec axes
     /// and can absorb perpendicular trunks the seed crossing had never
     /// heard of — the copper-cable column-4 trunk in the
     /// tier2_electronic_circuit case being the canonical example.
@@ -398,88 +400,10 @@ impl GrowingRegion {
         true
     }
 
-    /// Advance each participating spec's frontier by one step in each
-    /// direction along its path. Updates the bbox, the tile set, and
-    /// the forbidden cache. Returns `true` if any new tile entered the
-    /// region.
-    #[allow(dead_code)]
-    pub fn grow(
-        &mut self,
-        routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
-        hard_obstacles: &FxHashSet<(i32, i32)>,
-        strict_obstacles: &FxHashSet<(i32, i32)>,
-        placed_entities: &[PlacedEntity],
-    ) -> bool {
-        let mut added_any = false;
-        let keys: Vec<String> = self.participating.clone();
-        for key in &keys {
-            let Some(path) = routed_paths.get(key) else {
-                continue;
-            };
-            let Some(&(start, end)) = self.frontiers.get(key) else {
-                continue;
-            };
-            let mut new_start = start;
-            let mut new_end = end;
-            if start > 0 {
-                new_start = start - 1;
-                let t = path[new_start];
-                if self.tiles.insert(t) {
-                    added_any = true;
-                }
-            }
-            if end + 1 < path.len() {
-                new_end = end + 1;
-                let t = path[new_end];
-                if self.tiles.insert(t) {
-                    added_any = true;
-                }
-            }
-            self.frontiers.insert(key.clone(), (new_start, new_end));
-        }
-        if added_any {
-            self.recompute_bbox();
-            self.refresh_forbidden(
-                routed_paths,
-                hard_obstacles,
-                strict_obstacles,
-                placed_entities,
-            );
-        }
-        added_any
-    }
-
     /// Number of tiles currently in the region. Checked against
     /// `MAX_REGION_TILES` by the outer loop.
     pub fn tile_count(&self) -> usize {
         self.tiles.len()
-    }
-
-    fn recompute_bbox(&mut self) {
-        let mut min_x = i32::MAX;
-        let mut max_x = i32::MIN;
-        let mut min_y = i32::MAX;
-        let mut max_y = i32::MIN;
-        for &(x, y) in &self.tiles {
-            if x < min_x {
-                min_x = x;
-            }
-            if x > max_x {
-                max_x = x;
-            }
-            if y < min_y {
-                min_y = y;
-            }
-            if y > max_y {
-                max_y = y;
-            }
-        }
-        self.bbox = Rect {
-            x: min_x,
-            y: min_y,
-            w: (max_x - min_x + 1) as u32,
-            h: (max_y - min_y + 1) as u32,
-        };
     }
 
     fn refresh_forbidden(
@@ -602,54 +526,6 @@ impl GrowingRegion {
                 self.forbidden_tiles.insert(t);
             }
         }
-    }
-
-    /// Promote any encountered spec whose *entire* routed path is already
-    /// inside the current tile set. These specs are "fully engulfed" —
-    /// every tile they occupy is within the zone bbox — and must be routed
-    /// by the SAT solver or they become orphaned crossing specs.
-    ///
-    /// Typical case: a 1-tile trunk column that sits directly on the path
-    /// of a longer tap. The tap's crossing zone grows to include that tile,
-    /// which causes the trunk to appear in `encountered`. Without promotion
-    /// the SAT doesn't know about the trunk and places an entity that
-    /// conflicts with it.
-    #[allow(dead_code)]
-    pub fn promote_fully_enclosed(
-        &mut self,
-        routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
-        hard_obstacles: &FxHashSet<(i32, i32)>,
-        strict_obstacles: &FxHashSet<(i32, i32)>,
-        placed_entities: &[PlacedEntity],
-    ) {
-        let to_promote: Vec<String> = self
-            .encountered
-            .iter()
-            .filter(|key| {
-                routed_paths
-                    .get(key.as_str())
-                    .is_some_and(|path| path.iter().all(|t| self.tiles.contains(t)))
-            })
-            .cloned()
-            .collect();
-        if to_promote.is_empty() {
-            return;
-        }
-        for key in &to_promote {
-            if let Some(path) = routed_paths.get(key.as_str()) {
-                let start = 0;
-                let end = path.len().saturating_sub(1);
-                self.frontiers.insert(key.clone(), (start, end));
-            }
-            self.participating.push(key.clone());
-        }
-        self.encountered.retain(|k| !to_promote.contains(k));
-        self.refresh_forbidden(
-            routed_paths,
-            hard_obstacles,
-            strict_obstacles,
-            placed_entities,
-        );
     }
 
     /// Materialize a `Junction` snapshot suitable for strategy input.
@@ -2004,22 +1880,6 @@ fn try_solve_on_region(
 
     TryOutcome::Continue { veto_tiles, deferred }
 }
-
-/// Every tile inside `bbox` (inclusive on the min side, exclusive on the
-/// max side, per `Rect`'s convention). Kept as a helper in case future
-/// strategies want to release the whole footprint — the current walker
-/// wiring releases only SAT-proposed tiles instead.
-#[allow(dead_code)]
-fn bbox_tiles_set(bbox: Rect) -> FxHashSet<(i32, i32)> {
-    let mut out = FxHashSet::default();
-    for dy in 0..bbox.h as i32 {
-        for dx in 0..bbox.w as i32 {
-            out.insert((bbox.x + dx, bbox.y + dy));
-        }
-    }
-    out
-}
-
 /// True iff `(x, y)` falls inside `bbox` expanded by one tile on each
 /// side. The walker uses this to decide which routed paths to check —
 /// anything one tile beyond the bbox can still interact with the
