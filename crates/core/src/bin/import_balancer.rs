@@ -82,43 +82,40 @@ fn normalize_belt_name(name: &str) -> &str {
 /// than failing. Raynquist's fall-2025 book is 2.0, which is why every
 /// shape in it looked unimportable.
 fn direction_scale(data: &Value) -> Result<u64, String> {
-    if let Some(version) = data["blueprint"]["version"].as_u64() {
+    // Packed 0 is the ABSENT sentinel, not a real major-0 version — same
+    // convention as `blueprint_parser::blueprint_major_version`, which maps
+    // it to `None`. Treating it as 1.x reads a version-stripped 2.0
+    // blueprint as 8-way (#664 review).
+    let version = data["blueprint"]["version"].as_u64().unwrap_or(0);
+    if version != 0 {
         return Ok(if (version >> 48) >= 2 { 2 } else { 1 });
     }
-    // No version field. Only ONE inference from the direction values is
-    // sound, so make that one and refuse everything else (#664 review).
+
+    // No usable version: REFUSE, with no inference attempted.
     //
-    //   8-way (1.x):  cardinals {0,2,4,6}, diagonals {1,3,5,7}
-    //   16-way (2.0): cardinals {0,4,8,12}, diagonals {2,6,10,14}, and finer
+    // This DIVERGES from `blueprint_parser.rs`, where a missing version
+    // "fails toward modern" (16-way) to preserve prior analyzer behaviour.
+    // The divergence is deliberate and the asymmetry is the reason: analysis
+    // is transient and re-runnable, while an IMPORT bakes a permanently
+    // wrong template into the library, to be stamped into layouts by a
+    // generator with no way to know it is wrong.
     //
-    // A value >= 8 cannot occur under 8-way at all, so it PROVES 16-way.
-    // Nothing else discriminates:
-    //   * 2 and 6 are 8-way EAST/WEST or 16-way NE/SE — an earlier draft of
-    //     this function inferred 8-way from them, which silently re-decodes a
-    //     version-stripped 2.0 diagonal as a cardinal: exactly the failure
-    //     this function exists to prevent, one level down.
-    //   * 1/3/5/7 are diagonals under BOTH encodings (an earlier draft called
-    //     them 16-way-only, which is simply wrong).
-    //   * 0 and 4 are N/S under 8-way and N/E under 16-way.
-    // The single safe exception is an all-zero set: 0 is NORTH in both, so
-    // the encodings agree and there is nothing to get wrong.
-    let dirs: Vec<u64> = data["blueprint"]["entities"]
-        .as_array()
-        .map(|es| es.iter().filter_map(|e| e["direction"].as_u64()).collect())
-        .unwrap_or_default();
-    if dirs.iter().any(|&d| d >= 8) {
-        return Ok(2); // >= 8 is impossible under 8-way
-    }
-    if dirs.iter().all(|&d| d == 0) {
-        return Ok(1); // both encodings agree on 0 = north
-    }
-    Err(format!(
-        "blueprint has no `version` field and its directions {dirs:?} do not \
-         determine the encoding — every value below 8 means something \
-         different under 8-way (1.x) and 16-way (2.0), so importing would \
-         pick a topology at random. Re-export from the game so the blueprint \
-         carries a version."
-    ))
+    // Inference was tried and removed (#664 review). Only one rule is even
+    // sound for well-formed input — a value >= 8 cannot occur under 8-way —
+    // and every edge around it leaks:
+    //   * an empty or missing `entities` array makes "all directions are 0"
+    //     VACUOUSLY true, so a malformed blueprint imports as 1.x;
+    //   * a corrupt 1.x file with one stray direction >= 8 reads as 2.0 and
+    //     mis-decodes silently, where the pre-fix code at least panicked;
+    //   * 2 and 6 are 8-way E/W or 16-way NE/SE, and 1/3/5/7 are diagonals
+    //     under BOTH encodings, so neither discriminates.
+    // A tool whose job is refusing ambiguous input should not be guessing.
+    Err("blueprint has no usable `version` field (absent, or the packed-0 \
+         sentinel), so its direction encoding is undetermined: every value \
+         below 8 means something different under 8-way (1.x) and 16-way \
+         (2.0), and importing would pick a topology at random. Re-export \
+         the blueprint from the game so it carries a version."
+        .to_string())
 }
 
 fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
@@ -137,21 +134,20 @@ fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
             .as_f64()
             .ok_or("Entity missing position.y")?;
         let raw_dir = ent["direction"].as_u64().unwrap_or(0);
-        if raw_dir % scale != 0 {
+        // ONE refusal path (#664 review, 3/3). The old `% scale` pre-check
+        // was unreachable for 8-way (`% 1` is always 0) yet formatted a
+        // message branching on 8-vs-16-way, while 8-way diagonals (1/3/5/7)
+        // fell through to a DIFFERENT message — the same defect reported
+        // under two labels.
+        if raw_dir % scale != 0 || !matches!((raw_dir / scale) as u8, N | E | S | W) {
             return Err(format!(
-                "entity {raw_name} at ({x}, {y}) has direction {raw_dir}, which is not \
-                 a cardinal under the detected {}-way encoding — diagonal belts are \
-                 not representable as a balancer template",
+                "entity {raw_name} at ({x}, {y}) has direction {raw_dir}, which is \
+                 not a cardinal under the detected {}-way encoding — diagonal \
+                 belts are not representable as a balancer template",
                 if scale == 2 { 16 } else { 8 }
             ));
         }
         let direction = (raw_dir / scale) as u8;
-        if !matches!(direction, N | E | S | W) {
-            return Err(format!(
-                "entity {raw_name} at ({x}, {y}) normalised to direction {direction}, \
-                 which is not one of N/E/S/W (0/2/4/6)"
-            ));
-        }
         let io_type = ent["type"].as_str().map(|s| s.to_owned());
         let input_priority = ent["input_priority"].as_str().map(|s| s.to_owned());
         let output_priority = ent["output_priority"].as_str().map(|s| s.to_owned());
@@ -1165,67 +1161,65 @@ mod tests {
     /// 2.0 doubled the encoding; the top 16 bits of `version` are the major.
     #[test]
     fn version_field_picks_the_scale() {
-        // 2.0.x -> major 2 -> 16-way
         assert_eq!(direction_scale(&bp(Some(2u64 << 48), &[0])), Ok(2));
-        // 1.1.x -> major 1 -> 8-way
         assert_eq!(direction_scale(&bp(Some(1u64 << 48), &[0])), Ok(1));
     }
 
     /// The regression that made the whole 2025 book look unimportable: a 2.0
-    /// source must normalise 0/4/8/12 down to 0/2/4/6, not pass them through.
+    /// source's 0/4/8/12 must normalise to N/E/S/W, not pass through.
     #[test]
     fn two_point_zero_cardinals_normalise() {
-        let data = bp(Some(2u64 << 48), &[0, 4, 8, 12]);
-        let ents = extract_entities(&data).expect("2.0 cardinals import");
-        let got: Vec<u8> = ents.iter().map(|e| e.direction).collect();
-        assert_eq!(got, vec![N, E, S, W]);
+        let ents = extract_entities(&bp(Some(2u64 << 48), &[0, 4, 8, 12]))
+            .expect("2.0 cardinals import");
+        assert_eq!(ents.iter().map(|e| e.direction).collect::<Vec<_>>(), vec![N, E, S, W]);
     }
 
     /// ...and a 1.x source must be left alone.
     #[test]
     fn one_x_cardinals_pass_through() {
-        let data = bp(Some(1u64 << 48), &[0, 2, 4, 6]);
-        let ents = extract_entities(&data).expect("1.x cardinals import");
-        let got: Vec<u8> = ents.iter().map(|e| e.direction).collect();
-        assert_eq!(got, vec![N, E, S, W]);
+        let ents = extract_entities(&bp(Some(1u64 << 48), &[0, 2, 4, 6]))
+            .expect("1.x cardinals import");
+        assert_eq!(ents.iter().map(|e| e.direction).collect::<Vec<_>>(), vec![N, E, S, W]);
     }
 
-    /// Diagonals are not representable as a balancer template and must fail
-    /// by name rather than truncate into a cardinal. Both refusal paths are
-    /// covered: 16-way 2 (north-east) survives the `% scale` check and is
-    /// caught by the N/E/S/W test; 8-way 1 is caught by `% scale` itself.
+    /// Both encodings, both kinds of non-cardinal, ONE message.
     #[test]
     fn diagonal_directions_are_refused() {
-        let ne = extract_entities(&bp(Some(2u64 << 48), &[2])).unwrap_err();
-        assert!(ne.contains("N/E/S/W"), "16-way diagonal: {ne}");
-
-        let odd = extract_entities(&bp(Some(2u64 << 48), &[3])).unwrap_err();
-        assert!(odd.contains("cardinal"), "odd raw direction: {odd}");
+        for (version, dir, way) in [
+            (2u64 << 48, 2u64, "16"),
+            (2u64 << 48, 3, "16"),
+            (1u64 << 48, 1, "8"),
+            (1u64 << 48, 7, "8"),
+        ] {
+            let e = extract_entities(&bp(Some(version), &[dir])).unwrap_err();
+            assert!(e.contains("not a cardinal"), "dir {dir}: {e}");
+            assert!(e.contains(&format!("{way}-way")), "dir {dir}: {e}");
+        }
     }
 
-    /// The silent-default hole: `unwrap_or(0)` used to assume 1.x, so a
-    /// version-stripped 2.0 blueprint using only 0 and 4 imported as
-    /// north/SOUTH instead of north/EAST.
+    /// No usable version => REFUSE, whatever the directions look like.
+    ///
+    /// Each of these was an inference an earlier version made, and each
+    /// leaked: `[]` made "all directions are 0" VACUOUSLY true, so a
+    /// malformed blueprint imported as 1.x; `[0,8]` silently mis-decodes a
+    /// corrupt 1.x file as 2.0, where the pre-fix code at least panicked;
+    /// `[0,2]` is 8-way E or 16-way NE and does not discriminate at all.
     #[test]
-    fn missing_version_with_ambiguous_directions_refuses() {
-        let r = direction_scale(&bp(None, &[0, 4]));
-        assert!(r.is_err(), "0/4 with no version is undecidable, got {r:?}");
-    }
-
-    /// The only two sound no-version inferences, and the reason the rest are
-    /// refused. `[0, 2]` in particular MUST refuse: it is 8-way north+east
-    /// and equally 16-way north+north-east, and an earlier draft guessed
-    /// 8-way — re-decoding a 2.0 diagonal as a cardinal, which is the exact
-    /// silent mis-read this function exists to prevent.
-    #[test]
-    fn missing_version_infers_only_what_is_sound() {
-        assert_eq!(direction_scale(&bp(None, &[0, 8])), Ok(2), ">=8 is impossible under 8-way");
-        assert_eq!(direction_scale(&bp(None, &[0, 0])), Ok(1), "0 is north under both");
-        for ambiguous in [vec![0u64, 2], vec![0, 4], vec![0, 6], vec![0, 1], vec![2, 6]] {
+    fn missing_version_always_refuses() {
+        for dirs in [vec![], vec![0u64], vec![0, 8], vec![0, 2], vec![0, 4], vec![0, 6], vec![12]] {
             assert!(
-                direction_scale(&bp(None, &ambiguous)).is_err(),
-                "{ambiguous:?} does not determine the encoding and must refuse"
+                direction_scale(&bp(None, &dirs)).is_err(),
+                "no-version blueprint with {dirs:?} must refuse, not guess"
             );
         }
+    }
+
+    /// Packed 0 is the ABSENT sentinel (`blueprint_parser::
+    /// blueprint_major_version` maps it to `None`), not a real major-0
+    /// version — reading it as 1.x is how a version-stripped 2.0 blueprint
+    /// got decoded as 8-way.
+    #[test]
+    fn packed_zero_version_is_absent_not_one_x() {
+        assert!(direction_scale(&bp(Some(0), &[0, 4])).is_err());
     }
 }
