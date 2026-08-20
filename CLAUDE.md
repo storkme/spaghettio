@@ -167,7 +167,7 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 1. **Solver** (`crates/core/src/solver.rs`) — Resolves recipe dependencies via the net-flow LP in `netflow.rs` (free cost-based recipe selection, default since 2026-07; the legacy recursive tree walk and its compat-mode A/B path were deleted 2026-08-14, #632 A1 — the walk-vs-LP comparison tests went with it, but netflow's own regression suite survived the split as `crates/core/tests/netflow_regression.rs`), computes machine counts and flow rates. Loads `crates/core/data/recipes.json` via `include_str!`. Returns a `SolverResult`.
 2. **Bus layout** (`crates/core/src/bus/`) — Deterministic row-based layout. Machines group by recipe into rows, trunks run on parallel columns, tap-offs are routed via the ghost router (negotiated congestion A* + region-growth junction solver). See [`docs/ghost-pipeline-contracts.md`](docs/ghost-pipeline-contracts.md) for the phase-by-phase contracts the router promises.
 3. **Blueprint export** (`crates/core/src/blueprint.rs`) — Emits the JSON + zlib + base64 envelope directly (no draftsman dependency).
-4. **Validation** (`crates/core/src/validate/`) — 40 functional checks: pipe isolation, fluid port connectivity, inserter chains + direction, power coverage + pole connectivity, belt flow/structural, underground belt pairs + sideloading, lane throughput, input-rate delivery, module slots + eligibility, record integrity (effective_rows bands + power-wire indices vs geometry, RFC-065).
+4. **Validation** (`crates/core/src/validate/`) — 41 functional checks: pipe isolation, fluid port connectivity, inserter chains + direction, power coverage + pole connectivity, belt flow/structural, underground belt pairs + sideloading, lane throughput, input-rate delivery, module slots + eligibility, record integrity (effective_rows bands + power-wire indices vs geometry, RFC-065).
 
 ## Key models (`crates/core/src/models.rs`)
 
@@ -189,7 +189,7 @@ Most-visited files. Full reference in [`docs/file-reference.md`](docs/file-refer
 | `crates/core/src/bus/lane_planner.rs` | `BusLane` / `LaneFamily` types, `plan_bus_lanes`, lane splitting + tap-off coordinate finding |
 | `crates/core/src/bus/ghost_router.rs` | Ghost A* + negotiated congestion routing; junction solver integration; output merger call-site |
 | `crates/core/src/netflow.rs` | Net-flow LP solver — the only solver path since 2026-08-14 (#632 A1 deleted the legacy tree walk and its compat A/B mode in `solver.rs`; its own regression coverage lives in `crates/core/tests/netflow_regression.rs`); free cost-based recipe selection, byproduct crediting, typed cycle refusals. See `docs/rfc-solver-net-flow.md`. |
-| `crates/core/src/validate/` | The 40 functional checks, dispatched from `mod.rs` (`belt_flow` lane-rate walker, `belt_structural`, `fluids`, `inserters`, `modules`, `power`, `underground`) |
+| `crates/core/src/validate/` | The 41 functional checks, dispatched from `mod.rs` (`belt_flow` lane-rate walker, `belt_structural`, `fluids`, `inserters`, `modules`, `power`, `underground`) |
 | `crates/core/src/trace.rs` | Thread-local trace event collector; `TraceEvent` variants drive the snapshot debugger and stress scoreboards |
 | `crates/core/src/snapshot.rs` | `.fls` snapshot reader/writer for the layout debugger |
 | `crates/core/tests/e2e.rs` | End-to-end test harness: tier regression tests and stress corpus with scoreboards |
@@ -234,7 +234,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 | Balancer templates | `crates/core/src/bus/balancer_library.rs`. Regenerate: `python scripts/generate_balancer_library.py` (needs Factorio-SAT on `PATH`). |
 | Belt tier thresholds | `crates/core/src/common.rs` (`belt_entity_for_rate`, `ug_max_reach`) |
 | Entity sizes | `crates/core/src/common.rs` (`entity_size`) |
-| Validation checks | `crates/core/src/validate/` (40 checks, dispatched from `mod.rs`) |
+| Validation checks | `crates/core/src/validate/` (41 checks, dispatched from `mod.rs`) |
 | How a check should report (and the ten times it didn't) | [`docs/validator-reporting.md`](docs/validator-reporting.md) |
 | What `PlacedEntity::rate` denotes (an aggregate — **never** per-tile flow) | [`docs/rate-stamp-semantics.md`](docs/rate-stamp-semantics.md) |
 | What a check's report is worth (severity, selection participation, calibration receipts, known holes) | [`docs/validator-trust.md`](docs/validator-trust.md) — update it in the same PR as any severity/category/selection change |

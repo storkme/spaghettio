@@ -1048,6 +1048,48 @@ pub fn count_missing_balancer_template_warnings(layout: &LayoutResult) -> usize 
         .count()
 }
 
+/// Belts the router deleted at materialisation with nothing to replace
+/// them (`LayoutResult::dropped_connections`).
+///
+/// ERROR, and unlike `belt-flow-reachability` this one has earned it. That
+/// check INFERS severance from graph structure and is measurably noisy on
+/// bus layouts — promoting it was tried on 2026-08-17 and reverted, because
+/// `stress_electronic_circuit_35s_from_ore` went 4 errors -> 92 and a sample
+/// of 12 of the new ones all walked 14-62 tiles to real sources. This check
+/// does no inference: the router reports the tile where it deleted a belt
+/// and put nothing back, so a report here IS a hole, by construction.
+///
+/// It exists because that deletion used to be silent. ac7-HS shipped a
+/// severed iron-plate tap — 30 tiles of dead belt feeding two starved
+/// machines — as a ZERO-ERROR layout, and its only symptom was a rate
+/// anomaly far downstream that took a 200-tile manual walk to tell apart
+/// from ordinary under-delivery.
+fn check_dropped_connections(layout: &LayoutResult) -> Vec<ValidationIssue> {
+    layout
+        .dropped_connections
+        .iter()
+        .map(|d| {
+            ValidationIssue::with_pos(
+                Severity::Error,
+                "dropped-connection",
+                format!(
+                    "belt for {} was routed through ({},{}) then deleted — the tile is \
+                     owned by {} (module {}) and no crossing zone replaced it, so this \
+                     path has a hole here",
+                    if d.dropped_item.is_empty() { &d.spec_key } else { &d.dropped_item },
+                    d.x,
+                    d.y,
+                    d.surviving_item,
+                    d.surviving_module,
+                ),
+                d.x,
+                d.y,
+            )
+        })
+        .collect()
+}
+
+
 /// Run all functional validation checks on a layout.
 ///
 /// Returns a list of issues found.  Returns `Err(ValidationError)` if any
@@ -1148,6 +1190,7 @@ pub fn validate(
         Box::new(|| modules::check_module_slots(layout)),
         Box::new(|| modules::check_module_eligibility(layout)),
         Box::new(|| belt_detour::check_belt_detour(layout)),
+        Box::new(|| check_dropped_connections(layout)),
     ];
 
     let issues: Vec<ValidationIssue> = checks.par_iter().flat_map(|f| f()).collect();
@@ -1182,6 +1225,61 @@ pub fn validate(
 mod tests {
     use super::*;
     use crate::models::{EntityDirection, ItemFlow, LayoutResult, PlacedEntity};
+
+
+    /// The drop recorder's check, pinned. A new ERROR-severity check with no
+    /// test is the failure mode `docs/validator-reporting.md` catalogues ten
+    /// times: it can stop discriminating and nothing notices.
+    #[test]
+    fn dropped_connections_report_one_positioned_error_each() {
+        let mut layout = empty_layout();
+        layout.dropped_connections = vec![
+            crate::models::DroppedConnection {
+                x: 12,
+                y: 34,
+                spec_key: "tap:iron-plate:1:96".to_string(),
+                dropped_item: "iron-plate".to_string(),
+                surviving_item: "copper-cable".to_string(),
+                surviving_module: 0,
+            },
+            crate::models::DroppedConnection {
+                x: 40,
+                y: 7,
+                spec_key: "tap:plastic-bar:0:12".to_string(),
+                dropped_item: "plastic-bar".to_string(),
+                surviving_item: "iron-plate".to_string(),
+                surviving_module: 2,
+            },
+        ];
+        let issues = check_dropped_connections(&layout);
+
+        // ONE issue per drop, not one issue carrying a count — a check that
+        // reports "2 dropped connections" in a single message cannot tell 2
+        // from 218.
+        assert_eq!(issues.len(), 2, "expected one issue per dropped connection");
+        assert!(issues.iter().all(|i| i.severity == Severity::Error));
+        assert!(issues.iter().all(|i| i.category == "dropped-connection"));
+
+        // Positioned AT the drop, which is the whole point: the pre-existing
+        // alternative (`belt-flow-reachability`) reports a downstream symptom.
+        let positions: Vec<_> = issues.iter().map(|i| (i.x, i.y)).collect();
+        assert!(positions.contains(&(Some(12), Some(34))), "got {positions:?}");
+        assert!(positions.contains(&(Some(40), Some(7))), "got {positions:?}");
+
+        // The surviving owner is named — without it the report says a tile is
+        // contested but not by what, which is not actionable.
+        assert!(issues.iter().any(|i| i.message.contains("copper-cable")));
+        assert!(issues.iter().any(|i| i.message.contains("iron-plate")));
+    }
+
+    /// A clean layout must produce NO drop errors — the converse pin, so the
+    /// check cannot pass the test above by simply always firing.
+    #[test]
+    fn no_dropped_connections_means_no_issues() {
+        let layout = empty_layout();
+        assert!(layout.dropped_connections.is_empty());
+        assert!(check_dropped_connections(&layout).is_empty());
+    }
 
     fn empty_layout() -> LayoutResult {
         LayoutResult {

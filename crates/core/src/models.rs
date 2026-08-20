@@ -394,6 +394,31 @@ pub struct LayoutRegion {
     pub max_ug_reach: Option<u32>,
 }
 
+/// A belt that A* routed, materialisation then DELETED because a trunk or
+/// another ghost already owned the tile, and which no crossing zone put
+/// back. The path has a hole at this tile.
+///
+/// First-class layout data, not a trace artifact, because it is the only
+/// exact evidence of a severed connection: `belt-flow-reachability` INFERS
+/// severance from graph structure and is measurably noisy on bus layouts
+/// (2026-08-17: 90 errors on stress_electronic_circuit_35s, sampled 12,
+/// all 12 reached a real source). This is the drop itself, recorded where
+/// it happens.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+pub struct DroppedConnection {
+    pub x: i32,
+    pub y: i32,
+    /// Routing spec whose path lost the tile.
+    pub spec_key: String,
+    /// What the deleted belt was carrying.
+    pub dropped_item: String,
+    /// What already owned the tile.
+    pub surviving_item: String,
+    pub surviving_module: u32,
+}
+
+
 /// Everything the layout engine produces — no rate data.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -415,6 +440,11 @@ pub struct LayoutResult {
     /// surplus. Populated by the bus pipeline regardless of tracing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surplus_exits: Vec<(String, i32, i32)>,
+    /// Connections deleted at materialisation with nothing replacing them.
+    /// Populated by the bus pipeline regardless of tracing; the validator
+    /// errors on each one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped_connections: Vec<DroppedConnection>,
     /// External-input entry points (RFC-050 Phase 0): one record per bus
     /// lane with no producer row — the tile where the outside world must
     /// deliver that item. Emitted by the engine from lane-planner

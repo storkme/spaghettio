@@ -1650,6 +1650,7 @@ mod tests {
     fn empty_layout() -> LayoutResult {
         LayoutResult {
             entities: vec![],
+            dropped_connections: Vec::new(),
             research_productivity: Default::default(),
             width: 0,
             height: 0,

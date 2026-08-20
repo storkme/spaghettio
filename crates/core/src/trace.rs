@@ -595,6 +595,15 @@ pub enum TraceEvent {
     /// renderer treats them uniformly. Each lane therefore emits two events
     /// for solid lanes (Step 2 and Step 3.5) and one event for fluid lanes
     /// (Step 3.6).
+    /// A routed belt was deleted at materialisation and no crossing zone
+    /// replaced it — the path has a hole here.
+    ConnectionDropped {
+        x: i32,
+        y: i32,
+        spec_key: String,
+        dropped_item: String,
+        surviving_item: String,
+    },
     TrunkBeltCommitted {
         item: String,
         lane_x: i32,

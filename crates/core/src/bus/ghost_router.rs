@@ -52,8 +52,20 @@ use crate::trace;
 const TURN_PENALTY: u32 = 8;
 
 /// Output of the ghost router.
+/// One belt deleted by the materialisation survivor filter.
+struct DroppedBelt {
+    tile: (i32, i32),
+    spec_key: String,
+    dropped_item: String,
+    surviving_item: String,
+    surviving_module: u32,
+}
+
 pub struct GhostRouteResult {
     pub entities: Vec<PlacedEntity>,
+    /// Belts the materialisation survivor filter deleted with nothing to
+    /// replace them — see `DroppedConnection`.
+    pub dropped_connections: Vec<crate::models::DroppedConnection>,
     /// All tiles where two or more routed paths overlap.
     pub ghost_crossing_tiles: FxHashSet<(i32, i32)>,
     /// Number of union-find clusters among the ghost crossings.
@@ -130,13 +142,6 @@ struct BeltSpec {
     /// y=292 was the motivating bug). `None` for specs that don't have
     /// a single owning trunk (feeders into a balancer input).
     lane_trunk_col: Option<i32>,
-    /// Lane-family id this spec's lane belongs to (`BusLane::family_id`).
-    /// Used by the merge-tap bridge to test trunk foreignness by FAMILY
-    /// (a genuinely different logical network) rather than by column — two
-    /// columns of the SAME family (native lane splitting) must not UG-hop,
-    /// but a merge-tap tap crossing a DIFFERENT family's trunk must. `None`
-    /// for specs whose lane carries no family (unsplit single-trunk lanes).
-    family_id: Option<usize>,
 }
 
 /// A merge-and-tap trunk lane taps a shared trunk with PRIORITY splitters
@@ -228,10 +233,15 @@ fn bridge_feeder_under_foreign_trunks(
     spec_item: &str,
     spec_module: u32,
     own_trunk_col: Option<i32>,
-    own_family_id: Option<usize>,
     trunk_tile_items: &FxHashMap<(i32, i32), (String, u32)>,
-    trunk_tile_family: &FxHashMap<(i32, i32), Option<usize>>,
     reach: i32,
+    // Whether a DIFFERENT-item trunk tile counts as foreign here. True for
+    // merge-tap specs, which must dive under everything. False for ordinary
+    // specs, whose different-item crossings are the junction solver's job
+    // (they reach it via `all_ghost_crossings`) and would be taken away from
+    // it by bridging them here. Ordinary specs still need the SAME-item case,
+    // which is the gap this parameter exists to open: nothing else handles it.
+    foreign_items_too: bool,
 ) -> FeederBridge {
     // A crossed trunk tile is "foreign" — the feeder/tap must UG-hop UNDER it
     // rather than surface-cross and sideload onto it — when it belongs to a
@@ -252,15 +262,33 @@ fn bridge_feeder_under_foreign_trunks(
     // the column test when either family id is unknown (merge-tap specs always
     // carry one, so the fallback is only reached by non-merge-tap callers,
     // which never enter this bridge — behaviour-preserving either way).
+    // 2026-08-17: the test is the COLUMN, not the family. Foreignness here is
+    // a question about physical belts, not logical ownership — any trunk
+    // column that is not literally the one this spec came from will absorb a
+    // surface sideload, whatever it happens to be carrying. Same item, same
+    // module, same family, adjacent column: still fatal.
+    //
+    // The family test this replaces was itself a narrowing of an item/module
+    // test, for exactly this symptom one level out (see the note above: a tap
+    // crossing a SIBLING same-item trunk "hijacking the tap's flow onto the
+    // wrong trunk and starving its consumer"). It carved out "two columns of
+    // ONE native lane-split family", and that carve-out is the same bug again:
+    // on ac7-HS the iron-plate family owns columns x=1 and x=2, a tap drawn
+    // from x=1 fanned east across x=2, and because x=2 was "its own family" no
+    // UG hop was planned. The south-flowing trunk swallowed the tap and 30
+    // tiles of belt east of it — feeding two EC machines — went dead. The
+    // validator reported it as `belt-flow-reachability`, at Warning, on a
+    // layout with zero errors; it was found by eye in a served world.
+    //
+    // Being ON one's own column is fine: that is where the tap starts. An
+    // unknown own-column keeps the old conservative answer (not foreign)
+    // rather than tunnelling blind.
     let is_foreign = |t: &(i32, i32)| {
         trunk_tile_items.get(t).is_some_and(|(it, m)| {
             if it != spec_item || *m != spec_module {
-                return true;
+                return foreign_items_too;
             }
-            match (own_family_id, trunk_tile_family.get(t).copied().flatten()) {
-                (Some(of), Some(tf)) => of != tf,
-                _ => own_trunk_col.is_some_and(|c| t.0 != c),
-            }
+            own_trunk_col.is_some_and(|c| t.0 != c)
         })
     };
     let mut out: Vec<(i32, i32)> = Vec::with_capacity(path.len());
@@ -577,14 +605,6 @@ pub fn route_bus_ghost(
     // sibling families (under Phase 2 the same item can have multiple
     // independent flows that must be physically separated via UG bridges).
     let mut trunk_tile_items: FxHashMap<(i32, i32), (String, u32)> = FxHashMap::default();
-    // Tile → owning lane-family id (parallel to `trunk_tile_items`). Lets the
-    // merge-tap bridge test trunk foreignness by FAMILY: a merge-tap trunk is
-    // its own family (lane_planner stamps one family per K-trunk), so a tap
-    // crossing a SIBLING same-item merge-tap trunk reads as a different family
-    // (→ UG-hop), while two columns of ONE native lane-split family share an
-    // id (→ surface, native behaviour preserved). `None` for pre-placed
-    // permanent trunk tiles with no family provenance.
-    let mut trunk_tile_family: FxHashMap<(i32, i32), Option<usize>> = FxHashMap::default();
     // Synthetic column paths for each trunk lane, keyed by "trunk:{item}:{x}".
     // Keyed per-column (not just per-item) because multi-lane items like a
     // split copper-cable trunk have multiple vertical columns — merging them
@@ -677,13 +697,118 @@ pub fn route_bus_ghost(
                 // detection so the junction solver can bridge them.
                 existing_belts.insert(tile);
                 trunk_tile_items.insert(tile, (lane.item.clone(), lane.module_id));
-                trunk_tile_family.insert(tile, lane.family_id);
                 trunk_synth_paths
                     .entry(format!("trunk:{}:{}", lane.item, x))
                     .or_default()
                     .push(tile);
             }
         }
+        // A tap drawn from a column WEST of this one, fanning east, has to
+        // cross this trunk. One of the two must go under, and it cannot be
+        // the tap: its underground entrance would have to sit on its own
+        // trunk column — the obstacle is the very next tile east — and an
+        // underground entrance cannot curve, so the trunk would side-feed it
+        // and load one lane. A plain belt in that spot IS a curve and carries
+        // both. So the trunk dives and the tap crosses on the surface.
+        //
+        // DO-THEN-COMMIT, deliberately. An earlier version decided which rows
+        // to yield up front, added them to `skip_ys`, and only then tried to
+        // write the dive; where the flanking belts turned out not to exist it
+        // left a hole and severed the TRUNK — the same defect it was fixing,
+        // one column over. Here nothing is removed until both underground
+        // halves are actually in hand, so the worst case is no change.
+        let cross_ys: FxHashSet<i32> = lanes
+            .iter()
+            .filter(|o| {
+                // Same item and module, any column west of this one. NOT
+                // keyed on family: two columns carrying one item are two
+                // physical belts whether or not a family owns them, and
+                // ac7-HS's iron-plate pair carries no family id at all.
+                !o.is_fluid && o.x < x && o.item == lane.item && o.module_id == lane.module_id
+            })
+            .flat_map(|o| o.tap_off_ys.iter().copied())
+            .collect();
+
+        if !cross_ys.is_empty() {
+            let ug_name = crate::bus::balancer::underground_for_belt(belt_name);
+            let reach = crate::common::ug_max_reach(belt_name) as i32;
+            let idx_of = |ents: &[PlacedEntity], y: i32| {
+                ents.iter()
+                    .position(|e| e.x == x && e.y == y && e.name == belt_name)
+                    .map(|i| lane_start + i)
+            };
+
+            // CONSECUTIVE crossed rows tunnel as ONE pair. An earlier version
+            // refused any row whose neighbour was also crossed, which is how
+            // ac7-HS kept a severed tap at y=96 after y=114 was fixed: the
+            // west lane taps at two adjacent rows there, so neither could
+            // dive and the drop stayed. A single UG spans the whole run.
+            let mut rows: Vec<i32> = cross_ys.iter().copied().collect();
+            rows.sort_unstable();
+            let mut runs: Vec<(i32, i32)> = Vec::new();
+            for y in rows {
+                match runs.last_mut() {
+                    Some((_, hi)) if *hi + 1 == y => *hi = y,
+                    _ => runs.push((y, y)),
+                }
+            }
+
+            let mut drop_tiles: Vec<(i32, i32)> = Vec::new();
+            for (lo, hi) in runs {
+                // The endpoints are the nearest trunk belts either side, NOT
+                // necessarily the adjacent rows. A tap splitter is TWO tiles
+                // wide, so a west lane's splitter at (x-1, y) also occupies
+                // (x, y) and leaves this column with no belt on that flank —
+                // which is exactly why ac7-HS kept a drop at y=96 after y=114
+                // was fixed. Starting the tunnel a row further out clears it:
+                // an underground passes beneath whatever sits on the surface
+                // in between.
+                let a = (1..=reach + 1)
+                    .map(|d| lo - d)
+                    .find(|&y| idx_of(&entities[lane_start..], y).is_some());
+                let b = (1..=reach + 1)
+                    .map(|d| hi + d)
+                    .find(|&y| idx_of(&entities[lane_start..], y).is_some());
+                let (Some(a), Some(b)) = (a, b) else {
+                    continue;
+                };
+                if b - a > reach + 1 {
+                    continue; // too wide for this belt tier to tunnel
+                }
+                let (Some(ai), Some(bi)) = (
+                    idx_of(&entities[lane_start..], a),
+                    idx_of(&entities[lane_start..], b),
+                ) else {
+                    continue;
+                };
+                // Everything strictly between the endpoints is tunnelled
+                // under, so any trunk belt in there must go — leaving one
+                // behind would orphan it above the tunnel.
+                let mids: Vec<(i32, usize)> = (a + 1..b)
+                    .filter_map(|y| idx_of(&entities[lane_start..], y).map(|i| (y, i)))
+                    .collect();
+                entities[ai].name = ug_name.to_string();
+                entities[ai].io_type = Some("input".to_string());
+                entities[bi].name = ug_name.to_string();
+                entities[bi].io_type = Some("output".to_string());
+                for (y, m) in mids {
+                    entities[m].name = String::new(); // tombstone; swept below
+                    drop_tiles.push((x, y));
+                }
+            }
+            entities.retain(|e| !e.name.is_empty());
+            for tile in drop_tiles {
+                // The row belongs to the TAP now, so it must stop looking like
+                // a trunk tile: otherwise the survivor filter deletes the tap's
+                // belt there and the bridge tries to dive under it.
+                existing_belts.remove(&tile);
+                trunk_tile_items.remove(&tile);
+                if let Some(p) = trunk_synth_paths.get_mut(&format!("trunk:{}:{}", lane.item, x)) {
+                    p.retain(|t| *t != tile);
+                }
+            }
+        }
+
         // Stream the per-lane trunk-segment batch.
         if entities.len() > lane_start {
             crate::trace::emit(crate::trace::TraceEvent::TrunkBeltCommitted {
@@ -1464,7 +1589,6 @@ pub fn route_bus_ghost(
             // them from any solid-trunk sibling at the same tile under the
             // crossing filter.
             trunk_tile_items.insert((ent.x, ent.y), (item.clone(), 0));
-            trunk_tile_family.insert((ent.x, ent.y), None);
             // Also inject a synthetic fluid-trunk path so classify_crossing
             // sees the pipe column as a second spec at belt×pipe crossing
             // tiles. Key format mirrors the solid-trunk synth path format
@@ -1648,7 +1772,6 @@ pub fn route_bus_ghost(
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::East),
                     lane_trunk_col: Some(x),
-                    family_id: lane.family_id,
                 });
             }
         }
@@ -1728,7 +1851,6 @@ pub fn route_bus_ghost(
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
                     lane_trunk_col: Some(x),
-                    family_id: lane.family_id,
                 });
             }
         }
@@ -1770,7 +1892,6 @@ pub fn route_bus_ghost(
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
                     lane_trunk_col: Some(x),
-                    family_id: lane.family_id,
                 });
             }
         }
@@ -1961,7 +2082,6 @@ pub fn route_bus_ghost(
                                     // not down a single trunk column —
                                     // own-trunk hard-blocking doesn't apply.
                                     lane_trunk_col: None,
-                                    family_id: lane.family_id,
                                 });
                             }
                         }
@@ -1989,6 +2109,10 @@ pub fn route_bus_ghost(
     #[allow(clippy::needless_late_init)]
     let mut routed_paths: FxHashMap<String, Vec<(i32, i32)>>;
     let mut all_ghost_crossings: Vec<(i32, i32)> = Vec::new();
+    // Belts deleted by the materialisation survivor filter because a trunk or
+    // another ghost already owned the tile. Resolved against the crossing set
+    // after the loop: anything a crossing covers is fine, the rest is a hole.
+    let mut dropped_at_ghost: Vec<DroppedBelt> = Vec::new();
     #[allow(clippy::needless_late_init)]
     let unroutable_specs: Vec<String>;
     // Tracks `(item, module_id)` at each ghost-routed tile so the crossing
@@ -2271,16 +2395,28 @@ pub fn route_bus_ghost(
             // stay inert for non-merge-tap lanes.
             let is_mt_feeder = merge_tap_feeder_keys.contains(&spec.key);
             let is_mt_tap = merge_tap_tap_keys.contains(&spec.key);
-            if is_mt_feeder || is_mt_tap {
+            // 2026-08-17: ORDINARY specs enter this bridge too, for the
+            // same-item case only. A tap crossing another column of its OWN
+            // family falls in a gap between the two mechanisms named above:
+            // (a) drops its entity on the trunk tile, and (b) never fires
+            // because the items match — so the tap is severed with nothing
+            // bridging it and nothing reporting it as a crossing. ac7-HS lost
+            // 30 tiles of iron-plate belt and two EC machines that way, and
+            // shipped it as a Warning on a zero-error layout.
+            //
+            // `foreign_items_too` stays false for these: their different-item
+            // crossings belong to the junction solver, which builds real
+            // crossing geometry for them, and bridging here would take that
+            // work away from it.
+            {
                 match bridge_feeder_under_foreign_trunks(
                     &path,
                     &spec.item,
                     spec.module_id,
                     spec.lane_trunk_col,
-                    spec.family_id,
                     &trunk_tile_items,
-                    &trunk_tile_family,
                     ug_max_reach(spec.belt_name) as i32,
+                    is_mt_feeder || is_mt_tap,
                 ) {
                     FeederBridge::Routed(p) => path = p,
                     FeederBridge::Unbridgeable { span, reach } => {
@@ -2385,19 +2521,45 @@ pub fn route_bus_ghost(
             // are `trunk:*`. Claim kind is always `GhostSurface` — templates
             // and SAT may replace these tiles.
             let claim_kind = crate::bus::ghost_occupancy::ClaimKindTag::GhostSurface;
-            let surviving_ents: Vec<PlacedEntity> = path_ents
-                .into_iter()
-                .filter(|e| {
-                    // Use `astar_hard` so belts can survive at pipe tiles
-                    // (soft obstacles) and at reserved-but-empty fluid-column
-                    // tiles (the tunnel-through area between a UG-in and
-                    // UG-out on a fluid trunk — belts can cross over PTG
-                    // tunnels per F7).
-                    !pre_ghost_belts.contains(&(e.x, e.y))
-                        && !ghost_item_at.contains_key(&(e.x, e.y))
-                        && !astar_hard.contains(&(e.x, e.y))
-                })
-                .collect();
+            // A belt that loses its tile is DELETED here, and until
+            // 2026-08-17 that happened with no record anywhere. For a
+            // different-item collision that is fine: the same tile is also
+            // registered in `all_ghost_crossings` below, so the junction
+            // solver rebuilds it — deleted AND replaced. A same-item
+            // collision never registers, so the deletion is final and the
+            // path silently acquires a hole, after routing has already
+            // reported success.
+            //
+            // That is how ac7-HS shipped a severed iron-plate tap: 30 tiles
+            // of dead belt whose only symptom was a starved machine 30 tiles
+            // downstream, and which took a 200-tile manual walk to tell apart
+            // from ordinary under-delivery. Record every drop that a trunk or
+            // another ghost took (`ghost_item_at`); the ones no crossing
+            // covers are resolved into `dropped_connections` after the loop.
+            let mut surviving_ents: Vec<PlacedEntity> = Vec::with_capacity(path_ents.len());
+            for e in path_ents {
+                let tile = (e.x, e.y);
+                // `astar_hard` / `pre_ghost_belts` drops are pre-stamped
+                // geometry (rows, balancers) the path was never entitled to;
+                // only the ghost/trunk collision is the silent-hole case.
+                if let Some((owner_item, owner_mod)) = ghost_item_at.get(&tile) {
+                    if !pre_ghost_belts.contains(&tile) && !astar_hard.contains(&tile) {
+                        dropped_at_ghost.push(DroppedBelt {
+                            tile,
+                            spec_key: spec.key.clone(),
+                            dropped_item: e.carries.clone().unwrap_or_default(),
+                            surviving_item: owner_item.clone(),
+                            surviving_module: *owner_mod,
+                        });
+                    }
+                }
+                if !pre_ghost_belts.contains(&tile)
+                    && !ghost_item_at.contains_key(&tile)
+                    && !astar_hard.contains(&tile)
+                {
+                    surviving_ents.push(e);
+                }
+            }
             // Stream the materialised entities so a live renderer can
             // swap its per-tile ghost-belt placeholders for the real
             // turn-aware / UG-aware shapes. Fires once per spec after
@@ -2550,6 +2712,36 @@ pub fn route_bus_ghost(
     // Step 6: Resolve ghost crossings — templates first, SAT fallback
     // -------------------------------------------------------------------------
     let crossing_set: FxHashSet<(i32, i32)> = all_ghost_crossings.iter().copied().collect();
+
+    // A dropped belt is FINE if a crossing covers its tile — the junction
+    // solver rebuilds the connection there. What is left is a hole: a path
+    // that routed successfully and then lost a tile to a trunk with nothing
+    // putting it back. Report those as first-class layout facts so the
+    // failure is named where it happens, instead of surfacing (or not) as a
+    // starved machine somewhere downstream.
+    let mut dropped_connections: Vec<crate::models::DroppedConnection> = dropped_at_ghost
+        .iter()
+        .filter(|d| !crossing_set.contains(&d.tile))
+        .map(|d| crate::models::DroppedConnection {
+            x: d.tile.0,
+            y: d.tile.1,
+            spec_key: d.spec_key.clone(),
+            dropped_item: d.dropped_item.clone(),
+            surviving_item: d.surviving_item.clone(),
+            surviving_module: d.surviving_module,
+        })
+        .collect();
+    dropped_connections.sort_by_key(|d| (d.y, d.x, d.spec_key.clone()));
+    dropped_connections.dedup_by(|a, b| a.x == b.x && a.y == b.y && a.spec_key == b.spec_key);
+    for d in &dropped_connections {
+        trace::emit(trace::TraceEvent::ConnectionDropped {
+            x: d.x,
+            y: d.y,
+            spec_key: d.spec_key.clone(),
+            dropped_item: d.dropped_item.clone(),
+            surviving_item: d.surviving_item.clone(),
+        });
+    }
 
     // Running count of templates emitted in step 6a. Started at 0
     // because the corridor-template pre-pass was removed; all
@@ -4613,6 +4805,7 @@ pub fn route_bus_ghost(
 
     Ok(GhostRouteResult {
         entities,
+        dropped_connections,
         ghost_crossing_tiles: crossing_set,
         cluster_count,
         max_cluster_tiles,

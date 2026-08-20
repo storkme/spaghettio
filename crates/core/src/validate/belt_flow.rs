@@ -1118,6 +1118,21 @@ pub fn check_belt_flow_reachability(
         x == min_bx || x == max_bx || y == min_by || y == max_by
     };
 
+    // Severity stays WARNING for Bus style, and the reason is now MEASURED
+    // rather than assumed (2026-08-17). Promoting it to Error was tried and
+    // reverted: `stress_electronic_circuit_35s_from_ore` went from 4 errors
+    // to 92, and a sample of 12 of the new ones walked 14-62 tiles upstream
+    // and every single one terminated at a REAL source (`trunk:copper-plate`,
+    // `row:copper-plate:belt-out`). The check has a large false-positive rate
+    // on bus layouts — it does not model some legitimate feeding path here.
+    //
+    // That matters beyond the severity question. This check cannot currently
+    // be trusted to tell "severed" from "fed by a route I do not understand",
+    // so it is the WRONG instrument for catching dropped connections. The
+    // right one is to record the drop where it happens (the materialisation
+    // survivor filter deletes a belt with no evidence), which is exact and
+    // has no false positives. Do not re-promote this without first fixing the
+    // model and re-measuring on ec35/ec40.
     let severity = if style == LayoutStyle::Spaghetti {
         Severity::Error
     } else {

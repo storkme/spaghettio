@@ -1075,6 +1075,7 @@ fn layout_pass(
     }
     let ghost_warnings = ghost_result.warnings;
     let surplus_exits = ghost_result.surplus_exits;
+    let dropped_connections = ghost_result.dropped_connections;
     // Junction-cap seed tiles, carried as data (not scraped from the trace
     // stream) so `run_layout_with_retry_inner` detects caps whether or not a
     // trace collector is active — see that function and package #3.
@@ -1604,6 +1605,7 @@ fn layout_pass(
             regions,
             trace: None,
             surplus_exits,
+            dropped_connections,
             voided_streams,
             effective_rows,
             power_wires: Some(power_wires),
