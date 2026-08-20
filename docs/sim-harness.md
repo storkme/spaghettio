@@ -96,6 +96,25 @@ with the required flag named, not a silent overwrite.
 
 That guard reasons about which flags were PASSED, which is all that is
 knowable before the solve — so it cannot tell two runs apart that pass the
+same axis with different VALUES under one `--label`. Closing that needs the
+artifact's own provenance rather than a question about the command line, and
+it is a separate change (branch `feat/sim-export-overwrite-provenance`).
+
+A run with no axis flags keeps the old `{item}-{rate}` path unchanged.
+
+The check is **syntactic**: it fires on the PRESENCE of an axis flag, not on
+whether the value differs from the engine default. So `--tier
+assembling-machine-3` or `--strategy pooled` requires a `--label` even
+though neither changes the artifact. This is deliberate — deciding
+"is this value the default?" is exactly the defaults-tracking the encoding
+scheme was abandoned for, and it is the half that kept being wrong. The cost
+is that a previously-valid invocation passing an axis at its default now
+needs a label; no automation caller does — some hand-run repro commands in
+older RFCs did, and were updated — and the failure is a loud refusal
+with the required flag named, not a silent overwrite.
+
+That guard reasons about which flags were PASSED, which is all that is
+knowable before the solve — so it cannot tell two runs apart that pass the
 same axis with different VALUES. That half is answered from the artifact
 instead. Each fixture directory carries a `.sim-export-config` recording the
 axis flags and values it was built from, and a run refuses when the stored
