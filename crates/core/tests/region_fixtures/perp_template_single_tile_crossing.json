@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "name": "perp_template_single_tile_crossing",
+  "notes": "G1 (offpath campaign, #675): the first fixture to reach the perpendicular-template rung \u2014 rung 1 of the production strategy ladder, ~795 lines with ZERO prior test coverage anywhere in the suite. Minimal by construction: one seed tile where an east-flowing trunk and a south-flowing tap cross, exactly two specs, perpendicular directions \u2014 the rung's precise admission predicate (single-tile region, 2 specs, perpendicular). If this fixture stops solving, either the rung regressed or its admission predicate changed; both are findings, not paperwork.",
+  "seeds": [
+    [
+      5,
+      5
+    ]
+  ],
+  "initial_specs": [
+    "trunk:iron-plate:0",
+    "tap:copper-plate:1:0"
+  ],
+  "routed_paths": {
+    "trunk:iron-plate:0": [
+      [
+        2,
+        5
+      ],
+      [
+        3,
+        5
+      ],
+      [
+        4,
+        5
+      ],
+      [
+        5,
+        5
+      ],
+      [
+        6,
+        5
+      ],
+      [
+        7,
+        5
+      ],
+      [
+        8,
+        5
+      ]
+    ],
+    "tap:copper-plate:1:0": [
+      [
+        5,
+        2
+      ],
+      [
+        5,
+        3
+      ],
+      [
+        5,
+        4
+      ],
+      [
+        5,
+        5
+      ],
+      [
+        5,
+        6
+      ],
+      [
+        5,
+        7
+      ],
+      [
+        5,
+        8
+      ]
+    ]
+  },
+  "hard_obstacles": [],
+  "spec_belt_tiers": {
+    "trunk:iron-plate:0": "Yellow",
+    "tap:copper-plate:1:0": "Yellow"
+  },
+  "spec_items": {
+    "trunk:iron-plate:0": "iron-plate",
+    "tap:copper-plate:1:0": "copper-plate"
+  },
+  "spec_exit_dirs": {
+    "trunk:iron-plate:0": "East",
+    "tap:copper-plate:1:0": "South"
+  },
+  "expected": {
+    "mode": "solve"
+  },
+  "placed_entities": [
+    {
+      "name": "transport-belt",
+      "x": 2,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 3,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 4,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 6,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 7,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 8,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 2,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 3,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 4,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 6,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 7,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 8,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    }
+  ]
+}
