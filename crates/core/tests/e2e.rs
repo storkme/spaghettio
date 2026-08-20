@@ -385,6 +385,8 @@ fn run_e2e_inner(
     // can read them without the RAII guard wiping them on drop.
     let trace_events = trace::drain_events();
 
+    assert_balancer_shapes_are_verifiable(test_name, &trace_events);
+
     // Layout size + density (1:1 square) report — mirrors the
     // `Layout: N entities, WxH` style already used in diagnostic/stress tests,
     // and prints for every tier test so the pack-efficiency distribution is
@@ -769,6 +771,48 @@ fn assert_round_trip(result: &E2EResult) {
 // ghost routing. `tier2_electronic_circuit_splitter_stamp_regression` was
 // also one until RFC-047 Leg B turned its config into a named refusal (it
 // now guards that refusal instead — see its doc comment).
+
+
+/// Every balancer a real layout asks for must be small enough to VERIFY.
+///
+/// #662 made `classify_graph` refuse a graph whose side exceeds
+/// `SUBSET_ENUM_MAX`, because the Menger subset checks bail above that bound
+/// and reporting "no counterexample" for a search that never ran is a false
+/// clearance. `balancer_generate::generate` self-verifies through
+/// `classify_ref(..).ok()?`, so that refusal also removes the shape from
+/// SERVICE: `family_stamp_plan` falls through to
+/// `FamilyStampPlan::Unresolvable`, which stamps nothing. The failure is
+/// under-delivery, not a build error — so nothing would tell us.
+///
+/// The PR justified that trade with an offline census of `.fls` snapshots.
+/// The #662 review's objection (3/3) was that the justification was prose:
+/// nothing re-ran the census, snapshots are untracked build output, and the
+/// web app accepts arbitrary rates, so a shape crossing the bound would ship
+/// as silent under-delivery.
+///
+/// This is that census, executed, on every corpus layout the suite already
+/// builds — which is both broader and free, versus a standalone test
+/// rebuilding a hand-picked handful.
+fn assert_balancer_shapes_are_verifiable(test_name: &str, events: &[TraceEvent]) {
+    use spaghettio_core::bus::balancer_classify::SUBSET_ENUM_MAX;
+
+    let over: Vec<(usize, usize)> = events
+        .iter()
+        .filter_map(|e| match e {
+            TraceEvent::BalancerStamped { shape, .. } => Some(*shape),
+            _ => None,
+        })
+        .filter(|(m, n)| *m > SUBSET_ENUM_MAX || *n > SUBSET_ENUM_MAX)
+        .collect();
+
+    assert!(
+        over.is_empty(),
+        "{test_name}: requested balancer shapes {over:?} exceed SUBSET_ENUM_MAX \
+         ({SUBSET_ENUM_MAX}), which classify refuses — so nothing is stamped and \
+         this layout silently under-delivers. Either the shape is wrong, or the \
+         bound now has to buy its keep (see #667)."
+    );
+}
 
 #[test]
 #[ntest::timeout(10000)]

@@ -108,6 +108,13 @@ pub fn generate(m: u32, n: u32) -> Option<OwnedTemplate> {
     // intended class is unacceptable.
     let report = classify_ref(candidate.as_ref()).ok()?;
 
+    // NOTE the asymmetry with the LIBRARY path, which is the primary one:
+    // `balancer.rs` never calls `classify` at all, so `Direct` and
+    // `Decomposed` stamps select on shape alone and this gate does not
+    // apply to them. The registry holds exactly one throughput-limited
+    // shape today, (5,8). Pre-existing, not introduced here, but #662 is
+    // what made it visible — tracked in #669.
+    //
     // Gate on BOTH axes (#662 round 6, 3/3). Gating on `class` alone
     // reintroduces the conflation this PR exists to remove: `Balanced` is a
     // COMPOSITION verdict, and a Balanced template can still be
@@ -758,6 +765,13 @@ mod service_boundary {
     /// Why the new `throughput != Limited` gate is latent, asserted rather
     /// than assumed.
     ///
+    /// NOTE the exact invariant, which is weaker than "clean" (#662 review):
+    /// `BalancedRate` shapes such as (6,12) and (8,16) ARE served and pass
+    /// here. That is deliberate — MX2a is the bus target — but an MX2a
+    /// balancer does fall short on the output-subset max-flow, and this
+    /// test's earlier name implied full MX2b. What is pinned is "measured,
+    /// and not Limited", which is what the gate checks.
+    ///
     /// The review's point was that gating on `class` alone would accept a
     /// `Balanced`-but-`Limited` candidate. That cannot happen today, and
     /// this is the reason: every shape the generator actually serves
@@ -765,7 +779,7 @@ mod service_boundary {
     /// fails and says so, instead of the gate quietly becoming load-bearing
     /// in production with no coverage.
     #[test]
-    fn every_served_shape_is_throughput_clean() {
+    fn every_served_shape_has_a_measured_non_limited_tier() {
         use crate::bus::balancer_classify::{classify_ref, ThroughputTier};
 
         let mut checked = 0;

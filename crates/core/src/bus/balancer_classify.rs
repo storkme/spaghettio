@@ -145,7 +145,7 @@ pub enum ThroughputTier {
 /// registered (#662 round 6: "maxes at (10,10)" read as a shape when it was
 /// only a per-axis maximum); the
 /// bound exists for arbitrary imported graphs.
-const SUBSET_ENUM_MAX: usize = 16;
+pub const SUBSET_ENUM_MAX: usize = 16;
 
 /// The throughput tier of a graph, computed without reference to its
 /// composition matrix — so it is available even for templates whose
@@ -1529,6 +1529,34 @@ mod tests {
                 r.class, r.throughput
             ),
             Err(e) => panic!("unexpected error: {e:?}"),
+        }
+    }
+
+    /// The two public surfaces must agree on an OVERSIZED graph, not just
+    /// an in-bound one.
+    ///
+    /// `both_surfaces_agree_when_only_one_side_is_oversized` exercises the
+    /// in-bound/Limited path, and the `Unknown`-refusal test exercises
+    /// `classify_graph` alone. Neither pins the mapping BETWEEN them on the
+    /// out-of-bound path (#662 review) — which is exactly where rounds 2
+    /// and 3 found them drifted apart, with the bound guard living in one
+    /// surface and not the other.
+    #[test]
+    fn the_two_surfaces_agree_on_an_oversized_graph() {
+        let k = SUBSET_ENUM_MAX + 1;
+        for graph in [all_into_one(k), straight_through(k, k)] {
+            assert_eq!(
+                throughput_tier(&graph),
+                ThroughputTier::Unknown,
+                "the free function must report the tier as unmeasured"
+            );
+            assert!(
+                matches!(
+                    classify_graph(&graph),
+                    Err(ClassifyError::Unanalysable { bound, .. }) if bound == SUBSET_ENUM_MAX
+                ),
+                "and classify_graph must refuse the same graph, not issue a class"
+            );
         }
     }
 
