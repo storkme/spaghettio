@@ -19,7 +19,7 @@ use spaghettio_core::bus::layout;
 use spaghettio_core::density;
 use spaghettio_core::solver;
 use spaghettio_core::trace;
-use spaghettio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::validate::{self, Severity};
 use spaghettio_core::zone_cache;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
@@ -116,7 +116,7 @@ fn run_case(case: &Case) -> Outcome {
                 Err(e) => return Err(Outcome::LayoutErr(e.to_string())),
             };
 
-            let issues = match validate::validate(&lr, Some(&sr), LayoutStyle::Bus) {
+            let issues = match validate::validate(&lr, Some(&sr)) {
                 Ok(i) => i,
                 Err(e) => e.issues,
             };

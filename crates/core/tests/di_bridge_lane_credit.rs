@@ -12,7 +12,7 @@ use rustc_hash::FxHashSet;
 use spaghettio_core::bus::di_cell::DirectInsertion;
 use spaghettio_core::bus::layout::{self, LayoutOptions};
 use spaghettio_core::solver;
-use spaghettio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::validate::{self, Severity};
 
 fn solve_ec10_from_plates() -> spaghettio_core::models::SolverResult {
     let inputs: FxHashSet<String> =
@@ -53,7 +53,7 @@ fn di_forced_ec10_still_builds_the_belt_to_belt_bridge() {
 fn di_bridge_fed_input_belt_warns_on_single_lane_credit() {
     let sr = solve_ec10_from_plates();
     let l = build(DirectInsertion::Forced);
-    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).expect("validate");
+    let issues = validate::validate(&l, Some(&sr)).expect("validate");
     let warns: Vec<_> = issues
         .iter()
         .filter(|i| i.severity == Severity::Warning && i.category == "row-input-belt-margin")
@@ -75,7 +75,7 @@ fn di_bridge_fed_input_belt_warns_on_single_lane_credit() {
 fn bus_lane_variant_stays_clean() {
     let sr = solve_ec10_from_plates();
     let l = build(DirectInsertion::Off);
-    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).expect("validate");
+    let issues = validate::validate(&l, Some(&sr)).expect("validate");
     let warns: Vec<_> = issues
         .iter()
         .filter(|i| i.category == "row-input-belt-margin")

@@ -14,7 +14,7 @@ use spaghettio_core::bus::layout::{build_bus_layout_traced, LayoutOptions};
 use spaghettio_core::models::{EntityDirection, LayoutRegion, PortIo, RegionKind, RegionPort};
 use spaghettio_core::solver;
 use spaghettio_core::trace::TraceEvent;
-use spaghettio_core::validate::{self, LayoutStyle};
+use spaghettio_core::validate::{self};
 use rustc_hash::FxHashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -150,7 +150,7 @@ fn run_case(label: &str, recipe: &str, rate: f64, machine: &str, inputs: &[&str]
 
     // validate returns Err when errors are found; the issues live inside
     // the error variant too. Drain both branches.
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     };
@@ -500,7 +500,7 @@ fn run_case_with_belt(
         LayoutOptions::from_belt_tier(max_belt_tier),
     )
         .expect("layout");
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     };

@@ -29,7 +29,7 @@ use spaghettio_core::solver;
 /// Dims/entity count pinned to the sim artifact (110×22, 461 entities).
 #[test]
 fn cell_composed_ec15_zero_errors() {
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     let (esr, l) = compose_pairs_calibrated(3);
     println!(
         "calibrated EC@15: {}x{} = {} tiles, {} entities",
@@ -50,7 +50,7 @@ fn cell_composed_ec15_zero_errors() {
         461,
         "parity: sim-verified artifact entity count"
     );
-    let issues = validate::validate(&l, Some(&esr), LayoutStyle::Bus)
+    let issues = validate::validate(&l, Some(&esr))
         .unwrap_or_else(|e| panic!("composed EC@15 must validate: {e}"));
     let errors: Vec<_> = issues
         .iter()
@@ -77,9 +77,9 @@ fn cell_composed_ec15_zero_errors() {
 /// RFC-048 gate (a) closed in full).
 #[test]
 fn cell_composed_plastic_zero_issues() {
-    use spaghettio_core::validate::{self, LayoutStyle};
+    use spaghettio_core::validate::{self};
     let (sr, comp) = compose_plastic_calibrated();
-    let issues = validate::validate(&comp, Some(&sr), LayoutStyle::Bus)
+    let issues = validate::validate(&comp, Some(&sr))
         .unwrap_or_else(|e| panic!("composed plastic must validate: {e}"));
     println!(
         "composed plastic (calibrated): {}x{}, {} entities, {} issues",
@@ -339,7 +339,7 @@ fn export_engine_plastic_for_sim() {
 #[ignore = "exploration probe while the auto-placer stabilizes"]
 fn probe_chain_autoplace() {
     use spaghettio_core::bus::cells::chain::compose_chain;
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     for (label, item, rate, inputs) in [
         (
             "ec15",
@@ -381,7 +381,7 @@ fn probe_chain_autoplace() {
                     l.width * l.height,
                     l.entities.len()
                 );
-                match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                match validate::validate(&l, Some(&sr)) {
                     Ok(issues) => {
                         let e = issues
                             .iter()
@@ -748,7 +748,7 @@ fn export_chain_fixtures_for_sim() {
 #[ignore = "measurement probe — output goes to the RFC decision log"]
 fn probe_differential_scoreboard() {
     use spaghettio_core::bus::cells::chain::{chain_eligible, compose_chain};
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     let fixtures: &[(&str, &str, f64, &[&str])] = &[
         ("gear15", "iron-gear-wheel", 15.0, &["iron-plate"]),
         (
@@ -834,7 +834,7 @@ fn probe_differential_scoreboard() {
         };
         let bus = std::panic::catch_unwind(|| layout::build_bus_layout(&sr, bus_opts));
         let bus_desc = match &bus {
-            Ok(Ok(l)) => match validate::validate(l, Some(&sr), LayoutStyle::Bus) {
+            Ok(Ok(l)) => match validate::validate(l, Some(&sr)) {
                 Ok(issues) => {
                     let e = issues
                         .iter()
@@ -860,7 +860,7 @@ fn probe_differential_scoreboard() {
         let comp_desc = match chain_eligible(&sr) {
             Err(e) => format!("INELIGIBLE: {e}"),
             Ok(()) => match compose_chain(&sr) {
-                Ok(l) => match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                Ok(l) => match validate::validate(&l, Some(&sr)) {
                     Ok(issues) => {
                         let e = issues
                             .iter()
@@ -914,7 +914,7 @@ fn probe_differential_scoreboard() {
 #[test]
 fn cell_candidate_resolves_ec15_refusal() {
     use spaghettio_core::bus::cells::CellComposition;
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())
@@ -958,7 +958,7 @@ fn cell_candidate_resolves_ec15_refusal() {
         ..Default::default()
     };
     let l = layout::build_bus_layout(&sr, opts).expect("candidate must resolve the refusal");
-    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
+    let issues = validate::validate(&l, Some(&sr)).unwrap();
     let errors = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
@@ -1030,7 +1030,7 @@ fn cell_candidate_resolves_ec15_refusal() {
     // rather than any one winner's internal structure.
     let both = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
         .expect("the default must still resolve the refusal");
-    let both_issues = validate::validate(&both, Some(&sr), LayoutStyle::Bus).unwrap();
+    let both_issues = validate::validate(&both, Some(&sr)).unwrap();
     assert!(
         both_issues.iter().all(|i| i.severity != Severity::Error),
         "DI winner must be error-free: {both_issues:?}"
@@ -1397,7 +1397,7 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
     use spaghettio_core::bus::cells::chain::{compose_chain, compose_chain_with_capacity};
     use spaghettio_core::bus::cells::registry::geometry_hash;
     use spaghettio_core::common::DEFAULT_INSERTER_CAPACITY;
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())
@@ -1425,7 +1425,7 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
     let inserter_warns = |cap: u8| -> usize {
         let l = compose_chain_with_capacity(&sr, cap).unwrap();
         let issues =
-            validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap_or_else(|e| e.issues);
+            validate::validate(&l, Some(&sr)).unwrap_or_else(|e| e.issues);
         assert!(
             issues.iter().all(|i| i.severity != Severity::Error),
             "EC@15 L{cap} must have no errors: {issues:?}"
@@ -1848,7 +1848,7 @@ fn cell_candidate_never_displaces_a_succeeding_bus() {
 /// gate fails on the refusal — never on a silently broken Ok.
 #[test]
 fn cell_candidate_composes_mil5_ore() {
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "stone", "coal"]
         .iter()
         .map(|s| s.to_string())
@@ -1881,7 +1881,7 @@ fn cell_candidate_composes_mil5_ore() {
         l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
         "the composed candidate must be the winner"
     );
-    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
+    let issues = validate::validate(&l, Some(&sr)).unwrap();
     let errors: Vec<_> = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
@@ -1897,7 +1897,7 @@ fn cell_candidate_composes_mil5_ore() {
 /// returned the broken native as Ok.
 #[test]
 fn cell_candidate_wins_mil5_plates_over_broken_native() {
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     let inputs: FxHashSet<String> = [
         "iron-plate",
         "copper-plate",
@@ -1924,7 +1924,7 @@ fn cell_candidate_wins_mil5_plates_over_broken_native() {
         l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
         "the clean composed candidate must win over the validation-broken native"
     );
-    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
+    let issues = validate::validate(&l, Some(&sr)).unwrap();
     let errors: Vec<_> = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
@@ -1990,7 +1990,7 @@ fn selection_tier_validation_never_leaks_trace_events() {
 #[test]
 fn mega_cell_plastic_from_crude_zero_issues() {
     use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
-    use spaghettio_core::validate::{self, LayoutStyle};
+    use spaghettio_core::validate::{self};
     // All three Phase-A fixtures gate here (#401 review note: probe-only
     // coverage of plastic@5/sulfur@2 wouldn't catch a regression).
     for (label, item, rate, inputs) in [
@@ -2021,7 +2021,7 @@ fn mega_cell_plastic_from_crude_zero_issues() {
             l.boundary_inputs.iter().all(|b| b.y == 0),
             "{label}: feed heads at the north edge"
         );
-        let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus)
+        let issues = validate::validate(&l, Some(&sr))
             .unwrap_or_else(|e| panic!("{label}: mega must validate: {e}"));
         assert!(issues.is_empty(), "{label}: mega issues: {issues:?}");
     }
@@ -2069,7 +2069,7 @@ fn export_mega_fixtures_for_sim() {
 #[test]
 fn mega_chain_ac_from_raw_zero_issues() {
     use spaghettio_core::bus::cells::chain::compose_chain;
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     for rate in [1.0, 2.0, 4.0] {
         let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
             .iter()
@@ -2087,7 +2087,7 @@ fn mega_chain_ac_from_raw_zero_issues() {
         .unwrap();
         let l =
             compose_chain(&sr).unwrap_or_else(|e| panic!("AC@{rate} from raw must compose: {e}"));
-        let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus)
+        let issues = validate::validate(&l, Some(&sr))
             .unwrap_or_else(|e| panic!("AC@{rate} from raw must validate: {e}"));
         let errors: Vec<_> = issues
             .iter()
@@ -2126,7 +2126,7 @@ fn mega_chain_ac_from_raw_zero_issues() {
 #[test]
 fn mega_chain_chem5_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     let inputs: FxHashSet<String> = [
         "iron-ore",
         "copper-ore",
@@ -2151,7 +2151,7 @@ fn mega_chain_chem5_resolves_bus_failure() {
     )
     .unwrap();
     let l = compose_chain(&sr).expect("chem5 from raw must compose");
-    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).expect("must validate");
+    let issues = validate::validate(&l, Some(&sr)).expect("must validate");
     let errors: Vec<_> = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
@@ -2183,7 +2183,7 @@ fn mega_chain_chem5_resolves_bus_failure() {
 #[test]
 fn mega_chain_pu4_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
         .iter()
         .map(|s| s.to_string())
@@ -2207,7 +2207,7 @@ fn mega_chain_pu4_resolves_bus_failure() {
         plan.chain_fed
     );
     let l = compose_chain(&sr).expect("PU@4 from raw must compose");
-    let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+    let issues = match validate::validate(&l, Some(&sr)) {
         Ok(v) => v,
         Err(e) => e.issues,
     };
@@ -2252,7 +2252,7 @@ fn mega_chain_pu4_resolves_bus_failure() {
 #[ignore = "RFC-052 USP@2 mega gate: >6min live SAT (uncached zones); opt in with --ignored, or bake its zones into sat-zones.bin"]
 fn mega_chain_usp2_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     let inputs: FxHashSet<String> = [
         "iron-ore",
         "copper-ore",
@@ -2302,7 +2302,7 @@ fn mega_chain_usp2_resolves_bus_failure() {
         }),
         "heavy-oil surplus exit must name a physical matching pipe: {heavy_exit:?}"
     );
-    let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+    let issues = match validate::validate(&l, Some(&sr)) {
         Ok(v) => v,
         Err(e) => e.issues,
     };
@@ -2478,7 +2478,7 @@ fn export_mega_chain_for_sim() {
 #[ignore = "exploration probe"]
 fn probe_mega_cells() {
     use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, Severity};
     for (label, item, rate, inputs) in [
         (
             "plastic2",
@@ -2496,7 +2496,7 @@ fn probe_mega_cells() {
     ] {
         match compose_mega_calibrated(item, rate, inputs) {
             Ok((sr, l)) => {
-                let d = validate::validate(&l, Some(&sr), LayoutStyle::Bus);
+                let d = validate::validate(&l, Some(&sr));
                 match d {
                     Ok(is) => {
                         let e = is.iter().filter(|i| i.severity == Severity::Error).count();
@@ -2531,7 +2531,7 @@ fn probe_mega_cells() {
 #[ignore = "debug probe"]
 fn probe_mil5_errors() {
     use spaghettio_core::bus::cells::chain::compose_chain;
-    use spaghettio_core::validate::{self, LayoutStyle};
+    use spaghettio_core::validate::{self};
     for (label, item, rate, inputs) in [
         (
             "mil5-ore",
@@ -2559,7 +2559,7 @@ fn probe_mil5_errors() {
         .unwrap();
         println!("== {label}: {} specs ==", sr.machines.len());
         match compose_chain(&sr) {
-            Ok(l) => match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+            Ok(l) => match validate::validate(&l, Some(&sr)) {
                 Ok(_) => println!("   validates OK"),
                 Err(er) => {
                     for line in format!("{er}")

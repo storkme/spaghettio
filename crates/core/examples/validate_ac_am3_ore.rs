@@ -4,7 +4,7 @@
 
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
 use spaghettio_core::solver;
-use spaghettio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::validate::{self, Severity};
 use rustc_hash::FxHashSet;
 
 fn main() {
@@ -21,7 +21,7 @@ fn main() {
 
     let layout = build_bus_layout(&solver_result, LayoutOptions::from_belt_tier(Some("transport-belt"))).unwrap();
 
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(v) => v,
         Err(e) => {
             let v = e.issues.clone();

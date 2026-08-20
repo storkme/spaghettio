@@ -36,7 +36,7 @@ use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
 use spaghettio_core::connectivity::{check_record_integrity, derive_connectivity, diff};
 use spaghettio_core::models::{LayoutResult, SolverResult};
 use spaghettio_core::solver;
-use spaghettio_core::validate::{self, LayoutStyle, Severity, ValidationIssue};
+use spaghettio_core::validate::{self, Severity, ValidationIssue};
 
 fn build(
     item: &str,
@@ -66,7 +66,7 @@ fn build_with_exclusions(
 }
 
 fn issues_of(layout: &LayoutResult, solver_result: &SolverResult) -> Vec<ValidationIssue> {
-    match validate::validate(layout, Some(solver_result), LayoutStyle::Bus) {
+    match validate::validate(layout, Some(solver_result)) {
         Ok(issues) => issues,
         Err(error) => error.issues,
     }

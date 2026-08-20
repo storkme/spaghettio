@@ -23,7 +23,7 @@ use spaghettio_core::snapshot::{
 };
 use spaghettio_core::solver;
 use spaghettio_core::trace::{self, TraceEvent};
-use spaghettio_core::validate::{self, LayoutStyle, Severity, ValidationIssue};
+use spaghettio_core::validate::{self, Severity, ValidationIssue};
 use spaghettio_core::validate::{belt_flow, belt_structural, power, inserters};
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
@@ -365,7 +365,7 @@ fn run_e2e_inner(
         })?;
 
     // Validate the original layout (correct top-left positions).
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     };
@@ -1035,7 +1035,7 @@ fn merge_tap_fallback_fires_with_correct_k_and_priority_taps() {
         .filter(|e| e.name.contains("splitter") && e.output_priority.is_some())
         .count();
     assert!(prio_taps >= 1, "expected >=1 priority tap splitter; got {prio_taps}");
-    let issues = match validate::validate(&l1, Some(&sr), LayoutStyle::Bus) {
+    let issues = match validate::validate(&l1, Some(&sr)) {
         Ok(i) => i,
         Err(e) => e.issues,
     };
@@ -1150,7 +1150,7 @@ fn palette_pins_iron_gear_wheel_to_am1() {
     )
     .expect("layout builds");
 
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     };
@@ -1443,7 +1443,6 @@ fn tier2_electronic_circuit_splitter_stamp_regression() {
     let issues = spaghettio_core::validate::validate(
         &l,
         Some(&sr),
-        spaghettio_core::validate::LayoutStyle::Bus,
     )
     .unwrap_or_else(|e| panic!("DI layout must validate: {e}"));
     assert!(
@@ -2061,7 +2060,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
 
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(i) => i,
         Err(e) => e.issues,
     };
@@ -2438,7 +2437,7 @@ fn tier4_ac7_duty06_has_no_severed_connections() {
          cluster skips — the #652 flow-compatible commit upgrade stopped \
          clearing the UG-onto-continuation-belt conflict class"
     );
-    let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&sr)) {
         Ok(v) => v,
         Err(e) => e.issues,
     };
@@ -2558,7 +2557,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
 
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(i) => i,
         Err(e) => e.issues,
     };
@@ -3432,9 +3431,9 @@ fn run_timed_validators(lr: &LayoutResult, sr: &SolverResult) {
         ("inserter_chains", Box::new(|| inserters::check_inserter_chains(lr, Some(sr)))),
         ("inserter_direction", Box::new(|| inserters::check_inserter_direction(lr))),
         ("pipe_isolation", Box::new(|| validate::check_pipe_isolation(lr))),
-        ("fluid_port_connectivity", Box::new(|| validate::check_fluid_port_connectivity(lr, LayoutStyle::Bus))),
+        ("fluid_port_connectivity", Box::new(|| validate::check_fluid_port_connectivity(lr))),
         ("belt_connectivity", Box::new(|| belt_flow::check_belt_connectivity(lr, Some(sr)))),
-        ("belt_flow_path", Box::new(|| belt_flow::check_belt_flow_path(lr, Some(sr), LayoutStyle::Bus))),
+        ("belt_flow_path", Box::new(|| belt_flow::check_belt_flow_path(lr, Some(sr)))),
         ("entity_overlaps", Box::new(|| belt_structural::check_entity_overlaps(lr))),
         ("belt_throughput", Box::new(|| belt_structural::check_belt_throughput(lr))),
         ("output_belt_coverage", Box::new(|| belt_structural::check_output_belt_coverage(lr, Some(sr)))),
@@ -3446,7 +3445,7 @@ fn run_timed_validators(lr: &LayoutResult, sr: &SolverResult) {
         ("belt_loops", Box::new(|| belt_structural::check_belt_loops(lr))),
         ("belt_item_isolation", Box::new(|| belt_structural::check_belt_item_isolation(lr))),
         ("belt_inserter_conflict", Box::new(|| belt_structural::check_belt_inserter_conflict(lr))),
-        ("belt_flow_reachability", Box::new(|| belt_flow::check_belt_flow_reachability(lr, Some(sr), LayoutStyle::Bus))),
+        ("belt_flow_reachability", Box::new(|| belt_flow::check_belt_flow_reachability(lr, Some(sr)))),
         ("lane_throughput", Box::new(|| belt_flow::check_lane_throughput(lr, Some(sr)))),
         ("input_rate_delivery", Box::new(|| belt_flow::check_input_rate_delivery(lr, Some(sr)))),
     ];
@@ -6508,7 +6507,7 @@ fn fulgora_scrap_sorter_mechanism_present() {
     // AM3 single-exit-bus cluster at the holmium-plate row, tracked on
     // #309 — that this test still doesn't assert on.)
     let mut fluid_errors: Vec<&ValidationIssue> = Vec::new();
-    let fp = validate::check_fluid_port_connectivity(&layout, LayoutStyle::Bus);
+    let fp = validate::check_fluid_port_connectivity(&layout);
     let fn_ = validate::check_fluid_network_connectivity(&layout, None);
     let fi = validate::check_pipe_isolation(&layout);
     for issue in fp.iter().chain(fn_.iter()).chain(fi.iter()) {
@@ -6678,7 +6677,7 @@ fn quality_differential_ec_normal_vs_legendary() {
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
-        let issues = validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus)
+        let issues = validate::validate(&layout, Some(&solver_result))
             .unwrap_or_else(|e| panic!("{quality:?} validate: {e}"));
         (solver_result, layout, issues)
     };
@@ -6784,7 +6783,7 @@ fn cable13u_bridged_row_lane_throughput_clean() {
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
 
-    let issues = match validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout_result, Some(&sr)) {
         Ok(i) => i,
         Err(e) => e.issues,
     };
@@ -6854,7 +6853,7 @@ fn quality_ec_45s_express_legendary_from_ore() {
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
 
-    let issues = validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus)
+    let issues = validate::validate(&layout_result, Some(&sr))
         .unwrap_or_else(|e| panic!("validate: {e}"));
     let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors.is_empty(), "expected 0 errors, got {errors:?}");
@@ -6970,7 +6969,7 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
-        let issues = validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus)
+        let issues = validate::validate(&layout, Some(&solver_result))
             .unwrap_or_else(|e| panic!("{quality:?} validate: {e}"));
         (solver_result, layout, issues)
     };
@@ -7158,7 +7157,7 @@ fn quality_ec_45s_legendary_tree_wire_differential() {
     assert_eq!(count_disconnected_poles(&layout_result.entities, &tree), 0);
     assert_eq!(count_disconnected_poles(&layout_result.entities, &dense), 0);
 
-    let issues = validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus)
+    let issues = validate::validate(&layout_result, Some(&sr))
         .unwrap_or_else(|e| panic!("validate: {e}"));
     let power: Vec<_> = issues.iter().filter(|i| i.category == "power").collect();
     assert!(power.is_empty(), "tree mode must introduce no power issues: {power:?}");
@@ -7236,7 +7235,7 @@ fn stacking_ec_60s_red_one_belt_headline() {
         // phantom-UG-source artifacts; both arms measure ZERO errors
         // (probe receipt on PR #648), so validate() must succeed and
         // the issues need no per-arm screening.
-        validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
+        validate::validate(&layout, Some(&sr))
             .unwrap_or_else(|e| {
                 panic!(
                     "S={stacking} validate errors (expected none post-#644 walker fix): {:?}",
@@ -7350,7 +7349,6 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
         let issues = spaghettio_core::validate::validate(
             l,
             Some(sr),
-            spaghettio_core::validate::LayoutStyle::Bus,
         )
         .unwrap_or_else(|e| e.issues);
         (
@@ -7424,7 +7422,6 @@ fn horizontal_candidate_never_degrades_a_succeeding_bus_layout() {
         let issues = spaghettio_core::validate::validate(
             l,
             Some(sr),
-            spaghettio_core::validate::LayoutStyle::Bus,
         )
         .unwrap_or_else(|e| e.issues);
         (
@@ -7566,7 +7563,7 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     let l2 = layout::build_bus_layout(&sr, opts_with(2))
         .unwrap_or_else(|e| panic!("S=2 must lay out with the stacked lift, got Err: {e}"));
     assert_eq!(l2.stacking, 2, "layout must record its stack size");
-    let issues = validate::validate(&l2, Some(&sr), LayoutStyle::Bus)
+    let issues = validate::validate(&l2, Some(&sr))
         .unwrap_or_else(|e| panic!("S=2 validate: {e:?}"));
     let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors.is_empty(), "expected 0 errors at S=2, got {errors:?}");
@@ -7744,7 +7741,7 @@ fn stacking_hs_dual_input_output_cap() {
          machines in one row): {splits:?}"
     );
 
-    let issues = validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
+    let issues = validate::validate(&layout, Some(&sr))
         .unwrap_or_else(|e| panic!("validate: {e:?}"));
     let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors.is_empty(), "expected 0 errors, got {errors:?}");
@@ -7841,7 +7838,7 @@ fn stacking_kovarex_family_exempt_s2() {
             },
         )
         .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
-        let issues = validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
+        let issues = validate::validate(&layout, Some(&sr))
             .unwrap_or_else(|e| panic!("S={stacking} validate: {e}"));
         let errors: Vec<_> =
             issues.iter().filter(|i| i.severity == Severity::Error).cloned().collect();
@@ -7914,7 +7911,7 @@ fn stacking_ec_60s_express_legendary_s2() {
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
 
-    let issues = validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus)
+    let issues = validate::validate(&layout_result, Some(&sr))
         .unwrap_or_else(|e| panic!("validate: {e}"));
     let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
     assert!(errors.is_empty(), "expected 0 errors, got {errors:?}");
@@ -8105,7 +8102,7 @@ fn di_row_cell_fluid_fed_producer_validates_clean() {
     assert_eq!(foundries, 4, "all four foundries belong to the cell");
     assert_eq!(assemblers, 4, "all four assemblers belong to the cell");
 
-    let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&sr)) {
         Ok(v) => v,
         Err(e) => e.issues,
     };
@@ -8146,7 +8143,7 @@ fn di_cell_output_belt_exemption_does_not_cover_the_consumer() {
 
     // Sanity: intact, the cell is clean.
     assert!(
-        validate::validate(&layout, Some(&sr), LayoutStyle::Bus).is_ok_and(|v| v.is_empty()),
+        validate::validate(&layout, Some(&sr)).is_ok_and(|v| v.is_empty()),
         "intact cell should validate clean"
     );
 
@@ -8169,7 +8166,7 @@ fn di_cell_output_belt_exemption_does_not_cover_the_consumer() {
     });
     assert!(layout.entities.len() < before, "test must actually remove the output belt");
 
-    let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&sr)) {
         Ok(v) => v,
         Err(e) => e.issues,
     };
@@ -8230,7 +8227,7 @@ fn fluid_branch_meeting_its_own_pipe_is_not_a_blocked_tile() {
         // connectivity and network isolation are exactly what the fluid
         // checks own, which is the same argument that makes the router's
         // warning redundant here.
-        let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+        let issues = match validate::validate(&l, Some(&sr)) {
             Ok(v) => v,
             Err(e) => e.issues,
         };
@@ -8314,7 +8311,6 @@ fn di_cell_kc3_export() {
     let warnings = spaghettio_core::validate::validate(
         &l,
         Some(&sr),
-        spaghettio_core::validate::LayoutStyle::Bus,
     )
     .map(|w| w.len())
     .unwrap_or_else(|e| {
@@ -8569,7 +8565,6 @@ fn di_change_surface_sweep() {
         let issues = spaghettio_core::validate::validate(
             l,
             Some(sr),
-            spaghettio_core::validate::LayoutStyle::Bus,
         )
         .unwrap_or_else(|e| e.issues);
         (
@@ -8728,7 +8723,6 @@ fn merge_tap_does_not_shadow_di_on_pooled_yellow() {
         let issues = spaghettio_core::validate::validate(
             l,
             Some(&sr),
-            spaghettio_core::validate::LayoutStyle::Bus,
         )
         .unwrap_or_else(|e| e.issues);
         (
@@ -9006,7 +9000,7 @@ fn rfc060_sim_export() {
                     continue;
                 }
             };
-            let issues = match validate::validate(&lay, Some(&solved), LayoutStyle::Bus) {
+            let issues = match validate::validate(&lay, Some(&solved)) {
                 Ok(v) => v,
                 Err(e) => e.issues,
             };
@@ -9533,7 +9527,6 @@ fn di_jammed_cell_is_visible_and_therefore_refused() {
         let issues = spaghettio_core::validate::validate(
             &l,
             Some(&sr),
-            spaghettio_core::validate::LayoutStyle::Bus,
         )
         .unwrap_or_else(|e| e.issues);
         (l.entities.len(), issues)
@@ -9690,7 +9683,6 @@ fn probe_di_claim_order_shipped_corpus_verdict() {
         let issues = spaghettio_core::validate::validate(
             &l,
             Some(sr),
-            spaghettio_core::validate::LayoutStyle::Bus,
         )
         .unwrap_or_else(|e| e.issues);
         Some((

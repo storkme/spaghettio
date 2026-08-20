@@ -18,7 +18,7 @@ use spaghettio_core::models::SolverResult;
 use spaghettio_core::netflow::{solve_netflow_multi, CostTable, RecipeScope};
 use spaghettio_core::recipe_db::MachinePalette;
 use spaghettio_core::trace::{self, TraceEvent};
-use spaghettio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::validate::{self, Severity};
 
 fn set(items: &[&str]) -> FxHashSet<String> {
     items.iter().map(|s| s.to_string()).collect()
@@ -69,7 +69,7 @@ fn ec_ac_shared_row_native_mechanism_zero_errors() {
     )
     .expect("EC+AC native layout should build");
 
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     };
@@ -273,7 +273,7 @@ fn ec_ac_default_options_candidate_choice() {
     let layout = build_bus_layout(&solver_result, LayoutOptions::default())
         .expect("EC+AC default-options layout should build");
 
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     };
@@ -395,7 +395,7 @@ fn u235_u238_target_and_surplus_overlap() {
     )
     .expect("U-235+U-238 layout should build (even if validation reports issues)");
 
-    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&solver_result)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     };

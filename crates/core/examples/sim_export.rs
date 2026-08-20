@@ -60,7 +60,7 @@ use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
 use spaghettio_core::common::QualityTier;
 use spaghettio_core::recipe_db::MachinePalette;
-use spaghettio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::validate::{self, Severity};
 
 /// Default crafting machine — the one `--tier` overrides.
 const DEFAULT_TIER: &str = "assembling-machine-3";
@@ -425,7 +425,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    let issues = validate::validate(&layout, Some(&solved), LayoutStyle::Bus)
+    let issues = validate::validate(&layout, Some(&solved))
         .unwrap_or_else(|e| e.issues);
     let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
     let warnings = issues

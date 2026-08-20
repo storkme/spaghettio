@@ -35,7 +35,7 @@
 use crate::models::{LayoutResult, SolverResult};
 use crate::objective::{self, ObjectiveScores};
 use crate::trace::TraceEvent;
-use crate::validate::{self, LayoutStyle};
+use crate::validate;
 use crate::verdict::{self, MatchTier, Policy, Verdict};
 
 use super::decomposition_search::{self, DecompositionCandidate};
@@ -361,7 +361,7 @@ pub fn run_candidate_field(
 }
 
 fn issues_of(layout: &LayoutResult, solver: &SolverResult) -> Vec<validate::ValidationIssue> {
-    match validate::validate(layout, Some(solver), LayoutStyle::Bus) {
+    match validate::validate(layout, Some(solver)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     }

@@ -3,10 +3,13 @@
 //! Port of the belt-check functions from `src/validate.py`:
 //! - `check_belt_connectivity`
 //! - `check_belt_flow_path`
-//! - `check_belt_network_topology`
 //! - `check_belt_junctions`
 //! - `check_belt_flow_reachability`
-//!   Plus underground-belt helpers used by those checks.
+//!
+//! Plus underground-belt helpers used by those checks.
+//! (`check_belt_network_topology`, the Spaghetti-only member of the
+//! ported list, was deleted 2026-08-20 with `LayoutStyle` — offpath
+//! Tier 2.)
 
 use std::collections::VecDeque;
 
@@ -21,7 +24,7 @@ use crate::common::{
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 
-use super::{LayoutStyle, Severity, ValidationIssue};
+use super::{Severity, ValidationIssue};
 
 // ---------------------------------------------------------------------------
 // Belt direction map (including splitter expansion)
@@ -466,7 +469,6 @@ pub fn check_belt_connectivity(
 pub fn check_belt_flow_path(
     layout: &LayoutResult,
     solver: Option<&SolverResult>,
-    style: LayoutStyle,
 ) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
@@ -530,11 +532,10 @@ pub fn check_belt_flow_path(
         }
     }
 
-    let severity = if style == LayoutStyle::Spaghetti {
-        Severity::Error
-    } else {
-        Severity::Warning
-    };
+    // Warning unconditionally: production only ever built Bus layouts and
+    // the Spaghetti Error arm (with the LayoutStyle enum itself) was
+    // deleted 2026-08-20 — offpath Tier 2, trust-table hole 4.
+    let severity = Severity::Warning;
 
     let mut checked: FxHashSet<(i32, i32)> = FxHashSet::default();
     let machine_entities: Vec<&PlacedEntity> = layout
@@ -669,321 +670,6 @@ pub fn check_belt_flow_path(
 }
 
 // ---------------------------------------------------------------------------
-// 3. check_belt_network_topology
-// ---------------------------------------------------------------------------
-
-pub fn check_belt_network_topology(
-    layout: &LayoutResult,
-    solver: Option<&SolverResult>,
-) -> Vec<ValidationIssue> {
-    let mut issues = Vec::new();
-    let sr = match solver {
-        Some(s) => s,
-        None => return issues,
-    };
-
-    // Build belt tile set with carries annotation, expanding splitters
-    let mut belt_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
-    let mut belt_carries: FxHashMap<(i32, i32), Option<String>> = FxHashMap::default();
-    for e in &layout.entities {
-        if is_belt_entity(&e.name) {
-            belt_tiles.insert((e.x, e.y));
-            belt_carries.insert((e.x, e.y), e.carries.clone());
-            if is_splitter(&e.name) {
-                let second = splitter_second_tile(e);
-                belt_tiles.insert(second);
-                belt_carries.insert(second, e.carries.clone());
-            }
-        }
-    }
-    if belt_tiles.is_empty() {
-        return issues;
-    }
-
-    let machine_tiles_set = build_machine_tile_set(layout);
-    let machine_by_tile = build_machine_by_tile(layout);
-
-    // Per-machine belt tiles for input/output inserters
-    let mut input_inserter_belt_tiles: FxHashMap<(i32, i32), Vec<(i32, i32)>> =
-        FxHashMap::default();
-    let mut output_inserter_belt_tiles: FxHashMap<(i32, i32), Vec<(i32, i32)>> =
-        FxHashMap::default();
-
-    for ins in &layout.entities {
-        if !is_inserter(&ins.name) {
-            continue;
-        }
-        let (dx, dy) = dir_to_vec(ins.direction);
-        let reach = inserter_reach(&ins.name);
-        let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
-        let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
-
-        if machine_tiles_set.contains(&drop_pos) && belt_tiles.contains(&pickup_pos) {
-            if let Some(&mpos) = machine_by_tile.get(&drop_pos) {
-                input_inserter_belt_tiles
-                    .entry(mpos)
-                    .or_default()
-                    .push(pickup_pos);
-            }
-        } else if machine_tiles_set.contains(&pickup_pos) && belt_tiles.contains(&drop_pos) {
-            if let Some(&mpos) = machine_by_tile.get(&pickup_pos) {
-                output_inserter_belt_tiles
-                    .entry(mpos)
-                    .or_default()
-                    .push(drop_pos);
-            }
-        }
-    }
-
-    let ug_pairs = build_ug_pairs(layout);
-
-    // Layout boundary
-    let all_xs: Vec<i32> = belt_tiles.iter().map(|&(x, _)| x).collect();
-    let all_ys: Vec<i32> = belt_tiles.iter().map(|&(_, y)| y).collect();
-    let min_bx = *all_xs.iter().min().unwrap();
-    let max_bx = *all_xs.iter().max().unwrap();
-    let min_by = *all_ys.iter().min().unwrap();
-    let max_by = *all_ys.iter().max().unwrap();
-
-    let on_boundary = |(x, y): (i32, i32)| -> bool {
-        x == min_bx || x == max_bx || y == min_by || y == max_by
-    };
-
-    // Group machines by recipe
-    let mut recipe_machines: FxHashMap<&str, Vec<(i32, i32)>> = FxHashMap::default();
-    for e in &layout.entities {
-        if is_machine_entity(&e.name) {
-            if let Some(r) = e.recipe.as_deref() {
-                recipe_machines.entry(r).or_default().push((e.x, e.y));
-            }
-        }
-    }
-
-    let external_input_items: FxHashSet<&str> = sr
-        .external_inputs
-        .iter()
-        .filter(|f| !f.is_fluid)
-        .map(|f| f.item.as_str())
-        .collect();
-    let external_output_items: FxHashSet<&str> = sr
-        .external_outputs
-        .iter()
-        .filter(|f| !f.is_fluid)
-        .map(|f| f.item.as_str())
-        .collect();
-
-    // item → consumer recipes (external inputs)
-    let mut item_to_consumer_recipes: FxHashMap<&str, FxHashSet<&str>> = FxHashMap::default();
-    for spec in &sr.machines {
-        for inp in &spec.inputs {
-            if external_input_items.contains(inp.item.as_str()) && !inp.is_fluid {
-                item_to_consumer_recipes
-                    .entry(&inp.item)
-                    .or_default()
-                    .insert(&spec.recipe);
-            }
-        }
-    }
-
-    // item → producer recipes (external outputs)
-    let mut item_to_producer_recipes: FxHashMap<&str, FxHashSet<&str>> = FxHashMap::default();
-    for spec in &sr.machines {
-        for out in &spec.outputs {
-            if external_output_items.contains(out.item.as_str()) && !out.is_fluid {
-                item_to_producer_recipes
-                    .entry(&out.item)
-                    .or_default()
-                    .insert(&spec.recipe);
-            }
-        }
-    }
-
-    // Inner check function
-    let mut check_network = |item: &str,
-                              direction: &str,
-                              belt_starts: &Vec<(i32, i32)>,
-                              machine_list: &Vec<(i32, i32)>| {
-        if belt_starts.is_empty() {
-            return;
-        }
-        // Filter belt tiles to only those carrying this item
-        let item_belt_tiles: FxHashSet<(i32, i32)> = belt_tiles
-            .iter()
-            .filter(|&&pos| belt_carries.get(&pos).and_then(|c| c.as_deref()) == Some(item))
-            .copied()
-            .collect();
-
-        let starts_set: FxHashSet<(i32, i32)> = belt_starts.iter().copied().collect();
-        let full_network = bfs_belt_reach(&starts_set, &item_belt_tiles, Some(&ug_pairs));
-
-        // Check connectivity.
-        //
-        // One positioned issue per disconnected network, not one issue naming
-        // a count. An aggregate is invisible to any consumer comparing issue
-        // counts by category: `{"belt-topology": 1}` reads the same whether an
-        // item's belts are in two fragments or twenty. The identical shape in
-        // `check_pole_network_connectivity` let a layout transform go from 2
-        // to 89 disconnected poles and pass its admission gate as "no worse
-        // than source", shipping a factory that pasted as two dead halves.
-        //
-        // Networks are also grouped properly rather than measured from
-        // `belt_starts[0]`. That element is the arbitrary first entry of a Vec
-        // built off hash iteration order, so "unreachable from it" is not a
-        // stable magnitude — the same flaw in `power_wires::disconnected_poles`
-        // made a genuine repair (49 components down to 11) report as a
-        // regression, because merging components that exclude element 0 adds
-        // nodes still unreachable from element 0.
-        if belt_starts.len() > 1 {
-            // Partition the starts into connected components.
-            let mut components: Vec<Vec<(i32, i32)>> = Vec::new();
-            let mut assigned: FxHashSet<(i32, i32)> = FxHashSet::default();
-            for &start in belt_starts.iter() {
-                if assigned.contains(&start) {
-                    continue;
-                }
-                let seed: FxHashSet<(i32, i32)> = std::iter::once(start).collect();
-                let reach = bfs_belt_reach(&seed, &item_belt_tiles, Some(&ug_pairs));
-                let mut member: Vec<(i32, i32)> = belt_starts
-                    .iter()
-                    .filter(|&&bt| bt == start || reach.contains(&bt))
-                    .copied()
-                    .collect();
-                member.sort();
-                for &m in &member {
-                    assigned.insert(m);
-                }
-                components.push(member);
-            }
-            if components.len() > 1 {
-                // Deterministic order regardless of hash iteration.
-                components.sort();
-                let total = components.len();
-                for (n, member) in components.iter().enumerate() {
-                    let anchor = member[0];
-                    issues.push(ValidationIssue::with_pos(
-                        Severity::Error,
-                        "belt-topology",
-                        format!(
-                            "{item} {direction}: belt network {}/{total} is isolated \
-                             ({} feed point(s), serving {} machine(s)) — should be a \
-                             single connected network",
-                            n + 1,
-                            member.len(),
-                            machine_list.len()
-                        ),
-                        anchor.0,
-                        anchor.1,
-                    ));
-                }
-                return;
-            }
-        }
-
-        let boundary_tiles: Vec<(i32, i32)> = full_network
-            .iter()
-            .filter(|&&t| on_boundary(t))
-            .copied()
-            .collect();
-
-        if boundary_tiles.is_empty() {
-            issues.push(ValidationIssue::new(
-                Severity::Error,
-                "belt-topology",
-                format!(
-                    "{} {}: belt network ({} tiles) doesn't reach layout boundary",
-                    item,
-                    direction,
-                    full_network.len()
-                ),
-            ));
-            return;
-        }
-
-        // Check boundary tiles are contiguous
-        let boundary_set: FxHashSet<(i32, i32)> = boundary_tiles.iter().copied().collect();
-        let mut bfs_visited: FxHashSet<(i32, i32)> = FxHashSet::default();
-        let mut bfs_queue: VecDeque<(i32, i32)> = VecDeque::new();
-        bfs_queue.push_back(boundary_tiles[0]);
-        bfs_visited.insert(boundary_tiles[0]);
-        while let Some((bx, by)) = bfs_queue.pop_front() {
-            for (ddx, ddy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let nb = (bx + ddx, by + ddy);
-                if boundary_set.contains(&nb) && bfs_visited.insert(nb) {
-                    bfs_queue.push_back(nb);
-                }
-            }
-        }
-        if bfs_visited.len() < boundary_set.len() {
-            issues.push(ValidationIssue::new(
-                Severity::Warning,
-                "belt-topology",
-                format!(
-                    "{} {}: belt network reaches layout boundary at multiple \
-                     separate locations (ideally one contiguous entry/exit point)",
-                    item, direction
-                ),
-            ));
-        }
-    };
-
-    // Check input networks
-    for (item, recipes) in &item_to_consumer_recipes {
-        let mut input_belt_starts: Vec<(i32, i32)> = Vec::new();
-        let mut consuming_machines: Vec<(i32, i32)> = Vec::new();
-        for &recipe in recipes {
-            for &mpos in recipe_machines.get(recipe).unwrap_or(&vec![]) {
-                if let Some(bt_list) = input_inserter_belt_tiles.get(&mpos) {
-                    let matched: Vec<(i32, i32)> = bt_list
-                        .iter()
-                        .filter(|&&pos| {
-                            belt_carries
-                                .get(&pos)
-                                .and_then(|c| c.as_deref())
-                                == Some(*item)
-                        })
-                        .copied()
-                        .collect();
-                    if !matched.is_empty() {
-                        input_belt_starts.extend_from_slice(&matched);
-                        consuming_machines.push(mpos);
-                    }
-                }
-            }
-        }
-        check_network(item, "input", &input_belt_starts, &consuming_machines);
-    }
-
-    // Check output networks
-    for (item, recipes) in &item_to_producer_recipes {
-        let mut output_belt_starts: Vec<(i32, i32)> = Vec::new();
-        let mut producing_machines: Vec<(i32, i32)> = Vec::new();
-        for &recipe in recipes {
-            for &mpos in recipe_machines.get(recipe).unwrap_or(&vec![]) {
-                if let Some(bt_list) = output_inserter_belt_tiles.get(&mpos) {
-                    let matched: Vec<(i32, i32)> = bt_list
-                        .iter()
-                        .filter(|&&pos| {
-                            belt_carries
-                                .get(&pos)
-                                .and_then(|c| c.as_deref())
-                                == Some(*item)
-                        })
-                        .copied()
-                        .collect();
-                    if !matched.is_empty() {
-                        output_belt_starts.extend_from_slice(&matched);
-                        producing_machines.push(mpos);
-                    }
-                }
-            }
-        }
-        check_network(item, "output", &output_belt_starts, &producing_machines);
-    }
-
-    issues
-}
-
-// ---------------------------------------------------------------------------
 // 5. check_belt_junctions
 // ---------------------------------------------------------------------------
 
@@ -1061,7 +747,6 @@ pub fn check_belt_junctions(layout: &LayoutResult) -> Vec<ValidationIssue> {
 pub fn check_belt_flow_reachability(
     layout: &LayoutResult,
     solver: Option<&SolverResult>,
-    style: LayoutStyle,
 ) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     if solver.is_none() {
@@ -1118,11 +803,10 @@ pub fn check_belt_flow_reachability(
         x == min_bx || x == max_bx || y == min_by || y == max_by
     };
 
-    let severity = if style == LayoutStyle::Spaghetti {
-        Severity::Error
-    } else {
-        Severity::Warning
-    };
+    // Warning unconditionally: production only ever built Bus layouts and
+    // the Spaghetti Error arm (with the LayoutStyle enum itself) was
+    // deleted 2026-08-20 — offpath Tier 2, trust-table hole 4.
+    let severity = Severity::Warning;
 
     // BELT-TO-BELT LIFT inserters: pick off one belt and drop onto another.
     // Invisible to the classification above, which only recognises
@@ -4264,13 +3948,16 @@ mod tests {
             height: 20,
             ..Default::default()
         };
-        let issues = check_belt_flow_path(&lr, None, LayoutStyle::Spaghetti);
+        let issues = check_belt_flow_path(&lr, None);
         let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
 
     #[test]
-    fn belt_flow_path_disconnected_input_error() {
+    // Detection unchanged; severity is Warning unconditionally since the
+    // 2026-08-20 LayoutStyle deletion (this test ran the Spaghetti Error
+    // arm before — renamed accordingly).
+    fn belt_flow_path_disconnected_input_flags() {
         let lr = LayoutResult {
             entities: vec![
                 machine(10, 10, "iron-gear-wheel"),
@@ -4285,12 +3972,12 @@ mod tests {
             height: 50,
             ..Default::default()
         };
-        let issues = check_belt_flow_path(&lr, None, LayoutStyle::Spaghetti);
-        let errors: Vec<_> = issues
+        let issues = check_belt_flow_path(&lr, None);
+        let flagged: Vec<_> = issues
             .iter()
-            .filter(|i| i.severity == Severity::Error && i.category == "belt-flow-path")
+            .filter(|i| i.severity == Severity::Warning && i.category == "belt-flow-path")
             .collect();
-        assert_eq!(errors.len(), 1);
+        assert_eq!(flagged.len(), 1);
     }
 
     // --- check_belt_junctions ---
@@ -4381,7 +4068,7 @@ mod tests {
             height: 20,
             ..Default::default()
         };
-        let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
+        let issues = check_belt_flow_reachability(&lr, Some(&sr));
         let errors: Vec<_> = issues
             .iter()
             .filter(|i| i.message.contains("nothing feeds its pickup belt"))
@@ -4412,7 +4099,7 @@ mod tests {
             height: 20,
             ..Default::default()
         };
-        let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
+        let issues = check_belt_flow_reachability(&lr, Some(&sr));
         let errors: Vec<_> = issues
             .iter()
             .filter(|i| i.message.contains("nothing feeds its pickup belt"))
@@ -4446,7 +4133,7 @@ mod tests {
             height: 20,
             ..Default::default()
         };
-        let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
+        let issues = check_belt_flow_reachability(&lr, Some(&sr));
         let errors: Vec<_> = issues
             .iter()
             .filter(|i| i.message.contains("cannot leave"))
@@ -4495,7 +4182,7 @@ mod tests {
             height: 20,
             ..Default::default()
         };
-        let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
+        let issues = check_belt_flow_reachability(&lr, Some(&sr));
         let stuck: Vec<_> = issues
             .iter()
             .filter(|i| i.message.contains("cannot leave"))
@@ -4546,7 +4233,7 @@ mod tests {
             height: 20,
             ..Default::default()
         };
-        let issues = check_belt_flow_reachability(&lr, Some(&sr), LayoutStyle::Spaghetti);
+        let issues = check_belt_flow_reachability(&lr, Some(&sr));
         let unfed: Vec<_> = issues
             .iter()
             .filter(|i| i.message.contains("nothing feeds its pickup belt at (4,-2)"))

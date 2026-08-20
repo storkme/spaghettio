@@ -3,7 +3,7 @@
 
 use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
 use spaghettio_core::solver;
-use spaghettio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::validate::{self, Severity};
 use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
 
@@ -21,7 +21,7 @@ fn main() {
     };
     let layout = build_bus_layout(&sr, opts).unwrap();
 
-    let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+    let issues = match validate::validate(&layout, Some(&sr)) {
         Ok(v) => v,
         Err(e) => e.issues,
     };

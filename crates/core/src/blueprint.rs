@@ -134,11 +134,10 @@ struct BlueprintWrapper<'a> {
 ///   `ValidationCompleted` event. Emitting it from *export* leaks an event
 ///   into any live stream and skews the snapshot debugger's per-layout error
 ///   counts — the hazard `decomposition_search.rs` guards for (#396).
-/// - **Style.** `validate()` behaves differently under
-///   [`LayoutStyle`](crate::validate::LayoutStyle): `check_belt_network_topology`
-///   is Spaghetti-only, and the fluid-port and belt-flow checks branch on it.
-///   Export cannot know the right style — `LayoutResult` does not record one —
-///   so picking a default here would silently mislabel non-bus layouts.
+/// - **Style.** (Historical: `validate()` once branched on a `LayoutStyle`
+///   enum whose Spaghetti arms were production-dead; the enum and arms were
+///   deleted 2026-08-20 — offpath Tier 2 — so this concern no longer
+///   exists.)
 ///
 /// A manifest exported without this variant carries no `validator` key at
 /// all, which is deliberately distinct from carrying an empty/clean one.
@@ -653,7 +652,7 @@ mod tests {
         )
         .expect("layout");
         let issues =
-            match crate::validate::validate(&layout, Some(&solved), crate::validate::LayoutStyle::Bus)
+            match crate::validate::validate(&layout, Some(&solved))
             {
                 Ok(i) => i,
                 Err(e) => e.issues,
@@ -727,7 +726,7 @@ mod tests {
         .expect("layout");
 
         let issues =
-            match crate::validate::validate(&layout, Some(&solved), crate::validate::LayoutStyle::Bus)
+            match crate::validate::validate(&layout, Some(&solved))
             {
                 Ok(i) => i,
                 Err(e) => e.issues,

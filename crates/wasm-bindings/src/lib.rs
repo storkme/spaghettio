@@ -12,7 +12,7 @@
 use spaghettio_core::bus::inserter_ladder::InserterTier;
 use spaghettio_core::models::{LayoutResult, PlacedEntity, SolverResult};
 use spaghettio_core::recipe_db::MachinePalette;
-use spaghettio_core::validate::{self, LayoutStyle, ValidationIssue};
+use spaghettio_core::validate::{self, ValidationIssue};
 use spaghettio_core::{
     blueprint, blueprint_parser, bus::junction_cost::solution_cost,
     bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy},
@@ -818,9 +818,11 @@ pub fn solve_fixture(fixture_json: &str, pins_json: &str) -> Result<JsValue, JsE
 pub fn validate_layout(
     layout_result: LayoutResult,
     solver_result: Option<SolverResult>,
-    layout_style: Option<LayoutStyle>,
 ) -> Vec<ValidationIssue> {
-    let style = layout_style.unwrap_or_default();
+    // (The third `layout_style` param was deleted 2026-08-20 with the
+    // LayoutStyle enum — offpath Tier 2. Its absent-arg default was
+    // Spaghetti, the exact footgun the deletion removes; the web worker
+    // always passed "Bus".)
     let solver_ref: Option<&SolverResult> = solver_result.as_ref();
     // Always return the full issue list to the web UI. The native
     // `validate::validate` returns `Err(ValidationError)` when any
@@ -828,7 +830,7 @@ pub fn validate_layout(
     // discards the structured issue list. The UI needs the issues
     // themselves to render borders + the badge (#209), so we unwrap
     // the error case back into the same `Vec<ValidationIssue>`.
-    match validate::validate(&layout_result, solver_ref, style) {
+    match validate::validate(&layout_result, solver_ref) {
         Ok(issues) => issues,
         Err(err) => err.issues,
     }

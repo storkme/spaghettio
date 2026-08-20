@@ -147,8 +147,7 @@ verification protocol (suite green + clippy + WASM build), not just compile.
    gated `== Spaghetti`, dead in production; two more same-gated severity
    branches hide inside otherwise-live functions (`belt_flow.rs:533`,
    `:1121`) and go with it. Deleting the enum + severity forks simplifies
-   `validate()`'s signature. **Decision: is spaghetti-style
-   layout a live ambition or a relic of the project name?**
+   `validate()`'s signature. **Decision TAKEN 2026-08-20: relic — deleted (T2d).**
 9. **`inserter-throughput` + `inserter-item-throughput` checks** (validator):
    demoted from selection 2026-08-14 (#632 B6), hand-capacity model never
    sim-anchored, now report-only. Cost of deletion: the only signal on
