@@ -11,10 +11,8 @@
 //! **Gates by default**: the test asserts zero lane errors outside the
 //! `KNOWN_IMBALANCED` set — which is EMPTY as of 2026-08-14 (#632 A3:
 //! the last pair, (7,3)/(7,4), was deleted from the library with the
-//! rest of the defective-template cull. Those two shapes were RE-IMPORTED
-//! 2026-08-20 from a different source and audit clean, so the set stays
-//! empty for a different reason than it did then; the const's doc carries
-//! the full history). Every registered shape gates at zero errors. Set
+//! rest of the defective-template cull; the const's doc carries the
+//! full history). Every registered shape gates at zero errors. Set
 //! `BALANCER_AUDIT_NO_FAIL=1` to suppress the assert during exploratory
 //! work (e.g. baking new shapes, regenerating the library).
 //!
@@ -84,16 +82,6 @@ use spaghettio_core::validate::Severity;
 /// request silently at half-rate is worse than that request failing
 /// loudly as unstampable. The mechanism stays: a future provisionally-
 /// dirty bake gets an entry here, not a gate bypass.
-///
-/// RE-IMPORTED 2026-08-20 (#664), and the distinction matters: (7,3) and
-/// (7,4) are back in the library, but they are NOT the templates that were
-/// culled. These come from Raynquist's fall-2025 book and audit at ZERO
-/// lane errors, where the #334 residue produced 31 for (7,4) at 38.6/s
-/// against a 7.5/s cap. So the cull's first rationale — defective — no
-/// longer applies to these shapes. Its second — corpus-unexercised —
-/// still does, and is why they are library entries rather than anything
-/// the router reaches for. `KNOWN_IMBALANCED` stays EMPTY: the re-imported
-/// pair needs no entry because it has no errors to suppress.
 const KNOWN_IMBALANCED: [(u32, u32); 0] = [];
 
 #[test]
