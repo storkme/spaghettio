@@ -24,8 +24,10 @@ measurement protocol; pin file restored afterwards):
   e2e tests minus the 3 refusal tests (`stacking_refuses_low_inserter_cap`,
   `di_jammed_cell_is_visible_and_therefore_refused`,
   `di_cell_output_belt_exemption_does_not_cover_the_consumer`), plus the
-  `#[ignore]`d six-pack `science_gauntlet` (1/s), plus the non-ignored
-  `mega_*` composition gates in `cell_composition.rs`. All green (79 tests).
+  `#[ignore]`d six-pack `science_gauntlet` (one test, six packs at 1/s), plus
+  the non-ignored `mega_*` composition gates in `cell_composition.rs`. All
+  green: 73 + 1 + 5 = 79 tests (76 non-ignored per libtest's own `--list`;
+  a source-attribute count will disagree — the listing is authoritative).
 - **Run B (full default suite)** — everything CI gates. Caveat hit and
   repaired: cargo's fail-fast stopped the run when
   `tier2_electronic_circuit_20s_from_ore` overran its hard 10s wall guard by
@@ -56,7 +58,13 @@ auto-fires in the web app via `improve_region_streaming`), `fixture.rs`
 is optimal, invisible to production coverage by construction), and the whole
 offline balancer-generation toolchain.
 
-## Tier 1 — deletable now, no owner call (~3.1k lines)
+## Tier 1 — deletable now, no owner call (~2.7k lines, ~2.9k with in-file test blocks)
+
+"Zero callers" throughout this tier means zero *production* callers — several
+items have `#[cfg(test)]` callers in their own file (the belt_flow twins'
+test blocks ~100 lines, `partitioner.rs` helper tests ~5,
+`analyze_blueprint_string`'s 2 tests, ~15 sat.rs tests to retarget); delete
+or retarget those in the same change, they are counted in the 2.9k figure.
 
 1. **`bus/row_rotation.rs`** (~2,328 lines with wiring): the ad-hoc RFC-064
    rotation-aware rigid-row prototype, RETRACTED in RFC-064's own decision
@@ -192,7 +200,7 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
 - **Perpendicular-template rung has zero test coverage anywhere** (~795
   lines, `ghost_router.rs:5396-6010`): rung 1 of the live routing-strategy
   ladder, fires on narrow preconditions, and no test in the suite reaches it
-  (its sibling `cluster_adjacent_crossings` has 8). Coverage gap, not
+  (its sibling `cluster_adjacent_crossings` has nine). Coverage gap, not
   deletion. Also its factory `perpendicular_template_strategy()` (:6089) is
   itself production-dead (fixture replay only) with a stale parity comment.
 - **`region_reimprove.rs` has zero Rust-side tests** while auto-firing in the
