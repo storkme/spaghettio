@@ -491,6 +491,27 @@ pub fn classify_graph(graph: &SplitterGraph) -> Result<ClassificationReport, Cla
     let is_mx3 = composition
         .iter()
         .all(|row| row.iter().all(|&v| (v - target).abs() < 1e-9));
+    // BEFORE the MX3 branch, not after (#662 round 5). I originally exempted
+    // `Balanced` here on the grounds that it is a composition verdict,
+    // computed independently of the subset checks and sound at any size.
+    // That is true of the PROPERTY and false of the REPORT: `BalancerClass`
+    // is one conflated ladder and its consumers match on it as a single
+    // verdict — `balancer_generate` accepts `Balanced` as a usable candidate
+    // (balancer_generate.rs:113). So an oversized graph with uniform
+    // composition was accepted with no throughput check ever having run,
+    // which is the false clearance in the place it actually matters.
+    //
+    // An oversized graph therefore gets NO class at all. Callers wanting the
+    // throughput axis alone can use `throughput_tier`, which answers
+    // `Unknown` rather than failing.
+    if throughput == ThroughputTier::Unknown {
+        return Err(ClassifyError::Unanalysable {
+            m,
+            n,
+            bound: SUBSET_ENUM_MAX,
+        });
+    }
+
     if is_mx3 {
         return Ok(ClassificationReport {
             class: BalancerClass::Balanced,
@@ -513,19 +534,6 @@ pub fn classify_graph(graph: &SplitterGraph) -> Result<ClassificationReport, Cla
             throughput,
             composition,
             mx2_counterexample: mx2a_counterexample,
-        });
-    }
-
-    // Past this point every remaining `class` arm asserts a THROUGHPUT
-    // property, and if the checks could not run there is nothing behind the
-    // assertion. `Balanced` above is exempt on purpose: it is a composition
-    // verdict, computed independently of the subset checks, and is sound for
-    // a graph of any size.
-    if throughput == ThroughputTier::Unknown {
-        return Err(ClassifyError::Unanalysable {
-            m,
-            n,
-            bound: SUBSET_ENUM_MAX,
         });
     }
 
@@ -1415,6 +1423,36 @@ mod tests {
             throughput_tier_from(2, n_big, &check_input_subsets(&graph, 2, n_big), &None),
             "the free function and the shared core must not drift"
         );
+    }
+
+    /// An oversized graph with UNIFORM composition must not classify as
+    /// `Balanced` either (#662 round 5).
+    ///
+    /// `Balanced` is a sound statement about composition at any size, which
+    /// is why it was exempted at first — but `BalancerClass` is one conflated
+    /// ladder and its consumers match on it as a single verdict.
+    /// `balancer_generate` accepts `Balanced` as a usable candidate, so an
+    /// unanalysed graph reaching that arm is a false clearance exactly where
+    /// it matters.
+    ///
+    /// Verified to discriminate: with the guard back below the MX3 branch,
+    /// this fails with "classified as ThroughputUnlimited with throughput
+    /// Unknown".
+    #[test]
+    fn oversized_uniform_graphs_do_not_classify_as_balanced() {
+        let k = SUBSET_ENUM_MAX + 1;
+        let graph = straight_through(k, k);
+        match classify_graph(&graph) {
+            Err(ClassifyError::Unanalysable { m, n, bound }) => {
+                assert_eq!((m, n, bound), (k, k, SUBSET_ENUM_MAX));
+            }
+            Ok(r) => panic!(
+                "oversized graph classified as {:?} with throughput {:?} — no \
+                 subset check ran, so no class is earned",
+                r.class, r.throughput
+            ),
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
     }
 
     /// The bound is PER-SIDE. An input check that ran and found a
