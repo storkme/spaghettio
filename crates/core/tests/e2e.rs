@@ -2237,7 +2237,11 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
     }
 }
 
-/// #652: ac7-HS at duty 0.6 (the RFC-069 flip shape) lays out CLEAN.
+/// #652: ac7-HS at duty 0.6 (the RFC-069 flip shape) ships zero
+/// validation ERRORS. That is all it says. The fixture is NOT healthy:
+/// it sims at 64.4% of plan and pins 14 input-rate-delivery warnings —
+/// see the guard at the end of this test, which exists to stop the zero
+/// below being cited as health.
 ///
 /// This pin has inverted twice and the history is the point of the
 /// comment — it is the record of what each fix actually bought:
@@ -2271,8 +2275,10 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
 /// no longer severs anything, and a 7-fixture sweep on this same code
 /// path found no remaining exhibitor anywhere. Do NOT read its absence
 /// as the machinery being fine — a synthetic pin for it is tracked on
-/// #652. (Renamed from `tier4_ac7_duty06_unresolved_crossings_fail_safe`,
-/// which is the name #652's comments refer to.)
+/// #652. (Renamed twice: `tier4_ac7_duty06_unresolved_crossings_fail_safe`
+/// -> `tier4_ac7_duty06_lays_out_clean` -> this name. #652's comments
+/// refer to the first; the second overclaimed and is why the guard below
+/// exists.)
 #[test]
 #[ntest::timeout(300000)]
 fn tier4_ac7_duty06_has_no_severed_connections() {
@@ -2377,12 +2383,15 @@ fn tier4_ac7_duty06_has_no_severed_connections() {
     // WHAT ZERO ERRORS DOES NOT MEAN (read this before citing the test):
     // this fixture is NOT healthy. It sims at 64.4% of plan (4.51/7.00,
     // converged, kit-clean, 2026-08-17) and carries input-rate-delivery
-    // warnings including SIX belts whose modelled delivery is 0.0/s. Those
-    // belts are physically connected — each was walked 159-195 tiles
-    // upstream to a real source — so they are a provisioning deficit
-    // (RFC-069 / #519 territory), not a routing one, and nothing in this
-    // test touches them. The name says what it pins: no SEVERED
-    // connections. It does not say the layout works.
+    // warnings, TEN of which are belts whose modelled delivery is 0.0/s.
+    // (An earlier version of this comment said six. It was never
+    // measured; the count below is, and the assert now pins it so the
+    // next wrong number fails instead of ageing quietly.) Those belts
+    // are physically connected — each was walked 159-195 tiles upstream
+    // to a real source — so they are a provisioning deficit (RFC-069 /
+    // #519 territory), not a routing one, and nothing in this test
+    // touches them. The name says what it pins: no SEVERED connections.
+    // It does not say the layout works.
     assert!(
         errors.is_empty(),
         "ac7-HS duty-0.6 shipped {} errors (expected 0). If a balancer \
@@ -2397,16 +2406,36 @@ fn tier4_ac7_duty06_has_no_severed_connections() {
     // so that a future reader cannot mistake the zero above for health and
     // so that anyone who genuinely fixes delivery has to come here and say
     // so deliberately rather than silently inheriting a green test.
-    let ird = issues
+    let ird: Vec<&ValidationIssue> = issues
         .iter()
         .filter(|i| i.category == "input-rate-delivery")
+        .collect();
+    let ird_zero = ird
+        .iter()
+        .filter(|i| i.message.contains("delivers 0.0/s"))
         .count();
-    assert!(
-        ird > 0,
-        "ac7-HS duty-0.6 reports no input-rate-delivery warnings — it had 14, \
-         including six belts at 0.0/s, against a 64.4%-of-plan sim. If that is \
-         genuinely fixed this is GOOD NEWS: re-measure the fixture, update the \
-         comment above, and re-point this guard. Do not just delete it."
+    // Pinned EXACTLY, not as `> 0` (#663 review, 3/3). A floor lets a partial
+    // regression through silently — 14 -> 2 would still "pass" while every
+    // specific claim in the comment above went stale, which is the precise
+    // failure mode docs/validator-reporting.md catalogues. Both directions
+    // trip: a fix and a worsening are equally things the comment must be
+    // re-measured for.
+    //
+    // Yes, this reds CI when the deficit is FIXED. That is deliberate and is
+    // not the `committed >= 25` hazard this file rejected earlier: that was an
+    // incidental byproduct count that drifts under unrelated work. These two
+    // numbers move only when someone changes provisioning for this fixture on
+    // purpose (RFC-069 / #519), and when they do, the fixture needs
+    // re-measuring and this comment needs rewriting — which is exactly what a
+    // failure here forces.
+    assert_eq!(
+        (ird.len(), ird_zero),
+        (14, 10),
+        "ac7-HS duty-0.6 input-rate-delivery census moved — (total, at-0.0/s) \
+         is printed above; the expected pair was measured 2026-08-20 against a \
+         64.4%-of-plan sim. If this is an IMPROVEMENT that is GOOD NEWS — \
+         re-measure the fixture, rewrite the comment at the top of this test, \
+         and re-point these numbers. Do not just delete the guard."
     );
 }
 
