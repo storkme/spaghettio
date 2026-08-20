@@ -107,6 +107,17 @@ configuration differs from its own:
   before this existed cannot be assumed to match;
 - `--force` — replaces it regardless.
 
+The recorded configuration is the **targets** (item and rate) plus the axis
+flags and their values, sorted, so flag order does not matter. Two things it
+deliberately does not do: it compares values **syntactically**, so
+`--strategy pd` and `--strategy partitioned-decomposed` read as different
+configurations even though they resolve to the same one; and a fixture
+written before this existed has no recorded configuration, so it is refused
+rather than assumed to match. Both err toward refusing a run that would in
+fact have been safe — `--force` covers them, and the alternative is
+resolving values against engine defaults, which is the machinery this guard
+was built to avoid.
+
 Three earlier versions of this guard asked about the command line instead
 (refuse if anything exists / if this run passed an axis flag / if the label
 was explicit). Each one leaked, from a different direction, because the
