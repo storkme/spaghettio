@@ -705,29 +705,9 @@ pub fn compose_chain_with_capacity(
     sr: &SolverResult,
     inserter_capacity: u8,
 ) -> Result<LayoutResult, String> {
-    compose_chain_with_capacity_and_order(sr, inserter_capacity, ChainOrder::Current)
-}
-
-/// RFC-055 experimental entry point. Uses the production cell generator and
-/// router, changing only the macro order selected before slot placement.
-pub fn compose_chain_compact(
-    sr: &SolverResult,
-    inserter_capacity: u8,
-) -> Result<LayoutResult, String> {
-    compose_chain_with_capacity_and_order(sr, inserter_capacity, ChainOrder::Compact)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ChainOrder {
-    Current,
-    Compact,
-}
-
-fn compose_chain_with_capacity_and_order(
-    sr: &SolverResult,
-    inserter_capacity: u8,
-    chain_order: ChainOrder,
-) -> Result<LayoutResult, String> {
+    // (RFC-055's ChainOrder::Compact axis and its compose_chain_compact
+    // entry were deleted 2026-08-20 with cells/placement.rs — owner call
+    // extending #632 A2; record in RFC-055's decision log.)
     chain_eligible(sr)?;
     let kq = required_copies(sr);
     let scale = 1.0 / kq as f64;
@@ -830,54 +810,6 @@ fn compose_chain_with_capacity_and_order(
         Some(&i) => (0, std::cmp::Reverse(i)),
         None => (1, std::cmp::Reverse(usize::MAX)),
     });
-    if chain_order == ChainOrder::Compact {
-        let mut dimensions = FxHashMap::default();
-        for spec in &specs {
-            let (width, height) = if spec.recipe.starts_with(MEGA_PREFIX) {
-                let plan = mega_plan.as_ref().expect("mega spec implies plan");
-                let (_, block) = super::mega::compose_mega_block(sr, plan, scale)?;
-                (block.width, block.height)
-            } else {
-                let out = spec.outputs.first()
-                    .ok_or_else(|| format!("cells: {} has no output", spec.recipe))?;
-                let rate = out.rate * spec.count * scale;
-                let inputs: Vec<&str> = spec.inputs.iter().map(|i| i.item.as_str()).collect();
-                let (_, layout) = super::extract::generate_cell_layout_with_capacity(
-                    &out.item, rate, &inputs, inserter_capacity);
-                let cell = extract_cell(&layout);
-                (cell.width, cell.height)
-            };
-            dimensions.insert(spec.recipe.clone(), (width, height));
-        }
-        let graph = super::placement::PlacementGraph::from_specs(&specs, &dimensions)?;
-        let initial: Vec<usize> = (0..specs.len()).collect();
-        let control_metrics = graph.score_linear(&initial, CORRIDOR_GAP, 0.25)?;
-        let candidate = graph.best_linear(&initial, CORRIDOR_GAP, 0.25)?;
-        let fold = graph.best_two_row_fold(
-            &candidate.order, CORRIDOR_GAP, 24, 0.25, 2.0, true)?;
-        let mut best_fold_critical = i32::MAX;
-        for end in 1..candidate.order.len() {
-            for serpentine in [false, true] {
-                let metrics = graph.score_folded(
-                    &candidate.order, &[end, candidate.order.len()],
-                    CORRIDOR_GAP, 24, 0.25, serpentine)?;
-                best_fold_critical = best_fold_critical.min(metrics.critical_path_distance);
-            }
-        }
-        let original = specs.clone();
-        specs = candidate.order.iter().map(|&idx| original[idx].clone()).collect();
-        eprintln!("RFC placement estimates: control={:.1}/crit{} linear={:.1}/crit{} fold2={:.1}/crit{} best-fold-crit={} cut={:.1} serpentine={}; order: {:?}",
-            control_metrics.rate_weighted_distance,
-            control_metrics.critical_path_distance,
-            candidate.metrics.rate_weighted_distance,
-            candidate.metrics.critical_path_distance,
-            fold.metrics.rate_weighted_distance,
-            fold.metrics.critical_path_distance,
-            best_fold_critical,
-            fold.metrics.weighted_cut_sum,
-            fold.serpentine,
-            specs.iter().map(|s| s.recipe.as_str()).collect::<Vec<_>>());
-    }
 
     // Per-slot vertical-lane demand, from the bypass edge list (an edge
     // p→c descends in slot p+1 and ascends in slot c; sizing by the
@@ -911,11 +843,7 @@ fn compose_chain_with_capacity_and_order(
                     continue;
                 }
                 let consumes = ci != pi && c.inputs.iter().any(|i| i.item == o.item);
-                let fan_size = specs.iter()
-                    .filter(|cc| cc.inputs.iter().any(|i| i.item == o.item))
-                    .count();
-                let needs_bypass = ci != pi + 1
-                    || (chain_order == ChainOrder::Compact && fan_size >= 2);
+                let needs_bypass = ci != pi + 1;
                 if consumes && needs_bypass {
                     if pi + 1 < n {
                         lane_demand[pi + 1] += 1;
@@ -1158,19 +1086,12 @@ fn compose_chain_with_capacity_and_order(
                 if pi_mega { &m.outputs } else { &m.outputs[..1] };
             outs.iter()
                 .map(|o| {
-                    let fan_size = specs.iter()
-                        .enumerate()
-                        .filter(|(ci, c)| {
-                            *ci != pi && c.inputs.iter().any(|i| i.item == o.item)
-                        })
-                        .count();
                     let edges = specs
                         .iter()
                         .enumerate()
                         .filter(|(ci, c)| {
                             *ci != pi
-                                && (pi_mega || *ci != pi + 1
-                                    || (chain_order == ChainOrder::Compact && fan_size >= 2))
+                                && (pi_mega || *ci != pi + 1)
                                 && c.inputs.iter().any(|i| i.item == o.item)
                                 && cell_cache[*ci]
                                     .ports
@@ -1549,12 +1470,11 @@ fn compose_chain_with_capacity_and_order(
         // Pass-through (or the only) branch.
         branch_origins.push((
             if n_branches > 1 {
-                // The legacy dependency order never sends two fan
-                // branches west, so it can begin at the splitters'
-                // shared output column. A compact order can; advance
-                // to the first genuinely free tile so each branch has
-                // a distinct descent column.
-                if chain_order == ChainOrder::Compact { fx } else { fx - 1 }
+                // The dependency order never sends two fan branches
+                // west, so it can begin at the splitters' shared output
+                // column. (The compact order that could was deleted
+                // 2026-08-20 with ChainOrder::Compact.)
+                fx - 1
             } else {
                 pass_x
             },
@@ -1572,9 +1492,7 @@ fn compose_chain_with_capacity_and_order(
             let (tx, ty) = port_abs(port, c.x, c.y_off);
             let (bx, by) = branch_origins[bi];
             let seg = format!("corr:{}:{}", p.seg, c.seg);
-            if *ci == pi + 1
-                && (chain_order == ChainOrder::Current || consumers.len() == 1)
-            {
+            if *ci == pi + 1 {
                 if by == ty {
                     router.hrow(&mut entities, ty, bx, tx - 1, &out_item,
                         "express-transport-belt", "express-underground-belt", &seg);

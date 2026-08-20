@@ -120,7 +120,8 @@ verification protocol (suite green + clippy + WASM build), not just compile.
    future consumers (RFC-058, RFC-063 Phase C, RFC-064 Phase 3) have since
    run and concluded/failed. Same shape as what #632 A2 deleted; it just
    wasn't named. **Decision TAKEN 2026-08-20: yes — DELETED, #676.**
-6. **`bus/cells/placement.rs` + `ChainOrder::Compact`** (~1,000 lines):
+6. **`bus/cells/placement.rs` + `ChainOrder::Compact`** — **DELETED
+   2026-08-20 (#678)** (~1,000 lines):
    RFC-057 leftover the A2 sweep missed; `Compact` is a private enum variant
    constructed only by `compose_chain_compact`, called only by 3 `#[ignore]`d
    RFC-055 tests. Deletion requires surgery in `cells/chain.rs` (heavily
