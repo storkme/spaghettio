@@ -130,9 +130,11 @@ verification protocol (suite green + clippy + WASM build), not just compile.
 8. **`LayoutStyle::Spaghetti` arms** (~470+ lines): every production caller
    passes `Bus`; `Spaghetti` is constructed only in tests yet is the derived
    *default* (a standing footgun, trust-table hole 4). Biggest single piece:
-   `belt_flow.rs:675` `check_belt_network_topology` (310+148 nested lines),
-   gated `== Spaghetti`, dead in production. Deleting the enum + severity
-   forks simplifies `validate()`'s signature. **Decision: is spaghetti-style
+   `belt_flow.rs:675` `check_belt_network_topology` (458-line cluster),
+   gated `== Spaghetti`, dead in production; two more same-gated severity
+   branches hide inside otherwise-live functions (`belt_flow.rs:533`,
+   `:1121`) and go with it. Deleting the enum + severity forks simplifies
+   `validate()`'s signature. **Decision: is spaghetti-style
    layout a live ambition or a relic of the project name?**
 9. **`inserter-throughput` + `inserter-item-throughput` checks** (validator):
    demoted from selection 2026-08-14 (#632 B6), hand-capacity model never
@@ -169,7 +171,9 @@ gate in balancer-gen's bake path, used 2026-08-14); `cells/compose.rs`
 + `cells/mega.rs` (golden); `region_reimprove.rs`, `fixture.rs`,
 `preview.rs` (prod/web/RFC-contract); `bin/import_balancer.rs` + the
 `balancer/{graph,synth,verify,bake}` subtree + `balancer_topology.rs`
-(live offline library toolchain, last run 2026-08-14); `balancer_generate.rs`
+(live offline library toolchain, last run 2026-08-14); `short_ids.rs`
+(zero non-test Rust callers by design — it exists to keep the committed
+`short-ids.json` honest for the web app's independent TS port); `balancer_generate.rs`
 (`merge_tree` is runtime-load-bearing despite the file name); the
 `ModuleSizeSplit`/`k1-shape-fix`/`merge-tap` candidate machinery in
 `decomposition_search.rs`+`partitioner.rs` (~520 lines: user-reachable via
@@ -221,7 +225,9 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
   Tier 2 item 7).
 - `junction_sat_strategy.rs` header says it wraps `sat::solve_crossing_zone`
   (actually `_per_channel`); `recipe_db::find_recipe_for_item_excluding`'s
-  doc cites solver-supplied exclusions deleted by #632 A1;
+  doc cites solver-supplied exclusions deleted by #632 A1; `validate/mod.rs`
+  claims `ValidatorSummary` has no in-tree consumer (it's built by
+  `blueprint.rs:167/681` for `examples/sim_export.rs`);
   `docs/celldb-phase0-scoreboard.md` is self-declared archivable.
 
 ## Instrument gaps (build before further validator/strategy cuts)
