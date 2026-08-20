@@ -30,6 +30,7 @@
 //!   --claim up|down|search           DI claim order (default: engine default)
 //!   --belt <entity>        max belt tier (default: engine picks by rate)
 //!   --row-layout <kind>    native (default) | horizontal-stack
+//!   --strategy <kind>      pooled (default) | partitioned-decomposed
 //!   --quality <name>       normal|uncommon|rare|epic|legendary (default normal)
 //!   --stacking <1..4>      belt stacking (default 1)
 //!   --research-productivity <recipe=bonus,...>   declared research
@@ -54,7 +55,7 @@
 
 use rustc_hash::FxHashSet;
 use spaghettio_core::bus::di_cell::{DiClaimOrder, DirectInsertion};
-use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, RowLayout};
+use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
 use spaghettio_core::common::QualityTier;
 use spaghettio_core::recipe_db::MachinePalette;
 use spaghettio_core::validate::{self, LayoutStyle, Severity};
@@ -142,6 +143,7 @@ fn main() {
         Default::default();
     let mut inserter_cap: Option<u8> = None;
     let mut row_layout = RowLayout::default();
+    let mut strategy = LayoutStrategy::default();
     let mut inputs: Vec<String> = DEFAULT_INPUTS.iter().map(|s| s.to_string()).collect();
     let mut label: Option<String> = None;
     let mut out = std::env::var("SIM_PROBE_OUT").unwrap_or_else(|_| "/tmp".to_string());
@@ -181,6 +183,22 @@ fn main() {
                     "horizontal-stack" | "hs" => RowLayout::HorizontalStack,
                     other => usage(&format!(
                         "--row-layout must be native|horizontal-stack (got {other})"
+                    )),
+                }
+            }
+            // Same gap `--row-layout` was added for: without this the
+            // tracked generator cannot express a PartitionedDecomposed
+            // fixture at all, so the RFC-modular-production strategy had
+            // no supported route to a blueprint+manifest pair and could
+            // not be sim-anchored. Its Phase 1 kill criteria are stated
+            // against sim measurement, so the axis has to be reachable
+            // from here.
+            "--strategy" => {
+                strategy = match need(i).as_str() {
+                    "pooled" | "default" => LayoutStrategy::Pooled,
+                    "partitioned-decomposed" | "pd" => LayoutStrategy::PartitionedDecomposed,
+                    other => usage(&format!(
+                        "--strategy must be pooled|partitioned-decomposed (got {other})"
                     )),
                 }
             }
@@ -295,6 +313,7 @@ fn main() {
         max_belt_tier: belt,
         planning_duty: duty,
         row_layout,
+        strategy,
         quality,
         stacking,
         research_productivity,
