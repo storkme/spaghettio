@@ -1313,9 +1313,8 @@ needed to look at the result, not a UI feature.
   fix attempts within budget.*
 
   **Fixture.** `sim_export --multi electronic-circuit:10
-  advanced-circuit:3 --tier assembling-machine-2 --label kc3-am2` (native
-  mechanism,
-  default candidate search — the same shipped-default engine
+  advanced-circuit:3 --tier assembling-machine-2 --label kc3-am2`
+  (native mechanism, default candidate search — the same shipped-default engine
   `ec_ac_default_options_candidate_choice` pins as choosing `native`):
   159×96, 2169 entities, 139 machines, **0 validation errors, 4
   warnings** (the pre-existing copper-cable `input-rate-delivery`
