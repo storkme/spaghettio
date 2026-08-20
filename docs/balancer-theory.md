@@ -63,10 +63,10 @@ explicitly rather than smoothing it over.
 | `crates/balancer-gen/src/main.rs` | `bake_missing_shapes()` and its `Recipe` grammar |
 
 All *counts* below are from this document's merge-base, `51fea377`
-(registry = 64). A separate PR (#664) imports FOUR book shapes —
-`(3,2) (7,2) (7,3) (7,4)` — raising the registry to 68. It is discussed
-in §9.5 because it is the cheapest resolution of the fan-in holes and it
-changes the recommendations there.
+(registry = 64). An earlier draft of this section announced a companion
+PR importing four book shapes and raising the registry to 68. That import
+was measured and dropped — see §9.5 — so 64 is current, not a figure
+awaiting an update.
 
 `(8,6)` is deliberately NOT among them: it failed two existing library
 gates, so importing it would have meant weakening them. An earlier draft
@@ -1009,11 +1009,40 @@ sandwich for every shape in §5.5's table, and it covers all of
 `1..9 × 1..9` plus 20 miscellaneous larger shapes, in Factorio 2.0 form
 (16-way directions, express tier — both normalisable on import).
 
-The in-flight change to `balancer_library.rs` does exactly this for the
-five fan-in holes and, per its own comment, each import clears
-`audit_min_cut_capacity` — the invariant the culled composes failed. That
-is the correct move and it makes §5.5–§5.6 a fallback for shapes the book
-*lacks*, not a replacement for it.
+That makes §5.5–§5.6 a fallback for shapes the book *lacks*, rather than
+a replacement for it — **but "the book has it" is not on its own a reason
+to import it**, and this section previously said otherwise.
+
+An import of `(3,2) (7,2) (7,3) (7,4)` was prepared (#664), audited clean
+at zero lane errors, and then **dropped on measurement**. The usage
+census (`scripts/balancer_usage_census.py`, 49 snapshots / 62
+`BalancerStamped` events, 2026-08-20) is unambiguous:
+
+```
+68 registered  ->  21 consumed by the corpus, 47 not
+all four candidates land in the NOT-consumed set, and:
+  (3,2): direct request (3,2); decomposition consumers: none (width guard blocks)
+  (7,2): direct request (7,2); decomposition consumers: none (width guard blocks)
+  (7,3): direct request (7,3); decomposition consumers: none (width guard blocks)
+  (7,4): direct request (7,4); decomposition consumers: none (width guard blocks)
+```
+
+Two separate reasons, and the second is the load-bearing one: nothing
+requests those shapes, **and** §9.2's width guard means nothing can reach
+them by decomposition either. They would be inert entries, which is the
+same "corpus-unexercised" test that justified culling `(7,3)`/`(7,4)` in
+the first place (#632 A3). Being better templates than the culled ones
+answers only the *defect* half of that decision.
+
+What the census says the corpus actually cannot serve is a different set
+entirely — four shapes that fall through to `generator-or-unresolvable`:
+
+```
+(3,14)   (4,9)   (10,14)   (11,10)
+```
+
+**That** is the import list worth chasing, and none of the four candidates
+above was on it. Run the census before importing, not after.
 
 The caveat is §9.4: an imported priority-bearing template is classified
 on a graph that does not match it. Import and classification need to

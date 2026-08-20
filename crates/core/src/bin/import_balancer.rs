@@ -85,40 +85,40 @@ fn direction_scale(data: &Value) -> Result<u64, String> {
     if let Some(version) = data["blueprint"]["version"].as_u64() {
         return Ok(if (version >> 48) >= 2 { 2 } else { 1 });
     }
-    // No version field. Infer from the direction VALUES, and refuse when they
-    // are genuinely ambiguous (#664 review, 3/3): the previous `unwrap_or(0)`
-    // silently assumed 1.x, so a stripped-version 2.0 blueprint using only
-    // north and east (0 and 4) passed every guard and was read as
-    // north/SOUTH — exactly the silent mis-read this function exists to
-    // prevent, just moved one step back.
+    // No version field. Only ONE inference from the direction values is
+    // sound, so make that one and refuse everything else (#664 review).
+    //
+    //   8-way (1.x):  cardinals {0,2,4,6}, diagonals {1,3,5,7}
+    //   16-way (2.0): cardinals {0,4,8,12}, diagonals {2,6,10,14}, and finer
+    //
+    // A value >= 8 cannot occur under 8-way at all, so it PROVES 16-way.
+    // Nothing else discriminates:
+    //   * 2 and 6 are 8-way EAST/WEST or 16-way NE/SE — an earlier draft of
+    //     this function inferred 8-way from them, which silently re-decodes a
+    //     version-stripped 2.0 diagonal as a cardinal: exactly the failure
+    //     this function exists to prevent, one level down.
+    //   * 1/3/5/7 are diagonals under BOTH encodings (an earlier draft called
+    //     them 16-way-only, which is simply wrong).
+    //   * 0 and 4 are N/S under 8-way and N/E under 16-way.
+    // The single safe exception is an all-zero set: 0 is NORTH in both, so
+    // the encodings agree and there is nothing to get wrong.
     let dirs: Vec<u64> = data["blueprint"]["entities"]
         .as_array()
         .map(|es| es.iter().filter_map(|e| e["direction"].as_u64()).collect())
         .unwrap_or_default();
-    if dirs.iter().any(|d| d % 2 == 1) {
-        // Odd values exist only in the 16-way encoding's diagonals... which we
-        // reject anyway, but their presence proves the encoding.
-        return Ok(2);
+    if dirs.iter().any(|&d| d >= 8) {
+        return Ok(2); // >= 8 is impossible under 8-way
     }
-    if dirs.iter().any(|&d| d == 8 || d == 12) {
-        return Ok(2); // 8/12 are cardinals only under 16-way
+    if dirs.iter().all(|&d| d == 0) {
+        return Ok(1); // both encodings agree on 0 = north
     }
-    if dirs.iter().any(|&d| d == 2 || d == 6) {
-        return Ok(1); // 2/6 are cardinals only under 8-way
-    }
-    // Everything is 0 or 4: identical bytes under both encodings, meaning
-    // north/south (8-way) or north/east (16-way). Genuinely undecidable.
-    if dirs.contains(&4) {
-        return Err(
-            "blueprint has no `version` field and uses only directions 0 and 4, \
-             which is byte-identical under the 8-way (1.x) and 16-way (2.0) \
-             encodings — north/south vs north/east. Re-export the blueprint \
-             from the game so it carries a version, rather than have this tool \
-             guess the topology."
-                .to_string(),
-        );
-    }
-    Ok(1) // all-north: the two encodings agree
+    Err(format!(
+        "blueprint has no `version` field and its directions {dirs:?} do not \
+         determine the encoding — every value below 8 means something \
+         different under 8-way (1.x) and 16-way (2.0), so importing would \
+         pick a topology at random. Re-export from the game so the blueprint \
+         carries a version."
+    ))
 }
 
 fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
@@ -1203,20 +1203,29 @@ mod tests {
         assert!(odd.contains("cardinal"), "odd raw direction: {odd}");
     }
 
-    /// The silent-default hole: no version, and directions that mean different
-    /// things under each encoding. Guessing here mis-reads the topology, so it
-    /// must refuse instead.
+    /// The silent-default hole: `unwrap_or(0)` used to assume 1.x, so a
+    /// version-stripped 2.0 blueprint using only 0 and 4 imported as
+    /// north/SOUTH instead of north/EAST.
     #[test]
     fn missing_version_with_ambiguous_directions_refuses() {
         let r = direction_scale(&bp(None, &[0, 4]));
         assert!(r.is_err(), "0/4 with no version is undecidable, got {r:?}");
     }
 
-    /// ...but where the values themselves settle it, infer rather than refuse.
+    /// The only two sound no-version inferences, and the reason the rest are
+    /// refused. `[0, 2]` in particular MUST refuse: it is 8-way north+east
+    /// and equally 16-way north+north-east, and an earlier draft guessed
+    /// 8-way — re-decoding a 2.0 diagonal as a cardinal, which is the exact
+    /// silent mis-read this function exists to prevent.
     #[test]
-    fn missing_version_infers_when_unambiguous() {
-        assert_eq!(direction_scale(&bp(None, &[0, 8])), Ok(2), "8 is 16-way only");
-        assert_eq!(direction_scale(&bp(None, &[0, 2])), Ok(1), "2 is 8-way only");
-        assert_eq!(direction_scale(&bp(None, &[0, 0])), Ok(1), "all-north agrees");
+    fn missing_version_infers_only_what_is_sound() {
+        assert_eq!(direction_scale(&bp(None, &[0, 8])), Ok(2), ">=8 is impossible under 8-way");
+        assert_eq!(direction_scale(&bp(None, &[0, 0])), Ok(1), "0 is north under both");
+        for ambiguous in [vec![0u64, 2], vec![0, 4], vec![0, 6], vec![0, 1], vec![2, 6]] {
+            assert!(
+                direction_scale(&bp(None, &ambiguous)).is_err(),
+                "{ambiguous:?} does not determine the encoding and must refuse"
+            );
+        }
     }
 }
