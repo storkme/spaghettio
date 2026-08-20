@@ -336,6 +336,29 @@ registry row if it stays within the size norm.
   checklist items; K68-3 calibration note added (an epsilon-scraping
   pass is weak evidence, the reopening cleared the bar 18–22×).
   Tracking: work proceeds under #629.*
+- *2026-08-20 — **P0 EXECUTED AND PASSED** (K68-1; K68-2's unit half).
+  The self-stamp probe (`crates/core/tests/rfc068_p0_selfstamp.rs` — a
+  standing ~4s regression, not a one-shot) adjudicates: on both seed
+  fixtures and all five engine seeds (both band roles —
+  copper-plate/iron-plate/copper-cable intermediates, ec and ac finals),
+  a ports→RowSpan adapter written in the probe FROM DECLARED PORTS ALONE
+  reproduces the native band's input-belt ys in schedule order, output
+  ys, edge/role admissibility, and the continuous-coverage →
+  `output_feed_x_min = None` branch; index-preserving substitution
+  (power-wire records reference entity indices) reaches FULL validator
+  verdict parity — issue-list equality, stronger than the Error-parity
+  bar. Escape hatches: ZERO. Scope, honestly: with identity proven,
+  verdict parity cannot probe the router *reacting* to a differing
+  stamp — that instrument arrives with P1's byte-identical controls and
+  P2's donors, as this RFC designed. One probe-harness bug (not a
+  contract escape hatch) found en route: judging run flow by per-tile
+  direction refuses real runs containing corner/UG tiles; the RFC's
+  port-EDGE criterion is the correct test and is what the probe
+  implements. Context: executed on the owner's resume-vs-kill check
+  (2026-08-20) after the campaign sat 7 days idle; the off-path audit
+  (docs/offpath-code-followups.md) had queued ~3.7k lines of this
+  campaign's entry-path plumbing behind exactly this gate. **P1 is
+  unblocked.***
 - *2026-08-13 — third review round, verdict "no blocker/major": three
   minors absorbed — the relocation distinction now claimed against the
   three relocation deaths specifically (wide-row splitting and folding
