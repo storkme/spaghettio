@@ -1018,6 +1018,12 @@ at zero lane errors, and then **dropped on measurement**. The usage
 census (`scripts/balancer_usage_census.py`, 49 snapshots / 62
 `BalancerStamped` events, 2026-08-20) is unambiguous:
 
+The census below was run WITH the four candidates registered, so its
+denominator is 68 (64 + 4) rather than the 64 that is current now the
+import was dropped. It is quoted verbatim because 68 is the right
+denominator for the question it answers — whether registering them would
+have bought anything.
+
 ```
 68 registered  ->  21 consumed by the corpus, 47 not
 all four candidates land in the NOT-consumed set, and:
