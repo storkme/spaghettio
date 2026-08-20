@@ -10,8 +10,8 @@ pub mod chain;
 pub mod compose;
 pub mod extract;
 pub mod mega;
-// `placement` (RFC-057's linear/fold placement estimator, kept for the
-// RFC-055 compact-order experiments) was deleted 2026-08-20 with
+// `placement` (the RFC-055/RFC-056 shared macro-placement estimator,
+// kept for the compact-order experiments) was deleted 2026-08-20 with
 // ChainOrder::Compact — owner extended #632 A2 (offpath Tier 2, #675).
 pub mod registry;
 
