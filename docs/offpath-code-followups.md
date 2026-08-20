@@ -149,8 +149,7 @@ verification protocol (suite green + clippy + WASM build), not just compile.
    `:1121`) and go with it. Deleting the enum + severity forks simplifies
    `validate()`'s signature. **Decision: is spaghetti-style
    layout a live ambition or a relic of the project name?**
-9. **`inserter-throughput` + `inserter-item-throughput` checks** —
-   **DELETED 2026-08-21 (owner decision + T2e PR)** (validator):
+9. **`inserter-throughput` + `inserter-item-throughput` checks** (validator):
    demoted from selection 2026-08-14 (#632 B6), hand-capacity model never
    sim-anchored, now report-only. Cost of deletion: the only signal on
    production-science's known 8-warning residual, and the big-electric-pole

@@ -62,10 +62,7 @@ below are gated by the default (non-ignored) suite unless noted.
 | utility | 208×285 | 6796 | PASS |
 
 The only residual across all six packs is production-science's 8
-inserter-item-throughput warnings — which, as of 2026-08-21 (offpath
-item 9, owner call), are **validator-unreported**: the never-sim-anchored
-check pair was deleted, so this residual is tracked here and by the
-meter, not by `validate()`.
+inserter-item-throughput warnings.
 
 ### Beyond the ladder — capabilities the default suite also gates
 
