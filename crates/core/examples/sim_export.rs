@@ -130,85 +130,97 @@ struct LabelAxes<'a> {
 /// produce the same artifact. Default paths stay byte-identical to
 /// pre-#661.
 fn auto_label(base: &str, ax: &LabelAxes<'_>) -> String {
+    // Every "is this at default?" test compares against the ENGINE's own
+    // default, never a literal (#661 round 5). Round 4 fixed only `claim`
+    // this way, after hardcoding `Upstream` inverted the contract when the
+    // real default turned out to be `Downstream`. Every other axis had the
+    // same latent bug: this repo flips defaults on measurement (RFC-051,
+    // RFC-053, RFC-059, RFC-060 all did), and a flip would silently
+    // reintroduce the collision this whole function exists to prevent.
+    //
+    // `LayoutOptions::default()` IS the reference, so the comparison cannot
+    // drift from the thing it is describing.
+    let d = LayoutOptions::default();
     let mut tags: Vec<String> = Vec::new();
 
-    match ax.strategy {
-        LayoutStrategy::Pooled => {}
-        LayoutStrategy::PartitionedDecomposed => tags.push("pd".to_string()),
+    if ax.strategy != d.strategy {
+        tags.push("pd".to_string());
     }
-    if !matches!(ax.row_layout, RowLayout::VerticalSplit) {
+    if ax.row_layout != d.row_layout {
         tags.push(format!("{:?}", ax.row_layout).to_lowercase());
     }
-    // Exact float comparison, deliberately, and NOT a formatted-string test
-    // (#661 round 3) nor an epsilon one (#661 round 2). Exact `!=` gives both
-    // properties at once: `1.0` never tags, and `0.9999999999999999` — which
-    // an epsilon test would swallow — does.
-    if ax.duty != 1.0 {
+    // Exact float comparison, not epsilon (#661 round 2) and not a formatted
+    // string (round 3): `1.0` never tags, `0.9999999999999999` does.
+    if ax.duty != d.planning_duty {
         tags.push(format!("duty{}", format!("{}", ax.duty).replace('.', "_")));
     }
     if ax.tier != DEFAULT_TIER {
         tags.push(ax.tier.replace("assembling-machine-", "am").replace('-', ""));
     }
-    if let Some(b) = ax.belt {
-        tags.push(b.replace("-transport-belt", "").replace("transport-belt", "yellow"));
+    // NOTE the asymmetry, stated because it breaks the "only non-default"
+    // rule on purpose: `max_belt_tier: None` means "engine picks by rate", so
+    // an explicit `--belt` matching what the engine would have picked yields a
+    // byte-identical artifact in a separate directory. That over-forks, which
+    // is the SAFE direction (a redundant dir, never a shared one); resolving
+    // it properly needs the rate-dependent `belt_entity_for_rate`, which the
+    // label does not have. Documented rather than silently tolerated.
+    if ax.belt != d.max_belt_tier.as_deref() {
+        if let Some(b) = ax.belt {
+            tags.push(b.replace("-transport-belt", "").replace("transport-belt", "yellow"));
+        }
     }
-    if !matches!(ax.quality, QualityTier::Normal) {
+    if ax.quality != d.quality {
         tags.push(format!("{:?}", ax.quality).to_lowercase());
     }
-    if ax.stacking != 1 {
+    if ax.stacking != d.stacking {
         tags.push(format!("stack{}", ax.stacking));
     }
-    if !matches!(ax.di, DirectInsertion::Candidate) {
+    if ax.di != d.direct_insertion {
         tags.push(format!("di{:?}", ax.di).to_lowercase());
     }
-    // `--claim` and `--inserter-cap` compare against the ENGINE default, not
-    // against "was a flag passed": passing the default value produces a
-    // byte-identical artifact and must not fork the directory.
-    // `DiClaimOrder::default()`, never a hardcoded variant (#661 round 4,
-    // BLOCKER): the default is `Downstream` (RFC-059's sim close-out), and
-    // this compared against `Upstream`. That inverted the contract BOTH
-    // ways — `--claim up`, a genuine non-default, produced no tag and
-    // collided with the default artifact, while `--claim down`, the actual
-    // default, forked a redundant directory. Deriving it from the type
-    // means a future default flip cannot desynchronise this again.
     if let Some(c) = ax.claim {
-        if *c != DiClaimOrder::default() {
+        if *c != d.di_claim_order {
             tags.push(format!("claim{c:?}").to_lowercase());
         }
     }
     if let Some(ic) = ax.inserter_cap {
-        if ic != spaghettio_core::common::DEFAULT_INSERTER_CAPACITY {
+        if ic != d.inserter_capacity {
             tags.push(format!("icap{ic}"));
         }
     }
 
-    // List-valued axes: a stable short digest, so they cannot collide without
-    // spelling an ingredient list into a path component.
-    // Compared and digested as a SET, sorted, because the solve consumes
-    // `--inputs` as an `FxHashSet` (#661 round 4). Comparing by order forked
-    // the directory for a reordering of the same six ores, whose artifact is
-    // byte-identical.
+    // List-valued axes, compared and digested as SETS because the solve
+    // consumes `--inputs` as an `FxHashSet` (#661 round 4).
     let mut listy = String::new();
     let mut given: Vec<&str> = ax.inputs.iter().map(|s| s.as_str()).collect();
     given.sort_unstable();
     given.dedup();
     let mut default_inputs: Vec<&str> = DEFAULT_INPUTS.to_vec();
     default_inputs.sort_unstable();
-    if given != default_inputs {
+    let inputs_differ = given != default_inputs;
+    if inputs_differ {
         listy.push_str(&given.join(","));
     }
     for (k, v) in ax.research_productivity {
         listy.push_str(&format!(";{k}={v}"));
     }
-    if !listy.is_empty() {
-        // FNV-1a 32-bit: deterministic across runs and platforms, which
+    // Keyed on "does it DIFFER", not on "is the digest string non-empty"
+    // (#661 round 5): `--inputs ""` parses to `[""]`, which differs from the
+    // default set but joins to the empty string, so the old test skipped the
+    // tag and dropped the run into the DEFAULT directory — the exact
+    // collision, at the empty edge.
+    if inputs_differ || !ax.research_productivity.is_empty() {
+        // FNV-1a 64-bit (#661 round 5). The 32-bit version could alias two
+        // distinct sets onto one directory, which made the "cannot collide"
+        // claim false; 64 bits makes it true for any realistic number of
+        // fixture configs. Deterministic across runs and platforms, which
         // `DefaultHasher` explicitly is not.
-        let mut h: u32 = 0x811c_9dc5;
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for byte in listy.as_bytes() {
-            h ^= *byte as u32;
-            h = h.wrapping_mul(0x0100_0193);
+            h ^= *byte as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
-        tags.push(format!("cfg{h:08x}"));
+        tags.push(format!("cfg{h:016x}"));
     }
 
     if tags.is_empty() {
@@ -542,16 +554,19 @@ mod tests {
     use super::*;
 
     fn axes<'a>() -> LabelAxes<'a> {
-        // Every field at its ENGINE default: this must produce the bare base.
+        // Every field taken FROM `LayoutOptions::default()` rather than named
+        // (#661 round 5) — a fixture that hardcodes defaults goes stale the
+        // same way the production code did, and then passes anyway.
+        let d = LayoutOptions::default();
         LabelAxes {
-            strategy: LayoutStrategy::Pooled,
-            row_layout: RowLayout::VerticalSplit,
-            duty: 1.0,
+            strategy: d.strategy,
+            row_layout: d.row_layout,
+            duty: d.planning_duty,
             tier: DEFAULT_TIER,
             belt: None,
-            quality: QualityTier::Normal,
-            stacking: 1,
-            di: DirectInsertion::Candidate,
+            quality: d.quality,
+            stacking: d.stacking,
+            di: d.direct_insertion,
             claim: None,
             inserter_cap: None,
             inputs: &[],
@@ -680,8 +695,25 @@ mod tests {
         assert_eq!(
             auto_label("ec-5", &ax),
             "ec-5",
-            "--inserter-cap 2 / --claim up produce the default artifact and must \
-             not create a second directory for it"
+            "explicitly passing the DEFAULT inserter-cap and claim order \
+             produces the default artifact and must not create a second \
+             directory for it"
+        );
+    }
+
+    /// `--inputs ""` parses to `[""]` — a NON-default set that joins to the
+    /// empty string. Keying the tag on "digest string is non-empty" dropped
+    /// it into the default directory; keying on "does the set differ" does
+    /// not (#661 round 5).
+    #[test]
+    fn empty_input_string_does_not_collapse_onto_the_default() {
+        let empty: Vec<String> = vec![String::new()];
+        let mut ax = axes();
+        ax.inputs = &empty;
+        assert_ne!(
+            auto_label("ec-5", &ax),
+            "ec-5",
+            "an empty-string input set differs from the default and must tag"
         );
     }
 
