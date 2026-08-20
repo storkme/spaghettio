@@ -1,5 +1,6 @@
-//! SAT-based junction strategy — wraps `crate::sat::solve_crossing_zone`
-//! over a grown region.
+//! SAT-based junction strategy — wraps
+//! `crate::sat::solve_crossing_zone_per_channel` (and its cost-cap
+//! variant) over a grown region.
 //!
 //! Only fires on regions that have grown past the initial single-tile
 //! crossing: a 1×1 zone has entry==exit for every spec, which is not a

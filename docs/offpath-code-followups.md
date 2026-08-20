@@ -1,7 +1,11 @@
 # Off-path code followups — the golden-path deletion backlog
 
-**Status (2026-08-20)**: audit COMPLETE; execution started — Tier 1 item 1
-(row_rotation) in flight as PR #670. Tier 1 below is
+**Status (2026-08-20, end of day)**: audit COMPLETE; execution underway —
+tracking issue **#675** is the live queue. Tier 1 item 1 (row_rotation)
+MERGED (#670); items 2–4 in flight (#674, this doc's own PR). Owner
+decisions taken 2026-08-20: Tier 2 items 5–8 all APPROVED for deletion;
+item 9 (inserter-check pair) still open; Tier 3 resolved KEEP-CAMPAIGN
+(RFC-068 P0 ran and PASSED, #672). Tier 1 below is
 actionable by any session without further evidence. Tiers 2–3 each name the
 single owner decision that unlocks them. Bugs and stale-docs findings at the
 bottom are independent of any deletion.
@@ -95,9 +99,12 @@ or retarget those in the same change, they are counted in the 2.9k figure.
    `snapshot.rs:172` `read_from_file` (zero callers; the documented read-back
    is the shell pipeline); `analysis.rs:649` `analyze_blueprint_string`
    (mining-cli calls `_any` exclusively); `junction_sat_strategy.rs:256`
-   `impl Default for SatConstraints`; the self-documented unreachable
-   fallback arm at `ghost_router.rs:262`. Lower-confidence, verify first:
-   `recipe_db.rs:402` `machine_for_recipe`.
+   `impl Default for SatConstraints`. Two items adjudicated no-change at
+   execution (#674): `ghost_router.rs:262`'s dead arm stays (exhaustiveness-
+   load-bearing; `unreachable!()` would trade a silent no-op for a WASM
+   panic on a wrong analysis) and `recipe_db::machine_for_recipe` stays
+   (4-line doc-anchor wrapper, 10+ test callers — deletion is
+   churn-positive).
 
 Tier 1 items are still **layout-engine-adjacent deletions**: run the full
 verification protocol (suite green + clippy + WASM build), not just compile.
