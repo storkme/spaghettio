@@ -145,7 +145,14 @@ fn direction_scale(data: &Value) -> Result<u64, String> {
     //     python3 scripts/count_blueprint_versions.py <blueprint-dir>
     //
     // Point it at any collection to check the claim against a different
-    // population. (An earlier ad-hoc count said 6087/172; the script parses
+    // population.
+    //
+    // OPEN RISK, recorded rather than closed (#664 review): the corpus the
+    // number came from is not in the tree, so a reader cannot reproduce the
+    // RESULT, only the METHOD. The population being empty is what justifies
+    // refusing rather than guessing, and that evidence did not merge with
+    // the code. Tracked in #671. If a version-less blueprint ever shows up
+    // in the wild, the decision — not just the number — should be revisited. (An earlier ad-hoc count said 6087/172; the script parses
     // more file shapes and finds 6120/177. Both agree on the number that
     // matters, which is zero.)
     Err("blueprint has no usable `version` field (absent, or the packed-0 \
@@ -218,6 +225,11 @@ fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
                  blueprint is malformed, not merely unrepresentable"
             ));
         }
+        // `% scale` is what rejects 16-way's odd diagonals; under 8-way
+        // (`scale == 1`) it is trivially 0 and only the `matches!` does any
+        // work. Left explicit rather than folded away, because it is the
+        // discriminating half for the encoding this PR is about (#664
+        // review noted it reads as dead without this note).
         if raw_dir % scale != 0 || !matches!((raw_dir / scale) as u8, N | E | S | W) {
             return Err(format!(
                 "entity {raw_name} at ({x}, {y}) has direction {raw_dir}, which is \
