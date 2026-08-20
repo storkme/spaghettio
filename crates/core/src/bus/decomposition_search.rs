@@ -513,8 +513,6 @@ impl DecompositionCandidate for ModuleSizeSplit {
             horizontal_candidate: opts.horizontal_candidate,
             // The flag-gated RFC-058 plan is emitted by the native pass,
             // not re-emitted by every candidate variant's inner run.
-            band_packing: false,
-            band_pack_selection: None,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }

@@ -97,9 +97,9 @@ pub enum SurplusPolicy {
 ///   `fold_layout` and the `CompactTransform`/`FoldTransform`
 ///   `LayoutTransform` impls that backed them were deleted 2026-08-14
 ///   (#632 A2, owner call) — see `bus::candidate_runner`'s module doc.
-/// - **Diagnostic / measurement-only** (bypasses candidate selection
-///   entirely when set — not a search axis in either sense):
-///   `band_packing`.
+/// - **Diagnostic / measurement-only**: none remain — `band_packing` and
+///   its RFC-064-P3 selection seam were deleted 2026-08-20 (offpath
+///   Tier 2, owner call).
 #[derive(Clone, Debug)]
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,
@@ -206,30 +206,9 @@ pub struct LayoutOptions {
     /// vertical (test baselines / debugging); force-horizontal remains
     /// `row_layout: HorizontalStack`.
     pub horizontal_candidate: bool,
-    /// RFC-058 phase 2: plan band packing and record the plan as a
-    /// `BandPackingPlanned` trace event. Positions only — nothing consumes
-    /// them yet, so the layout geometry is identical with the flag on or
-    /// off (a focused test pins this). Default off; stays off until kill
-    /// criterion 1 clears again on the real phase-4 lane planner.
-    pub band_packing: bool,
-    /// RFC-064 Phase 3 measurement seam: when band packing is enabled,
-    /// materialize this exact shelf-search member instead of RFC-058's legacy
-    /// minimum-area/gap-widening choice.
-    ///
-    /// `None` preserves the frozen builder's **selection** — it takes the same
-    /// legacy minimum-area/gap-widening member RFC-058 took. It does *not*
-    /// promise byte-identical output against artifacts recorded before this
-    /// PR: `route_packed_nets`'s hardening (consumer-target narrowing,
-    /// one-shot producer stubs, the `fed_by_existing` guard, UG-exit
-    /// straightness, splitter occupancy) runs on both the `None` and the
-    /// explicit-selection paths, so a regenerated RFC-058 artifact can differ
-    /// from its recorded predecessor. An earlier revision of this comment
-    /// claimed byte-for-byte without that scope (PR #575 bot review). Nothing
-    /// in the shipping path is affected either way — `band_packing` is
-    /// default-off and nothing consumes its positions yet.
-    ///
-    /// No default or decomposition candidate sets this field.
-    pub band_pack_selection: Option<crate::bus::bands::PackSelection>,
+    // (RFC-058's `band_packing` flag and RFC-064-P3's `band_pack_selection`
+    // seam were deleted 2026-08-20 with `bus::bands` — offpath Tier 2,
+    // owner call extending #632 A2.)
 }
 
 impl Default for LayoutOptions {
@@ -272,8 +251,6 @@ impl Default for LayoutOptions {
             // the horizontal variant competes only where a DualInput row
             // exists and wins only on strict improvement.
             horizontal_candidate: true,
-            band_packing: false,
-            band_pack_selection: None,
         }
     }
 }
@@ -3126,109 +3103,6 @@ mod tests {
     /// `inserter-direction` (which would otherwise flag them as touching no
     /// machine) nor `belt-flow-reachability` (which would otherwise call the
     /// producer's bridge-consumed output belt a dead-end) fires on them.
-    /// RFC-058 phase 2 inertness gate: `band_packing` may add trace events
-    /// and NOTHING else. The packer emits positions only — nothing
-    /// consumes them — so the entity list must be identical with the flag
-    /// on or off, and a flag-on build must record either a plan or a
-    /// typed refusal (a silent flag would be indistinguishable from a
-    /// broken one).
-    #[test]
-    fn band_packing_option_is_inert_and_traced() {
-        use crate::trace::{self, TraceEvent};
-        let inputs: FxHashSet<String> =
-            ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
-        let sr = crate::solver::solve_with_exclusions(
-            "automation-science-pack",
-            1.0,
-            &inputs,
-            "assembling-machine-1",
-            &FxHashSet::default(),
-        )
-        .expect("solve sci1");
-        // Candidate isolation, same as the parity test: with cell
-        // composition / DI in Candidate mode the flag-on run's winner can
-        // be a DIFFERENT candidate (observed: the cell candidate re-solves
-        // at AM3 and wins when the packed layout scores badly), which
-        // makes control-vs-packed comparison meaningless.
-        let base = LayoutOptions {
-            cell_composition: crate::bus::cells::CellComposition::Off,
-            direct_insertion: crate::bus::di_cell::DirectInsertion::Off,
-            ..Default::default()
-        };
-        let control = build_bus_layout(&sr, base.clone()).expect("control layout");
-        let _guard = trace::start_trace();
-        let packed = build_bus_layout(
-            &sr,
-            LayoutOptions {
-                band_packing: true,
-                ..base
-            },
-        )
-        .expect("flag-on layout");
-        let events = trace::drain_events();
-
-        // Phase-4 contract (supersedes the phase-2 inertness assertion this
-        // test carried while the packer was emit-only): flag-on either
-        // REFUSES — byte-identical entities — or produces a packed layout
-        // that must not exceed the control's area and must preserve the
-        // machine census exactly (bands are rigid; only transport moves).
-        let census = |l: &crate::models::LayoutResult| {
-            let mut m: Vec<(String, Option<String>)> = l
-                .entities
-                .iter()
-                .filter(|e| crate::common::is_machine_entity(&e.name))
-                .map(|e| (e.name.clone(), e.recipe.clone()))
-                .collect();
-            m.sort();
-            m
-        };
-        if format!("{:?}", control.entities) != format!("{:?}", packed.entities) {
-            assert_eq!(census(&control), census(&packed), "machine census must survive packing");
-            // No area assertion: density was kill criterion 1's claim and
-            // KC1 FIRED (RFC-058 concluded 2026-07-31) — the packed
-            // builder is a falsification record, and RFC-060's
-            // horizontal-stack candidate can legitimately make the native
-            // control tighter than the packed result. The flag contract
-            // is refusal-or-census-preserving-build plus a typed event.
-        }
-        let last_plan = events.iter().rev().find(|e| {
-            matches!(
-                e,
-                TraceEvent::BandPackingPlanned { .. } | TraceEvent::BandPackingRefused { .. }
-            )
-        });
-        match last_plan {
-            None => panic!("flag-on build recorded neither a plan nor a refusal"),
-            Some(TraceEvent::BandPackingPlanned {
-                band_rects,
-                positions,
-                control_w,
-                control_h,
-                packed_w,
-                packed_h,
-                ..
-            }) => {
-                assert_eq!(
-                    band_rects.len(),
-                    positions.len(),
-                    "one planned position per extracted band",
-                );
-                assert!(
-                    (*packed_w as i64) * (*packed_h as i64)
-                        <= (*control_w as i64) * (*control_h as i64),
-                    "a packing the cap admits never exceeds the control area \
-                     (worst case is the control arrangement itself)",
-                );
-            }
-            Some(TraceEvent::BandPackingRefused { bands, .. }) => {
-                // Band structure is host-geometry-relative (RFC-058
-                // decision log 2026-07-31), so a refusal here is legal —
-                // but only the typed kinds the packer can actually emit.
-                assert!(*bands >= 1, "refusal must still report extracted bands");
-            }
-            Some(_) => unreachable!(),
-        }
-    }
     #[test]
     fn di_full_pipeline_ec_from_plates() {
         let inputs: FxHashSet<String> =

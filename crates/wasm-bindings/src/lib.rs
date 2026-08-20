@@ -146,13 +146,8 @@ fn layout_options(
         // be added here later if a real need appears (RFC-060 decision
         // log, 2026-07-30).
         horizontal_candidate: true,
-        // RFC-058's concluded packed builder remains engine-only and
-        // default-off; there is no web surface for the falsification artifact.
-        band_packing: false,
-        // RFC-064's explicit-plan seam is measurement-only. It must never be
-        // inferred at the public boundary or turn into an undocumented URL
-        // policy axis.
-        band_pack_selection: None,
+        // (band_packing / band_pack_selection deleted 2026-08-20 with
+        // bus::bands — offpath Tier 2; they never had a web surface.)
         // No `..Default::default()`: adding `direct_insertion` completed
         // the field list, and a no-op struct update is a clippy error
         // under the workspace's `-D warnings`. A field added to

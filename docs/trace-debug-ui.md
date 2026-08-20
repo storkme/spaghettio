@@ -69,8 +69,7 @@ doesn't attempt to fully resolve.
 >   fully resolve — flagged here rather than silently left standing next to
 >   a "verified" footnote.
 > - **80** = 93 − 13 are therefore not rendered by `traceOverlay.ts` today:
->   `BalancerCommitted`, `BalancerGenerated`, `BandPackingPlanned`,
->   `BandPackingRefused`, `BridgeRetry`, `BridgeRetryExhausted`,
+>   `BalancerCommitted`, `BalancerGenerated`, `BridgeRetry`, `BridgeRetryExhausted`,
 >   `CrossingZoneConflict`, `CrossingZoneSkipped`, `CrossingZoneSolved`,
 >   `DecompositionCandidateScored`, `DecompositionChosen`,
 >   `DiBridgeShifted`, `DiClaimOrderChosen`, `DiCouplingClaimed`,
