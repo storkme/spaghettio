@@ -160,8 +160,8 @@ impl PlacedTemplate {
 pub struct PlacementResult {
     pub template: PlacedTemplate,
     pub solve_wall_ms: u64,
-    /// Stable engine id, e.g. `"library_lookup"`, `"factorio_sat"`,
-    /// `"cp_sat"`. Used for bench reports.
+    /// Stable engine id, e.g. `"library_lookup"`, `"factorio_sat"`.
+    /// Used for bench reports.
     pub engine_id: &'static str,
 }
 
