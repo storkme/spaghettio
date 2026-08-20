@@ -1111,11 +1111,11 @@ mod tests {
     /// demonstrated — this pin makes that a one-line failure.
     #[test]
     fn error_certain_classes_are_validator_errors() {
-        use crate::validate::{self, LayoutStyle, Severity};
+        use crate::validate::{self, Severity};
         use EntityDirection::East;
 
         let error_categories = |l: &LayoutResult| -> std::collections::BTreeSet<String> {
-            let issues = match validate::validate(l, None, LayoutStyle::Bus) {
+            let issues = match validate::validate(l, None) {
                 Ok(issues) => issues,
                 Err(error) => error.issues,
             };

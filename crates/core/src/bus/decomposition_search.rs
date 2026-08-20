@@ -191,7 +191,6 @@ impl DecompositionCandidate for DirectInsertionCandidate {
             let issues = crate::validate::validate(
                 &l,
                 Some(solver_result),
-                crate::validate::LayoutStyle::Bus,
             )
             .map_err(|e| {
                 format!(
@@ -294,7 +293,7 @@ impl DecompositionCandidate for HorizontalStackCandidate {
         // native — on sweep evidence horizontal's wins all land at E0, so
         // the forgone region is empty.)
         let issues =
-            crate::validate::validate(&l, Some(solver_result), crate::validate::LayoutStyle::Bus)
+            crate::validate::validate(&l, Some(solver_result))
                 .map_err(|e| {
                     format!(
                         "horizontal-stack failed validation: {}",
@@ -357,7 +356,7 @@ impl DecompositionCandidate for CellComposedCandidate {
         // template corridors — errors refuse, surfacing the bus
         // refusal instead. Warnings pass (the adjudicated categories).
         let issues =
-            crate::validate::validate(&l, Some(solver_result), crate::validate::LayoutStyle::Bus)
+            crate::validate::validate(&l, Some(solver_result))
                 .map_err(|e| {
                     format!(
                         "cell composition failed validation: {}",
@@ -785,7 +784,6 @@ fn classify_errors(layout: &LayoutResult, solver_result: &SolverResult) -> Error
     let issues = match crate::validate::validate(
         layout,
         Some(solver_result),
-        crate::validate::LayoutStyle::Bus,
     ) {
         Ok(issues) => issues,
         Err(e) => e.issues,
@@ -852,7 +850,6 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
     let issues = match crate::validate::validate(
         layout,
         Some(solver_result),
-        crate::validate::LayoutStyle::Bus,
     ) {
         Ok(issues) => issues,
         Err(e) => e.issues,
@@ -1385,8 +1382,7 @@ pub fn select_best_decomposition(
                 match crate::validate::validate(
                     l,
                     Some(solver_result),
-                    crate::validate::LayoutStyle::Bus,
-                ) {
+                    ) {
                     Ok(issues) => {
                         let errors = issues
                             .iter()

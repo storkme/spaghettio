@@ -31,22 +31,16 @@ use rustc_hash::FxHashSet;
 
 use belt_flow::{
     check_belt_connectivity, check_belt_flow_path,
-    check_belt_flow_reachability, check_belt_junctions, check_belt_network_topology,
+    check_belt_flow_reachability, check_belt_junctions,
     check_underground_belt_entry_sideload,
     check_underground_belt_pairs, check_underground_belt_sideloading,
 };
 
-/// Layout style: affects which validation checks run and how.
-#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
-#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum LayoutStyle {
-    /// Constraint-based spaghetti layout (default).
-    #[default]
-    Spaghetti,
-    /// Deterministic row-based main-bus layout.
-    Bus,
-}
+// (`LayoutStyle` was deleted 2026-08-20 — offpath Tier 2, owner call.
+// Production only ever validated Bus layouts; the Spaghetti arms — a
+// severity fork in belt-flow-path/-reachability, the Spaghetti-only
+// belt-network-topology check, and the enum's footgun Spaghetti default —
+// were dead in production. Trust-table hole 4 records the history.)
 
 /// Severity level of a single validation finding.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
@@ -1057,7 +1051,6 @@ pub fn count_missing_balancer_template_warnings(layout: &LayoutResult) -> usize 
 pub fn validate(
     layout_result: &LayoutResult,
     solver_result: Option<&SolverResult>,
-    layout_style: LayoutStyle,
 ) -> Result<Vec<ValidationIssue>, ValidationError> {
     use rayon::prelude::*;
 
@@ -1090,18 +1083,13 @@ pub fn validate(
         Box::new(|| inserters::check_row_output_lane_budget(layout, solver)),
         Box::new(|| inserters::check_row_input_belt_margin(layout, solver)),
         Box::new(|| check_pipe_isolation(layout)),
-        Box::new(|| check_fluid_port_connectivity(layout, layout_style)),
+        Box::new(|| check_fluid_port_connectivity(layout)),
         Box::new(|| check_fluid_network_connectivity(layout, solver)),
         Box::new(|| check_belt_connectivity(layout, solver)),
-        Box::new(|| check_belt_flow_path(layout, solver, layout_style)),
+        Box::new(|| check_belt_flow_path(layout, solver)),
         Box::new(|| belt_structural::check_entity_overlaps(layout)),
         Box::new(|| belt_structural::check_belt_throughput(layout)),
         Box::new(|| belt_structural::check_output_belt_coverage(layout, solver)),
-        Box::new(|| if layout_style == LayoutStyle::Spaghetti {
-            check_belt_network_topology(layout, solver)
-        } else {
-            vec![]
-        }),
         Box::new(|| check_belt_junctions(layout)),
         Box::new(|| check_underground_belt_pairs(layout)),
         Box::new(|| check_underground_belt_sideloading(layout)),
@@ -1143,7 +1131,7 @@ pub fn validate(
                 .unwrap_or_default()
         }),
         Box::new(|| belt_structural::check_belt_inserter_conflict(layout)),
-        Box::new(|| check_belt_flow_reachability(layout, solver, layout_style)),
+        Box::new(|| check_belt_flow_reachability(layout, solver)),
         Box::new(|| belt_flow::check_lane_throughput_with(layout, solver, &shared_lane_rates)),
         Box::new(|| belt_flow::check_input_rate_delivery_with(layout, solver, &shared_lane_rates)),
         Box::new(|| check_balancer_template_coverage(layout)),
@@ -1431,7 +1419,7 @@ mod tests {
     #[test]
     fn validate_empty_layout_returns_ok_with_no_poles_warning() {
         let lr = empty_layout();
-        let result = validate(&lr, None, LayoutStyle::Spaghetti);
+        let result = validate(&lr, None);
         assert!(result.is_ok());
         let issues = result.unwrap();
         assert_eq!(issues.len(), 1);
@@ -1441,7 +1429,7 @@ mod tests {
     #[test]
     fn validate_with_machine_returns_errors() {
         let lr = layout_with_machine();
-        let result = validate(&lr, None, LayoutStyle::Bus);
+        let result = validate(&lr, None);
         assert!(result.is_err(), "expected errors for a machine with no belts");
     }
 
@@ -1469,17 +1457,6 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("fluids merged"), "error message must surface");
         assert!(!msg.contains("slow input"), "warnings shouldn't pollute error message");
-    }
-
-    #[test]
-    fn validate_default_layout_style_is_spaghetti() {
-        assert_eq!(LayoutStyle::default(), LayoutStyle::Spaghetti);
-    }
-
-    #[test]
-    fn layout_style_equality() {
-        assert_eq!(LayoutStyle::Bus, LayoutStyle::Bus);
-        assert_ne!(LayoutStyle::Bus, LayoutStyle::Spaghetti);
     }
 
     // ── check_shared_row_outflow_conservation (RFC-062 Phase 2) ────────────
@@ -1693,9 +1670,9 @@ mod tests {
     /// gate) but NO physical export record exists at all — the RFC-062
     /// Phase 0 "dropped export under the cell-composed candidate" finding,
     /// reproduced as a minimal synthetic case. The under-claim direction
-    /// exists specifically to catch this: `check_belt_network_topology`'s
-    /// own output-network check stays silent when `belt_starts` is
-    /// entirely empty (see the Phase 2 decision log).
+    /// exists specifically to catch this (the Spaghetti-only
+    /// belt-network-topology check that once shared the concern was
+    /// deleted 2026-08-20 with LayoutStyle; see the Phase 2 decision log).
     #[test]
     fn shared_row_outflow_conservation_flags_missing_export_record() {
         let solver = ec_ac_shared_row_solver(10.0);

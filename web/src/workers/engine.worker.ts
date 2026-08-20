@@ -208,7 +208,7 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         result = export_blueprint(req.layout, req.label);
         break;
       case "validateLayout":
-        result = validate_layout(req.layout, req.solverResult ?? undefined, "Bus");
+        result = validate_layout(req.layout, req.solverResult ?? undefined);
         break;
       case "parseBlueprint":
         result = parse_blueprint(req.bp);

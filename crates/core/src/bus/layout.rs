@@ -3257,7 +3257,6 @@ mod tests {
         let reach_issues = crate::validate::belt_flow::check_belt_flow_reachability(
             &layout,
             Some(&sr),
-            crate::validate::LayoutStyle::Bus,
         );
         assert!(
             reach_issues.is_empty(),

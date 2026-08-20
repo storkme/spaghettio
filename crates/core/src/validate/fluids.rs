@@ -11,7 +11,7 @@ use crate::common::{is_machine_entity, DIRECTIONS};
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity};
 use crate::recipe_db;
 
-use super::{LayoutStyle, Severity, ValidationIssue};
+use super::{Severity, ValidationIssue};
 
 // ---------------------------------------------------------------------------
 // Entity-set constants (mirrors Python's module-level sets)
@@ -411,7 +411,6 @@ fn fluid_supply_tiles(
 ///    actually produces a fluid).
 pub fn check_fluid_port_connectivity(
     layout_result: &LayoutResult,
-    layout_style: LayoutStyle,
 ) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
@@ -424,8 +423,9 @@ pub fn check_fluid_port_connectivity(
     let ptg_pairs = find_ptg_pairs(layout_result);
 
     // Find bus pipe positions (pipes west of the leftmost machine).
-    // Only needed for Bus-mode connectivity checks.
-    let bus_pipes: FxHashSet<(i32, i32)> = if layout_style == LayoutStyle::Bus && !pipe_tiles.is_empty() {
+    // (Unconditional since LayoutStyle's 2026-08-20 deletion — every
+    // production layout was Bus; empty pipe_tiles short-circuits below.)
+    let bus_pipes: FxHashSet<(i32, i32)> = if !pipe_tiles.is_empty() {
         let leftmost_machine_x = layout_result
             .entities
             .iter()
@@ -463,12 +463,10 @@ pub fn check_fluid_port_connectivity(
     // internally (petroleum has no boundary record anywhere; the old
     // check only passed such machines when a trunk happened to poke
     // west of the leftmost machine).
-    let bus_pipes: FxHashSet<(i32, i32)> = if layout_style == LayoutStyle::Bus {
+    let bus_pipes: FxHashSet<(i32, i32)> = {
         let mut b = bus_pipes;
         b.extend(fluid_supply_tiles(layout_result, &pipe_tiles));
         b
-    } else {
-        bus_pipes
     };
 
     for e in &layout_result.entities {
@@ -542,7 +540,7 @@ pub fn check_fluid_port_connectivity(
                     e.x,
                     e.y,
                 ));
-            } else if layout_style == LayoutStyle::Bus && !bus_pipes.is_empty() {
+            } else if !bus_pipes.is_empty() {
                 // Check at least one input pipe connects to the bus via BFS
                 let any_connected = input_pipe_positions.iter().any(|&pos| {
                     !bfs_pipe_reach(pos, &pipe_info, &ptg_pairs)
@@ -1054,7 +1052,7 @@ mod tests {
         let lr = layout(vec![
             machine("assembling-machine-1", 0, 0, "iron-gear-wheel", false),
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Spaghetti);
+        let issues = check_fluid_port_connectivity(&lr);
         assert!(issues.is_empty());
     }
 
@@ -1064,7 +1062,7 @@ mod tests {
         let lr = layout(vec![
             machine("assembling-machine-2", 0, 0, "iron-gear-wheel", false),
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Spaghetti);
+        let issues = check_fluid_port_connectivity(&lr);
         assert!(issues.is_empty());
     }
 
@@ -1075,7 +1073,7 @@ mod tests {
         let lr = layout(vec![
             machine("chemical-plant", 0, 0, "plastic-bar", false),
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Spaghetti);
+        let issues = check_fluid_port_connectivity(&lr);
         let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(!errors.is_empty(), "expected fluid-connectivity error");
         assert!(errors.iter().all(|i| i.category == "fluid-connectivity"));
@@ -1089,7 +1087,7 @@ mod tests {
             machine("chemical-plant", 0, 0, "plastic-bar", false),
             pipe(0, -1, Some("petroleum-gas")),
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Spaghetti);
+        let issues = check_fluid_port_connectivity(&lr);
         let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
@@ -1103,7 +1101,7 @@ mod tests {
             machine("oil-refinery", 0, 0, "basic-oil-processing", false),
             pipe(1, 5, Some("crude-oil")),  // input port 1
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Spaghetti);
+        let issues = check_fluid_port_connectivity(&lr);
         let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         // Should have output-pipe-missing error
         assert!(!errors.is_empty());
@@ -1117,7 +1115,7 @@ mod tests {
             machine("oil-refinery", 0, 0, "basic-oil-processing", true),
             pipe(1, -1, Some("crude-oil")), // input port with mirror
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Spaghetti);
+        let issues = check_fluid_port_connectivity(&lr);
         // With mirror, input at (1,-1) should be adjacent → only output error remains
         let input_errors: Vec<_> = issues
             .iter()
@@ -1137,7 +1135,7 @@ mod tests {
             // Bus pipe far to the left
             pipe(0, 3, Some("petroleum-gas")),
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Bus);
+        let issues = check_fluid_port_connectivity(&lr);
         let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(!errors.is_empty(), "expected bus connectivity error");
         assert!(errors.iter().any(|i| i.message.contains("not connected to bus")));
@@ -1158,7 +1156,7 @@ mod tests {
             pipe(0, 3, Some("petroleum-gas")),
         ]);
         // Connect the chain: (5,3)-(4,3) adjacent, ptg tunnel (4,3)-(1,3), (1,3)-(0,3) adjacent
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Bus);
+        let issues = check_fluid_port_connectivity(&lr);
         let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
@@ -1492,7 +1490,7 @@ mod tests {
             // check is satisfied and only the input-side behavior is tested.
             pipe(1, -1, Some("molten-iron")),
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Spaghetti);
+        let issues = check_fluid_port_connectivity(&lr);
         let input_errs: Vec<_> = issues
             .iter()
             .filter(|i| i.message.contains("input") && i.severity == Severity::Error)
@@ -1507,7 +1505,7 @@ mod tests {
         let lr = layout(vec![
             machine("foundry", 0, 0, "transport-belt", false),
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Spaghetti);
+        let issues = check_fluid_port_connectivity(&lr);
         assert!(issues.is_empty(), "solid foundry recipe should be skipped: {issues:?}");
     }
 
@@ -1518,7 +1516,7 @@ mod tests {
         let lr = layout(vec![
             machine("foundry", 0, 0, "casting-iron", false),
         ]);
-        let issues = check_fluid_port_connectivity(&lr, LayoutStyle::Spaghetti);
+        let issues = check_fluid_port_connectivity(&lr);
         let errs: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(!errs.is_empty(), "expected missing-input-pipe error");
         assert!(errs.iter().all(|i| i.category == "fluid-connectivity"));

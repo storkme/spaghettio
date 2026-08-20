@@ -71,10 +71,10 @@ use spaghettio_core::common::{
 };
 use spaghettio_core::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 use spaghettio_core::solver;
-use spaghettio_core::validate::{self, LayoutStyle, Severity, ValidationIssue};
+use spaghettio_core::validate::{self, Severity, ValidationIssue};
 
 fn issues_of(l: &LayoutResult, s: &SolverResult) -> Vec<ValidationIssue> {
-    match validate::validate(l, Some(s), LayoutStyle::Bus) {
+    match validate::validate(l, Some(s)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     }
