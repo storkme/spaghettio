@@ -35,7 +35,9 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
     `RFC-NNN` chronologically; existing files keep their names (numbers live
     in the registry), new RFCs are named `rfc-NNN-short-name.md` and get a
     registry row in the same commit. Rejected/obsolete RFCs move to
-    `docs/archive/`.
+    `docs/archive/`. **Close-out deletes the code** unless the decision log
+    names a retention contract with a flip condition — see the template's
+    "Deletion cadence" note.
   - **Followups** (`*-followups.md`) — deferred-work backlogs with pick-up
     notes. Named for what they track, not the session that produced them;
     status line at the top so a cold pick-up knows what's open.

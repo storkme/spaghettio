@@ -95,3 +95,15 @@ Append entries here as the RFC progresses. Date them.
 
 The decision log is the part that prevents "why did we drop this?"
 amnesia six months later. Don't skip it.
+
+### Deletion cadence
+
+**A killed or concluded-failed RFC's code is deleted in its close-out
+PR**, unless the decision log names a retention contract with an
+explicit flip condition (who re-enables it, and on what trigger). A
+close-out that leaves code behind without such a contract is
+incomplete — falsifying an approach is cheap and prompt; leaving its
+code in place for someone else to notice, audit, and remove later is
+not. (The off-path audit that motivated this rule found ~11k lines of
+retained-but-dead code across five RFCs, all falsified weeks-to-months
+before deletion.)
