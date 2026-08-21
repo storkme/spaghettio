@@ -851,14 +851,15 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
         assert_eq!(d.lanes, LaneMap::Straight);
     }
 
-    /// The OPPOSITE chirality must also be lane-for-lane. Locked
-    /// 2026-08-21 after the domain-physics audit's chirality
-    /// adjudication: this model (identity on curves, both directions)
-    /// was accused of being unable to represent a chirality swap and
-    /// was CLEARED — game rule B11 has no swap, and the swap lived in
-    /// core's belt_flow walker instead (fixed there the same day).
-    /// One test per chirality so neither arm can regress toward the
-    /// walker's old bug.
+    /// The OPPOSITE chirality is also lane-for-lane. Documentation-level
+    /// lock from the 2026-08-21 chirality adjudication (this model was
+    /// CLEARED; the swap was core's bug, fixed in belt_flow on PR #683):
+    /// honestly, this test is NON-discriminating today — link_downstream's
+    /// only_feeder branch never consults chirality, so both arms take the
+    /// same code path (#685 review). It pins that a future refactor which
+    /// ADDS a chirality distinction here fails loudly; the discriminating
+    /// lock (asymmetric lanes, both arms) lives in belt_flow's
+    /// lane_transfer test on #683.
     #[test]
     fn lone_side_feed_opposite_chirality_also_curves() {
         let ents = vec![

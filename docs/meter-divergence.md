@@ -780,21 +780,24 @@ in-fixture AC reads −3.9%).
   implemented. Adjudicated against game rule B11 (expert-confirmed: lane
   contents never jump lanes through a turn, either chirality) plus both
   models' handed seeding conventions: **the meter was CORRECT and is
-  cleared; the swap was core's bug**, fixed in `belt_flow` the same day
-  (its corpus consequence: one fabricated `input-rate-delivery` reading
-  on ac-am2-ore, pin re-blessed 7→6 with position forensics). Both
-  chiralities are now locked by tests on BOTH sides. Model-comparison
-  lesson recorded in `domain-physics-audit-2026-08.md`: a divergence
-  identifies a disagreement, not the guilty side.
-- **Fluid-port mirroring**: the decoder now parses the blueprint
-  `mirror` flag, so an explicit community `mirror: true` is honored on
-  any machine. The three engine-mirrored machines keep the name
-  heuristic: the engine encodes their mirror as a tile-identical 180°
-  rotation and omits the flag, so on the wire an engine-mirrored
-  refinery and a genuinely unmirrored community one are
-  **indistinguishable** — that residual (unmirrored single instance,
-  multi-fluid face) is undecidable from the artifact and stays
-  documented, not guessed.
+  cleared; the swap was core's bug — fix on PR #683** (whose corpus
+  consequence, one fabricated `input-rate-delivery` reading on the
+  ac-am2-ore fixture, is adjudicated with position forensics in that
+  PR's re-bless commit). The discriminating both-chirality lock lives in
+  belt_flow's `lane_transfer` test on #683; the meter-side test is a
+  documentation-level pin (its comment states why it cannot discriminate
+  today). Model-comparison lesson recorded in
+  `domain-physics-audit-2026-08.md`: a divergence identifies a
+  disagreement, not the guilty side.
+- **Fluid-port mirroring**: the decoder now PARSES the blueprint
+  `mirror` flag; the factory deliberately does not yet CONSUME it — for
+  the three engine-mirrored machines the name heuristic already applies
+  the binding flip (their mirror is tile-identical), and for any other
+  machine an explicit mirror also moves port TILES, so honoring it as a
+  binding flip alone would mis-place ports on asymmetric machines
+  (#685 review). The complete fix is a `reflect_port` (w−1−dx) plus the
+  flag; the engine-form undecidable (unmirrored community instance of
+  the three, multi-fluid face) remains documented rather than guessed.
 - **UG turbo tier**: core's `ug_max_reach` gained an explicit
   `turbo-transport-belt => 10` arm (was falling to the yellow-4
   fallback), closing the meter/core tier-table asymmetry for imported

@@ -1363,6 +1363,8 @@ mod tests {
         assert_eq!(ug_max_reach("transport-belt"), 4);
         assert_eq!(ug_max_reach("fast-transport-belt"), 6);
         assert_eq!(ug_max_reach("express-transport-belt"), 8);
+        assert_eq!(ug_max_reach("turbo-transport-belt"), 10);
+        assert_eq!(ug_max_reach("not-a-belt"), 4);
     }
 
     #[test]
