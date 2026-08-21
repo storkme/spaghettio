@@ -912,3 +912,135 @@ fixtures / docs split per the churn norm).
   profiles, so policy_replay is now "one live corpus run, two
   consumers" (v1 decides, v2 replays the captured in-process
   profiles; no second layout pass).*
+- *2026-08-21 — **Phase 1a landed** (#689 track W2a): the doc-only legend at
+  `bus/layout.rs:79-111` is promoted to three real types — `UserConstraints`,
+  `SearchAxes`, `EngineTuning` — closing the "`LayoutOptions` split" Design
+  bullet. **Composition shape: facade views over the flat struct, not
+  nesting.** The alternative (`LayoutOptions { constraints: UserConstraints,
+  axes: SearchAxes, .. }`) was rejected on a measured count, not a style
+  preference: ~238 flat-field reads and ~80 flat struct-literal
+  constructions of `LayoutOptions` exist across the workspace today (mostly
+  `tests/e2e.rs`), and `LayoutOptions` carries no serde/tsify derive to
+  begin with — the WASM boundary never serializes it,
+  `wasm-bindings::layout_options` builds one from primitive
+  `Option<String>`/`Option<u8>` params field-by-field. Nesting would rename
+  hundreds of sites for zero wire-format benefit and blow the PR's line
+  budget for no payoff the RFC asked for. Chose instead: fields stay flat
+  on `LayoutOptions` (unchanged, zero renames anywhere); `UserConstraints`/
+  `SearchAxes`/`EngineTuning` are owned-copy VIEWS obtained via
+  `LayoutOptions::constraints()`/`axes()`/`engine_tuning()`, plus a
+  `LayoutOptions::from_groups(constraints, axes, engine_tuning)`
+  constructor. Net +267/-10 lines, one file.
+  **Classification calls**: `planning_duty` (previously unclassified) is
+  neither a user constraint (the caller doesn't supply it, the engine picks
+  it) nor a search axis (the search loop never varies it) — it gets its own
+  tiny `EngineTuning` group rather than being folded into either existing
+  one or left doc-only. `research_productivity` (previously unclassified)
+  is NOT a preference — it describes the player's save (researched
+  productivity bonuses), i.e. world state — but it groups with
+  `UserConstraints` because it is exogenous caller input exactly like
+  `max_belt_tier`, never a value the engine searches or tunes; a fourth
+  group for one world-state field was judged not worth the ceremony.
+  **Structural guard**: each group's `Default` impl is manual, not derived
+  — in particular `SearchAxes::default().cell_composition` is `Candidate`,
+  matching the engine default, where `CellComposition`'s own `#[default]`
+  is `Off`. ~~`from_groups` therefore cannot reproduce the `cell_composition`
+  fossil~~ **RETRACTED, #696 round 2 (this entry originally overclaimed the
+  same thing round 1 below already fixed in the code legend — the log
+  itself was left contradicting its own later entry, a records-outlive-
+  their-state miss round 2 caught):** the guard only covers the ATOMIC path
+  (`SearchAxes::default()` called wholesale). A partial literal of the
+  group struct itself (`SearchAxes { cell_composition: Default::default(),
+  ..SearchAxes::default() }`) still resolves to `Off` — the identical trap,
+  one level down, because `SearchAxes`'s fields are `pub`. See the round-2
+  entry below for the corrected claim; the code legend
+  (`bus/layout.rs`) has always been the ground truth here since round 1's
+  fix, only this entry's earlier wording was stale.
+  **What it does not prevent**: the ~80 existing flat struct-literal call
+  sites — including both known `run_e2e` fossils — are completely
+  unchanged and exactly as fossil-prone as before (fixing those is #689
+  track W2c, sequenced after this one), and nothing stops new code from
+  writing a flat (or group-level partial) literal instead of calling
+  `from_groups`. A `layout_options_group_defaults_match_facade` test pins
+  the three group defaults against `LayoutOptions::default()` (executed
+  discrimination check: reverting `SearchAxes::default()`'s
+  `cell_composition` to `CellComposition::default()` made it fail, naming
+  exactly `cell_composition: Candidate` vs `Off`; restored and reverified
+  green). ~~A `layout_options_from_groups_round_trips` test pins
+  `from_groups` against a non-default value on every group.~~ **STALE,
+  #696 round 2: that test was replaced in round 1 by
+  `layout_options_constraints_axes_and_from_groups_match_explicit_expectations`
+  (see the round-1 entry below for why) — this entry named the retired
+  test and was never updated.**
+  **Verification**: `cargo test --manifest-path crates/core/Cargo.toml`
+  full suite green (no `--no-fail-fast` failures); `cargo clippy -p
+  spaghettio_core -- -D warnings` (the exact pre-commit invocation) clean,
+  and `--all-targets` clippy warning count unchanged at 42 before/after (no
+  new warnings anywhere in the crate, not just the changed file). WASM
+  rebuilt via `wasm-pack build crates/wasm-bindings --target web --out-dir`
+  twice (stashed/unstashed to get a clean before/after pair): the generated
+  `spaghettio_wasm.d.ts`, `spaghettio_wasm.js`, and `package.json` are
+  **byte-identical** (`diff` exit 0 on all three); only the `.wasm` binary
+  itself differs (expected — new dead code compiled in changes layout/debug
+  info, not the JS/TS surface). `web`'s `npm run build` (`tsc --noEmit &&
+  vite build`) and `npm run test` (vitest, 41 tests) both green with zero
+  web-side edits. The #694 parity-baseline check
+  (`SPAGHETTIO_ZONE_CACHE_PATH` pinned to `crates/core/data/sat-zones-ci.bin`,
+  `SPAGHETTIO_PARITY_CORPUS=check`) passed: **160/160 cells matched the
+  committed baseline exactly** (`test parity_corpus ... ok`, 268s) — the
+  printed option-set divergences (10 major, 12 minor) are the
+  ALREADY-COMMITTED Phase-0c facts about the option-set axis, not a new
+  divergence this PR introduced; the pin file was untouched by the
+  read-only `check` mode (confirmed via `git status`), so no restore step
+  was needed.
+- *2026-08-21 — **#696 (W2a) review round 1 adjudicated** (7 findings, all
+  minor, absorbed in full — none refuted). Two were substantive, not just
+  wording: (a) the field legend's "the guard means naming a field twice can
+  no longer select the wrong value" OVERCLAIMED — it is true only for the
+  ATOMIC path (`SearchAxes::default()` called wholesale); a partial literal
+  of the GROUP struct itself (`SearchAxes { cell_composition:
+  Default::default(), ..SearchAxes::default() }`) reproduces the exact same
+  trap one level down, because `UserConstraints`/`SearchAxes`'s fields are
+  `pub`. Fixed by rewriting the claim: the guard relocates the trap's
+  easiest entry point and gives new call sites a correct atomic default to
+  reach for instead, it does not remove the trap's shape from the language.
+  (b) the round-trip test (`layout_options_from_groups_round_trips`) had a
+  structural blind spot the review named precisely: comparing
+  `rebuilt.axes() == original.axes()` calls the SAME (possibly buggy)
+  accessor on both sides, so a "wrong-source-field" bug that is consistently
+  wrong (e.g. `axes()` reading `merge_tap` from `self.horizontal_candidate`)
+  produces identical wrong values on both sides and passes. Replaced with
+  `layout_options_constraints_axes_and_from_groups_match_explicit_expectations`,
+  which checks every accessor against a HAND-WRITTEN expected struct instead
+  of re-deriving one, and checks `from_groups`'s rebuild field-by-field
+  against the original (not via the accessors again). **Executed
+  discrimination check**: injected exactly the bug above
+  (`merge_tap: self.horizontal_candidate` in `axes()`); the new test failed
+  immediately, naming `merge_tap: false` (actual) vs `true` (expected) in
+  the `SearchAxes` comparison — caught before the round-trip stage was even
+  reached. Restored, reverified green. Minor fixes absorbed alongside: the
+  legend's "~320... most of them `tests/e2e.rs` struct literals" wording
+  contradicted the log's own "~238 reads + ~80 constructions" breakdown
+  (reads dominate, not literals) — reworded to state both counts and that
+  reads live outside `tests/e2e.rs` too; `from_groups`'s doc now states it
+  takes its groups **by value** (moves `max_belt_tier`'s `String` and
+  `research_productivity`'s `BTreeMap`), distinct from the `&self`
+  accessors' owned-copy contract; the legend now states explicitly that
+  `from_groups`/`constraints`/`axes`/`engine_tuning` have **zero production
+  callers as of this PR** — pure scaffolding for Phase 1b / #689 W2c: the
+  ~80 existing flat-literal sites, including both known `run_e2e` fossils,
+  are completely untouched; the defaults-match test's doc now states its
+  own stated limitation (catches divergence between the two `Default`
+  impls, not wrongness of a value both share). One finding, on the
+  round-trip test's original `stacking: 2` colliding with
+  `DEFAULT_INSERTER_CAPACITY`'s own value (also 2), is subsumed by the
+  test's replacement — the new test asserts `stacking` (3) is distinct from
+  `DEFAULT_INSERTER_CAPACITY` and gives the two `u8` fields
+  (`stacking`/`inserter_capacity`) different values (3 vs 5) by
+  construction. The bool-triple pigeonhole (three `bool` fields, two
+  possible values, so some pair must still collide) is inherent to the type
+  and documented as an acknowledged residual gap rather than chased further.
+  Re-verified after fixes: full `cargo test` green, `cargo clippy -p
+  spaghettio_core -- -D warnings` clean, all PR CI checks (`rust`,
+  `rust-clippy`, `web`, `second-opinion`, `deploy-preview`,
+  `workflow-guard`) green on the prior commit.

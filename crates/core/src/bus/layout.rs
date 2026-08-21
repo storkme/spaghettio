@@ -74,25 +74,56 @@ pub enum SurplusPolicy {
 /// previous `max_belt_tier` parameter so future per-call options
 /// (strategy, escargio fold parameters, …) attach as additional fields.
 ///
-/// ## Pinned vs. searchable fields (RFC-064 P2b, `bus::candidate_runner`)
+/// ## Pinned vs. searchable fields (RFC-064 P2b, `bus::candidate_runner`;
+/// promoted from doc-only legend to types in RFC-070 Phase 1a, #689 W2a)
 ///
 /// `candidate_runner::run_candidate_field` takes one `LayoutOptions` per
 /// call and passes it through to every base producer UNCHANGED — the runner
 /// never varies a field itself; only `DecompositionCandidate` implementations
 /// express variation (`bus::candidate_runner`'s own module docs, "Searchable
-/// vs. pinned knobs"). This is a doc-only classification of what each field
-/// IS, not a restructuring — every field below is unchanged, this is a
-/// legend for callers deciding whether a field belongs on a searched axis:
+/// vs. pinned knobs"). The classification below used to be a comment only;
+/// it is now backed by three real types — [`UserConstraints`], [`SearchAxes`],
+/// [`EngineTuning`] — but **every field still lives flat on `LayoutOptions`
+/// itself**: the groups are VIEWS (`LayoutOptions::constraints`/`axes`/
+/// `engine_tuning`), not storage, and there is no new wire format. This was
+/// a deliberate choice over nesting the fields inside the group structs
+/// (`LayoutOptions { constraints: UserConstraints, axes: SearchAxes, .. }`):
+/// ~238 existing flat-field READS plus ~80 flat struct-literal
+/// CONSTRUCTIONS (together ~320 sites) across the workspace name these
+/// fields flat — reads are the majority, not the constructions, but both
+/// dominate over `tests/e2e.rs` alone (many of the reads live in
+/// `validate/`, `bus/`, and elsewhere) — and `LayoutOptions` has no
+/// serde/tsify derive to begin with (the WASM boundary never
+/// serializes this struct — `wasm-bindings::layout_options` builds it from
+/// primitive `Option<String>`/`Option<u8>` params one field at a time), so
+/// nesting would rename hundreds of call sites for zero wire-format benefit
+/// and blow the PR's line budget. Recorded in the RFC-070 decision log
+/// (2026-08-21, W2a).
 ///
 /// - **User-pinned** (never a search/transform axis, by long-standing
-///   project rule — belt tier, in particular, is never auto-escalated):
-///   `max_belt_tier`, `max_inserter_tier`, `quality`, `stacking`,
-///   `inserter_capacity`, `wire_mode` (cosmetic-only), `surplus_policy`.
+///   project rule — belt tier, in particular, is never auto-escalated) —
+///   [`UserConstraints`]: `max_belt_tier`, `max_inserter_tier`, `quality`,
+///   `stacking`, `inserter_capacity`, `wire_mode` (cosmetic-only),
+///   `surplus_policy`, `research_productivity`. The last is NOT a
+///   preference — it describes the player's save (researched productivity
+///   bonuses), i.e. world state — but it is exogenous input supplied by the
+///   caller exactly like `max_belt_tier`, never a value the engine searches
+///   or tunes, so it groups with the other pinned fields rather than getting
+///   a fourth group of its own (RFC-070 decision log, 2026-08-21).
 /// - **Base-production axis** (today's decomposition-search competes these
 ///   via `DecompositionCandidate`, the runner's own "base production"
-///   slot — see `bus::decomposition_search`): `strategy`, `row_layout`,
-///   `merge_tap`, `cell_composition`, `direct_insertion`, `di_claim_order`,
-///   `horizontal_candidate`, `splitter_tap_spacers`.
+///   slot — see `bus::decomposition_search`) — [`SearchAxes`]: `strategy`,
+///   `row_layout`, `merge_tap`, `cell_composition`, `direct_insertion`,
+///   `di_claim_order`, `horizontal_candidate`, `splitter_tap_spacers`.
+/// - **Engine tuning** (neither user-pinned nor searched — an engine
+///   calibration constant set by measurement, not by a user's preference or
+///   the search loop's competition) — [`EngineTuning`]: `planning_duty`
+///   (RFC-069's provisioning factor). It was previously left unclassified
+///   in this legend; RFC-070 Phase 1a gives it its own tiny group rather
+///   than folding it into either existing one, because it fits neither: the
+///   search loop never varies it (unlike `SearchAxes`) and it isn't supplied
+///   by the caller (unlike `UserConstraints`) — it's the engine's own dial
+///   (RFC-070 decision log, 2026-08-21).
 /// - **Post-layout transform axis**: none remain. `compact_layout`/
 ///   `fold_layout` and the `CompactTransform`/`FoldTransform`
 ///   `LayoutTransform` impls that backed them were deleted 2026-08-14
@@ -100,6 +131,42 @@ pub enum SurplusPolicy {
 /// - **Diagnostic / measurement-only**: none remain — `band_packing` and
 ///   its RFC-064-P3 selection seam were deleted 2026-08-20 (offpath
 ///   Tier 2, owner call).
+///
+/// ### The fossil this split guards against, and what the guard does not do
+///
+/// A partial struct literal like `LayoutOptions { cell_composition:
+/// Default::default(), ..Default::default() }` is the shape that produced
+/// BOTH known `tests/e2e.rs` fossils (`cell_composition` and
+/// `inserter_capacity`, RFC-070 decision log): `Default::default()` on one
+/// named field resolves to *that field's type's own* default, completely
+/// ignoring the `..Default::default()` spread for that field — and for
+/// `cell_composition` specifically, the enum's own `#[default]` (`Off`)
+/// differs from the engine's actual default (`Candidate`), so the trap is
+/// silent. [`LayoutOptions::from_groups`] is the guard, but **only for the
+/// ATOMIC path**: each group's own `Default` impl is manual (matching the
+/// engine defaults, not derived from each field's type), so calling
+/// `SearchAxes::default()` WHOLESALE — no per-field literal — gives
+/// `cell_composition: Candidate`, matching the engine default, where the
+/// bare enum's own `#[default]` is `Off`. **This does not fence off a
+/// partial literal of the group struct itself**: `SearchAxes {
+/// cell_composition: Default::default(), ..SearchAxes::default() }` still
+/// resolves `cell_composition` to `Off`, because `UserConstraints`'s and
+/// `SearchAxes`'s fields are `pub` and nothing stops a caller writing
+/// exactly the pattern that produced the original fossil, one level down —
+/// the guard relocates the trap's easiest point of entry, it does not
+/// remove the trap's shape from the language (#696 review, absorbed). What
+/// it actually buys: a genuinely correct atomic default new call sites can
+/// reach for INSTEAD of hand-assembling a group, and it removes the trap
+/// for whoever takes it. **What this does not prevent, at all**: the ~80
+/// existing flat struct-literal call sites (including both known `run_e2e`
+/// fossils) are unchanged and exactly as fossil-prone as before — fixing
+/// those is #689 track W2c, sequenced after this one — and nothing stops
+/// new code from writing a flat (or group-level partial) literal instead of
+/// calling `from_groups`. **Zero production callers as of this PR**:
+/// `from_groups`/`constraints`/`axes`/`engine_tuning` are exercised only by
+/// this module's own unit tests below — they are scaffolding for Phase 1b
+/// and #689 track W2c to adopt, not yet wired into any call site that
+/// builds a real layout.
 #[derive(Clone, Debug)]
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,
@@ -194,9 +261,14 @@ pub struct LayoutOptions {
     /// whether the placer acts on them.
     pub direct_insertion: crate::bus::di_cell::DirectInsertion,
     /// Which coupling claims a contended DI spec (RFC-059). Default
-    /// `Upstream` = the status quo, so every existing layout is
-    /// byte-identical; `Downstream` is P1, the alternative phase 1 measures
-    /// against.
+    /// **`Downstream`** since RFC-059's sim close-out (`DiClaimOrder`'s own
+    /// `#[default]`, `di_cell.rs`) — `Upstream` was the pre-RFC-059 status
+    /// quo, kept as an explicit arm so `Downstream` could be measured
+    /// against it rather than assumed better; it lost on evidence (see
+    /// `DiClaimOrder::Upstream`'s doc). This comment stated the stale
+    /// pre-flip default until RFC-070 Phase 1a's #696 review round 2 —
+    /// the sibling comment in `decomposition_search.rs` was already fixed
+    /// during RFC-070 Phase 0b (W1b), this one survived.
     pub di_claim_order: crate::bus::di_cell::DiClaimOrder,
     /// RFC-060: run the horizontal-stack row layout as a scored
     /// decomposition candidate when `row_layout` is `VerticalSplit` and
@@ -209,6 +281,108 @@ pub struct LayoutOptions {
     // (RFC-058's `band_packing` flag and RFC-064-P3's `band_pack_selection`
     // seam were deleted 2026-08-20 with `bus::bands` — offpath Tier 2,
     // owner call extending #632 A2.)
+}
+
+/// User-pinned view of [`LayoutOptions`] (RFC-070 Phase 1a, #689 W2a). See
+/// the field legend on `LayoutOptions` for the full classification
+/// rationale and why this is a view (owned copy of the relevant fields),
+/// not the fields' storage. Obtain one via [`LayoutOptions::constraints`];
+/// build a whole `LayoutOptions` from one via [`LayoutOptions::from_groups`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserConstraints {
+    pub max_belt_tier: Option<String>,
+    pub max_inserter_tier: InserterTier,
+    pub quality: crate::common::QualityTier,
+    pub stacking: u8,
+    pub inserter_capacity: u8,
+    pub wire_mode: crate::power_wires::WireMode,
+    pub surplus_policy: SurplusPolicy,
+    /// World-state input (the player's researched productivity bonuses),
+    /// not a preference — grouped here because it is exogenous caller
+    /// input like every other constraint field, never a value the engine
+    /// searches or tunes. See the `LayoutOptions` field legend.
+    pub research_productivity: std::collections::BTreeMap<String, f64>,
+}
+
+impl Default for UserConstraints {
+    /// Manual (not derived): must match `LayoutOptions::default()` exactly
+    /// (asserted by `layout_options_group_defaults_match_facade` below), and
+    /// two fields here diverge from their OWN type's default the same way
+    /// `LayoutOptions::default()`'s do — `stacking`'s neutral value is `1`,
+    /// not `u8::default()`, and `inserter_capacity`'s engine default is
+    /// `DEFAULT_INSERTER_CAPACITY` (L2 research), not `u8::default()` (raw
+    /// unresearched `0`).
+    fn default() -> Self {
+        Self {
+            max_belt_tier: None,
+            max_inserter_tier: InserterTier::default(),
+            quality: crate::common::QualityTier::default(),
+            stacking: 1,
+            inserter_capacity: crate::common::DEFAULT_INSERTER_CAPACITY,
+            wire_mode: crate::power_wires::WireMode::default(),
+            surplus_policy: SurplusPolicy::default(),
+            research_productivity: Default::default(),
+        }
+    }
+}
+
+/// Base-production search-axis view of [`LayoutOptions`] (RFC-070 Phase 1a,
+/// #689 W2a). See the field legend on `LayoutOptions`. Obtain one via
+/// [`LayoutOptions::axes`]; build a whole `LayoutOptions` from one via
+/// [`LayoutOptions::from_groups`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchAxes {
+    pub strategy: LayoutStrategy,
+    pub row_layout: RowLayout,
+    pub merge_tap: bool,
+    pub cell_composition: crate::bus::cells::CellComposition,
+    pub direct_insertion: crate::bus::di_cell::DirectInsertion,
+    pub di_claim_order: crate::bus::di_cell::DiClaimOrder,
+    pub horizontal_candidate: bool,
+    pub splitter_tap_spacers: bool,
+}
+
+impl Default for SearchAxes {
+    /// Manual (not derived): this is exactly the guard the field legend's
+    /// fossil note describes. `CellComposition`'s own `#[default]` is `Off`
+    /// (`bus::cells::mod.rs`); the engine default is `Candidate`. A derived
+    /// `Default` here would silently reproduce the `run_e2e` fossil at the
+    /// type level instead of guarding against it. Must match
+    /// `LayoutOptions::default()` exactly (asserted below).
+    fn default() -> Self {
+        Self {
+            strategy: LayoutStrategy::default(),
+            row_layout: RowLayout::default(),
+            merge_tap: false,
+            cell_composition: crate::bus::cells::CellComposition::Candidate,
+            direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
+            di_claim_order: crate::bus::di_cell::DiClaimOrder::default(),
+            horizontal_candidate: true,
+            splitter_tap_spacers: false,
+        }
+    }
+}
+
+/// Engine-tuning view of [`LayoutOptions`] (RFC-070 Phase 1a, #689 W2a):
+/// calibration constants the engine sets by measurement, neither supplied
+/// by the caller (`UserConstraints`) nor competed over by the search loop
+/// (`SearchAxes`). See the field legend on `LayoutOptions`. Obtain one via
+/// [`LayoutOptions::engine_tuning`]; build a whole `LayoutOptions` from one
+/// via [`LayoutOptions::from_groups`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EngineTuning {
+    /// RFC-069's provisioning factor. See the field doc on
+    /// `LayoutOptions::planning_duty` for the full calibration story.
+    pub planning_duty: f64,
+}
+
+impl Default for EngineTuning {
+    /// Manual (not derived: `f64::default()` is `0.0`, which is not a valid
+    /// duty and is not `LayoutOptions::default()`'s value). Must match
+    /// `LayoutOptions::default()` exactly (asserted below).
+    fn default() -> Self {
+        Self { planning_duty: 1.0 }
+    }
 }
 
 impl Default for LayoutOptions {
@@ -256,6 +430,81 @@ impl Default for LayoutOptions {
 }
 
 impl LayoutOptions {
+    /// View of the user-pinned fields. Owned copy — `LayoutOptions` remains
+    /// the storage (see the field legend for why this is a view, not a
+    /// restructuring).
+    pub fn constraints(&self) -> UserConstraints {
+        UserConstraints {
+            max_belt_tier: self.max_belt_tier.clone(),
+            max_inserter_tier: self.max_inserter_tier,
+            quality: self.quality,
+            stacking: self.stacking,
+            inserter_capacity: self.inserter_capacity,
+            wire_mode: self.wire_mode,
+            surplus_policy: self.surplus_policy,
+            research_productivity: self.research_productivity.clone(),
+        }
+    }
+
+    /// View of the base-production search axes. Owned copy, same caveat as
+    /// [`Self::constraints`].
+    pub fn axes(&self) -> SearchAxes {
+        SearchAxes {
+            strategy: self.strategy,
+            row_layout: self.row_layout,
+            merge_tap: self.merge_tap,
+            cell_composition: self.cell_composition,
+            direct_insertion: self.direct_insertion,
+            di_claim_order: self.di_claim_order.clone(),
+            horizontal_candidate: self.horizontal_candidate,
+            splitter_tap_spacers: self.splitter_tap_spacers,
+        }
+    }
+
+    /// View of the engine-tuning fields. Owned copy, same caveat as
+    /// [`Self::constraints`].
+    pub fn engine_tuning(&self) -> EngineTuning {
+        EngineTuning {
+            planning_duty: self.planning_duty,
+        }
+    }
+
+    /// Build a `LayoutOptions` from whole groups — the fossil-resistant
+    /// constructor. See the field legend's "fossil this split guards
+    /// against" section for why this, and not a partial struct literal, is
+    /// the recommended path for new call sites (and for its honest limits).
+    /// Existing flat struct literals (there are ~80 across the workspace,
+    /// mostly `tests/e2e.rs`) are unaffected and not required to migrate.
+    ///
+    /// Takes its three groups **by value** (moves `max_belt_tier`'s
+    /// `String` and `research_productivity`'s `BTreeMap` out of whatever
+    /// `UserConstraints` the caller passed) — unlike the `&self` accessors
+    /// above, which hand back an owned *copy* and leave the original
+    /// `LayoutOptions` untouched. A caller that needs to reuse a
+    /// `UserConstraints`/`SearchAxes`/`EngineTuning` value after calling this
+    /// should `.clone()` it first (#696 review).
+    pub fn from_groups(constraints: UserConstraints, axes: SearchAxes, engine_tuning: EngineTuning) -> Self {
+        Self {
+            strategy: axes.strategy,
+            splitter_tap_spacers: axes.splitter_tap_spacers,
+            planning_duty: engine_tuning.planning_duty,
+            max_belt_tier: constraints.max_belt_tier,
+            row_layout: axes.row_layout,
+            surplus_policy: constraints.surplus_policy,
+            max_inserter_tier: constraints.max_inserter_tier,
+            quality: constraints.quality,
+            wire_mode: constraints.wire_mode,
+            merge_tap: axes.merge_tap,
+            stacking: constraints.stacking,
+            research_productivity: constraints.research_productivity,
+            inserter_capacity: constraints.inserter_capacity,
+            cell_composition: axes.cell_composition,
+            direct_insertion: axes.direct_insertion,
+            di_claim_order: axes.di_claim_order,
+            horizontal_candidate: axes.horizontal_candidate,
+        }
+    }
+
     /// Convenience: keep today's call shape working for tests / examples
     /// that only care about the belt tier.
     pub fn from_belt_tier(max_belt_tier: Option<&str>) -> Self {
@@ -2444,6 +2693,171 @@ fn make_substation(x: i32, y: i32) -> PlacedEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RFC-070 Phase 1a (#689 W2a): `UserConstraints`/`SearchAxes`/
+    /// `EngineTuning` each carry their own manual `Default` impl (deliberately
+    /// NOT derived from `LayoutOptions::default()` — this test is the thing
+    /// that keeps the two in sync instead). If either default impl drifts
+    /// from `LayoutOptions::default()`, this fails. Stated limitation (#696
+    /// review, not a defect): this only catches DIVERGENCE between the two
+    /// independent impls — if a future edit changed both in lockstep (e.g.
+    /// reverting `cell_composition` to `Off` in both places at once), this
+    /// test would stay green on the new, wrong, shared value. Nothing short
+    /// of an independent oracle (the `run_e2e`/parity-corpus fossils this
+    /// split responds to) can catch that class — this test certifies
+    /// *agreement* between two independently-written `Default` impls, not
+    /// the *truth* of the shared value; the actual truth anchor for
+    /// `cell_composition`'s engine default specifically is the #694
+    /// parity-baseline check (`crates/core/tests/parity_corpus.rs`), whose
+    /// 160 committed cells pin real `select_best_decomposition` behavior
+    /// under the real default, not a hand-written literal (#696 round 2).
+    #[test]
+    fn layout_options_group_defaults_match_facade() {
+        let facade = LayoutOptions::default();
+        assert_eq!(facade.constraints(), UserConstraints::default());
+        assert_eq!(facade.axes(), SearchAxes::default());
+        assert_eq!(facade.engine_tuning(), EngineTuning::default());
+    }
+
+    /// `constraints()`/`axes()`/`engine_tuning()` and `from_groups` are
+    /// checked against HAND-WRITTEN expected structs, not by re-deriving the
+    /// expectation via the same accessor under test (#696 review finding: a
+    /// pure round-trip — view, rebuild, view again — cannot catch a
+    /// "wrong-source-field" bug when the same buggy accessor computes both
+    /// sides identically; e.g. an accessor that reads `merge_tap` from
+    /// `self.horizontal_candidate` by mistake would produce the SAME wrong
+    /// value on both the original and the rebuilt options, and a bare
+    /// `rebuilt.axes() == original.axes()` comparison would not notice).
+    /// Every field is set to a value distinct from its `LayoutOptions`
+    /// default, so an accessor that silently drops or duplicates a field
+    /// cannot pass by both sides coincidentally landing on the same default
+    /// — with one deliberate exception. `cell_composition` is pinned to
+    /// `Candidate` here, which IS `LayoutOptions::default()`'s value for
+    /// that field, precisely so an accessor bug that emits
+    /// `CellComposition::default()` (the bare enum's `Off`) — the exact
+    /// shape of the fossil this whole split responds to — shows up as a
+    /// mismatch (`Candidate` expected, `Off` produced). Pinning it to `Off`
+    /// instead (as an earlier version of this test did, #696 round 2) would
+    /// have caught a DIFFERENT bug (an accessor that ignores `self` and
+    /// returns the group's own manual default) while going silent on this
+    /// one, since `Off` is `CellComposition`'s bare type default — for a
+    /// 2-variant enum whose engine default already differs from its type
+    /// default, no single test value can guard both directions at once; see
+    /// `layout_options_axes_distinguishes_both_cell_composition_values`
+    /// below for the differential check that covers the other direction.
+    /// The `u8` pair (`stacking`/`inserter_capacity`, 256 possible values
+    /// each) has no such excuse and is deliberately given distinct,
+    /// non-default values here (#696 round 1 flagged an earlier version of
+    /// this test where both happened to be `2`,
+    /// `DEFAULT_INSERTER_CAPACITY`'s own value). The three-`bool` fields
+    /// (`splitter_tap_spacers`, `merge_tap`, `horizontal_candidate`) have
+    /// the same two-values-three-fields pigeonhole problem as
+    /// `cell_composition`, but with no differential-test escape hatch
+    /// (there is no third bool value to probe with) — a swap bug between
+    /// exactly the colliding pair is not distinguishable by ANY choice of
+    /// test values or any number of additional cases; documented here as an
+    /// acknowledged residual gap, not chased further (#696 review, both
+    /// rounds).
+    #[test]
+    fn layout_options_constraints_axes_and_from_groups_match_explicit_expectations() {
+        let opts = LayoutOptions {
+            strategy: LayoutStrategy::PartitionedDecomposed,
+            splitter_tap_spacers: true,
+            planning_duty: 0.6,
+            max_belt_tier: Some("red".to_string()),
+            row_layout: RowLayout::HorizontalStack,
+            surplus_policy: SurplusPolicy::Void,
+            max_inserter_tier: InserterTier::Regular,
+            quality: crate::common::QualityTier::Rare,
+            wire_mode: crate::power_wires::WireMode::Tree,
+            merge_tap: true,
+            stacking: 3,
+            research_productivity: [("plastic-bar".to_string(), 0.1)].into_iter().collect(),
+            inserter_capacity: 5,
+            cell_composition: crate::bus::cells::CellComposition::Candidate,
+            direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
+            di_claim_order: crate::bus::di_cell::DiClaimOrder::Upstream,
+            horizontal_candidate: false,
+        };
+        assert_ne!(opts.stacking, crate::common::DEFAULT_INSERTER_CAPACITY);
+
+        assert_eq!(
+            opts.constraints(),
+            UserConstraints {
+                max_belt_tier: Some("red".to_string()),
+                max_inserter_tier: InserterTier::Regular,
+                quality: crate::common::QualityTier::Rare,
+                stacking: 3,
+                inserter_capacity: 5,
+                wire_mode: crate::power_wires::WireMode::Tree,
+                surplus_policy: SurplusPolicy::Void,
+                research_productivity: [("plastic-bar".to_string(), 0.1)].into_iter().collect(),
+            }
+        );
+        assert_eq!(
+            opts.axes(),
+            SearchAxes {
+                strategy: LayoutStrategy::PartitionedDecomposed,
+                row_layout: RowLayout::HorizontalStack,
+                merge_tap: true,
+                cell_composition: crate::bus::cells::CellComposition::Candidate,
+                direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
+                di_claim_order: crate::bus::di_cell::DiClaimOrder::Upstream,
+                horizontal_candidate: false,
+                splitter_tap_spacers: true,
+            }
+        );
+        assert_eq!(opts.engine_tuning(), EngineTuning { planning_duty: 0.6 });
+
+        // `from_groups` round-trip, checked field-by-field against `opts`
+        // directly (not via the accessors again — `LayoutOptions` has no
+        // `PartialEq` derive, and re-using the accessors here would repeat
+        // the exact blind spot this test exists to avoid).
+        let rebuilt =
+            LayoutOptions::from_groups(opts.constraints(), opts.axes(), opts.engine_tuning());
+        assert_eq!(rebuilt.strategy, opts.strategy);
+        assert_eq!(rebuilt.splitter_tap_spacers, opts.splitter_tap_spacers);
+        assert_eq!(rebuilt.planning_duty, opts.planning_duty);
+        assert_eq!(rebuilt.max_belt_tier, opts.max_belt_tier);
+        assert_eq!(rebuilt.row_layout, opts.row_layout);
+        assert_eq!(rebuilt.surplus_policy, opts.surplus_policy);
+        assert_eq!(rebuilt.max_inserter_tier, opts.max_inserter_tier);
+        assert_eq!(rebuilt.quality, opts.quality);
+        assert_eq!(rebuilt.wire_mode, opts.wire_mode);
+        assert_eq!(rebuilt.merge_tap, opts.merge_tap);
+        assert_eq!(rebuilt.stacking, opts.stacking);
+        assert_eq!(rebuilt.research_productivity, opts.research_productivity);
+        assert_eq!(rebuilt.inserter_capacity, opts.inserter_capacity);
+        assert_eq!(rebuilt.cell_composition, opts.cell_composition);
+        assert_eq!(rebuilt.direct_insertion, opts.direct_insertion);
+        assert_eq!(rebuilt.di_claim_order, opts.di_claim_order);
+        assert_eq!(rebuilt.horizontal_candidate, opts.horizontal_candidate);
+    }
+
+    /// The differential check the test above's doc comment points to:
+    /// pinning `cell_composition` to `Candidate` there (to catch an
+    /// accessor collapsing to the bare enum default `Off`) reopens the
+    /// opposite direction — an accessor that ignores `self` and always
+    /// returns the group default (also `Candidate`) would pass unnoticed.
+    /// This test closes it by checking BOTH values map through correctly,
+    /// which no single fixed test value can do for a 2-variant enum whose
+    /// engine default differs from its type default (#696 round 2).
+    #[test]
+    fn layout_options_axes_distinguishes_both_cell_composition_values() {
+        let off = LayoutOptions {
+            cell_composition: crate::bus::cells::CellComposition::Off,
+            ..LayoutOptions::default()
+        };
+        let candidate = LayoutOptions {
+            cell_composition: crate::bus::cells::CellComposition::Candidate,
+            ..LayoutOptions::default()
+        };
+        assert_eq!(off.axes().cell_composition, crate::bus::cells::CellComposition::Off);
+        assert_eq!(
+            candidate.axes().cell_composition,
+            crate::bus::cells::CellComposition::Candidate
+        );
+    }
 
     #[test]
     fn test_estimate_bus_width_empty() {
