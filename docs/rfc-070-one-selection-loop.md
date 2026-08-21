@@ -367,3 +367,43 @@ fixtures / docs split per the churn norm).
   sees it. Absence of a nested block is not evidence that none ran — a
   shadow-loop diff assuming otherwise would be comparing against a stream
   the production loop deliberately edits.*
+- *2026-08-21 — **#692 review round 2 adjudicated** (7 findings). Absorbed:
+  (a) the Phase-0b oracle had NO CI assertion coverage — everything was
+  `#[ignore]`d, so a broken stage tag or a dropped row shipped green. Added
+  `selection_scoreboard_contract`, a non-ignored test pinning the contract
+  (every slot emits a row, canonical order, rows before the terminal event,
+  winner ∈ its own block's rows, `not-run` ≠ `refused`, and the fixture's
+  deciding stage). **Discrimination check executed, not assumed**: mis-tagging
+  the error-free stage, dropping the `native` row, and swapping two runs in
+  the index list each made it fail with a message naming the right cause;
+  restored and re-verified green. (b) The four hand-maintained same-order
+  candidate lists are now one: `CandidateRun` carries its own name, a
+  `CANDIDATE_ORDER` const is the single source, and `Scoreboard::from_runs`
+  plus a `candidates` post-check assert each run's own name against its slot,
+  so a reorder panics instead of recording one candidate's verdicts against
+  another's row. (c) The census's nested-block banner no longer labels the
+  OUTER block, and the block walker now checks that a winner is among its own
+  block's rows, printing a loud marker if not. Refuted with receipts:
+  (d) "the failure path emits with the sink detached" — the sink is
+  re-attached at `decomposition_search.rs:1604` and the failure-path
+  `board.emit()` is at `:1814`, 210 lines later with no intervening
+  `swap_sink`; failure-path rows reach a streaming consumer exactly like
+  success-path ones, so no doc note was added for a behaviour that does not
+  exist. (e) "the e2e cells-off gap is left unfixed" — correct and
+  deliberate, recorded in the entry above and on #689.*
+- *2026-08-21 — **`PlacedEntity::rate` is NOT validator-visible; the no-op
+  label is redefined accordingly.** Two reviews claimed opposite things, so
+  it was settled by count: all 21 `.rate` reads across `validate/` and
+  `connectivity.rs` are on solver `ItemFlow`s, none on a `PlacedEntity`, and
+  the three `belt_flow.rs` lines #686 round 7 cited as proof read `e.carries`,
+  `e.carries` and `build_ug_pairs`. #686's adjudication was therefore wrong
+  about `rate` (right about `carries`). Decision: KEEP `rate` in
+  `EntitySignature` — a differing stamp means a different lane-family decision
+  reached the same tiles, which is worth not calling identical — and redefine
+  the label at every site that states it: **a no-op is "tiles AND stamps
+  identical", not "validator-identical"**. That is a strictly stricter test,
+  so it can only under-report no-ops, never over-report them; measured, it
+  changes nothing on the current slice (ratios identical to the pre-`rate`
+  run). Dropping `rate` was the alternative and was rejected: it would make
+  the label mean less while matching neither the recorded #675 follow-up nor
+  the provenance question the counter exists to answer.*

@@ -29,8 +29,17 @@
 //! printed header (round 3, #686) so a table-skimmer sees it without
 //! reading down to the Interpretation paragraph.
 //!
-//! TWO diagnostics live here, over the same `FIXTURES` slice and running
-//! in opposite directions. `check_firing_census` (this one) approximates
+//! THREE tests live here. Two are `#[ignore]`d diagnostics over the same
+//! `FIXTURES` slice, running in opposite directions; the third,
+//! `selection_scoreboard_contract`, is NOT ignored and is the only thing
+//! in this file a build depends on — it pins the Phase-0b oracle's
+//! contract (every candidate slot emits a row, in canonical order, before
+//! its terminal event; the winner is one of its own block's rows; the
+//! deciding stage is the one this fixture reaches) so that a broken stage
+//! tag or a row that stops being emitted fails CI instead of quietly
+//! printing wrong output to a human who may never run it.
+//!
+//! Of the two diagnostics: `check_firing_census` (this one) approximates
 //! the candidate field from OUTSIDE via option toggles and reports
 //! validator CATEGORIES. `selection_scoreboard_census` (RFC-070 Phase 0b,
 //! bottom of the file) reads the REAL internal loop under default options
@@ -51,14 +60,15 @@ use spaghettio_core::{solver, validate};
 
 /// A structural signature of a built layout's entities, sorted so
 /// emission order doesn't matter. Used only to
-/// detect when a variant's build is bit-identical to the same fixture's
+/// detect when a variant's build is identical to the same fixture's
 /// default (round 6, #686): `cells-off`/`hs-off` are gated internally
 /// (`decomposition_search.rs`'s `try_cells`/`try_horizontal`) on
 /// conditions this hardcoded fixture list may not satisfy for every
 /// fixture (chain eligibility, a `DualInput` row), so a variant can be a
-/// silent no-op — bit-identical to default — for some or all fixtures,
-/// which would otherwise look like a genuinely evaluated, merely-quiet
-/// candidate.
+/// silent no-op — producing the same layout as default — for some or all
+/// fixtures, which would otherwise look like a genuinely evaluated,
+/// merely-quiet candidate. What "identical" means here is defined
+/// precisely below, and it is NOT "validates the same".
 ///
 /// Field order: name, x, y, direction, recipe, carries, mirror, rate-bits.
 /// The last three joined in as the #675 follow-up recorded on #686's
@@ -68,15 +78,27 @@ use spaghettio_core::{solver, validate};
 ///   (`validate/*.rs` reads `e.carries` across nine check modules;
 ///   `fluids.rs` passes `e.mirror` into `fluid_ports`), so two layouts
 ///   differing only there genuinely validate differently — omitting them
-///   let "bit-identical" mean less than it claimed.
-/// - `rate` is NOT read by any validator or engine decision
-///   (`docs/rate-stamp-semantics.md`; the `PlacedEntity::rate` doc says so
-///   outright, and the round-7 review's claim that `belt_flow` reads it
-///   is wrong — those sites read `ItemFlow::rate` off the solver). It is
-///   in the signature anyway because a differing stamp means the pipeline
-///   made a different lane-family decision on the way to the same tiles,
-///   which is worth not calling "identical" — a provenance difference,
-///   not a validation-visible one.
+///   let the "identical" label mean less than it claimed.
+/// - `rate` is NOT read by any validator or engine decision. Receipts,
+///   since two reviews have now claimed opposite things: all 21 `.rate`
+///   reads across `validate/` and `connectivity.rs` are on solver
+///   `ItemFlow`s (`o`/`i`/`f`/`out`/`inp`/`sur`/`flow`/`ext`), none on a
+///   `PlacedEntity`; the three `belt_flow.rs` lines #686 round 7 cited as
+///   proof (`:684`, `:1675`, `:3286`) read `e.carries`, `e.carries` and
+///   `build_ug_pairs` respectively. `docs/rate-stamp-semantics.md` and
+///   the `PlacedEntity::rate` doc say the same. It is in the signature
+///   anyway because a differing stamp means the pipeline made a different
+///   lane-family decision on the way to the same tiles — which is worth
+///   not calling "identical" — and that choice REDEFINES the label:
+///
+/// **A "no-op" here means tiles AND stamps identical, not
+/// validator-identical.** The two differ only if `rate` can vary
+/// independently of geometry; where it does, this reports the variant as
+/// doing something when the validator would not care (#692 review round
+/// 2, 1/3). Measured on the current fixture set the redefinition changes
+/// nothing — the ratios are identical to the pre-`rate` run (di-off 5/6,
+/// di-forced 5/6, cells-off 6/6, hs-off 5/6, partitioned 4/6) — so
+/// nothing here is currently reported noisy on a stamp alone.
 ///
 /// `f64` has no `Ord`, so the rate travels as `to_bits`: exact equality
 /// is all this needs, and the sort only wants a total order, not a
@@ -428,13 +450,19 @@ fn check_firing_census() {
         );
     }
     println!(
-        "\n=== per-variant no-op check (bit-identical entities vs that \
+        "\n=== per-variant no-op check (entities identical to that \
          fixture's own default; round 6, #686) ==="
     );
     println!(
         "  (denominator counts COMPARABLE builds only — a build whose \
          fixture's own default refused has no baseline and is reported \
          separately, never as a difference; #675 follow-up)"
+    );
+    println!(
+        "  (\"identical\" = tiles AND stamps — name/x/y/direction/recipe/\
+         carries/mirror/rate. `rate` is not validator-visible, so this is \
+         a stricter test than \"validates the same\": a variant differing \
+         only in its rate stamp counts as NOT identical)"
     );
     for &(vname, _, native_adjacent) in variants.iter().filter(|t| t.0 != "default") {
         let total = comparable_builds.get(vname).copied().unwrap_or(0);
@@ -488,7 +516,10 @@ fn check_firing_census() {
          apply before concluding a quiet category is inert). A firing on \
          a variant identical to default carries no selection evidence, \
          and a variant that is no-op across all fixtures measures \
-         nothing here — see the per-variant no-op check above. That rule \
+         nothing here — see the per-variant no-op check above, and note \
+         that its \"identical\" is tiles-and-stamps, a STRICTER test than \
+         validator-identical, so it can only under-report no-ops, never \
+         over-report them. That rule \
          is enforced by the PAIRING, not by the no-op flag: a genuinely \
          identical variant validates identically, so its firings also \
          land on the same fixture's default side and cannot set either \
@@ -644,13 +675,20 @@ fn selection_scoreboard_census() {
         }
 
         for (n, (rows, decided)) in blocks.iter().enumerate() {
-            if blocks.len() > 1 {
-                // More than one selection ran for this fixture: an inner
-                // one belongs to a candidate whose `produce` recursed.
+            let is_outer = n == blocks.len() - 1;
+            if blocks.len() > 1 && !is_outer {
+                // An inner block belongs to a candidate whose `produce`
+                // recursed. The OUTER block is the last one and must not
+                // wear this banner — it is the row a reader is sent to
+                // (#692 review round 2, 1/3: the banner previously
+                // labelled "selection 2/2" as nested, which is exactly
+                // the load-bearing one).
                 println!(
-                    "   [selection {}/{} — a nested block comes from a \
-                     candidate's own search]",
+                    "   [selection {}/{} — nested, from a candidate's own \
+                     search; the outer selection is {}/{}]",
                     n + 1,
+                    blocks.len(),
+                    blocks.len(),
                     blocks.len()
                 );
             }
@@ -706,7 +744,28 @@ fn selection_scoreboard_census() {
             match decided {
                 Some((winner, stage)) => {
                     println!("   => winner: {winner}   deciding stage: {}", stage_name(*stage));
-                    if n == blocks.len() - 1 {
+                    // The block-pairing invariant, checked rather than
+                    // assumed (#692 review round 2, 3/3): a selection's
+                    // winner must be one of ITS OWN rows. If grouping ever
+                    // breaks — a reorder, or a nested selection emitted
+                    // after the outer terminal — this fires instead of the
+                    // table quietly attributing the wrong block's verdicts.
+                    // A diagnostic prints its failures loudly rather than
+                    // panicking; the CI-enforced version of this invariant
+                    // is `selection_scoreboard_contract` below.
+                    let winner_in_block = rows.iter().any(|ev| {
+                        matches!(ev, TraceEvent::SelectionCandidateEvaluated { name, .. }
+                                 if name == winner)
+                    });
+                    if !winner_in_block {
+                        println!(
+                            "   !! BLOCK PAIRING BROKEN: winner `{winner}` is not among \
+                             this block's {} rows — the summary row below is not \
+                             trustworthy",
+                            rows.len()
+                        );
+                    }
+                    if is_outer {
                         // The OUTER selection is the last block: nested
                         // ones close while the outer is still running.
                         stage_tally.push((
@@ -718,7 +777,7 @@ fn selection_scoreboard_census() {
                 }
                 None => {
                     println!("   => NO WINNER (every candidate failed; see reasons above)");
-                    if n == blocks.len() - 1 {
+                    if is_outer {
                         stage_tally.push((
                             fixture_key.clone(),
                             "—".to_string(),
@@ -758,5 +817,152 @@ fn selection_scoreboard_census() {
          is also why the deciding STAGE is the load-bearing column: it \
          says which question was actually asked, where the counts only \
          say what the answer was made of."
+    );
+}
+
+// ---------------------------------------------------------------------------
+// RFC-070 Phase 0b: the CI contract (NOT #[ignore]d)
+// ---------------------------------------------------------------------------
+
+/// The one non-ignored test in this file, and deliberately so.
+///
+/// Everything else here is a print-only diagnostic a human runs with
+/// `--ignored`. That is fine for a table nobody's build depends on — but
+/// the Phase-0b scoreboard is the oracle every later RFC-070 phase diffs
+/// its shadow loop against, and an oracle whose only reader is a human
+/// running a diagnostic by hand has no failure mode: a broken stage tag,
+/// a row that stops being emitted, or an `from_run` outcome deduced
+/// backwards would all ship green (#692 review round 2, 3/3). The repo's
+/// own doctrine names this exactly — "a check going quiet is not evidence
+/// the problem is fixed" (`docs/validator-reporting.md`).
+///
+/// So this pins the CONTRACT, not the layout: every candidate slot emits
+/// a row, the rows arrive in the canonical order and before the terminal
+/// event, the winner is one of that block's own rows, and the deciding
+/// stage is the one this fixture actually reaches. Tile geometry is the
+/// golden-hash tests' job and is deliberately not asserted here.
+///
+/// The expected candidate order is written out longhand rather than
+/// imported from `CANDIDATE_ORDER`: a test that reads the same constant
+/// the code reads cannot detect a wrong reorder, because both move
+/// together. This list is the independent second opinion.
+#[test]
+#[ntest::timeout(120_000)]
+fn selection_scoreboard_contract() {
+    use spaghettio_core::trace::{self, SelectionCandidateOutcome, SelectionStage, TraceEvent};
+
+    /// Slot order asserted independently of the engine's own constant.
+    const EXPECTED_ORDER: [&str; 7] = [
+        "native",
+        "k1-shape-fix",
+        "size-split-2",
+        "merge-tap",
+        "cell-composed",
+        "direct-insertion",
+        "horizontal-stack",
+    ];
+
+    let inputs: FxHashSet<String> = ["iron-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-1")
+        .expect("tier-1 fixture must solve");
+
+    let guard = trace::start_trace();
+    let layout = layout::build_bus_layout(&sr, LayoutOptions::default());
+    let events = trace::drain_events();
+    drop(guard);
+    layout.expect("tier-1 fixture must build");
+
+    // --- every slot emits a row, in order, before the terminal event ---
+    let rows: Vec<(&str, SelectionCandidateOutcome)> = events
+        .iter()
+        .filter_map(|e| match e {
+            TraceEvent::SelectionCandidateEvaluated { name, outcome, .. } => {
+                Some((name.as_str(), *outcome))
+            }
+            _ => None,
+        })
+        .collect();
+    let names: Vec<&str> = rows.iter().map(|(n, _)| *n).collect();
+    assert_eq!(
+        names, EXPECTED_ORDER,
+        "the scoreboard must emit one row per candidate SLOT, in canonical order — \
+         a missing row means a candidate became unobservable, and a reordered one \
+         means every recorded verdict is attributed to the wrong candidate"
+    );
+
+    let decided: Vec<(&str, SelectionStage)> = events
+        .iter()
+        .filter_map(|e| match e {
+            TraceEvent::SelectionDecided { winner, stage } => Some((winner.as_str(), *stage)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        decided.len(),
+        1,
+        "exactly one selection must terminate for this fixture; got {decided:?}"
+    );
+
+    let last_row = events
+        .iter()
+        .rposition(|e| matches!(e, TraceEvent::SelectionCandidateEvaluated { .. }))
+        .expect("rows asserted present above");
+    let terminal = events
+        .iter()
+        .position(|e| matches!(e, TraceEvent::SelectionDecided { .. }))
+        .expect("terminal asserted present above");
+    assert!(
+        last_row < terminal,
+        "all rows must precede their `SelectionDecided` — the census pairs a block \
+         to its verdict by flushing on the terminal event, so emitting a row after \
+         it would silently regroup the table"
+    );
+
+    // --- the winner is one of this block's own rows, and it produced ---
+    let (winner, stage) = decided[0];
+    let winner_row = rows
+        .iter()
+        .find(|(n, _)| *n == winner)
+        .unwrap_or_else(|| panic!("winner `{winner}` is not among the emitted rows {names:?}"));
+    assert_eq!(
+        winner_row.1,
+        SelectionCandidateOutcome::Produced,
+        "the winner's own row must say it produced a layout"
+    );
+
+    // --- `from_run`'s outcome deduction, across two live variants ---
+    let outcome_of = |name: &str| {
+        rows.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("no row for {name}")).1
+    };
+    assert_eq!(
+        outcome_of("cell-composed"),
+        SelectionCandidateOutcome::Produced,
+        "cell-composition is a live candidate under `LayoutOptions::default()` \
+         (`cell_composition: Candidate`) and produces on this chain-eligible fixture; \
+         if this flips, the candidate FIELD changed, and the stage assertion below \
+         will move with it"
+    );
+    assert_eq!(
+        outcome_of("k1-shape-fix"),
+        SelectionCandidateOutcome::NotRun,
+        "k1-shape-fix is gated on PartitionedDecomposed + an unaccepted native, \
+         neither true here — `not-run` and `refused` are different facts and must \
+         not collapse"
+    );
+
+    // --- the deciding stage ---
+    assert_eq!(winner, "native", "native must win this clean tier-1 fixture; got {winner}");
+    assert_eq!(
+        stage,
+        SelectionStage::BestErrorFree,
+        "expected the error-free tier to decide: native and cell-composed both \
+         produce here, so `clean_flags` runs (its gate is `n_layouts > 1`) and the \
+         validation tier picks before `best-accepted` is reached. If this fails, \
+         read it as one of TWO different things — the stage TAGGING broke (an \
+         instrumentation bug, fix here), or the CANDIDATE SET for this fixture \
+         changed so only one candidate now produces (an engine change, in which \
+         case the expected stage is `best-accepted` and the RFC-070 Phase-0 \
+         baseline needs re-taking). The `cell-composed` assertion above \
+         discriminates between them."
     );
 }
