@@ -68,6 +68,23 @@
 //! git checkout -- crates/core/data/sat-zones-ci.bin   # ALWAYS, every run
 //! ```
 //!
+//! # Reproducibility is of the WHOLE RUN, in order — not of one cell
+//!
+//! A trap worth knowing before Phase 2a re-runs a divergent cell on its
+//! own (#694 review round 6). `zone_cache::lookup_table()` is a
+//! process-wide `OnceLock`, seeded once from disk and then **mutated in
+//! memory** as solves append newly-found zones. All 160 cells run in one
+//! process, so cell N is solved against a map that cells 1..N-1 have
+//! already grown. The committed hash describes the run's STARTING disk
+//! state, which is what makes the full sweep reproducible — measured
+//! seven times, byte-identical every time — but it says nothing about
+//! what any individual cell saw.
+//!
+//! Consequence: **re-running one fixture in isolation is not guaranteed
+//! to reproduce its committed cell.** To adjudicate a divergence, re-run
+//! the whole corpus and read that cell out of it, or accept an isolated
+//! re-run as indicative rather than as the baseline's own value.
+//!
 //! `SPAGHETTIO_PARITY_CORPUS=bless` rewrites the committed baseline;
 //! `=check` fails on any cell that differs from it. `bless` REFUSES if
 //! this run's zone cache is not the one the committed baseline was
