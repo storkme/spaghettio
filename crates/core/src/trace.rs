@@ -1501,6 +1501,47 @@ pub enum TraceEvent {
         new_rate: f64,
         full_belt_cap: f64,
     },
+
+    /// Census-only instrumentation (offpath-code-followups.md G1 follow-up,
+    /// #689 W1d): emitted once per junction seed (once per outer
+    /// cluster-loop iteration in `ghost_router` that reaches
+    /// `junction_solver::solve_crossing` — NOT re-emitted by the muted
+    /// context-conflict retry, which reuses this same `keys_at_tile`
+    /// without recomputing it) — purely observational, no effect on
+    /// routing (gated behind `SPAGHETTIO_JUNCTION_SEED_CENSUS`, so
+    /// production pays nothing by default — see the emit site).
+    ///
+    /// `n_specs`/`n_distinct_items` are CLUSTER-WIDE: the union of every
+    /// spec whose path touches ANY tile in the cluster, which can span
+    /// multiple tiles already at seed time (before `solve_crossing`'s own
+    /// growth). `n_specs > n_distinct_items` therefore means "this
+    /// cluster's participants include an item-sharing pair SOMEWHERE in
+    /// the cluster" — not "one tile has two same-item specs", which is
+    /// the rung's actual `tile_count == 1` predicate. `cluster_tile_count`
+    /// (the cluster's tile count at seed time) lets a consumer recover the
+    /// precise question: when `cluster_tile_count == 1`, the cluster IS a
+    /// single tile, so `keys_at_tile` is exactly the spec set at that one
+    /// tile and `n_specs > n_distinct_items` becomes a true single-tile
+    /// same-item crossing (#689 W1d review round 1 caught the conflation
+    /// in an earlier version of this doc comment).
+    ///
+    /// `has_pipe` is measured over the RAW spec set touching the
+    /// cluster's tiles *before* `keys_at_tile`'s `SpecKind::Pipe` filter
+    /// runs (that filter is why pipes can never appear in
+    /// `n_specs`/`n_distinct_items` — see #687) — kept as a corroborating
+    /// receipt of that finding, not a new hypothesis.
+    JunctionSeedCensus {
+        seed_x: i32,
+        seed_y: i32,
+        /// Number of tiles in this seed's cluster at seed time (before any
+        /// growth). `1` means `n_specs`/`n_distinct_items` describe a
+        /// single physical tile; `>1` means they're a cluster-wide union
+        /// that may conflate specs from different tiles.
+        cluster_tile_count: usize,
+        n_specs: usize,
+        n_distinct_items: usize,
+        has_pipe: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------

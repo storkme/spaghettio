@@ -2890,6 +2890,22 @@ pub fn route_bus_ghost(
     // used to scrape from the trace collector — without needing a trace guard.
     let mut cap_coords: Vec<(i32, i32)> = Vec::new();
 
+    // Census-only instrumentation (offpath-code-followups.md G1 follow-up,
+    // #689 W1d): checked ONCE per `route_bus_ghost` call, outside the
+    // cluster loop, rather than per cluster (the `dump_region_fixture`
+    // precedent's per-call env lookup, hoisted one level further). Off by
+    // default — the shipped web path (`build_bus_layout_streaming`)
+    // always installs a trace collector *and* sink, so gating on
+    // `trace::is_active()` alone would not skip this in production; an
+    // explicit opt-in env var is what actually makes it zero-cost by
+    // default (round 1 review finding). Value-based, not merely
+    // presence-based (round 3 review finding): a shop-wide diagnostics
+    // block that sets every `SPAGHETTIO_*` var to `"0"` to disable them
+    // must not accidentally enable this one.
+    let junction_seed_census_enabled = std::env::var("SPAGHETTIO_JUNCTION_SEED_CENSUS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     for cluster in &clusters {
         // `corridor_handled` grows during this loop — a prior cluster's
         // SAT footprint may have absorbed tiles that belong to this
@@ -2963,6 +2979,108 @@ pub fn route_bus_ghost(
             })
             .map(|(key, _)| key.as_str())
             .collect();
+
+        // Census-only instrumentation (offpath-code-followups.md G1
+        // follow-up, #689 W1d): record this seed's shape before it reaches
+        // `solve_crossing`. Purely observational and gated behind
+        // `junction_seed_census_enabled` (checked once above, not per
+        // cluster) — off by default, so production pays nothing beyond
+        // the one hoisted env lookup per `route_bus_ghost` call.
+        // `has_pipe` is measured over the RAW spec set touching the
+        // cluster's tiles, i.e. BEFORE the `SpecKind::Pipe` filter above
+        // runs, so it can actually detect pipe presence instead of
+        // trivially reading false through the filter that excludes them.
+        if junction_seed_census_enabled {
+            let n_specs = keys_at_tile.len();
+            // Round 2 review: the round-1 fallback (unwrap_or the raw key,
+            // guaranteed unique) errs the OTHER way from round 1's
+            // filter_map bug — it can HIDE a genuine same-item pair
+            // whenever `spec_items` lacks an entry, which is not
+            // hypothetical (`ghost_router.rs`'s fluid catch-up only tags a
+            // synth key when its path is ENTIRELY on pipe tiles; a fluid
+            // synth key touching any non-pipe tile stays untagged). Every
+            // synthetic key format in this file (`trunk:{item}:{x}`,
+            // `tap:{item}:{x}:{tap_y}`, `flow:{item}:{x}[:ret:{y}]`,
+            // `feeder:{item}:{x}:{y}`, ghost_router.rs:1935) puts the item
+            // as the first colon-delimited segment after its prefix —
+            // recover it from the key itself (same technique the fluid
+            // catch-up above already uses) before falling back to the
+            // key as an absolute last resort. `"tap:mergetap:"` MUST
+            // be checked before the plain `"tap:"` prefix (round 3 review
+            // finding): a merge-tap feed key is
+            // `format!("tap{MERGE_TAP_SEGMENT_TAG}{item}:{x}:{y}")` =
+            // `"tap:mergetap:{item}:{x}:{y}"`, so stripping only `"tap:"`
+            // would recover the literal string "mergetap" as the item
+            // instead of the real one. Currently these keys are always
+            // registered as regular `BeltSpec`s (so `spec_items.get(key)`
+            // above already resolves them and this fallback path is never
+            // reached for them today) — ordering the prefixes this way
+            // keeps it correct if that ever changes.
+            fn resolve_item<'a>(key: &'a str, spec_items: &'a FxHashMap<String, String>) -> &'a str {
+                if let Some(item) = spec_items.get(key) {
+                    return item.as_str();
+                }
+                // Checked ahead of the generic "tap:" prefix below, tied
+                // to the real constant (not a duplicated literal) so it
+                // can't drift from the merge-tap key format itself.
+                if let Some(rest) =
+                    key.strip_prefix("tap").and_then(|r| r.strip_prefix(MERGE_TAP_SEGMENT_TAG))
+                {
+                    if let Some((item, _)) = rest.split_once(':') {
+                        return item;
+                    }
+                }
+                for prefix in ["trunk:", "tap:", "flow:", "feeder:"] {
+                    if let Some(rest) = key.strip_prefix(prefix) {
+                        if let Some((item, _)) = rest.split_once(':') {
+                            return item;
+                        }
+                    }
+                }
+                // Absolute last resort, reached only if BOTH the
+                // `spec_items` lookup and every known prefix above miss —
+                // not observed in any corpus run to date (round 4 review
+                // fence, since this path is genuinely untested): treating
+                // the raw key as a unique pseudo-item is the conservative
+                // choice for THIS census's specific failure mode (round 1
+                // review: never silently manufacture a same-item pair
+                // that isn't real), but it has its own opposite residual
+                // risk — two specs that truly share an item under some
+                // future, unrecognized key format would each get their
+                // own unique key here and read as "distinct", hiding a
+                // real same-item pair instead of fabricating one. If this
+                // path is ever observed firing (add an eprintln! probe if
+                // investigating), extend the prefix list above rather
+                // than trusting the count it produces.
+                key
+            }
+            let n_distinct_items: usize = keys_at_tile
+                .iter()
+                .map(|&key| resolve_item(key, &spec_items))
+                .collect::<FxHashSet<&str>>()
+                .len();
+            // Round 4 review: this is O(sum of every routed path's
+            // length) per cluster when the census is on, not O(1) — it
+            // re-scans every path in `routed_paths` (the same cost class
+            // `keys_at_tile`'s own filter above already pays). Acceptable
+            // for an opt-in diagnostic gated off by default, but not
+            // free; don't reach for this pattern in an always-on path.
+            let has_pipe = routed_paths.iter().any(|(key, path)| {
+                path.iter().any(|t| cluster_tiles.contains(t))
+                    && matches!(
+                        spec_kinds.get(key.as_str()),
+                        Some(crate::bus::junction::SpecKind::Pipe)
+                    )
+            });
+            trace::emit(trace::TraceEvent::JunctionSeedCensus {
+                seed_x: cluster[0].0,
+                seed_y: cluster[0].1,
+                cluster_tile_count: cluster.len(),
+                n_specs,
+                n_distinct_items,
+                has_pipe,
+            });
+        }
 
         // Pending crossings for the DeferredExit check: the subset of
         // `crossing_set` whose cluster hasn't committed yet. Excluding
