@@ -241,6 +241,21 @@ const FIXTURES: &[Fixture] = &[
 /// doc's second-fossil note. Keeping both is what lets a divergence be
 /// attributed to the cell-composed arm rather than to the inserter
 /// ladder.
+///
+/// `e2e-harness` encodes the harness as a DELTA from `LayoutOptions::
+/// default()`, which means it is only as accurate as this list — a
+/// future change to `run_e2e_inner`'s other pinned fields, or a default
+/// flipping to match a harness value, would break the "this is what the
+/// harness runs" claim with no corpus cell moving (#694 review round 2).
+/// It cannot be asserted automatically: `run_e2e_inner` is a private fn
+/// in a different test binary. So it is hand-verified instead, and here
+/// is the receipt to re-check against — as of `a54b9a7a`,
+/// `tests/e2e.rs:342-358` differs from the struct defaults on exactly
+/// two fields, `cell_composition` (`Default::default()` → the enum's
+/// `Off`) and `inserter_capacity: 0`; every other field it spells
+/// (`max_inserter_tier`, `quality`, `wire_mode`, `merge_tap`,
+/// `stacking`, `splitter_tap_spacers`) already equals its default.
+/// Re-run that diff if either fossil is ever fixed.
 type OptionSet = (&'static str, fn(&mut LayoutOptions));
 
 const OPTION_SETS: &[OptionSet] = &[
@@ -269,6 +284,15 @@ const OPTION_SETS: &[OptionSet] = &[
 /// - `no-winner` — every candidate failed: rows emitted, no terminal.
 /// - `no-selection` — the build never reached the search at all.
 /// - `no-solve` — the solver refused this (fixture, machine) pair.
+///
+/// `no-winner` and `no-selection` do not consult `built`, and do not need
+/// to: both IMPLY it errored. A stream with rows but no terminal is
+/// `select_best_decomposition`'s all-candidates-failed path, which
+/// returns `Err` by construction; a stream with no rows at all means the
+/// build refused before reaching the search. So "search ran, all
+/// refused" and "build failed after the search ran" are the same fact
+/// here, not two collapsed ones (#694 review round 2, adjudicated as
+/// designed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Cell {
     fixture: String,
@@ -325,16 +349,23 @@ fn resolve_zone_cache_path() -> std::path::PathBuf {
     base.join("spaghettio").join("sat-zones.bin")
 }
 
-/// Cheap content hash of the pinned cache, captured BEFORE any build —
-/// a run appends newly-solved zones, so hashing afterwards would describe
+/// Content hash of the pinned cache, captured BEFORE any build — a run
+/// appends newly-solved zones, so hashing afterwards would describe
 /// post-run bytes rather than the pin actually consulted (the mistake
 /// #693 round 3 caught in the meter tripwire).
+///
+/// **SHA-256, not `DefaultHasher`** (#694 review round 2). This value is
+/// COMMITTED and then compared against on every later run, so it has to
+/// be an identity that outlives the toolchain: `DefaultHasher`'s
+/// algorithm is explicitly documented as unspecified and unstable across
+/// releases, which would make the next Rust bump refuse to bless the
+/// very cache it had blessed against, and flag every `check` as a
+/// provenance mismatch. `sha2` is already a dev-dependency and `e2e.rs`
+/// already hashes content with it.
 fn hash_zone_cache() -> Option<String> {
-    use std::hash::{Hash, Hasher};
+    use sha2::{Digest, Sha256};
     let bytes = std::fs::read(resolve_zone_cache_path()).ok()?;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    Some(format!("{:016x}", hasher.finish()))
+    Some(format!("{:x}", Sha256::digest(&bytes)))
 }
 
 fn stage_name(s: SelectionStage) -> &'static str {
@@ -425,6 +456,23 @@ fn outer_selection(events: &[TraceEvent]) -> (String, Option<(String, SelectionS
         TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
         _ => None,
     });
+    // Membership, on top of the timing guard above (#694 review round 2).
+    // The timing check catches a terminal that arrives out of order; it
+    // does NOT catch a terminal that arrives in order but names a
+    // candidate from a different block. That cell would look
+    // self-consistent — plausible winner, plausible stage, seven
+    // plausible outcomes — and `check` would re-verify it green forever,
+    // because `check` reads through this same extractor. This is the
+    // same invariant `assert_scoreboard_contract` pins on its three
+    // fixtures; here it covers all 160.
+    if let Some((winner, _)) = &decided {
+        assert!(
+            names.contains(&winner.as_str()),
+            "the outer selection's winner `{winner}` is not among the seven rows this \
+             cell recorded ({names:?}) — the verdict and the candidate outcomes are from \
+             different blocks. Do not bless this baseline"
+        );
+    }
     (outcomes, decided)
 }
 
@@ -622,8 +670,16 @@ fn parity_corpus() {
                      SPAGHETTIO_PARITY_CORPUS=bless-repin if you really mean it"
                 );
                 if let Some(p) = &prior {
+                    // NOT `is_none() || ==`. A prior baseline recording
+                    // no hash must fail the guard too, not satisfy it:
+                    // one `bless-repin` with no resolvable cache would
+                    // otherwise write `null` and permanently disarm every
+                    // later plain `bless` through that disjunct (#694
+                    // review round 2). "No prior baseline" (handled by
+                    // the `if let`) and "prior baseline recorded no hash"
+                    // are different facts, and only the first is benign.
                     assert!(
-                        p.zone_cache_hash.is_none() || p.zone_cache_hash == pin_hash,
+                        p.zone_cache_hash == pin_hash,
                         "refusing to bless against a DIFFERENT zone cache than the \
                          committed baseline's: baseline {:?}, this run {pin_hash:?}. The \
                          cells below may differ for provenance reasons rather than engine \

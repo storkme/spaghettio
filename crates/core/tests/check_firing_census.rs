@@ -871,6 +871,21 @@ impl ScoreboardFacts {
 /// imported from `CANDIDATE_ORDER`: a test that reads the same constant
 /// the code reads cannot detect a wrong reorder, because both move
 /// together. This list is the independent second opinion.
+///
+/// **Zone cache**: this pins NO cache, while `parity_corpus.rs` insists
+/// its baseline is cache-relative. The two postures are reconciled, not
+/// in tension (#694 review round 2). CI pins the cache for these at the
+/// JOB level — `ci.yml`'s `cargo nextest run -p spaghettio_core` sets
+/// `SPAGHETTIO_ZONE_CACHE_PATH` to the committed
+/// `crates/core/data/sat-zones-ci.bin` — so the CI path IS pinned and
+/// reproducible. A local unpinned `cargo test` replays the developer's
+/// own `~/.cache/spaghettio/sat-zones.bin` instead. Measured 2026-08-21:
+/// all three pass under BOTH caches (pinned 1.10s, unpinned 2.66s), so
+/// these three verdicts are stable across two different zone sets. That
+/// is a datapoint, not a proof of cache-independence — **if one of these
+/// three ever fails on a local unpinned run, re-run it with the pin
+/// before believing it.** The corpus pins harder because it commits 160
+/// rows as data; a test asserting three verdicts does not.
 fn assert_scoreboard_contract(
     item: &str,
     rate: f64,
