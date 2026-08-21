@@ -279,3 +279,54 @@ fixtures / docs split per the churn norm).
   gen-1 runs; shadow's 2× cost excluded by construction); (d) the
   parity corpus is a named Phase-0c deliverable, not an assumption;
   (e) line-anchor nits fixed with an as-of note.*
+- *2026-08-21 — **Phase 0b landed** (#689 track W1b): two trace events —
+  `SelectionCandidateEvaluated`, one per candidate SLOT (all seven, every
+  call, including the ones a gate excluded before they cost a layout
+  pass) and `SelectionDecided` (winner + deciding stage). Design call,
+  and the one the later phases depend on: the events **record what each
+  verdict mechanism already computed at its own site, and never
+  recompute**. A scoreboard that re-ran `validate()` on the side could
+  disagree with the number the decision actually used, and Phase 2a
+  diffs the shadow loop against these records — an oracle that disagrees
+  with the thing it is oracling is worse than none. The price is
+  structural holes (below); Phase 1b's offline policy replay must treat
+  a missing count as "nothing computed this", never as zero.*
+- *2026-08-21 — **the precedence chain is named as FIVE stages**, where
+  Motivation above calls it four. The first `.or()` link answers with two
+  different mechanisms: merge-tap's `ErrorKinds::quality_key` verdict
+  (which can name merge-tap OR native) and the DI/horizontal pairwise
+  `IssueCounts` resolution that may displace it. Collapsing them into one
+  tag would lose which question was asked, which is the column K70-1
+  turns on. Measured over the #686 census slice (six fixtures, default
+  options): `best-error-free` ×4, `merge-tap` ×1, `scoped-pairwise` ×1;
+  `best-accepted` and `first-produced` never fired. Note that
+  `best-accepted` — the "generic soft score" mechanism the Summary
+  treats as one of the three — decided **nothing** on this slice; if
+  Phase 0c's wider corpus repeats that, the soft score's real role is
+  the `accepted` hard gate, not the ranking.*
+- *2026-08-21 — **Phase-0b oracle gaps**, recorded so no later phase
+  assumes the baseline says more than it does. (a) Issue counts exist
+  only where a comparison needed them: a merge-tap-decided selection
+  short-circuits the `clean_flags` tier entirely, so on such a fixture
+  neither native nor merge-tap carries ANY `IssueCounts` — the kinds key
+  is all that decision looked at. Likewise a scoped-pairwise-decided
+  selection leaves every non-participant countless. (b) `ErrorKinds` is
+  computed only by the merge-tap decision, so no candidate on a
+  non-Pooled or native-clean solve has one. (c) A `not-run` row has no
+  reason: the gates (`try_cells` / `try_di` / `try_horizontal` /
+  `try_k1_shape_fix` / `try_size_split` / `try_merge_tap`) are
+  conjunctions of booleans at the call site, so the scoreboard can say a
+  candidate was not tried but not WHICH conjunct excluded it — Phase 1b's
+  uniform loop should make the gate a first-class reportable predicate.
+  (d) **The refusal-attribution gap #686 named is NOT closed**: DI,
+  horizontal-stack and cell-composed stringify their own validation
+  failure as `e.to_string().lines().next()`, which yields
+  "…failed validation: Validation failed:" and discards the issue list
+  before anything can record it. Which CATEGORIES fire inside a
+  self-refused candidate therefore remains invisible; recovering it means
+  changing what `produce()` keeps, which is not additive and was kept out
+  of 0b. (e) DI's internal `DiClaimOrder::Search` two-arm race lives
+  inside `produce()`; the scoreboard sees one DI row, not two arms (moot
+  under the default `Upstream`). (f) The scoreboard is per selection
+  CALL — a candidate whose `produce` runs its own search emits its own
+  block; none occurred on the census slice.*
