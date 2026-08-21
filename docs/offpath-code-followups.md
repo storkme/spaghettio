@@ -251,10 +251,10 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
        reworked to let the cheap template actually fire. Don't delete on
        this note alone; run the census.
     3. **Census run 2026-08-21 (#689 W1d, `crates/core/tests/
-       junction_seed_census.rs`, two rounds of adversarial review
-       absorbed) — zero seeds matching the rung's exact firing predicate
-       observed; a separate, weaker multi-tile signal is common but
-       doesn't bear on reachability.** New behavior-neutral
+       junction_seed_census.rs`, four rounds of adversarial review
+       absorbed) — zero seeds observed in the necessary-superset bucket
+       for the rung's firing conditions; a separate, weaker multi-tile
+       signal is common but doesn't bear on reachability.** New behavior-neutral
        `TraceEvent::JunctionSeedCensus` (`trace.rs`, gated behind
        `SPAGHETTIO_JUNCTION_SEED_CENSUS`, off by default — the shipped web
        path always has a trace collector *and* sink active, so an
@@ -266,11 +266,23 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
        e2e "from-ore" fixtures listed in the test's module doc (12
        fixtures total, default `LayoutOptions` + each fixture's own
        belt-tier constraint; SAT zone cache pinned to `sat-zones-ci.bin`).
-       **The rung's exact firing predicate**
-       (`PerpendicularTemplateStrategy::try_solve`, ghost_router.rs
-       6177/6183/6186): `region.tile_count() == 1` AND `specs.len() == 2`.
-       Three review rounds found real methodology gaps in earlier passes of
-       this census, both now fixed:
+       **The rung's actual firing gate is threefold** (`Perpendicular
+       TemplateStrategy::try_solve`, ghost_router.rs 6177/6183/6186):
+       `region.tile_count() == 1` AND `specs.len() == 2` AND
+       `is_perpendicular(da, db)` on the two specs' directions (round 4
+       review finding — an earlier version of this entry said "exact
+       firing predicate" for just the first two conditions, overclaiming
+       precision). This census records neither direction, so it cannot
+       evaluate the third condition, and `specs.len()` at the exact
+       moment `try_solve` runs may include specs the growth loop
+       encountered after this seed's `keys_at_tile` was captured. So
+       `cluster_tile_count == 1 && n_specs == 2 && n_distinct_items == 1`
+       is a NECESSARY condition for firing (a superset), not the firing
+       predicate itself — which is still sufficient for the zero
+       conclusion below: any actual firing must land in this bucket, so
+       an empty bucket means zero firings observed, full stop; it just
+       isn't the tightest possible bucket. Four review rounds found real
+       methodology gaps in earlier passes of this census, all now fixed:
        - **Round 1**: `n_specs`/`n_distinct_items` are the union of every
          spec touching ANY tile in a cluster, and a cluster can already
          span multiple tiles at seed time — so `n_specs > n_distinct_items`
@@ -325,29 +337,75 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
          before the fallback is ever consulted), but fixed by checking the
          merge-tap-specific prefix first so it can't matter later either.
          (d) the "pipe-tagged == single-spec" identity was prose-only —
-         now `assert_eq!`-enforced, so corpus drift fails the test instead
-         of quietly rotting this doc. (e) one claim in round 2's
-         absorption was refuted rather than applied: the bot's assertion
-         that the `unsafe { std::env::set_var(...) }` wrapper is
-         "unnecessary under edition 2021" does not hold on this repo's
-         pinned toolchain (rustc 1.95.0) — verified directly:
-         `unsafe { std::env::set_var(...) }` under
-         `#[deny(unused_unsafe)]` compiles with zero warnings, while the
-         same experiment on an ordinary safe call (`unsafe {
-         println!(...) }`) correctly fires `unused_unsafe` — so the
-         wrapper is required, not vestigial, on this toolchain regardless
-         of edition. The env var IS now restored after the test via an
-         RAII guard (the valid half of that finding — the mutation was
-         never being undone, which could pollute a future test added to
-         this same file).
+         initially made `assert_eq!`-enforced (superseded in round 4,
+         below). (e) one claim was INITIALLY refuted, then that
+         refutation was itself corrected in round 4 (see below) — the
+         `unsafe { std::env::set_var(...) }` question needed a sharper
+         test than the one first used. The env var IS restored after the
+         test via an RAII guard regardless (the valid half of the
+         original finding — the mutation was never being undone, which
+         could pollute a future test added to this same file).
+       - **Round 4** (closing round, all CI green): (a) the two
+         `pipe-tagged == single-spec` `assert_eq!`s from round 3 could
+         themselves abort the test — a legitimate new seed shape (round
+         3's own `zero_specs_after_filter`: `has_pipe = true`, `n_specs =
+         0`, so NOT single-spec) trips `pipe_tagged_but_not_single_spec`
+         by construction, meaning the census would crash exactly when it
+         found something worth reporting. Demoted both to printed
+         diagnostics with a loud `⚠ UNEXPECTED` marker; the ONE remaining
+         hard assertion is `bucket_sum == total_seeds`, a true tautology
+         (the match is exhaustive) rather than a data-dependent
+         correlation a real corpus shape could trip. (b) `resolve_item`
+         was missing the `feeder:{item}:{x}:{y}` prefix (ghost_router.rs
+         1935) — added, and the raw-key absolute-last-resort now carries
+         an explicit comment fence naming its own residual bias (two
+         specs sharing an item under some future unrecognized key format
+         would each read as "distinct" there, hiding rather than
+         fabricating a same-item pair — the opposite direction from the
+         round-1/round-2 bugs, and, like the merge-tap case, unobserved
+         in every corpus run to date). (c) reworded "exact firing
+         predicate" to "necessary superset" throughout (see above) — the
+         zero conclusion survives the correction; the wording claiming
+         precision it didn't have does not. (d) added an explicit note
+         that the `has_pipe` computation is O(sum of every routed path's
+         length) per cluster when the census is on, not O(1) — cheap
+         enough for an opt-in diagnostic, but not free, and not a pattern
+         to reach for in an always-on path. (e) fixed a misleading print:
+         "pipe-tagged seeds ... expected 0 by construction" contradicted
+         the very next line reporting 11 — corrected to "expected to
+         equal the single-spec bypass count; any excess is the signal."
+         (f) **the round-3 refutation of the `unsafe` finding was itself
+         wrong, and is corrected here.** Round 3 tested only whether
+         wrapping the call in `unsafe {}` triggered `unused_unsafe` (it
+         didn't) and concluded the wrapper was therefore required — but
+         that test doesn't distinguish "required" from "tolerated by a
+         special lint carve-out." The decisive test is whether the BARE,
+         unwrapped call compiles: at `--edition 2021` it does, with zero
+         errors or warnings; at `--edition 2024` the same bare call fails
+         to compile with `E0133` ("call to unsafe function"). `crates/
+         core/Cargo.toml` pins `edition = "2021"` (checked directly, not
+         assumed). So on this crate's actual edition, `std::env::set_var`
+         is a plain safe function, and wrapping it in `unsafe {}` was
+         genuinely unnecessary — round 3's "confirmation" was an artifact
+         of `set_var`/`remove_var` carrying a `#[rustc_deprecated_safe_
+         2024]`-style attribute that specifically suppresses
+         `unused_unsafe` for pre-emptive wrapping, to ease the migration
+         to edition 2024 (where the functions become genuinely unsafe)
+         without warning either style of caller in the meantime. The
+         `unsafe` blocks are removed; a corrected comment explains the
+         edition-conditional truth and flags that a future edition-2024
+         bump would need them back.
        **Corrected, reconciled result — 111 seeds partition as:** 11
        single-spec pipe-bypass seeds, 31 single-tile 2-different-item
        crossings (the shape point 1's item-conflict-gate finding is
        about), 0 single-tile clusters with >2 specs, 3 multi-tile
        clusters with all-distinct items, and 66 multi-tile clusters with
        an item-sharing pair somewhere in their participant union.
-       **Zero seeds match the rung's exact predicate**
-       (`cluster_tile_count == 1 && n_specs == 2 && n_distinct_items == 1`).
+       **Zero seeds fall in the necessary-superset bucket for the rung's
+       firing conditions**
+       (`cluster_tile_count == 1 && n_specs == 2 && n_distinct_items == 1`
+       — see above for why this is a superset, not the exact predicate,
+       and why the zero conclusion holds regardless).
        The 66 multi-tile figure is a separate, explicitly weaker signal —
        round 2 review flagged it as likely dominated by the mundane case
        of a trunk column and its own non-last tap-off sharing an item

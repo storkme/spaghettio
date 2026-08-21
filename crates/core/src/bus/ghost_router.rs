@@ -3000,11 +3000,12 @@ pub fn route_bus_ghost(
             // synth key when its path is ENTIRELY on pipe tiles; a fluid
             // synth key touching any non-pipe tile stays untagged). Every
             // synthetic key format in this file (`trunk:{item}:{x}`,
-            // `tap:{item}:{x}:{tap_y}`, `flow:{item}:{x}[:ret:{y}]`) puts
-            // the item as the first colon-delimited segment after its
-            // prefix — recover it from the key itself (same technique the
-            // fluid catch-up above already uses) before falling back to
-            // the key as an absolute last resort. `"tap:mergetap:"` MUST
+            // `tap:{item}:{x}:{tap_y}`, `flow:{item}:{x}[:ret:{y}]`,
+            // `feeder:{item}:{x}:{y}`, ghost_router.rs:1935) puts the item
+            // as the first colon-delimited segment after its prefix —
+            // recover it from the key itself (same technique the fluid
+            // catch-up above already uses) before falling back to the
+            // key as an absolute last resort. `"tap:mergetap:"` MUST
             // be checked before the plain `"tap:"` prefix (round 3 review
             // finding): a merge-tap feed key is
             // `format!("tap{MERGE_TAP_SEGMENT_TAG}{item}:{x}:{y}")` =
@@ -3029,13 +3030,28 @@ pub fn route_bus_ghost(
                         return item;
                     }
                 }
-                for prefix in ["trunk:", "tap:", "flow:"] {
+                for prefix in ["trunk:", "tap:", "flow:", "feeder:"] {
                     if let Some(rest) = key.strip_prefix(prefix) {
                         if let Some((item, _)) = rest.split_once(':') {
                             return item;
                         }
                     }
                 }
+                // Absolute last resort, reached only if BOTH the
+                // `spec_items` lookup and every known prefix above miss —
+                // not observed in any corpus run to date (round 4 review
+                // fence, since this path is genuinely untested): treating
+                // the raw key as a unique pseudo-item is the conservative
+                // choice for THIS census's specific failure mode (round 1
+                // review: never silently manufacture a same-item pair
+                // that isn't real), but it has its own opposite residual
+                // risk — two specs that truly share an item under some
+                // future, unrecognized key format would each get their
+                // own unique key here and read as "distinct", hiding a
+                // real same-item pair instead of fabricating one. If this
+                // path is ever observed firing (add an eprintln! probe if
+                // investigating), extend the prefix list above rather
+                // than trusting the count it produces.
                 key
             }
             let n_distinct_items: usize = keys_at_tile
@@ -3043,6 +3059,12 @@ pub fn route_bus_ghost(
                 .map(|&key| resolve_item(key, &spec_items))
                 .collect::<FxHashSet<&str>>()
                 .len();
+            // Round 4 review: this is O(sum of every routed path's
+            // length) per cluster when the census is on, not O(1) — it
+            // re-scans every path in `routed_paths` (the same cost class
+            // `keys_at_tile`'s own filter above already pays). Acceptable
+            // for an opt-in diagnostic gated off by default, but not
+            // free; don't reach for this pattern in an always-on path.
             let has_pipe = routed_paths.iter().any(|(key, path)| {
                 path.iter().any(|t| cluster_tiles.contains(t))
                     && matches!(

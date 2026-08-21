@@ -26,19 +26,27 @@
 //! active, so gating on "is tracing active" alone would not have made
 //! this zero-cost there).
 //!
-//! **The rung's EXACT firing predicate** (`PerpendicularTemplateStrategy::
-//! try_solve`, ghost_router.rs 6177/6183/6186): `region.tile_count() == 1`
-//! AND `junction.specs.len() == 2`. This census's "true rung shape"
-//! bucket below requires both — `cluster_tile_count == 1`,
-//! `n_specs == 2`, `n_distinct_items == 1` (round 2 review finding: an
-//! earlier version of this test flagged ANY single-tile seed with
-//! `n_specs > n_distinct_items`, which is a superset of the rung's
-//! predicate — a single-tile 3+-spec cluster with an item-sharing pair
-//! would have counted as a "hit" even though the rung can never fire on
-//! it, since it hard-refuses whenever `specs.len() != 2`). This corpus
-//! happens to have zero single-tile clusters with more than 2 specs, so
-//! the superset bug didn't change the reported number, but the metric
-//! itself needed tightening.
+//! **A NECESSARY (not exact) predicate for the rung's firing** (round 4
+//! review finding: the previous wording overclaimed precision).
+//! `PerpendicularTemplateStrategy::try_solve` (ghost_router.rs
+//! 6177/6183/6186) actually gates on THREE things: `region.tile_count()
+//! == 1`, `junction.specs.len() == 2`, AND `is_perpendicular(da, db)` on
+//! the two specs' directions — this census records neither direction,
+//! so it cannot evaluate the third condition, and `specs.len()` at the
+//! moment `try_solve` runs may include specs the growth loop
+//! *encountered* after this seed's `keys_at_tile` was captured, not only
+//! the original seed set. So `cluster_tile_count == 1 && n_specs == 2 &&
+//! n_distinct_items == 1` is a bucket the rung's firing conditions are
+//! a SUBSET of — not the predicate itself. That's still enough to
+//! support the zero conclusion: any actual firing must land in this
+//! bucket, so an empty bucket means zero firings, full stop; it just
+//! isn't the tightest possible bucket. (Round 2 review separately fixed
+//! a real superset bug in an earlier pass — flagging ANY single-tile
+//! seed with `n_specs > n_distinct_items`, which would have counted a
+//! single-tile 3+-spec cluster as a "hit" even though the rung hard-
+//! refuses whenever `specs.len() != 2`; this corpus has zero such
+//! clusters, so the number didn't change, but the metric needed
+//! tightening regardless.)
 //!
 //! **Methodology note (round 1 review finding):** `n_specs`/
 //! `n_distinct_items` are CLUSTER-WIDE — the union of every spec whose
@@ -119,30 +127,38 @@ struct EnvVarGuard {
 impl EnvVarGuard {
     fn set(key: &'static str, value: &str) -> Self {
         let prev = std::env::var(key).ok();
-        // SAFETY: `std::env::set_var` requires `unsafe` on this toolchain
-        // at edition 2021 (verified: rustc 1.95.0 flags an unnecessary
-        // `unsafe` block under `#[deny(unused_unsafe)]` for an ordinary
-        // safe call — e.g. `unsafe { println!(...) }` — but does NOT flag
-        // this one, confirming the wrapper is required, not vestigial;
-        // round 3 review's claim that it's "unnecessary under edition
-        // 2021" does not hold on this toolchain). This test binary is
-        // single-threaded for env mutations — no other thread reads/
-        // writes process env concurrently here.
-        unsafe {
-            std::env::set_var(key, value);
-        }
+        // No `unsafe` here: `crates/core/Cargo.toml` pins `edition =
+        // "2021"` (verified directly, not guessed — round 4 review),
+        // and `std::env::set_var`/`remove_var` are plain safe functions
+        // at edition 2021 on this toolchain (rustc 1.95.0) — confirmed
+        // by compiling a bare, unwrapped call with `--edition 2021`:
+        // zero errors, zero warnings. (Round 3's claim that the wrapper
+        // WAS required was based on a flawed test: wrapping the call in
+        // `unsafe {}` also produces no `unused_unsafe` warning at this
+        // edition, which looks like "required" but isn't — these two
+        // functions carry a `#[rustc_deprecated_safe_2024]`-style
+        // edition-conditional attribute that specifically suppresses
+        // `unused_unsafe` for them, precisely so pre-emptive wrapping
+        // doesn't warn during the safe→unsafe migration window. The
+        // decisive test is whether the BARE call compiles, not whether
+        // the wrapped call warns: at edition 2024 the bare call fails
+        // with E0133 "call to unsafe function"; at edition 2021 it
+        // compiles clean. This crate is 2021, so the wrapper is
+        // genuinely unneeded today — re-add it if this crate ever bumps
+        // to edition 2024.) This test binary is single-threaded for env
+        // mutations — no other thread reads/writes process env
+        // concurrently here.
+        std::env::set_var(key, value);
         EnvVarGuard { key, prev }
     }
 }
 
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
-        // SAFETY: same as `set` above.
-        unsafe {
-            match &self.prev {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
-            }
+        // See `set` above — no `unsafe` needed at this crate's edition.
+        match &self.prev {
+            Some(v) => std::env::set_var(self.key, v),
+            None => std::env::remove_var(self.key),
         }
     }
 }
@@ -392,33 +408,53 @@ fn junction_seed_census() {
 
     println!(
         "\npipe-tagged seeds (measured on the RAW spec set at each cluster's \
-         tiles, BEFORE keys_at_tile's SpecKind::Pipe filter runs — expected \
-         0 by construction if #687's pipe×belt finding holds; a nonzero \
-         count here would mean pipes DO reach a cluster tile candidate, \
-         just always get filtered before solve_crossing): {pipe_tagged_seeds}"
+         tiles, BEFORE keys_at_tile's SpecKind::Pipe filter runs): \
+         {pipe_tagged_seeds} — expected to equal the single-spec bypass \
+         count ({single_tile_bypass} + {zero_specs_after_filter} zero-spec, \
+         since a zero-spec seed's sole participant was necessarily a \
+         filtered-out pipe); any EXCESS beyond that is the signal — a \
+         multi-spec seed also touched by a pipe, which #687's pipe×belt \
+         finding does not rule out and this census has not previously \
+         checked for."
     );
-    // Round 3 review finding: enforce the "pipe-tagged == single-spec"
-    // identity with assert_eq!, not just prose — if the corpus ever
-    // drifts so a pipe-tagged seed isn't single-spec (or vice versa),
-    // this test fails loudly instead of the doc silently going stale.
-    assert_eq!(
-        pipe_tagged_but_not_single_spec, 0,
-        "expected every pipe-tagged seed to be single-spec (the belt-crosses-a-placed-pipe bypass) — found one that wasn't"
-    );
-    assert_eq!(
-        single_spec_but_not_pipe_tagged, 0,
-        "expected every single-spec seed to be pipe-tagged — found one that wasn't"
-    );
+    // Round 4 review finding: these two correlation checks were hard
+    // `assert_eq!`s in an earlier pass, but a legitimate new seed shape
+    // (round 3's zero_specs_after_filter bucket: has_pipe=true,
+    // n_specs=0, so NOT single-spec) trips `pipe_tagged_but_not_single_
+    // spec` by construction — the census would abort exactly when it
+    // finds something worth reporting. A census must never crash on
+    // discovery; demoted to printed diagnostics with a loud marker.
+    // `bucket_sum == total_seeds` below remains the one hard assertion —
+    // that one is a true tautology (the match is exhaustive), not a
+    // data-dependent correlation that a real corpus shape can trip.
+    if pipe_tagged_but_not_single_spec > 0 {
+        println!(
+            "  ⚠ UNEXPECTED: {pipe_tagged_but_not_single_spec} pipe-tagged \
+             seed(s) are NOT single-spec (n_specs > 1 with a pipe also \
+             touching the cluster) — investigate before trusting the \
+             pipe-bypass narrative for these"
+        );
+    }
+    if single_spec_but_not_pipe_tagged > 0 {
+        println!(
+            "  ⚠ UNEXPECTED: {single_spec_but_not_pipe_tagged} single-spec \
+             seed(s) are NOT pipe-tagged — a bypass reason other than the \
+             belt-crosses-a-placed-pipe case may exist"
+        );
+    }
     println!(
-        "cross-check (assert_eq!-enforced above, not just prose): \
-         pipe-tagged & single-spec = {pipe_tagged_and_single_spec}, \
+        "cross-check (printed, not asserted — see round 4 review note \
+         above): pipe-tagged & single-spec = {pipe_tagged_and_single_spec}, \
          pipe-tagged but NOT single-spec = {pipe_tagged_but_not_single_spec}, \
          single-spec but NOT pipe-tagged = {single_spec_but_not_pipe_tagged}"
     );
 
     println!(
-        "\nsame-item seeds matching the rung's EXACT predicate \
-         (cluster_tile_count == 1 AND n_specs == 2 AND n_distinct_items == 1): {}",
+        "\nsame-item seeds matching the census's necessary-superset bucket \
+         for the rung's predicate (cluster_tile_count == 1 AND n_specs == 2 \
+         AND n_distinct_items == 1 — see the module doc's precision note; \
+         zero here proves zero actual firings, but the bucket may be \
+         broader than the rung's true firing set): {}",
         same_item_single_tile.len()
     );
     for (label, x, y) in &same_item_single_tile {
