@@ -108,6 +108,42 @@ fn region_fixtures() {
             continue;
         }
 
+        // Schema sanity for spec_kinds (#687 round 4): an unknown kind
+        // value, or a kind entry naming a spec absent from spec_items,
+        // must fail THIS fixture and keep the accumulate-and-report run
+        // going (replay_region_fixture's own panic stays as a backstop
+        // for non-harness callers, but should be unreachable from here).
+        let spec_kind_errors: Vec<String> = fixture
+            .spec_kinds
+            .iter()
+            .flat_map(|(key, kind)| {
+                let mut errs = Vec::new();
+                if kind != "Pipe" {
+                    errs.push(format!(
+                        "spec_kinds[{key:?}] = {kind:?} — only \"Pipe\" is \
+                         valid (omit the key for Belt)"
+                    ));
+                }
+                if !fixture.spec_items.contains_key(key) {
+                    errs.push(format!(
+                        "spec_kinds[{key:?}] names a spec absent from \
+                         spec_items — the kind would be silently dropped \
+                         and the shape degraded"
+                    ));
+                }
+                errs
+            })
+            .collect();
+        if !spec_kind_errors.is_empty() {
+            failures.push(format!(
+                "{} ({}): {}",
+                fixture.name,
+                filename,
+                spec_kind_errors.join("; ")
+            ));
+            continue;
+        }
+
         // `solved_by` only has meaning in solve mode — on "capped" /
         // "unsatisfiable" fixtures it would be silently ignored, and a
         // silently-dropped attribution pin is exactly what the pin

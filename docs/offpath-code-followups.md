@@ -224,12 +224,13 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
   deletion. (Its replay-only factory `perpendicular_template_strategy()`
   was folded into the shared `pinned_tier_core_strategies()` helper by
   #687.)
-  - **CLOSED 2026-08-21 (#687), with findings.** Two fixtures now pin the
-    rung via new `expected.solved_by` strategy attribution in the
-    region-fixture harness (`perp_template_pipe_belt_bridge` = static
-    unit pin of the rung's internal pipe×belt logic;
-    `perp_template_single_tile_crossing` = the pinned-tier core ladder's
-    dispatch on a belt×belt crossing). The instrumentation surfaced:
+  - **CLOSED 2026-08-21 (#687), with findings.** Two fixtures now cover
+    the rung's logic and the ladder's dispatch via new
+    `expected.solved_by` strategy attribution in the region-fixture
+    harness (`perp_template_pipe_belt_bridge` = static unit pin of the
+    rung's internal pipe×belt logic — NOT a production-reachability
+    probe; `perp_template_single_tile_crossing` = the pinned-tier core
+    ladder's dispatch on a belt×belt crossing). The instrumentation surfaced:
     1. **The rung appears production-unreachable on BOTH shapes it
        handles.** Belt×belt two-item crossings: `junction_solver`'s
        item-conflict gate skips every strategy on the sole single-tile
