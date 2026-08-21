@@ -561,3 +561,27 @@ fixtures / docs split per the churn norm).
     kit-fails the run; the anchor has to be taken on a declared-axis
     re-export, which is a slightly different artifact. A major divergence
     on such a fixture must say which artifact its sim anchored.*
+- *2026-08-21 — **#694 review round 1 adjudicated** (5 findings, 3 nits).
+  Absorbed: (a) `bless` could rotate the baseline onto a DIFFERENT zone
+  cache and rewrite the recorded hash in the same move, leaving 160
+  unreproducible rows with nothing to notice it by — it now refuses unless
+  the pin matches (escape hatch `bless-repin`), proven by an executed
+  discrimination check that exits 101 and leaves the file untouched. Only
+  half of that finding was taken: refusing to bless on differing VERDICTS
+  would make bless unusable, since re-taking after an intentional engine
+  change is what it is for. (b) `check`'s provenance warning now PREFIXES
+  the failure instead of trailing it as a note the reader met before the
+  diff list. (c) the `Cell::status` doc listed a `refused` no branch emits
+  — the records-outlive-state class again; it now enumerates the five real
+  statuses and marks `decided-then-refused` as unreached (zero cells).
+  Refuted with receipts: (d) "the corpus needs a CI gate" — a gate on this
+  baseline today asserts only "production has not changed", which every
+  engine PR legitimately falsifies; the gate that means something is
+  Phase 2a's shadow-vs-production check, which Verification plan item 2
+  already commits to. The instrument is gated by the three non-ignored
+  contract tests; the data is guarded by the next phase re-taking it. The
+  reasoning is now in the module doc so it reads as a decision.
+  (e) "the new contract helpers should use the corpus's nesting-robust
+  extractor" — the brittleness IS the pin: `assert_scoreboard_contract`
+  must fail when a selection nests, `outer_selection` must survive it
+  across 160 cells. Making the pin robust deletes its detection.*
