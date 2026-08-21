@@ -39,10 +39,19 @@ use spaghettio_core::bus::di_cell::DirectInsertion;
 use spaghettio_core::bus::layout::{self, LayoutOptions, LayoutStrategy};
 use spaghettio_core::{solver, validate};
 
+/// Variants the native `Candidate`-mode search actually evaluates as one of
+/// its own baseline/competing arms — established with receipts in round 3's
+/// #686 adjudication (`decomposition_search.rs`'s `try_cells`/
+/// `try_horizontal`/`try_di` gates, and the `DirectInsertion::Off` doc
+/// comment). `di-forced` and `partitioned` are genuinely separate,
+/// user-elected topologies the default search never tries on its own — see
+/// point 4 below.
+const NATIVE_ADJACENT_VARIANTS: &[&str] = &["di-off", "cells-off", "hs-off"];
+
 /// Per-category census row.
 ///
-/// Three independent things go wrong if this is read naively, found across
-/// #686 rounds 2 and 3:
+/// Four independent things go wrong if this is read naively, found across
+/// #686 rounds 2 through 5:
 ///
 /// 1. Candidate refusal (`decomposition_search.rs`) is supposed to key on
 ///    `Severity::Error` only, so a Warning-only firing on a non-default
@@ -73,6 +82,16 @@ use spaghettio_core::{solver, validate};
 ///    anything from. `defaults_built` (checked in `err_loser`/
 ///    `loser_only` below) gates the predicate on the default having
 ///    actually produced a layout for that fixture.
+/// 4. `di-forced` and `partitioned` are user-elected topologies the native
+///    `Candidate` search never evaluates on its own (round 3's receipts,
+///    reaffirmed round 5) — a category Error-firing ONLY on `partitioned`
+///    says nothing about a candidate the search silently refused, because
+///    the search never tried that shape at all. `fixtures_any_nondefault`/
+///    `fixtures_err_nondefault` therefore only accumulate fixture keys from
+///    `NATIVE_ADJACENT_VARIANTS` (`di-off`/`cells-off`/`hs-off`); `di-forced`/
+///    `partitioned` firings still show up in `variants`/`err_variants` and
+///    in `count` — visible, just not counted as loser-only/err-loser
+///    evidence.
 #[derive(Default)]
 struct CatRow {
     /// Fired (any severity) on SOME fixture's "default"-options build. NOT
@@ -82,37 +101,47 @@ struct CatRow {
     /// used to derive `loser-only`/`err-loser` (see points 2-3).
     winner: bool,
     /// Every variant name this category fired on, "default" included,
-    /// across all fixtures.
+    /// across all fixtures. Unrestricted — includes `di-forced`/
+    /// `partitioned` for display, even though those don't feed
+    /// `loser-only`/`err-loser` (point 4).
     variants: BTreeSet<&'static str>,
     /// Every variant name where this category fired at `Severity::Error`,
-    /// across all fixtures. Informational provenance only — NOT the
-    /// err-loser predicate itself, which needs fixture pairing (point 2)
-    /// gated on default-build success (point 3) rather than a flat union.
+    /// across all fixtures. Informational provenance only, unrestricted
+    /// like `variants` above — NOT the err-loser predicate itself, which
+    /// needs fixture pairing (point 2), gated on default-build success
+    /// (point 3) and restricted to native-adjacent variants (point 4)
+    /// rather than a flat union.
     err_variants: BTreeSet<&'static str>,
-    /// Fixture keys (`"{item}@{rate}"`) where this category fired (any
-    /// severity) on that fixture's OWN "default" build.
+    /// Fixture keys (`"{item}@{rate}:{machine}"`) where this category
+    /// fired (any severity) on that fixture's OWN "default" build.
     fixtures_any_default: BTreeSet<String>,
     /// Fixture keys where this category fired (any severity) on some
-    /// NON-default variant of that fixture.
+    /// NON-default, NATIVE-ADJACENT variant of that fixture (point 4) —
+    /// `di-forced`/`partitioned` firings are excluded from this set even
+    /// though they're still recorded in `variants` above.
     fixtures_any_nondefault: BTreeSet<String>,
     /// Fixture keys where this category fired at `Severity::Error` on
     /// that fixture's OWN "default" build.
     fixtures_err_default: BTreeSet<String>,
     /// Fixture keys where this category fired at `Severity::Error` on
-    /// some NON-default variant of that fixture.
+    /// some NON-default, NATIVE-ADJACENT variant of that fixture (point 4)
+    /// — same exclusion as `fixtures_any_nondefault` above.
     fixtures_err_nondefault: BTreeSet<String>,
-    /// Total issue count across all builds.
+    /// Total issue count across all builds (all variants, all severities
+    /// — including `di-forced`/`partitioned`; see the printed legend).
     count: usize,
 }
 
 impl CatRow {
     /// True iff some fixture fired this category (any severity) on a
-    /// non-default variant while that SAME fixture's own default build
-    /// (1) actually produced a layout AND (2) never fired it. `defaults_built`
-    /// is the global set of fixture keys whose "default" variant built
-    /// successfully — without that gate, a fixture whose default REFUSED
-    /// would look identical to one whose default built clean and simply
-    /// didn't fire, which is not evidence of anything (point 3, struct doc).
+    /// non-default, NATIVE-ADJACENT variant (point 4, struct doc — the
+    /// input set already excludes `di-forced`/`partitioned`) while that
+    /// SAME fixture's own default build (1) actually produced a layout AND
+    /// (2) never fired it. `defaults_built` is the global set of fixture
+    /// keys whose "default" variant built successfully — without that
+    /// gate, a fixture whose default REFUSED would look identical to one
+    /// whose default built clean and simply didn't fire, which is not
+    /// evidence of anything (point 3, struct doc).
     fn loser_only(&self, defaults_built: &FxHashSet<String>) -> bool {
         self.fixtures_any_nondefault
             .iter()
@@ -205,14 +234,19 @@ fn check_firing_census() {
                 if *vname == "default" {
                     row.winner = true;
                     row.fixtures_any_default.insert(fixture_key.clone());
-                } else {
+                } else if NATIVE_ADJACENT_VARIANTS.contains(vname) {
+                    // di-forced/partitioned still land in `variants` above
+                    // (display/provenance) but are excluded here — they
+                    // are user-elected topologies the native search never
+                    // tries, so firing only there is not loser-only
+                    // evidence (point 4, struct doc).
                     row.fixtures_any_nondefault.insert(fixture_key.clone());
                 }
                 if i.severity == validate::Severity::Error {
                     row.err_variants.insert(*vname);
                     if *vname == "default" {
                         row.fixtures_err_default.insert(fixture_key.clone());
-                    } else {
+                    } else if NATIVE_ADJACENT_VARIANTS.contains(vname) {
                         row.fixtures_err_nondefault.insert(fixture_key.clone());
                     }
                 }
@@ -240,6 +274,12 @@ fn check_firing_census() {
         "(count sums every issue across all variants and both severities \
          for that category — it is not per-variant or per-severity; use \
          err-variants/variants for provenance)"
+    );
+    println!(
+        "(loser-only/err-loser flags consider native-adjacent variants \
+         only: di-off, cells-off, hs-off. User-elected topologies \
+         (di-forced, partitioned) still show up in err-variants/variants \
+         and count, but are not counted as selection evidence)"
     );
     println!(
         "{:<32} {:>7} {:>10} {:>9} {:>6}  {:<24}  {}",
@@ -294,7 +334,12 @@ fn check_firing_census() {
          tries on its own. `partitioned` \
          (LayoutStrategy::PartitionedDecomposed) remains a genuinely \
          separate, user-elected top-level strategy the native search \
-         never runs. Refused builds (Err from build_bus_layout) produce \
+         never runs. Since round 5, `loser-only`/`err-loser` are computed \
+         ONLY from di-off/cells-off/hs-off firings — `di-forced`/ \
+         `partitioned` firings still show up in err-variants/variants/ \
+         count but no longer set either flag, because the search never \
+         evaluated those shapes to refuse in the first place. Refused \
+         builds (Err from build_bus_layout) produce \
          no layout to validate, so no category attribution is possible \
          for them — 'fired on NOTHING evaluated here' cannot distinguish \
          a genuinely inert category from one that only ever appears \
