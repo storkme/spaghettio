@@ -29,6 +29,15 @@
 //! printed header (round 3, #686) so a table-skimmer sees it without
 //! reading down to the Interpretation paragraph.
 //!
+//! TWO diagnostics live here, over the same `FIXTURES` slice and running
+//! in opposite directions. `check_firing_census` (this one) approximates
+//! the candidate field from OUTSIDE via option toggles and reports
+//! validator CATEGORIES. `selection_scoreboard_census` (RFC-070 Phase 0b,
+//! bottom of the file) reads the REAL internal loop under default options
+//! and reports candidates, verdicts and the deciding precedence stage —
+//! it closes the "which candidate" approximation named just above while
+//! saying nothing about categories, so neither replaces the other.
+//!
 //! Run: cargo test --test check_firing_census -- --ignored --nocapture
 
 use std::collections::BTreeSet;
