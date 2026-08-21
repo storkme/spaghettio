@@ -192,17 +192,21 @@ impl Factory {
                     // engine mirrors (oil-refinery, foundry, cryogenic-plant),
                     // whose exported orientation binds recipe fluids
                     // x-descending (the measured rule in `spaghettio_core::
-                    // fluid_ports`). The meter's blueprint decoder does not yet
-                    // parse the `mirror` flag, so it keys the reversal on the
-                    // mirrored-machine name unconditionally — a known
-                    // simplification (a genuinely-unmirrored single instance of
-                    // those three at some orientations would mis-bind). A
-                    // complete fix must key on BOTH a parsed mirror flag AND
-                    // the engine's direction+8 wire form (the engine exporter
-                    // omits the mirror key entirely for these rotation-mirrored
-                    // machines and encodes the mirror as the +8 rotation; the
-                    // meter reads neither today). For a single-fluid face
-                    // n-1-k == k, so this only matters for multi-fluid faces.
+                    // fluid_ports`). The decoder parses the blueprint
+                    // `mirror` flag since 2026-08-21 (offpath B2), but this
+                    // site deliberately does NOT consume it: for the three
+                    // engine-mirrored machines the name heuristic already
+                    // applies the binding flip (their mirror is
+                    // tile-identical, so the flag adds nothing), and for any
+                    // OTHER machine an explicit mirror:true also MOVES port
+                    // tiles — honoring it as a binding flip alone would
+                    // mis-place ports on asymmetric machines (#685 review).
+                    // The complete general fix is a reflect_port
+                    // (w-1-dx on port x) plus the flag; until built, the
+                    // flag is decoder knowledge only, and the engine-form
+                    // undecidable (unmirrored community instance of the
+                    // three, multi-fluid face) stays documented in
+                    // meter-divergence.md rather than guessed.
                     let mirrored = matches!(
                         e.name.as_str(),
                         "oil-refinery" | "foundry" | "cryogenic-plant"
@@ -862,6 +866,7 @@ mod note_tests {
             direction: Dir::North,
             recipe: None,
             io_type: None,
+            mirror: false,
         }
     }
 

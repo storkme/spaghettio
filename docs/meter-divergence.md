@@ -771,3 +771,34 @@ in-fixture AC reads −3.9%).
   fixtures are uncompared (no sim baseline), so this divergence is unverifiable
   and would only matter if a sim-baselined byproduct-loop fixture joined the
   corpus. Revisit then; recorded so the call is explicit. (2026-08-03)
+
+## 2026-08-21 — curve chirality ADJUDICATED (meter cleared); mirror flag parsed
+
+- **Curve chirality**: the domain-physics audit accused this meter's
+  `LaneMap` (no swap variant; every curve lane-for-lane) of being unable
+  to represent the chirality-dependent lane swap `validate/belt_flow.rs`
+  implemented. Adjudicated against game rule B11 (expert-confirmed: lane
+  contents never jump lanes through a turn, either chirality) plus both
+  models' handed seeding conventions: **the meter was CORRECT and is
+  cleared; the swap was core's bug — fix on PR #683** (whose corpus
+  consequence, one fabricated `input-rate-delivery` reading on the
+  ac-am2-ore fixture, is adjudicated with position forensics in that
+  PR's re-bless commit). The discriminating both-chirality lock lives in
+  belt_flow's `lane_transfer` test on #683; the meter-side test is a
+  documentation-level pin (its comment states why it cannot discriminate
+  today). Model-comparison lesson recorded in
+  `domain-physics-audit-2026-08.md`: a divergence identifies a
+  disagreement, not the guilty side.
+- **Fluid-port mirroring**: the decoder now PARSES the blueprint
+  `mirror` flag; the factory deliberately does not yet CONSUME it — for
+  the three engine-mirrored machines the name heuristic already applies
+  the binding flip (their mirror is tile-identical), and for any other
+  machine an explicit mirror also moves port TILES, so honoring it as a
+  binding flip alone would mis-place ports on asymmetric machines
+  (#685 review). The complete fix is a `reflect_port` (w−1−dx) plus the
+  flag; the engine-form undecidable (unmirrored community instance of
+  the three, multi-fluid face) remains documented rather than guessed.
+- **UG turbo tier**: core's `ug_max_reach` gained an explicit
+  `turbo-transport-belt => 10` arm (was falling to the yellow-4
+  fallback), closing the meter/core tier-table asymmetry for imported
+  blueprints.

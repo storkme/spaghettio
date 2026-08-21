@@ -661,6 +661,7 @@ mod tests {
             direction: dir,
             recipe: None,
             io_type: None,
+            mirror: false,
         }
     }
 
@@ -672,6 +673,7 @@ mod tests {
             direction: dir,
             recipe: None,
             io_type: None,
+            mirror: false,
         }
     }
 
@@ -815,6 +817,7 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
             direction: dir,
             recipe: None,
             io_type: Some(io.into()),
+            mirror: false,
         }
     }
 
@@ -846,6 +849,26 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
         let net = NetworkBuilder::build(&ents);
         let d = net.tiles[net.tile_at((0, 0)).unwrap()].downstream.unwrap();
         assert_eq!(d.lanes, LaneMap::Straight);
+    }
+
+    /// The OPPOSITE chirality is also lane-for-lane. Documentation-level
+    /// lock from the 2026-08-21 chirality adjudication (this model was
+    /// CLEARED; the swap was core's bug, fixed in belt_flow on PR #683):
+    /// honestly, this test is NON-discriminating today — link_downstream's
+    /// only_feeder branch never consults chirality, so both arms take the
+    /// same code path (#685 review). It pins that a future refactor which
+    /// ADDS a chirality distinction here fails loudly; the discriminating
+    /// lock (asymmetric lanes, both arms) lives in belt_flow's
+    /// lane_transfer test on #683.
+    #[test]
+    fn lone_side_feed_opposite_chirality_also_curves() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East), // feeds (1,0)
+            belt("transport-belt", 1, 0, Dir::North), // turns NORTH (other handedness)
+        ];
+        let net = NetworkBuilder::build(&ents);
+        let d = net.tiles[net.tile_at((0, 0)).unwrap()].downstream.unwrap();
+        assert_eq!(d.lanes, LaneMap::Straight, "B11: no chirality-dependent swap");
     }
 
     /// With a back feed present too, the side feeder becomes a genuine

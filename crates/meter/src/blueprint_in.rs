@@ -97,6 +97,14 @@ pub struct RawEntity {
     pub recipe: Option<String>,
     /// Underground-belt half: `"input"` (entrance) or `"output"` (exit).
     pub io_type: Option<String>,
+    /// Blueprint `mirror` flag (Factorio 2.0, fluid-box machines). Absent
+    /// means false ON THE WIRE — but note the engine exporter never emits
+    /// it for oil-refinery/foundry/cryogenic-plant (their mirror is
+    /// encoded as a tile-identical 180° rotation instead), so absence is
+    /// NOT proof of unmirroredness for those three; `factory.rs` keeps
+    /// its name heuristic for them. Parsed 2026-08-21 (offpath B2) so an
+    /// EXPLICIT community `mirror: true` is honored on any machine.
+    pub mirror: bool,
 }
 
 impl RawEntity {
@@ -137,6 +145,8 @@ struct Entity {
     recipe: Option<String>,
     #[serde(default, rename = "type")]
     io_type: Option<String>,
+    #[serde(default)]
+    mirror: bool,
 }
 
 #[derive(Deserialize)]
@@ -188,6 +198,7 @@ pub fn decode(bp: &str) -> Result<Vec<RawEntity>, String> {
             direction: dir,
             recipe: e.recipe,
             io_type: e.io_type,
+            mirror: e.mirror,
         });
     }
     if !unknown.is_empty() {
@@ -207,6 +218,32 @@ pub fn decode(bp: &str) -> Result<Vec<RawEntity>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The blueprint `mirror` flag is decoded (offpath B2, 2026-08-21) —
+    /// currently decoder knowledge only (factory.rs states why it is not
+    /// yet consumed: honoring it needs port reflection, not just a
+    /// binding flip). This pins the parse so the eventual reflect_port
+    /// work starts from a decoded field, and that absence defaults false.
+    #[test]
+    fn mirror_flag_is_decoded_and_defaults_false() {
+        use base64::Engine as _;
+        use std::io::Write as _;
+        let json = r#"{"blueprint":{"entities":[
+            {"entity_number":1,"name":"oil-refinery","position":{"x":2.5,"y":2.5},"direction":0,"recipe":"advanced-oil-processing","mirror":true},
+            {"entity_number":2,"name":"oil-refinery","position":{"x":12.5,"y":2.5},"direction":0,"recipe":"advanced-oil-processing"}
+        ],"item":"blueprint","version":1}}"#;
+        let mut enc =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(json.as_bytes()).unwrap();
+        let bp = format!(
+            "0{}",
+            base64::engine::general_purpose::STANDARD.encode(enc.finish().unwrap())
+        );
+        let ents = decode(&bp).expect("decodes");
+        assert_eq!(ents.len(), 2);
+        assert!(ents[0].mirror, "explicit mirror:true must decode");
+        assert!(!ents[1].mirror, "absent mirror must default false");
+    }
 
     #[test]
     fn direction_deltas_and_opposites() {
@@ -232,6 +269,7 @@ mod tests {
             direction: Dir::North,
             recipe: None,
             io_type: None,
+            mirror: false,
         };
         // Facing north => picks from the tile to the north, drops south.
         assert_eq!(ins.inserter_pickup_tile(1), (10, 9));
