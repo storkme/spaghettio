@@ -1208,7 +1208,9 @@ local function dump_sim_state(s)
     ugs = ugs, splitters = splitters, chests = chests}
   -- Convert the belts' ug_type sentinel (see SIM_STATE_NULL above) to a
   -- real JSON null now that the whole structure has been serialized.
-  sim_state_json = sim_state_json:gsub('"' .. SIM_STATE_NULL .. '"', "null")
+  -- Anchored to an array tail (`,"<sentinel>"]`) so only the ug_type slot
+  -- can ever match, whatever item or entity names a mod might introduce.
+  sim_state_json = sim_state_json:gsub(',%s*"' .. SIM_STATE_NULL .. '"%s*%]', ",null]")
   helpers.write_file("sim-state.json", sim_state_json, false)
 end
 
