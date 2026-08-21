@@ -225,7 +225,9 @@ const FIXTURES: &[Fixture] = &[
 /// doc's second-fossil note. Keeping both is what lets a divergence be
 /// attributed to the cell-composed arm rather than to the inserter
 /// ladder.
-const OPTION_SETS: &[(&str, fn(&mut LayoutOptions))] = &[
+type OptionSet = (&'static str, fn(&mut LayoutOptions));
+
+const OPTION_SETS: &[OptionSet] = &[
     ("default", |_| {}),
     ("cells-off", |o| o.cell_composition = CellComposition::Off),
     ("e2e-harness", |o| {

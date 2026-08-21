@@ -303,8 +303,11 @@ fn check_firing_census() {
     // gated internally on conditions this hardcoded fixture list may not
     // satisfy for every fixture (`try_cells`'s chain-eligibility check,
     // `try_horizontal`'s DualInput-row requirement — decomposition_
-    // search.rs), so a variant can be bit-identical to default for some or
-    // all fixtures without that being visible anywhere in the table above.
+    // search.rs), so a variant can come out identical to default — in the
+    // label this file uses, TILES AND STAMPS identical (see
+    // `EntitySignature`), which is stricter than validator-identical and
+    // is not the same claim as "bit-identical" — for some or all fixtures
+    // without that being visible anywhere in the table above.
     // Per-variant: how many non-default builds were COMPARABLE (their
     // fixture's own default also built), and how many of those were
     // structurally identical to it.
@@ -829,32 +832,49 @@ fn selection_scoreboard_census() {
 // RFC-070 Phase 0b: the CI contract (NOT #[ignore]d)
 // ---------------------------------------------------------------------------
 
-/// The one non-ignored test in this file, and deliberately so.
+/// What `assert_scoreboard_contract` hands back: the two facts each
+/// caller pins for its own fixture, plus the per-slot outcomes so a
+/// caller can also pin the candidate FIELD it decided among.
+struct ScoreboardFacts {
+    winner: String,
+    stage: spaghettio_core::trace::SelectionStage,
+    outcomes: Vec<(String, spaghettio_core::trace::SelectionCandidateOutcome)>,
+}
+
+impl ScoreboardFacts {
+    fn outcome_of(&self, name: &str) -> spaghettio_core::trace::SelectionCandidateOutcome {
+        self.outcomes
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("no row for {name}"))
+            .1
+    }
+}
+
+/// Run one fixture under `LayoutOptions::default()` and assert the
+/// scoreboard's STRUCTURAL contract, returning the winner and the stage
+/// that decided — so each caller only has to state the fact that is
+/// specific to its own fixture.
 ///
-/// Everything else here is a print-only diagnostic a human runs with
-/// `--ignored`. That is fine for a table nobody's build depends on — but
-/// the Phase-0b scoreboard is the oracle every later RFC-070 phase diffs
-/// its shadow loop against, and an oracle whose only reader is a human
-/// running a diagnostic by hand has no failure mode: a broken stage tag,
-/// a row that stops being emitted, or an `from_run` outcome deduced
-/// backwards would all ship green (#692 review round 2, 3/3). The repo's
-/// own doctrine names this exactly — "a check going quiet is not evidence
-/// the problem is fixed" (`docs/validator-reporting.md`).
-///
-/// So this pins the CONTRACT, not the layout: every candidate slot emits
-/// a row, the rows arrive in the canonical order and before the terminal
-/// event, the winner is one of that block's own rows, and the deciding
-/// stage is the one this fixture actually reaches. Tile geometry is the
-/// golden-hash tests' job and is deliberately not asserted here.
+/// The three callers below cover three different deciding stages
+/// (`best-error-free`, `merge-tap`, `scoped-pairwise`) because a contract
+/// pinned on one stage cannot tell a broken stage TAG from a stage that
+/// simply never fires: #692 landed with only the error-free tier
+/// asserted, and the RFC-070 W1c corpus then measured four of the five
+/// stages live. Mis-tagging `merge-tap` as `scoped-pairwise` would have
+/// been invisible to a single-fixture pin.
 ///
 /// The expected candidate order is written out longhand rather than
 /// imported from `CANDIDATE_ORDER`: a test that reads the same constant
 /// the code reads cannot detect a wrong reorder, because both move
 /// together. This list is the independent second opinion.
-#[test]
-#[ntest::timeout(120_000)]
-fn selection_scoreboard_contract() {
-    use spaghettio_core::trace::{self, SelectionCandidateOutcome, SelectionStage, TraceEvent};
+fn assert_scoreboard_contract(
+    item: &str,
+    rate: f64,
+    machine: &str,
+    inputs: &[&str],
+) -> ScoreboardFacts {
+    use spaghettio_core::trace::{self, SelectionCandidateOutcome, TraceEvent};
 
     /// Slot order asserted independently of the engine's own constant.
     const EXPECTED_ORDER: [&str; 7] = [
@@ -867,15 +887,15 @@ fn selection_scoreboard_contract() {
         "horizontal-stack",
     ];
 
-    let inputs: FxHashSet<String> = ["iron-plate"].iter().map(|s| s.to_string()).collect();
-    let sr = solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-1")
-        .expect("tier-1 fixture must solve");
+    let input_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve(item, rate, &input_set, machine)
+        .unwrap_or_else(|e| panic!("{item}@{rate} on {machine} must solve: {e}"));
 
     let guard = trace::start_trace();
-    let layout = layout::build_bus_layout(&sr, LayoutOptions::default());
+    let built = layout::build_bus_layout(&sr, LayoutOptions::default());
     let events = trace::drain_events();
     drop(guard);
-    layout.expect("tier-1 fixture must build");
+    built.unwrap_or_else(|e| panic!("{item}@{rate} on {machine} must build: {e}"));
 
     // --- every slot emits a row, in order, before the terminal event ---
     let rows: Vec<(&str, SelectionCandidateOutcome)> = events
@@ -890,18 +910,18 @@ fn selection_scoreboard_contract() {
     let names: Vec<&str> = rows.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names, EXPECTED_ORDER,
-        "the scoreboard must emit one row per candidate SLOT, in canonical order. \
-         TWO readings, and they need different fixes: (1) the ENGINE legitimately \
-         gained, lost or renamed a candidate — check `CANDIDATE_ORDER` in \
-         decomposition_search.rs; if it changed, this list is merely stale, update \
-         it and re-take the RFC-070 Phase-0 baseline, since the candidate field \
-         moved. (2) The INSTRUMENTATION broke — `CANDIDATE_ORDER` is unchanged but \
-         `Scoreboard::emit` stopped emitting a slot or the index alignment slipped, \
-         in which case every recorded verdict is now attributed to the wrong \
-         candidate and the fix is here, not in the baseline"
+        "the scoreboard must emit one row per candidate SLOT, in canonical order, for \
+         {item}@{rate} on {machine}. TWO readings, and they need different fixes: (1) the \
+         ENGINE legitimately gained, lost or renamed a candidate — check `CANDIDATE_ORDER` \
+         in decomposition_search.rs; if it changed, this list is merely stale, update it \
+         and re-take the RFC-070 Phase-0 baseline, since the candidate field moved. (2) The \
+         INSTRUMENTATION broke — `CANDIDATE_ORDER` is unchanged but `Scoreboard::emit` \
+         stopped emitting a slot or the index alignment slipped, in which case every \
+         recorded verdict is now attributed to the wrong candidate and the fix is here, not \
+         in the baseline"
     );
 
-    let decided: Vec<(&str, SelectionStage)> = events
+    let decided: Vec<(&str, spaghettio_core::trace::SelectionStage)> = events
         .iter()
         .filter_map(|e| match e {
             TraceEvent::SelectionDecided { winner, stage } => Some((winner.as_str(), *stage)),
@@ -911,15 +931,14 @@ fn selection_scoreboard_contract() {
     assert_eq!(
         decided.len(),
         1,
-        "exactly one selection must terminate for this fixture; got {decided:?}. \
-         TWO readings: (1) the ENGINE legitimately nested a selection — some \
-         candidate's `produce` now runs its own search on this fixture, which is a \
-         correct engine that this pin does not cover; confirm by checking whether \
-         the extra terminal is preceded by its own full block of seven rows (the \
-         census's block walker renders exactly that) and, if so, re-point this test \
-         at the OUTER block instead of assuming one. (2) The INSTRUMENTATION broke — \
-         terminals are duplicated or emitted somewhere other than once per \
-         selection, which would regroup every census table"
+        "exactly one selection must terminate for {item}@{rate} on {machine}; got \
+         {decided:?}. TWO readings: (1) the ENGINE legitimately nested a selection — some \
+         candidate's `produce` now runs its own search on this fixture, which is a correct \
+         engine that this pin does not cover; confirm by checking whether the extra terminal \
+         is preceded by its own full block of seven rows (the census's block walker renders \
+         exactly that) and, if so, re-point this helper at the OUTER block instead of \
+         assuming one. (2) The INSTRUMENTATION broke — terminals are duplicated or emitted \
+         somewhere other than once per selection, which would regroup every census table"
     );
 
     let last_row = events
@@ -954,13 +973,50 @@ fn selection_scoreboard_contract() {
         SelectionCandidateOutcome::Produced,
         "the winner's own row must say it produced a layout"
     );
+    ScoreboardFacts {
+        winner: winner.to_string(),
+        stage,
+        outcomes: rows.iter().map(|(n, o)| ((*n).to_string(), *o)).collect(),
+    }
+}
+
+/// The non-ignored tests in this file are this one and its two siblings
+/// below, and deliberately so.
+///
+/// Everything else here is a print-only diagnostic a human runs with
+/// `--ignored`. That is fine for a table nobody's build depends on — but
+/// the Phase-0b scoreboard is the oracle every later RFC-070 phase diffs
+/// its shadow loop against, and an oracle whose only reader is a human
+/// running a diagnostic by hand has no failure mode: a broken stage tag,
+/// a row that stops being emitted, or an `from_run` outcome deduced
+/// backwards would all ship green (#692 review round 2, 3/3). The repo's
+/// own doctrine names this exactly — "a check going quiet is not evidence
+/// the problem is fixed" (`docs/validator-reporting.md`).
+///
+/// So this pins the CONTRACT, not the layout: every candidate slot emits
+/// a row, the rows arrive in the canonical order and before the terminal
+/// event, the winner is one of that block's own rows, and the deciding
+/// stage is the one this fixture actually reaches. Tile geometry is the
+/// golden-hash tests' job and is deliberately not asserted here.
+///
+/// The structural half lives in `assert_scoreboard_contract`; this test
+/// adds only the facts specific to the tier-1 fixture — which candidates
+/// ran, who won, and which stage decided.
+#[test]
+#[ntest::timeout(120_000)]
+fn selection_scoreboard_contract() {
+    use spaghettio_core::trace::{SelectionCandidateOutcome, SelectionStage};
+
+    let facts = assert_scoreboard_contract(
+        "iron-gear-wheel",
+        10.0,
+        "assembling-machine-1",
+        &["iron-plate"],
+    );
 
     // --- `from_run`'s outcome deduction, across two live variants ---
-    let outcome_of = |name: &str| {
-        rows.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("no row for {name}")).1
-    };
     assert_eq!(
-        outcome_of("cell-composed"),
+        facts.outcome_of("cell-composed"),
         SelectionCandidateOutcome::Produced,
         "cell-composition is a live candidate under `LayoutOptions::default()` \
          (`cell_composition: Candidate`) and produces on this chain-eligible fixture; \
@@ -968,7 +1024,7 @@ fn selection_scoreboard_contract() {
          will move with it"
     );
     assert_eq!(
-        outcome_of("k1-shape-fix"),
+        facts.outcome_of("k1-shape-fix"),
         SelectionCandidateOutcome::NotRun,
         "k1-shape-fix is gated on PartitionedDecomposed + an unaccepted native, \
          neither true here — `not-run` and `refused` are different facts and must \
@@ -976,9 +1032,13 @@ fn selection_scoreboard_contract() {
     );
 
     // --- the deciding stage ---
-    assert_eq!(winner, "native", "native must win this clean tier-1 fixture; got {winner}");
     assert_eq!(
-        stage,
+        facts.winner, "native",
+        "native must win this clean tier-1 fixture; got {}",
+        facts.winner
+    );
+    assert_eq!(
+        facts.stage,
         SelectionStage::BestErrorFree,
         "expected the error-free tier to decide: native and cell-composed both \
          produce here, so `clean_flags` runs (its gate is `n_layouts > 1`) and the \
@@ -989,5 +1049,81 @@ fn selection_scoreboard_contract() {
          case the expected stage is `best-accepted` and the RFC-070 Phase-0 \
          baseline needs re-taking). The `cell-composed` assertion above \
          discriminates between them."
+    );
+}
+
+/// Second deciding stage: `merge-tap`, the `ErrorKinds` lexicographic
+/// mechanism — the only one of the three that computes a quality KEY
+/// rather than counts. Added W1c (#689) because #692 shipped with only
+/// `best-error-free` pinned, and a stage tag is exactly the kind of
+/// label that can be wrong everywhere except the one fixture a test
+/// looks at.
+///
+/// The winner here is `native`, not `merge-tap` — that is the interesting
+/// half. `merge_tap_choice` is the ONE mechanism allowed to answer
+/// `NATIVE_IDX`, because its own gate already guarantees native is
+/// unaccepted, so "native won" and "merge-tap decided" are compatible
+/// facts and the pair must not be collapsed into one column.
+#[test]
+#[ntest::timeout(180_000)]
+fn selection_scoreboard_contract_merge_tap_stage() {
+    use spaghettio_core::trace::SelectionStage;
+
+    let facts = assert_scoreboard_contract(
+        "electronic-circuit",
+        30.0,
+        "assembling-machine-2",
+        &["iron-ore", "copper-ore"],
+    );
+    assert_eq!(
+        facts.winner, "native",
+        "merge-tap's verdict names native on this fixture (`ErrorKinds::quality_key` \
+         ties/loses to native); got {}",
+        facts.winner
+    );
+    assert_eq!(
+        facts.stage,
+        SelectionStage::MergeTap,
+        "expected the merge-tap decision to decide ec@30/am2. TWO readings: (1) the \
+         stage TAGGING broke — fix here; (2) the ENGINE changed which mechanism \
+         answers first, e.g. native is now accepted so `try_merge_tap`'s gate no \
+         longer holds, in which case the RFC-070 parity corpus needs re-taking (this \
+         fixture is `tier2_ec_am2_30_ore` there). `parity_corpus_baseline.json` \
+         records what it was: native/merge-tap under all five option sets"
+    );
+}
+
+/// Third deciding stage: `scoped-pairwise`, the component-wise
+/// `IssueCounts` floor — the mechanism that is deliberately NOT
+/// lexicographic. Here horizontal-stack displaces native, so this also
+/// pins that a scoped pairwise CAN name a non-native winner, which the
+/// merge-tap fixture above cannot show.
+#[test]
+#[ntest::timeout(180_000)]
+fn selection_scoreboard_contract_scoped_pairwise_stage() {
+    use spaghettio_core::trace::SelectionStage;
+
+    let facts = assert_scoreboard_contract(
+        "advanced-circuit",
+        5.0,
+        "assembling-machine-2",
+        &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
+    );
+    assert_eq!(
+        facts.winner, "horizontal-stack",
+        "horizontal-stack strictly improves native's issue channels on ac@5/am2 and \
+         displaces it; got {}",
+        facts.winner
+    );
+    assert_eq!(
+        facts.stage,
+        SelectionStage::ScopedPairwise,
+        "expected `horizontal_choice`'s pairwise comparison to decide ac@5/am2. TWO \
+         readings: (1) the stage TAGGING broke — fix here; (2) the ENGINE changed so \
+         horizontal no longer strictly improves, in which case the winner assertion \
+         above fires first and the RFC-070 parity corpus needs re-taking (this fixture \
+         is `tier4_ac_am2_5_unconstrained` there; the baseline records \
+         horizontal-stack/scoped-pairwise under four option sets and \
+         native/best-error-free under `hs-off`)"
     );
 }
