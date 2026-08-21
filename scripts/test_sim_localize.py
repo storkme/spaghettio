@@ -291,5 +291,44 @@ def test_both_ranking_paths_share_the_tie_break():
     assert [(r["x"], r["y"]) for r in frame_rows] == [(r["x"], r["y"]) for r in ts_rows] == [(3, -1), (3, 0), (9, 0)]
 
 
+# --- second-round findings on #697 -------------------------------------------
+
+
+def test_classify_shape_never_calls_an_impaired_machine_healthy():
+    cs = sim_localize.classify_shape
+    assert cs([10, 50, 10, 50], ["item_ingredient_shortage"] * 4) == "unsteady"
+    assert cs([10, 50, 10, 50], ["working"] * 4) == "healthy"
+    assert cs([15, 5, 3, 2], ["working"] * 4) == "decaying"  # peak-first: winding down, not a jam
+    assert cs([2, 15, 5, 3], ["working"] * 4) == "ramp-then-decay"
+    assert cs([-1, -1], ["working"] * 2) == "unknown"  # can't occur; must not read as flat-zero
+
+
+def test_empty_new_format_belt_gets_lane_detail_not_the_old_format_fallback(capsys):
+    sim_state = {"belts": [[10, 10, 0, [], "transport-belt", 4, None],
+                           [11, 10, 0, [{}, {}], "transport-belt", 4, None]]}
+    sim_localize.print_lane_detail(sim_state, [{"unit": 7, "name": "m", "x": 10, "y": 11}], 2)
+    out = capsys.readouterr().out
+    assert "no per-lane detail" not in out
+    assert out.count("L1: —  L2: —") == 2
+
+
+def test_ranking_and_lane_detail_tolerate_missing_fields(capsys):
+    ts = [{"tick": 1, "machines": [{"unit": 1, "name": "m", "crafts_delta": 0.0, "status": "no_power"}], "items": {}}]
+    sim_localize.print_ranking({"report": {"timeseries": ts}, "sim_state": {}}, 3)  # packet lacks x/y
+    assert "(?,?)" in capsys.readouterr().out
+    assert sim_localize.lane_str([[["iron-plate", 4, "extra"]]], 0).startswith("?")
+
+
+def test_around_pivots_lane_detail_to_that_tile(tmp_path, capsys):
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(make_new_format_report()))
+    run(path, ["--around", "12,10,2"])
+    out = capsys.readouterr().out
+    assert "--- lane detail (around (12,10)" in out
+    assert "tile (12,10):" in out
+    assert "(12,10) fast-underground-belt > L1: copper-plate×2  L2: —" in out
+    assert "machine 1 assembling-machine-2" not in out  # worst-machine detail replaced, not appended
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

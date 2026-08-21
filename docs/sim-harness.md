@@ -424,7 +424,12 @@ the raw Factorio 2.0 16-way `defines.direction` integer (unremapped —
 0=north, 4=east, 8=south, 12=west), and — for underground belts only —
 `"input"`/`"output"`, `null` otherwise. Empty belts (`n == 0`) are
 included: a dried-up lane is the primary localization signal for belt
-forensics, so the dump no longer skips them. Older reports carry the
+forensics, so the dump no longer skips them. `scripts/sim-localize.py`
+is what renders them (`.` on its map, `L1: —  L2: —` in lane detail);
+the web overlay deliberately draws nothing for an empty belt, so in the
+browser this change is invisible. Cost: `sim-state.json` grows by the
+empty-belt share of the layout — 12% and 10.5% of belt entries on the
+two dogfood fixtures (gear@10, EC@10). Older reports carry the
 3-tuple `[x, y, n]` with nonempty belts only; both shapes load fine
 since the trailing fields are additive.
 

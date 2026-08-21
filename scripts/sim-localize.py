@@ -14,7 +14,9 @@ Usage: python3 scripts/sim-localize.py <report.json> [--top N]
             the map is the full extent (the first look usually wants
             the whole factory). --around overrides either.
 --radius N  lane-detail radius per worst machine (default 3).
---around X,Y[,R]  window the map on this tile (default R=15).
+--around X,Y[,R]  window the map on this tile (default R=15) AND anchor
+            the lane detail there (radius --radius) instead of on the
+            worst machines.
 
 Belt `n` — LOAD-BEARING: a transport LINE spans several tiles, and
 `get_item_count()` returns the WHOLE LINE's count, so `n` repeats across
@@ -50,7 +52,9 @@ BACKPRESSURE = {"full_output", "full_burnt_result_output", "fluid_production_ove
 
 def rank_key(r):
     """One sort key for both ranking paths: worst first, then stable by tile."""
-    return (-r["frac_shortage"], -r["frac_backpressure"], -r.get("frac_other", 0.0), r["x"] or 0, r["y"] or 0)
+    x = r["x"] if r["x"] is not None else 0  # missing ≠ coordinate 0, but both sort after nothing
+    y = r["y"] if r["y"] is not None else 0
+    return (-r["frac_shortage"], -r["frac_backpressure"], -r.get("frac_other", 0.0), x, y)
 MACHINE_GLYPH = {"working": "W", "full_output": "F", "no_power": "P"}
 INSERTER_GLYPH = {
     "working": "i",
@@ -58,7 +62,7 @@ INSERTER_GLYPH = {
     "waiting_for_space_in_destination": "d",
     "waiting_for_more_items": "m",
 }
-ARROWS = ["^", ">", "v", "<"]  # indexed by round(direction / 4) % 4
+ARROWS = ["^", ">", "v", "<"]  # indexed by direction // 4 % 4 (real belts are only ever 0/4/8/12)
 
 def machine_glyph(status):
     if status in MACHINE_GLYPH:
@@ -172,29 +176,35 @@ def print_header(top):
 def classify_shape(deltas, statuses):
     """Coarse decay-shape classifier over one machine's crafts_delta series.
     See docs/sim-harness-forensics.md "Reading time-series decay shapes"
-    for the real vocabulary this approximates. Rules:
+    for the real vocabulary this approximates. Rules, in order:
       flat-zero:       every window's crafts_delta is ~0.
-      ramp-then-decay: series peaks strictly before the final window, and
-                       the final window is under half that peak.
-      stable-below:    low relative variation (stdev/mean < 20%) AND at
-                       least one window sat in a shortage/full_output status.
-      healthy:         everything else.
+      ramp-then-decay: a rise to a peak strictly before the final window,
+                       then the final window under half that peak.
+      decaying:        peak in the FIRST window, final window under half it
+                       (winding down, never ramped — not a jam signature).
+      stable-below:    low relative variation (stdev/mean < 20%) with at
+                       least one window in a non-`working` status.
+      unsteady:        any other series with a non-`working` status somewhere.
+      healthy:         never left `working`, and none of the above.
+    `healthy` is never returned for a machine that sat in an impaired
+    status: an alternating starving machine is `unsteady`, not healthy.
     """
     if not deltas:
         return "unknown"
     if all(abs(d) < 1e-9 for d in deltas):
         return "flat-zero"
+    impaired = any(s != "working" for s in statuses)
     peak = max(deltas)
     peak_idx = deltas.index(peak)
     if peak > 0 and peak_idx < len(deltas) - 1 and deltas[-1] < 0.5 * peak:
-        return "ramp-then-decay"
+        return "ramp-then-decay" if peak_idx > 0 else "decaying"
     mean = sum(deltas) / len(deltas)
-    if mean > 0:
-        cv = (sum((d - mean) ** 2 for d in deltas) / len(deltas)) ** 0.5 / mean
-        impaired = any(s in SHORTAGE or s in BACKPRESSURE for s in statuses)
-        if cv < 0.2:
-            return "stable-below" if impaired else "healthy"
-    return "healthy" if mean > 0 else "flat-zero"
+    if mean <= 0:
+        return "unknown"
+    cv = (sum((d - mean) ** 2 for d in deltas) / len(deltas)) ** 0.5 / mean
+    if cv < 0.2:
+        return "stable-below" if impaired else "healthy"
+    return "unsteady" if impaired else "healthy"
 
 def rank_from_timeseries(timeseries):
     by_unit = {}
@@ -259,7 +269,7 @@ def print_ranking(top, top_n):
         return [], rows
     print(f"{'unit':>6} {'name':<26} {'pos':>10} {'shortage%':>10} {'backpressure%':>14} {'mean crafts':>12} {'shape':<16}")
     for r in rows[:20]:
-        pos = f"({r['x']:.0f},{r['y']:.0f})"
+        pos = f"({r['x']:.0f},{r['y']:.0f})" if r["x"] is not None and r["y"] is not None else "(?,?)"
         mean = "-" if r["mean_crafts_delta"] is None else f"{r['mean_crafts_delta']:.2f}"
         print(f"{str(r['unit'] or '-'):>6} {str(r['name'] or '?'):<26} {pos:>10} "
               f"{r['frac_shortage']*100:>9.0f}% {r['frac_backpressure']*100:>13.0f}% {mean:>12} {r['shape']:<16}")
@@ -344,16 +354,19 @@ def render_map(grid, all_xy, window):
         row_label = f"{y:>5} " if y % 10 == 0 else " " * 6
         print(row_label + "".join(grid.get((x, y), " ") for x in range(xmin, xmax + 1)))
 
-def resolve_window(args, worst_rows):
-    if args.around:
-        try:
-            parts = [int(p) for p in args.around.split(",")]
-            x, y = parts[0], parts[1]
-            r = parts[2] if len(parts) > 2 else 15
-            return (x - r, x + r, y - r, y + r)
-        except (ValueError, IndexError):
-            print(f"note: --around expects X,Y[,R] (got {args.around!r}) — rendering the full extent instead",
-                  file=sys.stderr)
+def parse_around(s):
+    """`X,Y[,R]` → (x, y, r) or None (with a stderr note) on malformed input."""
+    try:
+        parts = [int(p) for p in s.split(",")]
+        return parts[0], parts[1], (parts[2] if len(parts) > 2 else 15)
+    except (ValueError, IndexError):
+        print(f"note: --around expects X,Y[,R] (got {s!r}) — rendering the full extent instead", file=sys.stderr)
+        return None
+
+def resolve_window(args, worst_rows, around=None):
+    if around is not None:
+        x, y, r = around
+        return (x - r, x + r, y - r, y + r)
     if args.top_explicit and worst_rows:
         xs = [r["x"] for r in worst_rows if r["x"] is not None]
         ys = [r["y"] for r in worst_rows if r["y"] is not None]
@@ -367,7 +380,7 @@ LEGEND = """legend:
   inserters: i working  s waiting_for_source  d waiting_for_space  m waiting_for_more  ? other
   belts (direction known): ^ > v < = nonempty, moving that way; . = empty
   belts (old format, no direction): # nonempty, . empty
-  underground: U/u input mouth (nonempty/empty)  O/o output mouth (nonempty/empty) — direction not encoded
+  underground: U/u input mouth (nonempty/empty)  O/o output mouth (nonempty/empty) — direction not shown here (lane detail prints it)
   splitters: Y nonempty, y empty     pipes: ~ has fluid, - empty
   NOTE: belt `n` is a whole TRANSPORT LINE's count (repeats across a straight run) — treated as
   empty-vs-nonempty only, never per-tile.
@@ -378,19 +391,29 @@ LEGEND = """legend:
 def lane_str(det, idx):
     if not det or len(det) <= idx or not det[idx]:
         return "—"
-    return "  ".join(f"{item}×{count}" for item, count in det[idx])
+    parts = []
+    for entry in det[idx]:
+        if isinstance(entry, (list, tuple)) and len(entry) == 2:
+            parts.append(f"{entry[0]}×{entry[1]}")
+        else:
+            parts.append(f"?{entry!r}")  # unexpected lane entry shape: show it, don't crash
+    return "  ".join(parts)
 
-def print_lane_detail(sim_state, worst_rows, radius):
-    print(f"--- lane detail (worst {len(worst_rows)}, radius {radius}) ---")
-    if not worst_rows:
+def print_lane_detail(sim_state, anchors, radius, label=None):
+    """`anchors` are ranking rows (machines) or a `{"kind": "tile", ...}` from --around."""
+    print(f"--- lane detail ({label or f'worst {len(anchors)}'}, radius {radius}) ---")
+    if not anchors:
         print("(nothing to detail)")
         return
     belts = [parse_belt(b) for b in sim_state.get("belts") or []]
-    for r in worst_rows:
+    for r in anchors:
         x0, y0 = r["x"], r["y"]
         if x0 is None or y0 is None:
             continue
-        print(f"machine {r.get('unit') or '-'} {r.get('name') or '?'} at ({x0:.0f},{y0:.0f}):")
+        if r.get("kind") == "tile":
+            print(f"tile ({x0:.0f},{y0:.0f}):")
+        else:
+            print(f"machine {r.get('unit') or '-'} {r.get('name') or '?'} at ({x0:.0f},{y0:.0f}):")
         nearby = sorted(
             (b for b in belts if abs(b["x"] - x0) <= radius and abs(b["y"] - y0) <= radius),
             key=lambda b: (abs(b["x"] - x0) + abs(b["y"] - y0), b["x"], b["y"]),
@@ -401,7 +424,7 @@ def print_lane_detail(sim_state, worst_rows, radius):
         for b in nearby:
             arrow = arrow_for(b["direction"]) if b["direction"] is not None else "?"
             name = b["name"] or "belt"
-            if b["det"]:
+            if b["det"] is not None:  # `[]`/`[{}, {}]` is a real, empty new-format belt — the headline case
                 print(f"  ({b['x']:.0f},{b['y']:.0f}) {name} {arrow} L1: {lane_str(b['det'], 0)}  L2: {lane_str(b['det'], 1)}")
             else:
                 fill = "nonempty" if (b["n"] or 0) > 0 else "empty"
@@ -430,14 +453,19 @@ def main():
     worst_rows, _all_rows = print_ranking(top, top_n)
 
     sim_state = top.get("sim_state") or {}
-    window = resolve_window(args, worst_rows)
+    around = parse_around(args.around) if args.around else None
+    window = resolve_window(args, worst_rows, around)
     print("--- map ---")
     print(LEGEND)
     grid, all_xy = build_grid(sim_state, window)
     render_map(grid, all_xy, window)
     print()
 
-    print_lane_detail(sim_state, worst_rows, args.radius)
+    if around is not None:
+        x, y, _r = around
+        print_lane_detail(sim_state, [{"kind": "tile", "x": x, "y": y}], args.radius, label=f"around ({x},{y})")
+    else:
+        print_lane_detail(sim_state, worst_rows, args.radius)
     return 0
 
 if __name__ == "__main__":
