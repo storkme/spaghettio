@@ -39,7 +39,10 @@ function machineColor(status: string): number {
  *  count (observed values run well past a single tile's ~8-item physical
  *  max on the dogfood fixtures — a whole-line sum, not per-tile), so
  *  anything at/above `BELT_HEAT_CAP` just clamps to full red rather than
- *  needing an exact denominator. Empty belts (count 0) draw nothing. */
+ *  needing an exact denominator. Empty belts (count 0) draw nothing —
+ *  the harness now emits every belt including empty ones (the primary
+ *  localization signal for a dried-up lane), so this guard is what
+ *  keeps a factory's worth of idle belts from painting solid yellow. */
 const BELT_HEAT_CAP = 8;
 const BELT_HEAT_ALPHA = 0.5;
 const HEAT_LOW = { r: 0xf5, g: 0xc5, b: 0x18 }; // yellow

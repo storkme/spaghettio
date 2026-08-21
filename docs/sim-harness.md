@@ -416,6 +416,18 @@ a final census (`fluid_ingredient_shortage: 2, item_ingredient_shortage:
 fine for an hour then jammed". A rate-vs-time series distinguishes those
 at a glance; the final aggregate cannot.
 
+`sim_state.belts` entries are `[x, y, n, det, name, direction, ug_type]`:
+layout-space tile coordinate, total item count across all transport
+lines, per-line `{name, count}` detail, the entity name (e.g.
+`"transport-belt"`, `"fast-underground-belt"`, `"express-splitter"`),
+the raw Factorio 2.0 16-way `defines.direction` integer (unremapped —
+0=north, 4=east, 8=south, 12=west), and — for underground belts only —
+`"input"`/`"output"`, `null` otherwise. Empty belts (`n == 0`) are
+included: a dried-up lane is the primary localization signal for belt
+forensics, so the dump no longer skips them. Older reports carry the
+3-tuple `[x, y, n]` with nonempty belts only; both shapes load fine
+since the trailing fields are additive.
+
 Every report now carries `timeseries`, one entry per checkpoint window
 (the same item-driven windows the target/intermediate rates are computed
 over — see "How a measurement window is chosen" above):

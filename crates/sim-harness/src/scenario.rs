@@ -1079,6 +1079,19 @@ local function stn(st)
   return tostring(st)
 end
 
+-- Sentinel for a JSON `null` in the belts array. Lua cannot hold a
+-- `nil` in the middle (or at the tail) of an otherwise-sequential table --
+-- assigning `nil` just removes the key, so `helpers.table_to_json` would
+-- see a shorter array border and silently emit a 6-element tuple instead
+-- of 7 for a plain (non-underground) belt. There is no documented null
+-- sentinel `table_to_json` recognizes (checked against the Factorio forums
+-- and the 2.0 LuaHelpers docs), so this dump builds the JSON normally with
+-- this unique placeholder string in `ug_type`'s slot, then string-replaces
+-- the quoted placeholder with a literal `null` in the finished JSON text.
+-- The placeholder can never collide with a real value in this array
+-- (item/entity names never contain it).
+local SIM_STATE_NULL = "__spaghettio_sim_state_null__"
+
 local function dump_sim_state(s)
   local belts, machines, inserters, pipes = {}, {}, {}, {}
   for _, b in pairs(s.find_entities_filtered{type = {"transport-belt", "underground-belt", "splitter"}}) do
@@ -1101,10 +1114,21 @@ local function dump_sim_state(s)
       end
       det[li] = lane
     end
-    if n > 0 then
-      table.insert(belts, {math.floor(b.position.x - storage.offx) + LX0,
-                           math.floor(b.position.y - storage.offy) + LY0, n, det})
+    -- Name + direction (belts never carried these, unlike pipes which got
+    -- them for the same reason in #364 a few lines below) and, for
+    -- underground belts, which end of the pair this is. `direction` is the
+    -- raw 2.0 16-way `defines.direction` integer, unremapped (0=north,
+    -- 4=east, 8=south, 12=west) -- see docs/sim-harness.md for the
+    -- encoding note. Every belt is now emitted, including `n == 0`: an
+    -- empty belt is the primary localization signal for a dried-up lane,
+    -- and the old `if n > 0` guard hid exactly those tiles.
+    local ug_type = SIM_STATE_NULL
+    if b.type == "underground-belt" then
+      ug_type = b.belt_to_ground_type
     end
+    table.insert(belts, {math.floor(b.position.x - storage.offx) + LX0,
+                         math.floor(b.position.y - storage.offy) + LY0, n, det,
+                         b.name, b.direction, ug_type})
   end
   -- Pipe/fluid section (#364): every pipe-class entity with name,
   -- direction, and fluid contents — fluids were invisible in the dump,
@@ -1178,10 +1202,14 @@ local function dump_sim_state(s)
     table.insert(chests, {math.floor(c.position.x - storage.offx) + LX0,
                           math.floor(c.position.y - storage.offy) + LY0, contents})
   end
-  helpers.write_file("sim-state.json", helpers.table_to_json{
+  local sim_state_json = helpers.table_to_json{
     offx = storage.offx, offy = storage.offy, fed = storage.fed_total,
     belts = belts, machines = machines, inserters = inserters, pipes = pipes,
-    ugs = ugs, splitters = splitters, chests = chests}, false)
+    ugs = ugs, splitters = splitters, chests = chests}
+  -- Convert the belts' ug_type sentinel (see SIM_STATE_NULL above) to a
+  -- real JSON null now that the whole structure has been serialized.
+  sim_state_json = sim_state_json:gsub('"' .. SIM_STATE_NULL .. '"', "null")
+  helpers.write_file("sim-state.json", sim_state_json, false)
 end
 
 local function finalize(s, converged)
