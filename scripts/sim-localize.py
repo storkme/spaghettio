@@ -314,7 +314,7 @@ def render_map(grid, all_xy, window):
     xmin, xmax, ymin, ymax = int(xmin), int(xmax), int(ymin), int(ymax)
     margin, width = 6, xmax - xmin + 1
 
-    header = [" "] * (margin + width)
+    header = [" "] * (margin + width + 6)  # slack so a label at the right edge isn't truncated
     for x in range(xmin, xmax + 1):
         if x % 10 == 0:
             start = margin + (x - xmin)
