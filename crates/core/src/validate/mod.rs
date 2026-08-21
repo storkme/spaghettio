@@ -413,10 +413,12 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// thereby stopped asserting what the engine enforces — a flux-channel
 /// regression would have passed them silently (review, #605). One definition,
 /// one place to change it.
-pub const SELECTION_EXCLUDED_WARNING_CATEGORIES: [&str; 3] = [
+pub const SELECTION_EXCLUDED_WARNING_CATEGORIES: [&str; 1] = [
     "belt-detour",
-    "inserter-throughput",
-    "inserter-item-throughput",
+    // ("inserter-throughput" / "inserter-item-throughput" left this set by
+    // DELETION 2026-08-21 — owner call, offpath Tier 2 item 9, #675: the
+    // #632 B6 demotion had already removed their selection role; the
+    // checks themselves are now gone.)
 ];
 
 pub fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
@@ -479,8 +481,8 @@ pub(crate) fn is_di_cell_entity(seg: Option<&str>) -> bool {
 /// wherever partitioning never occurred. Shared across every `validate::`
 /// check that resolves a machine's spec by recipe name — see
 /// `belt_flow::compute_lane_rates_impl`, `belt_flow::check_input_rate_delivery`,
-/// `inserters::check_inserter_throughput`,
-/// and `inserters::check_inserter_item_throughput`.
+/// (formerly also the two inserter-throughput checks, deleted
+/// 2026-08-21 — offpath Tier 2 item 9).
 pub(crate) fn resolve_row_spec<'a>(
     layout: &'a LayoutResult,
     recipe: &str,
@@ -1078,8 +1080,6 @@ pub fn validate(
         Box::new(|| check_pole_network_connectivity(layout)),
         Box::new(|| inserters::check_inserter_chains(layout, solver)),
         Box::new(|| inserters::check_inserter_direction(layout)),
-        Box::new(|| inserters::check_inserter_throughput(layout, solver)),
-        Box::new(|| inserters::check_inserter_item_throughput(layout, solver)),
         Box::new(|| inserters::check_row_output_lane_budget(layout, solver)),
         Box::new(|| inserters::check_row_input_belt_margin(layout, solver)),
         Box::new(|| check_pipe_isolation(layout)),
@@ -1194,7 +1194,11 @@ mod tests {
     fn selection_exclusion_set_membership_is_deliberate() {
         assert_eq!(
             SELECTION_EXCLUDED_WARNING_CATEGORIES,
-            ["belt-detour", "inserter-throughput", "inserter-item-throughput"],
+            ["belt-detour"],
+            // 2026-08-21: the two inserter-throughput categories left the
+            // set by CHECK DELETION (owner call, offpath item 9, #675) —
+            // selection semantics unchanged (excluded since #632 B6);
+            // trust-table rows tombstoned in the same PR.
             "the selection-exclusion set changed — this is a selection-semantics \
              change, not a refactor. Update docs/validator-trust.md in the same \
              PR and carry demotion/lift receipts (see the const's doc comment)."

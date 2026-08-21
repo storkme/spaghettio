@@ -148,7 +148,8 @@ verification protocol (suite green + clippy + WASM build), not just compile.
    branches hide inside otherwise-live functions (`belt_flow.rs:533`,
    `:1121`) and go with it. Deleting the enum + severity forks simplifies
    `validate()`'s signature. **Decision TAKEN 2026-08-20: relic — deleted (T2d).**
-9. **`inserter-throughput` + `inserter-item-throughput` checks** (validator):
+9. **`inserter-throughput` + `inserter-item-throughput` checks** —
+   **DELETED 2026-08-21 (owner decision + T2e PR)** (validator):
    demoted from selection 2026-08-14 (#632 B6), hand-capacity model never
    sim-anchored, now report-only. Cost of deletion: the only signal on
    production-science's known 8-warning residual, and the big-electric-pole

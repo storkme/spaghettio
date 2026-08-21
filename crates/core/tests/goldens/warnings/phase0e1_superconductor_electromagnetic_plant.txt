@@ -1,2 +1,1 @@
-inserter-item-throughput 4
 orphan-belt-segment 2
