@@ -43,7 +43,19 @@
 //! word. `check` mode's only failure condition is "the CURRENT reading is
 //! below plan, and materially worse than the committed baseline" — never
 //! "the reading dropped from a higher baseline while staying non-negative
-//! throughout" and never "at-plan, therefore fine".
+//! throughout" and never "at-plan, therefore fine". Enforced structurally,
+//! not just by convention: the comparison clamps both readings to a
+//! ceiling of 0 before differencing (`min(deficit_pct, 0.0)`), so the
+//! result can only be positive (alarm-worthy) when the FRESH reading is
+//! itself below plan — an above-plan baseline (sulfuric5-chem's committed
+//! +239%, for instance) can never manufacture a "regression" out of a
+//! reading that improved toward or past plan (second-opinion review on
+//! #693, finding #1 — this was a live false-alarm path, not hypothetical).
+//! Everything that ISN'T that one comparison — a stale baseline (entity
+//! count moved), a reading that isn't converged on either side, or a
+//! fixture with no baseline row at all — cannot be validly judged either
+//! way, so it is printed as a skip and never fails the test; failing on
+//! those would itself violate the below-plan-only contract (finding #2).
 //!
 //! # bless/check protocol (mirrors `SPAGHETTIO_STRESS_GOLDEN`'s shape,
 //! but see the note below on why this one is NOT the same design)
@@ -52,15 +64,26 @@
 //!   * unset — **report-only** (the default). Prints the scoreboard,
 //!     asserts only that every fixture built and measured something (a
 //!     build regression must not hide as a silently-empty table); no
-//!     plan-relative verdict.
+//!     plan-relative verdict, and no other assertion — the
+//!     manifest-has-a-plan sanity check below only runs under `bless`/
+//!     `check`, where a missing plan would otherwise corrupt what gets
+//!     committed or compared.
 //!   * `bless` — writes the current per-fixture readings as the new
 //!     committed baseline (`e2e_tripwire_baseline.json`).
-//!   * `check` — compares fresh readings against the committed baseline;
-//!     fails only on a genuine below-plan regression (see above) or on a
-//!     baseline that is stale for the current geometry (entity count
-//!     changed — compared apples to oranges otherwise) or whose
-//!     convergence flag flipped (the deficit number is not trustworthy
-//!     either way in that case).
+//!   * `check` — compares fresh readings against the committed baseline.
+//!     **Fails only on a genuine below-plan regression**: the fresh
+//!     reading is itself below plan AND its below-plan portion is
+//!     materially worse than the baseline's (see the hard-rule section
+//!     above for the clamped-comparison mechanism). Three things that
+//!     cannot be validly judged are printed and SKIPPED rather than
+//!     failed — none of them is a below-plan finding, so none may fail
+//!     the test: a fixture missing from the baseline (new — bless it), a
+//!     baseline stale for the current geometry (entity count changed —
+//!     comparing them would be apples to oranges), and a reading that
+//!     isn't converged on either side (the deficit number isn't
+//!     trustworthy at all in that case, not just "trustworthy but
+//!     different" — matches `corpus_replay.rs`'s own treatment of an
+//!     unconverged reading as unusable, not merely suspect).
 //!
 //! **Why report-only stays the default, and this is NOT wired into CI as
 //! a gate**: the committed-golden `check`/`bless` flow that used to sit
@@ -107,17 +130,13 @@ use spaghettio_meter::{Factory, Manifest};
 const WARMUP: u64 = 60 * 60 * 80;
 const WINDOW: u64 = 60 * 60 * 3;
 
-/// Below this magnitude a deficit is tick-window noise, not a real
-/// below-plan reading — window-phase jitter alone is worth a few tenths
-/// of a percentage point on these fixtures (docs/meter-divergence.md's
-/// window-quantization note). Applied to the FRESH reading only: this is
-/// the floor for "is this fixture currently below plan at all", not a
-/// regression tolerance.
-const BELOW_PLAN_FLOOR_PP: f64 = 0.5;
-
-/// How much worse than the committed baseline a below-plan reading must
-/// get before `check` mode alarms. 2.0pp matches the sim-harness's own
-/// baseline-check tolerance (`crates/sim-harness/src/baseline.rs`).
+/// How much worse than the committed baseline the BELOW-plan portion of
+/// a reading must get before `check` mode alarms — see the comparison
+/// itself (in `e2e_tripwire`) for why only the below-plan portion is
+/// ever compared. 2.0pp matches the sim-harness's own baseline-check
+/// tolerance (`crates/sim-harness/src/baseline.rs`) and comfortably
+/// absorbs the tick-window jitter noted in docs/meter-divergence.md's
+/// window-quantization section.
 const REGRESSION_TOLERANCE_PP: f64 = 2.0;
 
 struct Fixture {
@@ -431,21 +450,9 @@ fn e2e_tripwire() {
 
     print_scoreboard(&results);
 
-    // Sanity, not a plan-relative verdict: every fixture here solves a
-    // single declared target, so a missing planned rate is an export/
-    // manifest bug, never a legitimate measurement.
-    let no_plan: Vec<&str> = results
-        .iter()
-        .filter(|m| m.deficit_pct.is_nan())
-        .map(|m| m.label)
-        .collect();
-    assert!(
-        no_plan.is_empty(),
-        "no planned rate found for target on: {no_plan:?} — export/manifest bug"
-    );
-
     match std::env::var("SPAGHETTIO_METER_TRIPWIRE").as_deref() {
         Ok("bless") => {
+            assert_has_plan(&results);
             let rows: Vec<BaselineRow> = results
                 .iter()
                 .map(|m| BaselineRow {
@@ -460,46 +467,68 @@ fn e2e_tripwire() {
             eprintln!("BLESSED {} fixture row(s) to {:?}", rows.len(), baseline_path());
         }
         Ok("check") => {
+            assert_has_plan(&results);
             let baseline = load_baseline().expect(
                 "SPAGHETTIO_METER_TRIPWIRE=check needs a committed baseline; bless one first",
             );
             let mut regressions = Vec::new();
             for m in &results {
+                // Three "cannot judge this one" cases. None of these is a
+                // below-plan finding, so per the below-plan-only contract
+                // (module docs; second-opinion review on #693, finding
+                // #2) none of them may fail the test — printed and
+                // skipped only.
                 let Some(b) = baseline.iter().find(|b| b.label == m.label) else {
-                    regressions.push(format!("{}: no baseline row (new fixture — bless it)", m.label));
+                    eprintln!("{}: SKIPPED — no baseline row (new fixture — bless it)", m.label);
                     continue;
                 };
                 if b.entities != m.entities {
-                    regressions.push(format!(
-                        "{}: entity count changed ({} -> {}) — geometry moved, baseline is \
-                         stale and not comparable; re-bless deliberately",
+                    eprintln!(
+                        "{}: SKIPPED — entity count changed ({} -> {}); geometry moved, \
+                         baseline is stale and not comparable. Re-bless deliberately.",
                         m.label, b.entities, m.entities
-                    ));
+                    );
                     continue;
                 }
-                if b.converged != m.converged {
-                    regressions.push(format!(
-                        "{}: convergence changed (was {}, now {}) — the deficit reading is not \
-                         trustworthy either way here; investigate before re-blessing",
+                if !b.converged || !m.converged {
+                    // Either side, not just a flip (finding #3): both
+                    // sides unconverged fell through this guard when it
+                    // only checked `b.converged != m.converged`, despite
+                    // the whole point being that an unconverged reading
+                    // isn't trustworthy full stop — matches
+                    // `corpus_replay.rs`'s own treatment (an unconverged
+                    // solid config is a buffer-fill transient, not a
+                    // rate, regardless of what it's being compared to).
+                    eprintln!(
+                        "{}: SKIPPED — not converged (baseline={}, fresh={}); the deficit \
+                         reading is not trustworthy, so it is not compared either way.",
                         m.label, b.converged, m.converged
-                    ));
+                    );
                     continue;
                 }
                 // The ONLY alarm condition, per the module docs' hard
-                // rule: the fresh reading must itself be below plan
-                // (past the noise floor), AND it must be materially
-                // worse than the baseline. A reading that stays
-                // non-negative throughout never reaches this branch,
-                // regardless of how far it dropped from a higher
-                // baseline value.
-                if m.deficit_pct < -BELOW_PLAN_FLOOR_PP {
-                    let drop = b.deficit_pct - m.deficit_pct;
-                    if drop > REGRESSION_TOLERANCE_PP {
-                        regressions.push(format!(
-                            "{}: BELOW-PLAN REGRESSION — baseline {:.1}%, now {:.1}% ({:.1}pp worse)",
-                            m.label, b.deficit_pct, m.deficit_pct, drop
-                        ));
-                    }
+                // rule: compare only the BELOW-plan portion of each
+                // reading (clamped to a ceiling of 0) so an above-plan
+                // baseline can never manufacture a "regression" out of a
+                // fresh reading that moved toward plan or into a
+                // trustworthy below-plan range. `drop` is provably <= 0
+                // whenever the fresh reading is at-or-above plan
+                // (`fresh_below` is then exactly 0, and `baseline_below`
+                // is always <= 0), so this can only fire when the CURRENT
+                // reading is itself below plan (second-opinion review on
+                // #693, finding #1 — this exact shape, an above-plan
+                // baseline moving toward plan, was a live false alarm
+                // before this fix: sulfuric5-chem/lightoil5-chem-cracking
+                // are committed at +239%/+200%).
+                let baseline_below = b.deficit_pct.min(0.0);
+                let fresh_below = m.deficit_pct.min(0.0);
+                let drop = baseline_below - fresh_below;
+                if drop > REGRESSION_TOLERANCE_PP {
+                    regressions.push(format!(
+                        "{}: BELOW-PLAN REGRESSION — baseline {:.1}%, now {:.1}% ({:.1}pp \
+                         worse, below-plan portion only)",
+                        m.label, b.deficit_pct, m.deficit_pct, drop
+                    ));
                 }
             }
             assert!(
@@ -510,7 +539,29 @@ fn e2e_tripwire() {
         }
         _ => {
             // Report-only default — see module docs. No plan-relative
-            // assertion here, deliberately.
+            // assertion here, deliberately, and no OTHER assertion either
+            // (the manifest-has-a-plan sanity check is bless/check-only —
+            // second-opinion review on #693, finding #4: report-only
+            // must not be able to fail a test over anything but the
+            // build-failure check above).
         }
     }
+}
+
+/// Sanity, not a plan-relative verdict: every fixture here solves a
+/// single declared target, so a missing planned rate is an export/
+/// manifest bug, never a legitimate measurement. Gated to `bless`/`check`
+/// only (called from within those match arms) — a NaN deficit would
+/// otherwise corrupt what gets committed or compared, but report-only
+/// mode has nothing to protect and must not assert on it (finding #4).
+fn assert_has_plan(results: &[Measurement]) {
+    let no_plan: Vec<&str> = results
+        .iter()
+        .filter(|m| m.deficit_pct.is_nan())
+        .map(|m| m.label)
+        .collect();
+    assert!(
+        no_plan.is_empty(),
+        "no planned rate found for target on: {no_plan:?} — export/manifest bug"
+    );
 }
