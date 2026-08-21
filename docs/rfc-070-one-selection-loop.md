@@ -407,3 +407,32 @@ fixtures / docs split per the churn norm).
   run). Dropping `rate` was the alternative and was rejected: it would make
   the label mean less while matching neither the recorded #675 follow-up nor
   the provenance question the counter exists to answer.*
+- *2026-08-21 — **#692 review round 3 adjudicated** (6 minors, no majors;
+  closing round). Absorbed: the all-refused message's refusal reasons now come
+  from the checked `run_refs`/`CANDIDATE_ORDER` pair instead of a hand-typed
+  7-slot tuple zipped positionally against candidate names — the same
+  misattribution class round 2 retired elsewhere, and the last positional
+  literal in the function; the two alignment checks became `debug_assert_eq!`,
+  so the tripwire fires in every debug build (which is what `cargo test` and
+  CI run — coverage unchanged) while release and WASM cannot panic a browser
+  solve over a code-level ordering mistake, restoring the degradation
+  philosophy the `catch_unwind` arms twenty lines away already follow; the
+  contract test's `decided.len()`, row-order and event-order assertions now
+  each name BOTH readings of a failure (engine legitimately changed vs.
+  instrumentation broke) and say which sibling assertion discriminates,
+  extending what the stage assertion already did; the no-op denominator
+  header now states that "+N with no default" counts SUCCESSFUL builds
+  lacking a baseline and that a variant's own refusals never reach that tally
+  (they are in the refusals summary), so it cannot be read as "all builds with
+  a failing default"; and a doc said `count_issues` runs at five sites when it
+  runs at six. Adjudicated as designed, no code change: a single scoreboard row
+  can carry counts sourced to one mechanism and kinds to another — that is what
+  a per-candidate summary across three mechanisms IS, and the decision
+  authority is `SelectionDecided::stage`, which the row does not duplicate; one
+  clarifying sentence added at the field doc. Incidental finding, NOT fixed and
+  out of scope: `ghost_occupancy::is_claimed` is dead code in RELEASE builds
+  because its only non-test uses are inside `debug_assert!`s in
+  `ghost_router.rs` — pre-existing, and invisible to CI because the clippy job
+  is debug-only. It surfaced here because the same hazard applied to
+  `CANDIDATE_ORDER`, which is why the refusal message now uses it for real
+  rather than only inside assertions.*

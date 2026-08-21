@@ -974,9 +974,14 @@ impl CandidateRun {
 /// silently recording one candidate's verdicts against another's row
 /// (#692 review round 2, 3/3).
 ///
-/// The assertions compare compile-time constants, so they cannot fire
-/// for some inputs and not others: either every call panics — in the
-/// first test that runs — or none can.
+/// The checks are `debug_assert`s: they compare compile-time constants,
+/// so a violation cannot depend on the input — it is caught by the first
+/// debug-built call, which every `cargo test` run and every CI job is
+/// (tests build in debug), while release and WASM pay nothing and cannot
+/// panic a browser solve over a code-level ordering mistake. Coverage is
+/// unchanged; the blast radius is not (#692 review round 3, 1/3, which
+/// noted the unconditional form inverted the degradation philosophy used
+/// twenty lines away, where candidates run under `catch_unwind`).
 const CANDIDATE_ORDER: [&str; 7] = [
     "native",
     "k1-shape-fix",
@@ -1155,7 +1160,7 @@ impl Scoreboard {
     /// review round 2, 3/3).
     fn from_runs(runs: [&CandidateRun; 7]) -> Self {
         Self(std::array::from_fn(|i| {
-            assert_eq!(
+            debug_assert_eq!(
                 runs[i].name, CANDIDATE_ORDER[i],
                 "candidate slot {i} holds `{}` but CANDIDATE_ORDER says `{}` — a \
                  candidate was added or reordered without updating every \
@@ -1170,11 +1175,12 @@ impl Scoreboard {
     ///
     /// FIRST WRITE WINS, and `source` therefore names the site that FIRST
     /// computed this candidate's counts — **not** necessarily the site
-    /// that went on to decide. `count_issues` runs at five places: both
-    /// pairwise comparisons (which is why native is computed twice) and
-    /// again inside `scoped_choice`'s DI-vs-horizontal arm, which does
-    /// not record at all because both its inputs are already on the board
-    /// by construction. Every repeat is the same deterministic call on
+    /// that went on to decide. `count_issues` runs at SIX call sites — two
+    /// in `di_choice`, two in `horizontal_choice` (which is why native is
+    /// computed twice), and two in `scoped_choice`'s DI-vs-horizontal arm,
+    /// which records at none of them because both its inputs are already
+    /// on the board by construction. (The doc said "five places" until
+    /// #692 review round 3 counted them.) Every repeat is the same deterministic call on
     /// the same layout, so the recorded VALUE is identical whichever site
     /// wrote it; only the label differs. Read `source` as provenance of
     /// the number, and the terminal event's stage as the deciding site
@@ -1677,15 +1683,14 @@ pub fn select_best_decomposition(
     // layout — same behaviour as today's pipeline when shape-fix can't
     // resolve a (n, m) trap).
     // Index order MUST match NATIVE_IDX (0) / MERGE_TAP_IDX (3) above.
-    let (native_err, k1_err, split_err, merge_tap_err, cells_err, di_err, horizontal_err) = (
-        native_run.error.clone(),
-        k1_run.error.clone(),
-        split_run.error.clone(),
-        merge_tap_run.error.clone(),
-        cells_run.error.clone(),
-        di_run.error.clone(),
-        horizontal_run.error.clone(),
-    );
+    // Refusal reasons for the all-candidates-failed message, taken from
+    // the same checked list everything else is keyed by. This was a
+    // hand-typed 7-slot tuple zipped positionally against the candidate
+    // names — every element the same type, so a reorder compiled silently
+    // and glued the wrong reason to the wrong candidate, which is the
+    // misattribution class the rest of this function retired (#692 review
+    // round 3, 1/3). Cloned here, before `candidates` moves the runs.
+    let refusal_reasons: [Option<String>; 7] = run_refs.map(|r| r.error.clone());
     // Whether DI may enter the generic ranking at all. It may ONLY when
     // native produced nothing: then there is no bit-identity to protect
     // and DI competes fairly with `cell-composed` on the error-free tier.
@@ -1724,7 +1729,7 @@ pub fn select_best_decomposition(
         (horizontal_run.outcome, horizontal_run.events, horizontal_run.name),
     ];
     for (i, (_, _, name)) in candidates.iter().enumerate() {
-        assert_eq!(
+        debug_assert_eq!(
             *name, CANDIDATE_ORDER[i],
             "candidates[{i}] holds `{name}` but CANDIDATE_ORDER says `{}` — the \
              winner index would name the wrong candidate",
@@ -1874,10 +1879,14 @@ pub fn select_best_decomposition(
         // because there is no winner and the stage enum is deliberately
         // closed over the five ways a winner CAN be picked.
         board.emit();
-        let details: Vec<String> = candidates
+        // Both sides keyed by `CANDIDATE_ORDER`: the names from the list
+        // itself and the reasons from `run_refs`, whose slots are checked
+        // against it. Nothing here is positional against a separately
+        // typed literal any more, so the message cannot glue one
+        // candidate's reason onto another's name.
+        let details: Vec<String> = CANDIDATE_ORDER
             .iter()
-            .map(|(_, _, name)| name.to_string())
-            .zip([&native_err, &k1_err, &split_err, &merge_tap_err, &cells_err, &di_err, &horizontal_err])
+            .zip(refusal_reasons.iter())
             .map(|(name, err)| {
                 format!("{name}: {}", err.as_deref().unwrap_or("did not run"))
             })

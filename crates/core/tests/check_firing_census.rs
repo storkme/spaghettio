@@ -454,9 +454,14 @@ fn check_firing_census() {
          fixture's own default; round 6, #686) ==="
     );
     println!(
-        "  (denominator counts COMPARABLE builds only — a build whose \
-         fixture's own default refused has no baseline and is reported \
-         separately, never as a difference; #675 follow-up)"
+        "  (denominator counts COMPARABLE builds only: ones that SUCCEEDED \
+         and whose fixture's own default also built. \"+N with no default\" \
+         counts successful builds whose fixture's default did NOT build — \
+         they have no baseline, so they are neither identical nor \
+         different. It is NOT a count of builds with a failing default in \
+         general: a variant's OWN refusals never reach this tally at all, \
+         they are in the `refusals:` summary at the top; #675 follow-up, \
+         wording per #692 review round 3)"
     );
     println!(
         "  (\"identical\" = tiles AND stamps — name/x/y/direction/recipe/\
@@ -885,9 +890,15 @@ fn selection_scoreboard_contract() {
     let names: Vec<&str> = rows.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names, EXPECTED_ORDER,
-        "the scoreboard must emit one row per candidate SLOT, in canonical order — \
-         a missing row means a candidate became unobservable, and a reordered one \
-         means every recorded verdict is attributed to the wrong candidate"
+        "the scoreboard must emit one row per candidate SLOT, in canonical order. \
+         TWO readings, and they need different fixes: (1) the ENGINE legitimately \
+         gained, lost or renamed a candidate — check `CANDIDATE_ORDER` in \
+         decomposition_search.rs; if it changed, this list is merely stale, update \
+         it and re-take the RFC-070 Phase-0 baseline, since the candidate field \
+         moved. (2) The INSTRUMENTATION broke — `CANDIDATE_ORDER` is unchanged but \
+         `Scoreboard::emit` stopped emitting a slot or the index alignment slipped, \
+         in which case every recorded verdict is now attributed to the wrong \
+         candidate and the fix is here, not in the baseline"
     );
 
     let decided: Vec<(&str, SelectionStage)> = events
@@ -900,7 +911,15 @@ fn selection_scoreboard_contract() {
     assert_eq!(
         decided.len(),
         1,
-        "exactly one selection must terminate for this fixture; got {decided:?}"
+        "exactly one selection must terminate for this fixture; got {decided:?}. \
+         TWO readings: (1) the ENGINE legitimately nested a selection — some \
+         candidate's `produce` now runs its own search on this fixture, which is a \
+         correct engine that this pin does not cover; confirm by checking whether \
+         the extra terminal is preceded by its own full block of seven rows (the \
+         census's block walker renders exactly that) and, if so, re-point this test \
+         at the OUTER block instead of assuming one. (2) The INSTRUMENTATION broke — \
+         terminals are duplicated or emitted somewhere other than once per \
+         selection, which would regroup every census table"
     );
 
     let last_row = events
@@ -914,8 +933,14 @@ fn selection_scoreboard_contract() {
     assert!(
         last_row < terminal,
         "all rows must precede their `SelectionDecided` — the census pairs a block \
-         to its verdict by flushing on the terminal event, so emitting a row after \
-         it would silently regroup the table"
+         to its verdict by flushing on the terminal event, so a row after it \
+         silently regroups the table. TWO readings: (1) the ENGINE nested a \
+         selection whose block now lands after the outer terminal (the ordering \
+         contract in `select_best_decomposition` puts the board immediately before \
+         `SelectionDecided`, so this means that ordering changed and the walker \
+         needs revisiting); (2) the INSTRUMENTATION broke — `board.emit()` moved \
+         relative to the terminal event. `decided.len()` above discriminates: a \
+         nested selection adds a terminal, a misplaced emit does not"
     );
 
     // --- the winner is one of this block's own rows, and it produced ---

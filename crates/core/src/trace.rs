@@ -1452,6 +1452,12 @@ pub enum TraceEvent {
         counts_source: Option<String>,
         /// `ErrorKinds` (mechanism 3) — computed ONLY by the merge-tap
         /// decision, so `None` on every call where merge-tap did not run.
+        /// One row can therefore carry counts from one mechanism and kinds
+        /// from another (a Pooled solve where DI also ran gives native
+        /// `di-vs-native` counts AND merge-tap kinds): a row is a
+        /// per-candidate summary of everything any mechanism computed
+        /// about it, not the record of one decision. The decision is
+        /// `SelectionDecided::stage`, and only that.
         contamination_errors: Option<usize>,
         starvation_errors: Option<usize>,
         structural_errors: Option<usize>,
