@@ -1249,3 +1249,39 @@ fixtures / docs split per the churn norm).
     NaN-vs-None score asymmetry in `ranks_ahead` (both are v1's: NaN
     ties via `partial_cmp().unwrap_or(Equal)`, and a produced candidate
     never lacks a score).*
+- *2026-08-21 — **#698 review round 4 adjudicated** (no majors — 8 minors
+  and 3 nits, the round the findings converge). Absorbed, and the two
+  worth keeping: (a) **four of the seven producer gates had no test at
+  all** — `policy_replay` evaluates ZERO gates by construction, and only
+  merge-tap's and size-split's were unit-pinned, so a mis-transcribed
+  eligibility clause in k1 / cell-composed / DI / horizontal would have
+  survived 140/140 and first appeared in Phase 2a as a changed candidate
+  SET. All seven are now pinned clause-by-clause against v1's
+  conjunctions. Writing them found one of my own assumptions wrong: a
+  gear solve IS chain-eligible, so the `chain-eligible` clause has no
+  negative case among the cheap fixtures — recorded at the test rather
+  than papered over. (b) `firewalls` was a vector nothing read, which
+  makes "firewall" a word for a comment; a `Firewall` now names the
+  categories its receipt argues for and a test pins that set against the
+  live exclusions, so changing them without touching the argument fails.*
+  - *Also absorbed: `incumbent_accepted()` was not order-bounded the way
+    `any_prior_accepted` is — both now go through one `prior_slot`
+    helper enforcing "a gate may only read producers registered before
+    it"; `incumbent_index()` asserts at most one incumbent (two would
+    silently rank the second as an ordinary challenger); the
+    `min_produced_for_error_free_tier` doc now states the dependence
+    that makes it equal v1's `n_layouts` — v1's scoped arms self-refuse
+    INSIDE `produce()`, so a producer given `refuse_on_error` without an
+    equivalent produce-side refusal would shift the tier's availability
+    invisibly to the replay; and the #632-B6-deletion provenance now
+    names BOTH numbers at every site — **PR #684** did the removal under
+    **issue #675**'s Tier 2 item 9 — since the RFC cited one and the
+    canonical constant the other, which reads as a contradiction to
+    anyone reconciling them (verified against both: #684 is
+    "del(t2e): remove the never-sim-anchored inserter-throughput check
+    pair (item 9)", #675 is the off-path tracking issue).*
+  - *Refuted: CI-gating the corpus, for the FOURTH time in four rounds —
+    the answer is #694's and has now been given eight times across two
+    PRs. `measure`'s refusal string not matching v1's is deliberate and
+    nothing compares them: the equivalence rule is (status, winner,
+    stage), and v1's string is the lossy artifact being replaced.*

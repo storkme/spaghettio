@@ -889,11 +889,15 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
         // what it cost, not as a description of current behaviour.
         // The `SELECTION_EXCLUDED_WARNING_CATEGORIES` set remains
         // excluded — as of 2026-08-21 that is `belt-detour` ALONE. The
-        // two #632 B6 demotions left the set by DELETION (#684: the
-        // inserter-throughput checks themselves are gone), so the "plus
-        // the two demotions" this line used to claim described a set
-        // with three entries that has had one since. Read the constant,
-        // not this comment. Receipts: validator-trust.md hole 2.
+        // two #632 B6 demotions left the set by DELETION: PR #684
+        // removed the inserter-throughput check pair, under the #675
+        // off-path campaign's Tier 2 item 9. (Both numbers name the same
+        // event — the PR that did it and the issue that tracked it — so
+        // this comment and the constant's own, which cites #675, do not
+        // disagree.) The "plus the two demotions" this line used to
+        // claim described a set with three entries that has had one
+        // since. Read the constant, not this comment. Receipts:
+        // validator-trust.md hole 2.
         // Honest scope statement (review finding on #525 corrected an
         // earlier "bit-identical to pre-#519" overclaim here): the
         // category PRE-EXISTED with nonzero counts, so excluding it DOES

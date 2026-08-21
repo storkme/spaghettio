@@ -288,6 +288,12 @@ impl IssueProfile {
         // self-refused candidate is invisible (Phase-0b oracle gap (d)).
         // Here the categories travel in the reason and the counts and
         // kinds stay on the profile.
+        //
+        // The reason STRING therefore deliberately does not match v1's
+        // ("direct insertion failed validation: …"), and nothing
+        // compares them: the equivalence rule is (status, winner,
+        // stage), and v1's string is the lossy artifact this replaces
+        // rather than a format to reproduce (#698 review round 4).
         if producer.refuse_on_error && errors > 0 {
             let breakdown = error_categories
                 .iter()
@@ -369,10 +375,20 @@ impl AcceptanceGate {
 /// it is the record of why [`SelectionPolicy::excluded_warning_categories`]
 /// contains what it does, so a future reader adjusting the set meets the
 /// argument instead of rediscovering it.
+///
+/// It is not only a record. `justifies` names the categories the receipt
+/// argues for, and `firewall_receipts_cover_the_live_exclusions` pins
+/// that set against the live one — so widening or narrowing the
+/// exclusions without touching the argument fails a test rather than
+/// leaving a receipt that describes a policy nobody kept (#698 review
+/// round 4: a thing called a firewall should have an enforcement
+/// surface).
 #[derive(Debug, Clone)]
 pub struct Firewall {
     pub name: &'static str,
     pub receipt: &'static str,
+    /// The excluded categories this receipt is the argument for.
+    pub justifies: &'static [&'static str],
 }
 
 /// Whether a producer is eligible on this call, and — when it is not —
@@ -405,10 +421,26 @@ pub struct GateContext<'a> {
 }
 
 impl GateContext<'_> {
+    /// The one rule both readers below obey: **a gate may only consult
+    /// producers registered BEFORE it.** Anything at or after its own
+    /// index has not run on this call, so reading it would be reading a
+    /// slot that is empty for ordering reasons rather than for
+    /// eligibility ones (#698 review round 4: the bound was enforced for
+    /// `any_prior_accepted` and merely true-in-practice for
+    /// `incumbent_accepted`).
+    fn prior_slot(&self, i: usize) -> Option<bool> {
+        debug_assert!(
+            i < self.registration_index,
+            "a gate for registration {} read slot {i}, which is not registered before it",
+            self.registration_index
+        );
+        self.prior.get(i).copied().flatten()
+    }
+
     /// `Some(accepted)` when the incumbent produced, `None` when it
     /// produced nothing.
     pub fn incumbent_accepted(&self) -> Option<bool> {
-        self.incumbent.and_then(|i| self.prior.get(i).copied().flatten())
+        self.incumbent.and_then(|i| self.prior_slot(i))
     }
 
     /// Whether any registration BEFORE this one produced an accepted
@@ -712,6 +744,20 @@ pub struct MeasurementRule {
     /// Below this many produced candidates, error-free admission is not
     /// evaluated — the tier is empty regardless of what was measured.
     /// v1: 2.
+    ///
+    /// **What "produced" has to mean for this to equal v1's
+    /// `n_layouts`** (#698 review round 4, the forward-looking one):
+    /// v1 counts candidates whose `produce()` returned `Ok`, and its
+    /// DI / horizontal / cell-composed arms self-refuse on error INSIDE
+    /// `produce()` — so an error-laden one of those has no outcome and
+    /// is not counted. The equality therefore rests on
+    /// [`ProducerRegistration::refuse_on_error`] being applied BEFORE
+    /// the count, which is why [`IssueProfile::measure`] applies it. A
+    /// producer given the flag here but no equivalent self-refusal on
+    /// the produce side would be counted as produced by v1 and refused
+    /// by v2, moving the error-free tier's availability — and
+    /// `policy_replay` would not see it, because it bypasses `measure`
+    /// entirely.
     pub min_produced_for_error_free_tier: usize,
 }
 
@@ -746,7 +792,18 @@ impl SelectionPolicy {
     }
 
     /// Index of the incumbent registration.
+    ///
+    /// Exactly one registration may carry the flag. Two would silently
+    /// break every pairwise stage — `position()` takes the first and the
+    /// second's profile would be ranked as an ordinary challenger
+    /// against it — so the invariant is asserted rather than assumed
+    /// (#698 review round 4).
     pub fn incumbent_index(&self) -> Option<usize> {
+        debug_assert!(
+            self.producers.iter().filter(|p| p.incumbent).count() <= 1,
+            "a policy declares at most one incumbent; this one declares {}",
+            self.producers.iter().filter(|p| p.incumbent).count()
+        );
         self.producers.iter().position(|p| p.incumbent)
     }
 
@@ -792,8 +849,13 @@ impl SelectionPolicy {
                           counts ~10x and letting an unanchored model steer selection \
                           shipped a physically over-stamped winner on stacking_ec_60s. \
                           The input-rate-delivery exemption was LIFTED 2026-08-07 (it \
-                          counts again); belt-detour remains excluded. Receipts: \
+                          counts again); belt-detour remains excluded. The two #632 B6 \
+                          demotions left the set by DELETION — PR #684 removed the \
+                          inserter-throughput check pair, under the #675 off-path \
+                          campaign's Tier 2 item 9 (both numbers name the same event: \
+                          the PR that did it and the issue that tracked it). Receipts: \
                           docs/validator-trust.md hole 2.",
+                justifies: &["belt-detour"],
             }],
             program: current_program(),
             producers: current_producers(),
@@ -1861,6 +1923,142 @@ mod tests {
         later[CELLS] = Some(true);
         later[HS] = Some(true);
         assert_eq!(excluded_by(&later), GateVerdict::Eligible);
+    }
+
+    /// The four gates `policy_replay` cannot reach and the two tests
+    /// above did not cover (#698 review round 4). The harness feeds
+    /// already-produced profiles to `decide`, which never evaluates a
+    /// gate at all — so a mis-transcribed eligibility clause survives
+    /// 140/140 and first appears in Phase 2a, where it moves the
+    /// candidate SET rather than the ranking.
+    #[test]
+    fn every_registered_gate_is_pinned_against_its_v1_conjunction() {
+        let policy = SelectionPolicy::current();
+        let sr = gear_solve();
+        let mut prior = [None; 7];
+        let verdict = |idx: usize, opts: &LayoutOptions, prior: &[Option<bool>; 7]| {
+            policy.producers[idx].gate.evaluate(&GateContext {
+                solver_result: &sr,
+                opts,
+                prior,
+                incumbent: Some(NATIVE),
+                registration_index: idx,
+            })
+        };
+
+        // k1-shape-fix: PartitionedDecomposed AND the incumbent produced
+        // an UNACCEPTED layout. v1: `matches!(opts.strategy,
+        // PartitionedDecomposed) && native_run.outcome.is_some_and(|(_, s)| !s.accepted)`.
+        let pooled = LayoutOptions::default();
+        let partitioned = LayoutOptions {
+            strategy: LayoutStrategy::PartitionedDecomposed,
+            ..Default::default()
+        };
+        assert_eq!(
+            verdict(K1, &pooled, &prior),
+            GateVerdict::Excluded("strategy-is-partitioned-decomposed")
+        );
+        assert_eq!(
+            verdict(K1, &partitioned, &prior),
+            GateVerdict::Excluded("incumbent-produced-and-unaccepted"),
+            "the incumbent has not produced, which is not the same as producing \
+             unaccepted — v1's `is_some_and` distinguishes them"
+        );
+        prior[NATIVE] = Some(true);
+        assert_eq!(
+            verdict(K1, &partitioned, &prior),
+            GateVerdict::Excluded("incumbent-produced-and-unaccepted"),
+            "an ACCEPTED incumbent stands k1 down: there is no unstampable shape to fix"
+        );
+        prior[NATIVE] = Some(false);
+        assert_eq!(verdict(K1, &partitioned, &prior), GateVerdict::Eligible);
+
+        // cell-composed: Candidate mode, DI not Forced, belt tier
+        // unconstrained-or-express, chain-eligible.
+        let cells_on = LayoutOptions {
+            cell_composition: crate::bus::cells::CellComposition::Candidate,
+            ..Default::default()
+        };
+        assert_eq!(
+            verdict(CELLS, &LayoutOptions {
+                cell_composition: crate::bus::cells::CellComposition::Off,
+                ..Default::default()
+            }, &prior),
+            GateVerdict::Excluded("cell-composition-is-candidate")
+        );
+        assert_eq!(
+            verdict(CELLS, &LayoutOptions {
+                direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
+                ..cells_on.clone()
+            }, &prior),
+            GateVerdict::Excluded("direct-insertion-not-forced"),
+            "Forced DI is an explicit topology request; a competing variant stands down"
+        );
+        assert_eq!(
+            verdict(CELLS, &LayoutOptions {
+                max_belt_tier: Some("transport-belt".to_string()),
+                ..cells_on.clone()
+            }, &prior),
+            GateVerdict::Excluded("belt-tier-unconstrained-or-express")
+        );
+        assert_eq!(
+            verdict(CELLS, &LayoutOptions {
+                max_belt_tier: Some("express-transport-belt".to_string()),
+                ..cells_on.clone()
+            }, &prior),
+            GateVerdict::Eligible,
+            "express IS allowed by that clause — an unconstrained tier is not the only \
+             admissible one"
+        );
+        // NOT pinned here: a negative case for the `chain-eligible`
+        // clause. Every fixture reachable from this test's cheap solves
+        // is chain-eligible (measured: gear/am1, plastic/chem and ec/am1
+        // all return `Ok(())`), so the clause is covered only in the
+        // positive direction. Stated rather than left as an apparent
+        // full sweep.
+
+        // horizontal-stack: enabled, VerticalSplit, DI not Forced, and
+        // the solve has a dual-input row. A gear solve has none.
+        assert_eq!(
+            verdict(HS, &LayoutOptions { horizontal_candidate: false, ..Default::default() }, &prior),
+            GateVerdict::Excluded("horizontal-candidate-enabled")
+        );
+        assert_eq!(
+            verdict(HS, &LayoutOptions {
+                direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
+                ..Default::default()
+            }, &prior),
+            GateVerdict::Excluded("direct-insertion-not-forced")
+        );
+        assert_eq!(
+            verdict(HS, &pooled, &prior),
+            GateVerdict::Excluded("solve-has-dual-input-row"),
+            "iron-gear-wheel from plate is single-input, so the variant would be \
+             bit-identical and the extra layout pass is pure waste"
+        );
+
+        // native's gate is empty by construction: the incumbent always runs.
+        assert!(policy.producers[NATIVE].gate.clauses.is_empty());
+    }
+
+    #[test]
+    fn firewall_receipts_cover_the_live_exclusions() {
+        // A "firewall" that nothing checks is a comment. This pins the
+        // receipts' declared scope against the set they argue for, so
+        // changing the exclusions without touching the argument fails
+        // here (#698 review round 4).
+        let p = SelectionPolicy::current();
+        let justified: BTreeSet<String> = p
+            .firewalls
+            .iter()
+            .flat_map(|f| f.justifies.iter().map(|c| (*c).to_string()))
+            .collect();
+        assert_eq!(
+            justified, p.excluded_warning_categories,
+            "every excluded warning category needs a firewall receipt saying WHY, and a \
+             receipt must not claim a category that is no longer excluded"
+        );
+        assert!(p.firewalls.iter().all(|f| !f.receipt.is_empty()));
     }
 
     // -----------------------------------------------------------------
