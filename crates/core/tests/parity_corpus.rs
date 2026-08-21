@@ -372,38 +372,42 @@ fn resolve_zone_cache_path() -> std::path::PathBuf {
 /// provenance mismatch. `sha2` is already a dev-dependency and `e2e.rs`
 /// already hashes content with it.
 ///
-/// Covers ALL THREE zone sources `zone_cache.rs` merges, not just the
-/// disk pin. Getting this list right took two review rounds and the
-/// lesson generalises: a provenance hash is only worth what its source
-/// list is, and a source list is a thing that goes stale.
+/// Covers the zone sources a NATIVE run actually consults, and only
+/// those. `lookup_table()` (`zone_cache.rs:1404-1412`) seeds its map
+/// with:
 ///
-/// 1. The **pin** — whatever `SPAGHETTIO_ZONE_CACHE_PATH` resolves to.
-/// 2. The compiled-in **`EMBEDDED_CACHE`**
-///    (`include_bytes!("../data/sat-zones.bin")`), merged by
-///    `install_prebaked_into` (#694 round 3). The const is private to
-///    the crate, so this hashes the file it embeds — the same bytes.
-/// 3. The **legacy `.jsonl`** sitting next to the pin, which
-///    `load_existing_jsonl` still reads on every native load
-///    (`zone_cache.rs`'s `resolve_legacy_jsonl_path`, #694 round 4).
-///    Optional: absent contributes nothing to the map and nothing here,
-///    so a file APPEARING changes the hash, which is the direction that
-///    matters.
+/// ```text
+/// #[cfg(not(target_arch = "wasm32"))] load_existing_jsonl(&mut map);
+/// #[cfg(target_arch = "wasm32")]      install_prebaked_into(&mut map, EMBEDDED_CACHE);
+/// ```
 ///
-/// Missing (1) or (2) yields `None` rather than a partial hash — a value
-/// that is committed and compared against forever must not silently
-/// describe fewer sources than it claims.
+/// so on native — which is how this corpus runs — the sources are
+/// exactly what `load_existing_jsonl` reads: the **pin** and the
+/// **legacy `.jsonl` beside it**. The compiled-in `EMBEDDED_CACHE`
+/// (`include_bytes!("../data/sat-zones.bin")`) is **WASM-only** and is
+/// deliberately NOT hashed: including it would make a wasm-only change
+/// to that file hard-fail every native `check` and refuse every plain
+/// `bless` while the native zone set was byte-identical, and would
+/// refuse outright if a file this run never reads went missing.
+///
+/// The `.jsonl` is optional — absent contributes nothing to the map and
+/// nothing here, so a file APPEARING moves the hash, which is the
+/// direction that matters.
+///
+/// **Three review rounds went into that list, and it was WRONG in two of
+/// them** — first missing the `.jsonl`, then over-corrected into hashing
+/// a wasm-only file. The durable lesson is not the list: it is that *a
+/// provenance hash is worth exactly what its source list is, a source
+/// list goes stale, and "which sources" is a `#[cfg]` question that
+/// cannot be answered by reading a function name.* Re-derive it from
+/// `lookup_table()` rather than from this comment if it ever matters.
 fn hash_zone_cache() -> Option<String> {
     use sha2::{Digest, Sha256};
     let pin_path = resolve_zone_cache_path();
     let pin = std::fs::read(&pin_path).ok()?;
-    let embedded = std::fs::read(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin"),
-    )
-    .ok()?;
     let legacy = std::fs::read(pin_path.with_extension("jsonl")).unwrap_or_default();
     let mut h = Sha256::new();
     h.update(&pin);
-    h.update(&embedded);
     h.update(&legacy);
     Some(format!("{:x}", h.finalize()))
 }
@@ -790,12 +794,26 @@ fn parity_corpus() {
             // nobody can identify is not evidence the baseline
             // reproduces. `check-any-cache` is the named escape for
             // deliberately comparing across caches.
-            let provenance = if pin_hash != baseline.zone_cache_hash {
+            //
+            // `None == None` is a MISMATCH here, not a match (#694 review
+            // round 5). `bless-repin` may legitimately write a null hash,
+            // and a later `check` on a cache-less host would then compare
+            // null to null, find no mismatch, and green-check 160 rows
+            // nobody can reproduce — the same "compared nothing reads as
+            // clean" shape round 3 closed on the Some-vs-None pair, with
+            // the None-vs-None pair still getting through. Both sides
+            // must be `Some` AND equal.
+            let provenance = if pin_hash.is_none()
+                || baseline.zone_cache_hash.is_none()
+                || pin_hash != baseline.zone_cache_hash
+            {
                 let msg = format!(
                     "PROVENANCE MISMATCH: this run's zone cache is {pin_hash:?}, the \
-                     baseline was blessed against {:?}. This corpus is cache-relative, so \
-                     the divergences below may be provenance rather than an engine change \
-                     — re-run with the committed pin \
+                     baseline was blessed against {:?}. (A `null` on EITHER side counts as \
+                     a mismatch — an unidentified cache is not the same cache, it is an \
+                     unknown one.) This corpus is cache-relative, so the divergences below \
+                     may be provenance rather than an engine change — re-run with the \
+                     committed pin \
                      (SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/sat-zones-ci.bin) before \
                      reading them as findings.",
                     baseline.zone_cache_hash
