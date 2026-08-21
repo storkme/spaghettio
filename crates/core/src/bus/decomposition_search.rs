@@ -1114,12 +1114,18 @@ struct Scoreboard([CandidateVerdict; 7]);
 impl Scoreboard {
     /// Record the `IssueCounts` a comparison site just computed.
     ///
-    /// FIRST WRITE WINS. Native's counts are computed by both pairwise
-    /// comparisons and DI's by both `di_choice` and `scoped_choice`; the
-    /// repeats are the same deterministic `count_issues` call on the same
-    /// layout, so keeping the first preserves the provenance of the site
-    /// that first needed the number instead of overwriting it with a
-    /// later duplicate.
+    /// FIRST WRITE WINS, and `source` therefore names the site that FIRST
+    /// computed this candidate's counts — **not** necessarily the site
+    /// that went on to decide. `count_issues` runs at five places: both
+    /// pairwise comparisons (which is why native is computed twice) and
+    /// again inside `scoped_choice`'s DI-vs-horizontal arm, which does
+    /// not record at all because both its inputs are already on the board
+    /// by construction. Every repeat is the same deterministic call on
+    /// the same layout, so the recorded VALUE is identical whichever site
+    /// wrote it; only the label differs. Read `source` as provenance of
+    /// the number, and the terminal event's stage as the deciding site
+    /// (#692 review, 3/3 — the two are not the same question and the
+    /// earlier wording let them be read as one).
     fn record_counts(&mut self, idx: usize, counts: IssueCounts, source: &'static str) {
         let row = &mut self.0[idx];
         if row.counts.is_none() {

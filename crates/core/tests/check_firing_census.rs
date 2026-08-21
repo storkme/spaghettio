@@ -554,9 +554,12 @@ fn selection_scoreboard_census() {
 
     println!("\n=== RFC-070 selection scoreboard (default options, one build per fixture) ===");
     println!(
-        "(err/selw/laww are the counts the DECISION computed, sourced in \
-         the `from` column; `-` means no mechanism computed one — a gap, \
-         not a zero. `reason` is produce()'s refusal text, or the \
+        "(err/selw/laww are counts a decision mechanism computed; `-` means \
+         no mechanism computed one — a gap, not a zero. `from` names the \
+         site that FIRST computed them, which is not necessarily the site \
+         that decided: recording is first-write-wins and the value is the \
+         same either way, so read the deciding stage below the table for \
+         WHO decided. `reason` is produce()'s refusal text, or the \
          accepted=no tag for a candidate that built but failed the hard \
          gate.)"
     );
@@ -565,8 +568,14 @@ fn selection_scoreboard_census() {
     for &(item, rate, machine, inputs) in FIXTURES {
         let input_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let fixture_key = format!("{item}@{rate}:{machine}");
+        // Every fixture contributes exactly one summary row, including the
+        // ones that never reach a decision (#692 review, 2/3: the header
+        // claimed "one row per fixture" while a no-winner or unsolvable
+        // fixture silently contributed none — a summary that drops its
+        // failures is the shape this repo keeps getting bitten by).
         let Ok(sr) = solver::solve(item, rate, &input_set, machine) else {
             println!("\n-- {fixture_key}\n   SKIP (no solve)");
+            stage_tally.push((fixture_key, "—".to_string(), "SKIP (no solve)".to_string()));
             continue;
         };
         // Collect this fixture's whole event stream, then walk it. The
@@ -600,7 +609,20 @@ fn selection_scoreboard_census() {
         let mut pending: Vec<&TraceEvent> = Vec::new();
         for ev in &events {
             match ev {
-                TraceEvent::SelectionCandidateEvaluated { .. } => pending.push(ev),
+                TraceEvent::SelectionCandidateEvaluated { name, .. } => {
+                    // A block that ended WITHOUT a `SelectionDecided` (the
+                    // all-candidates-failed path) would otherwise stay open
+                    // and absorb the next block's rows — flushing only on
+                    // the terminal event has no defense against that
+                    // (#692 review, 3/3). `Scoreboard::emit` walks its rows
+                    // in index order and index 0 is always `native`, so a
+                    // `native` row arriving with rows already pending marks
+                    // the start of a new block, terminated or not.
+                    if name == "native" && !pending.is_empty() {
+                        blocks.push((std::mem::take(&mut pending), None));
+                    }
+                    pending.push(ev);
+                }
                 TraceEvent::SelectionDecided { winner, stage } => {
                     blocks.push((std::mem::take(&mut pending), Some((winner.as_str(), *stage))));
                 }
@@ -613,6 +635,11 @@ fn selection_scoreboard_census() {
         }
         if blocks.is_empty() {
             println!("   (no selection events — build never reached the search)");
+            stage_tally.push((
+                fixture_key,
+                "—".to_string(),
+                "no selection events".to_string(),
+            ));
             continue;
         }
 
@@ -689,12 +716,24 @@ fn selection_scoreboard_census() {
                         ));
                     }
                 }
-                None => println!("   => NO WINNER (every candidate failed; see reasons above)"),
+                None => {
+                    println!("   => NO WINNER (every candidate failed; see reasons above)");
+                    if n == blocks.len() - 1 {
+                        stage_tally.push((
+                            fixture_key.clone(),
+                            "—".to_string(),
+                            "NO WINNER (all candidates failed)".to_string(),
+                        ));
+                    }
+                }
             }
         }
     }
 
-    println!("\n=== outer-selection summary (one row per fixture) ===");
+    println!(
+        "\n=== outer-selection summary (one row per fixture, including the \
+         ones that reached no decision) ==="
+    );
     println!("{:<44} {:<18} deciding stage", "fixture", "winner");
     for (fixture, winner, stage) in &stage_tally {
         println!("{fixture:<44} {winner:<18} {stage}");
@@ -710,14 +749,14 @@ fn selection_scoreboard_census() {
          buy a worse `laww`. `kinds` is the lexicographic `ErrorKinds` \
          key, computed only by the Pooled merge-tap decision. A blank \
          column is a candidate NO mechanism examined, and the blanks are \
-         structural rather than incidental: the merge-tap decision \
-         short-circuits the `clean_flags` tier entirely, so on a \
-         merge-tap-decided fixture neither native nor merge-tap carries \
-         issue counts at all even though both produced layouts — the \
-         kinds key is the whole of what that decision looked at, so it is \
-         the whole of what this can report. That is also why the deciding \
-         STAGE is the load-bearing column: it says which question was \
-         actually asked, where the counts only say what the answer was \
-         made of."
+         structural rather than incidental: a merge-tap decision \
+         short-circuits the `clean_flags` tier entirely, so the only \
+         counts such a fixture can show are ones a scoped pairwise \
+         already computed — and where DI and horizontal both refused, \
+         that is none, leaving the kinds key as the whole of what the \
+         decision looked at and the whole of what this can report. That \
+         is also why the deciding STAGE is the load-bearing column: it \
+         says which question was actually asked, where the counts only \
+         say what the answer was made of."
     );
 }

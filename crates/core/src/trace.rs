@@ -1441,10 +1441,14 @@ pub enum TraceEvent {
         errors: Option<usize>,
         selection_warnings: Option<usize>,
         layout_warnings: Option<usize>,
-        /// Which decision site produced the counts above (`"di-vs-native"`,
-        /// `"horizontal-vs-native"`, `"clean-flags"`). Provenance matters:
-        /// the counts are only as authoritative as the site that needed
-        /// them.
+        /// Which site FIRST computed the counts above (`"di-vs-native"`,
+        /// `"horizontal-vs-native"`, `"clean-flags"`) — provenance of the
+        /// number, **not** the site that decided. Recording is
+        /// first-write-wins and several sites compute the same candidate's
+        /// counts, so a later deciding tier can inherit an earlier tag;
+        /// the value is identical either way (same deterministic call on
+        /// the same layout). For "who decided", read `SelectionDecided`'s
+        /// stage.
         counts_source: Option<String>,
         /// `ErrorKinds` (mechanism 3) — computed ONLY by the merge-tap
         /// decision, so `None` on every call where merge-tap did not run.

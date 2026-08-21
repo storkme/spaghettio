@@ -328,10 +328,18 @@ fixtures / docs split per the churn norm).
 - *2026-08-21 — **Phase-0b oracle gaps**, recorded so no later phase
   assumes the baseline says more than it does. (a) Issue counts exist
   only where a comparison needed them: a merge-tap-decided selection
-  short-circuits the `clean_flags` tier entirely, so on such a fixture
-  neither native nor merge-tap carries ANY `IssueCounts` — the kinds key
-  is all that decision looked at. Likewise a scoped-pairwise-decided
-  selection leaves every non-participant countless. (b) `ErrorKinds` is
+  short-circuits the `clean_flags` tier entirely, so the only counts such
+  a fixture can carry are whatever a scoped pairwise already computed —
+  and on `ec@30`, where DI and horizontal both refused, that is NOTHING
+  for either native or merge-tap, leaving the kinds key as the whole of
+  what that decision looked at. (Corrected after #692 review, 2/3: the
+  first wording said a merge-tap decision means no counts, full stop.
+  It does not — native's counts DO get recorded whenever DI or
+  horizontal produced, since `di_choice`/`horizontal_choice` run on the
+  produced-but-unaccepted native that merge-tap's own gate requires. The
+  `ec@30` observation was true; the generalisation from it was not.)
+  Likewise a scoped-pairwise-decided selection leaves every
+  non-participant countless. (b) `ErrorKinds` is
   computed only by the merge-tap decision, so no candidate on a
   non-Pooled or native-clean solve has one. (c) A `not-run` row has no
   reason: the gates (`try_cells` / `try_di` / `try_horizontal` /
