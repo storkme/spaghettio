@@ -912,3 +912,71 @@ fixtures / docs split per the churn norm).
   profiles, so policy_replay is now "one live corpus run, two
   consumers" (v1 decides, v2 replays the captured in-process
   profiles; no second layout pass).*
+- *2026-08-21 — **Phase 1a landed** (#689 track W2a): the doc-only legend at
+  `bus/layout.rs:79-111` is promoted to three real types — `UserConstraints`,
+  `SearchAxes`, `EngineTuning` — closing the "`LayoutOptions` split" Design
+  bullet. **Composition shape: facade views over the flat struct, not
+  nesting.** The alternative (`LayoutOptions { constraints: UserConstraints,
+  axes: SearchAxes, .. }`) was rejected on a measured count, not a style
+  preference: ~238 flat-field reads and ~80 flat struct-literal
+  constructions of `LayoutOptions` exist across the workspace today (mostly
+  `tests/e2e.rs`), and `LayoutOptions` carries no serde/tsify derive to
+  begin with — the WASM boundary never serializes it,
+  `wasm-bindings::layout_options` builds one from primitive
+  `Option<String>`/`Option<u8>` params field-by-field. Nesting would rename
+  hundreds of sites for zero wire-format benefit and blow the PR's line
+  budget for no payoff the RFC asked for. Chose instead: fields stay flat
+  on `LayoutOptions` (unchanged, zero renames anywhere); `UserConstraints`/
+  `SearchAxes`/`EngineTuning` are owned-copy VIEWS obtained via
+  `LayoutOptions::constraints()`/`axes()`/`engine_tuning()`, plus a
+  `LayoutOptions::from_groups(constraints, axes, engine_tuning)`
+  constructor. Net +267/-10 lines, one file.
+  **Classification calls**: `planning_duty` (previously unclassified) is
+  neither a user constraint (the caller doesn't supply it, the engine picks
+  it) nor a search axis (the search loop never varies it) — it gets its own
+  tiny `EngineTuning` group rather than being folded into either existing
+  one or left doc-only. `research_productivity` (previously unclassified)
+  is NOT a preference — it describes the player's save (researched
+  productivity bonuses), i.e. world state — but it groups with
+  `UserConstraints` because it is exogenous caller input exactly like
+  `max_belt_tier`, never a value the engine searches or tunes; a fourth
+  group for one world-state field was judged not worth the ceremony.
+  **Structural guard**: each group's `Default` impl is manual, not derived
+  — in particular `SearchAxes::default().cell_composition` is `Candidate`,
+  matching the engine default, where `CellComposition`'s own `#[default]`
+  is `Off`. `from_groups` therefore cannot reproduce the `cell_composition`
+  fossil (naming a field next to a group default can no longer silently
+  select the wrong value, because the group default is already right).
+  **What it does not prevent**: the ~80 existing flat struct-literal call
+  sites — including both known `run_e2e` fossils — are completely
+  unchanged and exactly as fossil-prone as before (fixing those is #689
+  track W2c, sequenced after this one), and nothing stops new code from
+  writing a flat literal instead of calling `from_groups`. A
+  `layout_options_group_defaults_match_facade` test pins the three group
+  defaults against `LayoutOptions::default()` (executed discrimination
+  check: reverting `SearchAxes::default()`'s `cell_composition` to
+  `CellComposition::default()` made it fail, naming exactly
+  `cell_composition: Candidate` vs `Off`; restored and reverified green). A
+  `layout_options_from_groups_round_trips` test pins `from_groups` against
+  a non-default value on every group.
+  **Verification**: `cargo test --manifest-path crates/core/Cargo.toml`
+  full suite green (no `--no-fail-fast` failures); `cargo clippy -p
+  spaghettio_core -- -D warnings` (the exact pre-commit invocation) clean,
+  and `--all-targets` clippy warning count unchanged at 42 before/after (no
+  new warnings anywhere in the crate, not just the changed file). WASM
+  rebuilt via `wasm-pack build crates/wasm-bindings --target web --out-dir`
+  twice (stashed/unstashed to get a clean before/after pair): the generated
+  `spaghettio_wasm.d.ts`, `spaghettio_wasm.js`, and `package.json` are
+  **byte-identical** (`diff` exit 0 on all three); only the `.wasm` binary
+  itself differs (expected — new dead code compiled in changes layout/debug
+  info, not the JS/TS surface). `web`'s `npm run build` (`tsc --noEmit &&
+  vite build`) and `npm run test` (vitest, 41 tests) both green with zero
+  web-side edits. The #694 parity-baseline check
+  (`SPAGHETTIO_ZONE_CACHE_PATH` pinned to `crates/core/data/sat-zones-ci.bin`,
+  `SPAGHETTIO_PARITY_CORPUS=check`) passed: **160/160 cells matched the
+  committed baseline exactly** (`test parity_corpus ... ok`, 268s) — the
+  printed option-set divergences (10 major, 12 minor) are the
+  ALREADY-COMMITTED Phase-0c facts about the option-set axis, not a new
+  divergence this PR introduced; the pin file was untouched by the
+  read-only `check` mode (confirmed via `git status`), so no restore step
+  was needed.
