@@ -69,6 +69,26 @@
 //! "Standing gaps" below) — the baseline itself was never a trustworthy
 //! anchor to measure a regression FROM.
 //!
+//! **A baseline-non-converged fixture can never gain collapse coverage
+//! while it stays blessed non-converged** (second-opinion review round
+//! 3, finding #1 — `ec30-am2-ore`, the corpus's worst fixture, hits the
+//! "baseline never converged" branch before the collapse branch is ever
+//! reached, so a further regression on it is structurally unrepresentable
+//! today). This is not a gap in the check's design: an instrument cannot
+//! alarm on "worse than a baseline that was already producing nothing" —
+//! there is no direction left to regress FROM. It is inherent to any
+//! blessed-baseline design, not something a smarter comparison formula
+//! fixes. `ec30-am2-ore`'s real fix is the layout itself (its 3
+//! `belt-dead-end` validator errors — queued campaign-side as the W1c
+//! contested sample). The flip condition, so this is not permanently
+//! invisible: once that fixture is fixed and RE-BLESSED converged,
+//! collapse coverage arms itself automatically — no code change needed,
+//! just a bless run over the repaired layout. Until then, `check` prints
+//! a `RECOVERED` line (see the protocol section below) if a fresh run
+//! ever converges again on a still-non-converged baseline, so a fix
+//! landing is visible immediately rather than silently waiting for
+//! someone to think to re-bless.
+//!
 //! # Fluid targets are excluded from bless/check, never from the report
 //!
 //! `sulfuric5-chem` and `lightoil5-chem-cracking` (the corpus's only two
@@ -134,7 +154,11 @@
 //!   * `bless` — writes the current per-fixture readings (excluding fluid
 //!     targets — see above) as the new committed baseline
 //!     (`e2e_tripwire_baseline.json`), alongside a hash of the zone-cache
-//!     file used to build them.
+//!     PIN — captured before any fixture is built, not after (second-
+//!     opinion review round 3, finding #2: building can append newly-
+//!     solved zones to the cache file, so hashing after every fixture had
+//!     already run described post-run bytes, not the committed pin that
+//!     was actually consulted as the starting state).
 //!   * `check` — compares fresh readings against the committed baseline.
 //!     Every fixture lands in exactly one bucket, and the run prints an
 //!     accounting line totalling them (second-opinion review round 2,
@@ -151,15 +175,30 @@
 //!       - **uncovered** — the BASELINE row itself never converged, so it
 //!         was never a trustworthy anchor; a standing gap, printed
 //!         (`UNCOVERED (baseline non-converged)`), not a fresh failure.
+//!       - **recovered** — the BASELINE never converged, but the FRESH
+//!         run does: printed (`RECOVERED — re-bless to arm coverage`),
+//!         not a fresh failure, and not `judged` either (there is still
+//!         no trustworthy number to compare against) — but visible,
+//!         which `uncovered` alone would not make it (second-opinion
+//!         review round 3, finding #1).
 //!       - **collapsed** — baseline converged, fresh does not: FAILS (see
 //!         the hard-rule section above).
 //!       - **compared** — both converged, entities match: the clamped
-//!         below-plan comparison runs; a below-plan reading that's simply
-//!         standing (not worse than baseline) prints `STANDING BELOW-PLAN`
-//!         and does not fail.
+//!         below-plan comparison runs and lands in exactly one of three
+//!         buckets (second-opinion review round 3, finding #3 — the
+//!         previous single `compared` counter incremented BEFORE the
+//!         regression check, so a row that FAILED still printed as
+//!         "compared clean-or-standing" in the accounting, the exact
+//!         count/severity conflation `docs/validator-reporting.md`
+//!         polices): **clean** (no below-plan reading at all), or
+//!         **standing** (below-plan but not worse than baseline — prints
+//!         `STANDING BELOW-PLAN`, does not fail), or **regressed** (below-
+//!         plan AND materially worse — FAILS, prints `BELOW-PLAN
+//!         REGRESSION`).
 //!
-//!     `check` FAILS if nothing landed in `collapsed` or `compared` —
-//!     "verified clean" must be distinguishable from "compared nothing".
+//!     `check` FAILS if nothing landed in `collapsed`, `regressed`,
+//!     `standing`, or `clean` — "verified clean" must be distinguishable
+//!     from "compared nothing".
 //!
 //! **Why report-only stays the default, and this is NOT wired into CI as
 //! a gate**: the committed-golden `check`/`bless` flow that used to sit
@@ -211,6 +250,14 @@
 //!   versioned game binary), this baseline is always compared against
 //!   whatever engine commit is checked out, so the comparison is
 //!   inherently commit-relative already.
+//! * A fixture blessed right at the convergence boundary — `ac5-am2-ore`
+//!   at -0.2%, the closest-to-plan below-plan reading in the corpus —
+//!   could in principle flap non-converged on a noisy host (CPU
+//!   contention widening the tick-timing jitter the convergence detector
+//!   samples) and read as a `CONVERGENCE COLLAPSE` failure with no real
+//!   engine change behind it (second-opinion review round 3, nit).
+//!   Known, not fixed: `check` is deliberately not CI-wired (see above),
+//!   so this is a "confusing local re-run" risk, not a false CI red.
 
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -625,35 +672,57 @@ struct CheckOutcome {
     /// Below-plan-class failures: a genuine regression (the clamped
     /// comparison) or a convergence collapse. Non-empty ⇒ `check` fails.
     regressions: Vec<String>,
-    /// Both converged, entities matched, no regression — includes
-    /// standing below-plan rows (see `standing_below_plan`).
-    compared: usize,
+    /// Both converged, entities matched, no below-plan reading at all
+    /// (`deficit_pct >= 0`). Split out from `standing`/`regressed`
+    /// (second-opinion review round 3, finding #3): the previous single
+    /// `compared` counter incremented BEFORE the regression check ran, so
+    /// a row that FAILED still printed as "compared clean-or-standing" —
+    /// the exact count/severity conflation `docs/validator-reporting.md`
+    /// polices against.
+    compared_clean: usize,
+    /// Both converged, entities matched, below plan but NOT materially
+    /// worse than baseline — see `standing_below_plan` for the messages.
+    /// A subset of "compared"; counted via `standing_below_plan.len()`.
+    standing_below_plan: Vec<String>,
+    /// Both converged, entities matched, below plan AND materially worse
+    /// than baseline. Counted separately from `compared_clean`/
+    /// `standing_below_plan` so the accounting can never conflate a
+    /// failing row with a clean one.
+    regressed: usize,
     /// Baseline converged, fresh did not — counted as "judged" (a
-    /// verdict WAS rendered: FAIL) even though it lands in
-    /// `regressions`, not `compared`.
+    /// verdict WAS rendered: FAIL) even though it is not `compared_clean`,
+    /// `standing`, or `regressed`.
     collapsed: usize,
     excluded_fluid: usize,
     skipped_new: usize,
     skipped_stale: usize,
-    /// Labels whose BASELINE row never converged — a standing gap, not a
-    /// fresh finding.
+    /// Labels whose BASELINE row never converged and whose FRESH run
+    /// still doesn't either — a standing gap, not a fresh finding.
     uncovered: Vec<String>,
-    /// Below-plan readings that are standing (not worse than baseline) —
-    /// reported, never failed. See the module doc's "instrument's ZERO"
-    /// section.
-    standing_below_plan: Vec<String>,
+    /// Labels whose BASELINE row never converged but whose FRESH run now
+    /// DOES — a fix may have landed, but there is still no trustworthy
+    /// baseline number to compare against, so this is not `judged` either
+    /// (second-opinion review round 3, finding #1). Distinct from
+    /// `uncovered` so a repair is visible instead of looking identical to
+    /// "still broken".
+    recovered: Vec<String>,
 }
 
 impl CheckOutcome {
-    /// At least one row got a real verdict (compared clean/standing, OR
-    /// collapsed to a failure). Distinguishes "verified clean" from
-    /// "compared nothing" (second-opinion review round 2, finding #2).
+    /// At least one row got a real verdict (compared clean, standing,
+    /// regressed, OR collapsed to a failure). Distinguishes "verified
+    /// clean" from "compared nothing" (second-opinion review round 2,
+    /// finding #2).
     fn judged(&self) -> usize {
-        self.compared + self.collapsed
+        self.compared_clean + self.standing_below_plan.len() + self.regressed + self.collapsed
     }
 
     fn not_judged(&self) -> usize {
-        self.skipped_new + self.skipped_stale + self.uncovered.len() + self.excluded_fluid
+        self.skipped_new
+            + self.skipped_stale
+            + self.uncovered.len()
+            + self.recovered.len()
+            + self.excluded_fluid
     }
 }
 
@@ -704,15 +773,32 @@ fn evaluate_check(results: &[Measurement], baseline: &Baseline, verbose: bool) -
             // 1 treated this identically to a fresh-side collapse (both
             // were "skip"); round 2 splits them, because only THIS
             // direction is a standing gap rather than a fresh finding
-            // (second-opinion review round 2, finding #1).
-            out.uncovered.push(m.label.to_string());
-            if verbose {
-                eprintln!(
-                    "{}: UNCOVERED (baseline non-converged) — this fixture has never had a \
-                     trustworthy baseline reading to compare against; a standing gap, not a \
-                     fresh finding.",
-                    m.label
-                );
+            // (second-opinion review round 2, finding #1). Round 3 splits
+            // this direction again: a fresh run that now converges is a
+            // possible repair, not just more of the same standing gap
+            // (finding #1) — see the module doc's dedicated section on
+            // why this fixture can never gain collapse coverage while it
+            // stays blessed non-converged, and why RECOVERED exists.
+            if m.converged {
+                out.recovered.push(m.label.to_string());
+                if verbose {
+                    eprintln!(
+                        "{}: RECOVERED — baseline never converged, but this run does; \
+                         re-bless to arm collapse coverage. Not yet judged: there is still no \
+                         trustworthy baseline number to compare against.",
+                        m.label
+                    );
+                }
+            } else {
+                out.uncovered.push(m.label.to_string());
+                if verbose {
+                    eprintln!(
+                        "{}: UNCOVERED (baseline non-converged) — this fixture has never had \
+                         a trustworthy baseline reading to compare against; a standing gap, \
+                         not a fresh finding.",
+                        m.label
+                    );
+                }
             }
             continue;
         }
@@ -729,7 +815,6 @@ fn evaluate_check(results: &[Measurement], baseline: &Baseline, verbose: bool) -
             ));
             continue;
         }
-        out.compared += 1;
         // The ONLY percentage-based alarm condition, per the module
         // docs' hard rule: compare only the BELOW-plan portion of each
         // reading (clamped to a ceiling of 0) so an above-plan baseline
@@ -738,11 +823,16 @@ fn evaluate_check(results: &[Measurement], baseline: &Baseline, verbose: bool) -
         // `drop` is provably <= 0 whenever the fresh reading is
         // at-or-above plan, so this can only fire when the CURRENT
         // reading is itself below plan (second-opinion review round 1,
-        // finding #1).
+        // finding #1). The bucket a row lands in is decided HERE, after
+        // the check, never before it (second-opinion review round 3,
+        // finding #3 — the old `out.compared += 1` ran unconditionally
+        // before this comparison, so a row that regressed still counted
+        // as "compared clean-or-standing").
         let baseline_below = b.deficit_pct.min(0.0);
         let fresh_below = m.deficit_pct.min(0.0);
         let drop = baseline_below - fresh_below;
         if drop > REGRESSION_TOLERANCE_PP {
+            out.regressed += 1;
             out.regressions.push(format!(
                 "{}: BELOW-PLAN REGRESSION — baseline {:.1}%, now {:.1}% ({:.1}pp worse, \
                  below-plan portion only)",
@@ -758,6 +848,8 @@ fn evaluate_check(results: &[Measurement], baseline: &Baseline, verbose: bool) -
                  accepted at bless time as this fixture's zero point.",
                 m.label, m.deficit_pct, b.deficit_pct
             ));
+        } else {
+            out.compared_clean += 1;
         }
     }
     if verbose {
@@ -772,6 +864,15 @@ fn evaluate_check(results: &[Measurement], baseline: &Baseline, verbose: bool) -
 #[test]
 #[ignore = "diagnostic tripwire — run with --ignored; see module docs for bless/check"]
 fn e2e_tripwire() {
+    // Captured BEFORE building anything below, deliberately (second-
+    // opinion review round 3, finding #2): `build_and_measure` can append
+    // newly-solved zones to the cache file, so hashing after the build
+    // loop had already run described post-run bytes, not the committed
+    // pin that was actually consulted as this run's starting state. Both
+    // `bless` and `check` reuse this ONE captured value rather than
+    // re-hashing later.
+    let pin_hash = hash_zone_cache();
+
     let mut results = Vec::new();
     let mut build_failures = Vec::new();
     for f in FIXTURES {
@@ -809,7 +910,7 @@ fn e2e_tripwire() {
                 })
                 .collect();
             let baseline = Baseline {
-                zone_cache_hash: hash_zone_cache(),
+                zone_cache_hash: pin_hash.clone(),
                 rows,
             };
             write_baseline(&baseline);
@@ -826,30 +927,33 @@ fn e2e_tripwire() {
             let baseline = load_baseline().expect(
                 "SPAGHETTIO_METER_TRIPWIRE=check needs a committed baseline; bless one first",
             );
-            let fresh_hash = hash_zone_cache();
-            if fresh_hash != baseline.zone_cache_hash {
+            if pin_hash != baseline.zone_cache_hash {
                 eprintln!(
                     "NOTE: zone-cache hash differs from the blessed baseline's ({:?} vs \
                      {:?}) — entity-count mismatches below may be caused by this rather \
                      than a genuine engine change.",
-                    baseline.zone_cache_hash, fresh_hash
+                    baseline.zone_cache_hash, pin_hash
                 );
             }
 
             let outcome = evaluate_check(&results, &baseline, true);
             eprintln!(
-                "\naccounting: {}/{} judged ({} compared clean-or-standing, {} \
-                 collapsed-to-failure), {}/{} not judged ({} new, {} stale, {} uncovered \
-                 [baseline never converged], {} excluded [fluid, uncalibrated])",
+                "\naccounting: {}/{} judged ({} clean, {} standing, {} regressed, {} \
+                 collapsed), {}/{} not judged ({} new, {} stale, {} uncovered [baseline never \
+                 converged], {} recovered [re-bless to arm], {} excluded [fluid, \
+                 uncalibrated])",
                 outcome.judged(),
                 results.len(),
-                outcome.compared,
+                outcome.compared_clean,
+                outcome.standing_below_plan.len(),
+                outcome.regressed,
                 outcome.collapsed,
                 outcome.not_judged(),
                 results.len(),
                 outcome.skipped_new,
                 outcome.skipped_stale,
                 outcome.uncovered.len(),
+                outcome.recovered.len(),
                 outcome.excluded_fluid
             );
 
@@ -949,18 +1053,39 @@ mod tests {
     }
 
     /// Finding #1 (other direction): the baseline itself never converged
-    /// — this stays a skip (an "uncovered" standing gap), never a
-    /// failure, regardless of what the fresh run does.
+    /// and the fresh run still doesn't either — this stays a skip (an
+    /// "uncovered" standing gap), never a failure.
     #[test]
     fn baseline_never_converged_is_uncovered_not_failed() {
-        for fresh_converged in [true, false] {
-            let results = vec![measurement("x", -1.0, 100, fresh_converged)];
-            let base = baseline(vec![baseline_row("x", -1.0, 100, false)]);
-            let out = evaluate_check(&results, &base, false);
-            assert!(out.regressions.is_empty(), "must not fail: {:?}", out.regressions);
-            assert_eq!(out.uncovered, vec!["x".to_string()]);
-            assert_eq!(out.judged(), 0, "an uncovered row is not a rendered verdict");
-        }
+        let results = vec![measurement("x", -1.0, 100, false)];
+        let base = baseline(vec![baseline_row("x", -1.0, 100, false)]);
+        let out = evaluate_check(&results, &base, false);
+        assert!(out.regressions.is_empty(), "must not fail: {:?}", out.regressions);
+        assert_eq!(out.uncovered, vec!["x".to_string()]);
+        assert!(out.recovered.is_empty());
+        assert_eq!(out.judged(), 0, "an uncovered row is not a rendered verdict");
+    }
+
+    /// Round 3, finding #1: `ec30-am2-ore`'s real shape — a baseline that
+    /// never converged, now paired with a fresh run that DOES. This must
+    /// print/count as RECOVERED, not silently fold into `uncovered`
+    /// (which would make a real fix invisible) and must not fail (there
+    /// is still no trustworthy baseline number to compare the fresh
+    /// reading against — an instrument cannot alarm relative to a
+    /// baseline that was already producing nothing).
+    #[test]
+    fn baseline_never_converged_recovers_when_fresh_converges() {
+        let results = vec![measurement("ec30-am2-ore", 0.0, 100, true)];
+        let base = baseline(vec![baseline_row("ec30-am2-ore", -100.0, 100, false)]);
+        let out = evaluate_check(&results, &base, false);
+        assert!(out.regressions.is_empty(), "must not fail: {:?}", out.regressions);
+        assert_eq!(out.recovered, vec!["ec30-am2-ore".to_string()]);
+        assert!(out.uncovered.is_empty(), "must not ALSO count as uncovered");
+        assert_eq!(
+            out.judged(),
+            0,
+            "recovered is not yet judged — still no trustworthy baseline number"
+        );
     }
 
     /// Finding #2: every row entity-mismatches (e.g. a wrong/missing
@@ -999,7 +1124,12 @@ mod tests {
             "an improving reading must never alarm: {:?}",
             out.regressions
         );
-        assert_eq!(out.compared, 1);
+        assert_eq!(out.regressed, 0);
+        // -1.0% is itself below plan, so it lands in `standing`, not
+        // `compared_clean` — both are non-failing buckets, but conflating
+        // them is exactly what finding #3 (round 3) polices against.
+        assert_eq!(out.standing_below_plan.len(), 1);
+        assert_eq!(out.compared_clean, 0);
     }
 
     /// A genuine below-plan regression must still fail after the
@@ -1015,6 +1145,9 @@ mod tests {
             "expected a below-plan regression, got {:?}",
             out.regressions
         );
+        assert_eq!(out.regressed, 1, "must be counted in the `regressed` bucket, not `clean`");
+        assert_eq!(out.compared_clean, 0);
+        assert!(out.standing_below_plan.is_empty());
     }
 
     /// Finding #6: a standing below-plan reading (unchanged from
