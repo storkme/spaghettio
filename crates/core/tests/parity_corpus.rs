@@ -818,6 +818,24 @@ fn profile_from_row(ev: &TraceEvent) -> IssueProfile {
 /// A failure here is a CAMPAIGN-LEVEL finding, not a test bug: it means
 /// today's decisions are not expressible as policy data over the
 /// recorded measurements, which is K70-1's precursor firing.
+///
+/// # What this does NOT cover — read before quoting "140/140"
+///
+/// - **CI never runs it.** `#[ignore]`d like its sibling, for the same
+///   cache-relative reason. "The parity harness passes" always refers to
+///   a hand-run sweep with the pin, never to a green CI badge. The
+///   always-on gate is the comparator unit tier in
+///   `bus::selection_policy`.
+/// - **Zero gate coverage.** `decide()` consumes already-produced
+///   profiles and never evaluates a `ProducerGate`, so every clause of
+///   every producer's eligibility gate is untested by this harness; the
+///   only gate coverage is two unit tests. A mis-transcribed gate is
+///   invisible here and would first surface at the Phase-2a shadow,
+///   where it changes the candidate SET rather than the ranking.
+/// - **Two of the three comparators are unexercised by the corpus** —
+///   the component-wise floor's non-lexicographic-ness and the #474
+///   non-shadowing rule both survive being broken with 140/140 intact.
+///   Measured, not assumed; see the RFC decision log.
 #[test]
 #[ignore = "RFC-070 Phase 1b policy replay — runs the full #694 corpus; \
             run with --ignored --nocapture and the zone-cache pin"]
@@ -836,15 +854,25 @@ fn policy_replay() {
     );
 
     let pin_hash = hash_zone_cache();
-    let baseline: Option<Baseline> = std::fs::read_to_string(baseline_path())
-        .ok()
-        .map(|t| serde_json::from_str(&t).expect("committed baseline parses"));
-    let baseline_cells: BTreeMap<(&str, &str, &str), &Cell> = baseline
-        .as_ref()
-        .map(|b| b.cells.iter().map(|c| (c.key(), c)).collect())
-        .unwrap_or_default();
+    // REQUIRED, not optional. An absent baseline used to leave
+    // `baseline_cells` empty, which silently turned every
+    // v2-vs-baseline comparison into a no-op while the run still
+    // reported green — the "compared nothing reads as clean" shape #693
+    // closed elsewhere (#698 review round 1 named the neighbouring case;
+    // this disjunct is the same hazard one path over).
+    let text = std::fs::read_to_string(baseline_path())
+        .expect("policy_replay compares against the committed #694 baseline; it must exist");
+    let baseline: Baseline = serde_json::from_str(&text).expect("committed baseline parses");
+    let baseline_cells: BTreeMap<(&str, &str, &str), &Cell> =
+        baseline.cells.iter().map(|c| (c.key(), c)).collect();
+    // The count of DECIDED cells comes from the committed record, not a
+    // hand-typed literal that can go stale against it (#698 review round
+    // 1, finding 4). A legitimate corpus widening re-blesses the
+    // baseline and this follows; a candidate field that moved without a
+    // re-bless still fails, which is the case the guard is for.
+    let expected_decided = baseline.cells.iter().filter(|c| c.stage.is_some()).count();
     let provenance_ok =
-        baseline.as_ref().is_some_and(|b| b.zone_cache_hash.is_some() && b.zone_cache_hash == pin_hash);
+        baseline.zone_cache_hash.is_some() && baseline.zone_cache_hash == pin_hash;
 
     let mut decided = 0usize;
     let mut replay_diffs: Vec<String> = Vec::new();
@@ -862,14 +890,15 @@ fn policy_replay() {
                 // baseline difference is an ENGINE or provenance change,
                 // and reading it as a policy failure would misattribute
                 // the finding.
-                if let Some(b) = baseline_cells.get(&cell.key()) {
-                    if b.verdict() != cell.verdict() {
-                        baseline_diffs.push(format!(
-                            "  {key}: baseline {:?} -> live {:?}",
-                            b.verdict(),
-                            cell.verdict()
-                        ));
-                    }
+                let baseline_cell = baseline_cells.get(&cell.key());
+                let drifted = baseline_cell.is_some_and(|b| b.verdict() != cell.verdict());
+                if drifted {
+                    let b = baseline_cell.expect("drifted implies a baseline cell");
+                    baseline_diffs.push(format!(
+                        "  {key}: baseline {:?} -> live {:?}",
+                        b.verdict(),
+                        cell.verdict()
+                    ));
                 }
 
                 let Some(stage) = cell.stage.as_deref() else {
@@ -911,13 +940,30 @@ fn policy_replay() {
                 }
                 // …and against the committed baseline, which is the
                 // record Phase 2a will diff against.
-                if let Some(b) = baseline_cells.get(&cell.key()) {
-                    let b_verdict =
-                        Some((b.winner.clone().unwrap_or_default(), b.stage.clone().unwrap_or_default()));
-                    if v2_verdict != b_verdict {
-                        replay_diffs.push(format!(
-                            "  {key}: baseline {b_verdict:?} -> policy {v2_verdict:?}"
+                //
+                // SKIPPED on a drifted cell, and that guard is
+                // load-bearing (#698 review round 1, finding 1). Where
+                // v1 itself has moved off the baseline, "policy == live
+                // v1" is the correct result and "policy != baseline"
+                // follows from the drift alone — pushing it into
+                // `replay_diffs` would fire the campaign-finding
+                // assertion at the bottom against exactly the cells the
+                // NOTE above tells the reader to treat as an ENGINE
+                // change. That is a manufactured K70-1 finding, and the
+                // conditions that produce it (a stale baseline, a
+                // mis-pinned cache) are the ones where a reader is most
+                // primed to believe it.
+                if !drifted {
+                    if let Some(b) = baseline_cell {
+                        let b_verdict = Some((
+                            b.winner.clone().unwrap_or_default(),
+                            b.stage.clone().unwrap_or_default(),
                         ));
+                        if v2_verdict != b_verdict {
+                            replay_diffs.push(format!(
+                                "  {key}: baseline {b_verdict:?} -> policy {v2_verdict:?}"
+                            ));
+                        }
                     }
                 }
             }
@@ -942,17 +988,21 @@ fn policy_replay() {
             "\nNOTE: this run's zone cache is {pin_hash:?}, the baseline was blessed \
              against {:?} — run with SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/\
              sat-zones-ci.bin before reading any divergence as a finding.",
-            baseline.as_ref().and_then(|b| b.zone_cache_hash.clone())
+            baseline.zone_cache_hash
         );
     }
 
     // "Verified clean" must be distinguishable from "compared nothing"
-    // (the #693 lesson): 140 is the committed count of decided cells.
+    // (the #693 lesson). The expected count is the committed record's
+    // own, so a deliberate corpus widening travels with its re-bless
+    // while a candidate field that moved under a stale baseline still
+    // fails here.
+    assert!(expected_decided > 0, "the committed baseline records no decided cells at all");
     assert_eq!(
-        decided, 140,
-        "the corpus decided {decided} cells, not the 140 the committed baseline records — \
-         the candidate field moved, and a replay over a different cell set is not evidence \
-         about this baseline"
+        decided, expected_decided,
+        "the corpus decided {decided} cells, not the {expected_decided} the committed \
+         baseline records — the candidate field moved, and a replay over a different cell \
+         set is not evidence about this baseline"
     );
     assert!(
         replay_diffs.is_empty(),

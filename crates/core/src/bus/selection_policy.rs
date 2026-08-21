@@ -197,10 +197,34 @@ impl IssueProfile {
     /// `count_issues` and `clean_flags` each run `validate()`
     /// separately today; here one call feeds the kind classes, the
     /// three severity channels and the acceptance gates.
-    /// `validate()` is deterministic, so eager measurement cannot
-    /// change any outcome — only cost (RFC-070 §"Validation-once and
-    /// laziness"; K70-3's isolated-run comparator adjudicates which
-    /// Phase 2a ships).
+    ///
+    /// # Eager measurement changes the deciding STAGE. Read this before
+    /// wiring it.
+    ///
+    /// RFC-070 §"Validation-once and laziness" says eager vs lazy
+    /// "cannot change outcomes, only cost", because `validate()` is
+    /// deterministic. That is true of the WINNER and false of the
+    /// deciding STAGE — and the corpus's equivalence rule is
+    /// `(status, winner, stage)`, so the difference is a divergence
+    /// (#698 review round 1, absorbed as a campaign finding).
+    ///
+    /// The mechanism: this constructor ALWAYS fills `counts`, so the
+    /// gap rule can never fire on a live profile. v1 skips
+    /// `clean_flags` entirely on a single-layout solve (`n_layouts > 1`
+    /// guard), leaving the error-free tier empty so `BestAccepted`
+    /// decides. Measure eagerly and that same solve has counts, the
+    /// tier is populated, and `BestErrorFree` decides instead — same
+    /// layout, different answer to "which question was asked", which is
+    /// the column K70-1 turns on. The #694 baseline has **12
+    /// `best-accepted` cells**, and the RFC's own decision log
+    /// identifies them as exactly this shape (cells off → only native
+    /// produces → `clean_flags` skipped).
+    ///
+    /// So Phase 2a must either preserve the laziness as policy (skip
+    /// measuring when fewer than two candidates produced) or accept
+    /// those cells as MINOR divergences and adjudicate them. It is not
+    /// a free implementer's choice. Pinned by
+    /// `eager_measurement_moves_the_deciding_stage`.
     pub fn measure(
         layout: &LayoutResult,
         solver_result: &SolverResult,
@@ -312,6 +336,11 @@ pub struct GateContext<'a> {
     pub prior: &'a [Option<bool>],
     /// Index of the registration flagged [`ProducerRegistration::incumbent`].
     pub incumbent: Option<usize>,
+    /// Which registration this gate is being evaluated for. Bounds
+    /// [`Self::any_prior_accepted`] so the predicate matches its
+    /// contract rather than merely coinciding with it while the loop
+    /// happens to fill `prior` in order (#698 review round 1).
+    pub registration_index: usize,
 }
 
 impl GateContext<'_> {
@@ -321,13 +350,21 @@ impl GateContext<'_> {
         self.incumbent.and_then(|i| self.prior.get(i).copied().flatten())
     }
 
-    /// Whether any EARLIER registration produced an accepted layout.
-    /// Order-sensitive by construction — registration order is policy
-    /// data, and `size-split-2`'s gate ("native and k1 both failed to
-    /// land an accepted layout") is exactly this predicate over the two
-    /// producers registered before it.
+    /// Whether any registration BEFORE this one produced an accepted
+    /// layout. Order-sensitive by construction — registration order is
+    /// policy data, and `size-split-2`'s gate ("native and k1 both
+    /// failed to land an accepted layout") is exactly this predicate
+    /// over the two producers registered before it.
+    ///
+    /// The `[..registration_index]` bound is the contract, not an
+    /// optimisation: scanning the whole array would let a LATER
+    /// producer's acceptance stand `size-split-2` down. That is latent
+    /// today only because the loop fills `prior` in order — which is a
+    /// property of the caller, and this predicate should not depend on
+    /// one.
     pub fn any_prior_accepted(&self) -> bool {
-        self.prior.contains(&Some(true))
+        let end = self.registration_index.min(self.prior.len());
+        self.prior[..end].contains(&Some(true))
     }
 }
 
@@ -642,7 +679,12 @@ impl SelectionPolicy {
                 name: "missing-balancer-template",
                 layout_warning_substring: "balancer template",
             }],
-            contamination_weight: 3,
+            // Sourced from the constant the live mechanism reads, not
+            // re-typed beside it: a second definition is the
+            // "two values that disagree" class, and a unit test pinning
+            // a magic literal only notices after they have already
+            // diverged (#698 review round 1).
+            contamination_weight: super::decomposition_search::KIND_CONTAMINATION_WEIGHT,
             firewalls: vec![Firewall {
                 name: "warning-recalibration-firewall",
                 receipt: "#519/#520: the recalibration multiplied input-rate-delivery's \
@@ -1485,6 +1527,36 @@ mod tests {
         assert_eq!(d, Decision { winner: NATIVE, stage: SelectionStage::BestAccepted });
     }
 
+    /// The other half of the pair above, and a **Phase-2a warning**
+    /// rather than a property to preserve: filling the same profile's
+    /// counts — which `IssueProfile::measure` always does — moves the
+    /// SAME solve from `best-accepted` to `best-error-free`. The winner
+    /// is identical; the recorded answer to "which question decided
+    /// this" is not, and the corpus equivalence rule compares that.
+    /// So "eager vs lazy cannot change outcomes, only cost" holds for
+    /// the winner and NOT for the stage; the 12 `best-accepted` cells
+    /// of the #694 baseline are exactly this shape.
+    #[test]
+    fn eager_measurement_moves_the_deciding_stage() {
+        let mut lazy = blank();
+        lazy[NATIVE] = produced(1.0, true);
+        let mut eager = lazy.clone();
+        eager[NATIVE].counts = Some(counts(0, 0, 0));
+
+        let policy = SelectionPolicy::current();
+        let lazy_d = decide(&lazy, &policy).unwrap();
+        let eager_d = decide(&eager, &policy).unwrap();
+        assert_eq!(lazy_d.winner, eager_d.winner, "the winner is unaffected — that half is true");
+        assert_eq!(lazy_d.stage, SelectionStage::BestAccepted);
+        assert_eq!(
+            eager_d.stage,
+            SelectionStage::BestErrorFree,
+            "measuring a single-layout solve eagerly populates the error-free tier v1 \
+             leaves empty, so the deciding stage moves. Phase 2a must either keep the \
+             laziness as policy or adjudicate these as minor divergences"
+        );
+    }
+
     #[test]
     fn best_accepted_takes_the_highest_score_ties_to_the_earlier() {
         let mut ps = blank();
@@ -1573,6 +1645,7 @@ mod tests {
             opts: &opts,
             prior: &prior,
             incumbent: Some(NATIVE),
+            registration_index: MERGE_TAP,
         };
         // The incumbent is always eligible.
         assert_eq!(policy.producers[NATIVE].gate.evaluate(&ctx), GateVerdict::Eligible);
@@ -1620,11 +1693,23 @@ mod tests {
                 opts: &opts,
                 prior,
                 incumbent: Some(NATIVE),
+                registration_index: SPLIT,
             })
         };
         assert_eq!(excluded_by(&prior), GateVerdict::Eligible);
         prior[K1] = Some(true);
         assert_eq!(excluded_by(&prior), GateVerdict::Excluded("no-earlier-producer-accepted"));
+
+        // …and a LATER registration's acceptance must NOT stand it
+        // down. Unbounded, this scanned the whole array, so a
+        // cell-composed win at slot 4 would have silently disabled the
+        // size-split arm — invisible today only because the loop fills
+        // `prior` in order (#698 review round 1).
+        let mut later = [None; 7];
+        later[NATIVE] = Some(false);
+        later[CELLS] = Some(true);
+        later[HS] = Some(true);
+        assert_eq!(excluded_by(&later), GateVerdict::Eligible);
     }
 
     // -----------------------------------------------------------------

@@ -719,7 +719,7 @@ fn compute_overproduction(solver_result: &SolverResult) -> f64 {
 /// window on the merge-tap corpus (see `contamination_weight_window` test):
 /// electronic-circuit@35/s stays native for any integer weight `> 2`, and
 /// utility-science-pack@10/s flips to merge-tap for any weight `< 18`.
-const KIND_CONTAMINATION_WEIGHT: usize = 3;
+pub(crate) const KIND_CONTAMINATION_WEIGHT: usize = 3;
 
 /// `Severity::Error` count from a full validation pass, split by in-game
 /// severity CLASS rather than counted flat. The classes are ranked by how the

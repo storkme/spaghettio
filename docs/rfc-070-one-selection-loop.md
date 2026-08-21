@@ -1111,3 +1111,50 @@ fixtures / docs split per the churn norm).
     A future widening of the corpus toward a cell where merge-tap runs
     AND a scoped candidate wins would close the non-shadowing hole;
     nothing in the current fixture list reaches it.*
+- *2026-08-21 — **#698 review round 1 adjudicated** (2 major, 5 minor, 1
+  nit; all absorbed, nothing refuted). The headline is a **correction to
+  this RFC's own §"Validation-once and laziness"**, and it is a Phase-2a
+  constraint rather than a W2b bug: the spec says eager vs lazy
+  measurement "cannot change outcomes, only cost" because `validate()`
+  is deterministic. **That is true of the WINNER and false of the
+  deciding STAGE**, and the divergence-equivalence rule compares
+  `(status, winner, stage)`. `IssueProfile::measure` always fills
+  `counts`, so the gap rule cannot fire on a live profile; v1 skips
+  `clean_flags` entirely on a single-layout solve (`n_layouts > 1`),
+  leaving the error-free tier empty so `best-accepted` decides, while an
+  eagerly-measured v2 populates the tier and decides at
+  `best-error-free`. **That is exactly the shape of the 12
+  `best-accepted` cells** this log already attributes to the
+  cells-off/only-native mechanism. So Phase 2a must either preserve the
+  laziness AS POLICY (skip measuring below two produced candidates) or
+  accept those 12 as minor divergences and adjudicate them — it is not
+  the free implementer's choice the spec offers. Demonstrated, not
+  argued: `eager_measurement_moves_the_deciding_stage` pins both halves
+  (same winner, different stage) from hand-built profiles.*
+  - *Also absorbed: `policy_replay` could **manufacture a false K70-1
+    finding** — where v1 itself had drifted off the committed baseline,
+    the harness reported the drift as "an ENGINE change, not a policy
+    finding" and then ALSO pushed the same cell into the campaign-level
+    assertion, whose message says the opposite. The v2-vs-baseline
+    comparison is now skipped on a drifted cell. Same round: an absent
+    baseline silently no-op'd every v2-vs-baseline comparison while the
+    run still read green (the #693 "compared nothing reads as clean"
+    shape, one path over) — the baseline is now required; the
+    `decided == 140` literal now derives from the committed record's own
+    decided count, so a deliberate corpus widening travels with its
+    re-bless; `GateContext::any_prior_accepted` scanned the WHOLE
+    `prior` array while its doc claimed "registrations before this one",
+    which would have let a later producer's acceptance stand
+    `size-split-2` down — bounded, with a test for the later-slot case;
+    and `contamination_weight` is now sourced from
+    `KIND_CONTAMINATION_WEIGHT` rather than re-typed beside it.*
+  - ***Two further blind spots in the acceptance harness, recorded
+    alongside the two comparator holes above***: `decide()` consumes
+    already-produced profiles and never evaluates a `ProducerGate`, so
+    **the 140/140 result covers zero gate transcription** — a
+    mis-transcribed eligibility clause is invisible until the Phase-2a
+    shadow, where it moves the candidate SET rather than the ranking;
+    and `policy_replay` is `#[ignore]`d, so **CI never runs the
+    acceptance bar** — "the parity harness passes" always means a
+    hand-run sweep with the zone-cache pin. Both are now stated at the
+    test's own doc so the claim cannot be quoted without them.*
