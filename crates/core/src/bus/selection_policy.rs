@@ -294,14 +294,23 @@ impl IssueProfile {
                 .map(|(c, n)| format!("{c}×{n}"))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let gate_note = refusal.map(|r| format!("; acceptance gate also: {r}")).unwrap_or_default();
             return Self {
                 outcome: Some(SelectionCandidateOutcome::Refused),
                 refusal_reason: Some(format!(
-                    "refused on {errors} error(s) [refuse_on_error]: {breakdown}"
+                    "refused on {errors} error(s) [refuse_on_error]: {breakdown}{gate_note}"
                 )),
                 score: Some(score.score),
-                accepted: Some(refusal.is_none()),
-                accepted_reason: refusal,
+                // NOT `Some(..)`. A discarded layout has no acceptance
+                // verdict — v1's refused rows carry `accepted: None`
+                // because there is no `CandidateScore` at all — and
+                // `Refused` + `accepted: true` is a contradiction a
+                // naive reader (or a naive `measure -> decide` wiring)
+                // would resolve the wrong way (#698 review round 3).
+                // The gate's own observation is not lost; it rides in
+                // the refusal reason above.
+                accepted: None,
+                accepted_reason: None,
                 counts: Some(IssueCounts {
                     errors,
                     selection_warnings,
@@ -422,10 +431,15 @@ impl GateContext<'_> {
         // per the module's degradation philosophy: `cargo test` and CI
         // build debug, while a release or WASM solve must not panic over
         // a code-level mistake.
+        // `<`, not `<=`: valid registration indices are `0..len`, and
+        // `== len` would slice the WHOLE array through the `min` below —
+        // re-admitting the very scan this bound removes (#698 review
+        // round 3). The `min` stays for release safety: a debug_assert
+        // must not become an out-of-bounds panic in a browser solve.
         debug_assert!(
-            self.registration_index <= self.prior.len(),
-            "registration_index {} is past the {}-slot `prior` array — this gate would \
-             scan slots that do not belong to it",
+            self.registration_index < self.prior.len(),
+            "registration_index {} is not a slot of the {}-slot `prior` array — this gate \
+             would scan slots that do not belong to it",
             self.registration_index,
             self.prior.len()
         );
@@ -678,10 +692,34 @@ impl StageSpec {
     }
 }
 
+/// When the error-free tier is measured at all — v1's `clean_flags`
+/// laziness, promoted from an implementation accident to policy.
+///
+/// v1 skips `clean_flags` entirely below two produced layouts
+/// (`n_layouts > 1`), so a single-layout solve has an empty error-free
+/// tier and falls to `BestAccepted`. That is the shape of the 12
+/// `best-accepted` cells in the #694 baseline.
+///
+/// Left implicit, this only held because the RECORDER happened not to
+/// compute counts there; an eagerly-measured v2 would populate the tier
+/// and decide the same layout at `BestErrorFree` instead — a stage
+/// divergence on 12 cells, which the equivalence rule counts (#698
+/// review rounds 2 and 3). [`decide`] therefore ENFORCES this rule
+/// rather than trusting whoever built the profiles, so eager and lazy
+/// measurement reach the same answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeasurementRule {
+    /// Below this many produced candidates, error-free admission is not
+    /// evaluated — the tier is empty regardless of what was measured.
+    /// v1: 2.
+    pub min_produced_for_error_free_tier: usize,
+}
+
 /// The precedence chain as data.
 pub struct SelectionProgram {
     pub stages: Vec<StageSpec>,
     pub admission: AdmissionRule,
+    pub measurement: MeasurementRule,
 }
 
 /// Everything selection needs to know, in one place.
@@ -767,6 +805,8 @@ impl SelectionPolicy {
 fn current_program() -> SelectionProgram {
     SelectionProgram {
         admission: AdmissionRule::ScopedOnIncumbentRefusal,
+        // v1's `clean_flags` guard: `n_layouts > 1`.
+        measurement: MeasurementRule { min_produced_for_error_free_tier: 2 },
         stages: vec![
             StageSpec {
                 tag: SelectionStage::MergeTap,
@@ -986,16 +1026,26 @@ enum StageOutcome {
 /// all-candidates-failed path, which emits the scoreboard and then
 /// returns `Err` with no `SelectionDecided` at all.
 pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Decision> {
-    assert_eq!(
+    // `debug_assert` for the message, and a REFUSAL rather than a
+    // best-effort answer in release (#698 review round 3). The module's
+    // degradation philosophy says a code-level mistake must not panic a
+    // browser solve; it does not say the mistake should produce a
+    // plausible wrong winner, which a longer-than-expected slice would
+    // (the extra profiles rank under other producers' policy). Deciding
+    // nothing is the honest degradation.
+    debug_assert_eq!(
         profiles.len(),
         policy.producers.len(),
         "one profile per registration: the profile vector is keyed by registration order, \
-         so a length mismatch would silently rank one producer's measurement under \
-         another's policy"
+         so a length mismatch would rank one producer's measurement under another's policy"
     );
+    if profiles.len() != policy.producers.len() {
+        return None;
+    }
 
     let incumbent = policy.incumbent_index();
     let incumbent_produced = incumbent.is_some_and(|i| profiles[i].produced());
+    let produced_count = profiles.iter().filter(|p| p.produced()).count();
 
     // The AdmissionRule, applied once: which registrations the ranked
     // stages may consider at all.
@@ -1019,9 +1069,15 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
         let outcome = match &stage.kind {
             StageKind::QualityKeyPairwise => quality_key_stage(profiles, policy, incumbent),
             StageKind::ComponentWiseFloor => component_wise_floor_stage(profiles, policy, incumbent),
-            StageKind::TieredRank(spec) => {
-                tiered_rank_stage(profiles, spec, &admitted, incumbent_produced)
-            }
+            StageKind::TieredRank(spec) => tiered_rank_stage(
+                profiles,
+                spec,
+                &admitted,
+                incumbent_produced,
+                // The measurement rule, enforced here rather than
+                // assumed of the profile builder.
+                produced_count >= policy.program.measurement.min_produced_for_error_free_tier,
+            ),
         };
         match outcome {
             StageOutcome::Winner(i) => return Some(Decision { winner: i, stage: stage.tag }),
@@ -1157,7 +1213,15 @@ fn tiered_rank_stage(
     spec: &RankSpec,
     admitted: &[usize],
     incumbent_produced: bool,
+    error_free_tier_measured: bool,
 ) -> StageOutcome {
+    // The error-free tier is not evaluated at all below the measurement
+    // rule's threshold — v1's `clean_flags = [None; 7]`, as policy. Not
+    // a shortcut: it is what makes an eagerly-measured profile decide
+    // the same stage as a lazily-measured one.
+    if spec.require_error_free && !error_free_tier_measured {
+        return StageOutcome::NoOpinion;
+    }
     let order = if incumbent_produced { spec.success_order } else { spec.refusal_order };
     let mut best: Option<usize> = None;
     for &i in admitted {
@@ -1602,17 +1666,21 @@ mod tests {
         assert_eq!(d, Decision { winner: NATIVE, stage: SelectionStage::BestAccepted });
     }
 
-    /// The other half of the pair above, and a **Phase-2a warning**
-    /// rather than a property to preserve: filling the same profile's
-    /// counts — which `IssueProfile::measure` always does — moves the
-    /// SAME solve from `best-accepted` to `best-error-free`. The winner
-    /// is identical; the recorded answer to "which question decided
-    /// this" is not, and the corpus equivalence rule compares that.
-    /// So "eager vs lazy cannot change outcomes, only cost" holds for
-    /// the winner and NOT for the stage; the 12 `best-accepted` cells
-    /// of the #694 baseline are exactly this shape.
+    /// The [`MeasurementRule`], and why it is enforced in [`decide`]
+    /// rather than left to whoever builds the profiles.
+    ///
+    /// Filling a single-layout solve's counts — which
+    /// `IssueProfile::measure` ALWAYS does — would populate an
+    /// error-free tier that v1 leaves empty, moving the same solve from
+    /// `best-accepted` to `best-error-free`: same winner, different
+    /// answer to "which question decided this", which the corpus
+    /// equivalence rule compares. That is the shape of the 12
+    /// `best-accepted` cells in the #694 baseline. So "eager vs lazy
+    /// cannot change outcomes, only cost" is true of the WINNER and
+    /// false of the STAGE — and the rule below is what makes it true of
+    /// both.
     #[test]
-    fn eager_measurement_moves_the_deciding_stage() {
+    fn the_measurement_rule_makes_eager_and_lazy_decide_alike() {
         let mut lazy = blank();
         lazy[NATIVE] = produced(1.0, true);
         let mut eager = lazy.clone();
@@ -1621,16 +1689,24 @@ mod tests {
         let policy = SelectionPolicy::current();
         let lazy_d = decide(&lazy, &policy).unwrap();
         let eager_d = decide(&eager, &policy).unwrap();
-        assert_eq!(lazy_d.winner, eager_d.winner, "the winner is unaffected — that half is true");
-        assert_eq!(lazy_d.stage, SelectionStage::BestAccepted);
-        assert_eq!(
-            eager_d.stage,
-            SelectionStage::BestErrorFree,
-            "measuring a single-layout solve eagerly populates the error-free tier v1 \
-             leaves empty, so the deciding stage moves. Phase 2a must either keep the \
-             laziness as policy or adjudicate these as minor divergences"
-        );
+        assert_eq!(lazy_d, eager_d, "the measurement rule must erase the eager/lazy split");
+        assert_eq!(lazy_d.stage, SelectionStage::BestAccepted, "v1's answer, either way");
+
+        // …and the rule is a THRESHOLD, not a blanket skip: add a second
+        // produced candidate and the tier is evaluated normally.
+        let mut two = eager.clone();
+        two[CELLS] = produced(2.0, true);
+        two[CELLS].counts = Some(counts(0, 0, 0));
+        let d = decide(&two, &policy).unwrap();
+        assert_eq!(d, Decision { winner: CELLS, stage: SelectionStage::BestErrorFree });
     }
+
+    // No test for the length-mismatch path: the `debug_assert` fires
+    // first in every build `cargo test` produces, so a test could only
+    // assert that debug panics — which is the assert's own text — while
+    // printing a panic trace into every suite run. The release
+    // behaviour it guards (decide nothing rather than rank the wrong
+    // producers) is stated at the call site.
 
     #[test]
     fn best_accepted_takes_the_highest_score_ties_to_the_earlier() {

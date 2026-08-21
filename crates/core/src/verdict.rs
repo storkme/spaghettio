@@ -245,6 +245,14 @@ pub struct Policy {
     /// twin; it does not touch `regressed` or `pass`, so every existing
     /// preset behaves exactly as before with the set left empty.
     pub excluded_warning_categories: BTreeSet<String>,
+    /// Whether this policy DECLARED a selection scope at all. An empty
+    /// `excluded_warning_categories` is ambiguous between "exclude
+    /// nothing, deliberately" and "never thought about it", and the
+    /// selection accessors must not answer for the second — see
+    /// [`Verdict::candidate_selection_warnings`]. Set by
+    /// [`Policy::selection`], [`Policy::with_live_selection_exclusions`]
+    /// and [`Policy::with_excluded_warning_category`].
+    pub selection_scoped: bool,
 }
 
 impl Policy {
@@ -253,6 +261,7 @@ impl Policy {
             default,
             overrides: BTreeMap::new(),
             excluded_warning_categories: BTreeSet::new(),
+            selection_scoped: false,
         }
     }
 
@@ -266,6 +275,7 @@ impl Policy {
     /// — it only removes it from the selection channel.
     pub fn with_excluded_warning_category(mut self, category: impl Into<String>) -> Self {
         self.excluded_warning_categories.insert(category.into());
+        self.selection_scoped = true;
         self
     }
 
@@ -276,7 +286,17 @@ impl Policy {
         for c in crate::validate::SELECTION_EXCLUDED_WARNING_CATEGORIES {
             self.excluded_warning_categories.insert(c.to_string());
         }
+        self.selection_scoped = true;
         self
+    }
+
+    /// The preset for selection-scoped comparisons: gate nothing, carry
+    /// the live exclusions, and declare the scope so
+    /// [`Verdict::candidate_selection_warnings`] answers. Named so the
+    /// correct setup is a thing you reach for rather than a step you
+    /// remember (#698 review round 3).
+    pub fn selection() -> Self {
+        Self::new(GatePolicy::ReportOnly).with_live_selection_exclusions()
     }
 
     pub fn policy_for(&self, category: &str) -> GatePolicy {
@@ -378,6 +398,9 @@ pub struct Verdict {
     /// accessors below are answerable from the verdict alone rather than
     /// requiring the caller to hold onto the policy that produced it.
     pub excluded_warning_categories: BTreeSet<String>,
+    /// Whether the governing policy declared a selection scope. See
+    /// [`Policy::selection_scoped`].
+    pub selection_scoped: bool,
 }
 
 impl Verdict {
@@ -396,33 +419,54 @@ impl Verdict {
         self.categories.values().map(|o| o.native_errors).sum()
     }
 
-    /// Candidate warnings minus the policy's excluded categories.
+    /// Total `Severity::Warning` count on the candidate side, every
+    /// category included. Always answerable — no selection scope
+    /// involved.
+    pub fn candidate_warnings(&self) -> usize {
+        self.categories.values().map(|o| o.candidate_warnings).sum()
+    }
+
+    /// The native side of the raw warning channel.
+    pub fn native_warnings(&self) -> usize {
+        self.categories.values().map(|o| o.native_warnings).sum()
+    }
+
+    /// Candidate warnings minus the policy's excluded categories —
+    /// `validate::selection_warning_count`'s semantics over a verdict.
     ///
-    /// This equals `validate::selection_warning_count` **only when the
-    /// governing policy carries the exclusions** — via
-    /// [`Policy::with_live_selection_exclusions`] or
-    /// [`Policy::with_excluded_warning_category`]. [`Policy::fold`] and
-    /// [`Policy::decomposition`] deliberately carry NONE, so under those
-    /// presets this counts every warning including `belt-detour`, which
-    /// is the opposite of the selection-scoped number (#698 review round
-    /// 2). That is the compat property those presets are for, not an
-    /// oversight: adding exclusions to them would change what existing
-    /// callers measure.
-    pub fn candidate_selection_warnings(&self) -> usize {
+    /// **`None` when the governing policy never declared a selection
+    /// scope**, which is the case for [`Policy::fold`] and
+    /// [`Policy::decomposition`]: both deliberately carry no exclusions,
+    /// and returning a number there would silently count `belt-detour`
+    /// — the opposite of the selection-scoped figure, and precisely the
+    /// starvation channel #519/#520 firewalled (#698 review rounds 2-3).
+    ///
+    /// A gap, not a zero and not a plausible wrong number, per the rule
+    /// this campaign's instruments run on. Declare the scope with
+    /// [`Policy::selection`] or
+    /// [`Policy::with_excluded_warning_category`] to get a value —
+    /// including a deliberately empty exclusion set, which is a
+    /// declaration too.
+    pub fn candidate_selection_warnings(&self) -> Option<usize> {
         self.selection_warnings(|o| o.candidate_warnings)
     }
 
-    /// The native side of the same channel.
-    pub fn native_selection_warnings(&self) -> usize {
+    /// The native side of the same channel, with the same `None` rule.
+    pub fn native_selection_warnings(&self) -> Option<usize> {
         self.selection_warnings(|o| o.native_warnings)
     }
 
-    fn selection_warnings(&self, pick: fn(&CategoryOutcome) -> usize) -> usize {
-        self.categories
-            .iter()
-            .filter(|(cat, _)| !self.excluded_warning_categories.contains(*cat))
-            .map(|(_, o)| pick(o))
-            .sum()
+    fn selection_warnings(&self, pick: fn(&CategoryOutcome) -> usize) -> Option<usize> {
+        if !self.selection_scoped {
+            return None;
+        }
+        Some(
+            self.categories
+                .iter()
+                .filter(|(cat, _)| !self.excluded_warning_categories.contains(*cat))
+                .map(|(_, o)| pick(o))
+                .sum(),
+        )
     }
 
     /// Every new positioned issue across every category, regardless of
@@ -476,6 +520,7 @@ pub fn never_worse(
         categories,
         pass,
         excluded_warning_categories: policy.excluded_warning_categories.clone(),
+        selection_scoped: policy.selection_scoped,
     }
 }
 
@@ -841,7 +886,7 @@ mod tests {
         let v = never_worse(&native, &candidate, &policy, MatchTier::Count, None);
         assert_eq!(
             v.candidate_selection_warnings(),
-            1,
+            Some(1),
             "belt-detour must not count toward the selection channel"
         );
         assert_eq!(
@@ -852,13 +897,23 @@ mod tests {
     }
 
     #[test]
-    fn the_default_policy_excludes_nothing() {
-        // The compat claim `Policy::fold`'s callers rest on.
+    fn an_undeclared_selection_scope_is_a_gap_not_a_number() {
+        // The compat claim `Policy::fold`'s callers rest on…
         assert!(Policy::fold().excluded_warning_categories.is_empty());
         assert!(Policy::decomposition().excluded_warning_categories.is_empty());
+        // …and the trap that removes: under those presets the accessor
+        // would have counted `belt-detour`, i.e. returned the OPPOSITE
+        // of the selection-scoped number to a caller who asked for it.
         let candidate = vec![issue_at("belt-detour", 0, 0)];
         let v = never_worse(&[], &candidate, &Policy::fold(), MatchTier::Count, None);
-        assert_eq!(v.candidate_selection_warnings(), 1);
+        assert_eq!(v.candidate_selection_warnings(), None);
+        assert_eq!(v.native_selection_warnings(), None);
+        assert_eq!(v.candidate_warnings(), 1, "the raw channel still answers");
+
+        // Declaring the scope — even with an empty set — is what makes
+        // it answerable.
+        let declared = never_worse(&[], &candidate, &Policy::selection(), MatchTier::Count, None);
+        assert_eq!(declared.candidate_selection_warnings(), Some(0));
     }
 
     // -----------------------------------------------------------------

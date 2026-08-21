@@ -1205,3 +1205,47 @@ fixtures / docs split per the churn norm).
     decision function contradicts it — the caller-contract violation in
     `any_prior_accepted` is a different class, which is why that one got
     the assert.*
+- *2026-08-21 — **#698 review round 3 adjudicated** (3 major, 6 minor, 4
+  nits; 5 absorbed, 4 refuted as re-raises or as-designed). **The
+  round's real contribution is that it refused to let round 2's
+  eager-measurement finding stay a documented note**, and it was right
+  to: v1's `clean_flags` laziness is now
+  `MeasurementRule { min_produced_for_error_free_tier: 2 }` — policy
+  data that `decide()` ENFORCES, rather than a property that held only
+  because the recorder happened not to compute counts on single-layout
+  solves. Eager and lazy measurement now reach the same stage by
+  construction, so **the 12 `best-accepted` cells are no longer a
+  Phase-2a trap**; the RFC's "cannot change outcomes, only cost" is true
+  as written once the rule is part of the program. `policy_replay` is
+  unaffected (the recorded profiles carry the gap either way) and was
+  re-run to confirm.*
+  - *Also absorbed: `Verdict::candidate_selection_warnings` now returns
+    `Option<usize>` and answers `None` unless the policy DECLARED a
+    selection scope — under `fold()`/`decomposition()` it previously
+    returned a plausible number that counted `belt-detour`, i.e. the
+    opposite of the selection-scoped figure, to a caller who asked for
+    selection semantics. A gap, not a wrong number, per this campaign's
+    own rule; `Policy::selection()` is the named preset that answers.
+    A `refuse_on_error` refusal no longer reports `accepted: Some(true)`
+    (v1 never emits `Refused`-and-accepted; the gate's observation now
+    rides in the refusal reason). `decide()`'s length check became a
+    `debug_assert` plus a release refusal, so a caller bug degrades to
+    "no decision" instead of a plausible wrong winner. The
+    `any_prior_accepted` bound was `<=` where valid indices are
+    `0..len`, which let `== len` slice the whole array through the
+    `min` — the exact scan the bound removes.*
+  - *Refuted: the "acceptance bar is not executable / should be
+    CI-gated" finding, for the third time across three rounds — the
+    answer is unchanged and is #694's, adjudicated four times there: a
+    corpus gate today asserts only "production has not changed", which
+    every engine PR legitimately falsifies. The gate that means
+    something is Phase 2a's shadow-vs-production check, which
+    Verification plan item 2 already commits to; the always-on gate here
+    is the comparator unit tier, which is what the finding recommends
+    and what already exists. Also refuted: a `debug_assert` on
+    `quality_key_stage`'s unreachable incumbent-refused arm (same
+    reasoning as round 2 — a gap SKIPS, and a pure decision function
+    does not gain panic paths for impossible states), and the
+    NaN-vs-None score asymmetry in `ranks_ahead` (both are v1's: NaN
+    ties via `partial_cmp().unwrap_or(Equal)`, and a produced candidate
+    never lacks a score).*
