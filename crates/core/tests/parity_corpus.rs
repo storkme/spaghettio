@@ -265,31 +265,40 @@ const FIXTURES: &[Fixture] = &[
 /// ladder.
 ///
 /// `e2e-harness` encodes the harness as a DELTA from `LayoutOptions::
-/// default()`, which means it is only as accurate as this list — a
-/// future change to `run_e2e_inner`'s other pinned fields, or a default
-/// flipping to match a harness value, would break the "this is what the
-/// harness runs" claim with no corpus cell moving (#694 review round 2).
-/// It cannot be asserted automatically: `run_e2e_inner` is a private fn
-/// in a different test binary. So it is hand-verified instead, and here
-/// is the receipt to re-check against — as of `a54b9a7a`,
-/// `tests/e2e.rs:342-358` differs from the struct defaults on exactly
-/// two fields, `cell_composition` (`Default::default()` → the enum's
-/// `Off`) and `inserter_capacity: 0`; every other field it spells
-/// (`max_inserter_tier`, `quality`, `wire_mode`, `merge_tap`,
-/// `stacking`, `splitter_tap_spacers`) already equals its default.
-///
-/// **Both fossils were killed on 2026-08-21 (#689 track W2c).** As of
-/// that PR the harness builds its options through
-/// `LayoutOptions::from_groups` and runs the `default` column, so
-/// `e2e-harness` no longer names a LIVE configuration — it names the
-/// HISTORICAL one the committed baseline was taken under, which is
-/// exactly what makes it the prediction the W2c re-blesses were
+/// default()`. **It no longer describes a LIVE configuration.** Both
+/// fossils it encodes were killed on 2026-08-21 (#689 track W2c): the
+/// harness now builds its options through `LayoutOptions::from_groups`
+/// and runs the `default` column. What this label names is the
+/// HISTORICAL configuration the committed baseline was taken under —
+/// which is exactly what made it the prediction W2c's re-blesses were
 /// adjudicated against. It is kept, not deleted: dropping it would
 /// silently re-take 32 cells and destroy the only record of what the
 /// fossilized suite decided. The baseline itself needed no re-bless —
 /// this file builds its option sets as closures over
 /// `LayoutOptions::default()` (below), never through `run_e2e`, so a
-/// change to the harness cannot move a cell here.
+/// change to the harness cannot move a cell here (verified empirically:
+/// `SPAGHETTIO_PARITY_CORPUS=check` passed 160/160 after W2c).
+///
+/// **SUPERSEDED — the hand-verification receipt, kept for provenance.**
+/// Everything in this paragraph describes the pre-W2c harness and is
+/// false of the current one; it is here because it is the evidence the
+/// committed cells were taken under, not as a description of today.
+/// *"…it is only as accurate as this list — a future change to
+/// `run_e2e_inner`'s other pinned fields, or a default flipping to match
+/// a harness value, would break the 'this is what the harness runs'
+/// claim with no corpus cell moving (#694 review round 2). It cannot be
+/// asserted automatically: `run_e2e_inner` is a private fn in a
+/// different test binary. So it is hand-verified instead, and here is
+/// the receipt to re-check against — as of `a54b9a7a`,
+/// `tests/e2e.rs:342-358` differs from the struct defaults on exactly
+/// two fields, `cell_composition` (`Default::default()` → the enum's
+/// `Off`) and `inserter_capacity: 0`; every other field it spells
+/// (`max_inserter_tier`, `quality`, `wire_mode`, `merge_tap`,
+/// `stacking`, `splitter_tap_spacers`) already equals its default."*
+/// That struct literal no longer exists, and the harness spells none of
+/// those fields any more (#699 review round 3 — the correction used to
+/// be appended AFTER the receipt, leaving two mutually exclusive
+/// descriptions in one docblock).
 ///
 /// The label names an OPTION SET, not a cell the harness runs (#694
 /// review round 3). It is applied across the whole machine sweep, so

@@ -508,6 +508,15 @@ fn harness_options_are_engine_defaults() {
 /// harness's. Either way, name the site in the commit that lowers the
 /// number, so a reader can tell a migration from a weakened tripwire.
 /// Raising a count means a new copy of a known trap — don't.
+///
+/// **This is a source-text gauge, not a behavioural one** (#699 review
+/// round 3), and the coupling is deliberate: any edit that changes how
+/// one of these lines is SPELLED — a trailing comment, a rustfmt
+/// re-wrap, a rename — moves the count too and forces an edit here. That
+/// is a small tax on 15 known sites in exchange for the residual being
+/// impossible to grow silently, and it is the only mechanism available:
+/// the sites are ordinary struct literals inside ordinary tests, with no
+/// runtime handle to count.
 #[test]
 fn residual_fossil_literals_are_pinned() {
     // Self-read: matching on the exact TRIMMED line means the comparison
@@ -1471,10 +1480,12 @@ fn tier1_iron_gear_wheel_20s() {
         "tier1_iron_gear_wheel_20s pins a KNOWN UNDER-DELIVERING winner (#700): \
          `cell-composed` at `best-error-free`, metered at 15.0/s against a 20.0/s \
          plan while both native arms meter 21.0/s. If this assertion just failed, \
-         the selection moved — if that is #700 being fixed, re-take the meter \
-         reading (`w2c_gear20_meter_export` at the bottom of this file), update \
-         #700, and re-bless the golden with the new number. Do NOT re-bless on \
-         validator greenness alone: that is exactly what hid this for a month. \
+         the selection moved — if that is #700 being fixed: (1) re-take the meter \
+         reading with `w2c_gear20_meter_export` at the bottom of this file, \
+         (2) update #700 with it, (3) update THIS pin, and (4) re-bless the \
+         fixture's GOLDEN HASH (and its warning pin, if the tally moved). Those \
+         are the coupled artifacts; nothing else in the suite is. Do NOT re-bless \
+         on validator greenness alone: that is exactly what hid this for a month. \
          got {outer:?}",
     );
     assert_warnings_golden(&result, "tier1_iron_gear_wheel_20s");
