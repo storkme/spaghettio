@@ -577,6 +577,12 @@ fn selection_scoreboard_census() {
         // nested selection (cell composition builds per-cell layouts),
         // and each such block is contiguous and complete, so this
         // separates them instead of merging them into the outer one.
+        //
+        // Only the WINNER's nested blocks are visible: `run_candidate`
+        // truncates every candidate's events out of the collector and
+        // replays only the winner's, so a losing candidate's inner
+        // selection is dropped before anything can read it. Absence of a
+        // nested block is therefore not evidence that none ran.
         /// One selection's candidate rows plus its terminal verdict —
         /// `None` when the selection ended with every candidate failing,
         /// which emits rows but no `SelectionDecided`.

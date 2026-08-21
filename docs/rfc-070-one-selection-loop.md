@@ -329,4 +329,10 @@ fixtures / docs split per the churn norm).
   inside `produce()`; the scoreboard sees one DI row, not two arms (moot
   under the default `Upstream`). (f) The scoreboard is per selection
   CALL — a candidate whose `produce` runs its own search emits its own
-  block; none occurred on the census slice.*
+  block; none occurred on the census slice. (g) …and only the WINNER's
+  nested blocks survive at all: `run_candidate` truncates each
+  candidate's events out of the collector and replays only the winner's,
+  so a LOSING candidate's inner selection is dropped before any reader
+  sees it. Absence of a nested block is not evidence that none ran — a
+  shadow-loop diff assuming otherwise would be comparing against a stream
+  the production loop deliberately edits.*
