@@ -279,3 +279,160 @@ fixtures / docs split per the churn norm).
   gen-1 runs; shadow's 2× cost excluded by construction); (d) the
   parity corpus is a named Phase-0c deliverable, not an assumption;
   (e) line-anchor nits fixed with an as-of note.*
+- *2026-08-21 — **Phase 0b landed** (#689 track W1b): two trace events —
+  `SelectionCandidateEvaluated`, one per candidate SLOT (all seven, every
+  call, including the ones a gate excluded before they cost a layout
+  pass) and `SelectionDecided` (winner + deciding stage). Design call,
+  and the one the later phases depend on: the events **record what each
+  verdict mechanism already computed at its own site, and never
+  recompute**. A scoreboard that re-ran `validate()` on the side could
+  disagree with the number the decision actually used, and Phase 2a
+  diffs the shadow loop against these records — an oracle that disagrees
+  with the thing it is oracling is worse than none. The price is
+  structural holes (below); Phase 1b's offline policy replay must treat
+  a missing count as "nothing computed this", never as zero.*
+- *2026-08-21 — **the precedence chain is named as FIVE stages**, where
+  Motivation above calls it four. The first `.or()` link answers with two
+  different mechanisms: merge-tap's `ErrorKinds::quality_key` verdict
+  (which can name merge-tap OR native) and the DI/horizontal pairwise
+  `IssueCounts` resolution that may displace it. Collapsing them into one
+  tag would lose which question was asked, which is the column K70-1
+  turns on. Measured over the #686 census slice (six fixtures, default
+  options): `best-error-free` ×4, `merge-tap` ×1, `scoped-pairwise` ×1;
+  `best-accepted` and `first-produced` never fired **on that slice** —
+  see the next entry, which found `best-accepted` deciding as soon as the
+  option set changes. The stage distribution is a function of the OPTIONS,
+  not just the fixture.*
+- *2026-08-21 — **the e2e harness does not run production's candidate
+  set**, found by decoding a `tier1_iron_gear_wheel` snapshot and getting
+  a different deciding stage than the census reported for the same
+  fixture (`best-accepted` vs `best-error-free`). Cause:
+  `LayoutOptions::default()` sets `cell_composition: Candidate`
+  (`bus/layout.rs:241`), but `run_e2e` spells the field explicitly as
+  `cell_composition: Default::default()` (`tests/e2e.rs:355`) — the
+  ENUM's default, which is `Off` (`bus/cells/mod.rs:24`) — next to a
+  `..Default::default()` that would have given `Candidate`. The line
+  dates to RFC-051 Phase A when Off WAS the struct default (`5090da99`);
+  Phase B flipped the struct and the harness kept resolving to the enum.
+  Consequence for the mechanism: with cells off, only native produces,
+  `clean_flags` is skipped by its own `n_layouts > 1` guard, the
+  error-free tier is empty, and `best-accepted` decides — which is why
+  the whole e2e suite exercises a stage the census slice never reaches.
+  **Not fixed here**: flipping it changes the candidate set under every
+  regression test, i.e. a selection change, which is a campaign call and
+  not an additive Phase-0b one. Two obligations fall out: (1) the
+  Phase-0c parity corpus must be defined over fixture × MACHINE TIER ×
+  OPTION SET, since "same fixture" does not pin the candidate field; (2)
+  suite greenness is not evidence about the cell-composed arm, whose
+  production exposure the e2e corpus does not cover at all.*
+- *2026-08-21 — **Phase-0b oracle gaps**, recorded so no later phase
+  assumes the baseline says more than it does. (a) Issue counts exist
+  only where a comparison needed them: a merge-tap-decided selection
+  short-circuits the `clean_flags` tier entirely, so the only counts such
+  a fixture can carry are whatever a scoped pairwise already computed —
+  and on `ec@30`, where DI and horizontal both refused, that is NOTHING
+  for either native or merge-tap, leaving the kinds key as the whole of
+  what that decision looked at. (Corrected after #692 review, 2/3: the
+  first wording said a merge-tap decision means no counts, full stop.
+  It does not — native's counts DO get recorded whenever DI or
+  horizontal produced, since `di_choice`/`horizontal_choice` run on the
+  produced-but-unaccepted native that merge-tap's own gate requires. The
+  `ec@30` observation was true; the generalisation from it was not.)
+  Likewise a scoped-pairwise-decided selection leaves every
+  non-participant countless. (b) `ErrorKinds` is
+  computed only by the merge-tap decision, so no candidate on a
+  non-Pooled or native-clean solve has one. (c) A `not-run` row has no
+  reason: the gates (`try_cells` / `try_di` / `try_horizontal` /
+  `try_k1_shape_fix` / `try_size_split` / `try_merge_tap`) are
+  conjunctions of booleans at the call site, so the scoreboard can say a
+  candidate was not tried but not WHICH conjunct excluded it — Phase 1b's
+  uniform loop should make the gate a first-class reportable predicate.
+  (d) **The refusal-attribution gap #686 named is NOT closed**: DI,
+  horizontal-stack and cell-composed stringify their own validation
+  failure as `e.to_string().lines().next()`, which yields
+  "…failed validation: Validation failed:" and discards the issue list
+  before anything can record it. Which CATEGORIES fire inside a
+  self-refused candidate therefore remains invisible; recovering it means
+  changing what `produce()` keeps, which is not additive and was kept out
+  of 0b. (e) DI's internal `DiClaimOrder::Search` two-arm race lives
+  inside `produce()`; the scoreboard sees one DI row, not two arms —
+  moot under the default, which is `Downstream` (checking this turned up
+  a stale in-code comment claiming the default was `Upstream`, corrected
+  in the same PR; RFC-059's sim close-out had flipped it). (f) The scoreboard is per selection
+  CALL — a candidate whose `produce` runs its own search emits its own
+  block; none occurred on the census slice. (g) …and only the WINNER's
+  nested blocks survive at all: `run_candidate` truncates each
+  candidate's events out of the collector and replays only the winner's,
+  so a LOSING candidate's inner selection is dropped before any reader
+  sees it. Absence of a nested block is not evidence that none ran — a
+  shadow-loop diff assuming otherwise would be comparing against a stream
+  the production loop deliberately edits.*
+- *2026-08-21 — **#692 review round 2 adjudicated** (7 findings). Absorbed:
+  (a) the Phase-0b oracle had NO CI assertion coverage — everything was
+  `#[ignore]`d, so a broken stage tag or a dropped row shipped green. Added
+  `selection_scoreboard_contract`, a non-ignored test pinning the contract
+  (every slot emits a row, canonical order, rows before the terminal event,
+  winner ∈ its own block's rows, `not-run` ≠ `refused`, and the fixture's
+  deciding stage). **Discrimination check executed, not assumed**: mis-tagging
+  the error-free stage, dropping the `native` row, and swapping two runs in
+  the index list each made it fail with a message naming the right cause;
+  restored and re-verified green. (b) The four hand-maintained same-order
+  candidate lists are now one: `CandidateRun` carries its own name, a
+  `CANDIDATE_ORDER` const is the single source, and `Scoreboard::from_runs`
+  plus a `candidates` post-check assert each run's own name against its slot,
+  so a reorder panics instead of recording one candidate's verdicts against
+  another's row. (c) The census's nested-block banner no longer labels the
+  OUTER block, and the block walker now checks that a winner is among its own
+  block's rows, printing a loud marker if not. Refuted with receipts:
+  (d) "the failure path emits with the sink detached" — the sink is
+  re-attached at `decomposition_search.rs:1604` and the failure-path
+  `board.emit()` is at `:1814`, 210 lines later with no intervening
+  `swap_sink`; failure-path rows reach a streaming consumer exactly like
+  success-path ones, so no doc note was added for a behaviour that does not
+  exist. (e) "the e2e cells-off gap is left unfixed" — correct and
+  deliberate, recorded in the entry above and on #689.*
+- *2026-08-21 — **`PlacedEntity::rate` is NOT validator-visible; the no-op
+  label is redefined accordingly.** Two reviews claimed opposite things, so
+  it was settled by count: all 21 `.rate` reads across `validate/` and
+  `connectivity.rs` are on solver `ItemFlow`s, none on a `PlacedEntity`, and
+  the three `belt_flow.rs` lines #686 round 7 cited as proof read `e.carries`,
+  `e.carries` and `build_ug_pairs`. #686's adjudication was therefore wrong
+  about `rate` (right about `carries`). Decision: KEEP `rate` in
+  `EntitySignature` — a differing stamp means a different lane-family decision
+  reached the same tiles, which is worth not calling identical — and redefine
+  the label at every site that states it: **a no-op is "tiles AND stamps
+  identical", not "validator-identical"**. That is a strictly stricter test,
+  so it can only under-report no-ops, never over-report them; measured, it
+  changes nothing on the current slice (ratios identical to the pre-`rate`
+  run). Dropping `rate` was the alternative and was rejected: it would make
+  the label mean less while matching neither the recorded #675 follow-up nor
+  the provenance question the counter exists to answer.*
+- *2026-08-21 — **#692 review round 3 adjudicated** (6 minors, no majors;
+  closing round). Absorbed: the all-refused message's refusal reasons now come
+  from the checked `run_refs`/`CANDIDATE_ORDER` pair instead of a hand-typed
+  7-slot tuple zipped positionally against candidate names — the same
+  misattribution class round 2 retired elsewhere, and the last positional
+  literal in the function; the two alignment checks became `debug_assert_eq!`,
+  so the tripwire fires in every debug build (which is what `cargo test` and
+  CI run — coverage unchanged) while release and WASM cannot panic a browser
+  solve over a code-level ordering mistake, restoring the degradation
+  philosophy the `catch_unwind` arms twenty lines away already follow; the
+  contract test's `decided.len()`, row-order and event-order assertions now
+  each name BOTH readings of a failure (engine legitimately changed vs.
+  instrumentation broke) and say which sibling assertion discriminates,
+  extending what the stage assertion already did; the no-op denominator
+  header now states that "+N with no default" counts SUCCESSFUL builds
+  lacking a baseline and that a variant's own refusals never reach that tally
+  (they are in the refusals summary), so it cannot be read as "all builds with
+  a failing default"; and a doc said `count_issues` runs at five sites when it
+  runs at six. Adjudicated as designed, no code change: a single scoreboard row
+  can carry counts sourced to one mechanism and kinds to another — that is what
+  a per-candidate summary across three mechanisms IS, and the decision
+  authority is `SelectionDecided::stage`, which the row does not duplicate; one
+  clarifying sentence added at the field doc. Incidental finding, NOT fixed and
+  out of scope: `ghost_occupancy::is_claimed` is dead code in RELEASE builds
+  because its only non-test uses are inside `debug_assert!`s in
+  `ghost_router.rs` — pre-existing, and invisible to CI because the clippy job
+  is debug-only. It surfaced here because the same hazard applied to
+  `CANDIDATE_ORDER`, which is why the refusal message now uses it for real
+  rather than only inside assertions.*
