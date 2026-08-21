@@ -326,8 +326,10 @@ fixtures / docs split per the churn norm).
   self-refused candidate therefore remains invisible; recovering it means
   changing what `produce()` keeps, which is not additive and was kept out
   of 0b. (e) DI's internal `DiClaimOrder::Search` two-arm race lives
-  inside `produce()`; the scoreboard sees one DI row, not two arms (moot
-  under the default `Upstream`). (f) The scoreboard is per selection
+  inside `produce()`; the scoreboard sees one DI row, not two arms —
+  moot under the default, which is `Downstream` (checking this turned up
+  a stale in-code comment claiming the default was `Upstream`, corrected
+  in the same PR; RFC-059's sim close-out had flipped it). (f) The scoreboard is per selection
   CALL — a candidate whose `produce` runs its own search emits its own
   block; none occurred on the census slice. (g) …and only the WINNER's
   nested blocks survive at all: `run_candidate` truncates each

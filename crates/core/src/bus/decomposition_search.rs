@@ -211,12 +211,15 @@ impl DecompositionCandidate for DirectInsertionCandidate {
             Ok::<_, String>((l, n_warn))
         };
 
-        // Two arms only under `Search`, which is NOT the default — `Upstream`
-        // is (RFC-059: the search is measured better on every validator channel
-        // and ships a 0/s factory on one target, so it waits on #520). Every
-        // other value pins a single arm, and that is also how the corpus sweep
-        // measures the search against the pre-RFC status quo rather than
-        // asserting that picking the better arm cannot be worse.
+        // Two arms only under `Search`, which is NOT the default —
+        // `Downstream` is (`DiClaimOrder`'s `#[default]`, reached here via
+        // `LayoutOptions::default()`; RFC-059's sim close-out flipped it from
+        // `Upstream`, and this comment said `Upstream` until 2026-08-21).
+        // `Search` waits on #520: it is better on every validator channel and
+        // ships a 0/s factory on one target. Every other value pins a single
+        // arm, and that is also how the corpus sweep measures the search
+        // against the pre-RFC status quo rather than asserting that picking
+        // the better arm cannot be worse.
         if opts.di_claim_order != crate::bus::di_cell::DiClaimOrder::Search {
             return arm(opts.di_claim_order.clone()).map(|(l, _)| l);
         }
