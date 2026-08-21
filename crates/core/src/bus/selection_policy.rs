@@ -925,6 +925,10 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
                     return Some(Decision { winner: i, stage: stage.tag })
                 }
                 ChainBehavior::DeferToRemainingPairwiseStages => {
+                    // Last defer wins. Today's program has exactly one
+                    // deferring stage, so this cannot overwrite; a
+                    // second one would need its own precedence rule
+                    // rather than inheriting this one silently.
                     held = Some(Decision { winner: i, stage: stage.tag });
                 }
             },
@@ -958,6 +962,9 @@ fn quality_key_stage(
         // layout there is.
         None => StageOutcome::Winner(rival),
         Some(inc) => match profiles[inc].kinds {
+            // Unreachable against today's recorder, which classifies
+            // both sides in one place or neither. Skipping is the safe
+            // reading of a gap either way — see the module doc.
             None => StageOutcome::NoOpinion,
             Some(inc_kinds) if rival_kinds.quality_key(w) < inc_kinds.quality_key(w) => {
                 StageOutcome::Winner(rival)

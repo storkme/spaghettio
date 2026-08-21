@@ -1044,3 +1044,70 @@ fixtures / docs split per the churn norm).
   spaghettio_core -- -D warnings` clean, all PR CI checks (`rust`,
   `rust-clippy`, `web`, `second-opinion`, `deploy-preview`,
   `workflow-guard`) green on the prior commit.
+- *2026-08-21 — **Phase 1b built** (#689 track W2b), additively:
+  `bus/selection_policy.rs` plus the severity channels on `verdict.rs`.
+  Nothing is wired; `select_best_decomposition` is unchanged apart from
+  the stale-prose sweep the spec asked for and one `pub(crate)`
+  widening. **`policy_replay` reproduces all 140 decided #694 cells by
+  winner AND deciding stage** (`best-error-free` 87, `scoped-pairwise`
+  26, `merge-tap` 15, `best-accepted` 12 — identical to the committed
+  baseline), so K70-1's offline precursor PASSES: **no
+  candidate-identity-conditioned logic was needed anywhere**, and the
+  boundary is now a mechanical test (`k70_1_fence_holds` reads the
+  module's own source between fence markers and fails on any candidate
+  name or `.name` read inside the stage logic). Transcription calls,
+  each then checked by the replay: the `ranking_len` slice becomes the
+  AdmissionRule as a FILTER — equivalent because the two `scoped`
+  producers are exactly the tail the slice excluded, so the rule is
+  field-keyed rather than position-keyed; the #474 non-shadowing rule
+  becomes `ChainBehavior::DeferToRemainingPairwiseStages`, where a held
+  incumbent answer waits on the remaining pairwise stages and then
+  TERMINATES rather than falling through to the ranked ones; v1's lazy
+  `clean_flags` needs no laziness flag because the gap rule already
+  reproduces it (a single-layout solve records no counts, so the
+  error-free tier is empty and `best-accepted` decides); the gate
+  becomes an ordered clause list reporting the FIRST failing conjunct,
+  which closes Phase-0b oracle gap (c); the `verdict.rs` severity
+  channels are RECORDED-ONLY, never consulted by `regressed`/`pass`, so
+  the celldb-harness-green obligation holds with those tests
+  unmodified.*
+- *2026-08-21 — **the parity corpus does NOT discriminate two of the
+  three comparators**, found by EXECUTING the discrimination checks
+  rather than assuming them, and this is a direct warning to Phase 2a.
+  Three deliberate breaks, one whole corpus run each:*
+  - *making the component-wise floor LEXICOGRAPHIC — the #474 bug the
+    `IssueCounts` doc is written against — **passes 140/140**. No corpus
+    cell has a scoped candidate that is better on one severity channel
+    and worse on another.*
+  - *making stage 1's `on_incumbent_win` `Terminate` — the #474
+    SHADOWING bug, where merge-tap's "native won" short-circuits DI's
+    already-computed result — **passes 140/140**. On every merge-tap
+    cell in the corpus the scoped candidates refuse or lose, so the
+    deferral is never load-bearing there (consistent with the
+    `ec@30` observation in the oracle-gaps entry).*
+  - *`AdmissionRule::AdmitAll` — dropping `ranking_len` — **FAILS**, and
+    the failures are exactly the regression class the rule exists to
+    block: horizontal-stack displacing native in the error-free tier on
+    the `electronic-circuit` / `advanced-circuit` / `processing-unit`
+    rows. So the harness is not vacuous; it is BLIND in two specific
+    places.*
+  - ***The generalisation for Phase 2a: corpus parity is not evidence
+    about the floor's component-wise-ness or about non-shadowing.***
+    That is the same shape as the recorded `first-produced` hole — a
+    shadow loop can hold parity across all 160 cells with either of
+    those two semantics implemented wrongly. The unit tier is what
+    covers them, and each cover was executed rather than assumed: the
+    lexicographic-floor break failed
+    `the_floor_is_component_wise_not_lexicographic` ("a layout-warning
+    regression must not hide behind a validator-warning improvement");
+    the `Terminate` break failed
+    `an_incumbent_win_at_stage_one_does_not_shadow_the_pairwise_floor`
+    (`{winner: native, MergeTap}` where `{winner: DI, ScopedPairwise}`
+    was required) and — correctly — left
+    `a_held_incumbent_stands_when_no_pairwise_stage_displaces_it`
+    passing, since that test guards the OPPOSITE direction; deleting the
+    held-answer early return failed that second test plus three
+    stage-1 pins. All four breaks were restored and re-verified green.
+    A future widening of the corpus toward a cell where merge-tap runs
+    AND a scoped candidate wins would close the non-shadowing hole;
+    nothing in the current fixture list reaches it.*
