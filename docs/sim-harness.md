@@ -399,7 +399,11 @@ tells you which check fired and how often; `warnings: 3` would not.
 **Web overlay (RFC-050 Phase 4):** load the `--out` file via the sim
 report panel in the web app to get the verdict banner plus a `sim-state`
 entity overlay tinting machines/belts/inserters by their simulated state
-— the fastest way to see *where* a FAIL is starving.
+— the fastest way to see *where* a FAIL is starving. Without a browser
+(or for a scriptable/agent-facing equivalent), `scripts/sim-localize.py
+<report.json>` renders the same "where" as a starved-machine ranking plus
+an ASCII map — see [`sim-harness-forensics.md`](sim-harness-forensics.md)'s
+forensic playbook, step 0.
 
 ## Reading the time-series
 

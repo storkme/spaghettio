@@ -220,6 +220,17 @@ instrument that was true when written and false when read.
 
 ## Forensic playbook (in escalation order)
 
+**Step 0, before any of the below: `scripts/sim-localize.py <report.json>`.**
+It renders the "where" in one command instead of an improvised read (which
+has gotten the belt-count semantics wrong before — see the `n` warning
+above): a kit-error banner if the run is invalid, the item table with a
+same-target-shortfall hint, a starved/backpressured machine ranking (from
+`timeseries` when present, falling back to the final `sim_state` frame with
+an explicit "can't distinguish transient from persistent" caveat), an ASCII
+map of machines/inserters/belts by status and direction, and per-lane belt
+contents around the worst machines. It renders and ranks; it does not
+diagnose — steps 1-4 below are still where the reasoning happens.
+
 1. **Trajectory first** (`samples`, and now `timeseries` for a
    per-machine breakdown on the SAME checkpoint-window cadence the
    reported rates use — see "Reading time-series decay shapes" above):
