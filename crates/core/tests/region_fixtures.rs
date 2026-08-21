@@ -150,6 +150,18 @@ fn region_fixtures() {
                 errs
             })
             .collect();
+        // An initial_specs entry absent from spec_items silently gets
+        // item "?" and Belt kind in the replay (#687 round 6) — the
+        // same silent-degradation class as the spec_kinds checks above.
+        let mut spec_kind_errors = spec_kind_errors;
+        for key in &fixture.initial_specs {
+            if !fixture.spec_items.contains_key(key) {
+                spec_kind_errors.push(format!(
+                    "initial_specs entry {key:?} has no spec_items entry \
+                     — it would replay with item \"?\" and Belt kind"
+                ));
+            }
+        }
         if !spec_kind_errors.is_empty() {
             failures.push(format!(
                 "{} ({}): {}",
