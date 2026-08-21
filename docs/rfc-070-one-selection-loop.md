@@ -523,3 +523,41 @@ fixtures / docs split per the churn norm).
   reason W1b gave: flipping either changes the candidate set under every
   regression test, which is a Wave-2 campaign call, not a Phase-0 one.
   What changes is that the corpus now measures both.*
+- *2026-08-21 — **contested sample SIM-ANCHORED** (Verification plan item 3;
+  both runs `--warmup 432000 --speed 32`, entity-count-exact against the
+  meter tripwire's blessed rows, so the sim and the meter measured the same
+  artifacts).*
+  - ***`ac5-am2` (scoped-pairwise, winner `horizontal-stack`): PASS.***
+    5.03/s delivered vs 5.00 planned (**+0.6%**; produced 4.92/s, −1.6%),
+    every stage at plan (cable +0.2%, copper-plate 0.0%, EC −0.2%,
+    iron-plate 0.0%, plastic 0.0%, petroleum −0.6%), 136/136 machines
+    working, kit-clean, 12 checkpoints. `converged: false`, but the series
+    OSCILLATES across plan (4.92 ↔ 5.12, period 2) rather than decaying —
+    the harness's decay test reads a sawtooth as a trend. **So the one
+    pairwise displacement of native in the corpus is measured good.**
+    Caveat that must travel with the number: the run needs
+    `--research-productivity plastic-bar=0.10` (the force realizes +10% on
+    plastic and the harness kit-fails a manifest declaring 0), and the
+    declared-axis export is **2125 entities against the default cell's
+    2134** — same dims, 9 entities apart, so this anchors a
+    near-neighbour of the corpus cell, not the cell itself. That also
+    retires `status.md`'s "AC is bit-identical declared-or-not". The
+    undeclared run measured identically on every solid stage and differed
+    only on petroleum (−8.9% vs −0.6%), which is the axis mismatch itself.
+  - ***`ec30-am2` (merge-tap, winner `native`): FAIL, and it is REAL.***
+    **0.00/s at every stage, −100.0%**, 4 checkpoints at a 2-game-hour
+    warmup; kit-clean, fluid-clean, 1991/1991 ghosts revived; census 150
+    `full_output` + 20 `item_ingredient_shortage` — a jam, not a starve.
+    The layout ships **3 `belt-dead-end` Errors**. Not an instrument
+    artifact and not a warmup artifact. Full entry and the
+    fixture-confusion it clears up (the "#644-era ec30 ≈99.4%" anchor is a
+    different fixture AND a different artifact) in `docs/status.md`. **This
+    is a Phase-0 finding, not a Phase-0 fix**: nothing here changes the
+    layout.
+  - *Structural consequence for Phase 2a, recorded now: the corpus's
+    `default` cells are not all directly sim-anchorable. Any fixture whose
+    chain contains a force-boosted recipe (plastic-bar, processing-unit)
+    plans at 0 productivity while the game realizes +10%, so the harness
+    kit-fails the run; the anchor has to be taken on a declared-axis
+    re-export, which is a slightly different artifact. A major divergence
+    on such a fixture must say which artifact its sim anchored.*
