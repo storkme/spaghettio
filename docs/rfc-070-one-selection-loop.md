@@ -610,3 +610,24 @@ fixtures / docs split per the churn norm).
   three run in 1.06s, ~170× headroom) and the "builds the jammed ec30
   layout" concern conflates a build with a simulated factory — the layout
   builds in milliseconds, it is only the SIM that deadlocks.*
+- *2026-08-21 — **#694 review round 3 adjudicated** (8 findings, 3 nits;
+  closing round). Absorbed: (a) `check` passed GREEN on a provenance
+  mismatch whenever the cells happened to match — the same
+  "compared-nothing reads as clean" shape #693 closed, and now a hard
+  failure with a `check-any-cache` escape. Its discrimination check came
+  free from (b). (b) the provenance hash covered only the disk pin, not
+  the compiled-in `EMBEDDED_CACHE` that `zone_cache.rs` merges alongside
+  it, so a different embedded payload would have reported an identical
+  hash while consulting different zones; widening it re-blessed to **160
+  byte-identical cells, hash line only — a fifth reproduction**.
+  (c) a corrupt committed baseline bypassed the bless guard entirely,
+  because `.ok().and_then(parse.ok())` collapsed "missing" into
+  "truncated" — the same disjunct-disarms-the-guard class as round 2, one
+  path over. (d) the two new stage pins now state that a red is EXPECTED
+  when the ec30 jam is fixed, and that ac5's pairwise win is a knife-edge
+  to re-take and sim-check rather than revert toward. (e) the
+  `e2e-harness` label names an OPTION SET, not a cell the suite runs.
+  Refuted: `outcome_of`'s `&String == &str` compiles via the blanket
+  `PartialEq<&B> for &A` impl over `String: PartialEq<str>`, and an
+  always-false comparison is structurally unhidable there because the
+  lookup ends in a `panic!`, not a default.*
