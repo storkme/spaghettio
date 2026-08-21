@@ -516,17 +516,23 @@ fn harness_options_are_engine_defaults() {
 /// Raising a count means a new copy of a known trap — don't.
 ///
 /// **This is a source-text gauge, not a behavioural one** (#699 review
-/// rounds 3 and 4), and its reach is exactly that: it counts TEXTUAL
+/// rounds 3, 4 and 5), and its reach is exactly that: it counts TEXTUAL
 /// copies of two exact trimmed lines. It does not see a fossil written
-/// on one line, a re-spelled or reformatted literal, a semantically
-/// equivalent construction, or one inside dead code — and conversely a
-/// trailing comment or a rustfmt re-wrap on an existing line moves the
-/// count and forces an edit here. So the claim is narrow: **a textual
-/// copy of these two lines cannot be added silently.** That is not the
-/// same as "the fossil cannot come back", and it is the only mechanism
-/// available — the sites are ordinary struct literals inside ordinary
-/// tests, with no runtime handle to count. The behavioural guard, for
-/// the path that matters, is `harness_options_are_engine_defaults`.
+/// on one line, a re-spelled or reformatted literal, one inside dead
+/// code, or — the sharpest miss, and the one `bus::layout`'s own field
+/// legend names as reachable — the GROUP-level partial,
+/// `SearchAxes { cell_composition: Default::default(), ..SearchAxes::default() }`,
+/// which resolves to `Off` exactly like the flat form and matches
+/// neither pattern here. Conversely a trailing comment or a rustfmt
+/// re-wrap on an existing line moves the count and forces an edit here.
+/// So the claim is narrow: **a textual copy of these two lines cannot be
+/// added silently.** That is not the same as "the fossil cannot come
+/// back", and it is the only mechanism available — the sites are
+/// ordinary struct literals inside ordinary tests, with no runtime
+/// handle to count. The behavioural guard, for the one path that builds
+/// every regression fixture, is `harness_options_are_engine_defaults`;
+/// these 15 sites have no behavioural guard, which is a reason to
+/// migrate them, not a reason to widen this gauge.
 ///
 /// Cost, since it is not free and not obvious: `include_str!` embeds
 /// this ~11k-line file into the test binary (a few hundred KB). Accepted
@@ -1536,7 +1542,38 @@ fn tier1_iron_gear_wheel_20s() {
          what hid this for a month. got {outer:?}",
     );
     assert_warnings_golden(&result, "tier1_iron_gear_wheel_20s");
-    assert_produces(&result, "iron-gear-wheel", 20.0);
+
+    // NOT `assert_produces` (#699 review round 5, 3/3). That helper reads
+    // `analysis.throughput_estimates` — a static estimate derived from the
+    // machine count, not a measurement — and on THIS fixture it says 20/s
+    // about a layout the meter reads at 15/s. Calling it here would leave
+    // a green "produces 20/s" assertion standing next to a known 25%
+    // deficit, which is the exact "the suite is green so the engine
+    // delivers" inference this PR exists to break. So the estimate is
+    // still checked (it is the plan, and a plan regression is worth
+    // catching) but under a name and a message that say what it is.
+    //
+    // Rejected alternative, recorded because it is the obvious one:
+    // metering in-suite. `spaghettio_meter` depends on `spaghettio_core`,
+    // so a dev-dependency back would close a cycle and drag the meter into
+    // every `cargo test -p spaghettio_core`; and the meter's own tripwire
+    // ALREADY carries this fixture armed (`gear20-am2-plate`, -25.0%,
+    // entities 105). Duplicating it here would add a second, weaker copy
+    // of a guard that exists, not a new guard.
+    let estimated = result
+        .analysis
+        .throughput_estimates
+        .get("iron-gear-wheel")
+        .copied()
+        .unwrap_or(0.0);
+    assert!(
+        estimated >= 20.0 * 0.99,
+        "PLAN check only — this is `analysis.throughput_estimates`, not delivery. \
+         Expected the plan to still be >=20/s, got {estimated:.1}/s. The MEASURED \
+         rate for this fixture is 15.0/s (meter tripwire `gear20-am2-plate`, \
+         -25.0%, #700); do not read this assertion, or this test passing, as \
+         evidence that the layout delivers 20/s.",
+    );
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_20s");
 }
@@ -9294,6 +9331,20 @@ fn full_knob_sweep() {
     let mut md = String::new();
     let _ = writeln!(md, "# Knob sweep: strategy x row-layout\n");
     let _ = writeln!(md, "{} cases x {} combos. Lexicographic winner key: (errors, warnings, entities).\n", cases.len(), combos.len());
+    // Provenance stamped into the ARTIFACT, not just the source doc
+    // (#699 review round 5): these tables get pasted into issues and PRs,
+    // where a `run_e2e_pure_combo` doc comment is invisible, and the W2c
+    // option-set change makes old and new tables silently non-comparable.
+    let _ = writeln!(
+        md,
+        "> **Option-set epoch: post-RFC-070-W2c (2026-08-21).** Every column here — \
+         including the `pure` baselines — runs production's full candidate set \
+         (`cell-composed` competes) and the L2 inserter ladder. Before W2c the \
+         harness pinned `cell_composition: Off` and `inserter_capacity: 0`, so \
+         tables generated earlier are NOT comparable to this one: a cell can be \
+         decided by a layout family the old tables never saw. \"Pure\" means the \
+         horizontal-stack candidate is off, and only that.\n",
+    );
     let _ = writeln!(md, "## Per-run data\n");
     let _ = writeln!(md, "| case | combo | errs | warns | entities | WxH | dens% | candidate | ms |");
     let _ = writeln!(md, "|---|---|---|---|---|---|---|---|---|");
