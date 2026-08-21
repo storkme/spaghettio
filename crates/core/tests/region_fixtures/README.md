@@ -48,7 +48,12 @@ cargo test --manifest-path crates/core/Cargo.toml --test region_fixtures
                                                          // default to Belt. A pipe
                                                          // spec MUST be marked or
                                                          // the replay degrades the
-                                                         // shape to belt×belt.
+                                                         // shape to belt×belt. Pipe
+                                                         // specs still carry
+                                                         // belt-shaped fields
+                                                         // (belt_tiers/exit_dirs) —
+                                                         // required by the schema,
+                                                         // ignored by pipe handling.
 
   "placed_entities": [                               // current layout state —
     { "name": "transport-belt", "x": 21, "y": 160,   // needed for the walker's
@@ -93,6 +98,8 @@ Same semantics as `sat_fixtures/README.md`:
 Optional. When set, the harness asserts the **winning** strategy's name — from the terminal `JunctionSolved` trace event, i.e. the candidate the growth loop actually committed, not merely any rung that reported a walker-valid `Solved` attempt (speculative single-side variants run their own ladders, and losing candidates emit `Solved` attempts too). Use it when the fixture exists to pin a *specific rung* (added for offpath G1, #687): without it, a rung-specific regression is silently absorbed by the SAT fallbacks and the fixture stays green.
 
 On a `solved_by` mismatch the harness prints the winning solution's entities plus every strategy attempt as `(strategy, outcome, "i<iter>[<variant>] <detail>")` — including `try_bridge` rejection reasons and the `variant-chosen` cost comparison — so the failure is diagnosable from test output alone.
+
+Scope of the pin: `solved_by` discriminates **which rung** answered, not which growth iteration or expansion variant its solution came from — a same-name win on a different iteration passes. Pin the solution's *shape* with `required_entities` and its *cost* with `max_cost`; the three pins are complementary, not redundant (a solver change that makes a fallback cheaper flips `solved_by` while `required_entities` may still pass, and vice versa).
 
 The replay's strategy ladder mirrors production's **pinned-tier core** (`perp`, `sat-surface`, `sat-1ug-native`, `sat-2ug-native`, `sat-native`); the auto-tier-only extras (eviction, AutoUpgrade rungs) are excluded because fixtures don't record the layout's belt-tier mode. Pin names from the core ladder only.
 
