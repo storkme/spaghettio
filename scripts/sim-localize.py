@@ -9,8 +9,10 @@ tile, no validator cross-referencing.
 
 Usage: python3 scripts/sim-localize.py <report.json> [--top N]
        [--radius N] [--around X,Y[,R]]
---top N     rank/detail the worst N machines (default 3); also windows
-            the map on their bbox unless --around is given.
+--top N     rank/detail the worst N machines (default 3). Given
+            explicitly, also windows the map on their bbox; by default
+            the map is the full extent (the first look usually wants
+            the whole factory). --around overrides either.
 --radius N  lane-detail radius per worst machine (default 3).
 --around X,Y[,R]  window the map on this tile (default R=15).
 
@@ -37,8 +39,18 @@ def load_report(path):
     with open(path) as f:
         return json.load(f)
 
-SHORTAGE = {"item_ingredient_shortage", "fluid_ingredient_shortage", "no_power", "no_fuel"}
-BACKPRESSURE = {"full_output"}
+# Factorio `defines.entity_status` names, grouped the way the forensics doc
+# reads them. Anything not `working` and in neither set still counts as
+# impaired (`frac_other`) so an unfamiliar status is surfaced, not hidden.
+SHORTAGE = {
+    "item_ingredient_shortage", "fluid_ingredient_shortage", "no_ingredients",
+    "no_input_fluid", "low_input_fluid", "no_power", "low_power", "no_fuel",
+}
+BACKPRESSURE = {"full_output", "full_burnt_result_output", "fluid_production_overload"}
+
+def rank_key(r):
+    """One sort key for both ranking paths: worst first, then stable by tile."""
+    return (-r["frac_shortage"], -r["frac_backpressure"], -r.get("frac_other", 0.0), r["x"] or 0, r["y"] or 0)
 MACHINE_GLYPH = {"working": "W", "full_output": "F", "no_power": "P"}
 INSERTER_GLYPH = {
     "working": "i",
@@ -56,7 +68,7 @@ def machine_glyph(status):
     return "?"
 
 def arrow_for(direction):
-    return None if direction is None else ARROWS[round(direction / 4.0) % 4]
+    return None if direction is None else ARROWS[int(direction // 4) % 4]
 
 def g(d, *path, default=None):
     """Nested .get() that never raises on a missing key or wrong shape."""
@@ -85,7 +97,7 @@ def validator_line(top):
         return "? (manifest predates the validator field — state unknown, NOT clean)"
     errors, warnings, layout_w = v.get("errors", 0), v.get("warnings", 0), v.get("layout_warnings", 0)
     if errors == 0 and warnings == 0 and layout_w == 0:
-        return "clean (no issues reported — validator silence is not proof of correctness)"
+        return "clean (no issues reported — note validator silence is not proof of correctness)"
     badge = "/".join(f"{n}{c}" for n, c in ((errors, "E"), (warnings, "W"), (layout_w, "L")) if n)
     by_cat = v.get("by_category", {}) or {}
     ranked = sorted(by_cat.items(), key=lambda kv: (kv[1].get("errors", 0), kv[1].get("warnings", 0)), reverse=True)
@@ -125,10 +137,13 @@ def print_header(top):
         print(f"{mark + it.get('item', '?'):<28} {fmt(planned):>10} {fmt(produced):>11} {fmt(delivered):>12} {fmt_pct(dpct):>8}")
         if it.get("is_target"):
             target = it
+            ratio = None
             if delivered is not None and planned:
-                target_ratio = delivered / planned
+                ratio = delivered / planned
             elif produced is not None and planned:
-                target_ratio = produced / planned
+                ratio = produced / planned
+            if ratio is not None and (target_ratio is None or ratio < target_ratio):
+                target_ratio = ratio  # with several targets the worst one governs
     print()
 
     if target is not None and target_ratio is not None and target_ratio < 1.0:
@@ -197,13 +212,14 @@ def rank_from_timeseries(timeseries):
         n = len(rec["statuses"]) or 1
         frac_s = sum(1 for s in rec["statuses"] if s in SHORTAGE) / n
         frac_b = sum(1 for s in rec["statuses"] if s in BACKPRESSURE) / n
+        frac_o = sum(1 for s in rec["statuses"] if s != "working" and s not in SHORTAGE and s not in BACKPRESSURE) / n
         mean_delta = sum(rec["deltas"]) / len(rec["deltas"]) if rec["deltas"] else 0.0
         rows.append({
             "unit": unit, "name": rec["name"], "x": rec["x"], "y": rec["y"],
-            "frac_shortage": frac_s, "frac_backpressure": frac_b,
+            "frac_shortage": frac_s, "frac_backpressure": frac_b, "frac_other": frac_o,
             "mean_crafts_delta": mean_delta, "shape": classify_shape(rec["deltas"], rec["statuses"]),
         })
-    rows.sort(key=lambda r: (-r["frac_shortage"], -r["frac_backpressure"]))
+    rows.sort(key=rank_key)
     return rows
 
 def rank_from_final_frame(sim_state):
@@ -218,9 +234,10 @@ def rank_from_final_frame(sim_state):
             "unit": None, "name": name, "x": x, "y": y,
             "frac_shortage": 1.0 if status in SHORTAGE else 0.0,
             "frac_backpressure": 1.0 if status in BACKPRESSURE else 0.0,
+            "frac_other": 1.0 if (status not in SHORTAGE and status not in BACKPRESSURE) else 0.0,
             "mean_crafts_delta": None, "shape": "unknown (single frame)", "status": status,
         })
-    rows.sort(key=lambda r: (-r["frac_shortage"], -r["frac_backpressure"], r["x"], r["y"]))
+    rows.sort(key=rank_key)
     return rows
 
 def print_ranking(top, top_n):
@@ -230,7 +247,8 @@ def print_ranking(top, top_n):
     if timeseries:
         rows = rank_from_timeseries(timeseries)
         total = len(rows)
-        rows = [r for r in rows if r["frac_shortage"] > 0 or r["frac_backpressure"] > 0 or r["shape"] != "healthy"]
+        rows = [r for r in rows if r["frac_shortage"] > 0 or r["frac_backpressure"] > 0
+                or r["frac_other"] > 0 or r["shape"] != "healthy"]
         print(f"({len(timeseries)} checkpoint window(s); {total - len(rows)} healthy machine(s) omitted)")
     else:
         print("timeseries: absent — falling back to final frame (cannot distinguish transient from persistent)")
@@ -328,10 +346,14 @@ def render_map(grid, all_xy, window):
 
 def resolve_window(args, worst_rows):
     if args.around:
-        parts = args.around.split(",")
-        x, y = int(parts[0]), int(parts[1])
-        r = int(parts[2]) if len(parts) > 2 else 15
-        return (x - r, x + r, y - r, y + r)
+        try:
+            parts = [int(p) for p in args.around.split(",")]
+            x, y = parts[0], parts[1]
+            r = parts[2] if len(parts) > 2 else 15
+            return (x - r, x + r, y - r, y + r)
+        except (ValueError, IndexError):
+            print(f"note: --around expects X,Y[,R] (got {args.around!r}) — rendering the full extent instead",
+                  file=sys.stderr)
     if args.top_explicit and worst_rows:
         xs = [r["x"] for r in worst_rows if r["x"] is not None]
         ys = [r["y"] for r in worst_rows if r["y"] is not None]

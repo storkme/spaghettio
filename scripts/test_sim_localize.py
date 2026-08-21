@@ -239,5 +239,57 @@ def test_validator_line_variants():
     assert warned == "3W — input-rate-delivery×3"
 
 
+# --- review-bot findings on #697 -------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["10", "a,b", "1,2,x", ""])
+def test_malformed_around_degrades_to_full_extent(tmp_path, capsys, bad):
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(make_new_format_report()))
+    rc = run(path, ["--around", bad] if bad else [])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "--- map ---" in captured.out
+    if bad:
+        assert "--around expects X,Y[,R]" in captured.err
+
+
+def test_below_plan_gate_uses_the_worst_of_several_targets(tmp_path, capsys):
+    report = make_new_format_report()
+    # a starved primary target followed (in table order) by a healthy secondary
+    report["report"]["items"].append(
+        {"item": "iron-gear-wheel", "planned_rate": 5.0, "measured_produced_rate": 5.1,
+         "measured_delivered_rate": 5.05, "delta_pct_produced": 2.0, "delta_pct_delivered": 1.0,
+         "is_target": True, "verdict": "PASS"})
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    run(path)
+    out = capsys.readouterr().out
+    assert "below-plan intermediates" in out or "no intermediate below 98%" in out
+
+
+def test_no_ingredients_and_unknown_statuses_are_not_hidden():
+    ts = [{"tick": 1200 * (i + 1), "machines": [
+        {"unit": 1, "name": "assembling-machine-2", "x": 0, "y": 0, "crafts_delta": 0.0, "status": "no_ingredients"},
+        {"unit": 2, "name": "assembling-machine-2", "x": 5, "y": 0, "crafts_delta": 10.0, "status": "some_new_status"},
+        {"unit": 3, "name": "assembling-machine-2", "x": 9, "y": 0, "crafts_delta": 10.0, "status": "working"},
+    ], "items": {}} for i in range(3)]
+    rows = sim_localize.rank_from_timeseries(ts)
+    by_unit = {r["unit"]: r for r in rows}
+    assert by_unit[1]["frac_shortage"] == 1.0  # no_ingredients counts as a shortage, as the overlay does
+    assert by_unit[2]["frac_other"] == 1.0  # unfamiliar status surfaces rather than reading as healthy
+    assert rows[0]["unit"] == 1 and rows[1]["unit"] == 2
+
+
+def test_both_ranking_paths_share_the_tie_break():
+    frame = {"machines": [[9, 0, "m", "full_output"], [3, 0, "m", "full_output"], [3, -1, "m", "full_output"]]}
+    frame_rows = sim_localize.rank_from_final_frame(frame)
+    ts = [{"tick": 1, "machines": [
+        {"unit": u, "name": "m", "x": x, "y": y, "crafts_delta": 0.0, "status": "full_output"}
+        for u, (x, y) in enumerate([(9, 0), (3, 0), (3, -1)])], "items": {}}]
+    ts_rows = sim_localize.rank_from_timeseries(ts)
+    assert [(r["x"], r["y"]) for r in frame_rows] == [(r["x"], r["y"]) for r in ts_rows] == [(3, -1), (3, 0), (9, 0)]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
