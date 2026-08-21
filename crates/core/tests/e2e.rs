@@ -238,15 +238,21 @@ fn run_e2e_with_strategy_and_row_layout(
 /// column.
 ///
 /// "Pure" means **the horizontal-stack candidate is off**, and only that
-/// (#699 review round 2 read it as "no candidate competes"). Every other
-/// candidate — `cell-composed` included — runs exactly as production has
-/// it. Before RFC-070 W2c that was accidentally untrue: the harness
-/// pinned `cell_composition: Off`, so the cell-composed arm was absent
-/// from these columns AND from the `default` column, by fossil rather
-/// than by design. It now competes in both, which keeps the sweep's
-/// comparison apples-to-apples; disabling it in the pure columns alone
-/// would not. Consequence for readers: **`full_knob_sweep` tables
-/// produced before 2026-08-21 are not comparable to ones produced after.**
+/// (#699 review rounds 2 and 4 read it as "no candidate competes"). Every
+/// other candidate — `cell-composed` included — runs exactly as
+/// production has it, and so does the L2 inserter ladder. Before RFC-070
+/// W2c that was accidentally untrue: the harness pinned
+/// `cell_composition: Off` and `inserter_capacity: 0`, so the
+/// cell-composed arm and the shipped ladder were absent from these
+/// columns AND from the `default` column, by fossil rather than by
+/// design. Both now apply to both, which keeps the sweep's comparison
+/// apples-to-apples; restoring the fossil in the pure columns alone would
+/// not — it would make the baseline columns and the `default` column
+/// differ on two axes instead of the one the sweep is about.
+/// Consequence for readers: **`full_knob_sweep` tables produced before
+/// 2026-08-21 are not comparable to ones produced after**, and a pure
+/// cell can now be decided by a layout family the pre-W2c tables never
+/// saw.
 fn run_e2e_pure_combo(
     test_name: &str,
     item: &str,
@@ -510,13 +516,21 @@ fn harness_options_are_engine_defaults() {
 /// Raising a count means a new copy of a known trap — don't.
 ///
 /// **This is a source-text gauge, not a behavioural one** (#699 review
-/// round 3), and the coupling is deliberate: any edit that changes how
-/// one of these lines is SPELLED — a trailing comment, a rustfmt
-/// re-wrap, a rename — moves the count too and forces an edit here. That
-/// is a small tax on 15 known sites in exchange for the residual being
-/// impossible to grow silently, and it is the only mechanism available:
-/// the sites are ordinary struct literals inside ordinary tests, with no
-/// runtime handle to count.
+/// rounds 3 and 4), and its reach is exactly that: it counts TEXTUAL
+/// copies of two exact trimmed lines. It does not see a fossil written
+/// on one line, a re-spelled or reformatted literal, a semantically
+/// equivalent construction, or one inside dead code — and conversely a
+/// trailing comment or a rustfmt re-wrap on an existing line moves the
+/// count and forces an edit here. So the claim is narrow: **a textual
+/// copy of these two lines cannot be added silently.** That is not the
+/// same as "the fossil cannot come back", and it is the only mechanism
+/// available — the sites are ordinary struct literals inside ordinary
+/// tests, with no runtime handle to count. The behavioural guard, for
+/// the path that matters, is `harness_options_are_engine_defaults`.
+///
+/// Cost, since it is not free and not obvious: `include_str!` embeds
+/// this ~11k-line file into the test binary (a few hundred KB). Accepted
+/// for a non-ignored test that runs in microseconds.
 #[test]
 fn residual_fossil_literals_are_pinned() {
     // Self-read: matching on the exact TRIMMED line means the comparison
@@ -1195,16 +1209,27 @@ fn decomposition_search_native_candidate_fires_trace_events() {
     // `SelectionDecided` from the scoreboard) must agree, and the stage is
     // pinned against #694's `tier1_gear_am1` / am1 / `default` row.
     //
-    // Honest residual (round 2, same finding restated): a reordering that
-    // flipped BOTH emitters consistently would sail through both
-    // assertions. Corroboration narrows the failure mode, it does not
-    // remove it — and it cannot be removed from here, because the fix is a
-    // structural nesting marker in the trace contract itself, which is the
-    // selection loop's to own (RFC-070 Phase 1b/2a), not this test's.
-    // What this test CAN do about it is pin the stage as well as the
-    // winner: gear@20's nested board decides at `best-accepted`, so a
-    // whole class of "read the nested board instead" errors would show up
-    // as a stage mismatch here rather than as a silent pass.
+    // Honest residuals, both from #699's review, both correct:
+    //
+    // 1. (round 4, 3/3) **The corroboration is currently vacuous HERE.**
+    //    Measured: this fixture emits exactly ONE `DecompositionChosen`
+    //    and ONE `SelectionDecided`, because `native` wins and native has
+    //    no nested selection — the cell-composed candidate runs and
+    //    LOSES, and `run_candidate` truncates a loser's nested trace block
+    //    (RFC-070 oracle gap (g)). So `chosen.last() == decided.last()`
+    //    cannot fail here for any ordering. It is kept as a cheap
+    //    consistency check that becomes load-bearing the moment a nesting
+    //    candidate wins this fixture — which is precisely the event this
+    //    test exists to notice. The assertion that carries weight today is
+    //    the STAGE pin plus the cell-composed-presence check above. The
+    //    fixture where the ordering IS exercised is
+    //    `tier1_iron_gear_wheel_20s`, whose winner nests.
+    // 2. (round 2/3) A reordering that flipped BOTH emitters consistently
+    //    would sail through even where the check is not vacuous.
+    //    Corroboration narrows the failure mode, it does not remove it —
+    //    and it cannot be removed from here: the fix is a structural
+    //    nesting marker in the trace contract itself, which is the
+    //    selection loop's to own (RFC-070 Phase 1b/2a), not this test's.
     let decided: Vec<_> = result.trace_events.iter()
         .filter_map(|e| match e {
             TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
@@ -1279,7 +1304,11 @@ fn decomposition_search_picks_native_on_clean_partitioned_case() {
     // selections replay their own into the same stream (RFC-070 oracle gap
     // (g); the contract is stated on `trace.rs`'s
     // `SelectionCandidateEvaluated`). Corroborated across both independent
-    // terminal emitters rather than trusted, per #699's review.
+    // terminal emitters rather than trusted, per #699's review — with the
+    // same honest caveat as the sibling test above: while `native` wins
+    // and nests nothing, only one terminal of each kind is emitted, so the
+    // cross-check cannot fail. It is a cheap guard that arms itself if a
+    // nesting candidate ever takes this fixture.
     let decided: Vec<_> = result.trace_events.iter()
         .filter_map(|e| match e {
             TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
@@ -1461,7 +1490,23 @@ fn tier1_iron_gear_wheel_20s() {
     // passes on the under-delivering layout; do NOT read this test's
     // greenness as evidence of delivery.
     //
-    // The pin below is the IN-SUITE tripwire for that (#699 review round
+    // **The deficit itself is not new, and this is not the only guard on
+    // it.** W1a's meter tripwire found it on day one (#693's own table:
+    // `gear20-am2-plate` 20.000 planned / 15.000 produced / −25.0% BELOW
+    // PLAN) and its committed baseline
+    // (`crates/meter/tests/e2e_tripwire_baseline.json`) carries the row
+    // ARMED, at `entities: 105, deficit_pct: -25.0, converged: true` — a
+    // STANDING BELOW-PLAN row that `SPAGHETTIO_METER_TRIPWIRE=check`
+    // fails on if it worsens. What W2c adds is the ATTRIBUTION, and the
+    // reason nobody joined the two facts: **the tripwire's 105 entities
+    // and this fixture's pre-W2c golden's 148 were different layouts of
+    // the same named config.** The tripwire built `LayoutOptions::
+    // default()` (production, cell-composed, −25 %); the e2e fixture
+    // built the fossil's options (native, +5 %). Two instruments, one
+    // fixture name, two artifacts, no contradiction visible from either
+    // side. That is what the fossil cost.
+    //
+    // The pin below is this file's share of the guard (#699 review round
     // 2, 3/3 — "the only guard is prose and an external issue number").
     // Neither the golden hash nor `assert_produces` can say WHY this
     // fixture is special: the hash's failure message asks whether the
@@ -1482,11 +1527,13 @@ fn tier1_iron_gear_wheel_20s() {
          plan while both native arms meter 21.0/s. If this assertion just failed, \
          the selection moved — if that is #700 being fixed: (1) re-take the meter \
          reading with `w2c_gear20_meter_export` at the bottom of this file, \
-         (2) update #700 with it, (3) update THIS pin, and (4) re-bless the \
-         fixture's GOLDEN HASH (and its warning pin, if the tally moved). Those \
-         are the coupled artifacts; nothing else in the suite is. Do NOT re-bless \
-         on validator greenness alone: that is exactly what hid this for a month. \
-         got {outer:?}",
+         (2) update #700 with it, (3) update THIS pin, (4) re-bless the fixture's \
+         GOLDEN HASH (and its warning pin, if the tally moved), and (5) re-bless \
+         the meter tripwire's `gear20-am2-plate` row, which is the ARMED guard \
+         on the deficit (crates/meter/tests/e2e_tripwire_baseline.json, currently \
+         entities 105 / -25.0%). Those five are the coupled artifacts; nothing \
+         else is. Do NOT re-bless on validator greenness alone: that is exactly \
+         what hid this for a month. got {outer:?}",
     );
     assert_warnings_golden(&result, "tier1_iron_gear_wheel_20s");
     assert_produces(&result, "iron-gear-wheel", 20.0);

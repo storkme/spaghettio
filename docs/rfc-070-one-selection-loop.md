@@ -1061,8 +1061,14 @@ fixtures / docs split per the churn norm).
   additive (the cap-only and both-fossils fingerprints differ in one
   fixture, the one cells moves).
   * **Capacity `0` → `2`** moves 6 of 8 golden hashes and 8 of 8 stress
-    hashes — every fixture with an inserter-fed row. It changes no
-    winner and no deciding stage anywhere. The two fluid-target goldens
+    hashes — every fixture with an inserter-fed row — while changing no
+    winner and no deciding stage **on any (fixture, machine) pair the
+    suite runs**. That scoping is load-bearing and the first draft of
+    this entry dropped it (#699 review round 4): the corpus DOES record
+    two capacity-attributable winner changes, both at am3, on fixtures
+    the suite invokes at am1/am2. "Additive" likewise means the two
+    fossils' effects on the SUITE compose without interacting, not that
+    either is inert. The two fluid-target goldens
     (`tier3_sulfuric_acid`, `tier3_heavy_oil_cracking`) are the negative
     control: byte-identical under both arms.
   * **Cells `Off` → `Candidate`** moves exactly ONE layout in the whole
@@ -1116,19 +1122,40 @@ fixtures / docs split per the churn norm).
 
   The cell-composed winner **under-delivers by 25 %**, validator-clean,
   and production has shipped it since RFC-051 Phase B flipped
-  `cell_composition` on 2026-07-22. **The fossil was not merely hiding a
-  candidate arm — it was hiding a live defect in that arm's only shipped
-  win.** Filed as #700 with the reproduction; a `#[ignore]`d exporter
-  (`w2c_gear20_meter_export`) is committed so the reading is re-takeable
-  from a clean clone. The golden re-bless still stands — a golden records
-  what the engine produces, and this is what it produces — but the
-  fixture's comment now says so, including that its
-  `assert_produces(…, 20.0)` passes on a 15/s layout because it reads a
-  static estimate.
+  `cell_composition` on 2026-07-22.
 
-  This is the strongest possible argument for the track: the suite could
-  not see the defect, and a single instrument the suite does not run
-  found it in one command.
+  **CORRECTION, and it makes the finding better rather than worse
+  (#699 review round 4 prompted the check).** The first draft of this
+  entry presented the deficit as newly discovered. It was not: **W1a
+  found it on day one.** #693's own table reports `gear20-am2-plate` at
+  20.000 planned / 15.000 produced / **−25.0 % BELOW PLAN**, and the
+  committed tripwire baseline
+  (`crates/meter/tests/e2e_tripwire_baseline.json`) carries the row ARMED
+  at `entities: 105, deficit_pct: -25.0, converged: true`. The reading
+  above reproduces that baseline exactly, which is corroboration, not
+  novelty. There is therefore no "prose-only guard" gap either: `check`
+  fails on that row worsening, today, without this PR.
+
+  **What W2c actually adds is the attribution, and it is the sharper
+  fact.** The tripwire's row says 105 entities. The e2e suite's
+  `tier1_iron_gear_wheel_20s` golden, before this PR, pinned 148. *Same
+  item, same rate, same machine, same inputs — two different layouts,
+  under two instruments, neither able to see the other.* The tripwire
+  built `LayoutOptions::default()` (production: cell-composed, −25 %);
+  the e2e fixture built the fossil's options (native, +5 %). Nobody
+  joined "the meter says gear@20 is 25 % down" to "the regression suite
+  says gear@20 is fine" because they were not talking about the same
+  artifact. **That** is what the fossil cost, and it is exactly the class
+  of thing a campaign about one selection loop exists to remove. Filed as
+  #700; a `#[ignore]`d exporter (`w2c_gear20_meter_export`) is committed
+  so the three arms are re-measurable side by side, which is what makes
+  the divergence checkable rather than narrated.
+
+  The golden re-bless stands — a golden records what the engine produces,
+  and this is what it produces — but the fixture's comment now says so,
+  including that its `assert_produces(…, 20.0)` passes on a 15/s layout
+  because it reads a static estimate, and names all five coupled
+  artifacts a #700 fix has to move (the tripwire row among them).
 
   **SECOND FINDING — the stage-5 policy this exposes.** On
   `tier1_iron_gear_wheel_20s` the outer board records native with
@@ -1305,3 +1332,37 @@ fixtures / docs split per the churn norm).
     documented: it is the historical record the W2c re-blesses were
     adjudicated against, and deleting it would re-take 32 cells and
     destroy the only evidence of what the fossilized suite decided.
+
+  **#699 review rounds 3 and 4 absorbed** (4 + 5 findings; the reviewer
+  states none blocks merge). Three produced real corrections:
+  * *(round 3, minor — a defect this PR introduced)* `parity_corpus.rs`'s
+    `OPTION_SETS` docblock said both things at once: round 1 appended the
+    "both fossils are dead, this column is historical" correction AFTER
+    the pre-W2c hand-verification receipt, leaving two mutually exclusive
+    descriptions of the same label with no way to tell which was current.
+    Restructured — live statement leads, receipt kept behind an explicit
+    SUPERSEDED heading as provenance for the committed cells.
+  * *(round 4, minor, 3/3 — correct, and measured)* The two re-pinned
+    decomposition tests' "two independent terminal emitters corroborate"
+    claim is **vacuous on those fixtures**: both emit exactly ONE
+    `DecompositionChosen` and ONE `SelectionDecided`, because `native`
+    wins and nests nothing — the cell-composed candidate runs and loses,
+    and `run_candidate` truncates a loser's nested block (oracle gap
+    (g)). Verified from a decoded snapshot. The check is kept as a guard
+    that arms itself if a nesting candidate ever wins those fixtures, and
+    the comments now say plainly that today's weight is carried by the
+    STAGE pin and the cell-composed-presence assertion; the fixture where
+    the ordering IS exercised is `tier1_iron_gear_wheel_20s`.
+  * *(round 4, docs-only, 1/3)* The capacity-arm claim "changes no winner
+    and no deciding stage anywhere" was over-broad — corrected above to
+    scope it to the (fixture, machine) pairs the suite runs, since the
+    corpus records two capacity-attributable winner changes at am3.
+  Absorbed as scoping rather than mechanism: the residual-literal guard's
+  reach is now stated as "a textual copy of these two lines cannot be
+  added silently" (not "the fossil cannot come back"), with the
+  `include_str!` binary cost noted; `run_e2e_pure_combo`'s note now
+  covers the inserter ladder as well as the candidate set; the gear@20
+  pin's failure message enumerates all five coupled artifacts. The
+  restated ordering residual and the restated in-suite-tripwire major are
+  answered by the correction above — the armed guard is W1a's tripwire
+  row, which predates this PR.
