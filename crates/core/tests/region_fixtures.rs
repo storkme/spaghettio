@@ -131,6 +131,22 @@ fn region_fixtures() {
                          and the shape degraded"
                     ));
                 }
+                // A pipe spec missing from the belt-shaped maps silently
+                // falls back to defaults (Yellow tier, path-derived
+                // direction) — the path-derived direction can flip the
+                // perpendicularity gate the fixture exists to pin.
+                if !fixture.spec_belt_tiers.contains_key(key) {
+                    errs.push(format!(
+                        "spec_kinds[{key:?}] has no spec_belt_tiers entry"
+                    ));
+                }
+                if !fixture.spec_exit_dirs.contains_key(key) {
+                    errs.push(format!(
+                        "spec_kinds[{key:?}] has no spec_exit_dirs entry \
+                         — direction would silently fall back to \
+                         path-derived"
+                    ));
+                }
                 errs
             })
             .collect();

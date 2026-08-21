@@ -295,6 +295,23 @@ pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
     let capped = events
         .iter()
         .any(|e| matches!(e, TraceEvent::JunctionGrowthCapped { .. }));
+    // The replay runs exactly one `solve_crossing`, which emits at most
+    // one terminal `JunctionSolved` (from `pick_cheapest_candidate`,
+    // immediately before return). Assert that invariant rather than
+    // silently taking "the last one" — if a refactor ever emits
+    // `JunctionSolved` for a candidate that is later discarded, the
+    // attribution pin must fail loud, not mispin (#687 round 5).
+    let solved_count = events
+        .iter()
+        .filter(|e| matches!(e, TraceEvent::JunctionSolved { .. }))
+        .count();
+    assert!(
+        solved_count <= 1,
+        "replay observed {solved_count} JunctionSolved events for one \
+         solve_crossing — the terminal-winner invariant behind \
+         expected.solved_by no longer holds; fix the attribution \
+         extraction before trusting any solved_by pin"
+    );
     let solved_by = events.iter().rev().find_map(|e| match e {
         TraceEvent::JunctionSolved { strategy, .. } => Some(strategy.clone()),
         _ => None,
