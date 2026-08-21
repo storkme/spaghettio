@@ -242,16 +242,15 @@ def test_validator_line_variants():
 # --- review-bot findings on #697 -------------------------------------------
 
 
-@pytest.mark.parametrize("bad", ["10", "a,b", "1,2,x", ""])
+@pytest.mark.parametrize("bad", ["10", "a,b", "1,2,x", "", "1,2,3,4"])
 def test_malformed_around_degrades_to_full_extent(tmp_path, capsys, bad):
     path = tmp_path / "report.json"
     path.write_text(json.dumps(make_new_format_report()))
-    rc = run(path, ["--around", bad] if bad else [])
+    rc = run(path, ["--around", bad])
     captured = capsys.readouterr()
     assert rc == 0
     assert "--- map ---" in captured.out
-    if bad:
-        assert "--around expects X,Y[,R]" in captured.err
+    assert "--around expects X,Y[,R]" in captured.err
 
 
 def test_below_plan_gate_uses_the_worst_of_several_targets(tmp_path, capsys):
@@ -265,7 +264,10 @@ def test_below_plan_gate_uses_the_worst_of_several_targets(tmp_path, capsys):
     path.write_text(json.dumps(report))
     run(path)
     out = capsys.readouterr().out
-    assert "below-plan intermediates" in out or "no intermediate below 98%" in out
+    # the primary target is at 20% of plan, so the gate must open even though
+    # the LAST target in table order is healthy; copper-plate (99%) is the only
+    # intermediate and sits above the 98% bar, so this exact branch prints.
+    assert "no intermediate below 98%" in out
 
 
 def test_no_ingredients_and_unknown_statuses_are_not_hidden():
@@ -328,6 +330,44 @@ def test_around_pivots_lane_detail_to_that_tile(tmp_path, capsys):
     assert "tile (12,10):" in out
     assert "(12,10) fast-underground-belt > L1: copper-plate×2  L2: —" in out
     assert "machine 1 assembling-machine-2" not in out  # worst-machine detail replaced, not appended
+
+
+# --- third-round findings on #697 ---------------------------------------------
+
+
+@pytest.mark.parametrize("form", [["--around", "-5,-3,2"], ["--around=-5,-3,2"]])
+def test_negative_coordinates_parse_in_both_forms(tmp_path, capsys, form):
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(make_new_format_report()))
+    rc = run(path, form)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "--- lane detail (around (-5,-3), radius 2) ---" in out  # R doubles as lane radius
+
+
+def test_map_glyphs_follow_the_ranking_status_sets():
+    mg = sim_localize.machine_glyph
+    assert mg("no_ingredients") == "S" and mg("fluid_ingredient_shortage") == "S"
+    assert mg("no_fuel") == "P" and mg("low_power") == "P"
+    assert mg("fluid_production_overload") == "F"
+    assert mg("disabled") == "?"
+
+
+def test_top_governs_the_ranking_table(capsys):
+    frame = {"machines": [[x, 0, "m", "full_output"] for x in range(6)]}
+    sim_localize.print_ranking({"report": {}, "sim_state": frame}, 1, 2)
+    out = capsys.readouterr().out
+    assert out.count("full_output") == 0 and "... and 4 more" in out
+
+
+def test_negative_radius_is_clamped_with_a_note(tmp_path, capsys):
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(make_new_format_report()))
+    rc = run(path, ["--radius", "-2"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "--radius -2 is negative" in captured.err
+    assert "radius 0)" in captured.out
 
 
 if __name__ == "__main__":

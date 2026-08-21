@@ -9,14 +9,14 @@ tile, no validator cross-referencing.
 
 Usage: python3 scripts/sim-localize.py <report.json> [--top N]
        [--radius N] [--around X,Y[,R]]
---top N     rank/detail the worst N machines (default 3). Given
-            explicitly, also windows the map on their bbox; by default
-            the map is the full extent (the first look usually wants
-            the whole factory). --around overrides either.
---radius N  lane-detail radius per worst machine (default 3).
+--top N     table and lane-detail the worst N machines (default: table
+            20, detail 3). Given explicitly, also windows the map on
+            their bbox; by default the map is the full extent (the first
+            look usually wants the whole factory). --around overrides.
+--radius N  lane-detail radius (default 3, or --around's R when given).
 --around X,Y[,R]  window the map on this tile (default R=15) AND anchor
-            the lane detail there (radius --radius) instead of on the
-            worst machines.
+            the lane detail there instead of on the worst machines.
+            Negative coordinates: --around=-5,-3 (or bare; both work).
 
 Belt `n` — LOAD-BEARING: a transport LINE spans several tiles, and
 `get_item_count()` returns the WHOLE LINE's count, so `n` repeats across
@@ -25,7 +25,8 @@ empty-vs-nonempty only, never summed along a run or printed as
 items-per-tile (yesterday's improvised read made exactly that mistake).
 
 Formats: OLD dumps (web/src/ui/testdata/sim-report-*.json) lack
-timeseries/validator_standing/kit_errors, and belts are bare [x, y, n].
+timeseries/validator_standing/kit_errors, and belts are [x, y, n] or
+[x, y, n, det] (nonempty belts only).
 NEW dumps add those fields and extend belts to [x, y, n, det, name,
 direction, ug_type] (det: per-line [[item, count], ...], index 0=left/
 1=right lane; direction: raw Factorio 2.0 defines.direction, 16-way,
@@ -55,7 +56,6 @@ def rank_key(r):
     x = r["x"] if r["x"] is not None else 0  # missing ≠ coordinate 0, but both sort after nothing
     y = r["y"] if r["y"] is not None else 0
     return (-r["frac_shortage"], -r["frac_backpressure"], -r.get("frac_other", 0.0), x, y)
-MACHINE_GLYPH = {"working": "W", "full_output": "F", "no_power": "P"}
 INSERTER_GLYPH = {
     "working": "i",
     "waiting_for_source_items": "s",
@@ -64,11 +64,19 @@ INSERTER_GLYPH = {
 }
 ARROWS = ["^", ">", "v", "<"]  # indexed by direction // 4 % 4 (real belts are only ever 0/4/8/12)
 
+POWER = {"no_power", "low_power", "no_fuel"}
+
 def machine_glyph(status):
-    if status in MACHINE_GLYPH:
-        return MACHINE_GLYPH[status]
-    if status in ("item_ingredient_shortage", "fluid_ingredient_shortage"):
+    """Derived from the same status sets the ranking uses, so the map never
+    draws a top-ranked shortage as the catch-all `?`."""
+    if status == "working":
+        return "W"
+    if status in POWER:
+        return "P"
+    if status in SHORTAGE:
         return "S"
+    if status in BACKPRESSURE:
+        return "F"
     return "?"
 
 def arrow_for(direction):
@@ -250,7 +258,7 @@ def rank_from_final_frame(sim_state):
     rows.sort(key=rank_key)
     return rows
 
-def print_ranking(top, top_n):
+def print_ranking(top, top_n, table_n=20):
     report = top.get("report", {})
     timeseries = report.get("timeseries") or []
     print("--- machine ranking ---")
@@ -268,13 +276,13 @@ def print_ranking(top, top_n):
         print("no starved/backpressured machines found.\n")
         return [], rows
     print(f"{'unit':>6} {'name':<26} {'pos':>10} {'shortage%':>10} {'backpressure%':>14} {'mean crafts':>12} {'shape':<16}")
-    for r in rows[:20]:
+    for r in rows[:table_n]:
         pos = f"({r['x']:.0f},{r['y']:.0f})" if r["x"] is not None and r["y"] is not None else "(?,?)"
         mean = "-" if r["mean_crafts_delta"] is None else f"{r['mean_crafts_delta']:.2f}"
         print(f"{str(r['unit'] or '-'):>6} {str(r['name'] or '?'):<26} {pos:>10} "
               f"{r['frac_shortage']*100:>9.0f}% {r['frac_backpressure']*100:>13.0f}% {mean:>12} {r['shape']:<16}")
-    if len(rows) > 20:
-        print(f"... and {len(rows) - 20} more")
+    if len(rows) > table_n:
+        print(f"... and {len(rows) - table_n} more (raise --top to see them)")
     print()
     return rows[:top_n], rows
 
@@ -349,7 +357,7 @@ def render_map(grid, all_xy, window):
             for k, ch in enumerate(str(x)):
                 if start + k < len(header):
                     header[start + k] = ch
-    print("".join(header))
+    print("".join(header).rstrip())
     for y in range(ymin, ymax + 1):
         row_label = f"{y:>5} " if y % 10 == 0 else " " * 6
         print(row_label + "".join(grid.get((x, y), " ") for x in range(xmin, xmax + 1)))
@@ -358,6 +366,8 @@ def parse_around(s):
     """`X,Y[,R]` → (x, y, r) or None (with a stderr note) on malformed input."""
     try:
         parts = [int(p) for p in s.split(",")]
+        if len(parts) not in (2, 3):
+            raise ValueError(len(parts))
         return parts[0], parts[1], (parts[2] if len(parts) > 2 else 15)
     except (ValueError, IndexError):
         print(f"note: --around expects X,Y[,R] (got {s!r}) — rendering the full extent instead", file=sys.stderr)
@@ -433,15 +443,29 @@ def print_lane_detail(sim_state, anchors, radius, label=None):
 
 # --- main -----------------------------------------------------------------
 
-def main():
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # argparse reads `--around -5,-3` as an unknown option `-5,-3`. Layout
+    # coordinates are routinely negative, so glue a leading-minus value onto
+    # the flag (`--around=-5,-3`), which argparse accepts.
+    for i in range(len(argv) - 1):
+        if argv[i] == "--around" and argv[i + 1].startswith("-"):
+            argv[i:i + 2] = [f"--around={argv[i + 1]}"]
+            break
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("report", help="path to a sim-harness `run --out` JSON file")
-    ap.add_argument("--top", type=int, default=None, help="worst-N machines to detail (default 3)")
-    ap.add_argument("--radius", type=int, default=3, help="lane-detail radius (default 3)")
-    ap.add_argument("--around", default=None, help="X,Y[,R] — window the map instead of full extent")
-    args = ap.parse_args()
+    ap.add_argument("--top", type=int, default=None, help="worst-N machines to table/detail (default: table 20, detail 3)")
+    ap.add_argument("--radius", type=int, default=None, help="lane-detail radius (default 3, or --around's R)")
+    ap.add_argument("--around", default=None, help="X,Y[,R] — window map + lane detail on this tile (negative: --around=-5,-3)")
+    args = ap.parse_args(argv)
     args.top_explicit = args.top is not None
     top_n = args.top if args.top is not None else 3
+    table_n = args.top if args.top is not None else 20
+    around = parse_around(args.around) if args.around is not None else None
+    radius = args.radius if args.radius is not None else (around[2] if around is not None else 3)
+    if radius < 0:
+        print(f"note: --radius {radius} is negative — using 0", file=sys.stderr)
+        radius = 0
 
     try:
         top = load_report(args.report)
@@ -450,10 +474,9 @@ def main():
         return 1
 
     print_header(top)
-    worst_rows, _all_rows = print_ranking(top, top_n)
+    worst_rows, _all_rows = print_ranking(top, top_n, table_n)
 
     sim_state = top.get("sim_state") or {}
-    around = parse_around(args.around) if args.around else None
     window = resolve_window(args, worst_rows, around)
     print("--- map ---")
     print(LEGEND)
@@ -463,9 +486,9 @@ def main():
 
     if around is not None:
         x, y, _r = around
-        print_lane_detail(sim_state, [{"kind": "tile", "x": x, "y": y}], args.radius, label=f"around ({x},{y})")
+        print_lane_detail(sim_state, [{"kind": "tile", "x": x, "y": y}], radius, label=f"around ({x},{y})")
     else:
-        print_lane_detail(sim_state, worst_rows, args.radius)
+        print_lane_detail(sim_state, worst_rows, radius)
     return 0
 
 if __name__ == "__main__":

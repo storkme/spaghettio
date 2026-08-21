@@ -429,9 +429,9 @@ is what renders them (`.` on its map, `L1: —  L2: —` in lane detail);
 the web overlay deliberately draws nothing for an empty belt, so in the
 browser this change is invisible. Cost: `sim-state.json` grows by the
 empty-belt share of the layout — 12% and 10.5% of belt entries on the
-two dogfood fixtures (gear@10, EC@10). Older reports carry the
-3-tuple `[x, y, n]` with nonempty belts only; both shapes load fine
-since the trailing fields are additive.
+two dogfood fixtures (gear@10, EC@10). Older reports carry `[x, y, n]`
+(pre-#357) or `[x, y, n, det]`, nonempty belts only; all shapes load
+fine since the trailing fields are additive.
 
 Every report now carries `timeseries`, one entry per checkpoint window
 (the same item-driven windows the target/intermediate rates are computed
