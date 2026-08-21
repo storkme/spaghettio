@@ -2988,18 +2988,35 @@ pub fn route_bus_ghost(
         // trivially reading false through the filter that excludes them.
         if junction_seed_census_enabled {
             let n_specs = keys_at_tile.len();
+            // Round 2 review: the round-1 fallback (unwrap_or the raw key,
+            // guaranteed unique) errs the OTHER way from round 1's
+            // filter_map bug — it can HIDE a genuine same-item pair
+            // whenever `spec_items` lacks an entry, which is not
+            // hypothetical (`ghost_router.rs`'s fluid catch-up only tags a
+            // synth key when its path is ENTIRELY on pipe tiles; a fluid
+            // synth key touching any non-pipe tile stays untagged). Every
+            // synthetic key format in this file (`trunk:{item}:{x}`,
+            // `tap:{item}:{x}:{tap_y}`, `flow:{item}:{x}[:ret:{y}]`) puts
+            // the item as the first colon-delimited segment after its
+            // prefix — recover it from the key itself (same technique the
+            // fluid catch-up above already uses) before falling back to
+            // the key as an absolute last resort.
+            fn resolve_item<'a>(key: &'a str, spec_items: &'a FxHashMap<String, String>) -> &'a str {
+                if let Some(item) = spec_items.get(key) {
+                    return item.as_str();
+                }
+                for prefix in ["trunk:", "tap:", "flow:"] {
+                    if let Some(rest) = key.strip_prefix(prefix) {
+                        if let Some((item, _)) = rest.split_once(':') {
+                            return item;
+                        }
+                    }
+                }
+                key
+            }
             let n_distinct_items: usize = keys_at_tile
                 .iter()
-                // Fall back to the spec's own key (unique by construction)
-                // rather than dropping a key missing from `spec_items` —
-                // dropping would silently undercount `n_distinct_items`
-                // and manufacture a false same-item pair (round 1 review
-                // finding). A missing entry is not expected (synthetic
-                // trunk keys populate `spec_items` at insertion, same as
-                // `routed_paths`), but this keeps a violated invariant
-                // from quietly biasing the census instead of crashing the
-                // routing hot path this instrumentation must never affect.
-                .map(|&key| spec_items.get(key).map(|s| s.as_str()).unwrap_or(key))
+                .map(|&key| resolve_item(key, &spec_items))
                 .collect::<FxHashSet<&str>>()
                 .len();
             let has_pipe = routed_paths.iter().any(|(key, path)| {

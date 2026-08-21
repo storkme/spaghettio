@@ -251,54 +251,83 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
        reworked to let the cheap template actually fire. Don't delete on
        this note alone; run the census.
     3. **Census run 2026-08-21 (#689 W1d, `crates/core/tests/
-       junction_seed_census.rs`) — zero single-tile same-item crossings
-       observed; multi-tile item-sharing is common but is a different
-       question.** New behavior-neutral `TraceEvent::JunctionSeedCensus`
-       (`trace.rs`, gated behind `SPAGHETTIO_JUNCTION_SEED_CENSUS`, off by
-       default — the shipped web path always has a trace collector *and*
-       sink active, so an `is_active()`-only gate would not have made
-       this zero-cost in production) fires once per `ghost_router`
-       cluster seed, right where `keys_at_tile` is built, recording
-       `cluster_tile_count`/`n_specs`/`n_distinct_items`/`has_pipe`.
-       Corpus: the same six tier-ladder fixtures
-       `check_firing_census.rs` uses, plus the six e2e "from-ore"
-       fixtures listed in the test's module doc (12 fixtures total,
-       default `LayoutOptions` + each fixture's own belt-tier constraint;
-       SAT zone cache pinned to `sat-zones-ci.bin`).
-       **Round 1 review caught a methodology gap the first version of
-       this entry got wrong**: `n_specs`/`n_distinct_items` are the union
-       of every spec touching ANY tile in a cluster, and a cluster can
-       already span multiple tiles at seed time (before
-       `solve_crossing`'s own growth) — so `n_specs > n_distinct_items`
-       on a multi-tile cluster means "an item-sharing pair exists
-       somewhere in this cluster's participants", not "one tile has two
-       same-item specs", which is the rung's actual `tile_count == 1`
-       predicate. The test was fixed to record `cluster_tile_count` and
-       split the result on it. Corrected result: **111 seeds; 31 are
-       single-tile 2-different-item crossings (the shape point 1's
-       item-conflict-gate finding is about), 11 are single-spec
-       pipe-bypass seeds, and 66 are multi-tile clusters with an
-       item-sharing pair somewhere in the union — but of those 66,
-       cluster_tile_count is NEVER 1. Zero single-tile same-item seeds
-       were observed in this corpus** (no `(cluster_tile_count=1,
-       n_specs≥2, n_distinct<n_specs)` row in the full table). This is
-       the precise answer to the G1 question, and it's a stronger,
-       cleaner null than the first (wrong) pass reported — but it is
-       still one 12-fixture corpus, not a proof of universal
-       non-occurrence, so it does not by itself clear the rung for
-       deletion. Also recorded: 11 seeds have `has_pipe = true` (measured
-       on the raw spec set BEFORE the pipe filter) — corroborating point
-       1's pipe×belt finding rather than contradicting it (these are
-       exactly the corpus's 11 single-spec seeds, the
-       belt-crosses-a-placed-pipe bypass path; the pipe itself never
-       reaches `keys_at_tile`). Net: **this corpus found no reachable
-       instance of the rung's predicate anywhere in the pipeline — not a
-       universal proof, but real, corpus-wide, zero-based evidence for
-       the "never occurs" branch of point 1's either/or.** Widening the
-       corpus (more fixtures, or a fuzz/property sweep over crossing
-       shapes) would raise confidence further; this alone still isn't
-       sufficient for the owner-reviewed deletion call. CENSUS-ONLY per
-       its own charter: no gate or control flow changed.
+       junction_seed_census.rs`, two rounds of adversarial review
+       absorbed) — zero seeds matching the rung's exact firing predicate
+       observed; a separate, weaker multi-tile signal is common but
+       doesn't bear on reachability.** New behavior-neutral
+       `TraceEvent::JunctionSeedCensus` (`trace.rs`, gated behind
+       `SPAGHETTIO_JUNCTION_SEED_CENSUS`, off by default — the shipped web
+       path always has a trace collector *and* sink active, so an
+       `is_active()`-only gate would not have made this zero-cost in
+       production) fires once per `ghost_router` cluster seed, right
+       where `keys_at_tile` is built, recording `cluster_tile_count`/
+       `n_specs`/`n_distinct_items`/`has_pipe`. Corpus: the same six
+       tier-ladder fixtures `check_firing_census.rs` uses, plus the six
+       e2e "from-ore" fixtures listed in the test's module doc (12
+       fixtures total, default `LayoutOptions` + each fixture's own
+       belt-tier constraint; SAT zone cache pinned to `sat-zones-ci.bin`).
+       **The rung's exact firing predicate**
+       (`PerpendicularTemplateStrategy::try_solve`, ghost_router.rs
+       ~6166-6171): `region.tile_count() == 1` AND `specs.len() == 2`.
+       Two review rounds found real methodology gaps in earlier passes of
+       this census, both now fixed:
+       - **Round 1**: `n_specs`/`n_distinct_items` are the union of every
+         spec touching ANY tile in a cluster, and a cluster can already
+         span multiple tiles at seed time — so `n_specs > n_distinct_items`
+         on a multi-tile cluster means "an item-sharing pair exists
+         somewhere in the cluster", not "one tile has two same-item
+         specs". Fixed by recording `cluster_tile_count` and splitting on
+         it — the rung structurally cannot act on `tile_count > 1`
+         (returns `None` immediately), so multi-tile clusters are outside
+         its domain regardless of what any one tile inside them looks
+         like.
+       - **Round 2**: (a) the single-tile bucket still didn't check
+         `specs.len() == 2` exactly — a single-tile cluster with 3+ specs
+         and an item-sharing pair would have counted as a "hit" even
+         though the rung refuses whenever `specs.len() != 2` (this
+         corpus has zero such clusters, so the number didn't change, but
+         the metric needed tightening); (b) the `n_distinct_items`
+         fallback for a `spec_items`-map miss used the spec's raw key
+         (unique by construction), which HIDES same-item pairs instead of
+         manufacturing false ones — not hypothetical, since the fluid
+         catch-up sweep (ghost_router.rs ~2648-2667) only tags a synth key
+         when its path is entirely on pipe tiles, leaving some fluid synth
+         keys untagged; fixed by recovering the item from the key's own
+         `trunk:`/`tap:`/`flow:` prefix convention before falling back to
+         the raw key; (c) the doc's arithmetic didn't reconcile (31+11+66
+         = 108 of 111 — a 4th "multi-tile, all-distinct" bucket of 3 was
+         missing from the prose) and the headline numbers were
+         hand-transcribed rather than computed and cross-checked by the
+         test itself. The test now buckets exhaustively (`assert_eq!` on
+         the partition, not just prose) and prints a cross-check that
+         "pipe-tagged" and "single-spec" seeds are the same 11 (measured:
+         they are, exactly).
+       **Corrected, reconciled result — 111 seeds partition as:** 11
+       single-spec pipe-bypass seeds, 31 single-tile 2-different-item
+       crossings (the shape point 1's item-conflict-gate finding is
+       about), 0 single-tile clusters with >2 specs, 3 multi-tile
+       clusters with all-distinct items, and 66 multi-tile clusters with
+       an item-sharing pair somewhere in their participant union.
+       **Zero seeds match the rung's exact predicate**
+       (`cluster_tile_count == 1 && n_specs == 2 && n_distinct_items == 1`).
+       The 66 multi-tile figure is a separate, explicitly weaker signal —
+       round 2 review flagged it as likely dominated by the mundane case
+       of a trunk column and its own non-last tap-off sharing an item
+       (`docs/rfc-unified-belt-specs.md` Phase 2), which is a parent/child
+       relationship within one logical flow, not two independent specs
+       crossing — so read it as an upper bound on "same-item adjacency
+       exists somewhere nearby", not evidence of a same-item crossing.
+       Net: **this corpus found no reachable instance of the rung's exact
+       predicate anywhere in the pipeline — not a universal proof (one
+       12-fixture corpus, and `build_bus_layout`'s candidate search +
+       retry machinery means "111 seeds" counts every `route_bus_ghost`
+       invocation across all evaluated candidates and retries, not
+       deduplicated physical crossings), but real, corpus-wide, zero-based
+       evidence for the "never occurs" branch of point 1's either/or.**
+       Widening the corpus (more fixtures, or a fuzz/property sweep over
+       crossing shapes) would raise confidence further; this alone still
+       isn't sufficient for the owner-reviewed deletion call. CENSUS-ONLY
+       per its own charter: no gate or control flow changed.
     2. **The fixture replay's strategy ladder had drifted** from
        production (pre-native `sat-1ug`/Relaxed-reach list vs production's
        `sat-1ug-native` core). #687 lifted the pinned-tier core into a
