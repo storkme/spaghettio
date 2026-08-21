@@ -53,41 +53,59 @@
 //! improved toward or past plan (second-opinion review on #693 round 1,
 //! finding #1 — this was a live false-alarm path, not hypothetical).
 //!
-//! A convergence collapse (baseline converged, fresh does not) is judged
-//! qualitatively as its own below-plan-class failure, not folded into the
-//! percentage comparison: a previously-settling factory that no longer
-//! settles is exactly the shape of the worst regression this tripwire
-//! exists to catch (a stall to ~0 — the meter's own convergence detector
-//! treats "producing nothing" specially, see `producing_nothing_is_not_
-//! converged` in `factory.rs`), and round 1's shape — treating ANY
-//! non-convergence as a graceful skip — silently passed exactly that
-//! regression (second-opinion review round 2, finding #1). This does not
-//! violate the below-plan-only rule above: a stall is never an
-//! at-or-above-plan condition, it just cannot be quantified into a
-//! percentage, so it is judged as pass/fail rather than by magnitude.
-//! Baseline-side non-convergence is different and stays a skip (see
-//! "Standing gaps" below) — the baseline itself was never a trustworthy
-//! anchor to measure a regression FROM.
+//! A convergence collapse (baseline converged, fresh does not, AND the
+//! fresh reading is itself below plan) is judged qualitatively as its own
+//! below-plan-class failure, not folded into the percentage comparison: a
+//! previously-settling factory that no longer settles AND reads below
+//! plan is exactly the shape of the worst regression this tripwire exists
+//! to catch (a stall to ~0 — the meter's own convergence detector treats
+//! "producing nothing" specially, see `producing_nothing_is_not_converged`
+//! in `factory.rs`), and round 1's shape — treating ANY non-convergence as
+//! a graceful skip — silently passed exactly that regression
+//! (second-opinion review round 2, finding #1).
+//!
+//! **The direction gate matters, and an earlier round of this file got it
+//! wrong**: non-convergence alone is NOT evidence of a stall — the
+//! detector fails on any unstable trajectory, rising or falling
+//! (`factory.rs`'s `a_filling_buffer_is_not_converged` covers the rising
+//! case too), so round 2/3's "any non-convergence on the fresh side is a
+//! collapse" would fail on an over-producing or still-settling factory —
+//! good news, or at worst nothing — which violates the below-plan-only
+//! rule exactly as badly as round 1's "skip everything" bug violated it
+//! in the other direction (second-opinion review round 4, finding #1,
+//! the kernel bug that round fixed). The collapse branch therefore checks
+//! BOTH non-convergence AND `deficit_pct < 0.0` before failing; a
+//! non-converged, at-or-above-plan reading is `UNSETTLED` instead —
+//! reported, needs a stable re-run, never failed.
+//!
+//! Baseline-side non-convergence is different again and stays a skip
+//! (see "Standing gaps" below) — the baseline itself was never a
+//! trustworthy anchor to measure a regression FROM.
 //!
 //! **A baseline-non-converged fixture can never gain collapse coverage
 //! while it stays blessed non-converged** (second-opinion review round
-//! 3, finding #1 — `ec30-am2-ore`, the corpus's worst fixture, hits the
-//! "baseline never converged" branch before the collapse branch is ever
-//! reached, so a further regression on it is structurally unrepresentable
-//! today). This is not a gap in the check's design: an instrument cannot
-//! alarm on "worse than a baseline that was already producing nothing" —
-//! there is no direction left to regress FROM. It is inherent to any
-//! blessed-baseline design, not something a smarter comparison formula
-//! fixes. `ec30-am2-ore`'s real fix is the layout itself (its 3
-//! `belt-dead-end` validator errors — queued campaign-side as the W1c
-//! contested sample). The flip condition, so this is not permanently
-//! invisible: once that fixture is fixed and RE-BLESSED converged,
-//! collapse coverage arms itself automatically — no code change needed,
-//! just a bless run over the repaired layout. Until then, `check` prints
-//! a `RECOVERED` line (see the protocol section below) if a fresh run
-//! ever converges again on a still-non-converged baseline, so a fix
-//! landing is visible immediately rather than silently waiting for
-//! someone to think to re-bless.
+//! 3, finding #1). Two of the eleven blessed rows are affected today,
+//! not just one (round 3's text named only the first and read as if it
+//! were unique — round 4, finding #5): `ec30-am2-ore` (its 3
+//! `belt-dead-end` validator errors) and `plastic5-chem-crude` (no
+//! validator errors; the deficit is a real but smaller, unexplained
+//! shortfall). Both hit the "baseline never converged" branch before the
+//! collapse branch is ever reached, so a further regression on either is
+//! structurally unrepresentable today. This is not a gap in the check's
+//! design: an instrument cannot alarm on "worse than a baseline that was
+//! already producing nothing" — there is no direction left to regress
+//! FROM. It is inherent to any blessed-baseline design, not something a
+//! smarter comparison formula fixes. `ec30-am2-ore`'s real fix is the
+//! layout itself — queued campaign-side as the W1c contested sample;
+//! `plastic5-chem-crude`'s is unexamined (out of scope for this
+//! diagnostic PR to chase). The flip condition, so this is not
+//! permanently invisible: once either fixture is fixed and RE-BLESSED
+//! converged, collapse coverage arms itself automatically for it — no
+//! code change needed, just a bless run over the repaired layout. Until
+//! then, `check` prints a `RECOVERED` line (see the protocol section
+//! below) if a fresh run ever converges again on a still-non-converged
+//! baseline, so a fix landing is visible immediately rather than
+//! silently waiting for someone to think to re-bless.
 //!
 //! # Fluid targets are excluded from bless/check, never from the report
 //!
@@ -181,8 +199,16 @@
 //!         no trustworthy number to compare against) — but visible,
 //!         which `uncovered` alone would not make it (second-opinion
 //!         review round 3, finding #1).
-//!       - **collapsed** — baseline converged, fresh does not: FAILS (see
-//!         the hard-rule section above).
+//!       - **collapsed** — baseline converged, fresh does not, AND the
+//!         fresh reading is itself below plan: FAILS (see the hard-rule
+//!         section above).
+//!       - **unsettled** — baseline converged, fresh does not, but the
+//!         fresh reading is AT-OR-ABOVE plan: printed (`UNSETTLED`), not
+//!         a failure and not `judged` either — a rising buffer, a
+//!         still-settling improvement, or jitter, none of which is
+//!         below-plan evidence (second-opinion review round 4, finding
+//!         #1 — collapse used to fire on non-convergence alone, which
+//!         also covers this shape and would fail on good news).
 //!       - **compared** — both converged, entities match: the clamped
 //!         below-plan comparison runs and lands in exactly one of three
 //!         buckets (second-opinion review round 3, finding #3 — the
@@ -190,15 +216,18 @@
 //!         regression check, so a row that FAILED still printed as
 //!         "compared clean-or-standing" in the accounting, the exact
 //!         count/severity conflation `docs/validator-reporting.md`
-//!         polices): **clean** (no below-plan reading at all), or
-//!         **standing** (below-plan but not worse than baseline — prints
-//!         `STANDING BELOW-PLAN`, does not fail), or **regressed** (below-
-//!         plan AND materially worse — FAILS, prints `BELOW-PLAN
-//!         REGRESSION`).
+//!         polices): **at-or-above** (no below-plan reading at all — not
+//!         named "clean": that's a clearance word, and an at-or-above
+//!         reading is evidence of nothing either way, second-opinion
+//!         review round 4, finding #2), or **standing** (below-plan but
+//!         not worse than baseline — prints `STANDING BELOW-PLAN`, does
+//!         not fail), or **regressed** (below-plan AND materially worse
+//!         — FAILS, prints `BELOW-PLAN REGRESSION`).
 //!
 //!     `check` FAILS if nothing landed in `collapsed`, `regressed`,
-//!     `standing`, or `clean` — "verified clean" must be distinguishable
-//!     from "compared nothing".
+//!     `standing`, or `at-or-above` — a check run that judged nothing
+//!     must be distinguishable from one that judged everything and found
+//!     no problems.
 //!
 //! **Why report-only stays the default, and this is NOT wired into CI as
 //! a gate**: the committed-golden `check`/`bless` flow that used to sit
@@ -276,10 +305,26 @@ const WINDOW: u64 = 60 * 60 * 3;
 /// How much worse than the committed baseline the BELOW-plan portion of
 /// a reading must get before `check` mode alarms — see the comparison
 /// itself (in `e2e_tripwire`) for why only the below-plan portion is
-/// ever compared. 2.0pp matches the sim-harness's own baseline-check
-/// tolerance (`crates/sim-harness/src/baseline.rs`) and comfortably
-/// absorbs the tick-window jitter noted in docs/meter-divergence.md's
-/// window-quantization section.
+/// ever compared. Justified on its own terms, NOT by analogy to
+/// `crates/sim-harness/src/baseline.rs`'s 2% tolerance (round 3's doc
+/// claimed the two "match"; they don't — theirs is a RELATIVE tolerance
+/// on the blessed rate itself (`(got - want).abs() / want`), this is a
+/// fixed PERCENTAGE-POINT tolerance on plan-relative deficit; the shared
+/// numeral 2 is coincidence, not agreement — corrected round 4, finding
+/// #3). 2.0pp is set to comfortably absorb the tick-window jitter
+/// documented in docs/meter-divergence.md's window-quantization section
+/// (sub-1pp effects from window-boundary quantization alone) while still
+/// catching a real regression.
+///
+/// Trade-off, stated plainly (round 4, finding #4): the clamped
+/// comparison (below) means a fixture blessed comfortably ABOVE plan
+/// that later drops to JUST below plan — within this tolerance of zero —
+/// will not alarm, because `min(fresh, 0)` is small in magnitude and the
+/// "drop" from the baseline's clamped 0 doesn't clear the bar. Accepted:
+/// the alternative (a zero-tolerance clamped comparison) would fail on
+/// jitter alone for any fixture blessed near the boundary, which is
+/// worse in practice than a several-run delay before a marginal
+/// transition trips the gate.
 const REGRESSION_TOLERANCE_PP: f64 = 2.0;
 
 struct Fixture {
@@ -634,11 +679,15 @@ fn hash_zone_cache() -> Option<String> {
 /// single declared target, so a missing planned rate is an export/
 /// manifest bug, never a legitimate measurement. Called only from
 /// `bless`/`check` (report-only asserts nothing at all — see the module
-/// doc's bless/check protocol section).
+/// doc's bless/check protocol section). Skips fluid targets (round 4,
+/// finding #6) for consistency with their bless/check exclusion — a
+/// fluid target's plan-relative number is never gated on anyway (see the
+/// module doc's "Fluid targets are excluded" section), so this sanity
+/// check has no business asserting on it either.
 fn assert_has_plan(results: &[Measurement]) {
     let no_plan: Vec<&str> = results
         .iter()
-        .filter(|m| m.deficit_pct.is_nan())
+        .filter(|m| !m.is_fluid && m.deficit_pct.is_nan())
         .map(|m| m.label)
         .collect();
     assert!(
@@ -678,20 +727,36 @@ struct CheckOutcome {
     /// `compared` counter incremented BEFORE the regression check ran, so
     /// a row that FAILED still printed as "compared clean-or-standing" —
     /// the exact count/severity conflation `docs/validator-reporting.md`
-    /// polices against.
-    compared_clean: usize,
+    /// polices against. Named `compared_at_or_above`, not `..._clean`
+    /// (round 4, finding #2): "clean" is a clearance word, and an
+    /// at-or-above-plan reading is evidence of nothing either way — see
+    /// the module doc's hard-rule section.
+    compared_at_or_above: usize,
     /// Both converged, entities matched, below plan but NOT materially
     /// worse than baseline — see `standing_below_plan` for the messages.
     /// A subset of "compared"; counted via `standing_below_plan.len()`.
     standing_below_plan: Vec<String>,
     /// Both converged, entities matched, below plan AND materially worse
-    /// than baseline. Counted separately from `compared_clean`/
+    /// than baseline. Counted separately from `compared_at_or_above`/
     /// `standing_below_plan` so the accounting can never conflate a
     /// failing row with a clean one.
     regressed: usize,
-    /// Baseline converged, fresh did not — counted as "judged" (a
-    /// verdict WAS rendered: FAIL) even though it is not `compared_clean`,
-    /// `standing`, or `regressed`.
+    /// Baseline converged, fresh does NOT converge, AND the fresh reading
+    /// is itself below plan (or the meter's own bookkeeping shows it as
+    /// a stall — see the gate at the call site). Counted as "judged" (a
+    /// verdict WAS rendered: FAIL) even though it is not
+    /// `compared_at_or_above`, `standing`, or `regressed`.
+    ///
+    /// Gated on direction, not on non-convergence alone (round 4, finding
+    /// #1 — the kernel bug this round exists to fix): the meter's
+    /// `converged` flag is also false for a RISING reading (an
+    /// over-producing factory, or ordinary tick-window jitter around an
+    /// at-or-above-plan value — see `factory.rs`'s
+    /// `a_filling_buffer_is_not_converged`), not only a collapsing one.
+    /// Failing on non-convergence alone would fail on GOOD news, which
+    /// violates the below-plan-only hard rule as badly as round 1's
+    /// original bug violated it in the other direction. See `unsettled`
+    /// for the at-or-above-plan, non-converged case this excludes.
     collapsed: usize,
     excluded_fluid: usize,
     skipped_new: usize,
@@ -706,15 +771,26 @@ struct CheckOutcome {
     /// `uncovered` so a repair is visible instead of looking identical to
     /// "still broken".
     recovered: Vec<String>,
+    /// Labels where baseline converged but fresh does NOT, and the fresh
+    /// reading is at-or-above plan — a rising buffer, an improvement
+    /// still settling, or plain jitter, not a below-plan finding. Not
+    /// `collapsed` (round 4, finding #1) and not `judged`: there is no
+    /// trustworthy number here either, just not a failing one. Needs a
+    /// stable re-run (or a re-bless once it settles) before it can be
+    /// judged either way.
+    unsettled: Vec<String>,
 }
 
 impl CheckOutcome {
-    /// At least one row got a real verdict (compared clean, standing,
-    /// regressed, OR collapsed to a failure). Distinguishes "verified
-    /// clean" from "compared nothing" (second-opinion review round 2,
-    /// finding #2).
+    /// At least one row got a real verdict (compared at-or-above,
+    /// standing, regressed, OR collapsed to a failure). Distinguishes
+    /// "verified clean" from "compared nothing" (second-opinion review
+    /// round 2, finding #2) — "verified clean" here describes the CHECK
+    /// RUN's own state (did it actually judge anything), not any single
+    /// fixture's rate, so it is not the clearance wording finding #2
+    /// targets.
     fn judged(&self) -> usize {
-        self.compared_clean + self.standing_below_plan.len() + self.regressed + self.collapsed
+        self.compared_at_or_above + self.standing_below_plan.len() + self.regressed + self.collapsed
     }
 
     fn not_judged(&self) -> usize {
@@ -723,6 +799,7 @@ impl CheckOutcome {
             + self.uncovered.len()
             + self.recovered.len()
             + self.excluded_fluid
+            + self.unsettled.len()
     }
 }
 
@@ -804,15 +881,41 @@ fn evaluate_check(results: &[Measurement], baseline: &Baseline, verbose: bool) -
         }
         if !m.converged {
             // Baseline WAS a trustworthy anchor; fresh no longer
-            // converges. Treated as its own below-plan-class failure —
-            // see the module doc's hard-rule section.
-            out.collapsed += 1;
-            out.regressions.push(format!(
-                "{}: CONVERGENCE COLLAPSE — baseline converged at {:.1}%, fresh no longer \
-                 converges. A stalled/collapsed factory is exactly the regression class this \
-                 guard exists to catch.",
-                m.label, b.deficit_pct
-            ));
+            // converges. Gated on DIRECTION, not on non-convergence
+            // alone (round 4, finding #1 — the kernel bug this round
+            // exists to fix): `factory.rs`'s convergence detector fails
+            // on ANY unstable trajectory, rising or falling
+            // (`a_filling_buffer_is_not_converged` covers the rising
+            // case too), so treating every non-convergence as a collapse
+            // would fail on an over-producing/still-settling factory —
+            // good news, or at worst nothing — which violates the
+            // below-plan-only hard rule exactly as badly as round 1's
+            // original "skip everything" bug violated it in the other
+            // direction. `< 0.0` (strict) matches `print_scoreboard`'s
+            // own BELOW-PLAN threshold and never fails on an exactly-at-
+            // plan reading. A genuine stall reads unambiguously negative
+            // here regardless (measured ≈ 0 against any planned > 0 is
+            // deficit_pct ≈ -100%), so this loses no real coverage.
+            if m.deficit_pct < 0.0 {
+                out.collapsed += 1;
+                out.regressions.push(format!(
+                    "{}: CONVERGENCE COLLAPSE — baseline converged at {:.1}%, fresh no longer \
+                     converges AND reads below plan ({:.1}%). A stalled/collapsed factory is \
+                     exactly the regression class this guard exists to catch.",
+                    m.label, b.deficit_pct, m.deficit_pct
+                ));
+            } else {
+                out.unsettled.push(m.label.to_string());
+                if verbose {
+                    eprintln!(
+                        "{}: UNSETTLED — not converged, but reads at-or-above plan ({:.1}%); \
+                         could be a rising buffer, a still-settling improvement, or jitter — \
+                         not below-plan evidence either way, so not failed. Needs a stable \
+                         re-run (or a re-bless once stable) before this can be judged.",
+                        m.label, m.deficit_pct
+                    );
+                }
+            }
             continue;
         }
         // The ONLY percentage-based alarm condition, per the module
@@ -849,7 +952,7 @@ fn evaluate_check(results: &[Measurement], baseline: &Baseline, verbose: bool) -
                 m.label, m.deficit_pct, b.deficit_pct
             ));
         } else {
-            out.compared_clean += 1;
+            out.compared_at_or_above += 1;
         }
     }
     if verbose {
@@ -938,13 +1041,13 @@ fn e2e_tripwire() {
 
             let outcome = evaluate_check(&results, &baseline, true);
             eprintln!(
-                "\naccounting: {}/{} judged ({} clean, {} standing, {} regressed, {} \
+                "\naccounting: {}/{} judged ({} at-or-above, {} standing, {} regressed, {} \
                  collapsed), {}/{} not judged ({} new, {} stale, {} uncovered [baseline never \
-                 converged], {} recovered [re-bless to arm], {} excluded [fluid, \
-                 uncalibrated])",
+                 converged], {} recovered [re-bless to arm], {} unsettled [not converged, \
+                 at-or-above plan], {} excluded [fluid, uncalibrated])",
                 outcome.judged(),
                 results.len(),
-                outcome.compared_clean,
+                outcome.compared_at_or_above,
                 outcome.standing_below_plan.len(),
                 outcome.regressed,
                 outcome.collapsed,
@@ -954,6 +1057,7 @@ fn e2e_tripwire() {
                 outcome.skipped_stale,
                 outcome.uncovered.len(),
                 outcome.recovered.len(),
+                outcome.unsettled.len(),
                 outcome.excluded_fluid
             );
 
@@ -1035,9 +1139,10 @@ mod tests {
         }
     }
 
-    /// Finding #1: baseline converged, fresh does not — must FAIL as a
-    /// collapse, not silently skip (round 1's bug: uniform non-convergence
-    /// skipping let a throughput collapse to ~0 pass green).
+    /// Finding #1 (round 2): baseline converged, fresh does not, AND the
+    /// fresh reading is below plan — must FAIL as a collapse, not
+    /// silently skip (round 1's bug: uniform non-convergence skipping let
+    /// a throughput collapse to ~0 pass green).
     #[test]
     fn convergence_collapse_fails() {
         let results = vec![measurement("x", -1.0, 100, false)];
@@ -1050,6 +1155,32 @@ mod tests {
             "expected a COLLAPSE regression, got {:?}",
             out.regressions
         );
+        assert!(out.unsettled.is_empty());
+    }
+
+    /// Round 4, finding #1 (the kernel bug this round exists to fix):
+    /// baseline converged, fresh does NOT converge, but the fresh reading
+    /// is AT-OR-ABOVE plan — a rising buffer or a still-settling
+    /// improvement, not below-plan evidence. Must NOT fail: the
+    /// round-2/3 collapse branch fired on non-convergence alone, which
+    /// also covers this shape (`factory.rs`'s convergence detector fails
+    /// on any unstable trajectory, not only a falling one), so it would
+    /// have failed on good news — violating the below-plan-only hard
+    /// rule as badly as round 1's bug violated it in the other
+    /// direction.
+    #[test]
+    fn convergence_collapse_does_not_fire_on_improvement_shape() {
+        let results = vec![measurement("x", 5.0, 100, false)];
+        let base = baseline(vec![baseline_row("x", -2.0, 100, true)]);
+        let out = evaluate_check(&results, &base, false);
+        assert!(
+            out.regressions.is_empty(),
+            "a non-converged AT-OR-ABOVE-plan reading must never fail: {:?}",
+            out.regressions
+        );
+        assert_eq!(out.collapsed, 0, "must not be counted as a collapse");
+        assert_eq!(out.unsettled, vec!["x".to_string()]);
+        assert_eq!(out.judged(), 0, "unsettled is not yet judged either way");
     }
 
     /// Finding #1 (other direction): the baseline itself never converged
@@ -1126,10 +1257,11 @@ mod tests {
         );
         assert_eq!(out.regressed, 0);
         // -1.0% is itself below plan, so it lands in `standing`, not
-        // `compared_clean` — both are non-failing buckets, but conflating
-        // them is exactly what finding #3 (round 3) polices against.
+        // `compared_at_or_above` — both are non-failing buckets, but
+        // conflating them is exactly what finding #3 (round 3) polices
+        // against.
         assert_eq!(out.standing_below_plan.len(), 1);
-        assert_eq!(out.compared_clean, 0);
+        assert_eq!(out.compared_at_or_above, 0);
     }
 
     /// A genuine below-plan regression must still fail after the
@@ -1145,8 +1277,11 @@ mod tests {
             "expected a below-plan regression, got {:?}",
             out.regressions
         );
-        assert_eq!(out.regressed, 1, "must be counted in the `regressed` bucket, not `clean`");
-        assert_eq!(out.compared_clean, 0);
+        assert_eq!(
+            out.regressed, 1,
+            "must be counted in the `regressed` bucket, not `compared_at_or_above`"
+        );
+        assert_eq!(out.compared_at_or_above, 0);
         assert!(out.standing_below_plan.is_empty());
     }
 
