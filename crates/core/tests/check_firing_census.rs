@@ -173,7 +173,13 @@ fn check_firing_census() {
             eprintln!("SKIP (no solve): {item}@{rate}");
             continue;
         };
-        let fixture_key = format!("{item}@{rate}");
+        // Machine tier included (round 4, #686): "{item}@{rate}" alone
+        // collides if the fixture list ever gains a second tier at the
+        // same item/rate (the module doc invites exactly that extension),
+        // which would silently merge two fixtures' per-fixture state and
+        // corrupt the err_loser/loser_only pairing this file exists to
+        // protect.
+        let fixture_key = format!("{item}@{rate}:{machine}");
         for (vname, tweak) in variants {
             let mut opts = LayoutOptions::default();
             tweak(&mut opts);
@@ -229,6 +235,11 @@ fn check_firing_census() {
         "(a category ABSENT below was never observed on a built layout \
          here — indistinguishable from 'only fires on refused \
          candidates'; see Interpretation at the bottom)"
+    );
+    println!(
+        "(count sums every issue across all variants and both severities \
+         for that category — it is not per-variant or per-severity; use \
+         err-variants/variants for provenance)"
     );
     println!(
         "{:<32} {:>7} {:>10} {:>9} {:>6}  {:<24}  {}",
