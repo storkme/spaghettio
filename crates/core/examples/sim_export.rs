@@ -80,9 +80,11 @@ const DEFAULT_TIER: &str = "assembling-machine-3";
 /// enumerated and every engine default stated correctly, and which took five
 /// review rounds without converging — passing any of these simply REQUIRES an
 /// explicit `--label`. Collisions between runs that differ only by an axis
-/// become impossible by construction — reusing the same `--label` twice
-/// still collides, and deliberately so — and the
-/// check consults no defaults, so a future default flip cannot invert it.
+/// become impossible by construction, and the check consults no defaults, so
+/// a future default flip cannot invert it. Reusing the same `--label` for a
+/// DIFFERENT configuration is caught separately, by `overwrite_verdict`
+/// against the fixture's recorded provenance; reusing it for the same one is
+/// idempotent.
 ///
 /// Slightly over-strict on purpose: `--strategy pooled` is the default value
 /// and still demands a label. Erring toward "be explicit" costs a flag; erring
@@ -358,7 +360,7 @@ fn main() {
                     ),
                     "horizontal-stack" | "hs" => RowLayout::HorizontalStack,
                     other => usage(&format!(
-                        "--row-layout must be native|vertical-split|horizontal-stack (got {other})"
+                        "--row-layout must be native|vertical-split|horizontal-stack|hs (got {other})"
                     )),
                 }
             }
@@ -386,7 +388,7 @@ fn main() {
                     ),
                     "partitioned-decomposed" | "pd" => LayoutStrategy::PartitionedDecomposed,
                     other => usage(&format!(
-                        "--strategy must be pooled|default|partitioned-decomposed|pd (got {other})"
+                        "--strategy must be pooled|partitioned-decomposed|pd (got {other})"
                     )),
                 }
             }

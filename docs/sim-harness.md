@@ -55,8 +55,8 @@ cargo run --release --example sim_export -- <item> <rate> [flags]
   --belt <entity>       max belt tier      --quality <name>   normal..legendary
   --stacking <1..4>     belt stacking      --inserter-cap <n> capacity level
   --inputs a,b,c        raw inputs (default: the six-ore set)
-  --row-layout <kind>   native (default) | horizontal-stack
-  --strategy <kind>     pooled (aka default) | partitioned-decomposed (aka pd)
+  --row-layout <kind>   native|vertical-split | horizontal-stack|hs
+  --strategy <kind>     pooled | partitioned-decomposed (aka pd)
   --duty <0..1>         planning duty (default 1.0; <1 needs --belt)
   --research-productivity <recipe=bonus,...>   declared research
   --label <name>        output subdir + manifest label
