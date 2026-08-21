@@ -25,9 +25,14 @@
 //! (`40fd48dc`, RFC-049 Phase 1, 2026-07-22 — the struct default WAS 0),
 //! and went stale two days later when #383 flipped the default to
 //! `common::DEFAULT_INSERTER_CAPACITY` = 2. Identical shape, identical
-//! cause. The e2e harness therefore differs from production defaults on
+//! cause. The e2e harness therefore differed from production defaults on
 //! TWO fields, not one, which is why `e2e-harness` below is its own
 //! option set rather than a synonym for `cells-off`.
+//!
+//! Past tense as of 2026-08-21: #689 track W2c killed both fossils and
+//! the harness now runs the `default` column. `e2e-harness` stays as the
+//! historical record the W2c re-blesses were adjudicated against — see
+//! the `OPTION_SETS` doc below.
 //!
 //! # What a cell records, and what it does not
 //!
@@ -272,7 +277,19 @@ const FIXTURES: &[Fixture] = &[
 /// `Off`) and `inserter_capacity: 0`; every other field it spells
 /// (`max_inserter_tier`, `quality`, `wire_mode`, `merge_tap`,
 /// `stacking`, `splitter_tap_spacers`) already equals its default.
-/// Re-run that diff if either fossil is ever fixed.
+///
+/// **Both fossils were killed on 2026-08-21 (#689 track W2c).** As of
+/// that PR the harness builds its options through
+/// `LayoutOptions::from_groups` and runs the `default` column, so
+/// `e2e-harness` no longer names a LIVE configuration — it names the
+/// HISTORICAL one the committed baseline was taken under, which is
+/// exactly what makes it the prediction the W2c re-blesses were
+/// adjudicated against. It is kept, not deleted: dropping it would
+/// silently re-take 32 cells and destroy the only record of what the
+/// fossilized suite decided. The baseline itself needed no re-bless —
+/// this file builds its option sets as closures over
+/// `LayoutOptions::default()` (below), never through `run_e2e`, so a
+/// change to the harness cannot move a cell here.
 ///
 /// The label names an OPTION SET, not a cell the harness runs (#694
 /// review round 3). It is applied across the whole machine sweep, so

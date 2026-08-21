@@ -1044,3 +1044,121 @@ fixtures / docs split per the churn norm).
   spaghettio_core -- -D warnings` clean, all PR CI checks (`rust`,
   `rust-clippy`, `web`, `second-opinion`, `deploy-preview`,
   `workflow-guard`) green on the prior commit.
+- *2026-08-21 — **W2c: both `run_e2e` fossils killed; the suite now runs
+  production defaults.** `run_e2e_inner` builds its `LayoutOptions` through
+  `LayoutOptions::from_groups` (the #696 scaffolding's first production
+  caller) via a new `harness_options(HarnessOptions { .. })` helper, so
+  every field the harness does not deliberately override is the engine's
+  own default. `cell_composition` `Off` → `Candidate`; `inserter_capacity`
+  `0` → `DEFAULT_INSERTER_CAPACITY` (2). `rfc060_sim_export`'s hand-copied
+  "mirror run_e2e_inner exactly" literal — which had ALREADY drifted, keeping
+  `inserter_capacity: 0` but not the cells fossil, so it matched neither the
+  harness nor production — now calls the same helper.
+
+  **Blast radius, measured by A/B rather than assumed.** Three full
+  `--test e2e` runs under the pinned CI zone cache: cells-fossil-killed
+  only, capacity-fossil-killed only, and both. The two effects are exactly
+  additive (the cap-only and both-fossils fingerprints differ in one
+  fixture, the one cells moves).
+  * **Capacity `0` → `2`** moves 6 of 8 golden hashes and 8 of 8 stress
+    hashes — every fixture with an inserter-fed row. It changes no
+    winner and no deciding stage anywhere. The two fluid-target goldens
+    (`tier3_sulfuric_acid`, `tier3_heavy_oil_cracking`) are the negative
+    control: byte-identical under both arms.
+  * **Cells `Off` → `Candidate`** moves exactly ONE layout in the whole
+    suite: `tier1_iron_gear_wheel_20s`, where `cell-composed` now wins the
+    outer selection (`SelectionDecided { winner: cell-composed, stage:
+    best-error-free }`, score 0.1129 vs native's 0.1081) — 148 entities /
+    47×8 → 105 / 38×14, same 12.3 % density, zero validation issues on
+    both. Everywhere else the cell-composed candidate runs, is scored, and
+    loses, exactly as RFC-051's "strictly additive" flip claimed.
+
+  **Adjudication against #694.** The corpus's `e2e-harness` → `default`
+  delta is 7 verdict-differing rows of 32: two winner changes
+  (`e2e_tier2_electronic_circuit_20s_from_ore`/am3 and
+  `tier2_ec_am1_10_ore`/am3, both native → direct-insertion, both
+  capacity-attributable — they also differ `cells-off` vs `e2e-harness`)
+  and five stage-only changes (`best-accepted` → `best-error-free`, winner
+  `native` throughout: `tier1_gear_am1` ×3 tiers, `tier3_plastic_cp_5`,
+  `e2e_tier3_plastic_bar_from_crude`), which are the cell-composed
+  candidate giving the `best-error-free` stage something to decide on
+  instead of falling through. **Both winner changes are at am3, a tier the
+  suite never invokes for those fixtures**, so the corpus predicts zero
+  winner changes among the (fixture, machine) pairs `e2e.rs` actually runs
+  — and zero materialized. 6 golden re-blesses, 1 warning-pin re-bless, 2
+  test re-pins; every one traced to the prediction or to the corpus hole
+  below. Prediction-match rate on corpus-covered fixtures: 5/5 (the four
+  golden-pinned fixtures with an exact corpus row, plus tier5's pin).
+
+  **FINDING — corpus hole.** The one winner change the flip produces,
+  `tier1_iron_gear_wheel_20s` (gear @ 20/s, am2, from iron-plate), has NO
+  row in the #694 corpus: the corpus carries gear @ 10/s (`tier1_gear_am1`,
+  `e2e_tier1_iron_gear_wheel_from_ore`) and nothing at 20/s. Its nearest
+  covered neighbours all predict `native`, so the corpus is not falsified
+  — it is silent, and the one cell where the campaign's headline flip
+  changes a shipped artifact is the cell it does not cover. Recommendation
+  for W3a: add gear@20/am2 to the corpus before the shadow loop gates on
+  it. Adjudicated on its own evidence instead: both arms error- and
+  warning-free, the winner is smaller and denser, so the re-bless stands.
+
+  **SECOND FINDING — the stage-5 policy this exposes.** On
+  `tier1_iron_gear_wheel_20s` the outer board records native with
+  `layout_warnings: 0` and cell-composed with `layout_warnings: 1`, and
+  `best-error-free` picks cell-composed anyway, on score. The stage
+  discriminates on ERRORS and then ranks on score; warnings do not
+  participate. That is a real property of today's precedence, surfaced
+  (not introduced) by this PR, and it is squarely W2b/`SelectionPolicy`
+  territory — recorded here rather than acted on.
+
+  **Two tests re-pinned, not overridden.** No test got a deliberate
+  old-behaviour override — the two that failed were asserting the fossil
+  itself, and pinning them to `cells-off` would have preserved the fossil
+  in precisely the two tests that describe the candidate set.
+  `decomposition_search_native_candidate_fires_trace_events` asserted
+  "exactly one `DecompositionCandidateScored` under Phase 0"; production
+  has run more than one candidate since RFC-051 Phase B / RFC-053, so the
+  assertion was true only of the fossilized set. It now pins the set #694
+  records for this exact fixture — `native` accepted, `cell-composed`
+  present, `native` winning the outer selection — which makes it a
+  behavioural tripwire on re-fossilization as well as a smoke test.
+  `decomposition_search_picks_native_on_clean_partitioned_case` asserted
+  native was the ONLY candidate scored, reasoning "sequential dispatch,
+  search exits early once native is accepted"; that reasoning describes a
+  candidate set nothing ships. Its K-DS1-1 content — native wins the clean
+  case, `size-split-2` is not paid for on it — survives verbatim.
+
+  **New non-ignored guard**: `harness_options_are_engine_defaults` compares
+  all three group views against the engine's own defaults and names both
+  fossils individually. Discrimination check EXECUTED twice: re-spelling
+  `cell_composition: Default::default()` inside the `SearchAxes` literal
+  fails it (`cell_composition: Off` vs `Candidate`), and the capacity-arm
+  A/B run failed it on `inserter_capacity: 0` vs `2` without being asked
+  to. Both reverted and re-verified green.
+
+  **tier5's warning pin (`input-rate-delivery 13 → 10`)** is the suite's
+  only pin movement, and it is NOT a check going quiet: both issue lists
+  were decoded from snapshots and diffed instance by instance. Ten rows
+  reading "across 2 inserters" at capacity 0 read "across 1 inserter" at
+  capacity 2 (one L2 hand replaces two L0 hands, so the row places fewer,
+  fatter inserters); seven equivalent warnings re-appear at shifted
+  coordinates. Every survivor still carries its own position and its own
+  delivered-vs-needed pair. The fixture's known deficits are untouched, as
+  is the meter's open #644 reading. Stress scoreboards moved the same
+  direction (warnings fell on 3 of 8, entity counts fell on all 8, errors
+  stayed 0; no category went to zero) — the baselines are `≤` ceilings, so
+  none required a re-bless and none were loosened.
+
+  **Corpus baseline NOT re-blessed, verified at source** (the W2c brief
+  asked for this check explicitly): `parity_corpus.rs` builds its option
+  sets as closures over `LayoutOptions::default()` in `OPTION_SETS`, never
+  through `run_e2e`, so no cell can move when the harness changes. The
+  `e2e-harness` column is now a HISTORICAL record rather than a live
+  configuration; kept, not deleted, because it is the only record of what
+  the fossilized suite decided — the file's doc comments were updated to
+  say so instead of continuing to claim a present-tense fossil.
+
+  **Pre-existing flake noted, not caused**: `tier2_electronic_circuit_20s_from_ore`
+  carries `#[ntest::timeout(10000)]` and tripped it at 10003 ms on the
+  BASELINE (pre-change) parallel run while passing solo in 0.63 s. It
+  passed on every post-change run. Wall-clock timeouts on a loaded box are
+  a suite-wide hazard the extra candidate makes marginally worse.

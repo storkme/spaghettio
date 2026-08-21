@@ -314,6 +314,109 @@ fn run_e2e_with_exclusions_and_surplus_policy(
     )
 }
 
+/// The knobs a `run_e2e*` caller may vary. Everything NOT listed here is
+/// the engine's shipped default, by construction — see [`harness_options`].
+///
+/// `Default` is deliberately **manual and derived from the engine's own
+/// group defaults at runtime** rather than `#[derive(Default)]`. A derived
+/// impl would give `horizontal_candidate: false` (the `bool` default),
+/// which is not the engine default (`true`) — i.e. it would recreate the
+/// exact class of bug this struct exists to kill, one level up.
+struct HarnessOptions<'a> {
+    belt_tier: Option<&'a str>,
+    strategy: layout::LayoutStrategy,
+    row_layout: layout::RowLayout,
+    surplus_policy: layout::SurplusPolicy,
+    horizontal_candidate: bool,
+}
+
+impl Default for HarnessOptions<'_> {
+    fn default() -> Self {
+        // Read through the engine's group defaults, never re-spelled here:
+        // if a default flips, this follows it with no edit.
+        let axes = layout::SearchAxes::default();
+        let constraints = layout::UserConstraints::default();
+        Self {
+            belt_tier: None,
+            strategy: axes.strategy,
+            row_layout: axes.row_layout,
+            surplus_policy: constraints.surplus_policy,
+            horizontal_candidate: axes.horizontal_candidate,
+        }
+    }
+}
+
+/// Build the `LayoutOptions` every `run_e2e*` fixture runs under: **true
+/// engine defaults**, overridden only where a test's own parameters say so.
+///
+/// RFC-070 W2c (#689). This replaced a flat `LayoutOptions` struct literal
+/// that carried TWO fossils — fields spelled `Default::default()` or a
+/// literal that were correct when written and went stale when the engine
+/// default moved underneath them:
+///
+/// * `cell_composition: Default::default()` → the ENUM's `#[default]`,
+///   `Off`, next to a `..Default::default()` that would have given the
+///   STRUCT default, `Candidate` (flipped by RFC-051 Phase B, 2026-07-22).
+///   The suite therefore never exercised the cell-composed candidate arm.
+/// * `inserter_capacity: 0` → correct at RFC-049 Phase 1 (`40fd48dc`), stale
+///   two days later when #383 flipped the default to
+///   `common::DEFAULT_INSERTER_CAPACITY` = 2. The suite ran a different
+///   inserter ladder than production.
+///
+/// Both are dead here: [`LayoutOptions::from_groups`] takes whole groups,
+/// and each group's `Default` is a MANUAL impl that matches the engine
+/// defaults field for field (`bus::layout`'s field legend, "the fossil this
+/// split guards against"). The remaining rule for anyone editing this
+/// function: **never spell `field: Default::default()` inside one of these
+/// group literals.** Per-field `Default::default()` resolves to that
+/// field's own type's default and silently ignores the `..Default::default()`
+/// spread — that is the trap, and it is still reachable one level down.
+/// Spell a real value, or leave the field to the spread.
+fn harness_options(o: HarnessOptions<'_>) -> layout::LayoutOptions {
+    layout::LayoutOptions::from_groups(
+        layout::UserConstraints {
+            max_belt_tier: o.belt_tier.map(|s| s.to_string()),
+            surplus_policy: o.surplus_policy,
+            ..Default::default()
+        },
+        layout::SearchAxes {
+            strategy: o.strategy,
+            row_layout: o.row_layout,
+            horizontal_candidate: o.horizontal_candidate,
+            ..Default::default()
+        },
+        layout::EngineTuning::default(),
+    )
+}
+
+/// The guard on [`harness_options`]: with nothing overridden, the harness
+/// must run EXACTLY what production ships. Both RFC-070 W2c fossils are
+/// named individually as well as covered by the group comparison, because
+/// the whole failure mode was that a stale value looks like a deliberate
+/// one — a reader of a group assert cannot tell which field regressed.
+///
+/// Non-ignored and free: no solve, no layout. Restoring either fossil
+/// fails it (checked by doing so, RFC-070 W2c).
+#[test]
+fn harness_options_are_engine_defaults() {
+    let o = harness_options(HarnessOptions::default());
+    assert_eq!(o.constraints(), layout::UserConstraints::default(), "user-pinned group drifted");
+    assert_eq!(o.axes(), layout::SearchAxes::default(), "search-axis group drifted");
+    assert_eq!(o.engine_tuning(), layout::EngineTuning::default(), "engine-tuning group drifted");
+    assert_eq!(
+        o.cell_composition,
+        spaghettio_core::bus::cells::CellComposition::Candidate,
+        "cells-off fossil is back (RFC-070 W2c): the suite would stop exercising \
+         the cell-composed candidate arm and nothing else would notice",
+    );
+    assert_eq!(
+        o.inserter_capacity,
+        spaghettio_core::common::DEFAULT_INSERTER_CAPACITY,
+        "inserter_capacity fossil is back (RFC-070 W2c): the suite would run a \
+         different inserter ladder than production",
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_e2e_inner(
     test_name: &str,
@@ -339,25 +442,13 @@ fn run_e2e_inner(
             msg
         })?;
 
-    let layout = layout::build_bus_layout(
-        &solver_result,
-        layout::LayoutOptions {
-            strategy,
-            surplus_policy,
-            max_belt_tier: belt_tier.map(|s| s.to_string()),
-            row_layout,
-            max_inserter_tier: Default::default(),
-            quality: Default::default(),
-            wire_mode: Default::default(),
-            merge_tap: false,
-            stacking: 1,
-            inserter_capacity: 0,
-            cell_composition: Default::default(),
-            splitter_tap_spacers: false,
-            horizontal_candidate,
-            ..Default::default()
-        },
-    )
+    let layout = layout::build_bus_layout(&solver_result, harness_options(HarnessOptions {
+        belt_tier,
+        strategy,
+        row_layout,
+        surplus_policy,
+        horizontal_candidate,
+    }))
         .map_err(|e| {
             let msg = format!("layout: {e}");
             dump_partial_snapshot(test_name, &run_params, Some(&solver_result), &msg);
@@ -672,9 +763,25 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // that cover single_input_row-shaped fixtures moved even though entity
     // COUNT and layout geometry (KC4) stayed byte-identical — only the
     // inserter entity NAMES at the same positions changed.
-    ("tier1_iron_gear_wheel", "61ae6bb3babd5e5921e4ca3351664903444614ef9bd57e3579f08a9b2d12e503"),
-    ("tier1_iron_gear_wheel_from_ore", "7e7fbc36c596e237a8aa6838d2095f03a67284392085d8af4b6dea96af4d1f61"),
-    ("tier1_iron_gear_wheel_20s", "d00a81cb51d646c3755b5f7d5659a6f31f1cbfcdeb21ab2303c1dfd3b2121c02"),
+    // RFC-070 W2c (#689): re-blessed when `run_e2e` stopped pinning
+    // `inserter_capacity: 0` and started running production's L2 default.
+    // A capacity-2 hand moves ~2x per swing, so the sizing ladder needs
+    // fewer inserters per machine side and places different entities —
+    // the SAME re-bless class as the rfc-inserter-sizing note above.
+    // Attribution is measured, not assumed: an A/B that killed only the
+    // cells fossil left the next two entries byte-identical; killing
+    // only the capacity fossil moved all three.
+    ("tier1_iron_gear_wheel", "ffb66596f449156e3844d9bf23d004361b76c1c011c4746dd5cefa3131160285"),
+    ("tier1_iron_gear_wheel_from_ore", "a688889d2beb81ba3adbf0a9ec5f7f070a240db9800d21a383bd2ddfc0c7e8e4"),
+    // …except this one, which moved under BOTH arms, because it is the
+    // single fixture in the suite whose WINNER changes: with the
+    // cell-composed candidate restored to the search it wins the outer
+    // selection (`SelectionDecided { winner: cell-composed, stage:
+    // best-error-free }`, score 0.1129 vs native's 0.1081), taking the
+    // fixture from 148 entities / 47x8 to 105 / 38x14 at the same 12.3%
+    // density and the same ZERO validation issues. #694's corpus does
+    // not cover gear@20/s — see the W2c finding in the RFC decision log.
+    ("tier1_iron_gear_wheel_20s", "8ab74dc08c91cd8d13faf0a376c0c3eabe9b21df3a80f3b5a3768f89371d794c"),
     // Updated when `(m, m)` family balancers became passthroughs
     // (issue #268) — splitter blocks replaced by a single south-facing
     // belt per output column.
@@ -682,7 +789,11 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // copper-plate) ladder-sized, see note above.
     // RFC rfc-inserter-sizing.md Phase 2: dual_input_row (this fixture's EC
     // row is dual-input) is now ladder-sized + near/far reassigned.
-    ("tier2_electronic_circuit_from_ore", "0ae4d39372e33cf6c82dc96404a5f05b5a3b9888c2cea1f65ef542caeb91f182"),
+    // RFC-070 W2c: inserter-capacity re-bless (see the note above);
+    // winner + stage unchanged, as #694 predicts for
+    // `e2e_tier2_electronic_circuit_from_ore` @ am1 (native /
+    // best-error-free under both `e2e-harness` and `default`).
+    ("tier2_electronic_circuit_from_ore", "8db994a14cba2abdece21fe705ecd110c48bd572fa91adf79b2b4839a9e394e0"),
     // Hashes below changed when row inputs were switched to always
     // use `max_belt_tier` instead of per-row consumption rate (fixes
     // tier-mismatch seam where bus tap-off feeds row belt-in).
@@ -692,13 +803,21 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // RFC rfc-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
     // RFC rfc-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
     // RFC rfc-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
-    ("tier2_electronic_circuit_20s_from_ore", "7a23126d5f857d22db9374cc6269eb9ea2d7bdb2a69c6dc34f60f322cc63e134"),
+    // RFC-070 W2c: inserter-capacity re-bless. #694 predicts winner +
+    // stage hold at am2 (the tier this test runs) — the corpus's winner
+    // change on this fixture is at am3, which the suite never invokes.
+    ("tier2_electronic_circuit_20s_from_ore", "428fd17294c0d2b50a2217abf29b4e1ed723e23b04da4b89a9188608266d59e0"),
     // (RFC-047 Leg B: `tier2_electronic_circuit_splitter_stamp_regression`
     // no longer builds — it is now a named-refusal guard — so its golden
     // hash entry was removed.)
     // RFC rfc-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (coal) is now ladder-sized. Reaches fully clean.
-    ("tier3_plastic_bar", "bb1cccc422f0e44bfdb1d18ef59d870d71d8fe5d7147b659e7b388c79a526166"),
+    // RFC-070 W2c: inserter-capacity re-bless (the coal side is the
+    // ladder-sized one). The two fluid-target fixtures below are the
+    // negative control on this whole re-bless: they did NOT move under
+    // either fossil kill, and they are the only two golden-pinned
+    // fixtures that didn't.
+    ("tier3_plastic_bar", "847a0cf0ba7c7d8d54bd3a6f1630b1d8e7ac5efad78978f86435387e070d5758"),
     // RFC rfc-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (iron-plate) is now ladder-sized — this fixture (sulfuric-acid:
     // iron-plate + water) is exactly that shape. Stays fully clean
@@ -860,8 +979,18 @@ fn tier1_iron_gear_wheel() {
 /// (`docs/rfc-decomposition-search.md`). Confirms the layer is
 /// actually exercising — not just compiling but emitting the
 /// `DecompositionCandidateScored` and `DecompositionChosen` trace
-/// events. With Phase 0's single `NativeCandidate`, exactly one of
-/// each fires per layout call.
+/// events.
+///
+/// RFC-070 W2c re-pin. This used to assert "exactly one of each fires",
+/// citing Phase 0's single `NativeCandidate`. That claim stopped being
+/// true of PRODUCTION at RFC-051 Phase B and RFC-053; it kept passing
+/// only because `run_e2e` pinned `cell_composition: Off` (the fossil this
+/// track killed). The candidate set this fixture really runs is the one
+/// #694's parity corpus records for `tier1_gear_am1` @ am1 under
+/// `default`: `native` produced, `cell-composed` produced, deciding stage
+/// `best-error-free`, winner `native`. The assertions below now pin THAT
+/// — including cell-composed's presence, so a re-fossilization fails here
+/// as well as at `harness_options_are_engine_defaults`.
 #[test]
 #[ntest::timeout(10000)]
 fn decomposition_search_native_candidate_fires_trace_events() {
@@ -891,26 +1020,52 @@ fn decomposition_search_native_candidate_fires_trace_events() {
         })
         .collect();
 
-    assert_eq!(scored.len(), 1,
-        "expected exactly one DecompositionCandidateScored event under Phase 0; got {scored:?}");
-    assert_eq!(scored[0].0, "native", "expected `native` candidate; got {:?}", scored[0].0);
-    assert!(scored[0].1, "Phase 0 stub should always accept");
+    // `native` is scored and accepted — the layer is wired up at all.
+    assert!(
+        scored.iter().any(|(n, accepted)| n == "native" && *accepted),
+        "expected an accepted `native` candidate; got {scored:?}",
+    );
+    // …and so is `cell-composed`, because production's default candidate
+    // set includes it (#694: `tier1_gear_am1` / am1 / `default`). This
+    // assertion is the behavioural half of the W2c fossil guard: it fails
+    // if anything pins the harness back to `cell_composition: Off`.
+    assert!(
+        scored.iter().any(|(n, _)| n == "cell-composed"),
+        "expected the `cell-composed` candidate to run under production defaults \
+         (#694 records it as `produced` for this fixture) — if it is missing, the \
+         harness has been re-pinned to a candidate set nothing ships; got {scored:?}",
+    );
 
-    assert_eq!(chosen.len(), 1,
-        "expected exactly one DecompositionChosen event; got {chosen:?}");
-    assert_eq!(chosen[0], "native", "expected `native` to win; got {:?}", chosen[0]);
+    // The cell-composed candidate runs a NESTED selection of its own, and
+    // its rows land in the same flat event stream (RFC-070 oracle gap (g)),
+    // so the OUTER selection's terminal is the LAST `DecompositionChosen`,
+    // not the only one.
+    assert!(!chosen.is_empty(), "expected at least one DecompositionChosen event");
+    assert_eq!(
+        chosen.last().map(String::as_str),
+        Some("native"),
+        "expected `native` to win the outer selection (#694: winner `native`, stage \
+         `best-error-free`); got {chosen:?}",
+    );
 }
 
 /// K-DS1-1 from `docs/rfc-decomposition-search.md`: on cases where
 /// Native produces a clean layout (no `missing-balancer-template`
-/// warnings), the search must pick `NativeCandidate`. With sequential
-/// dispatch — Native runs first, search exits early if Native is
-/// accepted — this is true by construction; the test guards against
-/// future changes that would remove that property.
+/// warnings), the search must pick `NativeCandidate`.
 ///
 /// Runs `tier3_plastic_bar` under `PartitionedDecomposed` because
 /// that's the strategy where `ModuleSizeSplit` becomes a possible
 /// competitor (under `Pooled` it's never added to the candidate list).
+///
+/// RFC-070 W2c re-pin. The old version also asserted that `native` was
+/// the ONLY candidate scored, on the reasoning that "sequential dispatch
+/// — Native runs first, search exits early if Native is accepted — makes
+/// this true by construction". That reasoning describes a candidate set
+/// nothing ships: under production defaults `cell-composed` runs here too
+/// and native still wins, so the early-exit-on-native claim was an
+/// artifact of the `cell_composition: Off` fossil, not a property of the
+/// search. What K-DS1-1 actually asserts — native wins the clean case,
+/// and `size-split-2` is not paid for on it — survives verbatim below.
 #[test]
 #[ntest::timeout(30000)]
 fn decomposition_search_picks_native_on_clean_partitioned_case() {
@@ -937,26 +1092,34 @@ fn decomposition_search_picks_native_on_clean_partitioned_case() {
             _ => None,
         })
         .collect();
-    assert_eq!(chosen.len(), 1, "expected one DecompositionChosen event; got {chosen:?}");
+    // The last terminal is the outer selection's — nested candidate
+    // selections emit their own (RFC-070 oracle gap (g)).
+    assert!(!chosen.is_empty(), "expected at least one DecompositionChosen event");
     assert_eq!(
-        chosen[0], "native",
+        chosen.last().map(String::as_str),
+        Some("native"),
         "K-DS1-1: search must pick `native` when Native produces a clean layout; \
-         got {:?}. If a non-Native candidate won, scoring or acceptance is wrong.",
-        chosen[0]
+         got {chosen:?}. If a non-Native candidate won, scoring or acceptance is wrong.",
     );
 
-    // ModuleSizeSplit should not have run at all (sequential dispatch:
-    // Native accepted → search exits). Confirms the runtime cost of the
-    // candidate is paid only on cases that need it.
+    // ModuleSizeSplit must not have run: it is the candidate this
+    // strategy makes *available*, and a clean native case must not pay
+    // for it. (Unlike the old form, this does not claim to be the only
+    // candidate that ran — `cell-composed` does, and always did in
+    // production.)
     let scored_names: Vec<_> = result.trace_events.iter()
         .filter_map(|e| match e {
             TraceEvent::DecompositionCandidateScored { name, .. } => Some(name.clone()),
             _ => None,
         })
         .collect();
-    assert_eq!(
-        scored_names, vec!["native".to_string()],
-        "expected only `native` to be scored on a clean case; got {scored_names:?}"
+    assert!(
+        scored_names.iter().any(|n| n == "native"),
+        "expected `native` to be scored; got {scored_names:?}",
+    );
+    assert!(
+        !scored_names.iter().any(|n| n == "size-split-2"),
+        "K-DS1-1: `size-split-2` must not run on a clean native case; got {scored_names:?}",
     );
 }
 
@@ -2755,6 +2918,26 @@ fn tier5_processing_unit_from_ore_am3() {
     // to Error). A SECOND detour appearing here would mean the width
     // grew again — re-trace with the same instrument rather than
     // re-blessing.
+    //
+    // 2026-08-21 (RFC-070 W2c, #689) — ADJUDICATION for
+    // `input-rate-delivery 13 -> 10`. This is the ONLY warning pin in the
+    // suite that moved when `run_e2e` stopped pinning
+    // `inserter_capacity: 0` and started running production's L2 default
+    // (2). Attributed by A/B: killing only the cells fossil leaves this
+    // pin at 13; killing only the capacity fossil takes it to 10.
+    //
+    // NOT a check going quiet (docs/validator-reporting.md). Both issue
+    // lists were decoded from snapshots and diffed instance by instance:
+    // ten iron-plate/copper-cable rows that read "across 2 inserters" at
+    // capacity 0 read "across 1 inserter" at capacity 2 — one L2 hand
+    // does the work of two L0 hands, so the row geometry places fewer,
+    // fatter inserters — and seven equivalent warnings re-appear at the
+    // shifted coordinates. Net 13 -> 10; every surviving warning still
+    // carries its own position and its own delivered-vs-needed pair
+    // (e.g. "(50,164) delivers 0.0/s but machine needs 2.4/s"). The
+    // fixture's known deficits are NOT resolved by this change and the
+    // meter's open reading on #644 is untouched: what changed is that
+    // the pin now describes the configuration production ships.
     assert_warnings_golden(&result, "tier5_processing_unit_from_ore_am3");
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
@@ -8972,7 +9155,12 @@ fn rfc060_sim_export() {
         for (arm, candidate) in [("on", true), ("off", false)] {
             let label = format!("{}-{}", case.name, arm);
             // Mirror run_e2e_inner exactly so the artifacts match the
-            // sweep's layouts bit for bit.
+            // sweep's layouts bit for bit. Since RFC-070 W2c that is
+            // enforced by calling the same `harness_options` builder,
+            // not by a hand-copied struct literal — the copy here had
+            // ALREADY drifted (it kept `inserter_capacity: 0` but not
+            // the cells-off fossil, so it matched neither the harness
+            // nor production).
             let solved = match solver::solve_with_exclusions(
                 case.item, case.rate, &inputs, case.machine, &FxHashSet::default(),
             ) {
@@ -8984,15 +9172,11 @@ fn rfc060_sim_export() {
             };
             let lay = match layout::build_bus_layout(
                 &solved,
-                layout::LayoutOptions {
-                    max_belt_tier: case.belt_tier.map(|s| s.to_string()),
-                    merge_tap: false,
-                    stacking: 1,
-                    inserter_capacity: 0,
-                    splitter_tap_spacers: false,
+                harness_options(HarnessOptions {
+                    belt_tier: case.belt_tier,
                     horizontal_candidate: candidate,
                     ..Default::default()
-                },
+                }),
             ) {
                 Ok(l) => l,
                 Err(e) => {
