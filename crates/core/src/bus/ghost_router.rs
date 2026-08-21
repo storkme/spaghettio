@@ -2890,6 +2890,18 @@ pub fn route_bus_ghost(
     // used to scrape from the trace collector — without needing a trace guard.
     let mut cap_coords: Vec<(i32, i32)> = Vec::new();
 
+    // Census-only instrumentation (offpath-code-followups.md G1 follow-up,
+    // #689 W1d): checked ONCE per `route_bus_ghost` call, outside the
+    // cluster loop, rather than per cluster (the `dump_region_fixture`
+    // precedent's per-call env lookup, hoisted one level further). Off by
+    // default — the shipped web path (`build_bus_layout_streaming`)
+    // always installs a trace collector *and* sink, so gating on
+    // `trace::is_active()` alone would not skip this in production; an
+    // explicit opt-in env var is what actually makes it zero-cost by
+    // default (round 1 review finding).
+    let junction_seed_census_enabled =
+        std::env::var_os("SPAGHETTIO_JUNCTION_SEED_CENSUS").is_some();
+
     for cluster in &clusters {
         // `corridor_handled` grows during this loop — a prior cluster's
         // SAT footprint may have absorbed tiles that belong to this
@@ -2966,17 +2978,28 @@ pub fn route_bus_ghost(
 
         // Census-only instrumentation (offpath-code-followups.md G1
         // follow-up, #689 W1d): record this seed's shape before it reaches
-        // `solve_crossing`. Purely observational — `trace::emit` is a
-        // no-op unless a collector/sink is active, so this cannot change
-        // routing. `has_pipe` is measured over the RAW spec set touching
-        // the cluster's tiles, i.e. BEFORE the `SpecKind::Pipe` filter
-        // above runs, so it can actually detect pipe presence instead of
+        // `solve_crossing`. Purely observational and gated behind
+        // `junction_seed_census_enabled` (checked once above, not per
+        // cluster) — off by default, so production pays nothing beyond
+        // the one hoisted env lookup per `route_bus_ghost` call.
+        // `has_pipe` is measured over the RAW spec set touching the
+        // cluster's tiles, i.e. BEFORE the `SpecKind::Pipe` filter above
+        // runs, so it can actually detect pipe presence instead of
         // trivially reading false through the filter that excludes them.
-        {
+        if junction_seed_census_enabled {
             let n_specs = keys_at_tile.len();
             let n_distinct_items: usize = keys_at_tile
                 .iter()
-                .filter_map(|&key| spec_items.get(key).map(|s| s.as_str()))
+                // Fall back to the spec's own key (unique by construction)
+                // rather than dropping a key missing from `spec_items` —
+                // dropping would silently undercount `n_distinct_items`
+                // and manufacture a false same-item pair (round 1 review
+                // finding). A missing entry is not expected (synthetic
+                // trunk keys populate `spec_items` at insertion, same as
+                // `routed_paths`), but this keeps a violated invariant
+                // from quietly biasing the census instead of crashing the
+                // routing hot path this instrumentation must never affect.
+                .map(|&key| spec_items.get(key).map(|s| s.as_str()).unwrap_or(key))
                 .collect::<FxHashSet<&str>>()
                 .len();
             let has_pipe = routed_paths.iter().any(|(key, path)| {
@@ -2989,6 +3012,7 @@ pub fn route_bus_ghost(
             trace::emit(trace::TraceEvent::JunctionSeedCensus {
                 seed_x: cluster[0].0,
                 seed_y: cluster[0].1,
+                cluster_tile_count: cluster.len(),
                 n_specs,
                 n_distinct_items,
                 has_pipe,

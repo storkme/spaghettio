@@ -18,9 +18,28 @@
 //! `ghost_router`'s cluster loop — every `keys_at_tile` computation that
 //! survives the `corridor_handled`/`any_undecidable` skips and reaches
 //! `junction_solver::solve_crossing` (`crates/core/src/bus/ghost_router.rs`,
-//! right after `keys_at_tile` is built). Purely observational —
-//! `trace::emit` is a no-op unless a collector/sink is active on the
-//! thread, so adding it cannot change routing.
+//! right after `keys_at_tile` is built). Purely observational — the emit
+//! site is gated behind `SPAGHETTIO_JUNCTION_SEED_CENSUS` (checked once
+//! per `route_bus_ghost` call, off by default), so this test must set
+//! that env var, and production pays nothing without it (round 1 review
+//! finding: the shipped web path always has a trace collector *and* sink
+//! active, so gating on "is tracing active" alone would not have made
+//! this zero-cost there).
+//!
+//! **Methodology note (round 1 review finding, corrected here):**
+//! `n_specs`/`n_distinct_items` are CLUSTER-WIDE — the union of every
+//! spec whose path touches ANY tile in the seed's cluster, which can
+//! already span multiple tiles before `solve_crossing`'s own growth. So
+//! `n_specs > n_distinct_items` on a multi-tile cluster means "this
+//! cluster's participants include an item-sharing pair somewhere in it",
+//! NOT "one tile has two same-item specs" — the rung's actual
+//! `tile_count == 1` predicate. `cluster_tile_count` (also recorded)
+//! disambiguates: when it's `1`, the cluster IS a single tile, so
+//! `keys_at_tile` is exactly that tile's spec set and `n_specs >
+//! n_distinct_items` becomes a true single-tile same-item crossing. This
+//! census reports BOTH numbers — single-tile (the precise answer to the
+//! rung's own question) and multi-tile cluster-wide (a weaker, separate
+//! signal) — rather than conflating them into one count.
 //!
 //! Corpus (stated exactly, per the W1d brief): the same six tier-ladder
 //! fixtures `check_firing_census.rs` uses (G2's hardcoded slice — kept
@@ -58,6 +77,15 @@ use spaghettio_core::trace::{self, TraceEvent};
 #[test]
 #[ignore = "G1 diagnostic census — run with --ignored --nocapture; see module doc for the zone-cache pin"]
 fn junction_seed_census() {
+    // The emit site is gated behind this env var (off by default in
+    // production — round 1 review finding). Set it for the duration of
+    // this test only.
+    // SAFETY: single-threaded test binary process for this env mutation;
+    // no other thread reads/writes process env concurrently here.
+    unsafe {
+        std::env::set_var("SPAGHETTIO_JUNCTION_SEED_CENSUS", "1");
+    }
+
     // (label, item, rate, machine, belt_tier, inputs)
     #[allow(clippy::type_complexity)]
     let fixtures: &[(&str, &str, f64, &str, Option<&str>, &[&str])] = &[
@@ -135,11 +163,18 @@ fn junction_seed_census() {
         ),
     ];
 
-    // (n_specs, n_distinct_items) -> occurrence count across the corpus.
-    let mut table: std::collections::BTreeMap<(usize, usize), usize> = Default::default();
+    // (cluster_tile_count, n_specs, n_distinct_items) -> occurrence count.
+    let mut table: std::collections::BTreeMap<(usize, usize, usize), usize> = Default::default();
     let mut total_seeds = 0usize;
     let mut pipe_tagged_seeds = 0usize;
-    let mut same_item_seeds: Vec<(String, i32, i32, usize, usize)> = Vec::new();
+    // Precise answer: single-tile clusters (cluster_tile_count == 1) where
+    // the tile's own spec set has a same-item pair. This is exactly the
+    // rung's own predicate shape.
+    let mut same_item_single_tile: Vec<(String, i32, i32, usize, usize)> = Vec::new();
+    // Weaker signal: multi-tile clusters whose UNION of participants
+    // includes an item-sharing pair somewhere in the cluster — NOT
+    // evidence any one tile has two same-item specs.
+    let mut same_item_multi_tile_union: Vec<(String, i32, i32, usize, usize, usize)> = Vec::new();
     let mut builds_ok = 0usize;
     let mut builds_refused = 0usize;
     let mut solver_skipped = 0usize;
@@ -173,15 +208,34 @@ fn junction_seed_census() {
             }
         }
         for ev in &events {
-            if let TraceEvent::JunctionSeedCensus { seed_x, seed_y, n_specs, n_distinct_items, has_pipe } = ev
+            if let TraceEvent::JunctionSeedCensus {
+                seed_x,
+                seed_y,
+                cluster_tile_count,
+                n_specs,
+                n_distinct_items,
+                has_pipe,
+            } = ev
             {
                 total_seeds += 1;
-                *table.entry((*n_specs, *n_distinct_items)).or_insert(0) += 1;
+                *table.entry((*cluster_tile_count, *n_specs, *n_distinct_items)).or_insert(0) += 1;
                 if *has_pipe {
                     pipe_tagged_seeds += 1;
                 }
                 if *n_specs > *n_distinct_items {
-                    same_item_seeds.push((label.to_string(), *seed_x, *seed_y, *n_specs, *n_distinct_items));
+                    if *cluster_tile_count == 1 {
+                        same_item_single_tile
+                            .push((label.to_string(), *seed_x, *seed_y, *n_specs, *n_distinct_items));
+                    } else {
+                        same_item_multi_tile_union.push((
+                            label.to_string(),
+                            *seed_x,
+                            *seed_y,
+                            *cluster_tile_count,
+                            *n_specs,
+                            *n_distinct_items,
+                        ));
+                    }
                 }
             }
         }
@@ -191,9 +245,9 @@ fn junction_seed_census() {
         "\n=== junction seed census: {total_seeds} seeds across {} fixtures ({builds_ok} built, {builds_refused} refused, {solver_skipped} solver-skipped) ===",
         fixtures.len()
     );
-    println!("{:>8} {:>9} {:>7}", "n_specs", "distinct", "count");
-    for ((n_specs, n_distinct), count) in &table {
-        println!("{n_specs:>8} {n_distinct:>9} {count:>7}");
+    println!("{:>7} {:>8} {:>9} {:>7}", "tiles", "n_specs", "distinct", "count");
+    for ((tiles, n_specs, n_distinct), count) in &table {
+        println!("{tiles:>7} {n_specs:>8} {n_distinct:>9} {count:>7}");
     }
     println!(
         "\npipe-tagged seeds (measured on the RAW spec set at each cluster's \
@@ -203,11 +257,22 @@ fn junction_seed_census() {
          just always get filtered before solve_crossing): {pipe_tagged_seeds}"
     );
     println!(
-        "\nsame-item seeds (n_specs > n_distinct_items — the G1 open \
-         question, same-item belt crossings seeding junctions): {}",
-        same_item_seeds.len()
+        "\nsame-item SINGLE-TILE seeds (cluster_tile_count == 1 AND n_specs \
+         > n_distinct_items — the precise answer to the G1 question, the \
+         rung's own tile_count==1 predicate shape): {}",
+        same_item_single_tile.len()
     );
-    for (label, x, y, n_specs, n_distinct) in &same_item_seeds {
+    for (label, x, y, n_specs, n_distinct) in &same_item_single_tile {
         println!("  {label} @ ({x},{y}): {n_specs} specs, {n_distinct} distinct items");
+    }
+    println!(
+        "\nsame-item MULTI-TILE cluster-wide seeds (cluster_tile_count > 1 \
+         AND the cluster's participant UNION has an item-sharing pair \
+         somewhere in it — NOT evidence any single tile has two same-item \
+         specs; see the module doc's methodology note): {}",
+        same_item_multi_tile_union.len()
+    );
+    for (label, x, y, tiles, n_specs, n_distinct) in &same_item_multi_tile_union {
+        println!("  {label} @ ({x},{y}): {tiles} tiles, {n_specs} specs, {n_distinct} distinct items");
     }
 }

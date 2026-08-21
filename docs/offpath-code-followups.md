@@ -251,40 +251,54 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
        reworked to let the cheap template actually fire. Don't delete on
        this note alone; run the census.
     3. **Census run 2026-08-21 (#689 W1d, `crates/core/tests/
-       junction_seed_census.rs`) — same-item crossings DO occur; rung
-       reachability is still NOT established.** New behavior-neutral
-       `TraceEvent::JunctionSeedCensus` (`trace.rs`) fires once per
-       `ghost_router` cluster seed, right where `keys_at_tile` is built,
-       recording `n_specs`/`n_distinct_items`/`has_pipe`. Corpus: the
-       same six tier-ladder fixtures `check_firing_census.rs` uses, plus
-       the six e2e "from-ore" fixtures listed in the test's module doc
-       (12 fixtures total, default `LayoutOptions` + each fixture's own
-       belt-tier constraint; SAT zone cache pinned to
-       `sat-zones-ci.bin`). Result: **111 seeds; 66 have `n_specs >
-       n_distinct_items`** (a same-item pair among the seed's specs) —
-       far from zero, so the "never occurs" branch of point 1's
-       either/or does NOT hold. But the qualifier matters: **every one of
-       the 66 is a 3-or-more-spec cluster** (the full table has no
-       `(n_specs=2, n_distinct=1)` row at all — zero instances of the
-       rung's own narrow shape, an isolated 2-spec single-tile crossing
-       where both specs share an item). This census measures the SEED as
-       formed at cluster construction, not what `junction_solver`'s
-       growth/strategy-dispatch loop does with it afterward — it cannot
-       say whether the rung's `tile_count == 1` / 2-spec predicate is
-       ever met by a subset of one of these larger clusters mid-growth.
-       So: item-sharing at seed time is common, but the rung's specific
-       firing precondition remains unobserved in this corpus. Also
-       recorded: 11 seeds have `has_pipe = true` (measured on the raw
-       spec set BEFORE the pipe filter) — corroborating point 1's
-       pipe×belt finding rather than contradicting it (these are exactly
-       the corpus's 11 single-spec seeds, the belt-crosses-a-placed-pipe
-       bypass path; the pipe itself never reaches `keys_at_tile`). Net:
-       **neither deletion nor a gate rework is justified by this census
-       alone** — the open question narrows to "does the item-conflict
-       gate or the rung's tile_count==1 guard ever see a same-item pair
-       in isolation," which needs growth-loop instrumentation, not a
-       seed-level census. CENSUS-ONLY per its own charter: no gate or
-       control flow changed.
+       junction_seed_census.rs`) — zero single-tile same-item crossings
+       observed; multi-tile item-sharing is common but is a different
+       question.** New behavior-neutral `TraceEvent::JunctionSeedCensus`
+       (`trace.rs`, gated behind `SPAGHETTIO_JUNCTION_SEED_CENSUS`, off by
+       default — the shipped web path always has a trace collector *and*
+       sink active, so an `is_active()`-only gate would not have made
+       this zero-cost in production) fires once per `ghost_router`
+       cluster seed, right where `keys_at_tile` is built, recording
+       `cluster_tile_count`/`n_specs`/`n_distinct_items`/`has_pipe`.
+       Corpus: the same six tier-ladder fixtures
+       `check_firing_census.rs` uses, plus the six e2e "from-ore"
+       fixtures listed in the test's module doc (12 fixtures total,
+       default `LayoutOptions` + each fixture's own belt-tier constraint;
+       SAT zone cache pinned to `sat-zones-ci.bin`).
+       **Round 1 review caught a methodology gap the first version of
+       this entry got wrong**: `n_specs`/`n_distinct_items` are the union
+       of every spec touching ANY tile in a cluster, and a cluster can
+       already span multiple tiles at seed time (before
+       `solve_crossing`'s own growth) — so `n_specs > n_distinct_items`
+       on a multi-tile cluster means "an item-sharing pair exists
+       somewhere in this cluster's participants", not "one tile has two
+       same-item specs", which is the rung's actual `tile_count == 1`
+       predicate. The test was fixed to record `cluster_tile_count` and
+       split the result on it. Corrected result: **111 seeds; 31 are
+       single-tile 2-different-item crossings (the shape point 1's
+       item-conflict-gate finding is about), 11 are single-spec
+       pipe-bypass seeds, and 66 are multi-tile clusters with an
+       item-sharing pair somewhere in the union — but of those 66,
+       cluster_tile_count is NEVER 1. Zero single-tile same-item seeds
+       were observed in this corpus** (no `(cluster_tile_count=1,
+       n_specs≥2, n_distinct<n_specs)` row in the full table). This is
+       the precise answer to the G1 question, and it's a stronger,
+       cleaner null than the first (wrong) pass reported — but it is
+       still one 12-fixture corpus, not a proof of universal
+       non-occurrence, so it does not by itself clear the rung for
+       deletion. Also recorded: 11 seeds have `has_pipe = true` (measured
+       on the raw spec set BEFORE the pipe filter) — corroborating point
+       1's pipe×belt finding rather than contradicting it (these are
+       exactly the corpus's 11 single-spec seeds, the
+       belt-crosses-a-placed-pipe bypass path; the pipe itself never
+       reaches `keys_at_tile`). Net: **this corpus found no reachable
+       instance of the rung's predicate anywhere in the pipeline — not a
+       universal proof, but real, corpus-wide, zero-based evidence for
+       the "never occurs" branch of point 1's either/or.** Widening the
+       corpus (more fixtures, or a fuzz/property sweep over crossing
+       shapes) would raise confidence further; this alone still isn't
+       sufficient for the owner-reviewed deletion call. CENSUS-ONLY per
+       its own charter: no gate or control flow changed.
     2. **The fixture replay's strategy ladder had drifted** from
        production (pre-native `sat-1ug`/Relaxed-reach list vs production's
        `sat-1ug-native` core). #687 lifted the pinned-tier core into a
