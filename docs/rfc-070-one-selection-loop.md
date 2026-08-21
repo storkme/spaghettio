@@ -654,3 +654,24 @@ fixtures / docs split per the churn norm).
   (SHA-256 stability, the missing zone sources) were both about the
   PROVENANCE machinery rather than the corpus — the cells themselves
   never moved across six reproductions.*
+- *2026-08-21 — **#694 review round 5 adjudicated** (4 findings, 3 nits),
+  and the headline is that **round 3 was absorbed too eagerly**:
+  `EMBEDDED_CACHE` is merged under `#[cfg(target_arch = "wasm32")]` only
+  (`zone_cache.rs:1404-1412`), so the fix that added it to the provenance
+  hash was pinning a file the native corpus never reads — a wasm-only edit
+  would have hard-failed every native `check` and refused every plain
+  `bless` against a byte-identical native zone set. Dropped; the hash now
+  covers exactly what `load_existing_jsonl` reads. Re-bless returned the
+  hash to its pin-only value and held all 160 cells for the **seventh**
+  time. Also absorbed: `None == None` passed `check` green (the
+  None-vs-None pair survived round 3's Some-vs-None fix, so a null-hash
+  baseline could green-check 160 unreproducible rows forever); and the
+  junction-seed census's `bucket_sum` assert still ran before the dumps,
+  excused as a tautology — which is the "cannot happen" reasoning that
+  file distrusts everywhere else. Both its asserts are now last.
+  **The generalisation, which is the part worth keeping**: two rounds got
+  the hash's source list wrong in OPPOSITE directions — first too narrow,
+  then too wide — so the doc no longer states a list as fact, it states
+  how to re-derive one. `Which sources does this consult?` is a `#[cfg]`
+  question, and it cannot be answered by reading a function name. Every
+  Phase-1/2 instrument that hashes inputs inherits that.*
