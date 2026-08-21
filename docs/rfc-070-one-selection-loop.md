@@ -323,7 +323,11 @@ stages whose inputs are absent skip, exactly as today's lazy sites do.
 
 ```
 SelectionPolicy {
-  excluded_warning_categories: BTreeSet<String>,   // today: belt-detour + the two #632 B6 demotions
+  excluded_warning_categories: BTreeSet<String>,   // today: belt-detour ONLY — the two #632 B6
+                                                   // demotions left the set by DELETION (#684);
+                                                   // decomposition_search.rs:870-871 still carries
+                                                   // the stale two-demotions prose (pre-existing;
+                                                   // W2b sweeps it)
   error_kind_classes: BTreeMap<String, Kind>,      // the :799 match, as a table
   acceptance_gates: Vec<AcceptanceGate>,           // today: MissingBalancerTemplate
   contamination_weight: usize,                     // KIND_CONTAMINATION_WEIGHT
@@ -375,10 +379,18 @@ class) and the spec preserves it as such.
 ProducerRegistration {
   name, producer,                  // DecompositionCandidate, or PlanProducer for k1
   gate: GatePredicate,             // today's try_* predicates (cost gating), as data
-  refuse_on_error: bool,           // DI/horizontal/cells true; native/k1/split/merge-tap FALSE
-                                   // (an error-laden native can still win via stage 4/5 —
-                                   //  preserving this asymmetry is REQUIRED for parity; ec30
-                                   //  is the live witness)
+  refuse_on_error: bool,           // DI/horizontal/cells true; native/k1/split/merge-tap FALSE.
+                                   // PRECISE SEMANTICS (this is a PRODUCE-TIME gate, never a
+                                   // stage/win gate): when true, a produced layout carrying any
+                                   // Severity::Error is DISCARDED before any stage sees it —
+                                   // the producer records a refusal (v2 retains the full issue
+                                   // list, closing Phase-0b oracle gap (d); v1 stringifies it).
+                                   // That is exactly v1's self-validation in produce()
+                                   // (decomposition_search.rs:191-211 for DI: "Errors refuse;
+                                   // warnings pass"). When false, an error-laden layout stays
+                                   // in play and can win via stage 4/5 — the ec30 witness.
+                                   // Preserving WHICH producers carry the gate is REQUIRED
+                                   // for parity.
   equal_and_denser: bool,          // DI true, horizontal false
   scoped: bool,                    // DI/horizontal true → AdmissionRule applies
 }
@@ -427,15 +439,22 @@ campaign migrates.
 
 ### The Phase-1b acceptance harness
 
-`policy_replay` (a test, non-ignored where cheap): feed the **#694
-baseline's 160 cells** — using the recorded per-candidate profiles
-from the scoreboard events, not re-run layouts — through the v2
-comparator/program implementation, and require winner **and** stage to
-reproduce on all 140 decided cells. Profile gaps (fields the recorded
-mechanisms never computed) must be handled by stage-skip, exactly as
-the oracle records them. This is the offline precursor to K70-1; the
-live shadow (Phase 2a) then runs the same program against freshly
-produced layouts.
+`policy_replay` (a test, non-ignored where cheap): **one live corpus
+run, two consumers.** The committed #694 baseline deliberately stores
+only `(status, winner, stage, outcomes)` per cell — the per-candidate
+profiles exist only in the live `SelectionCandidateEvaluated` events
+and are never persisted (pinning them would pin gaps as facts, per the
+Phase-0b principle). So the harness runs the #694 corpus once with the
+scoreboard enabled; v1 decides each cell as normal, the harness
+captures that cell's emitted per-candidate profiles in-process, feeds
+them through the v2 comparator/program, and requires v2's winner
+**and** stage to match both the live v1 decision and the committed
+baseline on all 140 decided cells. No second layout pass per cell —
+the "replay" is over captured profiles, not re-produced layouts.
+Profile gaps (fields the recorded mechanisms never computed) must be
+handled by stage-skip, exactly as the oracle records them. This is the
+offline precursor to K70-1; the live shadow (Phase 2a) then runs the
+same program against freshly produced layouts.
 
 ## Phasing
 
@@ -879,3 +898,17 @@ fixtures / docs split per the churn norm).
   parity (its fix is Phase-3 calibration, not migration). Acceptance =
   `policy_replay` reproducing winner+stage on all 140 decided #694
   cells from recorded profiles.*
+- *2026-08-21 — #695 review round 1 absorbed (2 major, 1 minor — all
+  three improved the spec; one counter-model refuted with a receipt):
+  (a) the excluded-categories "today" comment was stale — the #632 B6
+  demotions left the set by DELETION (#684); belt-detour is the whole
+  set, and decomposition_search.rs still carries the stale prose (W2b
+  sweeps it); (b) `refuse_on_error` now has precise produce-time
+  semantics — the reviewer's counter-model ("error-laden DI maxes out
+  at stage 4/5 like native") is FALSE at source (DI's produce()
+  refuses on any Error at :191-211, so it has no outcome and reaches
+  no stage), but the under-definition was real and is fixed; (c) the
+  acceptance harness input was mis-specified — the baseline stores no
+  profiles, so policy_replay is now "one live corpus run, two
+  consumers" (v1 decides, v2 replays the captured in-process
+  profiles; no second layout pass).*
