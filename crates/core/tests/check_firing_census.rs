@@ -577,7 +577,11 @@ fn selection_scoreboard_census() {
         // nested selection (cell composition builds per-cell layouts),
         // and each such block is contiguous and complete, so this
         // separates them instead of merging them into the outer one.
-        let mut blocks: Vec<(Vec<&TraceEvent>, Option<(&str, SelectionStage)>)> = Vec::new();
+        /// One selection's candidate rows plus its terminal verdict —
+        /// `None` when the selection ended with every candidate failing,
+        /// which emits rows but no `SelectionDecided`.
+        type SelectionBlock<'a> = (Vec<&'a TraceEvent>, Option<(&'a str, SelectionStage)>);
+        let mut blocks: Vec<SelectionBlock> = Vec::new();
         let mut pending: Vec<&TraceEvent> = Vec::new();
         for ev in &events {
             match ev {
@@ -609,9 +613,8 @@ fn selection_scoreboard_census() {
                 );
             }
             println!(
-                "   {:<18} {:<9} {:>9} {:>4} {:>5} {:>5} {:>5}  {:<21} {:<9} {}",
-                "candidate", "outcome", "score", "acc", "err", "selw", "laww", "from", "kinds",
-                "reason"
+                "   {:<18} {:<9} {:>9} {:>4} {:>5} {:>5} {:>5}  {:<21} {:<9} reason",
+                "candidate", "outcome", "score", "acc", "err", "selw", "laww", "from", "kinds"
             );
             for ev in rows {
                 let TraceEvent::SelectionCandidateEvaluated {
@@ -677,7 +680,7 @@ fn selection_scoreboard_census() {
     }
 
     println!("\n=== outer-selection summary (one row per fixture) ===");
-    println!("{:<44} {:<18} {}", "fixture", "winner", "deciding stage");
+    println!("{:<44} {:<18} deciding stage", "fixture", "winner");
     for (fixture, winner, stage) in &stage_tally {
         println!("{fixture:<44} {winner:<18} {stage}");
     }
