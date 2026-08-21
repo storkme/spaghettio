@@ -67,19 +67,38 @@
 //! bound on anything resembling a same-item crossing, not evidence of
 //! one).
 //!
-//! **Scope note (round 2 review):** `build_bus_layout` runs the full
-//! candidate search + junction-cap retry machinery
+//! **Scope note (round 2 review, CORRECTED round 5):** `build_bus_layout`
+//! runs the full candidate search + junction-cap retry machinery
 //! (`decomposition_search::select_best_decomposition` →
 //! `run_layout_with_retry_inner`), each of which can invoke
 //! `route_bus_ghost` more than once per fixture (once per evaluated
-//! candidate variant, plus a pass-2 retry when pass 1 caps). This
-//! census's totals are seed-OBSERVATIONS across every such invocation
-//! during a fixture's full build, not deduplicated by physical
-//! coordinate — a seed whose geometry is untouched by a retry can appear
-//! more than once. This is intentional (every invocation is a real
-//! `route_bus_ghost` call the shipped pipeline actually makes), but it
-//! means "111 seeds" is not "111 distinct physical crossings in the
-//! final shipped layout".
+//! candidate variant, plus a pass-2 retry when pass 1 caps). An earlier
+//! version of this note claimed the totals count "every ... invocation
+//! ... not deduplicated" — that overstates it: when a candidate's pass 1
+//! caps, `run_layout_with_retry_inner` calls
+//! `trace::truncate_events(trace_start)` to discard that candidate's
+//! pass-1 events (including any `JunctionSeedCensus` it emitted) before
+//! pass 2 runs, specifically so a streaming consumer never sees an
+//! abandoned pass. So this census counts the SHIPPED (surviving) pass
+//! per candidate evaluation — a retried candidate's pass-1 seeds are
+//! silently dropped from what this test observes, not double-counted.
+//! Seeds are still not deduplicated ACROSS independent candidate
+//! evaluations (each candidate's own final pass counts separately), and
+//! a seed whose geometry is untouched across passes within one candidate
+//! can still appear at most once per candidate (pass 1 is gone if pass 2
+//! ran). This test also tallies `TraceEvent::LayoutRetried` occurrences
+//! (emitted right after the truncate, so it survives into what this test
+//! observes) as a directly-measured count of how many truncation
+//! episodes happened — printed next to the summary line. **This cannot
+//! flip the zero conclusion to a false positive**: truncation only
+//! REMOVES seed observations this census would otherwise have counted;
+//! it can never fabricate a same-item hit that didn't occur. It CAN hide
+//! a true positive that occurred only in a truncated pass-1 — the zero
+//! reported below is therefore a lower bound on this corpus's true
+//! same-item-crossing count, not a certainty that no such pass-1 ever
+//! existed. `SPAGHETTIO_JUNCTION_SEED_CENSUS`, once wired to fire from
+//! inside `layout_pass` before the truncate point (out of scope for this
+//! CENSUS-ONLY PR), would close this gap.
 //!
 //! Corpus (stated exactly, per the W1d brief): the same six tier-ladder
 //! fixtures `check_firing_census.rs` uses (G2's hardcoded slice — kept
@@ -275,6 +294,13 @@ fn junction_seed_census() {
     let mut builds_ok = 0usize;
     let mut builds_refused = 0usize;
     let mut solver_skipped = 0usize;
+    // Round 5 review: directly measure truncation episodes rather than
+    // just caveating them in prose. `LayoutRetried` is emitted AFTER
+    // `run_layout_with_retry_inner`'s `trace::truncate_events` call (see
+    // the module doc's scope note), so it survives into what this test
+    // observes and counts exactly how many times a candidate's pass-1
+    // census events were discarded before this test ever saw them.
+    let mut retried_episodes = 0usize;
 
     for &(label, item, rate, machine, belt_tier, inputs) in fixtures {
         let input_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
@@ -305,6 +331,9 @@ fn junction_seed_census() {
             }
         }
         for ev in &events {
+            if matches!(ev, TraceEvent::LayoutRetried { .. }) {
+                retried_episodes += 1;
+            }
             if let TraceEvent::JunctionSeedCensus {
                 seed_x,
                 seed_y,
@@ -376,6 +405,24 @@ fn junction_seed_census() {
         "\n=== junction seed census: {total_seeds} seeds across {} fixtures ({builds_ok} built, {builds_refused} refused, {solver_skipped} solver-skipped) ===",
         fixtures.len()
     );
+    // Round 5 review: the seed counts above are partial in two distinct
+    // ways, both DECREASING what this census can observe (never
+    // inflating it — see the module doc's scope note for why that means
+    // the zero conclusion below is a lower bound, not a certainty):
+    // (1) a REFUSED build's counted seeds are only whatever fired before
+    // the failure — the layout never finished, so there may have been
+    // more; (2) a build that internally retried had its pass-1 seeds
+    // discarded by the engine itself (`trace::truncate_events`) before
+    // this test could ever see them — `retried_episodes` below is a
+    // direct, measured count of how many such discards happened, not a
+    // guess.
+    println!(
+        "(seed counts are PARTIAL, never inflated: {builds_refused} build(s) refused \
+         partway through, and {retried_episodes} candidate-evaluation(s) internally \
+         retried — each retry's pass-1 census events were discarded by \
+         `trace::truncate_events` before this test observed them; see the \
+         module doc's scope note)"
+    );
     println!("{:>7} {:>8} {:>9} {:>7}", "tiles", "n_specs", "distinct", "count");
     for ((tiles, n_specs, n_distinct), count) in &table {
         println!("{tiles:>7} {n_specs:>8} {n_distinct:>9} {count:>7}");
@@ -400,10 +447,36 @@ fn junction_seed_census() {
          n_specs == 0 after the pipe filter (never a crash — see module doc): {zero_specs_after_filter}\n\
          single-tile, 1 spec (belt-over-forbidden-tile bypass): {single_tile_bypass}\n\
          single-tile, 2 specs, different items:                 {single_tile_diff_item}\n\
-         single-tile, 2 specs, SAME item (rung's exact shape):  {single_tile_same_item}\n\
+         single-tile, 2 specs, SAME item (necessary-superset):  {single_tile_same_item}\n\
          single-tile, >2 specs (outside rung's specs.len()==2): {single_tile_gt2_specs}\n\
          multi-tile,  all participants distinct items:          {multi_tile_all_distinct}\n\
          multi-tile,  item-sharing pair somewhere in union:     {multi_tile_same_item}"
+    );
+
+    // Round 5 review: this is THE conclusion the census exists to check
+    // — not an exploratory tally where an unexpected value is itself
+    // informative (that's what the demoted checks below are for; round
+    // 4's "never abort on discovery" call was about those, not this).
+    // Deliberately a hard `assert_eq!`: this diagnostic is `#[ignore]`d,
+    // so it only runs when someone deliberately re-executes the
+    // evidence behind a deletion or reachability decision — exactly the
+    // moment a changed conclusion should be loud, not a silently-updated
+    // number in a printed line nobody re-reads. If this ever fires, DO
+    // NOT proceed with any deletion of the perpendicular-template rung
+    // (ghost_router.rs, `solve_perpendicular_template`/`try_bridge`/
+    // `bridge_belt_over_pipe`) on the strength of this census — the
+    // reachability conclusion has changed, and `docs/offpath-code-
+    // followups.md`'s G1 entry must be updated with the new finding
+    // before anyone trusts a deletion call built on the old "zero"
+    // result.
+    assert_eq!(
+        single_tile_same_item, 0,
+        "same-item seed(s) found in the rung's necessary-superset bucket \
+         (cluster_tile_count == 1, n_specs == 2, n_distinct_items == 1) — \
+         the G1 census's zero-reachability conclusion no longer holds on \
+         this corpus. Update docs/offpath-code-followups.md's G1 entry \
+         with this finding BEFORE trusting any deletion decision that \
+         cited the old zero."
     );
 
     println!(
@@ -416,6 +489,32 @@ fn junction_seed_census() {
          multi-spec seed also touched by a pipe, which #687's pipe×belt \
          finding does not rule out and this census has not previously \
          checked for."
+    );
+    // Round 5 review: this corroboration, and the same_item_single_tile
+    // zero conclusion above, both inherit an acknowledged residual risk
+    // from n_distinct_items's item-resolution path in ghost_router.rs —
+    // TWO independent biases, and both bias toward HIDING a same-item
+    // pair rather than fabricating one: (1) the fluid catch-up sweep
+    // only tags a synth key as Pipe when its path sits ENTIRELY on pipe
+    // tiles, so a fluid synth key touching any non-pipe tile falls
+    // through to `resolve_item`'s prefix-recovery path instead of being
+    // excluded as a pipe outright; (2) `resolve_item`'s absolute-last-
+    // resort (no `spec_items` entry, no recognized key prefix) treats
+    // the raw key as a unique pseudo-item, which can make two specs that
+    // truly share an item read as "distinct" if their key format is one
+    // this census doesn't yet recognize. Neither has been observed
+    // firing in any run to date (this census would need dedicated
+    // instrumentation on `resolve_item` itself to prove that beyond
+    // "not observed so far"), so the zero conclusion above is honest but
+    // not airtight: a same-item pair COULD be hiding behind either bias.
+    // Any deletion follow-up that cites this census's zero should say so.
+    println!(
+        "(both the corroboration above and the zero same-item conclusion \
+         below share an acknowledged residual risk: ghost_router.rs's \
+         item-resolution fallback path can HIDE a true same-item pair — \
+         never fabricate one — under an unrecognized key format; not \
+         observed in any run to date, but not proven absent either. Cite \
+         this caveat alongside the zero in any deletion follow-up.)"
     );
     // Round 4 review finding: these two correlation checks were hard
     // `assert_eq!`s in an earlier pass, but a legitimate new seed shape

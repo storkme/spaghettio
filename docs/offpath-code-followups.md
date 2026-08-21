@@ -395,6 +395,43 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
          `unsafe` blocks are removed; a corrected comment explains the
          edition-conditional truth and flags that a future edition-2024
          bump would need them back.
+       - **Round 5** (final pass before merge, no blocking findings — 3
+         metric-integrity caveats): (a) the only hard assertion was the
+         tautological `bucket_sum == total_seeds`; the load-bearing
+         conclusion (`single_tile_same_item == 0`) was only printed.
+         Added `assert_eq!(single_tile_same_item, 0, ...)` with a message
+         naming exactly what a failure means: the reachability conclusion
+         changed, update this G1 entry before trusting any deletion call.
+         This does NOT contradict round 4's "never abort on discovery"
+         principle — that principle was about EXPLORATORY tallies (the
+         pipe-tagged/single-spec correlation checks) where an unexpected
+         value is itself the interesting finding; `single_tile_same_item`
+         IS the conclusion this census exists to check, and re-running it
+         is exactly the deliberate moment to be loud if it ever changes.
+         (b) the module doc's "counts every route_bus_ghost invocation"
+         claim overstated: `run_layout_with_retry_inner` calls
+         `trace::truncate_events` on a junction-cap/substation retry,
+         discarding that candidate's pass-1 census events (including any
+         `JunctionSeedCensus`) before pass 2 runs — so this census counts
+         the SHIPPED pass per candidate, not literally every invocation.
+         Fixed the sentence, and the test now directly tallies
+         `TraceEvent::LayoutRetried` occurrences (emitted right after the
+         truncate, so it survives) and prints the count next to the
+         summary line — measured, not just caveated. This cannot flip the
+         zero to a false positive: truncation only removes observations,
+         never fabricates one; the zero is therefore a lower bound on
+         this corpus, not a certainty that no truncated pass-1 ever hit
+         the rung's shape. (c) added an explicit caveat where the
+         11-pipe-bypass corroboration is discussed: the fluid catch-up
+         sweep only tags a synth key as Pipe when its path sits entirely
+         on pipe tiles, and `resolve_item`'s absolute-last-resort (raw
+         key as pseudo-item) can make two specs that truly share an item
+         read as "distinct" under an unrecognized key format — both
+         biases HIDE a same-item pair rather than fabricate one, so the
+         zero conclusion inherits this same residual risk. Neither bias
+         has been observed firing in any run to date. Any deletion
+         follow-up citing this census's zero should carry this caveat
+         forward.
        **Corrected, reconciled result — 111 seeds partition as:** 11
        single-spec pipe-bypass seeds, 31 single-tile 2-different-item
        crossings (the shape point 1's item-conflict-gate finding is
