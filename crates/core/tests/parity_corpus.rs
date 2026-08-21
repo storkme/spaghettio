@@ -372,26 +372,39 @@ fn resolve_zone_cache_path() -> std::path::PathBuf {
 /// provenance mismatch. `sha2` is already a dev-dependency and `e2e.rs`
 /// already hashes content with it.
 ///
-/// Covers BOTH zone sources, not just the disk pin (#694 review round
-/// 3). `zone_cache.rs` merges a compiled-in `EMBEDDED_CACHE`
-/// (`include_bytes!("../data/sat-zones.bin")`) into the map alongside
-/// whatever the pin replays, so a build against a different embedded
-/// payload consults a different zone set. Hashing only the pin would
-/// report an identical hash across that change and break the "describes
-/// the zones actually consulted" claim this whole provenance design
-/// rests on. The const is private to the crate, so this hashes the file
-/// it embeds — the same bytes, and if that path ever moves the `None`
-/// says so instead of a stale hash pretending otherwise.
+/// Covers ALL THREE zone sources `zone_cache.rs` merges, not just the
+/// disk pin. Getting this list right took two review rounds and the
+/// lesson generalises: a provenance hash is only worth what its source
+/// list is, and a source list is a thing that goes stale.
+///
+/// 1. The **pin** — whatever `SPAGHETTIO_ZONE_CACHE_PATH` resolves to.
+/// 2. The compiled-in **`EMBEDDED_CACHE`**
+///    (`include_bytes!("../data/sat-zones.bin")`), merged by
+///    `install_prebaked_into` (#694 round 3). The const is private to
+///    the crate, so this hashes the file it embeds — the same bytes.
+/// 3. The **legacy `.jsonl`** sitting next to the pin, which
+///    `load_existing_jsonl` still reads on every native load
+///    (`zone_cache.rs`'s `resolve_legacy_jsonl_path`, #694 round 4).
+///    Optional: absent contributes nothing to the map and nothing here,
+///    so a file APPEARING changes the hash, which is the direction that
+///    matters.
+///
+/// Missing (1) or (2) yields `None` rather than a partial hash — a value
+/// that is committed and compared against forever must not silently
+/// describe fewer sources than it claims.
 fn hash_zone_cache() -> Option<String> {
     use sha2::{Digest, Sha256};
-    let pin = std::fs::read(resolve_zone_cache_path()).ok()?;
+    let pin_path = resolve_zone_cache_path();
+    let pin = std::fs::read(&pin_path).ok()?;
     let embedded = std::fs::read(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin"),
     )
     .ok()?;
+    let legacy = std::fs::read(pin_path.with_extension("jsonl")).unwrap_or_default();
     let mut h = Sha256::new();
     h.update(&pin);
     h.update(&embedded);
+    h.update(&legacy);
     Some(format!("{:x}", h.finalize()))
 }
 
@@ -693,7 +706,19 @@ fn parity_corpus() {
             // precisely the run whose provenance nobody can check.
             if mode == "bless" {
                 let prior: Option<Baseline> = match std::fs::read_to_string(baseline_path()) {
-                    Err(_) => None, // genuinely absent: first bless, benign
+                    // ONLY not-found means "first bless". A permission or
+                    // I/O error is a baseline that exists and cannot be
+                    // read, which must not be treated as one that is not
+                    // there — same conflation as the parse arm below,
+                    // caught one round later (#694 round 4).
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => panic!(
+                        "the committed baseline exists but could not be read ({e}) — \
+                         refusing to bless over it, because its zone-cache hash is what \
+                         this run must be checked against. Fix the read error and re-run, \
+                         or pass SPAGHETTIO_PARITY_CORPUS=bless-repin to overwrite it \
+                         deliberately"
+                    ),
                     Ok(text) => Some(serde_json::from_str::<Baseline>(&text).unwrap_or_else(
                         |e| {
                             panic!(
