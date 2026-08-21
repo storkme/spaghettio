@@ -1098,8 +1098,37 @@ fixtures / docs split per the churn norm).
   — it is silent, and the one cell where the campaign's headline flip
   changes a shipped artifact is the cell it does not cover. Recommendation
   for W3a: add gear@20/am2 to the corpus before the shadow loop gates on
-  it. Adjudicated on its own evidence instead: both arms error- and
-  warning-free, the winner is smaller and denser, so the re-bless stands.
+  it.
+
+  **FINDING — and the corpus hole was hiding a real defect (#700).** The
+  first version of this entry adjudicated that re-bless on validator
+  evidence alone: both arms error- and warning-free, the winner smaller
+  and denser. #699's review round 1 refused that reasoning — correctly,
+  per the verification protocol: the validator cannot CLEAR a layout. So
+  the layout was metered. Three arms, `measure(108_000, 216_000)`, no
+  notes:
+
+  | arm | cells | capacity | entities | validator | meter |
+  |---|---|---|---|---|---|
+  | production today | `Candidate` | 2 | 105, 38×14 | 0 issues | **15.0 / 20.0 — 75 %** |
+  | cells disabled | `Off` | 2 | 148, 47×8 | 0 issues | 21.0 / 20.0 |
+  | pre-W2c golden | `Off` | 0 | 148, 47×8 | 0 issues | 21.0 / 20.0 |
+
+  The cell-composed winner **under-delivers by 25 %**, validator-clean,
+  and production has shipped it since RFC-051 Phase B flipped
+  `cell_composition` on 2026-07-22. **The fossil was not merely hiding a
+  candidate arm — it was hiding a live defect in that arm's only shipped
+  win.** Filed as #700 with the reproduction; a `#[ignore]`d exporter
+  (`w2c_gear20_meter_export`) is committed so the reading is re-takeable
+  from a clean clone. The golden re-bless still stands — a golden records
+  what the engine produces, and this is what it produces — but the
+  fixture's comment now says so, including that its
+  `assert_produces(…, 20.0)` passes on a 15/s layout because it reads a
+  static estimate.
+
+  This is the strongest possible argument for the track: the suite could
+  not see the defect, and a single instrument the suite does not run
+  found it in one command.
 
   **SECOND FINDING — the stage-5 policy this exposes.** On
   `tier1_iron_gear_wheel_20s` the outer board records native with
@@ -1162,3 +1191,47 @@ fixtures / docs split per the churn norm).
   BASELINE (pre-change) parallel run while passing solo in 0.63 s. It
   passed on every post-change run. Wall-clock timeouts on a loaded box are
   a suite-wide hazard the extra candidate makes marginally worse.
+
+  **#699 review round 1 absorbed** (7 findings, 1 union-major + 6 minor,
+  all absorbed, none refuted — the major paid out immediately):
+  * *"the re-bless rests on validator evidence and the docs say the
+    validator cannot clear a layout; no meter/sim reading is recorded"* —
+    correct, and the meter run it forced produced #700 above. The fix is
+    the measurement plus a committed exporter, not prose.
+  * *"the fossil PATTERN survives at ~a dozen other call sites in the same
+    file, so 'both fossils killed' overstates coverage"* (3/3 passes) —
+    correct and verified: **14 `cell_composition: Default::default()` and
+    14 `inserter_capacity: 0` literals remain, across 15 distinct tests**
+    (the horizontal-stack tier4/tier5 trio, the four `quality_*`, the six
+    `stacking_*`, `research_l7_thins_output_inserters_s4`,
+    `rfc061_allocation_probe_ac5`). None documents its value as
+    deliberate; every one is a copy of `run_e2e_inner`'s old literal.
+    Not migrated here — each carries its own pins, so flipping them is a
+    second adjudication of this PR's size, not a rider on it. Instead the
+    residual is now PINNED by a non-ignored test
+    (`residual_fossil_literals_are_pinned`) that reads its own source and
+    fails if either count moves, with the reduction direction spelled out.
+    The claim itself is scoped to the `run_e2e` path everywhere it appears.
+  * *"`chosen.last()` is an ordering-dependent oracle"* (2/3) — true. The
+    ordering IS a stated contract (`trace.rs`'s
+    `SelectionCandidateEvaluated` doc: terminals emitted adjacently at the
+    very end, nested selections replayed inside the winner's events) and
+    the #694 census reads the corpus by the same rule, but "stated" is not
+    "checked". Both tests now corroborate across the two INDEPENDENT
+    terminal emitters (`DecompositionChosen` and `SelectionDecided`) and
+    the first also pins the deciding STAGE against #694's row, so a
+    reordering has to break both emitters identically to slip through.
+  * *"`harness_options_are_engine_defaults` is self-referential"* — partly:
+    it compared against the group `Default` impls, a second hand-written
+    copy of the engine defaults. Now compares against
+    `LayoutOptions::default()`'s own views, which is the value the engine
+    ships. (Group-vs-`LayoutOptions` agreement stays #696's
+    `layout_options_group_defaults_match_facade`'s job.)
+  * *"`rfc060_sim_export`'s artifacts silently change with no pin"* — true
+    and worth a warning rather than a pin: the recorded K60-3 numbers were
+    measured on capacity-0 artifacts, so post-2026-08-21 exports are not
+    comparable to them. Stated in the exporter's doc.
+  * The nit *"tier2's warning pin didn't move while its hash did"* is
+    expected, not unexplained: warning pins record a per-category TALLY,
+    and a geometry change that leaves the tally alone leaves the pin alone.
+    Only tier5's tally moved.
