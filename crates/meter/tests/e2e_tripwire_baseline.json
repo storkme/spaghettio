@@ -1,0 +1,93 @@
+[
+  {
+    "label": "gear10-am1-plate",
+    "target": "iron-gear-wheel",
+    "entities": 108,
+    "deficit_pct": 0.0,
+    "converged": true
+  },
+  {
+    "label": "ec10-am1-ore",
+    "target": "electronic-circuit",
+    "entities": 863,
+    "deficit_pct": 0.0,
+    "converged": true
+  },
+  {
+    "label": "ec30-am2-ore",
+    "target": "electronic-circuit",
+    "entities": 1991,
+    "deficit_pct": -100.0,
+    "converged": false
+  },
+  {
+    "label": "plastic5-chem-crude",
+    "target": "plastic-bar",
+    "entities": 153,
+    "deficit_pct": 0.8888888888885615,
+    "converged": false
+  },
+  {
+    "label": "ac5-am2-ore",
+    "target": "advanced-circuit",
+    "entities": 2134,
+    "deficit_pct": -0.22222222222222365,
+    "converged": true
+  },
+  {
+    "label": "pu2-am3-ore",
+    "target": "processing-unit",
+    "entities": 5531,
+    "deficit_pct": -8.05555555555556,
+    "converged": true
+  },
+  {
+    "label": "gear10-am2-ore",
+    "target": "iron-gear-wheel",
+    "entities": 406,
+    "deficit_pct": 0.0,
+    "converged": true
+  },
+  {
+    "label": "gear20-am2-plate",
+    "target": "iron-gear-wheel",
+    "entities": 105,
+    "deficit_pct": -25.0,
+    "converged": true
+  },
+  {
+    "label": "ec10-am1-ore-yellow",
+    "target": "electronic-circuit",
+    "entities": 1110,
+    "deficit_pct": -6.666666666666665,
+    "converged": true
+  },
+  {
+    "label": "ec20-am2-ore",
+    "target": "electronic-circuit",
+    "entities": 1372,
+    "deficit_pct": 0.0,
+    "converged": true
+  },
+  {
+    "label": "plastic10-chem-petro",
+    "target": "plastic-bar",
+    "entities": 89,
+    "deficit_pct": 0.0,
+    "converged": true
+  },
+  {
+    "label": "sulfuric5-chem",
+    "target": "sulfuric-acid",
+    "entities": 43,
+    "deficit_pct": 238.88888888888883,
+    "converged": false
+  },
+  {
+    "label": "lightoil5-chem-cracking",
+    "target": "light-oil",
+    "entities": 29,
+    "deficit_pct": 200.0,
+    "converged": true
+  }
+]
