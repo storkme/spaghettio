@@ -675,3 +675,23 @@ fixtures / docs split per the churn norm).
   how to re-derive one. `Which sources does this consult?` is a `#[cfg]`
   question, and it cannot be answered by reading a function name. Every
   Phase-1/2 instrument that hashes inputs inherits that.*
+- *2026-08-21 — **#694 review round 6 adjudicated** (8 findings, 3 nits;
+  closing round — seven of the eight were re-raises already answered).
+  One absorbed, and it is a **direct warning to Phase 2a**:
+  `zone_cache::lookup_table()` is a process-wide `OnceLock` mutated in
+  memory as solves append zones, and all 160 cells run in one process, so
+  cell N is solved against a map cells 1..N-1 have grown. The committed
+  hash describes the run's STARTING disk state — which is what makes the
+  full sweep reproducible (seven byte-identical runs) — but says nothing
+  about what an individual cell saw. **Re-running one fixture in isolation
+  is therefore not guaranteed to reproduce its committed cell**, which is
+  exactly the first thing anyone will do on a divergence. Adjudicate by
+  re-running the whole corpus and reading the cell out of it. New argument
+  answered on merits: relaxing the two stage pins' winner assertions would
+  not reduce brittleness, because on both fixtures winner and stage move
+  together — if merge-tap stops gating its stage goes too, and if
+  horizontal stops winning the stage becomes best-error-free. There is no
+  looser pin that still detects a mis-tagged stage. **Review close-out:
+  six rounds, ~35 findings; the load-bearing ones were all about the
+  provenance machinery and the instrument's failure messages, and the 160
+  cells never moved once across seven reproductions.**
