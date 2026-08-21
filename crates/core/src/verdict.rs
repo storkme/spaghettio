@@ -121,12 +121,28 @@
 //!   simply doesn't consult it for the pass/fail bit.
 //! - [`GatePolicy::ReportOnly`]: never regresses; the diff is still computed
 //!   and stored for observability.
+//!
+//! ## Severity channels (RFC-070 Phase 1b)
+//!
+//! The category-count model above is severity-BLIND: an error and a warning
+//! in one category are fungible counts. That is exactly the #519/#644 failure
+//! class, so [`CategoryOutcome`] now also carries the per-category
+//! `{errors, warnings}` split on both sides, and [`Policy`] carries the
+//! selection-excluded warning categories.
+//!
+//! **Additive by construction.** The channels are RECORDED, never consulted
+//! by `regressed` or `pass`; [`Policy::fold`] and [`Policy::decomposition`]
+//! keep their exact meaning, so `bus::candidate_runner` and the RFC-068
+//! celldb harness (`tests/celldb_template.rs`, `tests/candidate_runner.rs`)
+//! stay green unmodified — the celldb-harness-green obligation RFC-070 took
+//! on in exchange for leaving RFC-068 P1 owner-gated. The severity-blind
+//! path remains available to RFC-068 until its own campaign migrates.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rustc_hash::FxHashMap;
 
-use crate::validate::ValidationIssue;
+use crate::validate::{Severity, ValidationIssue};
 
 /// Maps a tile position in one layout's coordinate frame to its position in
 /// another. Built by the transform itself (`bus::compaction::
@@ -221,15 +237,45 @@ pub enum GatePolicy {
 pub struct Policy {
     pub default: GatePolicy,
     pub overrides: BTreeMap<String, GatePolicy>,
+    /// Warning categories that do not participate in selection —
+    /// `validate::SELECTION_EXCLUDED_WARNING_CATEGORIES` as policy data
+    /// rather than a hardcoded constant (RFC-070 Phase 1b).
+    ///
+    /// Read ONLY by [`Verdict::candidate_selection_warnings`] and its native
+    /// twin; it does not touch `regressed` or `pass`, so every existing
+    /// preset behaves exactly as before with the set left empty.
+    pub excluded_warning_categories: BTreeSet<String>,
 }
 
 impl Policy {
     pub fn new(default: GatePolicy) -> Self {
-        Self { default, overrides: BTreeMap::new() }
+        Self {
+            default,
+            overrides: BTreeMap::new(),
+            excluded_warning_categories: BTreeSet::new(),
+        }
     }
 
     pub fn with_override(mut self, category: impl Into<String>, policy: GatePolicy) -> Self {
         self.overrides.insert(category.into(), policy);
+        self
+    }
+
+    /// Exclude one warning category from the selection-scoped warning
+    /// count. Excluding a category does NOT stop it being diffed or gated
+    /// — it only removes it from the selection channel.
+    pub fn with_excluded_warning_category(mut self, category: impl Into<String>) -> Self {
+        self.excluded_warning_categories.insert(category.into());
+        self
+    }
+
+    /// The live selection exclusions, from the canonical constant. Today
+    /// that is `belt-detour` alone: the two #632 B6 demotions left the set
+    /// by DELETION (#684).
+    pub fn with_live_selection_exclusions(mut self) -> Self {
+        for c in crate::validate::SELECTION_EXCLUDED_WARNING_CATEGORIES {
+            self.excluded_warning_categories.insert(c.to_string());
+        }
         self
     }
 
@@ -286,6 +332,14 @@ pub struct CategoryOutcome {
     pub policy: GatePolicy,
     pub native_count: usize,
     pub candidate_count: usize,
+    /// The severity split of `native_count` (RFC-070 Phase 1b).
+    /// Recorded, never gated on: `regressed` is computed exactly as it
+    /// was before these fields existed.
+    pub native_errors: usize,
+    pub native_warnings: usize,
+    /// The severity split of `candidate_count`.
+    pub candidate_errors: usize,
+    pub candidate_warnings: usize,
     /// Candidate issues not attributable to any native issue at the tier's
     /// granularity — positioned instances, per `docs/validator-reporting.md`
     /// rule 1. These are the actual regressions this module exists to
@@ -320,12 +374,46 @@ pub struct Verdict {
     pub tier: MatchTier,
     pub categories: BTreeMap<String, CategoryOutcome>,
     pub pass: bool,
+    /// The policy's selection exclusions, carried so the severity
+    /// accessors below are answerable from the verdict alone rather than
+    /// requiring the caller to hold onto the policy that produced it.
+    pub excluded_warning_categories: BTreeSet<String>,
 }
 
 impl Verdict {
     /// Category names whose outcome contributed a regression to `!pass`.
     pub fn regressed_categories(&self) -> impl Iterator<Item = &str> {
         self.categories.iter().filter(|(_, o)| o.regressed).map(|(cat, _)| cat.as_str())
+    }
+
+    /// Total `Severity::Error` count on the candidate side.
+    pub fn candidate_errors(&self) -> usize {
+        self.categories.values().map(|o| o.candidate_errors).sum()
+    }
+
+    /// Total `Severity::Error` count on the native side.
+    pub fn native_errors(&self) -> usize {
+        self.categories.values().map(|o| o.native_errors).sum()
+    }
+
+    /// Candidate warnings minus the policy's excluded categories —
+    /// `validate::selection_warning_count`'s semantics, expressed over a
+    /// verdict.
+    pub fn candidate_selection_warnings(&self) -> usize {
+        self.selection_warnings(|o| o.candidate_warnings)
+    }
+
+    /// The native side of the same channel.
+    pub fn native_selection_warnings(&self) -> usize {
+        self.selection_warnings(|o| o.native_warnings)
+    }
+
+    fn selection_warnings(&self, pick: fn(&CategoryOutcome) -> usize) -> usize {
+        self.categories
+            .iter()
+            .filter(|(cat, _)| !self.excluded_warning_categories.contains(*cat))
+            .map(|(_, o)| pick(o))
+            .sum()
     }
 
     /// Every new positioned issue across every category, regardless of
@@ -374,7 +462,18 @@ pub fn never_worse(
     }
 
     let pass = !categories.values().any(|o| o.regressed);
-    Verdict { tier, categories, pass }
+    Verdict {
+        tier,
+        categories,
+        pass,
+        excluded_warning_categories: policy.excluded_warning_categories.clone(),
+    }
+}
+
+/// `(errors, warnings)` for one category's issues.
+fn severity_split(issues: &[&ValidationIssue]) -> (usize, usize) {
+    let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
+    (errors, issues.len() - errors)
 }
 
 /// The position a native issue's problem is expected to occupy in the
@@ -397,7 +496,14 @@ fn expected_position(
 /// every issue in the category fungible with every other. Used both for
 /// `MatchTier::Count` itself and as the fallback described in
 /// `diff_category`'s docs.
-fn count_outcome(native_count: usize, candidate_count: usize, policy: GatePolicy) -> CategoryOutcome {
+fn count_outcome(
+    native: &[&ValidationIssue],
+    candidate: &[&ValidationIssue],
+    policy: GatePolicy,
+) -> CategoryOutcome {
+    let (native_count, candidate_count) = (native.len(), candidate.len());
+    let (native_errors, native_warnings) = severity_split(native);
+    let (candidate_errors, candidate_warnings) = severity_split(candidate);
     let matched = native_count.min(candidate_count);
     let regressed = match policy {
         GatePolicy::ReportOnly => false,
@@ -407,6 +513,10 @@ fn count_outcome(native_count: usize, candidate_count: usize, policy: GatePolicy
         policy,
         native_count,
         candidate_count,
+        native_errors,
+        native_warnings,
+        candidate_errors,
+        candidate_warnings,
         new_issues: Vec::new(),
         resolved_issues: Vec::new(),
         matched,
@@ -425,9 +535,11 @@ fn diff_category(
 ) -> CategoryOutcome {
     let native_count = native.len();
     let candidate_count = candidate.len();
+    let (native_errors, native_warnings) = severity_split(native);
+    let (candidate_errors, candidate_warnings) = severity_split(candidate);
 
     if tier == MatchTier::Count {
-        return count_outcome(native_count, candidate_count, policy);
+        return count_outcome(native, candidate, policy);
     }
 
     // Positional or Provenance: resolve every native issue's expected
@@ -451,7 +563,7 @@ fn diff_category(
     let expected: Vec<Option<(i32, i32)>> =
         native.iter().map(|n| expected_position(n, tier, correspondence)).collect();
     if expected.iter().any(Option::is_none) {
-        return count_outcome(native_count, candidate_count, policy);
+        return count_outcome(native, candidate, policy);
     }
 
     // Every native issue resolved to a position. Consume candidate issues
@@ -499,6 +611,10 @@ fn diff_category(
         policy,
         native_count,
         candidate_count,
+        native_errors,
+        native_warnings,
+        candidate_errors,
+        candidate_warnings,
         new_issues,
         resolved_issues,
         matched,
@@ -672,6 +788,68 @@ mod tests {
         let candidate = vec![issue_at("missing-balancer-template", 5, 5)];
         let v = never_worse(&native, &candidate, &Policy::decomposition(), MatchTier::Count, None);
         assert!(!v.pass, "missing-balancer-template must gate even from a zero baseline");
+    }
+
+    // -----------------------------------------------------------------
+    // Severity channels (RFC-070 Phase 1b) — recorded, never gated on
+    // -----------------------------------------------------------------
+
+    fn error_at(category: &str, x: i32, y: i32) -> ValidationIssue {
+        ValidationIssue::with_pos(Severity::Error, category, "test error", x, y)
+    }
+
+    #[test]
+    fn severity_channels_split_a_category_that_carries_both() {
+        let native = vec![issue_at("power", 0, 0)];
+        let candidate = vec![error_at("power", 0, 0), issue_at("power", 1, 1)];
+        let v = never_worse(&native, &candidate, &Policy::fold(), MatchTier::Count, None);
+        let o = &v.categories["power"];
+        assert_eq!((o.native_errors, o.native_warnings), (0, 1));
+        assert_eq!((o.candidate_errors, o.candidate_warnings), (1, 1));
+        assert_eq!(v.candidate_errors(), 1);
+        assert_eq!(v.native_errors(), 0);
+    }
+
+    #[test]
+    fn the_severity_split_survives_the_positional_tier() {
+        // The positional branch builds its outcome by hand rather than
+        // through `count_outcome`, so it is a second site that has to
+        // populate the channels.
+        let native = vec![error_at("belt-flow", 0, 0)];
+        let candidate = vec![error_at("belt-flow", 0, 0), issue_at("belt-flow", 9, 9)];
+        let policy = Policy::new(GatePolicy::GateInstances);
+        let v = never_worse(&native, &candidate, &policy, MatchTier::Positional, None);
+        let o = &v.categories["belt-flow"];
+        assert_eq!((o.native_errors, o.native_warnings), (1, 0));
+        assert_eq!((o.candidate_errors, o.candidate_warnings), (1, 1));
+    }
+
+    #[test]
+    fn an_excluded_category_leaves_the_selection_channel_but_not_the_gate() {
+        let native: Vec<ValidationIssue> = vec![];
+        let candidate = vec![issue_at("belt-detour", 3, 3), issue_at("power", 4, 4)];
+        let policy = Policy::new(GatePolicy::GateCount).with_live_selection_exclusions();
+        let v = never_worse(&native, &candidate, &policy, MatchTier::Count, None);
+        assert_eq!(
+            v.candidate_selection_warnings(),
+            1,
+            "belt-detour must not count toward the selection channel"
+        );
+        assert_eq!(
+            v.categories["belt-detour"].candidate_warnings, 1,
+            "…while still being recorded and diffed"
+        );
+        assert!(!v.pass, "and still gated: exclusion is a channel rule, not a gate rule");
+    }
+
+    #[test]
+    fn the_default_policy_excludes_nothing() {
+        // The compat claim `Policy::fold`'s callers rest on.
+        assert!(Policy::fold().excluded_warning_categories.is_empty());
+        assert!(Policy::decomposition().excluded_warning_categories.is_empty());
+        let candidate = vec![issue_at("belt-detour", 0, 0)];
+        let v = never_worse(&[], &candidate, &Policy::fold(), MatchTier::Count, None);
+        assert_eq!(v.candidate_selection_warnings(), 1);
     }
 
     // -----------------------------------------------------------------

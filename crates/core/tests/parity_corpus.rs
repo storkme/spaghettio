@@ -114,6 +114,9 @@ use serde::{Deserialize, Serialize};
 use spaghettio_core::bus::cells::CellComposition;
 use spaghettio_core::bus::di_cell::DirectInsertion;
 use spaghettio_core::bus::layout::{self, LayoutOptions};
+use spaghettio_core::bus::selection_policy::{
+    decide, ErrorKindCounts, IssueCounts, IssueProfile, SelectionPolicy,
+};
 use spaghettio_core::solver;
 use spaghettio_core::trace::{self, SelectionCandidateOutcome, SelectionStage, TraceEvent};
 
@@ -448,6 +451,19 @@ fn outcome_name(o: SelectionCandidateOutcome) -> &'static str {
     }
 }
 
+/// One build's outer selection: what the cell records, plus the
+/// per-candidate rows themselves (which `policy_replay` feeds through
+/// the v2 comparators — see its own docs for why they cannot come from
+/// the committed baseline).
+#[derive(Default)]
+struct OuterSelection {
+    outcomes: String,
+    decided: Option<(String, SelectionStage)>,
+    /// The seven `SelectionCandidateEvaluated` events of the outer
+    /// block, in canonical slot order. Empty when no selection ran.
+    rows: Vec<TraceEvent>,
+}
+
 /// Pull the OUTER selection out of one build's event stream.
 ///
 /// The census walks blocks to render every nested selection; this needs
@@ -459,21 +475,25 @@ fn outcome_name(o: SelectionCandidateOutcome) -> &'static str {
 /// canonical order is ASSERTED, not assumed — if the emission contract
 /// ever changes, the baseline run fails instead of committing rows
 /// attributed to the wrong candidates.
-fn outer_selection(events: &[TraceEvent]) -> (String, Option<(String, SelectionStage)>) {
-    let rows: Vec<(&str, SelectionCandidateOutcome)> = events
+fn outer_selection(events: &[TraceEvent]) -> OuterSelection {
+    let rows: Vec<&TraceEvent> = events
         .iter()
-        .filter_map(|e| match e {
-            TraceEvent::SelectionCandidateEvaluated { name, outcome, .. } => {
-                Some((name.as_str(), *outcome))
-            }
-            _ => None,
-        })
+        .filter(|e| matches!(e, TraceEvent::SelectionCandidateEvaluated { .. }))
         .collect();
     if rows.is_empty() {
-        return (String::new(), None);
+        return OuterSelection::default();
     }
     let tail = &rows[rows.len().saturating_sub(EXPECTED_ORDER.len())..];
-    let names: Vec<&str> = tail.iter().map(|(n, _)| *n).collect();
+    let row_fields: Vec<(&str, SelectionCandidateOutcome)> = tail
+        .iter()
+        .map(|e| match e {
+            TraceEvent::SelectionCandidateEvaluated { name, outcome, .. } => {
+                (name.as_str(), *outcome)
+            }
+            _ => unreachable!("filtered to scoreboard rows above"),
+        })
+        .collect();
+    let names: Vec<&str> = row_fields.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names, EXPECTED_ORDER,
         "the last {} scoreboard rows must be the outer selection's seven slots in \
@@ -487,7 +507,7 @@ fn outer_selection(events: &[TraceEvent]) -> (String, Option<(String, SelectionS
         EXPECTED_ORDER.len()
     );
     let outcomes =
-        tail.iter().map(|(_, o)| outcome_name(*o)).collect::<Vec<_>>().join(",");
+        row_fields.iter().map(|(_, o)| outcome_name(*o)).collect::<Vec<_>>().join(",");
     let terminal = events
         .iter()
         .rposition(|e| matches!(e, TraceEvent::SelectionDecided { .. }));
@@ -534,10 +554,21 @@ fn outer_selection(events: &[TraceEvent]) -> (String, Option<(String, SelectionS
              different blocks. Do not bless this baseline"
         );
     }
-    (outcomes, decided)
+    OuterSelection { outcomes, decided, rows: tail.iter().map(|e| (*e).clone()).collect() }
 }
 
 fn run_cell(f: &Fixture, machine: &str, opts_label: &str, apply: fn(&mut LayoutOptions)) -> Cell {
+    run_cell_capturing(f, machine, opts_label, apply).0
+}
+
+/// `run_cell`, plus the outer selection's seven scoreboard rows. One
+/// solve, two consumers — `policy_replay`'s whole shape.
+fn run_cell_capturing(
+    f: &Fixture,
+    machine: &str,
+    opts_label: &str,
+    apply: fn(&mut LayoutOptions),
+) -> (Cell, Vec<TraceEvent>) {
     let base = Cell {
         fixture: f.label.to_string(),
         machine: machine.to_string(),
@@ -549,7 +580,7 @@ fn run_cell(f: &Fixture, machine: &str, opts_label: &str, apply: fn(&mut LayoutO
     };
     let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
     let Ok(sr) = solver::solve(f.item, f.rate, &inputs, machine) else {
-        return Cell { status: "no-solve".into(), ..base };
+        return (Cell { status: "no-solve".into(), ..base }, Vec::new());
     };
 
     let mut opts = LayoutOptions { max_belt_tier: f.belt.map(str::to_string), ..Default::default() };
@@ -560,8 +591,8 @@ fn run_cell(f: &Fixture, machine: &str, opts_label: &str, apply: fn(&mut LayoutO
     let events = trace::drain_events();
     drop(guard);
 
-    let (outcomes, decided) = outer_selection(&events);
-    match decided {
+    let OuterSelection { outcomes, decided, rows } = outer_selection(&events);
+    let cell = match decided {
         Some((winner, stage)) => Cell {
             // A build can refuse AFTER the search picked a winner (the
             // pick is not the last thing `build_bus_layout` does), so
@@ -575,7 +606,8 @@ fn run_cell(f: &Fixture, machine: &str, opts_label: &str, apply: fn(&mut LayoutO
         },
         None if outcomes.is_empty() => Cell { status: "no-selection".into(), ..base },
         None => Cell { status: "no-winner".into(), outcomes, ..base },
-    }
+    };
+    (cell, rows)
 }
 
 /// Print the corpus as the campaign's key table: rows are
@@ -686,6 +718,265 @@ fn print_divergences(cells: &[Cell]) {
         }
     }
     println!("  ({major} major, {minor} minor)");
+}
+
+// =====================================================================
+// RFC-070 Phase 1b (#689 W2b): the `policy_replay` acceptance harness
+// =====================================================================
+
+/// Turn one recorded scoreboard row into the profile the v2 comparators
+/// consume. Gaps stay gaps: a `None` count means no mechanism computed
+/// one on that call, and the stage that would have read it skips —
+/// which is precisely how v1's lazy sites behave.
+fn profile_from_row(ev: &TraceEvent) -> IssueProfile {
+    let TraceEvent::SelectionCandidateEvaluated {
+        outcome,
+        reason,
+        score,
+        accepted,
+        accepted_reason,
+        errors,
+        selection_warnings,
+        layout_warnings,
+        contamination_errors,
+        starvation_errors,
+        structural_errors,
+        ..
+    } = ev
+    else {
+        panic!("profile_from_row wants a scoreboard row, got {ev:?}");
+    };
+    // All three channels are written together by `record_counts`, and
+    // all three kind fields by `record_kinds`. A partial would mean the
+    // instrument changed under us, and silently reading the present half
+    // would fabricate the absent one.
+    let counts_present =
+        [errors.is_some(), selection_warnings.is_some(), layout_warnings.is_some()];
+    assert!(
+        counts_present.iter().all(|p| *p) || counts_present.iter().all(|p| !*p),
+        "a scoreboard row carries a PARTIAL count triple {counts_present:?} — the three \
+         channels are written together, so this is an instrument change, not a gap"
+    );
+    let kinds_present = [
+        contamination_errors.is_some(),
+        starvation_errors.is_some(),
+        structural_errors.is_some(),
+    ];
+    assert!(
+        kinds_present.iter().all(|p| *p) || kinds_present.iter().all(|p| !*p),
+        "a scoreboard row carries a PARTIAL kind triple {kinds_present:?}"
+    );
+    IssueProfile {
+        outcome: Some(*outcome),
+        refusal_reason: reason.clone(),
+        score: *score,
+        accepted: *accepted,
+        accepted_reason: accepted_reason.clone(),
+        counts: match (errors, selection_warnings, layout_warnings) {
+            (Some(e), Some(w), Some(lw)) => Some(IssueCounts {
+                errors: *e,
+                selection_warnings: *w,
+                layout_warnings: *lw,
+            }),
+            _ => None,
+        },
+        kinds: match (contamination_errors, starvation_errors, structural_errors) {
+            (Some(c), Some(s), Some(st)) => Some(ErrorKindCounts {
+                contamination: *c,
+                starvation: *s,
+                structural: *st,
+            }),
+            _ => None,
+        },
+    }
+}
+
+/// **The Phase-1b acceptance bar** (RFC-070 §"The Phase-1b acceptance
+/// harness"): the offline precursor to K70-1.
+///
+/// One live corpus run, two consumers. v1 decides each cell as normal;
+/// the harness captures that cell's emitted per-candidate profiles
+/// in-process, feeds them through `selection_policy::decide`, and
+/// requires v2's winner AND deciding stage to match **both** the live v1
+/// decision and the committed #694 baseline, on all 140 decided cells.
+///
+/// Why the profiles are captured live rather than read from the
+/// baseline: the committed baseline deliberately stores only
+/// `(status, winner, stage, outcomes)`. The verdict NUMBERS are
+/// structurally holed (RFC-070's Phase-0b oracle gaps) and a baseline
+/// pinning them would pin gaps as facts. So the profiles exist only in
+/// the live `SelectionCandidateEvaluated` events. There is no second
+/// layout pass per cell — the "replay" is over captured profiles, not
+/// re-produced layouts. The live shadow against freshly produced layouts
+/// is Phase 2a's job, and K70-1 is adjudicated there.
+///
+/// Same cache-relative posture as `parity_corpus` itself: run with the
+/// zone-cache pin, and read a divergence out of a whole-corpus re-run
+/// rather than an isolated one (see the module doc's reproducibility
+/// note).
+///
+/// A failure here is a CAMPAIGN-LEVEL finding, not a test bug: it means
+/// today's decisions are not expressible as policy data over the
+/// recorded measurements, which is K70-1's precursor firing.
+#[test]
+#[ignore = "RFC-070 Phase 1b policy replay — runs the full #694 corpus; \
+            run with --ignored --nocapture and the zone-cache pin"]
+fn policy_replay() {
+    let policy = SelectionPolicy::current();
+    // The profile vector is keyed by registration order, so a
+    // registration that does not line up with the recorded slot order
+    // would rank one candidate's measurement under another's policy.
+    // Spelled longhand against this file's own EXPECTED_ORDER for the
+    // same reason that list exists at all.
+    assert_eq!(
+        policy.producers.iter().map(|p| p.name).collect::<Vec<_>>(),
+        EXPECTED_ORDER,
+        "SelectionPolicy::current() does not register the seven producers in the slot \
+         order the scoreboard records"
+    );
+
+    let pin_hash = hash_zone_cache();
+    let baseline: Option<Baseline> = std::fs::read_to_string(baseline_path())
+        .ok()
+        .map(|t| serde_json::from_str(&t).expect("committed baseline parses"));
+    let baseline_cells: BTreeMap<(&str, &str, &str), &Cell> = baseline
+        .as_ref()
+        .map(|b| b.cells.iter().map(|c| (c.key(), c)).collect())
+        .unwrap_or_default();
+    let provenance_ok =
+        baseline.as_ref().is_some_and(|b| b.zone_cache_hash.is_some() && b.zone_cache_hash == pin_hash);
+
+    let mut decided = 0usize;
+    let mut replay_diffs: Vec<String> = Vec::new();
+    let mut baseline_diffs: Vec<String> = Vec::new();
+    let mut stage_hits: BTreeMap<&str, usize> = BTreeMap::new();
+
+    for f in FIXTURES {
+        for machine in f.machines {
+            for (label, apply) in OPTION_SETS {
+                let (cell, rows) = run_cell_capturing(f, machine, label, *apply);
+                let key = format!("{}[{machine}]/{label}", f.label);
+
+                // v1 decided this cell against the committed record.
+                // Reported separately from the replay result: a live-vs-
+                // baseline difference is an ENGINE or provenance change,
+                // and reading it as a policy failure would misattribute
+                // the finding.
+                if let Some(b) = baseline_cells.get(&cell.key()) {
+                    if b.verdict() != cell.verdict() {
+                        baseline_diffs.push(format!(
+                            "  {key}: baseline {:?} -> live {:?}",
+                            b.verdict(),
+                            cell.verdict()
+                        ));
+                    }
+                }
+
+                let Some(stage) = cell.stage.as_deref() else {
+                    // `no-solve` / `no-selection` / `no-winner`: v1 named
+                    // no winner, so there is nothing for the program to
+                    // reproduce. The 20 `no-solve` cells live here.
+                    assert!(
+                        rows.is_empty() || cell.status == "no-winner",
+                        "cell {key} has scoreboard rows but no stage and status {:?}",
+                        cell.status
+                    );
+                    continue;
+                };
+                decided += 1;
+                *stage_hits.entry(stage_label(stage)).or_default() += 1;
+
+                assert_eq!(
+                    rows.len(),
+                    EXPECTED_ORDER.len(),
+                    "cell {key} decided but recorded {} rows",
+                    rows.len()
+                );
+                let profiles: Vec<IssueProfile> = rows.iter().map(profile_from_row).collect();
+                let v2 = decide(&profiles, &policy);
+                let v2_verdict = v2.map(|d| {
+                    (policy.producers[d.winner].name.to_string(), stage_name(d.stage).to_string())
+                });
+                let v1_verdict = Some((
+                    cell.winner.clone().expect("a decided cell names a winner"),
+                    stage.to_string(),
+                ));
+                if v2_verdict != v1_verdict {
+                    replay_diffs.push(format!(
+                        "  {key}: v1 {v1_verdict:?} -> policy {v2_verdict:?}\n      \
+                         outcomes: {}",
+                        cell.outcomes
+                    ));
+                    continue;
+                }
+                // …and against the committed baseline, which is the
+                // record Phase 2a will diff against.
+                if let Some(b) = baseline_cells.get(&cell.key()) {
+                    let b_verdict =
+                        Some((b.winner.clone().unwrap_or_default(), b.stage.clone().unwrap_or_default()));
+                    if v2_verdict != b_verdict {
+                        replay_diffs.push(format!(
+                            "  {key}: baseline {b_verdict:?} -> policy {v2_verdict:?}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    println!("\n=== RFC-070 policy replay ===");
+    println!("decided cells replayed: {decided}");
+    println!("deciding-stage distribution: {stage_hits:?}");
+    if !baseline_diffs.is_empty() {
+        println!(
+            "\nNOTE: v1 itself diverged from the committed baseline on {} cell(s). The \
+             replay below is still meaningful (it compares against the LIVE v1 decision \
+             too), but these cells are an engine or provenance change, not a policy \
+             finding:\n{}",
+            baseline_diffs.len(),
+            baseline_diffs.join("\n")
+        );
+    }
+    if !provenance_ok {
+        println!(
+            "\nNOTE: this run's zone cache is {pin_hash:?}, the baseline was blessed \
+             against {:?} — run with SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/\
+             sat-zones-ci.bin before reading any divergence as a finding.",
+            baseline.as_ref().and_then(|b| b.zone_cache_hash.clone())
+        );
+    }
+
+    // "Verified clean" must be distinguishable from "compared nothing"
+    // (the #693 lesson): 140 is the committed count of decided cells.
+    assert_eq!(
+        decided, 140,
+        "the corpus decided {decided} cells, not the 140 the committed baseline records — \
+         the candidate field moved, and a replay over a different cell set is not evidence \
+         about this baseline"
+    );
+    assert!(
+        replay_diffs.is_empty(),
+        "SelectionPolicy::decide did not reproduce {} of {decided} decided cells. THIS IS \
+         A CAMPAIGN-LEVEL FINDING, not a test bug: it means today's selection is not \
+         expressible as policy data over the recorded measurements — K70-1's precursor. \
+         Report it; do not add candidate-name-keyed logic to make it pass.\n{}",
+        replay_diffs.len(),
+        replay_diffs.join("\n")
+    );
+}
+
+/// `stage_name`'s inverse-ish: the label a `Cell` stores, normalised for
+/// the histogram. A stage the corpus records but this file does not know
+/// is a loud `unknown:` row rather than a silent bucket.
+fn stage_label(stage: &str) -> &'static str {
+    match stage {
+        "merge-tap" => "merge-tap",
+        "scoped-pairwise" => "scoped-pairwise",
+        "best-error-free" => "best-error-free",
+        "best-accepted" => "best-accepted",
+        "first-produced" => "first-produced",
+        _ => "unknown",
+    }
 }
 
 #[test]

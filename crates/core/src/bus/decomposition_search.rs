@@ -628,7 +628,7 @@ fn k1_consumer_for_item(
 /// Returns `None` if no enrollments would apply (e.g. all warnings are
 /// for K≥2 items or shard-only fixes), so the caller can skip the
 /// follow-up layout pass.
-fn build_k1_enrollment_plan(
+pub(crate) fn build_k1_enrollment_plan(
     native_layout: &LayoutResult,
     solver_result: &SolverResult,
     opts: &LayoutOptions,
@@ -868,9 +868,12 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
         // that follows is kept as the record of WHY it was excluded and
         // what it cost, not as a description of current behaviour.
         // The `SELECTION_EXCLUDED_WARNING_CATEGORIES` set remains
-        // excluded (belt-detour, plus the two #632 B6 demotions).
-        // Receipts: validator-trust.md
-        // hole 2.
+        // excluded — as of 2026-08-21 that is `belt-detour` ALONE. The
+        // two #632 B6 demotions left the set by DELETION (#684: the
+        // inserter-throughput checks themselves are gone), so the "plus
+        // the two demotions" this line used to claim described a set
+        // with three entries that has had one since. Read the constant,
+        // not this comment. Receipts: validator-trust.md hole 2.
         // Honest scope statement (review finding on #525 corrected an
         // earlier "bit-identical to pre-#519" overclaim here): the
         // category PRE-EXISTED with nonzero counts, so excluding it DOES
