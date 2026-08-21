@@ -229,21 +229,34 @@ impl IssueProfile {
         layout: &LayoutResult,
         solver_result: &SolverResult,
         policy: &SelectionPolicy,
+        producer: &ProducerRegistration,
     ) -> Self {
-        let issues = match crate::validate::validate(layout, Some(solver_result)) {
-            Ok(issues) => issues,
-            // `validate()` returns Err CARRYING the issues — reading only
-            // `Ok` here would blank the profile of exactly the candidates
-            // that failed hardest.
-            Err(e) => e.issues,
-        };
+        // MUTED, for the reason v1 wraps every one of its `validate()`
+        // calls in peek/truncate: `validate()` emits a
+        // `ValidationCompleted` event, and a losing candidate's
+        // validation leaking into the winner's replayed stream makes the
+        // web timing log and the snapshot debugger report the wrong
+        // layout's error counts. That is #396, which this project has
+        // hit twice; a measurement helper with no emission discipline
+        // would hand it to Phase 2a a third time (#698 review round 2).
+        let issues = crate::trace::with_muted(|| {
+            match crate::validate::validate(layout, Some(solver_result)) {
+                Ok(issues) => issues,
+                // `validate()` returns Err CARRYING the issues — reading
+                // only `Ok` here would blank the profile of exactly the
+                // candidates that failed hardest.
+                Err(e) => e.issues,
+            }
+        });
         let mut kinds = ErrorKindCounts::default();
         let mut errors = 0usize;
         let mut selection_warnings = 0usize;
+        let mut error_categories: BTreeMap<&str, usize> = BTreeMap::new();
         for i in &issues {
             match i.severity {
                 crate::validate::Severity::Error => {
                     errors += 1;
+                    *error_categories.entry(i.category.as_str()).or_default() += 1;
                     match policy.kind_of(&i.category) {
                         IssueKind::Contamination => kinds.contamination += 1,
                         IssueKind::Structural => kinds.structural += 1,
@@ -259,6 +272,45 @@ impl IssueProfile {
         }
         let score = score_layout(layout, solver_result);
         let refusal = policy.acceptance_gates.iter().find_map(|g| g.refusal(layout));
+
+        // The PRODUCE-TIME gate. A flag no code path applies is a trap
+        // for whoever wires this (#698 review round 2): without it, a
+        // naive `measure -> decide` hands DI / horizontal / cell-composed
+        // an error-laden `Produced` profile that can displace a healthy
+        // incumbent, inverting the very asymmetry
+        // `refuse_on_error_is_asymmetric_and_that_asymmetry_is_load_bearing`
+        // exists to pin — and `policy_replay` cannot catch it, because
+        // it replays rows where v1 already refused.
+        //
+        // Unlike v1, the refusal KEEPS the measurement: v1 stringifies
+        // its own validation failure as `e.to_string().lines().next()`
+        // and drops the issue list, so which categories fired inside a
+        // self-refused candidate is invisible (Phase-0b oracle gap (d)).
+        // Here the categories travel in the reason and the counts and
+        // kinds stay on the profile.
+        if producer.refuse_on_error && errors > 0 {
+            let breakdown = error_categories
+                .iter()
+                .map(|(c, n)| format!("{c}×{n}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Self {
+                outcome: Some(SelectionCandidateOutcome::Refused),
+                refusal_reason: Some(format!(
+                    "refused on {errors} error(s) [refuse_on_error]: {breakdown}"
+                )),
+                score: Some(score.score),
+                accepted: Some(refusal.is_none()),
+                accepted_reason: refusal,
+                counts: Some(IssueCounts {
+                    errors,
+                    selection_warnings,
+                    layout_warnings: layout.warnings.len(),
+                }),
+                kinds: Some(kinds),
+            };
+        }
+
         Self {
             outcome: Some(SelectionCandidateOutcome::Produced),
             refusal_reason: None,
@@ -363,6 +415,20 @@ impl GateContext<'_> {
     /// property of the caller, and this predicate should not depend on
     /// one.
     pub fn any_prior_accepted(&self) -> bool {
+        // ASSERTED, not clamped (#698 review round 2). A `min()` here
+        // would silently degrade an out-of-range index back into the
+        // whole-array scan this bound exists to remove — the fix would
+        // hold only for callers that already got it right. `debug_assert`
+        // per the module's degradation philosophy: `cargo test` and CI
+        // build debug, while a release or WASM solve must not panic over
+        // a code-level mistake.
+        debug_assert!(
+            self.registration_index <= self.prior.len(),
+            "registration_index {} is past the {}-slot `prior` array — this gate would \
+             scan slots that do not belong to it",
+            self.registration_index,
+            self.prior.len()
+        );
         let end = self.registration_index.min(self.prior.len());
         self.prior[..end].contains(&Some(true))
     }
@@ -657,18 +723,15 @@ impl SelectionPolicy {
             .map(|s| (*s).to_string())
             .collect();
 
-        // `classify_errors`' match, as a table.
+        // `classify_errors`' classification, as a table — built from the
+        // SAME lists that function reads, not re-typed beside them
+        // (#698 review round 2). A category added there now appears
+        // here; re-typing would have let it fall silently to Starvation.
         let mut error_kind_classes = BTreeMap::new();
-        for c in [
-            "belt-item-isolation",
-            "fluid-network",
-            "pipe-isolation",
-            "fluid-connectivity",
-            "belt-junction",
-        ] {
+        for c in super::decomposition_search::CONTAMINATION_CATEGORIES {
             error_kind_classes.insert(c.to_string(), IssueKind::Contamination);
         }
-        for c in ["entity-overlap", "pipe-to-ground"] {
+        for c in super::decomposition_search::STRUCTURAL_CATEGORIES {
             error_kind_classes.insert(c.to_string(), IssueKind::Structural);
         }
 
@@ -1002,6 +1065,18 @@ fn quality_key_stage(
     match incumbent.filter(|&i| profiles[i].produced()) {
         // The incumbent produced nothing, so the rival is the only
         // layout there is.
+        //
+        // KEPT despite being unreachable under today's registrations —
+        // the rival's own gate requires the incumbent to have produced,
+        // so it cannot itself produce when the incumbent refused. This
+        // is a faithful transcription of v1's `merge_tap_choice` arm,
+        // which carries the same unreachability note at its own site,
+        // and deleting it would leave this stage undefined in a state
+        // v1 answers. The floor stage's opposite convention (no
+        // opinion when the incumbent refused) is likewise v1's, from
+        // `di_choice`'s early return — two mechanisms, deliberately
+        // different, not an inconsistency to reconcile (#698 review
+        // round 2, half-refuted).
         None => StageOutcome::Winner(rival),
         Some(inc) => match profiles[inc].kinds {
             // Unreachable against today's recorder, which classifies
@@ -1723,10 +1798,64 @@ mod tests {
             ..Default::default()
         };
         let sr = SolverResult::default();
-        let profile = IssueProfile::measure(&layout, &sr, &SelectionPolicy::current());
+        let policy = SelectionPolicy::current();
+        let profile =
+            IssueProfile::measure(&layout, &sr, &policy, &policy.producers[NATIVE]);
         assert_eq!(profile.accepted, Some(false));
         assert!(profile.accepted_reason.unwrap().contains("missing-balancer-template"));
         // The layout channel is counted separately from the validator's.
         assert_eq!(profile.counts.unwrap().layout_warnings, 1);
+    }
+
+    /// `refuse_on_error` is a PRODUCE-TIME gate, and it has to be
+    /// applied by something. Here it is applied by `measure`, so the
+    /// asymmetry survives a `measure -> decide` wiring: the same
+    /// error-laden layout is `Produced` for the incumbent (which is how
+    /// `ec30` ships an error-laden best) and `Refused` for DI.
+    #[test]
+    fn measure_applies_the_produce_time_refusal_only_where_policy_says_so() {
+        // One entity overlapping itself: an `entity-overlap` Error that
+        // needs no solver context to fire.
+        let e = |name: &str| crate::models::PlacedEntity {
+            name: name.to_string(),
+            x: 0,
+            y: 0,
+            ..Default::default()
+        };
+        let layout = LayoutResult {
+            entities: vec![e("transport-belt"), e("transport-belt")],
+            ..Default::default()
+        };
+        let sr = SolverResult::default();
+        let policy = SelectionPolicy::current();
+
+        let native = IssueProfile::measure(&layout, &sr, &policy, &policy.producers[NATIVE]);
+        assert!(native.counts.unwrap().errors > 0, "the fixture must actually produce Errors");
+        assert!(
+            native.produced(),
+            "native does NOT carry refuse_on_error — an error-laden layout stays in play, \
+             which is the ec30 witness and is REQUIRED for parity"
+        );
+
+        let di = IssueProfile::measure(&layout, &sr, &policy, &policy.producers[DI]);
+        assert!(!di.produced(), "DI carries refuse_on_error, so this layout is discarded");
+        assert_eq!(di.outcome, Some(SelectionCandidateOutcome::Refused));
+        let reason = di.refusal_reason.clone().expect("a refusal names its reason");
+        assert!(
+            reason.contains("entity-overlap"),
+            "the refusal must retain WHICH categories fired (Phase-0b oracle gap (d)); \
+             got {reason:?}"
+        );
+        assert!(
+            di.counts.is_some() && di.kinds.is_some(),
+            "…and the measurement survives the refusal rather than being stringified away"
+        );
+
+        // A refused profile cannot win any stage.
+        let mut ps = blank();
+        ps[NATIVE] = native;
+        ps[DI] = di;
+        let d = decide(&ps, &policy).unwrap();
+        assert_eq!(d.winner, NATIVE);
     }
 }

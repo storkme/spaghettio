@@ -796,17 +796,37 @@ fn classify_errors(layout: &LayoutResult, solver_result: &SolverResult) -> Error
         .iter()
         .filter(|i| i.severity == crate::validate::Severity::Error)
     {
-        match i.category.as_str() {
-            "belt-item-isolation" | "fluid-network" | "pipe-isolation"
-            | "fluid-connectivity" | "belt-junction" => {
-                kinds.contamination += 1
-            }
-            "entity-overlap" | "pipe-to-ground" => kinds.structural += 1,
-            _ => kinds.starvation += 1,
+        let cat = i.category.as_str();
+        if CONTAMINATION_CATEGORIES.contains(&cat) {
+            kinds.contamination += 1;
+        } else if STRUCTURAL_CATEGORIES.contains(&cat) {
+            kinds.structural += 1;
+        } else {
+            kinds.starvation += 1;
         }
     }
     kinds
 }
+
+/// The Error categories that classify as CONTAMINATION — a wrong item on
+/// a trunk, which propagates downstream. Hoisted out of the `match` this
+/// function used to spell inline so `bus::selection_policy` can build its
+/// category→kind table from the same list rather than re-typing it beside
+/// this one (#698 review round 2: the "two definitions that disagree"
+/// class, where a category added here would silently fall to Starvation
+/// there).
+pub(crate) const CONTAMINATION_CATEGORIES: [&str; 5] = [
+    "belt-item-isolation",
+    "fluid-network",
+    "pipe-isolation",
+    "fluid-connectivity",
+    "belt-junction",
+];
+
+/// The Error categories that classify as STRUCTURAL — the blueprint does
+/// not import at all. Everything not in either list is STARVATION (the
+/// `_` arm above).
+pub(crate) const STRUCTURAL_CATEGORIES: [&str; 2] = ["entity-overlap", "pipe-to-ground"];
 
 /// Issue counts for the DI-vs-native comparison: validator errors,
 /// validator warnings, and the SECOND issue channel

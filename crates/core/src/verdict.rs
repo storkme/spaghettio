@@ -396,9 +396,18 @@ impl Verdict {
         self.categories.values().map(|o| o.native_errors).sum()
     }
 
-    /// Candidate warnings minus the policy's excluded categories —
-    /// `validate::selection_warning_count`'s semantics, expressed over a
-    /// verdict.
+    /// Candidate warnings minus the policy's excluded categories.
+    ///
+    /// This equals `validate::selection_warning_count` **only when the
+    /// governing policy carries the exclusions** — via
+    /// [`Policy::with_live_selection_exclusions`] or
+    /// [`Policy::with_excluded_warning_category`]. [`Policy::fold`] and
+    /// [`Policy::decomposition`] deliberately carry NONE, so under those
+    /// presets this counts every warning including `belt-detour`, which
+    /// is the opposite of the selection-scoped number (#698 review round
+    /// 2). That is the compat property those presets are for, not an
+    /// oversight: adding exclusions to them would change what existing
+    /// callers measure.
     pub fn candidate_selection_warnings(&self) -> usize {
         self.selection_warnings(|o| o.candidate_warnings)
     }

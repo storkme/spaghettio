@@ -1158,3 +1158,50 @@ fixtures / docs split per the churn norm).
     acceptance bar** — "the parity harness passes" always means a
     hand-run sweep with the zone-cache pin. Both are now stated at the
     test's own doc so the claim cannot be quoted without them.*
+- *2026-08-21 — **#698 review round 2 adjudicated** (2 major, 5 minor, 1
+  nit; 6 absorbed, 1 half-refuted, 1 refuted). **Both majors were about
+  the same thing and it is the useful pattern of the round: a
+  Phase-1b helper that Phase 2a will call is a place where a v1
+  discipline can be silently dropped.** (a) `refuse_on_error` was policy
+  data no code path applied — a naive `measure → decide` wiring would
+  have handed DI / horizontal / cell-composed an error-laden `Produced`
+  profile able to displace a healthy incumbent, inverting the asymmetry
+  the flag exists to state, and `policy_replay` cannot see it because it
+  replays rows where v1 already refused. `IssueProfile::measure` now
+  takes the registration and applies the gate — and, unlike v1, KEEPS
+  the measurement: the refusal reason carries the error categories and
+  the counts/kinds stay on the profile, which is Phase-0b oracle gap (d)
+  closed rather than merely deferred. (b) `measure` ran `validate()`
+  with no emission discipline, where v1 wraps every one of its
+  `validate()` calls in peek/truncate so a loser's `ValidationCompleted`
+  cannot leak into the winner's replayed stream — that is #396, hit
+  twice before; `measure` now runs muted.*
+  - *Also absorbed: the category→kind table was a SECOND hand-typed copy
+    of `classify_errors`'s match, guarded only by a seven-category unit
+    test, so a category added there would have fallen silently to
+    Starvation here — both now read
+    `CONTAMINATION_CATEGORIES` / `STRUCTURAL_CATEGORIES`, hoisted out of
+    the match (behaviour-identical; the merge-tap corpus cells exercise
+    it); `any_prior_accepted`'s bound was a `min()` that silently
+    degraded an out-of-range index back into the whole-array scan it had
+    just removed — now `debug_assert`ed; and
+    `Verdict::candidate_selection_warnings`'s doc promised
+    `selection_warning_count` semantics that only hold when the policy
+    carries the exclusions, which `fold()`/`decomposition()`
+    deliberately do not.*
+  - *Half-refuted: `quality_key_stage`'s "incumbent produced nothing →
+    the rival wins" arm IS unreachable under today's gates, as the
+    reviewer says — but it is a faithful transcription of v1's
+    `merge_tap_choice` arm, which carries the same unreachability note
+    at its own site, and deleting it would leave the stage undefined in
+    a state v1 answers. The claimed inconsistency with the floor stage's
+    opposite convention is also v1's (`di_choice`'s early return):
+    two mechanisms, deliberately different. Comment strengthened, branch
+    kept. Refuted outright: the gate-coverage / `#[ignore]` finding is a
+    re-raise of round 1's, absorbed there and already disclosed in the
+    code the reviewer is reading. The nit (a `debug_assert` on the
+    incumbent-kinds gap branch) is declined on principle: this module's
+    stated rule is that a gap SKIPS, and a panic path inside a pure
+    decision function contradicts it — the caller-contract violation in
+    `any_prior_accepted` is a different class, which is why that one got
+    the assert.*
