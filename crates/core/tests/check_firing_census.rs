@@ -18,11 +18,31 @@
 //!
 //! Run: cargo test --test check_firing_census -- --ignored --nocapture
 
+use std::collections::BTreeSet;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 use spaghettio_core::bus::cells::CellComposition;
 use spaghettio_core::bus::di_cell::DirectInsertion;
 use spaghettio_core::bus::layout::{self, LayoutOptions, LayoutStrategy};
 use spaghettio_core::{solver, validate};
+
+/// Per-category census row. `winner` / `variants` / `err_variants` are kept
+/// separate rather than folded into one flag because candidate refusal
+/// (`decomposition_search.rs`) keys on `Severity::Error` only — a category
+/// that fires Warnings on a non-default variant but never an Error is
+/// invisible to selection, and must not be conflated with one that does.
+#[derive(Default)]
+struct CatRow {
+    /// Fired (any severity) on the "default" variant — the one the engine
+    /// actually ships.
+    winner: bool,
+    /// Every variant name this category fired on, "default" included.
+    variants: BTreeSet<&'static str>,
+    /// Variant names where this category fired at `Severity::Error`.
+    err_variants: BTreeSet<&'static str>,
+    /// Total issue count across all builds.
+    count: usize,
+}
 
 #[test]
 #[ignore = "G2 diagnostic census — run with --ignored --nocapture"]
@@ -54,11 +74,9 @@ fn check_firing_census() {
         ("partitioned", |o| o.strategy = LayoutStrategy::PartitionedDecomposed),
     ];
 
-    // category -> (fired on the default/winner build, fired on any
-    // non-default variant, total issue count across all builds)
-    let mut census: FxHashMap<String, (bool, bool, usize)> = FxHashMap::default();
+    let mut census: FxHashMap<String, CatRow> = FxHashMap::default();
     let mut builds = 0usize;
-    let mut refusals = 0usize;
+    let mut refusals_by_variant: FxHashMap<&'static str, usize> = FxHashMap::default();
 
     for &(item, rate, machine, inputs) in fixtures {
         let input_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
@@ -72,7 +90,7 @@ fn check_firing_census() {
             let l = match layout::build_bus_layout(&sr, opts) {
                 Ok(l) => l,
                 Err(_) => {
-                    refusals += 1;
+                    *refusals_by_variant.entry(*vname).or_insert(0) += 1;
                     continue;
                 }
             };
@@ -82,36 +100,66 @@ fn check_firing_census() {
                 Err(e) => e.issues,
             };
             for i in &issues {
-                let e = census.entry(i.category.clone()).or_insert((false, false, 0));
+                let row = census.entry(i.category.clone()).or_default();
+                row.variants.insert(*vname);
+                row.count += 1;
                 if *vname == "default" {
-                    e.0 = true;
-                } else {
-                    e.1 = true;
+                    row.winner = true;
                 }
-                e.2 += 1;
+                if i.severity == validate::Severity::Error {
+                    row.err_variants.insert(*vname);
+                }
             }
         }
     }
 
     let mut rows: Vec<_> = census.into_iter().collect();
-    rows.sort_by(|a, b| b.1 .2.cmp(&a.1 .2));
-    println!("\n=== check-firing census: {builds} builds, {refusals} refusals ===");
-    println!("{:<32} {:>7} {:>10} {:>6}", "category", "winner", "loser-only", "count");
-    for (cat, (on_default, on_variant, n)) in &rows {
-        let loser_only = *on_variant && !*on_default;
+    rows.sort_by(|a, b| b.1.count.cmp(&a.1.count).then_with(|| a.0.cmp(&b.0)));
+
+    let refusal_summary = if refusals_by_variant.is_empty() {
+        "none".to_string()
+    } else {
+        let mut entries: Vec<_> = refusals_by_variant.iter().collect();
+        entries.sort_by_key(|(name, _)| **name);
+        entries.iter().map(|(name, n)| format!("{name}={n}")).collect::<Vec<_>>().join(" ")
+    };
+    println!("\n=== check-firing census: {builds} builds, refusals: {refusal_summary} ===");
+    println!(
+        "{:<32} {:>7} {:>10} {:>9} {:>6}  {}",
+        "category", "winner", "loser-only", "err-loser", "count", "variants"
+    );
+    for (cat, row) in &rows {
+        // "loser-only" and "err-loser" both read as "fired on a non-default
+        // variant, never on default" — the difference is which severity is
+        // required on that non-default firing. `winner` already tracks
+        // "fired on default at any severity", so `!winner` alone covers the
+        // "never on default" half for both columns.
+        let loser_only = !row.winner;
+        let err_loser = !row.winner && !row.err_variants.is_empty();
+        let variants_str = row.variants.iter().copied().collect::<Vec<_>>().join(",");
         println!(
-            "{:<32} {:>7} {:>10} {:>6}",
+            "{:<32} {:>7} {:>10} {:>9} {:>6}  {}",
             cat,
-            if *on_default { "yes" } else { "-" },
+            if row.winner { "yes" } else { "-" },
             if loser_only { "YES" } else { "-" },
-            n
+            if err_loser { "YES" } else { "-" },
+            row.count,
+            variants_str
         );
     }
     println!(
-        "\nInterpretation: a category with loser-only=YES does invisible \
-         selection work — quietness on the shipped corpus proves nothing \
-         about it. Categories absent entirely fired on NOTHING evaluated \
-         here (v1 scope caveats in the module doc apply before concluding \
-         they are inert)."
+        "\nInterpretation: candidate refusal keys on Severity::Error only \
+         (decomposition_search refuses Error-carrying candidates; warnings \
+         pass), so only err-loser=YES categories are evidence of invisible \
+         selection work. loser-only=YES with warnings alone means the \
+         category fires on shapes the corpus never ships — useful for \
+         coverage, silent on selection. The variants column says WHICH \
+         shapes: cells-off/partitioned are user-elected or alternate-path \
+         builds the native search does not enumerate (v1 approximation, \
+         module doc), so firings confined to them are 'fired on a \
+         non-default pipeline', not 'refused within the search'. \
+         Categories absent entirely fired on NOTHING evaluated here (v1 \
+         scope caveats in the module doc apply before concluding they are \
+         inert)."
     );
 }
