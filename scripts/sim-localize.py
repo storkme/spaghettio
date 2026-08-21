@@ -8,7 +8,7 @@ belts. Renders and ranks; no root-cause, no belt-walking to first-empty-
 tile, no validator cross-referencing.
 
 Usage: python3 scripts/sim-localize.py <report.json> [--top N]
-       [--radius N] [--around X,Y[,R]] [--color]
+       [--radius N] [--around X,Y[,R]]
 --top N     rank/detail the worst N machines (default 3); also windows
             the map on their bbox unless --around is given.
 --radius N  lane-detail radius per worst machine (default 3).
@@ -132,24 +132,24 @@ def print_header(top):
     print()
 
     if target is not None and target_ratio is not None and target_ratio < 1.0:
-        # Only worth localizing when the target actually falls short — an
-        # at-or-above-plan target has no shortfall for a hint to explain.
-        # "Planned dependency order" isn't derivable from this report (no
-        # recipe graph carried) — table order (target-first, then
-        # alphabetical, per report.rs) is used instead.
-        hint = next(
-            (it for it in items if not it.get("is_target") and it.get("planned_rate")
-             and it.get("measured_produced_rate") is not None
-             and it["measured_produced_rate"] / it["planned_rate"] < target_ratio),
-            None,
+        # Only when the target actually falls short. The report carries no
+        # recipe graph, so "upstream" is not verifiable from it — this is a
+        # plain sorted listing, and the caveat printed with it is load-bearing.
+        short = sorted(
+            (it["measured_produced_rate"] / it["planned_rate"], it["item"])
+            for it in items
+            if not it.get("is_target") and it.get("planned_rate")
+            and it.get("measured_produced_rate") is not None
         )
-        if hint:
-            r = hint["measured_produced_rate"] / hint["planned_rate"] * 100
-            print(f"hint: {hint['item']} runs at {r:.0f}% of plan, below the target's own "
-                  f"{target_ratio * 100:.0f}% — a plausible upstream stage (table order, not verified dependency order).")
+        short = [(r, name) for r, name in short if r < 0.98]
+        if short:
+            print("below-plan intermediates, most short first: "
+                  + ", ".join(f"{name} {r * 100:.0f}%" for r, name in short))
+            print("  (a listing, not a causal order — a BACKED-UP stage reads below plan just like a "
+                  "starved one; cross-check the ranking's backpressure% column)")
         else:
-            print("hint: no upstream item measures below the target's own shortfall ratio — the "
-                  "bottleneck may be structural (machine count, capacity) rather than a starved input.")
+            print("no intermediate below 98% of plan — the shortfall sits at the target stage itself "
+                  "(machine count, inserter/belt capacity, or its own feed).")
     print()
 
 # --- machine ranking ---------------------------------------------------------
@@ -229,7 +229,9 @@ def print_ranking(top, top_n):
     print("--- machine ranking ---")
     if timeseries:
         rows = rank_from_timeseries(timeseries)
-        print(f"({len(timeseries)} checkpoint window(s))")
+        total = len(rows)
+        rows = [r for r in rows if r["frac_shortage"] > 0 or r["frac_backpressure"] > 0 or r["shape"] != "healthy"]
+        print(f"({len(timeseries)} checkpoint window(s); {total - len(rows)} healthy machine(s) omitted)")
     else:
         print("timeseries: absent — falling back to final frame (cannot distinguish transient from persistent)")
         rows = rank_from_final_frame(top.get("sim_state") or {})
@@ -366,7 +368,7 @@ def print_lane_detail(sim_state, worst_rows, radius):
         x0, y0 = r["x"], r["y"]
         if x0 is None or y0 is None:
             continue
-        print(f"machine {r.get('unit', '-')} {r.get('name', '?')} at ({x0:.0f},{y0:.0f}):")
+        print(f"machine {r.get('unit') or '-'} {r.get('name') or '?'} at ({x0:.0f},{y0:.0f}):")
         nearby = sorted(
             (b for b in belts if abs(b["x"] - x0) <= radius and abs(b["y"] - y0) <= radius),
             key=lambda b: (abs(b["x"] - x0) + abs(b["y"] - y0), b["x"], b["y"]),
@@ -392,7 +394,6 @@ def main():
     ap.add_argument("--top", type=int, default=None, help="worst-N machines to detail (default 3)")
     ap.add_argument("--radius", type=int, default=3, help="lane-detail radius (default 3)")
     ap.add_argument("--around", default=None, help="X,Y[,R] — window the map instead of full extent")
-    ap.add_argument("--color", action="store_true", help="cheap ANSI tinting (off by default; unused for now)")
     args = ap.parse_args()
     args.top_explicit = args.top is not None
     top_n = args.top if args.top is not None else 3

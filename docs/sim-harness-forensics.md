@@ -223,8 +223,8 @@ instrument that was true when written and false when read.
 **Step 0, before any of the below: `scripts/sim-localize.py <report.json>`.**
 It renders the "where" in one command instead of an improvised read (which
 has gotten the belt-count semantics wrong before — see the `n` warning
-above): a kit-error banner if the run is invalid, the item table with a
-same-target-shortfall hint, a starved/backpressured machine ranking (from
+above): a kit-error banner if the run is invalid, the item table with its
+below-plan intermediates listed (a listing, not a causal order), a starved/backpressured machine ranking (from
 `timeseries` when present, falling back to the final `sim_state` frame with
 an explicit "can't distinguish transient from persistent" caveat), an ASCII
 map of machines/inserters/belts by status and direction, and per-lane belt

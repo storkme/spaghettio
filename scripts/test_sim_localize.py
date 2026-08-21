@@ -49,12 +49,15 @@ def test_ec10_fail_ranks_both_shortage_assemblers_first(capsys):
     assert rows[2]["frac_backpressure"] == 1.0
 
 
-def test_ec10_fail_prints_verdict_and_hint(capsys):
+def test_ec10_fail_prints_verdict_and_below_plan_listing(capsys):
     run(TESTDATA / "sim-report-ec10-fail.json")
     out = capsys.readouterr().out
     assert "verdict: FAIL" in out
     assert "*electronic-circuit" in out
-    assert "hint:" in out
+    # cable (52%) sorts before iron (56%); copper-plate (100%) is not listed
+    line = next(l for l in out.splitlines() if l.startswith("below-plan intermediates"))
+    assert line.index("copper-cable 52%") < line.index("iron-plate 5")
+    assert "copper-plate" not in line
 
 
 def test_gear10_pass_has_no_starved_machines(capsys):
@@ -169,7 +172,8 @@ def test_synthetic_new_format_ranking_and_shapes(tmp_path, capsys):
     assert rc == 0
     assert "checkpoint window(s)" in out  # timeseries path taken, not the frame fallback
     assert "flat-zero" in out
-    assert "healthy" in out
+    assert "1 healthy machine(s) omitted" in out  # unit 2 is healthy: not listed, not lane-detailed
+    assert "machine 2 assembling-machine-2" not in out
 
     rows = sim_localize.rank_from_timeseries(report["report"]["timeseries"])
     assert rows[0]["unit"] == 1  # flat-zero shortage machine outranks the healthy one
