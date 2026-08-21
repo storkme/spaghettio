@@ -585,3 +585,28 @@ fixtures / docs split per the churn norm).
   extractor" — the brittleness IS the pin: `assert_scoreboard_contract`
   must fail when a selection nests, `outer_selection` must survive it
   across 160 cells. Making the pin robust deletes its detection.*
+- *2026-08-21 — **#694 review round 2 adjudicated** (7 findings, 4 nits;
+  none contradicted round 1). Absorbed: (a) the committed provenance hash
+  was `DefaultHasher`, whose algorithm is documented as unstable across
+  Rust releases — a value that is committed and compared against forever
+  cannot be that, so it is SHA-256 now. The re-bless is its own receipt:
+  **only the hash line changed, all 160 cells byte-identical**, a fourth
+  independent reproduction, taken through `bless-repin` because the plain
+  path correctly refused. (b) a `null` prior hash satisfied the new bless
+  guard through an `is_none()` disjunct, so one repin with no cache would
+  have disarmed it permanently. (c) `outer_selection` now asserts the
+  winner is among the seven rows it extracted — the timing guard catches
+  an out-of-order terminal but not an in-order one naming another block's
+  candidate, and that cell would look self-consistent and be re-verified
+  green forever because `check` reads through the same extractor.
+  (d) the contract tests' unpinned cache posture is reconciled by
+  measurement rather than assertion: CI pins at the job level, and all
+  three pass under both caches (1.10s pinned, 2.66s unpinned).
+  Adjudicated as designed: `no-winner`/`no-selection` do not consult the
+  build result because both IMPLY it errored; `e2e-harness` cannot assert
+  its delta automatically (`run_e2e_inner` is private to another test
+  binary) so the hand-verified receipt is written into the doc instead.
+  Refuted: the 180s contract-test timeouts are not a flake source (the
+  three run in 1.06s, ~170× headroom) and the "builds the jammed ec30
+  layout" concern conflates a build with a simulated factory — the layout
+  builds in milliseconds, it is only the SIM that deadlocks.*
