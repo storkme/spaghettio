@@ -980,3 +980,54 @@ fixtures / docs split per the churn norm).
   divergence this PR introduced; the pin file was untouched by the
   read-only `check` mode (confirmed via `git status`), so no restore step
   was needed.
+- *2026-08-21 — **#696 (W2a) review round 1 adjudicated** (7 findings, all
+  minor, absorbed in full — none refuted). Two were substantive, not just
+  wording: (a) the field legend's "the guard means naming a field twice can
+  no longer select the wrong value" OVERCLAIMED — it is true only for the
+  ATOMIC path (`SearchAxes::default()` called wholesale); a partial literal
+  of the GROUP struct itself (`SearchAxes { cell_composition:
+  Default::default(), ..SearchAxes::default() }`) reproduces the exact same
+  trap one level down, because `UserConstraints`/`SearchAxes`'s fields are
+  `pub`. Fixed by rewriting the claim: the guard relocates the trap's
+  easiest entry point and gives new call sites a correct atomic default to
+  reach for instead, it does not remove the trap's shape from the language.
+  (b) the round-trip test (`layout_options_from_groups_round_trips`) had a
+  structural blind spot the review named precisely: comparing
+  `rebuilt.axes() == original.axes()` calls the SAME (possibly buggy)
+  accessor on both sides, so a "wrong-source-field" bug that is consistently
+  wrong (e.g. `axes()` reading `merge_tap` from `self.horizontal_candidate`)
+  produces identical wrong values on both sides and passes. Replaced with
+  `layout_options_constraints_axes_and_from_groups_match_explicit_expectations`,
+  which checks every accessor against a HAND-WRITTEN expected struct instead
+  of re-deriving one, and checks `from_groups`'s rebuild field-by-field
+  against the original (not via the accessors again). **Executed
+  discrimination check**: injected exactly the bug above
+  (`merge_tap: self.horizontal_candidate` in `axes()`); the new test failed
+  immediately, naming `merge_tap: false` (actual) vs `true` (expected) in
+  the `SearchAxes` comparison — caught before the round-trip stage was even
+  reached. Restored, reverified green. Minor fixes absorbed alongside: the
+  legend's "~320... most of them `tests/e2e.rs` struct literals" wording
+  contradicted the log's own "~238 reads + ~80 constructions" breakdown
+  (reads dominate, not literals) — reworded to state both counts and that
+  reads live outside `tests/e2e.rs` too; `from_groups`'s doc now states it
+  takes its groups **by value** (moves `max_belt_tier`'s `String` and
+  `research_productivity`'s `BTreeMap`), distinct from the `&self`
+  accessors' owned-copy contract; the legend now states explicitly that
+  `from_groups`/`constraints`/`axes`/`engine_tuning` have **zero production
+  callers as of this PR** — pure scaffolding for Phase 1b / #689 W2c: the
+  ~80 existing flat-literal sites, including both known `run_e2e` fossils,
+  are completely untouched; the defaults-match test's doc now states its
+  own stated limitation (catches divergence between the two `Default`
+  impls, not wrongness of a value both share). One finding, on the
+  round-trip test's original `stacking: 2` colliding with
+  `DEFAULT_INSERTER_CAPACITY`'s own value (also 2), is subsumed by the
+  test's replacement — the new test asserts `stacking` (3) is distinct from
+  `DEFAULT_INSERTER_CAPACITY` and gives the two `u8` fields
+  (`stacking`/`inserter_capacity`) different values (3 vs 5) by
+  construction. The bool-triple pigeonhole (three `bool` fields, two
+  possible values, so some pair must still collide) is inherent to the type
+  and documented as an acknowledged residual gap rather than chased further.
+  Re-verified after fixes: full `cargo test` green, `cargo clippy -p
+  spaghettio_core -- -D warnings` clean, all PR CI checks (`rust`,
+  `rust-clippy`, `web`, `second-opinion`, `deploy-preview`,
+  `workflow-guard`) green on the prior commit.
