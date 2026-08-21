@@ -25,7 +25,9 @@
 //! candidate loop (same refactor #1 above), not anything this census can
 //! do post-hoc. "Fired on NOTHING evaluated here" therefore means "not
 //! observed," not "inert" — it is silent on categories that only ever
-//! appear inside refused candidates.
+//! appear inside refused candidates. This caveat is repeated in the
+//! printed header (round 3, #686) so a table-skimmer sees it without
+//! reading down to the Interpretation paragraph.
 //!
 //! Run: cargo test --test check_firing_census -- --ignored --nocapture
 
@@ -39,8 +41,8 @@ use spaghettio_core::{solver, validate};
 
 /// Per-category census row.
 ///
-/// Two independent things go wrong if this is read naively, both found in
-/// #686 round 2 review:
+/// Three independent things go wrong if this is read naively, found across
+/// #686 rounds 2 and 3:
 ///
 /// 1. Candidate refusal (`decomposition_search.rs`) is supposed to key on
 ///    `Severity::Error` only, so a Warning-only firing on a non-default
@@ -51,32 +53,50 @@ use spaghettio_core::{solver, validate};
 ///    candidate and ships it anyway (see the comment above
 ///    `best_error_free_idx` in `decomposition_search.rs`: "still returns
 ///    the error-laden best rather than refusing"). A default build CAN
-///    carry a `Severity::Error`, so `err-loser` must not be gated on the
-///    any-severity `winner` flag — the two are unrelated facts.
-/// 2. `winner` and a naive `err_variants.is_empty()` check are both
-///    accumulated ACROSS all six fixtures. A category that Error-fires on
-///    `di-off` for fixture A but only Warns on `default` for unrelated
-///    fixture B would read `winner=true` from B and mask the fixture-A
-///    finding. `fixtures_err_default` / `fixtures_err_nondefault` key on
-///    fixture identity so `err-loser` is computed per-fixture and then
+///    carry a `Severity::Error`, so `err-loser`/`loser-only` must not be
+///    gated on the any-severity `winner` flag — the two are unrelated
+///    facts.
+/// 2. Round 2's fix aggregated `winner` and the err sets ACROSS all six
+///    fixtures. A category that Error-fires on `di-off` for fixture A but
+///    only Warns on `default` for unrelated fixture B would read
+///    `winner=true` from B and mask the fixture-A finding.
+///    `fixtures_{err,any}_{default,nondefault}` key on fixture identity so
+///    both `err-loser` and `loser-only` are computed per-fixture and then
 ///    unioned, not aggregated blind across fixtures.
+/// 3. Per-fixture pairing alone still isn't enough: a fixture whose
+///    `default` variant itself REFUSED (returned `Err`, so nothing is in
+///    `fixtures_err_default`/`fixtures_any_default` for it) is
+///    indistinguishable from one whose default built clean — both show
+///    nothing in the "default" set for that fixture. Reading the former
+///    as "clean default, so the non-default firing is invisible work"
+///    would be wrong: there was no winner for that fixture to hide
+///    anything from. `defaults_built` (checked in `err_loser`/
+///    `loser_only` below) gates the predicate on the default having
+///    actually produced a layout for that fixture.
 #[derive(Default)]
 struct CatRow {
     /// Fired (any severity) on SOME fixture's "default"-options build. NOT
     /// "the layout the engine ships" — `select_best_decomposition` can
     /// still ship an Error-carrying candidate when nothing validates
-    /// clean; see point 1 above.
+    /// clean; see point 1 above. Informational column only — no longer
+    /// used to derive `loser-only`/`err-loser` (see points 2-3).
     winner: bool,
     /// Every variant name this category fired on, "default" included,
     /// across all fixtures.
     variants: BTreeSet<&'static str>,
     /// Every variant name where this category fired at `Severity::Error`,
     /// across all fixtures. Informational provenance only — NOT the
-    /// err-loser predicate itself, which needs fixture pairing (point 2
-    /// above) rather than a flat union.
+    /// err-loser predicate itself, which needs fixture pairing (point 2)
+    /// gated on default-build success (point 3) rather than a flat union.
     err_variants: BTreeSet<&'static str>,
-    /// Fixture keys (`"{item}@{rate}"`) where this category fired at
-    /// `Severity::Error` on that fixture's OWN "default" build.
+    /// Fixture keys (`"{item}@{rate}"`) where this category fired (any
+    /// severity) on that fixture's OWN "default" build.
+    fixtures_any_default: BTreeSet<String>,
+    /// Fixture keys where this category fired (any severity) on some
+    /// NON-default variant of that fixture.
+    fixtures_any_nondefault: BTreeSet<String>,
+    /// Fixture keys where this category fired at `Severity::Error` on
+    /// that fixture's OWN "default" build.
     fixtures_err_default: BTreeSet<String>,
     /// Fixture keys where this category fired at `Severity::Error` on
     /// some NON-default variant of that fixture.
@@ -86,12 +106,25 @@ struct CatRow {
 }
 
 impl CatRow {
-    /// True iff some fixture Error-fired this category on a non-default
-    /// variant while that SAME fixture's own default build did not —
-    /// i.e. invisible-to-selection Error work that a different fixture's
-    /// quiet default cannot mask.
-    fn err_loser(&self) -> bool {
-        self.fixtures_err_nondefault.iter().any(|f| !self.fixtures_err_default.contains(f))
+    /// True iff some fixture fired this category (any severity) on a
+    /// non-default variant while that SAME fixture's own default build
+    /// (1) actually produced a layout AND (2) never fired it. `defaults_built`
+    /// is the global set of fixture keys whose "default" variant built
+    /// successfully — without that gate, a fixture whose default REFUSED
+    /// would look identical to one whose default built clean and simply
+    /// didn't fire, which is not evidence of anything (point 3, struct doc).
+    fn loser_only(&self, defaults_built: &FxHashSet<String>) -> bool {
+        self.fixtures_any_nondefault
+            .iter()
+            .any(|f| defaults_built.contains(f) && !self.fixtures_any_default.contains(f))
+    }
+
+    /// Same shape as `loser_only`, restricted to `Severity::Error` — the
+    /// severity candidate refusal actually keys on (point 1, struct doc).
+    fn err_loser(&self, defaults_built: &FxHashSet<String>) -> bool {
+        self.fixtures_err_nondefault
+            .iter()
+            .any(|f| defaults_built.contains(f) && !self.fixtures_err_default.contains(f))
     }
 }
 
@@ -128,6 +161,11 @@ fn check_firing_census() {
     let mut census: FxHashMap<String, CatRow> = FxHashMap::default();
     let mut builds = 0usize;
     let mut refusals_by_variant: FxHashMap<&'static str, usize> = FxHashMap::default();
+    // Fixture keys whose "default" variant actually produced a layout —
+    // see struct doc point 3. Global (not per-category): whether a
+    // fixture's default build succeeded doesn't depend on which category
+    // we're looking at.
+    let mut defaults_built: FxHashSet<String> = FxHashSet::default();
 
     for &(item, rate, machine, inputs) in fixtures {
         let input_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
@@ -147,6 +185,9 @@ fn check_firing_census() {
                 }
             };
             builds += 1;
+            if *vname == "default" {
+                defaults_built.insert(fixture_key.clone());
+            }
             let issues = match validate::validate(&l, Some(&sr)) {
                 Ok(i) => i,
                 Err(e) => e.issues,
@@ -157,6 +198,9 @@ fn check_firing_census() {
                 row.count += 1;
                 if *vname == "default" {
                     row.winner = true;
+                    row.fixtures_any_default.insert(fixture_key.clone());
+                } else {
+                    row.fixtures_any_nondefault.insert(fixture_key.clone());
                 }
                 if i.severity == validate::Severity::Error {
                     row.err_variants.insert(*vname);
@@ -182,18 +226,20 @@ fn check_firing_census() {
     };
     println!("\n=== check-firing census: {builds} builds, refusals: {refusal_summary} ===");
     println!(
+        "(a category ABSENT below was never observed on a built layout \
+         here — indistinguishable from 'only fires on refused \
+         candidates'; see Interpretation at the bottom)"
+    );
+    println!(
         "{:<32} {:>7} {:>10} {:>9} {:>6}  {:<24}  {}",
         "category", "winner", "loser-only", "err-loser", "count", "err-variants", "variants"
     );
     for (cat, row) in &rows {
-        // "loser-only" = fired (any severity) on a non-default variant,
-        // never on default; `winner` already tracks "fired on SOME
-        // fixture's default at any severity", so `!winner` covers the
-        // "never on default" half. "err-loser" is NOT `!winner` — see
-        // `CatRow::err_loser` and the struct doc: it is computed per
-        // fixture so a quiet-on-B default can't mask an Error found on A.
-        let loser_only = !row.winner;
-        let err_loser = row.err_loser();
+        // `winner` is informational only (struct doc point 1) — neither
+        // column below is `!winner`. Both are computed per fixture, gated
+        // on that fixture's default having actually built (points 2-3).
+        let loser_only = row.loser_only(&defaults_built);
+        let err_loser = row.err_loser(&defaults_built);
         let err_variants_str = row.err_variants.iter().copied().collect::<Vec<_>>().join(",");
         let err_variants_disp = if err_variants_str.is_empty() { "-" } else { &err_variants_str };
         let variants_str = row.variants.iter().copied().collect::<Vec<_>>().join(",");
@@ -209,19 +255,33 @@ fn check_firing_census() {
         );
     }
     println!(
-        "\nInterpretation: default builds are NOT guaranteed error-free — \
-         select_best_decomposition ships the best-scoring candidate even \
-         when none validates clean, so gating err-loser on the \
-         any-severity `winner` flag was wrong (round 2, #686). err-loser \
-         is now computed per fixture: YES iff some fixture Error-fired \
-         this category on a non-default variant while that SAME \
-         fixture's own default build did not. cell_composition and \
-         direct_insertion both default to Candidate, so the native \
-         search ALREADY tries the cells-off / DI-free shape internally \
-         as its own baseline candidate — firings confined to \
-         cells-off/di-off/di-forced/hs-off are native-adjacent, not \
-         outside the search. Only `partitioned` \
-         (LayoutStrategy::PartitionedDecomposed) is a genuinely \
+        "\nInterpretation: `loser-only`/`err-loser` are computed per \
+         fixture, not from the aggregate `winner` flag (round 3, #686): \
+         for a fixture whose default build actually succeeded, did a \
+         non-default variant of THAT fixture fire (any severity for \
+         loser-only, Severity::Error for err-loser) while that fixture's \
+         own default did not — unioned across fixtures. A fixture whose \
+         default REFUSED contributes nothing to either predicate, because \
+         a refused default has no result to have stayed quiet: its \
+         absence must not be read as 'clean'. Of the option-toggle \
+         variants, cells-off/di-off/hs-off are shapes the native \
+         Candidate-mode search already evaluates internally as its own \
+         baseline — `decomposition_search.rs`'s NativeCandidate always \
+         runs DI-free/cells-free/vertical under the default `Candidate` \
+         settings (see the `DirectInsertion::Off` and `try_horizontal` \
+         doc comments), so firings confined to those three are \
+         native-adjacent, not outside the search. `di-forced` is \
+         different: setting `direct_insertion` to `Forced` at the \
+         top level (rather than letting `Candidate` mode use `Forced` \
+         internally to build ONE competing candidate) stands down the \
+         cells/horizontal/DI-candidate arms entirely (`decomposition_\
+         search.rs`'s `try_cells`/`try_horizontal`/`try_di` gates all \
+         require the outer mode to be non-Forced or exactly Candidate) \
+         and bakes DI directly via a path the default search's own \
+         DI-candidate arm does not reproduce — so `di-forced` is a \
+         user-elected/forced topology, not a shape the native search \
+         tries on its own. `partitioned` \
+         (LayoutStrategy::PartitionedDecomposed) remains a genuinely \
          separate, user-elected top-level strategy the native search \
          never runs. Refused builds (Err from build_bus_layout) produce \
          no layout to validate, so no category attribution is possible \
