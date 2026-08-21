@@ -91,7 +91,10 @@ Append entries here as the RFC progresses. Date them.
 - *2026-MM-DD — phase 1 landed in <commit>; phase 2 deferred pending …*
 - *2026-MM-DD — abandoned; kill criterion <X> tripped on <test>. See
   follow-up notes in `docs/<...>.md`. Move this file to `docs/archive/`
-  with a status of "Rejected" in the archive README.*
+  with a status of "Rejected" in the archive README, **and delete the
+  RFC's code in this same close-out PR** (or append a retention
+  contract with a flip condition — see "Deletion cadence" below) — an
+  archived RFC whose code is still sitting live is not actually closed.*
 
 The decision log is the part that prevents "why did we drop this?"
 amnesia six months later. Don't skip it.
@@ -102,8 +105,16 @@ amnesia six months later. Don't skip it.
 PR**, unless the decision log names a retention contract with an
 explicit flip condition (who re-enables it, and on what trigger). A
 close-out that leaves code behind without such a contract is
-incomplete — falsifying an approach is cheap and prompt; leaving its
-code in place for someone else to notice, audit, and remove later is
-not. (The off-path audit that motivated this rule found ~11k lines of
-retained-but-dead code across five RFCs, all falsified weeks-to-months
-before deletion.)
+incomplete — concluding an approach didn't pan out is cheap and prompt;
+leaving its code in place for someone else to notice, audit, and remove
+later is not. (Motivated by
+[`docs/offpath-code-followups.md`](offpath-code-followups.md)'s Tier 1 +
+Tier 2 findings: ~11k lines of retained code — not all of it RFC-owned,
+and not every instance a clean falsification; some (the CP-SAT pipeline,
+RFC-063 Phase C) were simply never wired in or never funded a
+follow-on — sitting live for weeks to months after their RFC stopped
+being worked on.) For the retention-contract shape, see RFC-067's
+decision log: its preview consumer was killed (K67-2) while the module
+itself was explicitly retained as a baseline, "reopening only by a
+decision-log amendment" — that's the level of specificity a flip
+condition needs.
