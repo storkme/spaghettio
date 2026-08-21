@@ -108,6 +108,19 @@ fn region_fixtures() {
             continue;
         }
 
+        // `solved_by` only has meaning in solve mode — on "capped" /
+        // "unsatisfiable" fixtures it would be silently ignored, and a
+        // silently-dropped attribution pin is exactly what the pin
+        // exists to prevent. Fail loud instead.
+        if fixture.expected.mode != "solve" && fixture.expected.solved_by.is_some() {
+            failures.push(format!(
+                "{} ({}): expected.solved_by is set but mode is {:?} — \
+                 attribution pins only apply to solve-mode fixtures",
+                fixture.name, filename, fixture.expected.mode
+            ));
+            continue;
+        }
+
         let result = replay_region_fixture(&fixture);
 
         match fixture.expected.mode.as_str() {

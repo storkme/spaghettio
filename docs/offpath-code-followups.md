@@ -221,32 +221,41 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
   lines, `ghost_router.rs:5396-6010`): rung 1 of the live routing-strategy
   ladder, fires on narrow preconditions, and no test in the suite reaches it
   (its sibling `cluster_adjacent_crossings` has nine). Coverage gap, not
-  deletion. Also its factory `perpendicular_template_strategy()` (:6089) is
-  itself production-dead (fixture replay only) with a stale parity comment.
+  deletion. (Its replay-only factory `perpendicular_template_strategy()`
+  was folded into the shared `pinned_tier_core_strategies()` helper by
+  #687.)
   - **CLOSED 2026-08-21 (#687), with findings.** Two fixtures now pin the
-    rung (`perp_template_pipe_belt_bridge` = the rung solving its live
-    pipe×belt path; `perp_template_single_tile_crossing` = the ladder's
-    actual dispatch on a belt×belt crossing), via new `expected.solved_by`
-    strategy attribution in the region-fixture harness. The instrumentation
-    surfaced two findings:
-    1. **The rung's belt×belt arm is unreachable for two-item crossings**
-       — the exact shape it was written for. `junction_solver`'s
+    rung via new `expected.solved_by` strategy attribution in the
+    region-fixture harness (`perp_template_pipe_belt_bridge` = static
+    unit pin of the rung's internal pipe×belt logic;
+    `perp_template_single_tile_crossing` = the pinned-tier core ladder's
+    dispatch on a belt×belt crossing). The instrumentation surfaced:
+    1. **The rung appears production-unreachable on BOTH shapes it
+       handles.** Belt×belt two-item crossings: `junction_solver`'s
        item-conflict gate skips every strategy on the sole single-tile
-       iteration (two items on one boundary tile), and the rung refuses
-       any grown region (`tile_count > 1` guard, ghost_router.rs:6105).
-       Reachable paths: pipe×belt (pipe items are conflict-exempt) and,
-       untested hypothesis, same-item belt crossings *if* those ever seed
-       junctions. Follow-up candidates: delete the belt×belt/
-       same-direction arms of `solve_perpendicular_template` + `try_bridge`
-       after a production census confirms no same-item crossings, or
-       rework the conflict gate to let the template try before growth.
+       iteration, and the rung refuses any grown region (`tile_count > 1`
+       guard). Pipe×belt crossings (#687 round-3 review, verified):
+       production dispatch filters pipe specs out of junction seeding
+       entirely (`keys_at_tile` — pipes are forbidden tiles; SAT bypasses
+       them as obstacles), so the rung's 2-spec predicate refuses, and
+       `bridge_belt_over_pipe` never runs from production. The one
+       untested reachability hypothesis left: same-item belt crossings,
+       *if* those ever seed junctions. Follow-up candidate: a production
+       census of junction seeds; if same-item crossings never occur, the
+       **entire ~795-line rung** (`solve_perpendicular_template`,
+       `try_bridge`, `bridge_belt_over_pipe`, the wrapper) is dead in
+       production and deletable — or the conflict/dispatch gates get
+       reworked to let the cheap template actually fire. Don't delete on
+       this note alone; run the census.
     2. **The fixture replay's strategy ladder had drifted** from
        production (pre-native `sat-1ug`/Relaxed-reach list vs production's
-       `sat-1ug-native` core). Realigned to the pinned-tier core in #687;
-       auto-tier extras (eviction, AutoUpgrade rungs) remain deliberately
-       excluded — fixtures don't record belt-tier mode. If the production
-       ladder changes again, the copy in `fixture.rs` must follow (its
-       comment says lift to a shared helper on the next drift).
+       `sat-1ug-native` core). #687 lifted the pinned-tier core into a
+       shared helper (`ghost_router::pinned_tier_core_strategies`) used
+       by both production and the replay, so this drift class is closed
+       structurally. Auto-tier extras (eviction, AutoUpgrade rungs)
+       remain outside the replay — fixtures don't record belt-tier mode
+       — so `solved_by` pins are relative to the core only: a change
+       confined to auto-mode dispatch is not caught by these fixtures.
 - **`region_reimprove.rs` has zero Rust-side tests** while auto-firing in the
   web app on every clean layout with SAT zones.
 

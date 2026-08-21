@@ -202,7 +202,6 @@ pub struct RegionReplayResult {
 /// the replay exercises the same code path a live layout would.
 pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
     use crate::bus::junction_cost::solution_cost;
-    use crate::bus::junction_sat_strategy::{SatConstraints, SatStrategy};
     use crate::bus::junction_solver::{solve_crossing, JunctionStrategy};
     use crate::trace::{self, TraceEvent};
     use rustc_hash::{FxHashMap, FxHashSet};
@@ -246,35 +245,29 @@ pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
         .map(|k| {
             let kind = match fixture.spec_kinds.get(k).map(String::as_str) {
                 Some("Pipe") => crate::bus::junction::SpecKind::Pipe,
-                _ => crate::bus::junction::SpecKind::Belt,
+                None => crate::bus::junction::SpecKind::Belt,
+                // A typo ("pipe", "PIPE") silently degrading the shape
+                // to belt×belt would pin the wrong geometry — fail loud.
+                Some(other) => panic!(
+                    "fixture {}: unknown spec_kind {other:?} for {k} \
+                     (only \"Pipe\" is valid; omit the key for Belt)",
+                    fixture.name
+                ),
             };
             (k.clone(), kind)
         })
         .collect();
 
-    // Production's PINNED-TIER core ladder, mirrored from the strategy
-    // construction in `ghost_router.rs` (search `sat_1ug_native`). The
-    // auto-tier-only extras (eviction + the AutoUpgrade rungs) are
-    // deliberately excluded: fixtures don't record the layout's belt-tier
-    // mode, and the pinned-tier core is the ladder every fixture's
-    // `solved_by` pin should name. Offpath G1 found the previous replay
-    // list here had drifted to the pre-native ladder ("sat-1ug" with
-    // Relaxed reach), so attribution pins named rungs production no
-    // longer runs. Kept inline instead of lifted to a pub helper because
-    // the list only has two call sites and copying is cheaper than
-    // widening the public surface — but if it drifts again, lift it.
-    let perp = crate::bus::ghost_router::perpendicular_template_strategy();
-    let sat_surface = SatStrategy::surface_only();
-    let sat_1ug = SatStrategy::with("sat-1ug-native", SatConstraints::max_ug_ins_native(1));
-    let sat_2ug = SatStrategy::with("sat-2ug-native", SatConstraints::max_ug_ins_native(2));
-    let sat_full = SatStrategy::with("sat-native", SatConstraints::unrestricted_native());
-    let strategies: [&dyn JunctionStrategy; 5] = [
-        &*perp,
-        &sat_surface,
-        &sat_1ug,
-        &sat_2ug,
-        &sat_full,
-    ];
+    // Production's PINNED-TIER core ladder, from the shared helper (the
+    // single source of truth — #687 round 3 lifted it after finding the
+    // previous hand-mirrored copy here had drifted to the pre-native
+    // ladder, so attribution pins named rungs production no longer ran).
+    // The auto-tier-only extras (eviction + the AutoUpgrade rungs) are
+    // deliberately excluded: fixtures don't record the layout's
+    // belt-tier mode, and the pinned-tier core is the ladder every
+    // fixture's `solved_by` pin should name.
+    let core = crate::bus::ghost_router::pinned_tier_core_strategies();
+    let strategies: Vec<&dyn JunctionStrategy> = core.iter().map(|s| s.as_ref()).collect();
 
     // Wrap solve_crossing in a trace scope so we can detect the "capped"
     // outcome (the growth loop emits `JunctionGrowthCapped` on the tile

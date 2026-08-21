@@ -109,6 +109,8 @@ The replay's strategy ladder mirrors production's **pinned-tier core** (`perp`, 
 
 The region solver's call site in `ghost_router.rs` has a debug-only dump path gated on an environment variable. Off by default.
 
+**Pipe caveat:** production dispatch filters pipe specs out of junction seeding (`keys_at_tile` — pipes participate as forbidden tiles only), so a capture can **never** emit a pipe entry in `initial_specs`. Pipe×belt fixtures must be hand-authored (see `perp_template_pipe_belt_bridge.json`); the `spec_kinds` field in the dump exists so captures stay faithful if dispatch ever re-admits pipe specs.
+
 ### Capture one specific junction
 
 ```bash
