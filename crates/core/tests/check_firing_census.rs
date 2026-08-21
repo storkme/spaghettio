@@ -547,7 +547,9 @@ fn selection_scoreboard_census() {
     println!(
         "(err/selw/laww are the counts the DECISION computed, sourced in \
          the `from` column; `-` means no mechanism computed one — a gap, \
-         not a zero)"
+         not a zero. `reason` is produce()'s refusal text, or the \
+         accepted=no tag for a candidate that built but failed the hard \
+         gate.)"
     );
 
     let mut stage_tally: Vec<(String, String, String)> = Vec::new();
@@ -618,6 +620,7 @@ fn selection_scoreboard_census() {
                     reason,
                     score,
                     accepted,
+                    accepted_reason,
                     errors,
                     selection_warnings,
                     layout_warnings,
@@ -648,7 +651,11 @@ fn selection_scoreboard_census() {
                     num(layout_warnings),
                     counts_source.as_deref().unwrap_or("-"),
                     kinds,
-                    reason.as_deref().unwrap_or("-"),
+                    // `produce()`'s refusal text, or — for a candidate
+                    // that produced but failed the hard gate — the
+                    // `accepted=no` tag, which is the only place the
+                    // missing-balancer-template count surfaces.
+                    reason.as_deref().or(accepted_reason.as_deref()).unwrap_or("-"),
                 );
             }
             match decided {
