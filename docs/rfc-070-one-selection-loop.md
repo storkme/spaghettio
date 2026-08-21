@@ -631,3 +631,26 @@ fixtures / docs split per the churn norm).
   `PartialEq<&B> for &A` impl over `String: PartialEq<str>`, and an
   always-false comparison is structurally unhidable there because the
   lookup ends in a `panic!`, not a default.*
+- *2026-08-21 — **#694 review round 4 adjudicated** (5 findings; the pass
+  was DEGRADED — it leaked its own prompt template and cited four symbols
+  that grep to zero — but two findings were real and one was the best of
+  the review). Absorbed: (a) the provenance hash missed a THIRD zone
+  source, the legacy `sat-zones.jsonl` `zone_cache.rs` still reads next to
+  the pin; a `.jsonl` appearing would have changed which zones replay
+  while the committed hash stayed identical. Re-bless: **zero diff, not
+  even the hash line** (none exists here) — a sixth identical
+  reproduction. (b) `bless` conflated a NotFound baseline with an
+  unreadable one. **The generalisation is the durable part, and it is now
+  in the doc: a provenance hash is only worth what its source list is,
+  and a source list is a thing that goes stale** — two rounds found two
+  missing sources, so all three are enumerated against `zone_cache.rs`
+  rather than summarised. Refuted: the "no terminal/row after the chosen
+  terminal" concern (the index comes from `rposition`, and `last_row < t`
+  has covered the row half since the first hardening pass); the CI-gate
+  finding for the third time (answer unchanged); and the objection that
+  the scoped pin's message admits it may fail on a correct change — that
+  wording exists because round 3 asked for it. **Campaign note on the
+  instrument**: four rounds, and the two genuinely load-bearing findings
+  (SHA-256 stability, the missing zone sources) were both about the
+  PROVENANCE machinery rather than the corpus — the cells themselves
+  never moved across six reproductions.*
