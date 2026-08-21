@@ -2805,23 +2805,12 @@ pub fn route_bus_ghost(
         .map(|e| (e.x, e.y))
         .chain(hard.iter().copied())
         .collect();
-    let perp_strategy = PerpendicularTemplateStrategy;
-    let sat_surface = SatStrategy::surface_only();
-    // Native-reach rungs: each channel's UG reach equals its declared
-    // belt tier. Tier-correct UG pair lengths — the SAT solver finds
-    // chained-UG solutions when a single UG can't reach.
-    let sat_1ug_native = SatStrategy::with(
-        "sat-1ug-native",
-        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins_native(1),
-    );
-    let sat_2ug_native = SatStrategy::with(
-        "sat-2ug-native",
-        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins_native(2),
-    );
-    let sat_full_native = SatStrategy::with(
-        "sat-native",
-        crate::bus::junction_sat_strategy::SatConstraints::unrestricted_native(),
-    );
+    // Core rungs come from the shared pinned-tier list (also used by the
+    // fixture replay — see `pinned_tier_core_strategies`). Native-reach
+    // rungs: each channel's UG reach equals its declared belt tier;
+    // tier-correct UG pair lengths, chained-UG solutions when a single
+    // UG can't reach.
+    let core_strategies = pinned_tier_core_strategies();
     // Auto-upgrade rungs: only included when the user did NOT pin a
     // `max_belt_tier`. When the tier is auto, the engine is free to
     // promote a low-rate channel's UG to the zone's dominant tier so
@@ -2860,13 +2849,8 @@ pub fn route_bus_ghost(
     //   7-9. (auto only) AutoUpgrade rungs — Relaxed reach with UG
     //        entity-tier promoted to the zone's dominant tier.
     let eviction_strategy = EvictionStrategy::default_recipes();
-    let mut strategies: Vec<&dyn JunctionStrategy> = vec![
-        &perp_strategy,
-        &sat_surface,
-        &sat_1ug_native,
-        &sat_2ug_native,
-        &sat_full_native,
-    ];
+    let mut strategies: Vec<&dyn JunctionStrategy> =
+        core_strategies.iter().map(|s| s.as_ref()).collect();
     if max_belt_tier.is_none() {
         strategies.push(&eviction_strategy);
         strategies.push(&sat_1ug_upgrade);
@@ -3008,6 +2992,7 @@ pub fn route_bus_ghost(
             &spec_belt_tiers,
             &spec_items,
             &spec_exit_dirs,
+            &spec_kinds,
             &entities,
             &pending_crossings,
         );
@@ -6082,13 +6067,34 @@ fn belt_name_for_tier(tier: BeltTier) -> &'static str {
 /// strategies will land alongside this one.
 pub(crate) struct PerpendicularTemplateStrategy;
 
-/// Construct a boxed `PerpendicularTemplateStrategy`. Exposed for the
-/// fixture-replay helper in `crate::fixture` so it can build the same
-/// strategy slice production uses without this type becoming part of the
-/// crate's public surface.
-pub(crate) fn perpendicular_template_strategy(
-) -> Box<dyn crate::bus::junction_solver::JunctionStrategy> {
-    Box::new(PerpendicularTemplateStrategy)
+/// The pinned-tier core of the production strategy ladder, in dispatch
+/// order. Single source of truth shared by production (`route_bus_ghost`,
+/// which appends the auto-tier-only extras — eviction + AutoUpgrade —
+/// when `max_belt_tier` is unset) and the fixture replay in
+/// `crate::fixture` (which uses exactly this core: fixtures don't record
+/// the layout's belt-tier mode). Lifted from two hand-mirrored copies
+/// after #687 found they had drifted (the replay still built the
+/// pre-native Relaxed-reach rungs, so `solved_by` pins named rungs
+/// production no longer ran).
+pub(crate) fn pinned_tier_core_strategies(
+) -> Vec<Box<dyn crate::bus::junction_solver::JunctionStrategy>> {
+    use crate::bus::junction_sat_strategy::{SatConstraints, SatStrategy};
+    vec![
+        Box::new(PerpendicularTemplateStrategy),
+        Box::new(SatStrategy::surface_only()),
+        Box::new(SatStrategy::with(
+            "sat-1ug-native",
+            SatConstraints::max_ug_ins_native(1),
+        )),
+        Box::new(SatStrategy::with(
+            "sat-2ug-native",
+            SatConstraints::max_ug_ins_native(2),
+        )),
+        Box::new(SatStrategy::with(
+            "sat-native",
+            SatConstraints::unrestricted_native(),
+        )),
+    ]
 }
 
 impl JunctionStrategy for PerpendicularTemplateStrategy {
@@ -6171,6 +6177,7 @@ fn dump_region_fixture(
     spec_belt_tiers: &FxHashMap<String, BeltTier>,
     spec_items: &FxHashMap<String, String>,
     spec_exit_dirs: &FxHashMap<String, EntityDirection>,
+    spec_kinds: &FxHashMap<String, crate::bus::junction::SpecKind>,
     placed_entities: &[PlacedEntity],
     pending_crossings: &FxHashSet<(i32, i32)>,
 ) {
@@ -6275,6 +6282,17 @@ fn dump_region_fixture(
             .filter(|(k, _)| kept_keys.contains(k.as_str()))
             .map(|(k, &v)| (k.clone(), v))
             .collect::<BTreeMap<_, _>>(),
+        // Only Pipe kinds are recorded — Belt is the replay default, and
+        // omitting it keeps the JSON minimal. A pipe spec MUST be dumped
+        // here or the replay silently degrades it to a belt×belt shape.
+        spec_kinds: spec_kinds
+            .iter()
+            .filter(|(k, &kind)| {
+                kept_keys.contains(k.as_str())
+                    && kind == crate::bus::junction::SpecKind::Pipe
+            })
+            .map(|(k, _)| (k.clone(), "Pipe".to_string()))
+            .collect::<BTreeMap<_, _>>(),
         placed_entities: placed_entities
             .iter()
             .filter(|e| in_radius(e.x, e.y))
@@ -6285,6 +6303,7 @@ fn dump_region_fixture(
             mode: "solve".to_string(),
             max_cost: None,
             optimal_cost: None,
+            solved_by: None,
             required_entities: Vec::new(),
         },
     };

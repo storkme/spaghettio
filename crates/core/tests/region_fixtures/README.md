@@ -44,6 +44,16 @@ cargo test --manifest-path crates/core/Cargo.toml --test region_fixtures
   "spec_belt_tiers": { "trunk:iron-plate:21": "Yellow", /* … */ },
   "spec_items":      { "trunk:iron-plate:21": "iron-plate", /* … */ },
   "spec_exit_dirs":  { "trunk:iron-plate:21": "South", /* … */ },
+  "spec_kinds":      { "trunk:water:0": "Pipe" },       // optional; absent keys
+                                                         // default to Belt. A pipe
+                                                         // spec MUST be marked or
+                                                         // the replay degrades the
+                                                         // shape to belt×belt. Pipe
+                                                         // specs still carry
+                                                         // belt-shaped fields
+                                                         // (belt_tiers/exit_dirs) —
+                                                         // required by the schema,
+                                                         // ignored by pipe handling.
 
   "placed_entities": [                               // current layout state —
     { "name": "transport-belt", "x": 21, "y": 160,   // needed for the walker's
@@ -58,7 +68,12 @@ cargo test --manifest-path crates/core/Cargo.toml --test region_fixtures
   "expected": {
     "mode": "solve",           // "solve" | "capped" | "unsatisfiable"
     "max_cost": 40,            // optional hard anti-regression ceiling
-    "optimal_cost": 33         // optional aspiration — reported as gap
+    "optimal_cost": 33,        // optional aspiration — reported as gap
+    "solved_by": "sat-1ug-native",  // optional strategy attribution pin
+    "required_entities": [     // optional shape pins on the solution
+      { "x": 4, "y": 5, "carries": "iron-plate",
+        "name": "underground-belt", "direction": "East" }
+    ]
   }
 }
 ```
@@ -78,11 +93,23 @@ Same semantics as `sat_fixtures/README.md`:
 - `max_cost` is a **hard ratchet** — the test fails if the solver's entity cost exceeds it. Bump down when the solver improves.
 - `optimal_cost` is an **aspirational target** — never fails the test, but reported as `gap: N` so headroom is visible on every run.
 
+### `solved_by` (strategy attribution)
+
+Optional. When set, the harness asserts the **winning** strategy's name — from the terminal `JunctionSolved` trace event, i.e. the candidate the growth loop actually committed, not merely any rung that reported a walker-valid `Solved` attempt (speculative single-side variants run their own ladders, and losing candidates emit `Solved` attempts too). Use it when the fixture exists to pin a *specific rung* (added for offpath G1, #687): without it, a rung-specific regression is silently absorbed by the SAT fallbacks and the fixture stays green.
+
+On a `solved_by` mismatch the harness prints the winning solution's entities plus every strategy attempt as `(strategy, outcome, "i<iter>[<variant>] <detail>")` — including `try_bridge` rejection reasons and the `variant-chosen` cost comparison — so the failure is diagnosable from test output alone.
+
+Scope of the pin: `solved_by` discriminates **which rung** answered, not which growth iteration or expansion variant its solution came from — a same-name win on a different iteration passes. Pin the solution's *shape* with `required_entities` and its *cost* with `max_cost`; the three pins are complementary, not redundant (a solver change that makes a fallback cheaper flips `solved_by` while `required_entities` may still pass, and vice versa).
+
+The replay's strategy ladder mirrors production's **pinned-tier core** (`perp`, `sat-surface`, `sat-1ug-native`, `sat-2ug-native`, `sat-native`); the auto-tier-only extras (eviction, AutoUpgrade rungs) are excluded because fixtures don't record the layout's belt-tier mode. Pin names from the core ladder only.
+
 ---
 
 ## Capturing a fixture from a real layout
 
 The region solver's call site in `ghost_router.rs` has a debug-only dump path gated on an environment variable. Off by default.
+
+**Pipe caveat:** production dispatch filters pipe specs out of junction seeding (`keys_at_tile` — pipes participate as forbidden tiles only), so a capture can **never** emit a pipe entry in `initial_specs`. Pipe×belt fixtures must be hand-authored (see `perp_template_pipe_belt_bridge.json`); the `spec_kinds` field in the dump exists so captures stay faithful if dispatch ever re-admits pipe specs.
 
 ### Capture one specific junction
 

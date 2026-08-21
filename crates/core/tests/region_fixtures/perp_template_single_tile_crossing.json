@@ -1,0 +1,193 @@
+{
+  "version": 1,
+  "name": "perp_template_single_tile_crossing",
+  "notes": "G1 (offpath campaign, #675). Originally authored to pin the perpendicular-template rung; solved_by attribution (added for the #687 review) proved that rung UNREACHABLE on this shape. Causal chain: on the only single-tile iteration, the item-conflict gate in junction_solver (two items on one boundary tile) skips EVERY strategy and grows the region; the rung then refuses any region larger than one tile (ghost_router's tile_count guard). Each gate is correct in isolation; together they make the rung's belt\u00d7belt arm dead for two-item crossings \u2014 the exact shape it was written for. This fixture therefore pins the PINNED-TIER CORE ladder's dispatch on the canonical two-item single-tile crossing (sat-1ug-native solves it on a grown region, bridging the tap under the trunk; auto-tier extras are outside the replay's scope \u2014 see README) and stands as the regression record of that reachability finding: if solved_by ever changes, the core ladder's dispatch on this shape changed. max_cost is padded to 17 over the measured 14 for varisat cost wobble across machines (precedent: electronic_circuit_copper_cable_missing_input_chain's notes); the solved_by pin itself is stable \u2014 SAT/UNSAT per rung is deterministic for a fixed formula, only the solution's cost wobbles. The rung's internal pipe\u00d7belt logic is pinned separately by perp_template_pipe_belt_bridge.json (production dispatch currently filters pipe specs before the rung can see them \u2014 see that fixture's notes).",
+  "seeds": [
+    [
+      5,
+      5
+    ]
+  ],
+  "initial_specs": [
+    "trunk:iron-plate:0",
+    "tap:copper-plate:1:0"
+  ],
+  "routed_paths": {
+    "trunk:iron-plate:0": [
+      [
+        2,
+        5
+      ],
+      [
+        3,
+        5
+      ],
+      [
+        4,
+        5
+      ],
+      [
+        5,
+        5
+      ],
+      [
+        6,
+        5
+      ],
+      [
+        7,
+        5
+      ],
+      [
+        8,
+        5
+      ]
+    ],
+    "tap:copper-plate:1:0": [
+      [
+        5,
+        2
+      ],
+      [
+        5,
+        3
+      ],
+      [
+        5,
+        4
+      ],
+      [
+        5,
+        5
+      ],
+      [
+        5,
+        6
+      ],
+      [
+        5,
+        7
+      ],
+      [
+        5,
+        8
+      ]
+    ]
+  },
+  "hard_obstacles": [],
+  "spec_belt_tiers": {
+    "trunk:iron-plate:0": "Yellow",
+    "tap:copper-plate:1:0": "Yellow"
+  },
+  "spec_items": {
+    "trunk:iron-plate:0": "iron-plate",
+    "tap:copper-plate:1:0": "copper-plate"
+  },
+  "spec_exit_dirs": {
+    "trunk:iron-plate:0": "East",
+    "tap:copper-plate:1:0": "South"
+  },
+  "expected": {
+    "mode": "solve",
+    "max_cost": 17,
+    "solved_by": "sat-1ug-native"
+  },
+  "placed_entities": [
+    {
+      "name": "transport-belt",
+      "x": 2,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 3,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 4,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 6,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 7,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 8,
+      "y": 5,
+      "direction": "East",
+      "carries": "iron-plate",
+      "segment_id": "trunk:iron-plate:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 2,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 3,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 4,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 6,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 7,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    },
+    {
+      "name": "transport-belt",
+      "x": 5,
+      "y": 8,
+      "direction": "South",
+      "carries": "copper-plate",
+      "segment_id": "tap:copper-plate:1:0"
+    }
+  ]
+}

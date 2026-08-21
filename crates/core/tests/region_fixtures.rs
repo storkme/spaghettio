@@ -108,6 +108,83 @@ fn region_fixtures() {
             continue;
         }
 
+        // Schema sanity for spec_kinds (#687 round 4): an unknown kind
+        // value, or a kind entry naming a spec absent from spec_items,
+        // must fail THIS fixture and keep the accumulate-and-report run
+        // going (replay_region_fixture's own panic stays as a backstop
+        // for non-harness callers, but should be unreachable from here).
+        let spec_kind_errors: Vec<String> = fixture
+            .spec_kinds
+            .iter()
+            .flat_map(|(key, kind)| {
+                let mut errs = Vec::new();
+                if kind != "Pipe" {
+                    errs.push(format!(
+                        "spec_kinds[{key:?}] = {kind:?} — only \"Pipe\" is \
+                         valid (omit the key for Belt)"
+                    ));
+                }
+                if !fixture.spec_items.contains_key(key) {
+                    errs.push(format!(
+                        "spec_kinds[{key:?}] names a spec absent from \
+                         spec_items — the kind would be silently dropped \
+                         and the shape degraded"
+                    ));
+                }
+                // A pipe spec missing from the belt-shaped maps silently
+                // falls back to defaults (Yellow tier, path-derived
+                // direction) — the path-derived direction can flip the
+                // perpendicularity gate the fixture exists to pin.
+                if !fixture.spec_belt_tiers.contains_key(key) {
+                    errs.push(format!(
+                        "spec_kinds[{key:?}] has no spec_belt_tiers entry"
+                    ));
+                }
+                if !fixture.spec_exit_dirs.contains_key(key) {
+                    errs.push(format!(
+                        "spec_kinds[{key:?}] has no spec_exit_dirs entry \
+                         — direction would silently fall back to \
+                         path-derived"
+                    ));
+                }
+                errs
+            })
+            .collect();
+        // An initial_specs entry absent from spec_items silently gets
+        // item "?" and Belt kind in the replay (#687 round 6) — the
+        // same silent-degradation class as the spec_kinds checks above.
+        let mut spec_kind_errors = spec_kind_errors;
+        for key in &fixture.initial_specs {
+            if !fixture.spec_items.contains_key(key) {
+                spec_kind_errors.push(format!(
+                    "initial_specs entry {key:?} has no spec_items entry \
+                     — it would replay with item \"?\" and Belt kind"
+                ));
+            }
+        }
+        if !spec_kind_errors.is_empty() {
+            failures.push(format!(
+                "{} ({}): {}",
+                fixture.name,
+                filename,
+                spec_kind_errors.join("; ")
+            ));
+            continue;
+        }
+
+        // `solved_by` only has meaning in solve mode — on "capped" /
+        // "unsatisfiable" fixtures it would be silently ignored, and a
+        // silently-dropped attribution pin is exactly what the pin
+        // exists to prevent. Fail loud instead.
+        if fixture.expected.mode != "solve" && fixture.expected.solved_by.is_some() {
+            failures.push(format!(
+                "{} ({}): expected.solved_by is set but mode is {:?} — \
+                 attribution pins only apply to solve-mode fixtures",
+                fixture.name, filename, fixture.expected.mode
+            ));
+            continue;
+        }
+
         let result = replay_region_fixture(&fixture);
 
         match fixture.expected.mode.as_str() {
@@ -121,6 +198,26 @@ fn region_fixtures() {
                     ));
                 }
                 Some(cost) => {
+                    if let Some(want) = &fixture.expected.solved_by {
+                        match &result.solved_by {
+                            Some(got) if got == want => {}
+                            other => {
+                                failures.push(format!(
+                                    "{} ({}): expected solved_by {want:?}, got {other:?}; \
+                                     solution: {:?}; attempts: {:?}",
+                                    fixture.name,
+                                    filename,
+                                    result
+                                        .entities
+                                        .iter()
+                                        .map(|e| (e.name.as_str(), e.x, e.y, e.direction))
+                                        .collect::<Vec<_>>(),
+                                    result.attempts
+                                ));
+                                continue;
+                            }
+                        }
+                    }
                     if let Some(max_cost) = fixture.expected.max_cost {
                         if cost > max_cost {
                             failures.push(format!(

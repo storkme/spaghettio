@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "name": "perp_template_pipe_belt_bridge",
+  "notes": "G1 (offpath campaign, #675): a STATIC UNIT PIN of the perpendicular-template rung's internal pipe×belt logic — NOT a production-reachability probe. Production's dispatch filters pipe specs out of junction seeding entirely (ghost_router's keys_at_tile: pipes participate as forbidden tiles only, and SAT bypasses them as obstacles), so a live pipe×belt crossing reaches the solver as ONE belt spec and the rung's 2-spec admission predicate refuses it; this fixture feeds the pipe spec directly via initial_specs, a state the production caller cannot currently produce (#687 round 3). Within that scope: pipe items are conflict-gate-exempt, so the strategies run on the single-tile iteration, the admission predicate (1 tile, 2 specs, perpendicular) passes, and bridge_belt_over_pipe answers — a UG pair carries the belt under the pipe, nothing stamped on the pipe tile. Why keep it: it pins several hundred otherwise-untested lines (the rung + bridge_belt_over_pipe) and the spec_kinds replay plumbing, and it is the ready-made regression lock if dispatch ever re-admits pipe specs. solved_by pins attribution; required_entities + max_cost pin the UG-pair shape and cost — complementary pins (a cheaper fallback flips solved_by while shape pins still pass, and vice versa). Hand-authored by necessity: the capture workflow can never emit a pipe initial_spec (see README).",
+  "seeds": [[5, 5]],
+  "initial_specs": ["trunk:iron-plate:0", "trunk:water:0"],
+  "routed_paths": {
+    "trunk:iron-plate:0": [[2, 5], [3, 5], [4, 5], [5, 5], [6, 5], [7, 5], [8, 5]],
+    "trunk:water:0": [[5, 2], [5, 3], [5, 4], [5, 5], [5, 6], [5, 7], [5, 8]]
+  },
+  "hard_obstacles": [[5, 2], [5, 3], [5, 4], [5, 5], [5, 6], [5, 7], [5, 8]],
+  "unreleasable_obstacles": [[5, 2], [5, 3], [5, 4], [5, 5], [5, 6], [5, 7], [5, 8]],
+  "spec_belt_tiers": {
+    "trunk:iron-plate:0": "Yellow",
+    "trunk:water:0": "Yellow"
+  },
+  "spec_items": {
+    "trunk:iron-plate:0": "iron-plate",
+    "trunk:water:0": "water"
+  },
+  "spec_exit_dirs": {
+    "trunk:iron-plate:0": "East",
+    "trunk:water:0": "South"
+  },
+  "spec_kinds": {
+    "trunk:water:0": "Pipe"
+  },
+  "expected": {
+    "mode": "solve",
+    "max_cost": 12,
+    "solved_by": "perpendicular_template",
+    "required_entities": [
+      { "x": 4, "y": 5, "carries": "iron-plate", "name": "underground-belt", "direction": "East" },
+      { "x": 6, "y": 5, "carries": "iron-plate", "name": "underground-belt", "direction": "East" }
+    ]
+  },
+  "placed_entities": [
+    { "name": "transport-belt", "x": 2, "y": 5, "direction": "East", "carries": "iron-plate", "segment_id": "trunk:iron-plate:0" },
+    { "name": "transport-belt", "x": 3, "y": 5, "direction": "East", "carries": "iron-plate", "segment_id": "trunk:iron-plate:0" },
+    { "name": "transport-belt", "x": 4, "y": 5, "direction": "East", "carries": "iron-plate", "segment_id": "trunk:iron-plate:0" },
+    { "name": "transport-belt", "x": 6, "y": 5, "direction": "East", "carries": "iron-plate", "segment_id": "trunk:iron-plate:0" },
+    { "name": "transport-belt", "x": 7, "y": 5, "direction": "East", "carries": "iron-plate", "segment_id": "trunk:iron-plate:0" },
+    { "name": "transport-belt", "x": 8, "y": 5, "direction": "East", "carries": "iron-plate", "segment_id": "trunk:iron-plate:0" },
+    { "name": "pipe", "x": 5, "y": 2, "direction": "North", "carries": "water", "segment_id": "trunk:water:0" },
+    { "name": "pipe", "x": 5, "y": 3, "direction": "North", "carries": "water", "segment_id": "trunk:water:0" },
+    { "name": "pipe", "x": 5, "y": 4, "direction": "North", "carries": "water", "segment_id": "trunk:water:0" },
+    { "name": "pipe", "x": 5, "y": 5, "direction": "North", "carries": "water", "segment_id": "trunk:water:0" },
+    { "name": "pipe", "x": 5, "y": 6, "direction": "North", "carries": "water", "segment_id": "trunk:water:0" },
+    { "name": "pipe", "x": 5, "y": 7, "direction": "North", "carries": "water", "segment_id": "trunk:water:0" },
+    { "name": "pipe", "x": 5, "y": 8, "direction": "North", "carries": "water", "segment_id": "trunk:water:0" }
+  ]
+}

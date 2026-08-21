@@ -112,6 +112,14 @@ pub struct RegionFixture {
     pub spec_belt_tiers: BTreeMap<String, BeltTier>,
     pub spec_items: BTreeMap<String, String>,
     pub spec_exit_dirs: BTreeMap<String, EntityDirection>,
+    /// Spec-kind overrides; `"Pipe"` is the only meaningful value, absent
+    /// keys default to Belt. Needed because the perpendicular-template
+    /// rung's only reachable path on a two-item single-tile crossing is
+    /// the pipe bridge (the item-conflict gate skips every strategy on
+    /// the sole single-tile iteration of a belt×belt crossing), so
+    /// pinning that rung requires a pipe-kind spec (offpath G1).
+    #[serde(default)]
+    pub spec_kinds: BTreeMap<String, String>,
     #[serde(default)]
     pub placed_entities: Vec<PlacedEntity>,
     #[serde(default)]
@@ -131,6 +139,12 @@ pub struct RegionExpected {
     /// Aspirational target. Reported as "gap: N" by the harness.
     #[serde(default)]
     pub optimal_cost: Option<u32>,
+    /// When set, the harness asserts the WINNING strategy's name (from
+    /// the terminal `JunctionSolved` trace event) equals this — strategy
+    /// attribution, so a rung-specific regression cannot be silently
+    /// absorbed by the ladder's fallbacks (offpath G1).
+    #[serde(default)]
+    pub solved_by: Option<String>,
     /// Entities that MUST appear in the solution. Each entry matches by
     /// `(x, y, carries)` — `name` and `direction` are asserted when set,
     /// ignored when empty/None. Use this to guard against missing-input
@@ -165,6 +179,18 @@ pub struct RegionReplayResult {
     /// True if the region hit `MAX_REGION_TILES` / the growth-cap path.
     /// Distinguishes "capped" from "no satisfiable strategy" outcomes.
     pub capped: bool,
+    /// Strategy name from the terminal `JunctionSolved` event — the
+    /// winner among primary and speculative-variant candidates, NOT the
+    /// last `JunctionStrategyAttempt` to report `Solved` (variants run
+    /// their own ladders and losing candidates also emit Solved
+    /// attempts). Offpath G1, #687 review: without this, a rung-specific
+    /// regression is silently absorbed by the SAT fallbacks and a
+    /// fixture cannot pin WHICH rung answered.
+    pub solved_by: Option<String>,
+    /// Every strategy attempt as (strategy, outcome, detail), replay
+    /// order — the harness prints these on a `solved_by` mismatch so an
+    /// attribution failure is diagnosable from the test output alone.
+    pub attempts: Vec<(String, String, String)>,
 }
 
 /// Run the region solver against a captured fixture. Reconstructs every
@@ -176,7 +202,6 @@ pub struct RegionReplayResult {
 /// the replay exercises the same code path a live layout would.
 pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
     use crate::bus::junction_cost::solution_cost;
-    use crate::bus::junction_sat_strategy::{SatConstraints, SatStrategy};
     use crate::bus::junction_solver::{solve_crossing, JunctionStrategy};
     use crate::trace::{self, TraceEvent};
     use rustc_hash::{FxHashMap, FxHashSet};
@@ -215,29 +240,34 @@ pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
         .iter()
         .map(|(k, &v)| (k.clone(), v))
         .collect();
-    // Fixtures predate pipe-belt junctions; no stored fixture has a
-    // pipe-kind spec. Default everything to Belt.
     let spec_kinds: FxHashMap<String, crate::bus::junction::SpecKind> = spec_items
         .keys()
-        .map(|k| (k.clone(), crate::bus::junction::SpecKind::Belt))
+        .map(|k| {
+            let kind = match fixture.spec_kinds.get(k).map(String::as_str) {
+                Some("Pipe") => crate::bus::junction::SpecKind::Pipe,
+                None => crate::bus::junction::SpecKind::Belt,
+                // A typo ("pipe", "PIPE") silently degrading the shape
+                // to belt×belt would pin the wrong geometry — fail loud.
+                Some(other) => panic!(
+                    "fixture {}: unknown spec_kind {other:?} for {k} \
+                     (only \"Pipe\" is valid; omit the key for Belt)",
+                    fixture.name
+                ),
+            };
+            (k.clone(), kind)
+        })
         .collect();
 
-    // Production strategies: same list as `ghost_router.rs:1382-1406`.
-    // Kept inline instead of lifted to a pub helper because the list
-    // only has two call sites (production + this replay) and copying is
-    // cheaper than widening the public surface.
-    let perp = crate::bus::ghost_router::perpendicular_template_strategy();
-    let sat_surface = SatStrategy::surface_only();
-    let sat_1ug = SatStrategy::with("sat-1ug", SatConstraints::max_ug_ins(1));
-    let sat_2ug = SatStrategy::with("sat-2ug", SatConstraints::max_ug_ins(2));
-    let sat_full = SatStrategy::unrestricted();
-    let strategies: [&dyn JunctionStrategy; 5] = [
-        &*perp,
-        &sat_surface,
-        &sat_1ug,
-        &sat_2ug,
-        &sat_full,
-    ];
+    // Production's PINNED-TIER core ladder, from the shared helper (the
+    // single source of truth — #687 round 3 lifted it after finding the
+    // previous hand-mirrored copy here had drifted to the pre-native
+    // ladder, so attribution pins named rungs production no longer ran).
+    // The auto-tier-only extras (eviction + the AutoUpgrade rungs) are
+    // deliberately excluded: fixtures don't record the layout's
+    // belt-tier mode, and the pinned-tier core is the ladder every
+    // fixture's `solved_by` pin should name.
+    let core = crate::bus::ghost_router::pinned_tier_core_strategies();
+    let strategies: Vec<&dyn JunctionStrategy> = core.iter().map(|s| s.as_ref()).collect();
 
     // Wrap solve_crossing in a trace scope so we can detect the "capped"
     // outcome (the growth loop emits `JunctionGrowthCapped` on the tile
@@ -265,17 +295,79 @@ pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
     let capped = events
         .iter()
         .any(|e| matches!(e, TraceEvent::JunctionGrowthCapped { .. }));
+    // The replay runs exactly one `solve_crossing`, which emits at most
+    // one terminal `JunctionSolved` (from `pick_cheapest_candidate`,
+    // immediately before return). Assert that invariant rather than
+    // silently taking "the last one" — if a refactor ever emits
+    // `JunctionSolved` for a candidate that is later discarded, the
+    // attribution pin must fail loud, not mispin (#687 round 5).
+    let solved_count = events
+        .iter()
+        .filter(|e| matches!(e, TraceEvent::JunctionSolved { .. }))
+        .count();
+    assert!(
+        solved_count <= 1,
+        "replay observed {solved_count} JunctionSolved events for one \
+         solve_crossing — the terminal-winner invariant behind \
+         expected.solved_by no longer holds; fix the attribution \
+         extraction before trusting any solved_by pin"
+    );
+    let solved_by = events.iter().rev().find_map(|e| match e {
+        TraceEvent::JunctionSolved { strategy, .. } => Some(strategy.clone()),
+        _ => None,
+    });
+    let attempts: Vec<(String, String, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            TraceEvent::JunctionStrategyAttempt {
+                strategy,
+                outcome,
+                detail,
+                iter,
+                variant,
+                ..
+            } => Some((
+                strategy.clone(),
+                outcome.clone(),
+                format!("i{iter}[{variant}] {detail}"),
+            )),
+            // The winner selection with per-candidate costs — the reason one
+            // rung's walker-valid solution lost to another's.
+            TraceEvent::JunctionVariantChosen { variant, cost, considered, .. } => {
+                Some((
+                    "variant-chosen".to_string(),
+                    variant.clone(),
+                    format!("cost={cost} considered={considered:?}"),
+                ))
+            }
+            // The perp rung's inner `try_bridge` refusals carry the reason a
+            // template attempt came back Unsatisfiable — fold them in so an
+            // attribution mismatch is diagnosable without re-instrumenting.
+            TraceEvent::JunctionTemplateRejected { tile_x, tile_y, bridge_dir, reason } => {
+                Some((
+                    "perpendicular_template".to_string(),
+                    format!("Rejected[{bridge_dir}]"),
+                    format!("({tile_x},{tile_y}) {reason}"),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
 
     match solution {
         Some(sol) => RegionReplayResult {
             cost: Some(solution_cost(&sol.entities)),
             entities: sol.entities,
             capped,
+            solved_by,
+            attempts,
         },
         None => RegionReplayResult {
             cost: None,
             entities: Vec::new(),
             capped,
+            solved_by,
+            attempts,
         },
     }
 }
