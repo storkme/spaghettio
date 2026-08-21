@@ -256,6 +256,15 @@ const FIXTURES: &[Fixture] = &[
 /// (`max_inserter_tier`, `quality`, `wire_mode`, `merge_tap`,
 /// `stacking`, `splitter_tap_spacers`) already equals its default.
 /// Re-run that diff if either fossil is ever fixed.
+///
+/// The label names an OPTION SET, not a cell the harness runs (#694
+/// review round 3). It is applied across the whole machine sweep, so
+/// most `e2e-harness` cells combine the harness's option configuration
+/// with a tier the harness never invokes for that fixture — which is the
+/// POINT of the axis, not an overclaim, but only the (fixture, machine)
+/// pairs `e2e.rs` actually calls are "what the suite runs". For the
+/// tier-ladder six those are the machines their #691 labels name
+/// (`tier1_gear_am1` → am1, `tier2_ec_am2_30_ore` → am2, …).
 type OptionSet = (&'static str, fn(&mut LayoutOptions));
 
 const OPTION_SETS: &[OptionSet] = &[
@@ -362,10 +371,28 @@ fn resolve_zone_cache_path() -> std::path::PathBuf {
 /// very cache it had blessed against, and flag every `check` as a
 /// provenance mismatch. `sha2` is already a dev-dependency and `e2e.rs`
 /// already hashes content with it.
+///
+/// Covers BOTH zone sources, not just the disk pin (#694 review round
+/// 3). `zone_cache.rs` merges a compiled-in `EMBEDDED_CACHE`
+/// (`include_bytes!("../data/sat-zones.bin")`) into the map alongside
+/// whatever the pin replays, so a build against a different embedded
+/// payload consults a different zone set. Hashing only the pin would
+/// report an identical hash across that change and break the "describes
+/// the zones actually consulted" claim this whole provenance design
+/// rests on. The const is private to the crate, so this hashes the file
+/// it embeds — the same bytes, and if that path ever moves the `None`
+/// says so instead of a stale hash pretending otherwise.
 fn hash_zone_cache() -> Option<String> {
     use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(resolve_zone_cache_path()).ok()?;
-    Some(format!("{:x}", Sha256::digest(&bytes)))
+    let pin = std::fs::read(resolve_zone_cache_path()).ok()?;
+    let embedded = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin"),
+    )
+    .ok()?;
+    let mut h = Sha256::new();
+    h.update(&pin);
+    h.update(&embedded);
+    Some(format!("{:x}", h.finalize()))
 }
 
 fn stage_name(s: SelectionStage) -> &'static str {
@@ -657,10 +684,30 @@ fn parity_corpus() {
             // the mismatch is invisible afterwards because bless also
             // rewrites the recorded hash. That half of the finding is
             // real, so it is now a refusal with a named escape hatch.
-            let prior = std::fs::read_to_string(baseline_path())
-                .ok()
-                .and_then(|t| serde_json::from_str::<Baseline>(&t).ok());
+            // "File missing" and "file present but corrupt" must not
+            // collapse into the same `None` (#694 review round 3 — the
+            // same disjunct-disarms-the-guard class round 2 retired in
+            // the null-hash path). A baseline left truncated by a killed
+            // bless would otherwise skip the hash check entirely and get
+            // silently overwritten by the next plain `bless`, which is
+            // precisely the run whose provenance nobody can check.
             if mode == "bless" {
+                let prior: Option<Baseline> = match std::fs::read_to_string(baseline_path()) {
+                    Err(_) => None, // genuinely absent: first bless, benign
+                    Ok(text) => Some(serde_json::from_str::<Baseline>(&text).unwrap_or_else(
+                        |e| {
+                            panic!(
+                                "the committed baseline exists but does not parse ({e}) — \
+                                 refusing to bless over it, because a corrupt file cannot \
+                                 supply the zone-cache hash this run must be checked \
+                                 against. Restore it (`git checkout -- {:?}`) and re-run, \
+                                 or pass SPAGHETTIO_PARITY_CORPUS=bless-repin to overwrite \
+                                 it deliberately",
+                                baseline_path()
+                            )
+                        },
+                    )),
+                };
                 assert!(
                     pin_hash.is_some(),
                     "refusing to bless with no resolvable zone cache: this baseline is \
@@ -700,7 +747,7 @@ fn parity_corpus() {
                 baseline_path()
             );
         }
-        Ok("check") => {
+        Ok(mode @ ("check" | "check-any-cache")) => {
             let text = std::fs::read_to_string(baseline_path())
                 .expect("SPAGHETTIO_PARITY_CORPUS=check needs a committed baseline");
             let baseline: Baseline = serde_json::from_str(&text).expect("baseline parses");
@@ -709,7 +756,15 @@ fn parity_corpus() {
             // knowing — but it must LEAD the failure if there is one,
             // rather than trailing it as a NOTE the reader met before the
             // diffs and has forgotten by the time they matter (#694
-            // review, finding 4).
+            // review round 1, finding 4).
+            //
+            // And it must FAIL, even when the cells all match (#694 review
+            // round 3). Round 1's version printed the mismatch and passed
+            // green, which is the same shape as "compared nothing, read as
+            // clean" that #693 closed: a green `check` under a cache
+            // nobody can identify is not evidence the baseline
+            // reproduces. `check-any-cache` is the named escape for
+            // deliberately comparing across caches.
             let provenance = if pin_hash != baseline.zone_cache_hash {
                 let msg = format!(
                     "PROVENANCE MISMATCH: this run's zone cache is {pin_hash:?}, the \
@@ -791,10 +846,25 @@ fn parity_corpus() {
                 diffs.len(),
                 diffs.join("\n")
             );
+            // Only reached when every cell matched. A green result under
+            // an unidentifiable cache still must not read as clean.
+            assert!(
+                provenance.is_none() || mode == "check-any-cache",
+                "{}\n\nEvery cell matched, but under a DIFFERENT zone cache than the \
+                 baseline was blessed against — so this run is not evidence the committed \
+                 baseline reproduces. Re-run with the committed pin, or pass \
+                 SPAGHETTIO_PARITY_CORPUS=check-any-cache if comparing across caches is \
+                 what you meant.",
+                provenance.as_deref().unwrap_or_default()
+            );
             eprintln!(
                 "checked {} cell(s) against the committed baseline{}",
                 new.len(),
-                if provenance.is_some() { " (UNDER A DIFFERENT ZONE CACHE — see above)" } else { "" }
+                if provenance.is_some() {
+                    " (check-any-cache: UNDER A DIFFERENT ZONE CACHE — see above)"
+                } else {
+                    ""
+                }
             );
         }
         _ => {

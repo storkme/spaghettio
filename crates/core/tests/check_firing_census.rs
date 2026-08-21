@@ -1082,6 +1082,17 @@ fn selection_scoreboard_contract() {
 /// `NATIVE_IDX`, because its own gate already guarantees native is
 /// unaccepted, so "native won" and "merge-tap decided" are compatible
 /// facts and the pair must not be collapsed into one column.
+///
+/// **This fixture is the corpus's known-broken one, and this pin is
+/// EXPECTED to flip when it is fixed** (#694 review round 3). `ec@30/am2`
+/// at production defaults ships 3 `belt-dead-end` errors and sims at
+/// 0.00/s — `docs/status.md` carries the receipt. Selection reaching
+/// `merge-tap`/`native` here is a record of the miscalibration RFC-070
+/// exists to fix, not a property worth preserving. So a red here after a
+/// jam fix is the SUCCESS path: re-take the parity baseline
+/// (`SPAGHETTIO_PARITY_CORPUS=bless`) and update these expectations.
+/// Both assertions say so, because a test that goes red without telling
+/// you it was supposed to costs somebody an afternoon.
 #[test]
 #[ntest::timeout(180_000)]
 fn selection_scoreboard_contract_merge_tap_stage() {
@@ -1096,7 +1107,11 @@ fn selection_scoreboard_contract_merge_tap_stage() {
     assert_eq!(
         facts.winner, "native",
         "merge-tap's verdict names native on this fixture (`ErrorKinds::quality_key` \
-         ties/loses to native); got {}",
+         ties/loses to native); got {}. If you are here because you FIXED the ec@30 jam \
+         (3 belt-dead-end errors, 0.00/s — docs/status.md), this red is the expected \
+         outcome, not a regression: re-take the parity baseline with \
+         SPAGHETTIO_PARITY_CORPUS=bless and update this expectation to whatever selection \
+         now picks",
         facts.winner
     );
     assert_eq!(
@@ -1130,7 +1145,13 @@ fn selection_scoreboard_contract_scoped_pairwise_stage() {
     assert_eq!(
         facts.winner, "horizontal-stack",
         "horizontal-stack strictly improves native's issue channels on ac@5/am2 and \
-         displaces it; got {}",
+         displaces it; got {}. This is a knife-edge by construction — the pairwise floor \
+         is component-wise, so one channel moving either way flips it, and the corpus \
+         records `hs-off` on this same fixture landing on native/best-error-free. A red \
+         here is therefore as likely to be a legitimate engine shift as a bug: re-take the \
+         parity baseline (SPAGHETTIO_PARITY_CORPUS=bless), check whether the fixture \
+         SIM-anchors better or worse than the +0.6%-of-plan recorded in RFC-070's decision \
+         log, and update this expectation rather than reverting to reach it",
         facts.winner
     );
     assert_eq!(
