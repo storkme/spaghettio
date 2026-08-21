@@ -944,21 +944,34 @@ fixtures / docs split per the churn norm).
   **Structural guard**: each group's `Default` impl is manual, not derived
   — in particular `SearchAxes::default().cell_composition` is `Candidate`,
   matching the engine default, where `CellComposition`'s own `#[default]`
-  is `Off`. `from_groups` therefore cannot reproduce the `cell_composition`
-  fossil (naming a field next to a group default can no longer silently
-  select the wrong value, because the group default is already right).
+  is `Off`. ~~`from_groups` therefore cannot reproduce the `cell_composition`
+  fossil~~ **RETRACTED, #696 round 2 (this entry originally overclaimed the
+  same thing round 1 below already fixed in the code legend — the log
+  itself was left contradicting its own later entry, a records-outlive-
+  their-state miss round 2 caught):** the guard only covers the ATOMIC path
+  (`SearchAxes::default()` called wholesale). A partial literal of the
+  group struct itself (`SearchAxes { cell_composition: Default::default(),
+  ..SearchAxes::default() }`) still resolves to `Off` — the identical trap,
+  one level down, because `SearchAxes`'s fields are `pub`. See the round-2
+  entry below for the corrected claim; the code legend
+  (`bus/layout.rs`) has always been the ground truth here since round 1's
+  fix, only this entry's earlier wording was stale.
   **What it does not prevent**: the ~80 existing flat struct-literal call
   sites — including both known `run_e2e` fossils — are completely
   unchanged and exactly as fossil-prone as before (fixing those is #689
   track W2c, sequenced after this one), and nothing stops new code from
-  writing a flat literal instead of calling `from_groups`. A
-  `layout_options_group_defaults_match_facade` test pins the three group
-  defaults against `LayoutOptions::default()` (executed discrimination
-  check: reverting `SearchAxes::default()`'s `cell_composition` to
-  `CellComposition::default()` made it fail, naming exactly
-  `cell_composition: Candidate` vs `Off`; restored and reverified green). A
-  `layout_options_from_groups_round_trips` test pins `from_groups` against
-  a non-default value on every group.
+  writing a flat (or group-level partial) literal instead of calling
+  `from_groups`. A `layout_options_group_defaults_match_facade` test pins
+  the three group defaults against `LayoutOptions::default()` (executed
+  discrimination check: reverting `SearchAxes::default()`'s
+  `cell_composition` to `CellComposition::default()` made it fail, naming
+  exactly `cell_composition: Candidate` vs `Off`; restored and reverified
+  green). ~~A `layout_options_from_groups_round_trips` test pins
+  `from_groups` against a non-default value on every group.~~ **STALE,
+  #696 round 2: that test was replaced in round 1 by
+  `layout_options_constraints_axes_and_from_groups_match_explicit_expectations`
+  (see the round-1 entry below for why) — this entry named the retired
+  test and was never updated.**
   **Verification**: `cargo test --manifest-path crates/core/Cargo.toml`
   full suite green (no `--no-fail-fast` failures); `cargo clippy -p
   spaghettio_core -- -D warnings` (the exact pre-commit invocation) clean,

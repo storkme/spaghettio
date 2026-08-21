@@ -261,9 +261,14 @@ pub struct LayoutOptions {
     /// whether the placer acts on them.
     pub direct_insertion: crate::bus::di_cell::DirectInsertion,
     /// Which coupling claims a contended DI spec (RFC-059). Default
-    /// `Upstream` = the status quo, so every existing layout is
-    /// byte-identical; `Downstream` is P1, the alternative phase 1 measures
-    /// against.
+    /// **`Downstream`** since RFC-059's sim close-out (`DiClaimOrder`'s own
+    /// `#[default]`, `di_cell.rs`) — `Upstream` was the pre-RFC-059 status
+    /// quo, kept as an explicit arm so `Downstream` could be measured
+    /// against it rather than assumed better; it lost on evidence (see
+    /// `DiClaimOrder::Upstream`'s doc). This comment stated the stale
+    /// pre-flip default until RFC-070 Phase 1a's #696 review round 2 —
+    /// the sibling comment in `decomposition_search.rs` was already fixed
+    /// during RFC-070 Phase 0b (W1b), this one survived.
     pub di_claim_order: crate::bus::di_cell::DiClaimOrder,
     /// RFC-060: run the horizontal-stack row layout as a scored
     /// decomposition candidate when `row_layout` is `VerticalSplit` and
@@ -2699,7 +2704,13 @@ mod tests {
     /// reverting `cell_composition` to `Off` in both places at once), this
     /// test would stay green on the new, wrong, shared value. Nothing short
     /// of an independent oracle (the `run_e2e`/parity-corpus fossils this
-    /// split responds to) can catch that class.
+    /// split responds to) can catch that class — this test certifies
+    /// *agreement* between two independently-written `Default` impls, not
+    /// the *truth* of the shared value; the actual truth anchor for
+    /// `cell_composition`'s engine default specifically is the #694
+    /// parity-baseline check (`crates/core/tests/parity_corpus.rs`), whose
+    /// 160 committed cells pin real `select_best_decomposition` behavior
+    /// under the real default, not a hand-written literal (#696 round 2).
     #[test]
     fn layout_options_group_defaults_match_facade() {
         let facade = LayoutOptions::default();
@@ -2719,16 +2730,34 @@ mod tests {
     /// `rebuilt.axes() == original.axes()` comparison would not notice).
     /// Every field is set to a value distinct from its `LayoutOptions`
     /// default, so an accessor that silently drops or duplicates a field
-    /// cannot pass by both sides coincidentally landing on the same default.
-    /// Exception, inherent to the type: `bool` has only two values and three
-    /// fields (`splitter_tap_spacers`, `merge_tap`, `horizontal_candidate`)
-    /// share that type, so by pigeonhole at least one pair must still
-    /// collide — a swap bug between exactly that colliding pair is not
-    /// distinguishable by ANY choice of test values; the `u8` pair
-    /// (`stacking`/`inserter_capacity`, 256 possible values each) has no
-    /// such excuse and is deliberately given distinct, non-default values
-    /// here (#696 flagged an earlier version of this test where both
-    /// happened to be `2`, `DEFAULT_INSERTER_CAPACITY`'s own value).
+    /// cannot pass by both sides coincidentally landing on the same default
+    /// — with one deliberate exception. `cell_composition` is pinned to
+    /// `Candidate` here, which IS `LayoutOptions::default()`'s value for
+    /// that field, precisely so an accessor bug that emits
+    /// `CellComposition::default()` (the bare enum's `Off`) — the exact
+    /// shape of the fossil this whole split responds to — shows up as a
+    /// mismatch (`Candidate` expected, `Off` produced). Pinning it to `Off`
+    /// instead (as an earlier version of this test did, #696 round 2) would
+    /// have caught a DIFFERENT bug (an accessor that ignores `self` and
+    /// returns the group's own manual default) while going silent on this
+    /// one, since `Off` is `CellComposition`'s bare type default — for a
+    /// 2-variant enum whose engine default already differs from its type
+    /// default, no single test value can guard both directions at once; see
+    /// `layout_options_axes_distinguishes_both_cell_composition_values`
+    /// below for the differential check that covers the other direction.
+    /// The `u8` pair (`stacking`/`inserter_capacity`, 256 possible values
+    /// each) has no such excuse and is deliberately given distinct,
+    /// non-default values here (#696 round 1 flagged an earlier version of
+    /// this test where both happened to be `2`,
+    /// `DEFAULT_INSERTER_CAPACITY`'s own value). The three-`bool` fields
+    /// (`splitter_tap_spacers`, `merge_tap`, `horizontal_candidate`) have
+    /// the same two-values-three-fields pigeonhole problem as
+    /// `cell_composition`, but with no differential-test escape hatch
+    /// (there is no third bool value to probe with) — a swap bug between
+    /// exactly the colliding pair is not distinguishable by ANY choice of
+    /// test values or any number of additional cases; documented here as an
+    /// acknowledged residual gap, not chased further (#696 review, both
+    /// rounds).
     #[test]
     fn layout_options_constraints_axes_and_from_groups_match_explicit_expectations() {
         let opts = LayoutOptions {
@@ -2745,7 +2774,7 @@ mod tests {
             stacking: 3,
             research_productivity: [("plastic-bar".to_string(), 0.1)].into_iter().collect(),
             inserter_capacity: 5,
-            cell_composition: crate::bus::cells::CellComposition::Off,
+            cell_composition: crate::bus::cells::CellComposition::Candidate,
             direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
             di_claim_order: crate::bus::di_cell::DiClaimOrder::Upstream,
             horizontal_candidate: false,
@@ -2771,7 +2800,7 @@ mod tests {
                 strategy: LayoutStrategy::PartitionedDecomposed,
                 row_layout: RowLayout::HorizontalStack,
                 merge_tap: true,
-                cell_composition: crate::bus::cells::CellComposition::Off,
+                cell_composition: crate::bus::cells::CellComposition::Candidate,
                 direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
                 di_claim_order: crate::bus::di_cell::DiClaimOrder::Upstream,
                 horizontal_candidate: false,
@@ -2803,6 +2832,31 @@ mod tests {
         assert_eq!(rebuilt.direct_insertion, opts.direct_insertion);
         assert_eq!(rebuilt.di_claim_order, opts.di_claim_order);
         assert_eq!(rebuilt.horizontal_candidate, opts.horizontal_candidate);
+    }
+
+    /// The differential check the test above's doc comment points to:
+    /// pinning `cell_composition` to `Candidate` there (to catch an
+    /// accessor collapsing to the bare enum default `Off`) reopens the
+    /// opposite direction — an accessor that ignores `self` and always
+    /// returns the group default (also `Candidate`) would pass unnoticed.
+    /// This test closes it by checking BOTH values map through correctly,
+    /// which no single fixed test value can do for a 2-variant enum whose
+    /// engine default differs from its type default (#696 round 2).
+    #[test]
+    fn layout_options_axes_distinguishes_both_cell_composition_values() {
+        let off = LayoutOptions {
+            cell_composition: crate::bus::cells::CellComposition::Off,
+            ..LayoutOptions::default()
+        };
+        let candidate = LayoutOptions {
+            cell_composition: crate::bus::cells::CellComposition::Candidate,
+            ..LayoutOptions::default()
+        };
+        assert_eq!(off.axes().cell_composition, crate::bus::cells::CellComposition::Off);
+        assert_eq!(
+            candidate.axes().cell_composition,
+            crate::bus::cells::CellComposition::Candidate
+        );
     }
 
     #[test]
