@@ -1235,3 +1235,73 @@ fixtures / docs split per the churn norm).
     expected, not unexplained: warning pins record a per-category TALLY,
     and a geometry change that leaves the tally alone leaves the pin alone.
     Only tier5's tally moved.
+
+  **#699 review round 2 absorbed** (8 findings: 2 major, 6 minor; 6
+  absorbed with code, 2 refuted with receipts):
+  * *(major, 3/3)* **"the suite now permanently endorses a known-broken
+    artifact with no in-suite tripwire — the only guard is prose and an
+    external issue number."** Correct, and the fix is an assertion, not
+    more prose: `tier1_iron_gear_wheel_20s` now PINS its outer selection
+    (`cell-composed` at `best-error-free`) with a message naming #700 and
+    telling whoever moves it — including whoever FIXES #700 — to re-take
+    the meter reading rather than re-bless on greenness. Neither existing
+    assertion could say that: the golden hash's message asks whether the
+    change was intentional, and `assert_produces` reads a static estimate
+    the meter contradicts. Discrimination check executed: restoring the
+    cells fossil fails it with `Some(("native", BestAccepted))` vs
+    `Some(("cell-composed", BestErrorFree))`.
+  * *(major, 2/3)* *"this cements a new baseline that should be treated as
+    provisional until #700 lands"* — agreed, and now literally true: the
+    pin above is what makes it provisional rather than silent.
+  * *(minor, 1/3)* *"`harness_options_are_engine_defaults` only exercises
+    the default path; the four fields the wrappers pass explicitly could
+    go stale unseen."* **The best finding of the round** — the guard did
+    have that hole. Two of the four are HARD LITERALS in every wrapper
+    (`LayoutStrategy::Pooled`, `true`), which is the same fossil shape one
+    level out; the guard now asserts the engine defaults still equal them.
+    The other two (`row_layout`, `surplus_policy`) are passed as
+    `::default()` and follow a flip on their own — stated, so the absence
+    is not read as an oversight.
+  * *(minor, 2/3)* *"the residual pin counts deliberate test vectors as
+    fossils, and its 'lower the number' policy would push someone to
+    convert a deliberate low-capacity behaviour test."* The specific
+    example is shaky (`stacking_refuses_low_inserter_cap`'s refusal
+    predicate names `max_inserter_tier`, not the capacity) but the hazard
+    is real and unaudited. The doc now claims only what was checked — none
+    carries a COMMENT explaining its value, no per-site audit was done —
+    and the guidance is rewritten: decide per site whether the value is
+    load-bearing, document it and lower the count if so, migrate if not,
+    and name the site in the commit either way.
+  * *(minor, 1/3)* *"both re-pinned tests gained a full extra layout pass
+    under wall-clock timeouts on a box this PR itself records flaking at
+    10003 ms."* Correct and cheap: 10 s → 30 s and 30 s → 60 s. Both run
+    in ~0.02 s, so the raised budgets still catch a ~1000x regression.
+  * *(minor, 1/3)* *"`run_e2e_pure_combo` silently breaks its 'pure'
+    contract."* Half right. "Pure" is documented as *the horizontal-stack
+    candidate off*, which is still exactly what it does; `cell-composed`
+    was never part of that contract and was absent by fossil, from the
+    baseline columns AND the `default` column alike. Disabling it in the
+    pure columns only would break the apples-to-apples comparison the
+    sweep exists for, so no override — but the doc now says precisely what
+    "pure" means and warns that `full_knob_sweep` tables from before
+    2026-08-21 are not comparable to ones after.
+  * *(minor, 1/3, REFUTED with an acknowledged residual)* *"a consistent
+    reversal of both terminal emitters sails through the corroboration."*
+    True, and already stated in the test's own comment. Corroboration
+    narrows a failure mode, it does not remove it, and it cannot be
+    removed from a test: the fix is a structural nesting marker in the
+    trace contract, which is Phase 1b/2a's to own. Strengthened as far as
+    a test can go — the STAGE is pinned too, so "read the nested board
+    instead" shows up as a stage mismatch (gear@20's nested board decides
+    at `best-accepted`, the outer at `best-error-free`).
+  * *(nit, REFUTED)* *"nothing re-derives tier5's 10; the answer lives
+    only in the RFC."* The committed warning pin
+    (`tests/goldens/warnings/tier5_processing_unit_from_ore_am3.txt`) is
+    re-derived and asserted on every suite run — that is what
+    `assert_warnings_golden` does. The RFC carries the ADJUDICATION, which
+    is a different artifact from the value.
+  * *(nit, REFUTED)* *"the corpus's `e2e-harness` column keeps generating
+    a baseline for a candidate set nothing ships."* Deliberate and
+    documented: it is the historical record the W2c re-blesses were
+    adjudicated against, and deleting it would re-take 32 cells and
+    destroy the only evidence of what the fossilized suite decided.

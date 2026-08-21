@@ -236,6 +236,17 @@ fn run_e2e_with_strategy_and_row_layout(
 /// strategy × row-layout combination in isolation; the default engine
 /// behavior (candidate competing) is the sweep's separate `default`
 /// column.
+///
+/// "Pure" means **the horizontal-stack candidate is off**, and only that
+/// (#699 review round 2 read it as "no candidate competes"). Every other
+/// candidate — `cell-composed` included — runs exactly as production has
+/// it. Before RFC-070 W2c that was accidentally untrue: the harness
+/// pinned `cell_composition: Off`, so the cell-composed arm was absent
+/// from these columns AND from the `default` column, by fossil rather
+/// than by design. It now competes in both, which keeps the sweep's
+/// comparison apples-to-apples; disabling it in the pure columns alone
+/// would not. Consequence for readers: **`full_knob_sweep` tables
+/// produced before 2026-08-21 are not comparable to ones produced after.**
 fn run_e2e_pure_combo(
     test_name: &str,
     item: &str,
@@ -425,6 +436,31 @@ fn harness_options_are_engine_defaults() {
         "inserter_capacity fossil is back (RFC-070 W2c): the suite would run a \
          different inserter ladder than production",
     );
+
+    // The fields `run_e2e_inner` takes as PARAMETERS bypass the spread —
+    // the wrappers hand them in explicitly — so
+    // `harness_options(HarnessOptions::default())` alone cannot see them
+    // go stale (#699 review round 2). Two of the four are spelled as HARD
+    // LITERALS by every wrapper (`LayoutStrategy::Pooled`, `true`), which
+    // is the same fossil shape one level out; assert the engine defaults
+    // still equal them, so a default flip fails here instead of silently
+    // pinning every fixture to the old value.
+    //
+    // The other two — `row_layout` and `surplus_policy` — are absent
+    // deliberately: the wrappers pass `RowLayout::default()` /
+    // `SurplusPolicy::default()`, which follow a flip on their own.
+    assert_eq!(
+        shipped.strategy,
+        layout::LayoutStrategy::Pooled,
+        "the engine's default strategy moved, but `run_e2e`/`run_e2e_with_exclusions` \
+         still hand `LayoutStrategy::Pooled` to `run_e2e_inner` — update the wrappers \
+         (and adjudicate the goldens) rather than this assertion",
+    );
+    assert!(
+        shipped.horizontal_candidate,
+        "the engine's default `horizontal_candidate` moved to false, but the \
+         `run_e2e*` wrappers still hand `true` to `run_e2e_inner`",
+    );
 }
 
 /// **The fossil pattern is dead on the `run_e2e` path only.** It survives,
@@ -452,15 +488,26 @@ fn harness_options_are_engine_defaults() {
 ///   `stacking_kovarex_family_exempt_s2`, `stacking_ec_60s_express_legendary_s2`,
 ///   `research_l7_thins_output_inserters_s4`, `rfc061_allocation_probe_ac5`.
 ///
-/// None of them documents its `0` / `Off` as deliberate — every one is the
-/// same copy of `run_e2e_inner`'s old literal. They are NOT migrated here
-/// because each carries its own pins and assertions, so flipping them is a
-/// second adjudication of the same size as this PR's, not a rider on it.
+/// None of them carries a COMMENT explaining its `0` / `Off`; every one is
+/// textually the same copy of `run_e2e_inner`'s old literal. That is a
+/// claim about the prose, not about whether the value is load-bearing —
+/// **no per-site audit has been done**, and #699's review round 2 was
+/// right to flag that at least one site (`stacking_refuses_low_inserter_cap`,
+/// whose whole subject is a low-capacity config) reads as though it might
+/// be deliberate even if its refusal predicate actually names
+/// `max_inserter_tier`. They are NOT migrated here because each carries
+/// its own pins and assertions, so flipping them is a second adjudication
+/// of the same size as this PR's, not a rider on it.
 ///
-/// **Reducing a count here is the good direction**: migrate a site to
-/// `harness_options` (or spell a deliberate value with a comment saying
-/// why), then lower the number. Raising one means a new copy of a known
-/// trap — don't.
+/// **Reducing a count here is the good direction, but not unconditionally**:
+/// per site, first decide whether the value is load-bearing for what that
+/// test asserts. If it is, spell it with a comment saying so and lower the
+/// count anyway (a documented deliberate value is not a fossil). If it is
+/// not, migrate the site to `harness_options` — which will move that
+/// test's own pins, so adjudicate them the way this PR adjudicated the
+/// harness's. Either way, name the site in the commit that lowers the
+/// number, so a reader can tell a migration from a weakened tripwire.
+/// Raising a count means a new copy of a known trap — don't.
 #[test]
 fn residual_fossil_literals_are_pinned() {
     // Self-read: matching on the exact TRIMMED line means the comparison
@@ -1071,8 +1118,16 @@ fn tier1_iron_gear_wheel() {
 /// `best-error-free`, winner `native`. The assertions below now pin THAT
 /// — including cell-composed's presence, so a re-fossilization fails here
 /// as well as at `harness_options_are_engine_defaults`.
+///
+/// Timeout raised 10 s → 30 s in the same change (#699 review round 2):
+/// this fixture now runs a SECOND full layout pass (the cell-composed
+/// candidate), and `ntest::timeout` is wall-clock, so a loaded box is the
+/// binding constraint, not the work. The neighbouring
+/// `tier2_electronic_circuit_20s_from_ore` already tripped its 10 s at
+/// 10003 ms on this PR's own BASELINE run while passing solo in 0.63 s.
+/// 30 s still catches a ~1000x regression on a test that runs in ~0.02 s.
 #[test]
-#[ntest::timeout(10000)]
+#[ntest::timeout(30000)]
 fn decomposition_search_native_candidate_fires_trace_events() {
     let inputs: FxHashSet<String> = ["iron-plate"].iter().map(|s| s.to_string()).collect();
     let result = run_e2e(
@@ -1129,9 +1184,18 @@ fn decomposition_search_native_candidate_fires_trace_events() {
     // oracle. It is, so it is corroborated rather than trusted: the two
     // INDEPENDENT terminals (`DecompositionChosen` from the search,
     // `SelectionDecided` from the scoreboard) must agree, and the stage is
-    // pinned against #694's `tier1_gear_am1` / am1 / `default` row. A
-    // reordering that broke the pairing would have to break both emitters
-    // the same way to slip through.
+    // pinned against #694's `tier1_gear_am1` / am1 / `default` row.
+    //
+    // Honest residual (round 2, same finding restated): a reordering that
+    // flipped BOTH emitters consistently would sail through both
+    // assertions. Corroboration narrows the failure mode, it does not
+    // remove it — and it cannot be removed from here, because the fix is a
+    // structural nesting marker in the trace contract itself, which is the
+    // selection loop's to own (RFC-070 Phase 1b/2a), not this test's.
+    // What this test CAN do about it is pin the stage as well as the
+    // winner: gear@20's nested board decides at `best-accepted`, so a
+    // whole class of "read the nested board instead" errors would show up
+    // as a stage mismatch here rather than as a silent pass.
     let decided: Vec<_> = result.trace_events.iter()
         .filter_map(|e| match e {
             TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
@@ -1172,8 +1236,12 @@ fn decomposition_search_native_candidate_fires_trace_events() {
 /// artifact of the `cell_composition: Off` fossil, not a property of the
 /// search. What K-DS1-1 actually asserts — native wins the clean case,
 /// and `size-split-2` is not paid for on it — survives verbatim below.
+///
+/// Timeout raised 30 s → 60 s for the same reason as its sibling above
+/// (#699 review round 2): one extra full layout pass under a wall-clock
+/// budget on a box that already flakes a 10 s one.
 #[test]
-#[ntest::timeout(30000)]
+#[ntest::timeout(60000)]
 fn decomposition_search_picks_native_on_clean_partitioned_case() {
     use spaghettio_core::bus::layout::LayoutStrategy;
     let inputs: FxHashSet<String> = ["petroleum-gas", "coal"]
@@ -1383,6 +1451,32 @@ fn tier1_iron_gear_wheel_20s() {
     // fixed here. Everything below is validator- and estimate-level and
     // passes on the under-delivering layout; do NOT read this test's
     // greenness as evidence of delivery.
+    //
+    // The pin below is the IN-SUITE tripwire for that (#699 review round
+    // 2, 3/3 — "the only guard is prose and an external issue number").
+    // Neither the golden hash nor `assert_produces` can say WHY this
+    // fixture is special: the hash's failure message asks whether the
+    // layout change was intentional, and `assert_produces` reads
+    // `analysis.throughput_estimates`, a static estimate the meter
+    // contradicts. This one names #700, so whoever changes the selection
+    // here — including whoever FIXES #700 — is told what they just moved
+    // instead of being invited to re-bless.
+    let outer = result.trace_events.iter().rev().find_map(|e| match e {
+        TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
+        _ => None,
+    });
+    assert_eq!(
+        outer.as_ref().map(|(w, s)| (w.as_str(), *s)),
+        Some(("cell-composed", spaghettio_core::trace::SelectionStage::BestErrorFree)),
+        "tier1_iron_gear_wheel_20s pins a KNOWN UNDER-DELIVERING winner (#700): \
+         `cell-composed` at `best-error-free`, metered at 15.0/s against a 20.0/s \
+         plan while both native arms meter 21.0/s. If this assertion just failed, \
+         the selection moved — if that is #700 being fixed, re-take the meter \
+         reading (`w2c_gear20_meter_export` at the bottom of this file), update \
+         #700, and re-bless the golden with the new number. Do NOT re-bless on \
+         validator greenness alone: that is exactly what hid this for a month. \
+         got {outer:?}",
+    );
     assert_warnings_golden(&result, "tier1_iron_gear_wheel_20s");
     assert_produces(&result, "iron-gear-wheel", 20.0);
     assert_round_trip(&result);
