@@ -3008,6 +3008,7 @@ pub fn route_bus_ghost(
             &spec_belt_tiers,
             &spec_items,
             &spec_exit_dirs,
+            &spec_kinds,
             &entities,
             &pending_crossings,
         );
@@ -6171,6 +6172,7 @@ fn dump_region_fixture(
     spec_belt_tiers: &FxHashMap<String, BeltTier>,
     spec_items: &FxHashMap<String, String>,
     spec_exit_dirs: &FxHashMap<String, EntityDirection>,
+    spec_kinds: &FxHashMap<String, crate::bus::junction::SpecKind>,
     placed_entities: &[PlacedEntity],
     pending_crossings: &FxHashSet<(i32, i32)>,
 ) {
@@ -6275,6 +6277,17 @@ fn dump_region_fixture(
             .filter(|(k, _)| kept_keys.contains(k.as_str()))
             .map(|(k, &v)| (k.clone(), v))
             .collect::<BTreeMap<_, _>>(),
+        // Only Pipe kinds are recorded — Belt is the replay default, and
+        // omitting it keeps the JSON minimal. A pipe spec MUST be dumped
+        // here or the replay silently degrades it to a belt×belt shape.
+        spec_kinds: spec_kinds
+            .iter()
+            .filter(|(k, &kind)| {
+                kept_keys.contains(k.as_str())
+                    && kind == crate::bus::junction::SpecKind::Pipe
+            })
+            .map(|(k, _)| (k.clone(), "Pipe".to_string()))
+            .collect::<BTreeMap<_, _>>(),
         placed_entities: placed_entities
             .iter()
             .filter(|e| in_radius(e.x, e.y))
@@ -6285,6 +6298,7 @@ fn dump_region_fixture(
             mode: "solve".to_string(),
             max_cost: None,
             optimal_cost: None,
+            solved_by: None,
             required_entities: Vec::new(),
         },
     };

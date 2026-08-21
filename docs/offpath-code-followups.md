@@ -223,6 +223,30 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
   (its sibling `cluster_adjacent_crossings` has nine). Coverage gap, not
   deletion. Also its factory `perpendicular_template_strategy()` (:6089) is
   itself production-dead (fixture replay only) with a stale parity comment.
+  - **CLOSED 2026-08-21 (#687), with findings.** Two fixtures now pin the
+    rung (`perp_template_pipe_belt_bridge` = the rung solving its live
+    pipe×belt path; `perp_template_single_tile_crossing` = the ladder's
+    actual dispatch on a belt×belt crossing), via new `expected.solved_by`
+    strategy attribution in the region-fixture harness. The instrumentation
+    surfaced two findings:
+    1. **The rung's belt×belt arm is unreachable for two-item crossings**
+       — the exact shape it was written for. `junction_solver`'s
+       item-conflict gate skips every strategy on the sole single-tile
+       iteration (two items on one boundary tile), and the rung refuses
+       any grown region (`tile_count > 1` guard, ghost_router.rs:6105).
+       Reachable paths: pipe×belt (pipe items are conflict-exempt) and,
+       untested hypothesis, same-item belt crossings *if* those ever seed
+       junctions. Follow-up candidates: delete the belt×belt/
+       same-direction arms of `solve_perpendicular_template` + `try_bridge`
+       after a production census confirms no same-item crossings, or
+       rework the conflict gate to let the template try before growth.
+    2. **The fixture replay's strategy ladder had drifted** from
+       production (pre-native `sat-1ug`/Relaxed-reach list vs production's
+       `sat-1ug-native` core). Realigned to the pinned-tier core in #687;
+       auto-tier extras (eviction, AutoUpgrade rungs) remain deliberately
+       excluded — fixtures don't record belt-tier mode. If the production
+       ladder changes again, the copy in `fixture.rs` must follow (its
+       comment says lift to a shared helper on the next drift).
 - **`region_reimprove.rs` has zero Rust-side tests** while auto-firing in the
   web app on every clean layout with SAT zones.
 

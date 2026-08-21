@@ -121,6 +121,26 @@ fn region_fixtures() {
                     ));
                 }
                 Some(cost) => {
+                    if let Some(want) = &fixture.expected.solved_by {
+                        match &result.solved_by {
+                            Some(got) if got == want => {}
+                            other => {
+                                failures.push(format!(
+                                    "{} ({}): expected solved_by {want:?}, got {other:?}; \
+                                     solution: {:?}; attempts: {:?}",
+                                    fixture.name,
+                                    filename,
+                                    result
+                                        .entities
+                                        .iter()
+                                        .map(|e| (e.name.as_str(), e.x, e.y, e.direction))
+                                        .collect::<Vec<_>>(),
+                                    result.attempts
+                                ));
+                                continue;
+                            }
+                        }
+                    }
                     if let Some(max_cost) = fixture.expected.max_cost {
                         if cost > max_cost {
                             failures.push(format!(

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "perp_template_single_tile_crossing",
-  "notes": "G1 (offpath campaign, #675): the first fixture to reach the perpendicular-template rung \u2014 rung 1 of the production strategy ladder, ~795 lines with ZERO prior test coverage anywhere in the suite. Minimal by construction: one seed tile where an east-flowing trunk and a south-flowing tap cross, exactly two specs, perpendicular directions \u2014 the rung's precise admission predicate (single-tile region, 2 specs, perpendicular). If this fixture stops solving, either the rung regressed or its admission predicate changed; both are findings, not paperwork.",
+  "notes": "G1 (offpath campaign, #675). Originally authored to pin the perpendicular-template rung; solved_by attribution (added for the #687 review) proved that rung UNREACHABLE on this shape. Causal chain: on the only single-tile iteration, the item-conflict gate in junction_solver (two items on one boundary tile) skips EVERY strategy and grows the region; the rung then refuses any region larger than one tile (ghost_router's tile_count guard). Each gate is correct in isolation; together they make the rung's belt\u00d7belt arm dead for two-item crossings \u2014 the exact shape it was written for. This fixture therefore pins the ladder's ACTUAL behavior on the canonical two-item single-tile crossing (sat-1ug-native solves it on a grown region, bridging the tap under the trunk) and stands as the regression record of that reachability finding: if solved_by ever changes, the ladder's dispatch on this shape changed. The rung's genuinely reachable path (pipe\u00d7belt) is pinned by perp_template_pipe_belt_bridge.json.",
   "seeds": [
     [
       5,
@@ -88,7 +88,9 @@
     "tap:copper-plate:1:0": "South"
   },
   "expected": {
-    "mode": "solve"
+    "mode": "solve",
+    "max_cost": 14,
+    "solved_by": "sat-1ug-native"
   },
   "placed_entities": [
     {
