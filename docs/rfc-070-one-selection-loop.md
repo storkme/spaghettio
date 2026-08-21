@@ -299,11 +299,32 @@ fixtures / docs split per the churn norm).
   tag would lose which question was asked, which is the column K70-1
   turns on. Measured over the #686 census slice (six fixtures, default
   options): `best-error-free` ×4, `merge-tap` ×1, `scoped-pairwise` ×1;
-  `best-accepted` and `first-produced` never fired. Note that
-  `best-accepted` — the "generic soft score" mechanism the Summary
-  treats as one of the three — decided **nothing** on this slice; if
-  Phase 0c's wider corpus repeats that, the soft score's real role is
-  the `accepted` hard gate, not the ranking.*
+  `best-accepted` and `first-produced` never fired **on that slice** —
+  see the next entry, which found `best-accepted` deciding as soon as the
+  option set changes. The stage distribution is a function of the OPTIONS,
+  not just the fixture.*
+- *2026-08-21 — **the e2e harness does not run production's candidate
+  set**, found by decoding a `tier1_iron_gear_wheel` snapshot and getting
+  a different deciding stage than the census reported for the same
+  fixture (`best-accepted` vs `best-error-free`). Cause:
+  `LayoutOptions::default()` sets `cell_composition: Candidate`
+  (`bus/layout.rs:241`), but `run_e2e` spells the field explicitly as
+  `cell_composition: Default::default()` (`tests/e2e.rs:355`) — the
+  ENUM's default, which is `Off` (`bus/cells/mod.rs:24`) — next to a
+  `..Default::default()` that would have given `Candidate`. The line
+  dates to RFC-051 Phase A when Off WAS the struct default (`5090da99`);
+  Phase B flipped the struct and the harness kept resolving to the enum.
+  Consequence for the mechanism: with cells off, only native produces,
+  `clean_flags` is skipped by its own `n_layouts > 1` guard, the
+  error-free tier is empty, and `best-accepted` decides — which is why
+  the whole e2e suite exercises a stage the census slice never reaches.
+  **Not fixed here**: flipping it changes the candidate set under every
+  regression test, i.e. a selection change, which is a campaign call and
+  not an additive Phase-0b one. Two obligations fall out: (1) the
+  Phase-0c parity corpus must be defined over fixture × MACHINE TIER ×
+  OPTION SET, since "same fixture" does not pin the candidate field; (2)
+  suite greenness is not evidence about the cell-composed arm, whose
+  production exposure the e2e corpus does not cover at all.*
 - *2026-08-21 — **Phase-0b oracle gaps**, recorded so no later phase
   assumes the baseline says more than it does. (a) Issue counts exist
   only where a comparison needed them: a merge-tap-decided selection
