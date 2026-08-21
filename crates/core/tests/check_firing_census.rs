@@ -29,15 +29,18 @@
 //! printed header (round 3, #686) so a table-skimmer sees it without
 //! reading down to the Interpretation paragraph.
 //!
-//! THREE tests live here. Two are `#[ignore]`d diagnostics over the same
-//! `FIXTURES` slice, running in opposite directions; the third,
-//! `selection_scoreboard_contract`, is NOT ignored and is the only thing
-//! in this file a build depends on — it pins the Phase-0b oracle's
-//! contract (every candidate slot emits a row, in canonical order, before
-//! its terminal event; the winner is one of its own block's rows; the
+//! FIVE tests live here. Two are `#[ignore]`d diagnostics over the same
+//! `FIXTURES` slice, running in opposite directions; the other THREE are
+//! NOT ignored and are what a build depends on — they share
+//! `assert_scoreboard_contract` and pin the Phase-0b oracle's contract
+//! (every candidate slot emits a row, in canonical order, before its
+//! terminal event; the winner is one of its own block's rows; the
 //! deciding stage is the one this fixture reaches) so that a broken stage
 //! tag or a row that stops being emitted fails CI instead of quietly
-//! printing wrong output to a human who may never run it.
+//! printing wrong output to a human who may never run it. One fixture
+//! each for `best-error-free`, `merge-tap` and `scoped-pairwise`, because
+//! a contract pinned on ONE stage cannot tell a broken stage tag from a
+//! stage that never fires (W1c, #689).
 //!
 //! Of the two diagnostics: `check_firing_census` (this one) approximates
 //! the candidate field from OUTSIDE via option toggles and reports

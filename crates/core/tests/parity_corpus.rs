@@ -69,10 +69,26 @@
 //! ```
 //!
 //! `SPAGHETTIO_PARITY_CORPUS=bless` rewrites the committed baseline;
-//! `=check` fails on any cell that differs from it. Neither is CI-gated
-//! (the test is `#[ignore]`d) — same posture as the stress goldens,
-//! which are host-cache-relative for the same reason: the layouts depend
-//! on which zone solutions the pinned cache replays.
+//! `=check` fails on any cell that differs from it. `bless` REFUSES if
+//! this run's zone cache is not the one the committed baseline was
+//! blessed against (or if there is no resolvable cache at all) — the
+//! corpus is cache-relative and blessing also rewrites the recorded
+//! hash, so a mis-pinned bless would leave 160 unreproducible rows with
+//! nothing to notice it by. `=bless-repin` is the escape hatch for
+//! deliberately re-taking the baseline on a new cache.
+//!
+//! **Not CI-gated, deliberately, and the reason is scheduling rather
+//! than cost** (#694 review, finding 2). Gating this against production
+//! today would only assert "production has not changed", which every
+//! engine PR legitimately falsifies — a re-bless treadmill with no
+//! reader. The consumer that makes a gate meaningful is Phase 2a's
+//! shadow loop, and the RFC already commits to gating THAT
+//! (Verification plan item 2: "winner mismatch fails the check"). Until
+//! then the guard on the instrument is the three non-ignored contract
+//! tests in `check_firing_census.rs`; the guard on the DATA is that the
+//! next phase re-takes it. Same posture as the stress goldens for the
+//! same underlying reason: the layouts depend on which zone solutions
+//! the pinned cache replays.
 
 use std::collections::BTreeMap;
 
@@ -239,8 +255,20 @@ const OPTION_SETS: &[OptionSet] = &[
 ];
 
 /// One grid cell's outcome. `status` is the coarse verdict, so a reader
-/// (and `check`) never has to infer one from a `None`:
-/// `decided` / `no-winner` / `refused` / `no-solve` / `no-selection`.
+/// (and `check`) never has to infer one from a `None`. The complete set
+/// the code can emit, which is the set a baseline reader should expect
+/// (#694 review, finding 3 — an earlier version of this line listed a
+/// `refused` that no branch produces):
+///
+/// - `decided` — the search picked a winner and the build returned it.
+/// - `decided-then-refused` — the search picked a winner but
+///   `build_bus_layout` returned `Err` afterwards. **Unreached on the
+///   current corpus** (zero cells in the committed baseline); kept
+///   because the pick is not the last thing the build does, and
+///   collapsing it into `decided` would silently mislabel a refusal.
+/// - `no-winner` — every candidate failed: rows emitted, no terminal.
+/// - `no-selection` — the build never reached the search at all.
+/// - `no-solve` — the solver refused this (fixture, machine) pair.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Cell {
     fixture: String,
@@ -569,12 +597,49 @@ fn parity_corpus() {
     print_divergences(&cells);
 
     match std::env::var("SPAGHETTIO_PARITY_CORPUS").as_deref() {
-        Ok("bless") => {
+        Ok(mode @ ("bless" | "bless-repin")) => {
+            // Blessing DELIBERATELY overwrites verdicts — re-taking the
+            // baseline after an intentional engine change is what bless
+            // is for, and refusing on divergence would make it unusable
+            // (#694 review, finding 1, half-absorbed).
+            //
+            // The PROVENANCE is different. This baseline is pinned-cache-
+            // relative, so a bless taken against a different cache — or
+            // against none — writes 160 rows nobody can reproduce, and
+            // the mismatch is invisible afterwards because bless also
+            // rewrites the recorded hash. That half of the finding is
+            // real, so it is now a refusal with a named escape hatch.
+            let prior = std::fs::read_to_string(baseline_path())
+                .ok()
+                .and_then(|t| serde_json::from_str::<Baseline>(&t).ok());
+            if mode == "bless" {
+                assert!(
+                    pin_hash.is_some(),
+                    "refusing to bless with no resolvable zone cache: this baseline is \
+                     cache-relative and a null `zone_cache_hash` cannot be checked by \
+                     anyone later. Set SPAGHETTIO_ZONE_CACHE_PATH to \
+                     crates/core/data/sat-zones-ci.bin, or pass \
+                     SPAGHETTIO_PARITY_CORPUS=bless-repin if you really mean it"
+                );
+                if let Some(p) = &prior {
+                    assert!(
+                        p.zone_cache_hash.is_none() || p.zone_cache_hash == pin_hash,
+                        "refusing to bless against a DIFFERENT zone cache than the \
+                         committed baseline's: baseline {:?}, this run {pin_hash:?}. The \
+                         cells below may differ for provenance reasons rather than engine \
+                         ones, and blessing would overwrite the old hash so nobody could \
+                         tell afterwards. Re-run with the committed pin, or pass \
+                         SPAGHETTIO_PARITY_CORPUS=bless-repin to deliberately re-take the \
+                         baseline on a new cache",
+                        p.zone_cache_hash
+                    );
+                }
+            }
             let baseline = Baseline { zone_cache_hash: pin_hash.clone(), cells };
             let json = serde_json::to_string_pretty(&baseline).expect("baseline serializes");
             std::fs::write(baseline_path(), json + "\n").expect("write baseline");
             eprintln!(
-                "BLESSED {} cell(s) to {:?} (zone-cache hash: {pin_hash:?})",
+                "BLESSED ({mode}) {} cell(s) to {:?} (zone-cache hash: {pin_hash:?})",
                 baseline.cells.len(),
                 baseline_path()
             );
@@ -583,14 +648,27 @@ fn parity_corpus() {
             let text = std::fs::read_to_string(baseline_path())
                 .expect("SPAGHETTIO_PARITY_CORPUS=check needs a committed baseline");
             let baseline: Baseline = serde_json::from_str(&text).expect("baseline parses");
-            if pin_hash != baseline.zone_cache_hash {
-                eprintln!(
-                    "NOTE: zone-cache hash differs from the blessed baseline's ({:?} vs \
-                     {pin_hash:?}) — divergences below may be cache provenance rather \
-                     than an engine change.",
+            // A mismatched (or absent) pin does not stop the comparison —
+            // a clean result under a different cache is still worth
+            // knowing — but it must LEAD the failure if there is one,
+            // rather than trailing it as a NOTE the reader met before the
+            // diffs and has forgotten by the time they matter (#694
+            // review, finding 4).
+            let provenance = if pin_hash != baseline.zone_cache_hash {
+                let msg = format!(
+                    "PROVENANCE MISMATCH: this run's zone cache is {pin_hash:?}, the \
+                     baseline was blessed against {:?}. This corpus is cache-relative, so \
+                     the divergences below may be provenance rather than an engine change \
+                     — re-run with the committed pin \
+                     (SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/sat-zones-ci.bin) before \
+                     reading them as findings.",
                     baseline.zone_cache_hash
                 );
-            }
+                eprintln!("\n{msg}");
+                Some(msg)
+            } else {
+                None
+            };
             let old: BTreeMap<_, _> = baseline.cells.iter().map(|c| (c.key(), c)).collect();
             let new: BTreeMap<_, _> = cells.iter().map(|c| (c.key(), c)).collect();
             let mut diffs = Vec::new();
@@ -648,11 +726,20 @@ fn parity_corpus() {
             );
             assert!(
                 diffs.is_empty(),
-                "parity corpus diverged from the committed baseline ({} cell(s)):\n{}",
+                "{}parity corpus diverged from the committed baseline ({} cell(s)):\n{}",
+                // Provenance FIRST when it applies: a mis-pinned run's
+                // diffs are uninterpretable, and a failure message that
+                // opens with the diff list invites reading them as
+                // findings anyway.
+                provenance.as_deref().map(|p| format!("{p}\n\n")).unwrap_or_default(),
                 diffs.len(),
                 diffs.join("\n")
             );
-            eprintln!("checked {} cell(s) against the committed baseline", new.len());
+            eprintln!(
+                "checked {} cell(s) against the committed baseline{}",
+                new.len(),
+                if provenance.is_some() { " (UNDER A DIFFERENT ZONE CACHE — see above)" } else { "" }
+            );
         }
         _ => {
             // Report-only default: prints, asserts nothing.
