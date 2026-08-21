@@ -2898,9 +2898,13 @@ pub fn route_bus_ghost(
     // always installs a trace collector *and* sink, so gating on
     // `trace::is_active()` alone would not skip this in production; an
     // explicit opt-in env var is what actually makes it zero-cost by
-    // default (round 1 review finding).
-    let junction_seed_census_enabled =
-        std::env::var_os("SPAGHETTIO_JUNCTION_SEED_CENSUS").is_some();
+    // default (round 1 review finding). Value-based, not merely
+    // presence-based (round 3 review finding): a shop-wide diagnostics
+    // block that sets every `SPAGHETTIO_*` var to `"0"` to disable them
+    // must not accidentally enable this one.
+    let junction_seed_census_enabled = std::env::var("SPAGHETTIO_JUNCTION_SEED_CENSUS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
     for cluster in &clusters {
         // `corridor_handled` grows during this loop — a prior cluster's
@@ -3000,10 +3004,30 @@ pub fn route_bus_ghost(
             // the item as the first colon-delimited segment after its
             // prefix — recover it from the key itself (same technique the
             // fluid catch-up above already uses) before falling back to
-            // the key as an absolute last resort.
+            // the key as an absolute last resort. `"tap:mergetap:"` MUST
+            // be checked before the plain `"tap:"` prefix (round 3 review
+            // finding): a merge-tap feed key is
+            // `format!("tap{MERGE_TAP_SEGMENT_TAG}{item}:{x}:{y}")` =
+            // `"tap:mergetap:{item}:{x}:{y}"`, so stripping only `"tap:"`
+            // would recover the literal string "mergetap" as the item
+            // instead of the real one. Currently these keys are always
+            // registered as regular `BeltSpec`s (so `spec_items.get(key)`
+            // above already resolves them and this fallback path is never
+            // reached for them today) — ordering the prefixes this way
+            // keeps it correct if that ever changes.
             fn resolve_item<'a>(key: &'a str, spec_items: &'a FxHashMap<String, String>) -> &'a str {
                 if let Some(item) = spec_items.get(key) {
                     return item.as_str();
+                }
+                // Checked ahead of the generic "tap:" prefix below, tied
+                // to the real constant (not a duplicated literal) so it
+                // can't drift from the merge-tap key format itself.
+                if let Some(rest) =
+                    key.strip_prefix("tap").and_then(|r| r.strip_prefix(MERGE_TAP_SEGMENT_TAG))
+                {
+                    if let Some((item, _)) = rest.split_once(':') {
+                        return item;
+                    }
                 }
                 for prefix in ["trunk:", "tap:", "flow:"] {
                     if let Some(rest) = key.strip_prefix(prefix) {

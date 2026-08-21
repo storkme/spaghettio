@@ -27,7 +27,7 @@
 //! this zero-cost there).
 //!
 //! **The rung's EXACT firing predicate** (`PerpendicularTemplateStrategy::
-//! try_solve`, ghost_router.rs ~6166-6171): `region.tile_count() == 1`
+//! try_solve`, ghost_router.rs 6177/6183/6186): `region.tile_count() == 1`
 //! AND `junction.specs.len() == 2`. This census's "true rung shape"
 //! bucket below requires both — `cluster_tile_count == 1`,
 //! `n_specs == 2`, `n_distinct_items == 1` (round 2 review finding: an
@@ -106,17 +106,54 @@ use spaghettio_core::bus::layout::{self, LayoutOptions};
 use spaghettio_core::solver;
 use spaghettio_core::trace::{self, TraceEvent};
 
+/// RAII guard: sets an env var for the guard's lifetime and restores
+/// whatever value (or absence) it had before, on drop — including on
+/// panic unwind, so an assertion failure mid-test doesn't leak the
+/// mutation into any test that runs afterward in this process (round 3
+/// review finding: this test's own env mutation was never restored).
+struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let prev = std::env::var(key).ok();
+        // SAFETY: `std::env::set_var` requires `unsafe` on this toolchain
+        // at edition 2021 (verified: rustc 1.95.0 flags an unnecessary
+        // `unsafe` block under `#[deny(unused_unsafe)]` for an ordinary
+        // safe call — e.g. `unsafe { println!(...) }` — but does NOT flag
+        // this one, confirming the wrapper is required, not vestigial;
+        // round 3 review's claim that it's "unnecessary under edition
+        // 2021" does not hold on this toolchain). This test binary is
+        // single-threaded for env mutations — no other thread reads/
+        // writes process env concurrently here.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        EnvVarGuard { key, prev }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: same as `set` above.
+        unsafe {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 #[test]
 #[ignore = "G1 diagnostic census — run with --ignored --nocapture; see module doc for the zone-cache pin"]
 fn junction_seed_census() {
     // The emit site is gated behind this env var (off by default in
     // production — round 1 review finding). Set it for the duration of
-    // this test only.
-    // SAFETY: single-threaded test binary process for this env mutation;
-    // no other thread reads/writes process env concurrently here.
-    unsafe {
-        std::env::set_var("SPAGHETTIO_JUNCTION_SEED_CENSUS", "1");
-    }
+    // this test only; restored on drop regardless of how the test exits.
+    let _census_env_guard = EnvVarGuard::set("SPAGHETTIO_JUNCTION_SEED_CENSUS", "1");
 
     // (label, item, rate, machine, belt_tier, inputs)
     #[allow(clippy::type_complexity)]
@@ -206,14 +243,15 @@ fn junction_seed_census() {
     let mut pipe_tagged_but_not_single_spec = 0usize;
     let mut single_spec_but_not_pipe_tagged = 0usize;
 
-    // Every seed falls into exactly one of these five buckets — printed
-    // total must equal `total_seeds` (checked below, not just asserted in
-    // prose).
+    // Every seed falls into exactly one of these six buckets — printed
+    // total must equal `total_seeds` (checked below via assert_eq!, not
+    // just asserted in prose).
+    let mut zero_specs_after_filter = 0usize; // n_specs=0 (round 3 review finding: reachable — e.g. a pipe-only seed where keys_at_tile filters out the sole participant — and precisely the kind of case this census exists to surface, never to crash on)
     let mut single_tile_bypass = 0usize; // tiles=1, n_specs=1 (the belt-over-forbidden-tile bypass)
     let mut single_tile_diff_item = 0usize; // tiles=1, n_specs=2, distinct=2
     let mut single_tile_same_item = 0usize; // tiles=1, n_specs=2, distinct=1 — the rung's EXACT predicate shape
     let mut single_tile_gt2_specs = 0usize; // tiles=1, n_specs>2 (outside the rung's specs.len()==2 gate regardless of item-sharing)
-    let mut multi_tile_all_distinct = 0usize; // tiles>1, n_specs==n_distinct_items
+    let mut multi_tile_all_distinct = 0usize; // tiles>1, n_specs==n_distinct_items, n_specs>0
     let mut multi_tile_same_item = 0usize; // tiles>1, n_specs>n_distinct_items — weak signal, see module doc
 
     let mut same_item_single_tile: Vec<(String, i32, i32)> = Vec::new();
@@ -275,7 +313,21 @@ fn junction_seed_census() {
                     single_spec_but_not_pipe_tagged += 1;
                 }
 
+                // Round 3 review finding: n_specs == 0 IS reachable (a
+                // single-tile — or, in principle, multi-tile — cluster
+                // whose only participant(s) were pipes, all filtered out
+                // of keys_at_tile) and is exactly the kind of edge case
+                // this census exists to surface, so it gets its own
+                // bucket ahead of everything else — never a crash. Every
+                // other arm below is now genuinely exhaustive without a
+                // data-dependent catch-all: once n_specs == 0 is handled
+                // first, n_distinct_items is provably in 1..=n_specs for
+                // every remaining case (a non-empty HashSet's size can't
+                // exceed its input count or be zero), so the trailing
+                // `_ => unreachable!()` only catches a violated counting
+                // invariant, not a real corpus shape.
                 match (*cluster_tile_count == 1, *n_specs, *n_distinct_items) {
+                    (_, 0, _) => zero_specs_after_filter += 1,
                     (true, 1, _) => single_tile_bypass += 1,
                     (true, 2, 2) => single_tile_diff_item += 1,
                     (true, 2, 1) => {
@@ -284,7 +336,7 @@ fn junction_seed_census() {
                     }
                     (true, n, _) if n > 2 => single_tile_gt2_specs += 1,
                     (false, n, d) if n == d => multi_tile_all_distinct += 1,
-                    (false, _, _) => {
+                    (false, n, d) if n > d => {
                         multi_tile_same_item += 1;
                         same_item_multi_tile_union.push((
                             label.to_string(),
@@ -295,7 +347,10 @@ fn junction_seed_census() {
                             *n_distinct_items,
                         ));
                     }
-                    _ => unreachable!("n_specs < n_distinct_items should never occur"),
+                    _ => unreachable!(
+                        "counting invariant violated: n_distinct_items ({n_distinct_items}) \
+                         must be in 1..=n_specs ({n_specs}) once n_specs > 0"
+                    ),
                 }
             }
         }
@@ -315,7 +370,8 @@ fn junction_seed_census() {
     // is an arithmetic invariant true by construction (the match above is
     // exhaustive over the same fields the table sums), not a data-
     // dependent claim, so it can't spuriously fail from corpus drift.
-    let bucket_sum = single_tile_bypass
+    let bucket_sum = zero_specs_after_filter
+        + single_tile_bypass
         + single_tile_diff_item
         + single_tile_same_item
         + single_tile_gt2_specs
@@ -325,6 +381,7 @@ fn junction_seed_census() {
 
     println!(
         "\n--- bucket breakdown (sums to {total_seeds}) ---\n\
+         n_specs == 0 after the pipe filter (never a crash — see module doc): {zero_specs_after_filter}\n\
          single-tile, 1 spec (belt-over-forbidden-tile bypass): {single_tile_bypass}\n\
          single-tile, 2 specs, different items:                 {single_tile_diff_item}\n\
          single-tile, 2 specs, SAME item (rung's exact shape):  {single_tile_same_item}\n\
@@ -340,8 +397,20 @@ fn junction_seed_census() {
          count here would mean pipes DO reach a cluster tile candidate, \
          just always get filtered before solve_crossing): {pipe_tagged_seeds}"
     );
+    // Round 3 review finding: enforce the "pipe-tagged == single-spec"
+    // identity with assert_eq!, not just prose — if the corpus ever
+    // drifts so a pipe-tagged seed isn't single-spec (or vice versa),
+    // this test fails loudly instead of the doc silently going stale.
+    assert_eq!(
+        pipe_tagged_but_not_single_spec, 0,
+        "expected every pipe-tagged seed to be single-spec (the belt-crosses-a-placed-pipe bypass) — found one that wasn't"
+    );
+    assert_eq!(
+        single_spec_but_not_pipe_tagged, 0,
+        "expected every single-spec seed to be pipe-tagged — found one that wasn't"
+    );
     println!(
-        "cross-check (round 2 review — measured, not asserted): \
+        "cross-check (assert_eq!-enforced above, not just prose): \
          pipe-tagged & single-spec = {pipe_tagged_and_single_spec}, \
          pipe-tagged but NOT single-spec = {pipe_tagged_but_not_single_spec}, \
          single-spec but NOT pipe-tagged = {single_spec_but_not_pipe_tagged}"

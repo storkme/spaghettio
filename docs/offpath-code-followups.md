@@ -268,8 +268,8 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
        belt-tier constraint; SAT zone cache pinned to `sat-zones-ci.bin`).
        **The rung's exact firing predicate**
        (`PerpendicularTemplateStrategy::try_solve`, ghost_router.rs
-       ~6166-6171): `region.tile_count() == 1` AND `specs.len() == 2`.
-       Two review rounds found real methodology gaps in earlier passes of
+       6177/6183/6186): `region.tile_count() == 1` AND `specs.len() == 2`.
+       Three review rounds found real methodology gaps in earlier passes of
        this census, both now fixed:
        - **Round 1**: `n_specs`/`n_distinct_items` are the union of every
          spec touching ANY tile in a cluster, and a cluster can already
@@ -290,7 +290,7 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
          fallback for a `spec_items`-map miss used the spec's raw key
          (unique by construction), which HIDES same-item pairs instead of
          manufacturing false ones — not hypothetical, since the fluid
-         catch-up sweep (ghost_router.rs ~2648-2667) only tags a synth key
+         catch-up sweep (ghost_router.rs 2643-2667) only tags a synth key
          when its path is entirely on pipe tiles, leaving some fluid synth
          keys untagged; fixed by recovering the item from the key's own
          `trunk:`/`tap:`/`flow:` prefix convention before falling back to
@@ -302,6 +302,44 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
          the partition, not just prose) and prints a cross-check that
          "pipe-tagged" and "single-spec" seeds are the same 11 (measured:
          they are, exactly).
+       - **Round 3**: (a) the bucket match's trailing `_ =>
+         unreachable!()` arm was reachable for `n_specs == 0` (a seed
+         whose only participants were pipes, all filtered out of
+         `keys_at_tile`) — precisely a case this census exists to
+         surface, and crashing on it would have destroyed the data
+         instead of reporting it; fixed with its own `zero_specs_after_
+         filter` bucket, checked first, making every remaining arm
+         genuinely exhaustive rather than resting on a data-dependent
+         catch-all. (b) the env-var gate was presence-based
+         (`var_os(..).is_some()`), so a shop-wide diagnostics block
+         setting every `SPAGHETTIO_*` var to `"0"` to disable them would
+         have accidentally enabled this one — fixed to require the value
+         be `"1"` or case-insensitive `"true"`. (c) the `resolve_item`
+         prefix fallback checked bare `"tap:"` before a more specific
+         case: a merge-tap feed key is literally `"tap:mergetap:{item}:
+         {x}:{y}"` (`format!("tap{MERGE_TAP_SEGMENT_TAG}...")`,
+         `ghost_router.rs:1635`), so the generic `"tap:"` strip would have
+         recovered the literal string `"mergetap"` as the item — currently
+         inert (merge-tap keys are always registered as regular
+         `BeltSpec`s, so `spec_items.get(key)` already resolves them
+         before the fallback is ever consulted), but fixed by checking the
+         merge-tap-specific prefix first so it can't matter later either.
+         (d) the "pipe-tagged == single-spec" identity was prose-only —
+         now `assert_eq!`-enforced, so corpus drift fails the test instead
+         of quietly rotting this doc. (e) one claim in round 2's
+         absorption was refuted rather than applied: the bot's assertion
+         that the `unsafe { std::env::set_var(...) }` wrapper is
+         "unnecessary under edition 2021" does not hold on this repo's
+         pinned toolchain (rustc 1.95.0) — verified directly:
+         `unsafe { std::env::set_var(...) }` under
+         `#[deny(unused_unsafe)]` compiles with zero warnings, while the
+         same experiment on an ordinary safe call (`unsafe {
+         println!(...) }`) correctly fires `unused_unsafe` — so the
+         wrapper is required, not vestigial, on this toolchain regardless
+         of edition. The env var IS now restored after the test via an
+         RAII guard (the valid half of that finding — the mutation was
+         never being undone, which could pollute a future test added to
+         this same file).
        **Corrected, reconciled result — 111 seeds partition as:** 11
        single-spec pipe-bypass seeds, 31 single-tile 2-different-item
        crossings (the shape point 1's item-conflict-gate finding is
