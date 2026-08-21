@@ -24,7 +24,11 @@
 //! that env var, and production pays nothing without it (round 1 review
 //! finding: the shipped web path always has a trace collector *and* sink
 //! active, so gating on "is tracing active" alone would not have made
-//! this zero-cost there).
+//! this zero-cost there). The gate is on the ENV VAR only, so a caller
+//! that sets it without attaching a collector still pays the full
+//! per-cluster payload cost — the `resolve_item` fold and the
+//! `routed_paths` scan both run before `trace::emit` discovers there is
+//! nothing to emit into (round 6 review, #691).
 //!
 //! **A NECESSARY (not exact) predicate for the rung's firing** (round 4
 //! review finding: the previous wording overclaimed precision).
@@ -82,9 +86,23 @@
 //! abandoned pass. So this census counts the SHIPPED (surviving) pass
 //! per candidate evaluation — a retried candidate's pass-1 seeds are
 //! silently dropped from what this test observes, not double-counted.
-//! Seeds are still not deduplicated ACROSS independent candidate
-//! evaluations (each candidate's own final pass counts separately), and
-//! a seed whose geometry is untouched across passes within one candidate
+//!
+//! **Corrected round 6 (#691):** this census does NOT observe every
+//! candidate. `decomposition_search::run_candidate` captures each
+//! candidate's events and `truncate_events` them out of the collector,
+//! replaying only the WINNER's at the end — so a LOSING candidate's
+//! junction seeds never reach this test at all. The totals are therefore
+//! the winner's surviving pass per selection call (plus any nested
+//! selection inside the winner), not one entry per evaluated candidate
+//! variant. The earlier wording ("each candidate's own final pass counts
+//! separately") described a stream the production loop deliberately
+//! edits. This does not move the zero conclusion — losing candidates'
+//! seeds being invisible can only REMOVE observations, never fabricate a
+//! same-item hit — but it does mean the corpus is narrower than the
+//! candidate count suggests, and it widens the same lower-bound caveat
+//! the truncation note below already carries.
+//!
+//! A seed whose geometry is untouched across passes within one candidate
 //! can still appear at most once per candidate (pass 1 is gone if pass 2
 //! ran). This test also tallies `TraceEvent::LayoutRetried` occurrences
 //! (emitted right after the truncate, so it survives into what this test
@@ -433,6 +451,13 @@ fn junction_seed_census() {
     // is an arithmetic invariant true by construction (the match above is
     // exhaustive over the same fields the table sums), not a data-
     // dependent claim, so it can't spuriously fail from corpus drift.
+    // Computed here, ASSERTED at the bottom of the function — after
+    // every dump (#694 review round 5, completing the round-6 carry-over
+    // this file already absorbed for the same-item assert). Faulting
+    // here would swallow the very tables a reader needs to see why the
+    // partition broke, which is the shape the reorder was meant to
+    // eliminate; the "it's a tautology so it can't fire" reasoning is
+    // the same "cannot happen" this file distrusts everywhere else.
     let bucket_sum = zero_specs_after_filter
         + single_tile_bypass
         + single_tile_diff_item
@@ -440,7 +465,6 @@ fn junction_seed_census() {
         + single_tile_gt2_specs
         + multi_tile_all_distinct
         + multi_tile_same_item;
-    assert_eq!(bucket_sum, total_seeds, "seed buckets must partition total_seeds exactly");
 
     println!(
         "\n--- bucket breakdown (sums to {total_seeds}) ---\n\
@@ -453,31 +477,37 @@ fn junction_seed_census() {
          multi-tile,  item-sharing pair somewhere in union:     {multi_tile_same_item}"
     );
 
-    // Round 5 review: this is THE conclusion the census exists to check
-    // — not an exploratory tally where an unexpected value is itself
-    // informative (that's what the demoted checks below are for; round
-    // 4's "never abort on discovery" call was about those, not this).
-    // Deliberately a hard `assert_eq!`: this diagnostic is `#[ignore]`d,
-    // so it only runs when someone deliberately re-executes the
-    // evidence behind a deletion or reachability decision — exactly the
-    // moment a changed conclusion should be loud, not a silently-updated
-    // number in a printed line nobody re-reads. If this ever fires, DO
-    // NOT proceed with any deletion of the perpendicular-template rung
-    // (ghost_router.rs, `solve_perpendicular_template`/`try_bridge`/
-    // `bridge_belt_over_pipe`) on the strength of this census — the
-    // reachability conclusion has changed, and `docs/offpath-code-
-    // followups.md`'s G1 entry must be updated with the new finding
-    // before anyone trusts a deletion call built on the old "zero"
-    // result.
-    assert_eq!(
-        single_tile_same_item, 0,
-        "same-item seed(s) found in the rung's necessary-superset bucket \
-         (cluster_tile_count == 1, n_specs == 2, n_distinct_items == 1) — \
-         the G1 census's zero-reachability conclusion no longer holds on \
-         this corpus. Update docs/offpath-code-followups.md's G1 entry \
-         with this finding BEFORE trusting any deletion decision that \
-         cited the old zero."
+    // The DISCOVERY DUMPS run before BOTH hard assertions, which live at
+    // the very end of this function (round 6 review #691, completed by
+    // #694 review round 5): an assert is what fires when the conclusion
+    // changes, and the seeds printed here are the only record of WHICH
+    // seeds changed it. Asserting first meant a failing run reported the
+    // count and swallowed the addresses — the reader would have had to
+    // comment out the assert to see the finding it was announcing.
+    println!(
+        "\nsame-item seeds matching the census's necessary-superset bucket \
+         for the rung's predicate (cluster_tile_count == 1 AND n_specs == 2 \
+         AND n_distinct_items == 1 — see the module doc's precision note; \
+         zero here proves zero actual firings, but the bucket may be \
+         broader than the rung's true firing set): {}",
+        same_item_single_tile.len()
     );
+    for (label, x, y) in &same_item_single_tile {
+        println!("  {label} @ ({x},{y})");
+    }
+    println!(
+        "\nsame-item MULTI-TILE cluster-wide seeds (cluster_tile_count > 1 \
+         AND the cluster's participant UNION has an item-sharing pair \
+         somewhere in it — a weak, likely trunk/tap-contaminated signal; \
+         see the module doc's methodology note. NOT evidence of a same-item \
+         crossing, and not further examined per-tile because the rung \
+         structurally cannot act on tile_count > 1 regardless): {}",
+        same_item_multi_tile_union.len()
+    );
+    for (label, x, y, tiles, n_specs, n_distinct) in &same_item_multi_tile_union {
+        println!("  {label} @ ({x},{y}): {tiles} tiles, {n_specs} specs, {n_distinct} distinct items");
+    }
+
 
     println!(
         "\npipe-tagged seeds (measured on the RAW spec set at each cluster's \
@@ -510,7 +540,7 @@ fn junction_seed_census() {
     // Any deletion follow-up that cites this census's zero should say so.
     println!(
         "(both the corroboration above and the zero same-item conclusion \
-         below share an acknowledged residual risk: ghost_router.rs's \
+         printed earlier share an acknowledged residual risk: ghost_router.rs's \
          item-resolution fallback path can HIDE a true same-item pair — \
          never fabricate one — under an unrecognized key format; not \
          observed in any run to date, but not proven absent either. Cite \
@@ -523,9 +553,16 @@ fn junction_seed_census() {
     // spec` by construction — the census would abort exactly when it
     // finds something worth reporting. A census must never crash on
     // discovery; demoted to printed diagnostics with a loud marker.
-    // `bucket_sum == total_seeds` below remains the one hard assertion —
-    // that one is a true tautology (the match is exhaustive), not a
-    // data-dependent correlation that a real corpus shape can trip.
+    //
+    // TWO hard assertions survive, and BOTH now sit at the very end of
+    // this function, after every table (round 6 review #691 moved the
+    // first; #694 review round 5 moved the second, which had still been
+    // running before this section): `single_tile_same_item == 0`, the
+    // data-dependent conclusion the census exists to defend, and
+    // `bucket_sum == total_seeds`, a tautology over an exhaustive match.
+    // The rule the file now follows without exception: print everything,
+    // then assert. An assert that fires before the tables explaining it
+    // reports a number and swallows the evidence.
     if pipe_tagged_but_not_single_spec > 0 {
         println!(
             "  ⚠ UNEXPECTED: {pipe_tagged_but_not_single_spec} pipe-tagged \
@@ -548,27 +585,51 @@ fn junction_seed_census() {
          single-spec but NOT pipe-tagged = {single_spec_but_not_pipe_tagged}"
     );
 
-    println!(
-        "\nsame-item seeds matching the census's necessary-superset bucket \
-         for the rung's predicate (cluster_tile_count == 1 AND n_specs == 2 \
-         AND n_distinct_items == 1 — see the module doc's precision note; \
-         zero here proves zero actual firings, but the bucket may be \
-         broader than the rung's true firing set): {}",
-        same_item_single_tile.len()
+    // Round 5 review: this is THE conclusion the census exists to check
+    // — not an exploratory tally where an unexpected value is itself
+    // informative (that's what the demoted checks below are for; round
+    // 4's "never abort on discovery" call was about those, not this).
+    // Deliberately a hard `assert_eq!`: this diagnostic is `#[ignore]`d,
+    // so it only runs when someone deliberately re-executes the
+    // evidence behind a deletion or reachability decision — exactly the
+    // moment a changed conclusion should be loud, not a silently-updated
+    // number in a printed line nobody re-reads. If this ever fires, DO
+    // NOT proceed with any deletion of the perpendicular-template rung
+    // (ghost_router.rs, `solve_perpendicular_template`/`try_bridge`/
+    // `bridge_belt_over_pipe`) on the strength of this census — the
+    // reachability conclusion has changed, and `docs/offpath-code-
+    // followups.md`'s G1 entry must be updated with the new finding
+    // before anyone trusts a deletion call built on the old "zero"
+    // result.
+    //
+    // The message says "re-examine", not "the rung is reachable" (round
+    // 6 review, #691). The bucket is a NECESSARY superset, not the
+    // rung's predicate — it records neither spec direction, so it cannot
+    // evaluate `is_perpendicular` — and a non-zero bucket therefore
+    // establishes only that the cheap proof of unreachability is gone,
+    // never that the rung fires. Wording it as a falsified conclusion
+    // would have handed the next reader a stronger finding than the
+    // instrument can support.
+    assert_eq!(
+        single_tile_same_item, 0,
+        "necessary-superset bucket non-zero — re-examine perpendicularity \
+         before trusting the conclusion. Same-item seed(s) landed in the \
+         rung's necessary-superset bucket (cluster_tile_count == 1, \
+         n_specs == 2, n_distinct_items == 1), listed above. That bucket \
+         does NOT check `is_perpendicular`, so this is not proof the rung \
+         fires — it is proof the zero-reachability argument no longer \
+         holds cheaply on this corpus. Check the printed seeds' spec \
+         directions, then update docs/offpath-code-followups.md's G1 \
+         entry BEFORE trusting any deletion decision that cited the old \
+         zero."
     );
-    for (label, x, y) in &same_item_single_tile {
-        println!("  {label} @ ({x},{y})");
-    }
-    println!(
-        "\nsame-item MULTI-TILE cluster-wide seeds (cluster_tile_count > 1 \
-         AND the cluster's participant UNION has an item-sharing pair \
-         somewhere in it — a weak, likely trunk/tap-contaminated signal; \
-         see the module doc's methodology note. NOT evidence of a same-item \
-         crossing, and not further examined per-tile because the rung \
-         structurally cannot act on tile_count > 1 regardless): {}",
-        same_item_multi_tile_union.len()
-    );
-    for (label, x, y, tiles, n_specs, n_distinct) in &same_item_multi_tile_union {
-        println!("  {label} @ ({x},{y}): {tiles} tiles, {n_specs} specs, {n_distinct} distinct items");
-    }
+
+    // Deliberately LAST, so every table above it has already printed:
+    // every seed must land in exactly one bucket. Asserted rather than
+    // trusted to hand-transcribed prose (round 2 review) — an arithmetic
+    // invariant true by construction (the match is exhaustive over the
+    // same fields the table sums), not a data-dependent claim, so it
+    // cannot spuriously fail from corpus drift. If it DOES fire, the
+    // bucket tallies and the seed dumps above are what you need to see.
+    assert_eq!(bucket_sum, total_seeds, "seed buckets must partition total_seeds exactly");
 }

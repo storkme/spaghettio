@@ -226,6 +226,48 @@ instruments:
    falls out of policy unification updates
    `docs/validator-trust.md` in the same PR.
 
+### The named parity corpus, and the divergence-equivalence rule
+
+Landed Phase 0c (#689 W1c). The corpus is
+`crates/core/tests/parity_corpus.rs` — an explicit **fixture × machine
+tier × option set** grid — and its committed result is
+`crates/core/tests/parity_corpus_baseline.json`
+(`SPAGHETTIO_PARITY_CORPUS=bless|check`, `#[ignore]`d, never CI-gated:
+like the stress goldens it is host-cache-relative and must be run with
+the zone-cache pin).
+
+**160 cells.** 12 fixtures (the #691 corpus verbatim: G2's six
+tier-ladder solves plus the six e2e "from-ore" ones) × the machine tiers
+each recipe permits (three assembler tiers, or the one chemical plant)
+× five option sets — `default`, `cells-off`, `e2e-harness`, `di-off`,
+`hs-off`. 140 decide; 20 are recorded `no-solve`
+(`assembling-machine-1`'s two ingredient slots cannot run
+advanced-circuit or processing-unit). The option-set axis is not
+optional decoration: it is the axis W1b's finding made load-bearing, and
+it is where the corpus's claim surface lives (below).
+
+Two cells are **equal** iff their `(status, winner, deciding stage)`
+triples are equal. Nothing else is compared. The per-candidate outcome
+vector is recorded alongside, for adjudication only; the verdict
+NUMBERS are deliberately absent, because they are structurally holed
+(see the Phase-0b oracle-gaps entry) and a baseline pinning them would
+pin gaps as facts.
+
+- **Minor divergence** — same `status` and `winner`, different deciding
+  stage. The shadow loop reached the same shipped layout by answering a
+  different question, which is expected wherever v2's policy merges two
+  of today's five stages. Adjudicated individually in this log; **no sim
+  required**, because no shipped geometry changed.
+- **Major divergence** — `winner` or `status` differs. A different
+  layout ships. Adjudicated individually in this log **and sim-anchored
+  before the flip**.
+- A **new or missing cell** is a major divergence by definition: the
+  candidate field moved, and the corpus must be re-taken and re-named
+  here before parity means anything.
+- K70-2's budget of 3 counts diverging **FIXTURES**, per its own wording
+  — not cells. One fixture spans up to 15 cells, so a single policy
+  difference would otherwise spend the whole budget in one place.
+
 ## Phasing
 
 - **Phase 0 — instruments.** 0b: scoreboard instrumentation of
@@ -385,9 +427,12 @@ fixtures / docs split per the churn norm).
   OUTER block, and the block walker now checks that a winner is among its own
   block's rows, printing a loud marker if not. Refuted with receipts:
   (d) "the failure path emits with the sink detached" — the sink is
-  re-attached at `decomposition_search.rs:1604` and the failure-path
-  `board.emit()` is at `:1814`, 210 lines later with no intervening
-  `swap_sink`; failure-path rows reach a streaming consumer exactly like
+  re-attached at `decomposition_search.rs:1659` and the failure-path
+  `board.emit()` is at `:1881`, 222 lines later with no intervening
+  `swap_sink` (anchors re-located against merged main, W1c: the round-2
+  entry quoted `:1604`/`:1814`, which do not point at those statements in
+  the file as merged — the argument is unchanged, the coordinates were
+  not); failure-path rows reach a streaming consumer exactly like
   success-path ones, so no doc note was added for a behaviour that does not
   exist. (e) "the e2e cells-off gap is left unfixed" — correct and
   deliberate, recorded in the entry above and on #689.*
@@ -436,3 +481,217 @@ fixtures / docs split per the churn norm).
   is debug-only. It surfaced here because the same hazard applied to
   `CANDIDATE_ORDER`, which is why the refusal message now uses it for real
   rather than only inside assertions.*
+- *2026-08-21 — **Phase 0c landed** (#689 track W1c): the parity corpus is
+  NAMED, at **160 cells** (12 fixtures × permitted machine tiers × 5 option
+  sets; 140 decide, 20 `no-solve`), committed as
+  `crates/core/tests/parity_corpus_baseline.json`, together with the
+  divergence-equivalence rule above. K70-1 and K70-2 are re-runnable from
+  here. Equality is `(status, winner, deciding stage)` and nothing else —
+  the verdict numbers stay out of the baseline on the Phase-0b principle
+  that a hole must not be committed as a fact.*
+- *2026-08-21 — **the option-set axis carries the claim surface, and it is
+  large**: 15 of the 32 fixture×machine rows change verdict somewhere
+  across the five option sets — **10 major** (winner changes) and **12
+  minor** (stage-only), 22 changed cells of 140 decided. The stage
+  distribution over the whole corpus is `best-error-free` 87,
+  `scoped-pairwise` 26, `merge-tap` 15, `best-accepted` 12,
+  `first-produced` 0 — so four of the five stages are live and the census
+  slice's "best-accepted and first-produced never fire" was a property of
+  that slice, not of the engine. Every minor divergence has the same
+  mechanism (W1b's): with cells off only native produces, `clean_flags` is
+  skipped by its `n_layouts > 1` guard, and the decision falls from
+  `best-error-free` to `best-accepted`. **`first-produced` remains
+  unmeasured on any corpus** — a shadow loop can reproduce this baseline
+  without ever exercising that arm, and Phase 2a must not read corpus
+  parity as evidence about it.*
+- *2026-08-21 — **the e2e harness carries a SECOND fossil of the same
+  shape**, found while building the corpus: `run_e2e_inner` also pins
+  `inserter_capacity: 0` (`tests/e2e.rs:354`), which was the struct default
+  when the line was written (`40fd48dc`, RFC-049 Phase 1, 2026-07-22) and
+  went stale two days later when #383 flipped the default to
+  `DEFAULT_INSERTER_CAPACITY` = 2. Identical cause to the
+  `cell_composition` fossil, in the same struct literal. It is not
+  cosmetic: `e2e-harness` (cells off AND capacity 0) diverges from BOTH
+  `default` and `cells-off` on two cells —
+  `tier2_ec_am1_10_ore` and `e2e_tier2_electronic_circuit_20s_from_ore`,
+  both at `assembling-machine-3`, where `direct-insertion` wins under
+  default and cells-off but `native` wins once the capacity drops. So the
+  inserter ladder independently steers selection, and a corpus that had
+  modelled the harness as "cells-off" — the W1c brief's stated minimum —
+  would have recorded the wrong winner for the configuration the whole
+  regression suite runs under. Both fossils stay UNFIXED here for the
+  reason W1b gave: flipping either changes the candidate set under every
+  regression test, which is a Wave-2 campaign call, not a Phase-0 one.
+  What changes is that the corpus now measures both.*
+- *2026-08-21 — **contested sample SIM-ANCHORED** (Verification plan item 3;
+  both runs `--warmup 432000 --speed 32`, entity-count-exact against the
+  meter tripwire's blessed rows, so the sim and the meter measured the same
+  artifacts).*
+  - ***`ac5-am2` (scoped-pairwise, winner `horizontal-stack`): PASS.***
+    5.03/s delivered vs 5.00 planned (**+0.6%**; produced 4.92/s, −1.6%),
+    every stage at plan (cable +0.2%, copper-plate 0.0%, EC −0.2%,
+    iron-plate 0.0%, plastic 0.0%, petroleum −0.6%), 136/136 machines
+    working, kit-clean, 12 checkpoints. `converged: false`, but the series
+    OSCILLATES across plan (4.92 ↔ 5.12, period 2) rather than decaying —
+    the harness's decay test reads a sawtooth as a trend. **So the one
+    pairwise displacement of native in the corpus is measured good.**
+    Caveat that must travel with the number: the run needs
+    `--research-productivity plastic-bar=0.10` (the force realizes +10% on
+    plastic and the harness kit-fails a manifest declaring 0), and the
+    declared-axis export is **2125 entities against the default cell's
+    2134** — same dims, 9 entities apart, so this anchors a
+    near-neighbour of the corpus cell, not the cell itself. That also
+    retires `status.md`'s "AC is bit-identical declared-or-not". The
+    undeclared run measured identically on every solid stage and differed
+    only on petroleum (−8.9% vs −0.6%), which is the axis mismatch itself.
+  - ***`ec30-am2` (merge-tap, winner `native`): FAIL, and it is REAL.***
+    **0.00/s at every stage, −100.0%**, 4 checkpoints at a 2-game-hour
+    warmup; kit-clean, fluid-clean, 1991/1991 ghosts revived; census 150
+    `full_output` + 20 `item_ingredient_shortage` — a jam, not a starve.
+    The layout ships **3 `belt-dead-end` Errors**. Not an instrument
+    artifact and not a warmup artifact. Full entry and the
+    fixture-confusion it clears up (the "#644-era ec30 ≈99.4%" anchor is a
+    different fixture AND a different artifact) in `docs/status.md`. **This
+    is a Phase-0 finding, not a Phase-0 fix**: nothing here changes the
+    layout.
+  - *Structural consequence for Phase 2a, recorded now: the corpus's
+    `default` cells are not all directly sim-anchorable. Any fixture whose
+    chain contains a force-boosted recipe (plastic-bar, processing-unit)
+    plans at 0 productivity while the game realizes +10%, so the harness
+    kit-fails the run; the anchor has to be taken on a declared-axis
+    re-export, which is a slightly different artifact. A major divergence
+    on such a fixture must say which artifact its sim anchored.*
+- *2026-08-21 — **#694 review round 1 adjudicated** (5 findings, 3 nits).
+  Absorbed: (a) `bless` could rotate the baseline onto a DIFFERENT zone
+  cache and rewrite the recorded hash in the same move, leaving 160
+  unreproducible rows with nothing to notice it by — it now refuses unless
+  the pin matches (escape hatch `bless-repin`), proven by an executed
+  discrimination check that exits 101 and leaves the file untouched. Only
+  half of that finding was taken: refusing to bless on differing VERDICTS
+  would make bless unusable, since re-taking after an intentional engine
+  change is what it is for. (b) `check`'s provenance warning now PREFIXES
+  the failure instead of trailing it as a note the reader met before the
+  diff list. (c) the `Cell::status` doc listed a `refused` no branch emits
+  — the records-outlive-state class again; it now enumerates the five real
+  statuses and marks `decided-then-refused` as unreached (zero cells).
+  Refuted with receipts: (d) "the corpus needs a CI gate" — a gate on this
+  baseline today asserts only "production has not changed", which every
+  engine PR legitimately falsifies; the gate that means something is
+  Phase 2a's shadow-vs-production check, which Verification plan item 2
+  already commits to. The instrument is gated by the three non-ignored
+  contract tests; the data is guarded by the next phase re-taking it. The
+  reasoning is now in the module doc so it reads as a decision.
+  (e) "the new contract helpers should use the corpus's nesting-robust
+  extractor" — the brittleness IS the pin: `assert_scoreboard_contract`
+  must fail when a selection nests, `outer_selection` must survive it
+  across 160 cells. Making the pin robust deletes its detection.*
+- *2026-08-21 — **#694 review round 2 adjudicated** (7 findings, 4 nits;
+  none contradicted round 1). Absorbed: (a) the committed provenance hash
+  was `DefaultHasher`, whose algorithm is documented as unstable across
+  Rust releases — a value that is committed and compared against forever
+  cannot be that, so it is SHA-256 now. The re-bless is its own receipt:
+  **only the hash line changed, all 160 cells byte-identical**, a fourth
+  independent reproduction, taken through `bless-repin` because the plain
+  path correctly refused. (b) a `null` prior hash satisfied the new bless
+  guard through an `is_none()` disjunct, so one repin with no cache would
+  have disarmed it permanently. (c) `outer_selection` now asserts the
+  winner is among the seven rows it extracted — the timing guard catches
+  an out-of-order terminal but not an in-order one naming another block's
+  candidate, and that cell would look self-consistent and be re-verified
+  green forever because `check` reads through the same extractor.
+  (d) the contract tests' unpinned cache posture is reconciled by
+  measurement rather than assertion: CI pins at the job level, and all
+  three pass under both caches (1.10s pinned, 2.66s unpinned).
+  Adjudicated as designed: `no-winner`/`no-selection` do not consult the
+  build result because both IMPLY it errored; `e2e-harness` cannot assert
+  its delta automatically (`run_e2e_inner` is private to another test
+  binary) so the hand-verified receipt is written into the doc instead.
+  Refuted: the 180s contract-test timeouts are not a flake source (the
+  three run in 1.06s, ~170× headroom) and the "builds the jammed ec30
+  layout" concern conflates a build with a simulated factory — the layout
+  builds in milliseconds, it is only the SIM that deadlocks.*
+- *2026-08-21 — **#694 review round 3 adjudicated** (8 findings, 3 nits;
+  closing round). Absorbed: (a) `check` passed GREEN on a provenance
+  mismatch whenever the cells happened to match — the same
+  "compared-nothing reads as clean" shape #693 closed, and now a hard
+  failure with a `check-any-cache` escape. Its discrimination check came
+  free from (b). (b) the provenance hash covered only the disk pin, not
+  the compiled-in `EMBEDDED_CACHE` that `zone_cache.rs` merges alongside
+  it, so a different embedded payload would have reported an identical
+  hash while consulting different zones; widening it re-blessed to **160
+  byte-identical cells, hash line only — a fifth reproduction**.
+  (c) a corrupt committed baseline bypassed the bless guard entirely,
+  because `.ok().and_then(parse.ok())` collapsed "missing" into
+  "truncated" — the same disjunct-disarms-the-guard class as round 2, one
+  path over. (d) the two new stage pins now state that a red is EXPECTED
+  when the ec30 jam is fixed, and that ac5's pairwise win is a knife-edge
+  to re-take and sim-check rather than revert toward. (e) the
+  `e2e-harness` label names an OPTION SET, not a cell the suite runs.
+  Refuted: `outcome_of`'s `&String == &str` compiles via the blanket
+  `PartialEq<&B> for &A` impl over `String: PartialEq<str>`, and an
+  always-false comparison is structurally unhidable there because the
+  lookup ends in a `panic!`, not a default.*
+- *2026-08-21 — **#694 review round 4 adjudicated** (5 findings; the pass
+  was DEGRADED — it leaked its own prompt template and cited four symbols
+  that grep to zero — but two findings were real and one was the best of
+  the review). Absorbed: (a) the provenance hash missed a THIRD zone
+  source, the legacy `sat-zones.jsonl` `zone_cache.rs` still reads next to
+  the pin; a `.jsonl` appearing would have changed which zones replay
+  while the committed hash stayed identical. Re-bless: **zero diff, not
+  even the hash line** (none exists here) — a sixth identical
+  reproduction. (b) `bless` conflated a NotFound baseline with an
+  unreadable one. **The generalisation is the durable part, and it is now
+  in the doc: a provenance hash is only worth what its source list is,
+  and a source list is a thing that goes stale** — two rounds found two
+  missing sources, so all three are enumerated against `zone_cache.rs`
+  rather than summarised. Refuted: the "no terminal/row after the chosen
+  terminal" concern (the index comes from `rposition`, and `last_row < t`
+  has covered the row half since the first hardening pass); the CI-gate
+  finding for the third time (answer unchanged); and the objection that
+  the scoped pin's message admits it may fail on a correct change — that
+  wording exists because round 3 asked for it. **Campaign note on the
+  instrument**: four rounds, and the two genuinely load-bearing findings
+  (SHA-256 stability, the missing zone sources) were both about the
+  PROVENANCE machinery rather than the corpus — the cells themselves
+  never moved across six reproductions.*
+- *2026-08-21 — **#694 review round 5 adjudicated** (4 findings, 3 nits),
+  and the headline is that **round 3 was absorbed too eagerly**:
+  `EMBEDDED_CACHE` is merged under `#[cfg(target_arch = "wasm32")]` only
+  (`zone_cache.rs:1404-1412`), so the fix that added it to the provenance
+  hash was pinning a file the native corpus never reads — a wasm-only edit
+  would have hard-failed every native `check` and refused every plain
+  `bless` against a byte-identical native zone set. Dropped; the hash now
+  covers exactly what `load_existing_jsonl` reads. Re-bless returned the
+  hash to its pin-only value and held all 160 cells for the **seventh**
+  time. Also absorbed: `None == None` passed `check` green (the
+  None-vs-None pair survived round 3's Some-vs-None fix, so a null-hash
+  baseline could green-check 160 unreproducible rows forever); and the
+  junction-seed census's `bucket_sum` assert still ran before the dumps,
+  excused as a tautology — which is the "cannot happen" reasoning that
+  file distrusts everywhere else. Both its asserts are now last.
+  **The generalisation, which is the part worth keeping**: two rounds got
+  the hash's source list wrong in OPPOSITE directions — first too narrow,
+  then too wide — so the doc no longer states a list as fact, it states
+  how to re-derive one. `Which sources does this consult?` is a `#[cfg]`
+  question, and it cannot be answered by reading a function name. Every
+  Phase-1/2 instrument that hashes inputs inherits that.*
+- *2026-08-21 — **#694 review round 6 adjudicated** (8 findings, 3 nits;
+  closing round — seven of the eight were re-raises already answered).
+  One absorbed, and it is a **direct warning to Phase 2a**:
+  `zone_cache::lookup_table()` is a process-wide `OnceLock` mutated in
+  memory as solves append zones, and all 160 cells run in one process, so
+  cell N is solved against a map cells 1..N-1 have grown. The committed
+  hash describes the run's STARTING disk state — which is what makes the
+  full sweep reproducible (seven byte-identical runs) — but says nothing
+  about what an individual cell saw. **Re-running one fixture in isolation
+  is therefore not guaranteed to reproduce its committed cell**, which is
+  exactly the first thing anyone will do on a divergence. Adjudicate by
+  re-running the whole corpus and reading the cell out of it. New argument
+  answered on merits: relaxing the two stage pins' winner assertions would
+  not reduce brittleness, because on both fixtures winner and stage move
+  together — if merge-tap stops gating its stage goes too, and if
+  horizontal stops winning the stage becomes best-error-free. There is no
+  looser pin that still detects a mis-tagged stage. **Review close-out:
+  six rounds, ~35 findings; the load-bearing ones were all about the
+  provenance machinery and the instrument's failure messages, and the 160
+  cells never moved once across seven reproductions.**

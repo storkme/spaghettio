@@ -1,0 +1,1445 @@
+{
+  "zone_cache_hash": "29166d1b2c8ab69dc8b539472c449a046e9719162dd6c651d54996ea436e9ad1",
+  "cells": [
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier1_gear_am1",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "best-error-free",
+      "outcomes": "refused,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "best-error-free",
+      "outcomes": "refused,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "best-error-free",
+      "outcomes": "refused,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "best-error-free",
+      "outcomes": "refused,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "best-error-free",
+      "outcomes": "refused,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "tier2_ec_am1_10_ore",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,refused,produced,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,refused,not-run,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,refused,produced,not-run"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,refused,refused,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,refused,not-run,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,refused,refused,not-run"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,refused,refused,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,refused,not-run,refused"
+    },
+    {
+      "fixture": "tier2_ec_am2_30_ore",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,refused,refused,not-run"
+    },
+    {
+      "fixture": "tier3_plastic_cp_5",
+      "machine": "chemical-plant",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier3_plastic_cp_5",
+      "machine": "chemical-plant",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "tier3_plastic_cp_5",
+      "machine": "chemical-plant",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "tier3_plastic_cp_5",
+      "machine": "chemical-plant",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier3_plastic_cp_5",
+      "machine": "chemical-plant",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "tier4_ac_am2_5_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "tier5_pu_am3_2_unconstrained",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "e2e_tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,refused"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,not-run,not-run,refused"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "merge-tap",
+      "outcomes": "produced,not-run,not-run,produced,not-run,refused,not-run"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,produced"
+    },
+    {
+      "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "direct-insertion",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,produced,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier3_plastic_bar_from_crude",
+      "machine": "chemical-plant",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "e2e_tier3_plastic_bar_from_crude",
+      "machine": "chemical-plant",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "e2e_tier3_plastic_bar_from_crude",
+      "machine": "chemical-plant",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-accepted",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,not-run"
+    },
+    {
+      "fixture": "e2e_tier3_plastic_bar_from_crude",
+      "machine": "chemical-plant",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "e2e_tier3_plastic_bar_from_crude",
+      "machine": "chemical-plant",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,produced,not-run,not-run"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,produced"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,produced"
+    },
+    {
+      "fixture": "e2e_tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-1",
+      "options": "default",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-1",
+      "options": "cells-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-1",
+      "options": "e2e-harness",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-1",
+      "options": "di-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-1",
+      "options": "hs-off",
+      "status": "no-solve",
+      "winner": null,
+      "stage": null,
+      "outcomes": ""
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-2",
+      "options": "default",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-2",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-2",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-2",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,produced"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-2",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-3",
+      "options": "default",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-3",
+      "options": "cells-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-3",
+      "options": "e2e-harness",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-3",
+      "options": "di-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,produced"
+    },
+    {
+      "fixture": "e2e_tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-3",
+      "options": "hs-off",
+      "status": "decided",
+      "winner": "native",
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
+    }
+  ]
+}
