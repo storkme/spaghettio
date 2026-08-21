@@ -2964,6 +2964,37 @@ pub fn route_bus_ghost(
             .map(|(key, _)| key.as_str())
             .collect();
 
+        // Census-only instrumentation (offpath-code-followups.md G1
+        // follow-up, #689 W1d): record this seed's shape before it reaches
+        // `solve_crossing`. Purely observational — `trace::emit` is a
+        // no-op unless a collector/sink is active, so this cannot change
+        // routing. `has_pipe` is measured over the RAW spec set touching
+        // the cluster's tiles, i.e. BEFORE the `SpecKind::Pipe` filter
+        // above runs, so it can actually detect pipe presence instead of
+        // trivially reading false through the filter that excludes them.
+        {
+            let n_specs = keys_at_tile.len();
+            let n_distinct_items: usize = keys_at_tile
+                .iter()
+                .filter_map(|&key| spec_items.get(key).map(|s| s.as_str()))
+                .collect::<FxHashSet<&str>>()
+                .len();
+            let has_pipe = routed_paths.iter().any(|(key, path)| {
+                path.iter().any(|t| cluster_tiles.contains(t))
+                    && matches!(
+                        spec_kinds.get(key.as_str()),
+                        Some(crate::bus::junction::SpecKind::Pipe)
+                    )
+            });
+            trace::emit(trace::TraceEvent::JunctionSeedCensus {
+                seed_x: cluster[0].0,
+                seed_y: cluster[0].1,
+                n_specs,
+                n_distinct_items,
+                has_pipe,
+            });
+        }
+
         // Pending crossings for the DeferredExit check: the subset of
         // `crossing_set` whose cluster hasn't committed yet. Excluding
         // `corridor_handled` avoids false deferrals when a zone's exit

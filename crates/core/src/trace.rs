@@ -1435,6 +1435,26 @@ pub enum TraceEvent {
         new_rate: f64,
         full_belt_cap: f64,
     },
+
+    /// Census-only instrumentation (offpath-code-followups.md G1 follow-up,
+    /// #689 W1d): emitted once per junction seed in `ghost_router`'s
+    /// cluster loop — every `keys_at_tile` computation that survives the
+    /// `corridor_handled` / `any_undecidable` skips and reaches
+    /// `junction_solver::solve_crossing` — purely observational, no effect
+    /// on routing. Answers "do same-item belt crossings ever seed
+    /// junctions?": `n_specs > n_distinct_items` at a seed means yes.
+    /// `has_pipe` is measured over the RAW spec set touching the cluster's
+    /// tiles *before* `keys_at_tile`'s `SpecKind::Pipe` filter runs (that
+    /// filter is why pipes can never appear in `n_specs`/`n_distinct_items`
+    /// — see #687) — kept as a corroborating receipt of that finding, not
+    /// a new hypothesis.
+    JunctionSeedCensus {
+        seed_x: i32,
+        seed_y: i32,
+        n_specs: usize,
+        n_distinct_items: usize,
+        has_pipe: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------

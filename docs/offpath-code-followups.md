@@ -250,6 +250,41 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
        production and deletable — or the conflict/dispatch gates get
        reworked to let the cheap template actually fire. Don't delete on
        this note alone; run the census.
+    3. **Census run 2026-08-21 (#689 W1d, `crates/core/tests/
+       junction_seed_census.rs`) — same-item crossings DO occur; rung
+       reachability is still NOT established.** New behavior-neutral
+       `TraceEvent::JunctionSeedCensus` (`trace.rs`) fires once per
+       `ghost_router` cluster seed, right where `keys_at_tile` is built,
+       recording `n_specs`/`n_distinct_items`/`has_pipe`. Corpus: the
+       same six tier-ladder fixtures `check_firing_census.rs` uses, plus
+       the six e2e "from-ore" fixtures listed in the test's module doc
+       (12 fixtures total, default `LayoutOptions` + each fixture's own
+       belt-tier constraint; SAT zone cache pinned to
+       `sat-zones-ci.bin`). Result: **111 seeds; 66 have `n_specs >
+       n_distinct_items`** (a same-item pair among the seed's specs) —
+       far from zero, so the "never occurs" branch of point 1's
+       either/or does NOT hold. But the qualifier matters: **every one of
+       the 66 is a 3-or-more-spec cluster** (the full table has no
+       `(n_specs=2, n_distinct=1)` row at all — zero instances of the
+       rung's own narrow shape, an isolated 2-spec single-tile crossing
+       where both specs share an item). This census measures the SEED as
+       formed at cluster construction, not what `junction_solver`'s
+       growth/strategy-dispatch loop does with it afterward — it cannot
+       say whether the rung's `tile_count == 1` / 2-spec predicate is
+       ever met by a subset of one of these larger clusters mid-growth.
+       So: item-sharing at seed time is common, but the rung's specific
+       firing precondition remains unobserved in this corpus. Also
+       recorded: 11 seeds have `has_pipe = true` (measured on the raw
+       spec set BEFORE the pipe filter) — corroborating point 1's
+       pipe×belt finding rather than contradicting it (these are exactly
+       the corpus's 11 single-spec seeds, the belt-crosses-a-placed-pipe
+       bypass path; the pipe itself never reaches `keys_at_tile`). Net:
+       **neither deletion nor a gate rework is justified by this census
+       alone** — the open question narrows to "does the item-conflict
+       gate or the rung's tile_count==1 guard ever see a same-item pair
+       in isolation," which needs growth-loop instrumentation, not a
+       seed-level census. CENSUS-ONLY per its own charter: no gate or
+       control flow changed.
     2. **The fixture replay's strategy ladder had drifted** from
        production (pre-native `sat-1ug`/Relaxed-reach list vs production's
        `sat-1ug-native` core). #687 lifted the pinned-tier core into a
