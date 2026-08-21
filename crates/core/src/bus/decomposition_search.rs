@@ -937,6 +937,12 @@ struct CandidateRun {
     /// the unactionable "no decomposition candidate produced a layout"
     /// (observability gap found debugging rfc-build-quality Phase 2).
     error: Option<String>,
+    /// `produce()` panicked and `catch_unwind` swallowed it. Read only by
+    /// the RFC-070 scoreboard, which must not conflate a panic with an
+    /// ordinary refusal — `error` carries a sentinel string in that case
+    /// and string-matching it would be a latent bug the moment the tag is
+    /// reworded.
+    panicked: bool,
     events: Vec<crate::trace::TraceEvent>,
 }
 
@@ -944,7 +950,7 @@ impl CandidateRun {
     /// A candidate that wasn't tried (e.g. gating predicate was false).
     /// No outcome, no events; the winner-selection code skips it.
     fn skipped(_name: &str) -> Self {
-        Self { outcome: None, events: Vec::new(), error: None }
+        Self { outcome: None, events: Vec::new(), error: None, panicked: false }
     }
 }
 
@@ -984,7 +990,7 @@ where
             None
         }
     };
-    CandidateRun { outcome, events, error }
+    CandidateRun { outcome, events, error, panicked: false }
 }
 
 /// Like `run_candidate` but wraps the produce call in `catch_unwind`.
@@ -1002,6 +1008,7 @@ where
     let mut events = crate::trace::peek_events_since(start);
     crate::trace::truncate_events(start);
     let mut error = None;
+    let mut panicked = false;
     let outcome = match result {
         Ok(Ok(layout)) => {
             let score = score_layout(&layout, solver_result);
@@ -1022,6 +1029,7 @@ where
         }
         Err(_) => {
             error = Some("panicked (caught)".to_string());
+            panicked = true;
             events.push(crate::trace::TraceEvent::DecompositionCandidateScored {
                 name: name.to_string(),
                 density: 0.0,
@@ -1034,7 +1042,122 @@ where
             None
         }
     };
-    CandidateRun { outcome, events, error }
+    CandidateRun { outcome, events, error, panicked }
+}
+
+/// RFC-070 Phase 0b (#689 W1b): one candidate's row on the selection
+/// scoreboard.
+///
+/// Purely observational — no decision reads it. A row starts from the
+/// candidate's `CandidateRun` (outcome + soft score, mechanism 1) and is
+/// then FILLED IN by whichever verdict mechanism happens to touch that
+/// candidate, **at the site where the decision path already computed the
+/// number**. Nothing here recomputes: a scoreboard that re-ran
+/// `validate()` on its own could disagree with the value the decision
+/// actually used, and an oracle that disagrees with the thing it is
+/// oracling is worse than no oracle.
+///
+/// The price of that discipline is `None`s — a candidate that no
+/// comparison needed carries no issue counts at all, because on that call
+/// nothing computed any. That is a genuine hole in what this can see, and
+/// it is recorded as a hole rather than papered over with a fresh
+/// validation pass.
+struct CandidateVerdict {
+    name: &'static str,
+    outcome: crate::trace::SelectionCandidateOutcome,
+    reason: Option<String>,
+    score: Option<f64>,
+    accepted: Option<bool>,
+    accepted_reason: Option<String>,
+    counts: Option<IssueCounts>,
+    counts_source: Option<&'static str>,
+    kinds: Option<ErrorKinds>,
+}
+
+impl CandidateVerdict {
+    fn from_run(name: &'static str, run: &CandidateRun) -> Self {
+        use crate::trace::SelectionCandidateOutcome as Outcome;
+        // `panicked` is a field, not a string match on `error` — see its
+        // doc on `CandidateRun`. Order matters: a panic also sets `error`.
+        let outcome = match (&run.outcome, run.panicked, &run.error) {
+            (Some(_), _, _) => Outcome::Produced,
+            (None, true, _) => Outcome::Panicked,
+            (None, false, Some(_)) => Outcome::Refused,
+            (None, false, None) => Outcome::NotRun,
+        };
+        Self {
+            name,
+            outcome,
+            reason: run.error.clone(),
+            score: run.outcome.as_ref().map(|(_, s)| s.score),
+            accepted: run.outcome.as_ref().map(|(_, s)| s.accepted),
+            accepted_reason: run
+                .outcome
+                .as_ref()
+                .and_then(|(_, s)| s.accepted_reason.clone()),
+            counts: None,
+            counts_source: None,
+            kinds: None,
+        }
+    }
+}
+
+/// The seven candidate rows, **indexed exactly like the `candidates`
+/// array** in `select_best_decomposition` (`NATIVE_IDX` = 0 through
+/// `H_IDX` = 6), so a recorder can key off the same index constants the
+/// decision uses.
+struct Scoreboard([CandidateVerdict; 7]);
+
+impl Scoreboard {
+    /// Record the `IssueCounts` a comparison site just computed.
+    ///
+    /// FIRST WRITE WINS. Native's counts are computed by both pairwise
+    /// comparisons and DI's by both `di_choice` and `scoped_choice`; the
+    /// repeats are the same deterministic `count_issues` call on the same
+    /// layout, so keeping the first preserves the provenance of the site
+    /// that first needed the number instead of overwriting it with a
+    /// later duplicate.
+    fn record_counts(&mut self, idx: usize, counts: IssueCounts, source: &'static str) {
+        let row = &mut self.0[idx];
+        if row.counts.is_none() {
+            row.counts = Some(counts);
+            row.counts_source = Some(source);
+        }
+    }
+
+    /// Record the `ErrorKinds` the merge-tap decision just computed.
+    /// First write wins, for the same reason as `record_counts`.
+    fn record_kinds(&mut self, idx: usize, kinds: ErrorKinds) {
+        let row = &mut self.0[idx];
+        if row.kinds.is_none() {
+            row.kinds = Some(kinds);
+        }
+    }
+
+    /// Emit one event per candidate — all seven, including the ones that
+    /// never ran. "Which candidates were even eligible" is half the
+    /// question RFC-070 asks, and a row that is absent from the stream
+    /// cannot answer it (`docs/validator-reporting.md`: one positioned
+    /// record per instance, never a count in a message).
+    fn emit(&self) {
+        for row in &self.0 {
+            crate::trace::emit(crate::trace::TraceEvent::SelectionCandidateEvaluated {
+                name: row.name.to_string(),
+                outcome: row.outcome,
+                reason: row.reason.clone(),
+                score: row.score,
+                accepted: row.accepted,
+                accepted_reason: row.accepted_reason.clone(),
+                errors: row.counts.map(|c| c.errors),
+                selection_warnings: row.counts.map(|c| c.warnings),
+                layout_warnings: row.counts.map(|c| c.layout_warnings),
+                counts_source: row.counts_source.map(str::to_string),
+                contamination_errors: row.kinds.map(|k| k.contamination),
+                starvation_errors: row.kinds.map(|k| k.starvation),
+                structural_errors: row.kinds.map(|k| k.structural),
+            });
+        }
+    }
 }
 
 /// Run candidates and pick the winner.
@@ -1212,6 +1335,21 @@ pub fn select_best_decomposition(
     // applies unchanged (every non-Pooled and every Native-clean case).
     const NATIVE_IDX: usize = 0;
     const MERGE_TAP_IDX: usize = 3;
+
+    // RFC-070 Phase 0b scoreboard. Built here — after every candidate has
+    // run, before the first verdict mechanism fires — so the mechanism
+    // sites below can record into it as they compute. Index-aligned with
+    // the `candidates` array further down.
+    let mut board = Scoreboard([
+        CandidateVerdict::from_run("native", &native_run),
+        CandidateVerdict::from_run("k1-shape-fix", &k1_run),
+        CandidateVerdict::from_run("size-split-2", &split_run),
+        CandidateVerdict::from_run("merge-tap", &merge_tap_run),
+        CandidateVerdict::from_run("cell-composed", &cells_run),
+        CandidateVerdict::from_run("direct-insertion", &di_run),
+        CandidateVerdict::from_run("horizontal-stack", &horizontal_run),
+    ]);
+
     let merge_tap_choice: Option<usize> = merge_tap_run.outcome.as_ref().map(|(mt_layout, _)| {
         let start = crate::trace::peek_events_len();
         let mergetap_kinds = classify_errors(mt_layout, solver_result);
@@ -1220,6 +1358,10 @@ pub fn select_best_decomposition(
             .as_ref()
             .map(|(l, _)| classify_errors(l, solver_result));
         crate::trace::truncate_events(start);
+        board.record_kinds(MERGE_TAP_IDX, mergetap_kinds);
+        if let Some(n) = native_kinds {
+            board.record_kinds(NATIVE_IDX, n);
+        }
         match native_kinds {
             Some(n) if mergetap_kinds.quality_key() < n.quality_key() => MERGE_TAP_IDX,
             Some(_) => NATIVE_IDX,
@@ -1264,6 +1406,8 @@ pub fn select_best_decomposition(
         let di_counts = count_issues(di_layout, solver_result);
         let nat_counts = count_issues(nat_layout, solver_result);
         crate::trace::truncate_events(start);
+        board.record_counts(DI_IDX, di_counts, "di-vs-native");
+        board.record_counts(NATIVE_IDX, nat_counts, "di-vs-native");
         // Component-wise, NOT lexicographic — see `IssueCounts`.
         let strictly_better_issues = di_counts.strictly_better_than(&nat_counts);
         // Equal on every issue channel: DI must then be strictly denser
@@ -1296,6 +1440,8 @@ pub fn select_best_decomposition(
             let hs_counts = count_issues(hs_layout, solver_result);
             let nat_counts = count_issues(nat_layout, solver_result);
             crate::trace::truncate_events(start);
+            board.record_counts(H_IDX, hs_counts, "horizontal-vs-native");
+            board.record_counts(NATIVE_IDX, nat_counts, "horizontal-vs-native");
             let strictly_better_issues = hs_counts.strictly_better_than(&nat_counts);
             // v1 deliberately has NO equal-issues-and-denser arm (unlike
             // `di_choice`): measured on the first full-suite run, that
@@ -1369,8 +1515,11 @@ pub fn select_best_decomposition(
         && n_layouts > 1
     {
         let start = crate::trace::peek_events_len();
-        let flags = tier_outcomes.map(|o| {
-            o.map(|(l, score)| {
+        // `from_fn` rather than `[T; N]::map` only so the RFC-070
+        // scoreboard can key the row it records by the same index the
+        // flag lands on; the traversal and its result are identical.
+        let flags: [Option<(bool, usize)>; 7] = std::array::from_fn(|idx| {
+            tier_outcomes[idx].map(|(l, score)| {
                 // (error-free, warning key). The key orders the
                 // error-free tier below: RFC-060 made the refusal path
                 // multi-candidate (cells, DI, horizontal), and a
@@ -1391,12 +1540,44 @@ pub fn select_best_decomposition(
                         // Selection-scoped count — see
                         // `validate::selection_warning_count`.
                         let warnings = crate::validate::selection_warning_count(&issues);
+                        board.record_counts(
+                            idx,
+                            IssueCounts {
+                                errors,
+                                warnings,
+                                layout_warnings: l.warnings.len(),
+                            },
+                            "clean-flags",
+                        );
                         (
                             score.accepted && errors == 0,
                             warnings + l.warnings.len(),
                         )
                     }
-                    Err(_) => (false, usize::MAX),
+                    Err(e) => {
+                        // `validate()` returns `Err` CARRYING the issues, and
+                        // this arm is reached iff at least one is an Error.
+                        // The decision reads only "not clean" — but throwing
+                        // the counts away here would have the scoreboard
+                        // report a blank row for precisely the candidates
+                        // that failed hardest. Same issue list, same
+                        // predicates as the `Ok` arm; the source tag records
+                        // that the decision itself did not read them.
+                        board.record_counts(
+                            idx,
+                            IssueCounts {
+                                errors: e
+                                    .issues
+                                    .iter()
+                                    .filter(|i| i.severity == crate::validate::Severity::Error)
+                                    .count(),
+                                warnings: crate::validate::selection_warning_count(&e.issues),
+                                layout_warnings: l.warnings.len(),
+                            },
+                            "clean-flags(unclean)",
+                        );
+                        (false, usize::MAX)
+                    }
                 }
             })
         });
@@ -1586,20 +1767,42 @@ pub fn select_best_decomposition(
     // the DI/horizontal pairwise resolution — so neither scoped
     // candidate can shadow the other; the merge-tap non-shadowing
     // structure is unchanged.)
-    let winner_idx = match merge_tap_choice {
-        Some(MERGE_TAP_IDX) => Some(MERGE_TAP_IDX),
-        Some(_) => scoped_choice.or(Some(NATIVE_IDX)),
-        None => scoped_choice,
+    //
+    // RFC-070 Phase 0b: each arm is TAGGED with the `SelectionStage` that
+    // produced it. The chain is unchanged — `Some(_) => scoped_choice
+    // .or(Some(NATIVE_IDX))` is spelled as a match on `scoped_choice`
+    // purely so the two answers get different stage tags (a scoped
+    // candidate displacing native is a different decision from native
+    // surviving merge-tap, and the oracle must not merge them).
+    use crate::trace::SelectionStage;
+    let winner_idx: Option<(usize, SelectionStage)> = match merge_tap_choice {
+        Some(MERGE_TAP_IDX) => Some((MERGE_TAP_IDX, SelectionStage::MergeTap)),
+        Some(_) => match scoped_choice {
+            Some(i) => Some((i, SelectionStage::ScopedPairwise)),
+            None => Some((NATIVE_IDX, SelectionStage::MergeTap)),
+        },
+        None => scoped_choice.map(|i| (i, SelectionStage::ScopedPairwise)),
     }
-    .or(best_error_free_idx)
-    .or(best_accepted_idx)
+    .or(best_error_free_idx.map(|i| (i, SelectionStage::BestErrorFree)))
+    .or(best_accepted_idx.map(|i| (i, SelectionStage::BestAccepted)))
     // DI IS admitted here, deliberately: `di_choice` returns `None` when
     // native produced nothing (see its guard), precisely so `cell-composed`
     // and DI compete in this ranking rather than DI auto-winning a refusal.
     // `ranking_len` is what excludes DI in the native-SUCCEEDED case.
-    .or_else(|| candidates[..ranking_len].iter().position(|(o, _, _)| o.is_some()));
+    .or_else(|| {
+        candidates[..ranking_len]
+            .iter()
+            .position(|(o, _, _)| o.is_some())
+            .map(|i| (i, SelectionStage::FirstProduced))
+    });
 
-    let Some(idx) = winner_idx else {
+    let Some((idx, stage)) = winner_idx else {
+        // Every candidate failed. The scoreboard still goes out — WHY each
+        // of the seven produced nothing is exactly what a refusal
+        // investigation needs — but no `SelectionDecided` follows it,
+        // because there is no winner and the stage enum is deliberately
+        // closed over the five ways a winner CAN be picked.
+        board.emit();
         let details: Vec<String> = candidates
             .iter()
             .map(|(_, _, name)| name.to_string())
@@ -1630,6 +1833,18 @@ pub fn select_best_decomposition(
     crate::trace::emit(crate::trace::TraceEvent::DecompositionChosen {
         name: name.to_string(),
         score: score.score,
+    });
+    // RFC-070 Phase 0b: the scoreboard and its terminal event go out LAST
+    // and ADJACENTLY, after the winner's replayed stream. A candidate's
+    // `produce` can run its own nested selection whose events are replayed
+    // above; emitting the outer block here keeps each selection's
+    // candidates contiguous with their own `SelectionDecided`, so a reader
+    // pairs them by flushing on the terminal event without a nested block
+    // splicing into the outer one.
+    board.emit();
+    crate::trace::emit(crate::trace::TraceEvent::SelectionDecided {
+        winner: name.to_string(),
+        stage,
     });
     Ok(layout)
 }

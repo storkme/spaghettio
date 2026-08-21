@@ -1401,6 +1401,62 @@ pub enum TraceEvent {
         score: f64,
     },
 
+    // RFC-070 Phase 0b (#689 W1b): the SELECTION SCOREBOARD. One
+    // `SelectionCandidateEvaluated` per candidate slot of
+    // `select_best_decomposition` (all seven, every call — including the
+    // ones that never ran), then one `SelectionDecided` naming the winner
+    // and the precedence stage that picked it. The two are emitted
+    // adjacently at the very end of the selection, so a stream walker can
+    // pair them by "flush the pending candidates when a `SelectionDecided`
+    // arrives" without a nested selection (a candidate whose `produce`
+    // runs its own search, replayed inside the winner's events) splicing
+    // itself into the outer block.
+    //
+    // Purely observational: the fields RECORD what each verdict mechanism
+    // already computed on the decision path, never a recomputation, which
+    // is why so many are `Option`. A `None` means "no mechanism computed
+    // this for this candidate on this call" — an oracle GAP, not a zero.
+    // Reading one as 0 is the `unwrap_or(0)` trap that has silently
+    // reported "no findings" here before.
+    SelectionCandidateEvaluated {
+        /// Candidate name, matching `DecompositionCandidate::name`.
+        name: String,
+        outcome: SelectionCandidateOutcome,
+        /// `produce()`'s own error text when `outcome` is `Refused`, or the
+        /// caught-panic tag when `Panicked`. `None` otherwise — a candidate
+        /// that was never run carries no reason string, because the gating
+        /// predicate lives at the call site, not in `produce`.
+        reason: Option<String>,
+        /// Soft score (`score_layout`) and its acceptance verdict — `Some`
+        /// iff the candidate produced a layout (mechanism 1). `accepted`
+        /// carries only the `missing-balancer-template` hard gate; it is
+        /// NOT a validation verdict.
+        score: Option<f64>,
+        accepted: Option<bool>,
+        accepted_reason: Option<String>,
+        /// `IssueCounts` (mechanism 2) as computed by whichever comparison
+        /// site ran first — `errors` / `selection_warning_count` /
+        /// `LayoutResult.warnings.len()`. All three are `None` together
+        /// when no comparison needed this candidate's counts.
+        errors: Option<usize>,
+        selection_warnings: Option<usize>,
+        layout_warnings: Option<usize>,
+        /// Which decision site produced the counts above (`"di-vs-native"`,
+        /// `"horizontal-vs-native"`, `"clean-flags"`). Provenance matters:
+        /// the counts are only as authoritative as the site that needed
+        /// them.
+        counts_source: Option<String>,
+        /// `ErrorKinds` (mechanism 3) — computed ONLY by the merge-tap
+        /// decision, so `None` on every call where merge-tap did not run.
+        contamination_errors: Option<usize>,
+        starvation_errors: Option<usize>,
+        structural_errors: Option<usize>,
+    },
+    SelectionDecided {
+        winner: String,
+        stage: SelectionStage,
+    },
+
     // `ModuleSizeSplit` candidate (see `docs/rfc-decomposition-search.md`)
     // applied a k-way split to one module of the partition plan. Fires
     // once per split module per `produce()` call. With Phase 1's k=2,
@@ -1632,6 +1688,49 @@ pub struct MachineTrace {
     pub count: f64,
     /// Total output rate of this machine group (items/s)
     pub rate: f64,
+}
+
+/// What happened to one candidate slot of `select_best_decomposition`.
+/// `NotRun` and `Refused` are DIFFERENT facts: `NotRun` means the call
+/// site's gating predicate was false so `produce` was never called (no
+/// layout pass was paid for), while `Refused` means `produce` ran and
+/// returned `Err` — including the three arms that self-validate and
+/// refuse their own error-carrying layout.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SelectionCandidateOutcome {
+    Produced,
+    Refused,
+    Panicked,
+    NotRun,
+}
+
+/// The precedence stage of `select_best_decomposition` that picked the
+/// winner — a CLOSED enum of the five arms of the `winner_idx` chain, in
+/// precedence order. Exhaustive by construction: every return path of
+/// that chain maps to exactly one variant, so a future stage that is
+/// added without a variant here fails to compile.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SelectionStage {
+    /// The scoped Pooled merge-tap decision (`ErrorKinds::quality_key`).
+    /// Covers BOTH of its answers: merge-tap won, or native beat merge-tap
+    /// and no scoped-pairwise choice displaced it.
+    MergeTap,
+    /// The DI / horizontal-stack pairwise `IssueCounts` comparison
+    /// (`scoped_choice`) — reached either directly or through the
+    /// merge-tap chain's native arm.
+    ScopedPairwise,
+    /// `best_error_free_idx` — the validation tier (#392).
+    BestErrorFree,
+    /// `best_accepted_idx` — best soft score among accepted candidates.
+    BestAccepted,
+    /// The positional fallback: first candidate that produced anything.
+    FirstProduced,
 }
 
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
