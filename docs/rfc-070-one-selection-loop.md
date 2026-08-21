@@ -268,6 +268,194 @@ pin gaps as facts.
   — not cells. One fixture spans up to 15 cells, so a single policy
   difference would otherwise spend the whole budget in one place.
 
+## Phase 1b specification: `SelectionPolicy`
+
+*(Authored 2026-08-21 by the campaign lead against the merged Phase-0
+instruments; the implementation track W2b builds exactly this, and its
+acceptance bar is §"The Phase-1b acceptance harness" below. Line
+anchors are as-of `1e97cc67`.)*
+
+### The reframe: one measurement, three comparators
+
+Reading the mechanisms at source
+(`decomposition_search.rs:757-929, 1425-1873`) dissolves the "three
+verdict mechanisms" into a cleaner factorization the RFC's Motivation
+could not yet see: there is **one underlying measurement** and **three
+comparators consuming different projections of it**:
+
+- `classify_errors` (:786), `count_issues` (:852), and the
+  `clean_flags` closure (:1585) each independently run
+  `validate::validate` on the same layout and project the same issue
+  list three different ways (kind classes / severity-channel counts /
+  clean-bit + warning key). Today a contested candidate is validated
+  up to three times per selection.
+- The comparators are: the **quality-key lexicograph** (structural
+  dominates weighted-functional; merge-tap scope), the
+  **component-wise floor** (non-lexicographic across three channels,
+  ties to incumbent; pairwise scope), and the **tiered rank**
+  (clean tier ordered warnings-asc-then-score on the refusal path /
+  score-desc on the success path; then accepted-by-score; then
+  first-produced).
+
+v2 therefore measures **once** and derives all projections.
+
+### `IssueProfile` — the unified per-candidate measurement
+
+One struct, computed from a single `validate()` call plus the layout
+and score:
+
+- `errors: usize` — `Severity::Error` count.
+- `selection_warnings: usize` — `selection_warning_count` semantics:
+  warnings minus the policy's excluded categories.
+- `layout_warnings: usize` — `LayoutResult.warnings.len()`, the second
+  channel `validate()` never sees (the #462 lesson).
+- `kinds: {contamination, starvation, structural}` — the Error-only
+  kind classification, with the category→kind map as policy data (the
+  match at :799-806 becomes a table).
+- `accepted: bool` + `accepted_reason` — the acceptance gates (today
+  exactly one: `missing-balancer-template > 0` disqualifies).
+- `score: f64` + components — `score_layout` unchanged.
+
+A `None` field is a **gap, never a zero** (the scoreboard's rule):
+stages whose inputs are absent skip, exactly as today's lazy sites do.
+
+### `SelectionPolicy` — the data
+
+```
+SelectionPolicy {
+  excluded_warning_categories: BTreeSet<String>,   // today: belt-detour ONLY — the two #632 B6
+                                                   // demotions left the set by DELETION (#684);
+                                                   // decomposition_search.rs:870-871 still carries
+                                                   // the stale two-demotions prose (pre-existing;
+                                                   // W2b sweeps it)
+  error_kind_classes: BTreeMap<String, Kind>,      // the :799 match, as a table
+  acceptance_gates: Vec<AcceptanceGate>,           // today: MissingBalancerTemplate
+  contamination_weight: usize,                     // KIND_CONTAMINATION_WEIGHT
+  firewalls: Vec<Firewall>,                        // named, with receipt strings — the #519
+                                                   // exemption lives here as the record of WHY
+                                                   // excluded_warning_categories contains what it does
+  program: SelectionProgram,                       // §below
+  producers: Vec<ProducerRegistration>,            // §below
+}
+```
+
+### `SelectionProgram` — the five stages as data
+
+An ordered stage list; each stage names its `SelectionStage` tag, its
+scope, its comparator, and its chain behavior. Today's program:
+
+1. **MergeTap** — scope: merge-tap vs incumbent, gated on merge-tap
+   having produced (which its own gate restricts to Pooled +
+   incumbent-unaccepted). Comparator: quality-key lexicograph, ties →
+   incumbent. **Non-shadowing rule** (the #474 lesson, :1816-1845): an
+   incumbent win here does NOT short-circuit past stage 2 — only a
+   merge-tap win terminates the chain at this stage.
+2. **ScopedPairwise** — scope: each scoped candidate (DI, horizontal)
+   vs incumbent, each gated on incumbent-produced (incumbent refusal
+   routes them to stage 3 instead — see AdmissionRule). Comparator:
+   component-wise floor; per-producer `equal_and_denser` flag (DI yes,
+   horizontal no — RFC-060's measured call); unaccepted never
+   displaces accepted. Two winners resolve pairwise by the same floor,
+   ties → earlier registration.
+3. **BestErrorFree** — scope: the admitted slice; requires
+   `accepted && errors == 0`. Order: refusal path (selection+layout
+   warnings asc, score desc, index asc) / success path (score desc,
+   index asc) — the RFC-060 scoping at :1795-1807.
+4. **BestAccepted** — `accepted`, score desc, earliest index.
+5. **FirstProduced** — the degraded fallback. **This stage is the ec30
+   trap measured by #694** (an error-laden best ships rather than a
+   refusal); v2 reproduces it bit-for-bit under parity, and any change
+   to it is Phase-3 calibration work, not Phase-1/2 migration work.
+
+**AdmissionRule** — `ranking_len` (:1705) becomes named data: *scoped
+producers enter the generic stages iff the incumbent produced
+nothing*. It is the single enforcement point for DI/horizontal
+never-worse defaulting (the `tier2_electronic_circuit` regression
+class) and the spec preserves it as such.
+
+### `ProducerRegistration` — per-producer policy
+
+```
+ProducerRegistration {
+  name, producer,                  // DecompositionCandidate, or PlanProducer for k1
+  gate: GatePredicate,             // today's try_* predicates (cost gating), as data
+  refuse_on_error: bool,           // DI/horizontal/cells true; native/k1/split/merge-tap FALSE.
+                                   // PRECISE SEMANTICS (this is a PRODUCE-TIME gate, never a
+                                   // stage/win gate): when true, a produced layout carrying any
+                                   // Severity::Error is DISCARDED before any stage sees it —
+                                   // the producer records a refusal (v2 retains the full issue
+                                   // list, closing Phase-0b oracle gap (d); v1 stringifies it).
+                                   // That is exactly v1's self-validation in produce()
+                                   // (decomposition_search.rs:191-211 for DI: "Errors refuse;
+                                   // warnings pass"). When false, an error-laden layout stays
+                                   // in play and can win via stage 4/5 — the ec30 witness.
+                                   // Preserving WHICH producers carry the gate is REQUIRED
+                                   // for parity.
+  equal_and_denser: bool,          // DI true, horizontal false
+  scoped: bool,                    // DI/horizontal true → AdmissionRule applies
+}
+```
+
+The `k1-shape-fix` closure becomes a `PlanProducer` — a registration
+constructed *with* its `build_k1_enrollment_plan` output — so it
+registers like every other producer without widening the trait.
+
+**K70-1 boundary, stated precisely**: producer-*keyed configuration*
+(the fields above) is policy data and does not trip K70-1.
+Producer-*name-conditioned branches inside stage logic* do. The test
+is mechanical: stage code may read registration fields, never
+registration names.
+
+### Uniform loop stages
+
+`catch_unwind` becomes uniform (7/7; today 5/7 — native and k1 are
+unprotected, so a native panic aborts the solve today but would become
+an all-refused error under v2). This is a deliberate, strictly
+degradation-softening divergence on a path the corpus cannot witness
+(no corpus fixture panics); it is documented here rather than hidden,
+and the parity gate cannot and need not cover it. Producer gates and
+the sink detach/replay discipline (winner-only event replay, losers
+truncated) move into the loop unchanged.
+
+### Validation-once and laziness
+
+v2 may validate each produced candidate exactly once (eager profile)
+or preserve today's lazy per-stage validation — implementer's choice,
+adjudicated by K70-3's isolated-run comparator. `validate()` is
+deterministic, so eager vs lazy cannot change outcomes, only cost.
+The lazy skips that exist today (merge-tap- or scoped-decided solves
+skip `clean_flags` entirely; single-layout solves skip) are the
+cost-relevant cases to measure.
+
+### `verdict.rs` extension and RFC-068 compat
+
+`Verdict`'s category-count model gains a severity dimension
+(per-category `{errors, warnings}` instead of one fungible count);
+`Policy` gains the excluded-categories set. `Policy::fold()` keeps its
+current meaning so `celldb_template.rs` / `candidate_runner.rs` tests
+stay green unmodified (the celldb-harness-green obligation). The
+severity-blind path remains available to RFC-068 until its own
+campaign migrates.
+
+### The Phase-1b acceptance harness
+
+`policy_replay` (a test, non-ignored where cheap): **one live corpus
+run, two consumers.** The committed #694 baseline deliberately stores
+only `(status, winner, stage, outcomes)` per cell — the per-candidate
+profiles exist only in the live `SelectionCandidateEvaluated` events
+and are never persisted (pinning them would pin gaps as facts, per the
+Phase-0b principle). So the harness runs the #694 corpus once with the
+scoreboard enabled; v1 decides each cell as normal, the harness
+captures that cell's emitted per-candidate profiles in-process, feeds
+them through the v2 comparator/program, and requires v2's winner
+**and** stage to match both the live v1 decision and the committed
+baseline on all 140 decided cells. No second layout pass per cell —
+the "replay" is over captured profiles, not re-produced layouts.
+Profile gaps (fields the recorded mechanisms never computed) must be
+handled by stage-skip, exactly as the oracle records them. This is the
+offline precursor to K70-1; the live shadow (Phase 2a) then runs the
+same program against freshly produced layouts.
+
 ## Phasing
 
 - **Phase 0 — instruments.** 0b: scoreboard instrumentation of
@@ -695,3 +883,32 @@ fixtures / docs split per the churn norm).
   six rounds, ~35 findings; the load-bearing ones were all about the
   provenance machinery and the instrument's failure messages, and the 160
   cells never moved once across seven reproductions.**
+- *2026-08-21 — **Phase 1b specification authored** (§"Phase 1b
+  specification" above), by the session lead per the W2b design-duty
+  decision on #689. The load-bearing reframe: the "three verdict
+  mechanisms" factor into ONE measurement (`IssueProfile`) consumed by
+  three comparators — today a contested candidate is validated up to
+  three times per selection, and v2 measures once. Calls made in the
+  spec: per-producer `refuse_on_error` stays asymmetric (native/k1/
+  split/merge-tap false — REQUIRED for parity; ec30 is the live
+  witness); `catch_unwind` unifies to 7/7 as a documented
+  corpus-invisible divergence; the K70-1 boundary is "stage code may
+  read registration fields, never registration names"; the FirstProduced
+  stage's ships-error-laden-best behavior is explicitly preserved under
+  parity (its fix is Phase-3 calibration, not migration). Acceptance =
+  `policy_replay` reproducing winner+stage on all 140 decided #694
+  cells from recorded profiles.*
+- *2026-08-21 — #695 review round 1 absorbed (2 major, 1 minor — all
+  three improved the spec; one counter-model refuted with a receipt):
+  (a) the excluded-categories "today" comment was stale — the #632 B6
+  demotions left the set by DELETION (#684); belt-detour is the whole
+  set, and decomposition_search.rs still carries the stale prose (W2b
+  sweeps it); (b) `refuse_on_error` now has precise produce-time
+  semantics — the reviewer's counter-model ("error-laden DI maxes out
+  at stage 4/5 like native") is FALSE at source (DI's produce()
+  refuses on any Error at :191-211, so it has no outcome and reaches
+  no stage), but the under-definition was real and is fixed; (c) the
+  acceptance harness input was mis-specified — the baseline stores no
+  profiles, so policy_replay is now "one live corpus run, two
+  consumers" (v1 decides, v2 replays the captured in-process
+  profiles; no second layout pass).*
