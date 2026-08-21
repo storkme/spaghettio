@@ -85,4 +85,6 @@ backfill the status next time the doc is touched.
 
 | RFC-069 | 2026-08-15 | [`rfc-069-achievable-duty-provisioning.md`](rfc-069-achievable-duty-provisioning.md) | Draft — #644 engine fix: thread one `PLANNING_DUTY` factor through external-chain provisioning (root site: the `floor(in_lane_cap/rate)×2` row caps admit exact equality, so integral divisions produce zero-headroom rows by construction; trunks follow rows 1:1 on the external path). Sim-gated (K69-1: ec30 ≥ 96.0% delivered — the single gate number — or stop); the #519 margin-probe rejection explicitly discounted as instrument-contaminated (pre-#648 walker fabricated the penalty signal). Phase 0 baselines ec22 + tier5-PU |
 
-Next number: **RFC-070**.
+| RFC-070 | 2026-08-21 | [`rfc-070-one-selection-loop.md`](rfc-070-one-selection-loop.md) | Proposed — replace `select_best_decomposition`’s three braided verdict mechanisms + seven bespoke candidate arms with one policy-driven selection loop (candidate_runner shape, gen-1 semantics as `SelectionPolicy` data), migrated netflow-style (shadow → parity → flip → delete). K70-1 expressibility / K70-2 parity budget / K70-3 cost. Owner gates: post-Phase-1 design, pre-flip. RFC-068 P1 excluded; celldb harness kept green throughout |
+
+Next number: **RFC-071**.
