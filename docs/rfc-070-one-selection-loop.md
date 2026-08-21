@@ -226,6 +226,48 @@ instruments:
    falls out of policy unification updates
    `docs/validator-trust.md` in the same PR.
 
+### The named parity corpus, and the divergence-equivalence rule
+
+Landed Phase 0c (#689 W1c). The corpus is
+`crates/core/tests/parity_corpus.rs` — an explicit **fixture × machine
+tier × option set** grid — and its committed result is
+`crates/core/tests/parity_corpus_baseline.json`
+(`SPAGHETTIO_PARITY_CORPUS=bless|check`, `#[ignore]`d, never CI-gated:
+like the stress goldens it is host-cache-relative and must be run with
+the zone-cache pin).
+
+**160 cells.** 12 fixtures (the #691 corpus verbatim: G2's six
+tier-ladder solves plus the six e2e "from-ore" ones) × the machine tiers
+each recipe permits (three assembler tiers, or the one chemical plant)
+× five option sets — `default`, `cells-off`, `e2e-harness`, `di-off`,
+`hs-off`. 140 decide; 20 are recorded `no-solve`
+(`assembling-machine-1`'s two ingredient slots cannot run
+advanced-circuit or processing-unit). The option-set axis is not
+optional decoration: it is the axis W1b's finding made load-bearing, and
+it is where the corpus's claim surface lives (below).
+
+Two cells are **equal** iff their `(status, winner, deciding stage)`
+triples are equal. Nothing else is compared. The per-candidate outcome
+vector is recorded alongside, for adjudication only; the verdict
+NUMBERS are deliberately absent, because they are structurally holed
+(see the Phase-0b oracle-gaps entry) and a baseline pinning them would
+pin gaps as facts.
+
+- **Minor divergence** — same `status` and `winner`, different deciding
+  stage. The shadow loop reached the same shipped layout by answering a
+  different question, which is expected wherever v2's policy merges two
+  of today's five stages. Adjudicated individually in this log; **no sim
+  required**, because no shipped geometry changed.
+- **Major divergence** — `winner` or `status` differs. A different
+  layout ships. Adjudicated individually in this log **and sim-anchored
+  before the flip**.
+- A **new or missing cell** is a major divergence by definition: the
+  candidate field moved, and the corpus must be re-taken and re-named
+  here before parity means anything.
+- K70-2's budget of 3 counts diverging **FIXTURES**, per its own wording
+  — not cells. One fixture spans up to 15 cells, so a single policy
+  difference would otherwise spend the whole budget in one place.
+
 ## Phasing
 
 - **Phase 0 — instruments.** 0b: scoreboard instrumentation of
@@ -385,9 +427,12 @@ fixtures / docs split per the churn norm).
   OUTER block, and the block walker now checks that a winner is among its own
   block's rows, printing a loud marker if not. Refuted with receipts:
   (d) "the failure path emits with the sink detached" — the sink is
-  re-attached at `decomposition_search.rs:1604` and the failure-path
-  `board.emit()` is at `:1814`, 210 lines later with no intervening
-  `swap_sink`; failure-path rows reach a streaming consumer exactly like
+  re-attached at `decomposition_search.rs:1659` and the failure-path
+  `board.emit()` is at `:1881`, 222 lines later with no intervening
+  `swap_sink` (anchors re-located against merged main, W1c: the round-2
+  entry quoted `:1604`/`:1814`, which do not point at those statements in
+  the file as merged — the argument is unchanged, the coordinates were
+  not); failure-path rows reach a streaming consumer exactly like
   success-path ones, so no doc note was added for a behaviour that does not
   exist. (e) "the e2e cells-off gap is left unfixed" — correct and
   deliberate, recorded in the entry above and on #689.*
@@ -436,3 +481,45 @@ fixtures / docs split per the churn norm).
   is debug-only. It surfaced here because the same hazard applied to
   `CANDIDATE_ORDER`, which is why the refusal message now uses it for real
   rather than only inside assertions.*
+- *2026-08-21 — **Phase 0c landed** (#689 track W1c): the parity corpus is
+  NAMED, at **160 cells** (12 fixtures × permitted machine tiers × 5 option
+  sets; 140 decide, 20 `no-solve`), committed as
+  `crates/core/tests/parity_corpus_baseline.json`, together with the
+  divergence-equivalence rule above. K70-1 and K70-2 are re-runnable from
+  here. Equality is `(status, winner, deciding stage)` and nothing else —
+  the verdict numbers stay out of the baseline on the Phase-0b principle
+  that a hole must not be committed as a fact.*
+- *2026-08-21 — **the option-set axis carries the claim surface, and it is
+  large**: 15 of the 32 fixture×machine rows change verdict somewhere
+  across the five option sets — **10 major** (winner changes) and **12
+  minor** (stage-only), 22 changed cells of 140 decided. The stage
+  distribution over the whole corpus is `best-error-free` 87,
+  `scoped-pairwise` 26, `merge-tap` 15, `best-accepted` 12,
+  `first-produced` 0 — so four of the five stages are live and the census
+  slice's "best-accepted and first-produced never fire" was a property of
+  that slice, not of the engine. Every minor divergence has the same
+  mechanism (W1b's): with cells off only native produces, `clean_flags` is
+  skipped by its `n_layouts > 1` guard, and the decision falls from
+  `best-error-free` to `best-accepted`. **`first-produced` remains
+  unmeasured on any corpus** — a shadow loop can reproduce this baseline
+  without ever exercising that arm, and Phase 2a must not read corpus
+  parity as evidence about it.*
+- *2026-08-21 — **the e2e harness carries a SECOND fossil of the same
+  shape**, found while building the corpus: `run_e2e_inner` also pins
+  `inserter_capacity: 0` (`tests/e2e.rs:354`), which was the struct default
+  when the line was written (`40fd48dc`, RFC-049 Phase 1, 2026-07-22) and
+  went stale two days later when #383 flipped the default to
+  `DEFAULT_INSERTER_CAPACITY` = 2. Identical cause to the
+  `cell_composition` fossil, in the same struct literal. It is not
+  cosmetic: `e2e-harness` (cells off AND capacity 0) diverges from BOTH
+  `default` and `cells-off` on two cells —
+  `tier2_ec_am1_10_ore` and `e2e_tier2_electronic_circuit_20s_from_ore`,
+  both at `assembling-machine-3`, where `direct-insertion` wins under
+  default and cells-off but `native` wins once the capacity drops. So the
+  inserter ladder independently steers selection, and a corpus that had
+  modelled the harness as "cells-off" — the W1c brief's stated minimum —
+  would have recorded the wrong winner for the configuration the whole
+  regression suite runs under. Both fossils stay UNFIXED here for the
+  reason W1b gave: flipping either changes the candidate set under every
+  regression test, which is a Wave-2 campaign call, not a Phase-0 one.
+  What changes is that the corpus now measures both.*

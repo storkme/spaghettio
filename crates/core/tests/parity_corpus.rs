@@ -368,7 +368,32 @@ fn outer_selection(events: &[TraceEvent]) -> (String, Option<(String, SelectionS
     );
     let outcomes =
         tail.iter().map(|(_, o)| outcome_name(*o)).collect::<Vec<_>>().join(",");
-    let decided = events.iter().rev().find_map(|e| match e {
+    let terminal = events
+        .iter()
+        .rposition(|e| matches!(e, TraceEvent::SelectionDecided { .. }));
+    // The pairing this whole extractor rests on: the last terminal must
+    // follow the last row, or those rows and that verdict belong to
+    // different selections and the cell would record one block's winner
+    // against another's candidates. Today this cannot happen — the
+    // all-candidates-failed path emits a board with no terminal and
+    // replays nobody's events, so a nested terminal can only reach the
+    // stream inside a WINNER's replay, which precedes the outer board.
+    // Asserted anyway, because "cannot happen" is what the mis-pairing
+    // bug class always says first.
+    if let Some(t) = terminal {
+        let last_row = events
+            .iter()
+            .rposition(|e| matches!(e, TraceEvent::SelectionCandidateEvaluated { .. }))
+            .expect("rows non-empty here");
+        assert!(
+            last_row < t,
+            "the last `SelectionDecided` (index {t}) precedes the last scoreboard row \
+             (index {last_row}) — the outer rows and the recorded verdict are from \
+             different selections, so this cell would attribute one block's winner to \
+             another block's candidates. Do not bless this baseline"
+        );
+    }
+    let decided = terminal.and_then(|t| match &events[t] {
         TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
         _ => None,
     });
@@ -569,12 +594,27 @@ fn parity_corpus() {
             let old: BTreeMap<_, _> = baseline.cells.iter().map(|c| (c.key(), c)).collect();
             let new: BTreeMap<_, _> = cells.iter().map(|c| (c.key(), c)).collect();
             let mut diffs = Vec::new();
+            // Reported, never failed: a cell whose CANDIDATE FIELD moved
+            // while the verdict held — an arm that used to produce now
+            // refuses, say. The equivalence rule is winner+stage, so
+            // failing here would be inventing a stricter contract than
+            // the RFC states; but staying silent would let the field
+            // shift under a green check, which is the shape this repo
+            // keeps getting bitten by. So it prints.
+            let mut field_shifts = Vec::new();
             for (k, c) in &new {
                 match old.get(k) {
                     // Equality is the RFC's rule, not `Cell::eq`:
                     // `outcomes` is recorded for adjudication and is
                     // deliberately NOT part of the comparison.
-                    Some(b) if b.verdict() == c.verdict() => {}
+                    Some(b) if b.verdict() == c.verdict() => {
+                        if b.outcomes != c.outcomes {
+                            field_shifts.push(format!(
+                                "  {k:?}: {} -> {}",
+                                b.outcomes, c.outcomes
+                            ));
+                        }
+                    }
                     Some(b) => diffs.push(format!(
                         "  DIVERGED {k:?}: baseline {:?} -> now {:?}",
                         b.verdict(),
@@ -582,6 +622,15 @@ fn parity_corpus() {
                     )),
                     None => diffs.push(format!("  NEW CELL {k:?}: {:?}", c.verdict())),
                 }
+            }
+            if !field_shifts.is_empty() {
+                eprintln!(
+                    "\nNOTE: {} cell(s) kept their verdict but changed which candidates \
+                     produced/refused. Not a divergence under the equivalence rule; still \
+                     worth reading before trusting a green check:\n{}",
+                    field_shifts.len(),
+                    field_shifts.join("\n")
+                );
             }
             for k in old.keys() {
                 if !new.contains_key(k) {
