@@ -1405,7 +1405,8 @@ fixtures / docs split per the churn norm).
     the sentence became false in the same diff that falsified it.
     Replaced with an adoption-status list naming the caller, the two
     exporters, and what is still open.
-  * *(round 5, major, 3/3, fourth restatement — answered with code)*
+  * *(round 5, major, 3/3, fourth restatement — answered with code, and
+    then that answer's claim was corrected in round 8)*
     `assert_produces(…, 20.0)` was deleted from
     `tier1_iron_gear_wheel_20s`. It reads `analysis.throughput_estimates`
     — a static estimate from the machine count — and asserted "produces
@@ -1416,7 +1417,14 @@ fixtures / docs split per the churn norm).
     passing as delivery. Rejected alternative recorded at the call site:
     metering in-suite would close a dev-dependency cycle
     (`spaghettio_meter` → `spaghettio_core`) to duplicate a guard that
-    already exists armed.
+    already exists armed. **Round-8 correction, accepted**: the first
+    wording of this bullet said the false delivery signal was "killed at
+    the call site". It was not — the assertion is still GREEN on the 15/s
+    layout, and nothing in `crates/core`'s suite can fail on delivery
+    because nothing in it measures delivery. What changed is that the
+    suite no longer ASSERTS something false. The honest claim is "the
+    suite no longer says this layout produces 20/s", and it is now written
+    that way both here and at the call site.
   * *(round 6, minor, 1/2 — correct, and fixed structurally rather than
     by assertion)* Round 2 had added two guard assertions pinning
     `LayoutStrategy::Pooled` and `horizontal_candidate == true`, because
@@ -1454,3 +1462,73 @@ fixtures / docs split per the churn norm).
     counts on all 8), measured under the new config, with the direction
     stated and the alarm condition (a category reaching zero) checked and
     absent.
+
+  **#699 review round 7 absorbed** (7 findings; three were checkable
+  facts and all three checked out — the round paid for itself):
+  * *(major, 1/3 — a defect THIS change introduced)*
+    `scoreboard_strategy_sweep` and `full_knob_sweep` read their
+    `candidate` column with `find_map` from the FRONT of the event
+    stream. A winning candidate that nests replays its inner events
+    first, so from-the-front reports the NESTED winner. Harmless while
+    `run_e2e` pinned `cell_composition: Off` and nothing nested —
+    restoring the candidate makes both sweeps print "native" for exactly
+    the fixtures where cell-composed wins, i.e. the one thing this track
+    is about. Both switched to `.rev().find_map(…)`, matching
+    `parity_corpus.rs` and the re-pinned tests. A stale "Phase 0: always
+    native" comment above one of them went too. **Worth noting as a
+    pattern**: this is the third place in the campaign where the
+    nested-replay ordering has bitten a reader of the event stream
+    (oracle gap (g), the census's last-seven rule, and now these two
+    columns). A structural nesting marker in the trace contract would
+    retire the whole class; Phase 1b/2a owns it.
+  * *(major, 1/3)* "39 functional checks" was stale in two comments this
+    PR added — it is **37**. Verified twice: `CLAUDE.md` says 37 in three
+    places, `validate/mod.rs` dispatches 37 `Box::new` closures.
+  * *(minor, 1/3)* `tier5`'s 2026-08-17 ACCEPTED block still read
+    "input-rate-delivery is unchanged at 13" immediately above the new
+    "13 → 10" adjudication. Rewritten as of-its-date with a pointer — a
+    grep landing on the stale sentence would have read it as current.
+  * *(minor, 1/3, REFUTED with the receipt, and the receipt written
+    down)* "same 12.3 % density is unverified; naive entities/(w·h) gives
+    39 % vs 20 %." `density::score_density(_, (1,1))` normalises to a 1:1
+    SQUARE bounding box and counts filled TILES: `260 filled / 2116` and
+    `169 filled / 1369`, both 12.3 %, printed by the harness on both arms.
+    Now stated at the call site.
+  * *(nit)* `w2c_gear20_meter_export` now ASSERTS 105/148/148 entities and
+    zero issues per arm rather than printing them: its doc table pairs
+    each arm's entity count with a meter reading, so a silently reshaped
+    arm would leave a committed number attached to a different artifact —
+    the exact 105-vs-148 confusion the exporter exists to expose.
+  * *(minor)* The residual guard's blind-spot list gained a spelled-out
+    `CellComposition::Off`; the negative-control asymmetry
+    (`tier3_sulfuric_acid` capacity-invariant while `tier3_plastic_bar`
+    moved) is now marked explicitly UNEXPLAINED, with the plausible
+    bottom-rung story labelled unmeasured and a note not to "fix" either
+    hash on the strength of it.
+
+  **#699 review round 8 absorbed** (single pass; verdict "unusually
+  well-vetted change… no crash or contract violation found", with an
+  explicit verified-clean list covering the wrapper refactor, the
+  `from_groups` field mapping, the re-blesses and the residual counts).
+  Three findings, two of them real:
+  * *(major)* "the false delivery signal was renamed, not killed."
+    **Correct** — the corrected wording is recorded above and at the call
+    site. Nothing in `crates/core`'s suite can fail on delivery; the
+    assertion was relabelled so it stops asserting something false.
+  * *(minor, and the most useful of the round)* the residual gauge was
+    pointed at the wrong shape. It matched exact TRIMMED LINES, so the
+    group-level partial
+    `SearchAxes { cell_composition: Default::default(), ..SearchAxes::default() }`
+    — which `from_groups`, now the *recommended* constructor, makes the
+    likeliest way the fossil returns — slipped through unless rustfmt
+    happened to break it across lines. Rewritten to match non-comment
+    lines CONTAINING either pattern. **Discrimination check executed**: a
+    single-line group partial takes the count 14 → 15. Two second-order
+    fixes fell out of that, and the first is the interesting one: the
+    substring gauge initially read 16/15 because it was **counting its own
+    assertion messages and a provenance banner** — a self-counting gauge
+    is worse than none, since it is wrong in the "looks fine" direction.
+    Needles are now assembled at runtime and the prose spells the fields
+    with `=` instead of `:`.
+  * *(minor)* format fragility of the gauge — already documented, and
+    narrowed rather than removed by the substring form.

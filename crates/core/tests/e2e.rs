@@ -486,48 +486,71 @@ fn harness_options_are_engine_defaults() {
 /// Raising a count means a new copy of a known trap — don't.
 ///
 /// **This is a source-text gauge, not a behavioural one** (#699 review
-/// rounds 3, 4 and 5), and its reach is exactly that: it counts TEXTUAL
-/// copies of two exact trimmed lines. It does not see a fossil written
-/// on one line, a re-spelled or reformatted literal, one inside dead
-/// code, a spelled-out `cell_composition: CellComposition::Off`, or —
-/// the sharpest miss, and the one `bus::layout`'s own field legend names
-/// as reachable — the GROUP-level partial,
-/// `SearchAxes { cell_composition: Default::default(), ..SearchAxes::default() }`,
-/// which resolves to `Off` exactly like the flat form and matches
-/// neither pattern here. Conversely a trailing comment or a rustfmt
-/// re-wrap on an existing line moves the count and forces an edit here.
-/// So the claim is narrow: **a textual copy of these two lines cannot be
-/// added silently.** That is not the same as "the fossil cannot come
-/// back", and it is the only mechanism available — the sites are
-/// ordinary struct literals inside ordinary tests, with no runtime
-/// handle to count. The behavioural guard, for the one path that builds
-/// every regression fixture, is `harness_options_are_engine_defaults`;
-/// these 15 sites have no behavioural guard, which is a reason to
-/// migrate them, not a reason to widen this gauge.
+/// rounds 3-5 argued its reach; round 8 argued it was pointed at the
+/// wrong shape, and was right). It counts non-comment lines CONTAINING
+/// either pattern — substring, not exact-trimmed-line — which is what
+/// makes it see the resurrection path round 8 named as most likely now
+/// that `from_groups` is the recommended constructor: the GROUP-level
+/// partial `SearchAxes { cell_composition: Default::default(), ..SearchAxes::default() }`,
+/// which resolves to `Off` exactly like the flat form. An
+/// exact-trimmed-line match saw that only when rustfmt happened to break
+/// it across lines. **Discrimination check executed**: a single-line
+/// group partial added anywhere in this file takes the count 14 → 15.
+///
+/// Still not seen: a re-spelled literal (`cell_composition:
+/// CellComposition::Off`), a semantically equivalent construction, one
+/// inside dead code. Conversely a trailing comment or a rustfmt re-wrap
+/// on an existing line moves the count and forces an edit here. So the
+/// claim is bounded: **a textual copy of either pattern, flat or
+/// group-level, cannot be added silently.** That is not "the fossil
+/// cannot come back". The behavioural guard, for the one path that
+/// builds every regression fixture, is
+/// `harness_options_are_engine_defaults`; these 15 sites have no
+/// behavioural guard, which is a reason to migrate them, not a reason to
+/// keep widening this gauge.
 ///
 /// Cost, since it is not free and not obvious: `include_str!` embeds
 /// this ~11k-line file into the test binary (a few hundred KB). Accepted
 /// for a non-ignored test that runs in microseconds.
 #[test]
 fn residual_fossil_literals_are_pinned() {
-    // Self-read: matching on the exact TRIMMED line means the comparison
-    // literals a few lines below do not count themselves.
+    // Self-read. SUBSTRING match on non-comment lines, not exact-trimmed
+    // (#699 review round 8): the review's "highest-probability
+    // resurrection path" is the group-level partial
+    // `SearchAxes { cell_composition: Default::default(), ..SearchAxes::default() }`,
+    // and an exact-trimmed match sees it only when rustfmt happens to
+    // break it across lines. A substring match sees it either way, and
+    // sees an inline flat literal too. Comment lines are skipped so the
+    // docblock above — which quotes both patterns on purpose — does not
+    // count itself; that skip is why the `//` filter is not optional.
+    // Needles are ASSEMBLED AT RUNTIME rather than written whole, so this
+    // function's own code and messages do not match themselves. (Round 8
+    // found the counts reading 16/14 for exactly that reason — a
+    // self-counting gauge is worse than no gauge, because it is wrong in
+    // the direction of "looks fine".) For the same reason the assertion
+    // messages below spell the fields with an `=` instead of the `:` the
+    // source uses.
     const SRC: &str = include_str!("e2e.rs");
-    let cells = SRC
-        .lines()
-        .filter(|l| l.trim() == "cell_composition: Default::default(),")
-        .count();
-    let capacity = SRC.lines().filter(|l| l.trim() == "inserter_capacity: 0,").count();
+    let cells_needle = format!("cell_composition: {}", "Default::default()");
+    let capacity_needle = format!("inserter_capacity: {}", 0);
+    let count_of = |needle: &str| {
+        SRC.lines()
+            .filter(|l| !l.trim_start().starts_with("//") && l.contains(needle))
+            .count()
+    };
+    let cells = count_of(&cells_needle);
+    let capacity = count_of(&capacity_needle);
     assert_eq!(
         cells, 14,
-        "residual `cell_composition: Default::default()` literals moved (was 14 at \
-         RFC-070 W2c). Fewer = a site was migrated: lower this number in the same \
-         commit. More = a new copy of a known-stale pattern: use `harness_options` \
-         instead, or spell the value deliberately with a reason.",
+        "residual `cell_composition` = `Default::default()` sites moved (was 14 at \
+         RFC-070 W2c). Fewer = a site was migrated or its value was spelled \
+         deliberately: lower this number in the same commit and NAME the site. \
+         More = a new copy of a known-stale pattern, flat or group-level: use \
+         `harness_options`, or spell the value with a reason.",
     );
     assert_eq!(
         capacity, 14,
-        "residual `inserter_capacity: 0` literals moved (was 14 at RFC-070 W2c). \
+        "residual `inserter_capacity` = 0 sites moved (was 14 at RFC-070 W2c). \
          Same rule as above.",
     );
 }
@@ -1559,6 +1582,18 @@ fn tier1_iron_gear_wheel_20s() {
     // delivers" inference this PR exists to break. So the estimate is
     // still checked (it is the plan, and a plan regression is worth
     // catching) but under a name and a message that say what it is.
+    //
+    // **Be precise about what that bought** (#699 round 8, and it was
+    // right to press): this assertion is still GREEN on the 15/s layout.
+    // The check was RELABELLED, not made stricter — nothing here can fail
+    // on delivery, because nothing in `crates/core`'s test suite measures
+    // it. What changed is that the suite no longer ASSERTS something
+    // false. Any claim that "the false delivery signal is gone" is an
+    // overclaim; the honest one is "the suite no longer says this layout
+    // produces 20/s". Failing on delivery needs the meter, and that lives
+    // behind `SPAGHETTIO_METER_TRIPWIRE=check` by a standing decision with
+    // its own recorded reasoning (`crates/meter/tests/e2e_tripwire.rs`,
+    // "Why report-only stays the default").
     //
     // Rejected alternative, recorded because it is the obvious one:
     // metering in-suite. `spaghettio_meter` depends on `spaghettio_core`,
@@ -9366,7 +9401,7 @@ fn full_knob_sweep() {
         "> **Option-set epoch: post-RFC-070-W2c (2026-08-21).** Every column here — \
          including the `pure` baselines — runs production's full candidate set \
          (`cell-composed` competes) and the L2 inserter ladder. Before W2c the \
-         harness pinned `cell_composition: Off` and `inserter_capacity: 0`, so \
+         harness pinned cells OFF and the inserter capacity at 0, so \
          tables generated earlier are NOT comparable to this one: a cell can be \
          decided by a layout family the old tables never saw. \"Pure\" means the \
          horizontal-stack candidate is off, and only that.\n",
