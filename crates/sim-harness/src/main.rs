@@ -8,6 +8,7 @@ mod baseline;
 mod checkdata;
 mod fetch;
 mod manifest;
+mod meter_probe;
 mod orchestrate;
 mod paths;
 mod report;
@@ -49,7 +50,10 @@ fn print_help() {
 USAGE:
   spaghettio-sim fetch [--force]
   spaghettio-sim run --bp <file> --manifest <file> [--ticks N] [--speed N]
-                      [--warmup N] [--out report.json] [--timeout-secs N]
+                      [--warmup N] [--window N] [--fixed-window]
+                      [--out report.json] [--timeout-secs N]
+                      [--meter [--meter-warmup N] [--meter-window N]]
+                      [--pickup-trace-only] [--drop-trace]
   spaghettio-sim serve --bp <file> --manifest <file> [--port 34197] [--speed 1]
                         [--warmup N]
   spaghettio-sim check-data
@@ -166,6 +170,12 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
                 .map_err(|_| format!("--warmup must be an integer, got '{s}'"))
         })
         .transpose()?;
+    let window: Option<u32> = flag_value(args, "--window")
+        .map(|s| {
+            s.parse()
+                .map_err(|_| format!("--window must be an integer, got '{s}'"))
+        })
+        .transpose()?;
     let speed: u32 = flag_value(args, "--speed")
         .map(|s| {
             s.parse()
@@ -180,6 +190,26 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
         })
         .transpose()?;
     let out_path = flag_value(args, "--out");
+    let meter_warmup_arg = flag_value(args, "--meter-warmup");
+    let meter_window_arg = flag_value(args, "--meter-window");
+    let meter_enabled = has_flag(args, "--meter");
+    if !meter_enabled && (meter_warmup_arg.is_some() || meter_window_arg.is_some()) {
+        return Err("--meter-warmup and --meter-window require --meter".to_string());
+    }
+    let meter_warmup: u64 = meter_warmup_arg
+        .map(|s| {
+            s.parse()
+                .map_err(|_| format!("--meter-warmup must be an integer, got '{s}'"))
+        })
+        .transpose()?
+        .unwrap_or(meter_probe::DEFAULT_WARMUP_TICKS);
+    let meter_window: u64 = meter_window_arg
+        .map(|s| {
+            s.parse()
+                .map_err(|_| format!("--meter-window must be an integer, got '{s}'"))
+        })
+        .transpose()?
+        .unwrap_or(meter_probe::DEFAULT_WINDOW_TICKS);
 
     let install_dir = paths::resolve_existing_install()?;
 
@@ -197,6 +227,26 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     if let Some(w) = warmup {
         params = params.with_warmup(w);
     }
+    if let Some(w) = window {
+        if has_flag(args, "--fixed-window") {
+            params = params.with_fixed_window(w);
+        } else {
+            return Err("--window requires --fixed-window".to_string());
+        }
+    } else if has_flag(args, "--fixed-window") {
+        let window = params.window_ticks;
+        params = params.with_fixed_window(window);
+    }
+    if has_flag(args, "--fixed-window") {
+        if let Some(requested_ticks) = ticks {
+            if requested_ticks != params.end_tick {
+                eprintln!(
+                    "warning: --fixed-window uses an exact ceiling of warmup + window ({} ticks); ignoring --ticks {}",
+                    params.end_tick, requested_ticks
+                );
+            }
+        }
+    }
     // Live per-window telemetry: stream the machine/item time-series to
     // script-output/timeseries.csv as the run progresses (not just into the
     // JSON at finalize), so a long/grinding run can be watched and scored in
@@ -205,6 +255,31 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     if has_flag(args, "--timeseries") {
         params = params.with_timeseries();
     }
+    if has_flag(args, "--pickup-trace-only") {
+        params = params.with_pickup_trace_only();
+    }
+    if has_flag(args, "--drop-trace") {
+        params = params.with_drop_trace();
+    }
+    if meter_enabled
+        && (meter_warmup != u64::from(params.warmup_ticks)
+            || meter_window != u64::from(params.window_ticks))
+    {
+        eprintln!(
+            "warning: report-only meter uses warmup/window {} / {} ticks, while the sim uses {} / {}; compare rates only as diagnostic evidence",
+            meter_warmup,
+            meter_window,
+            params.warmup_ticks,
+            params.window_ticks
+        );
+    }
+    let meter = meter_enabled.then(|| {
+        println!(
+            "Running report-only meter (warmup={} window={} ticks; it cannot alter the sim verdict)...",
+            meter_warmup, meter_window
+        );
+        meter_probe::MeterProbe::run(&bp, &manifest_str, meter_warmup, meter_window)
+    });
     let lua = scenario::build_control_lua(&manifest, &bp, &params);
     // Derived AFTER params so the wall-clock net always clears the run's
     // own tick budget — a timeout that fires first turns a non-converged
@@ -230,10 +305,14 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
 
     let rpt = report::compute(&manifest, &outcome.result);
     report::print_human(&rpt);
+    if let Some(meter) = &meter {
+        print_meter_probe(meter, &manifest);
+    }
 
     if let Some(out_path) = out_path {
         let full = serde_json::json!({
             "report": rpt,
+            "meter": meter,
             "raw_result": outcome.result,
             "sim_state": outcome.sim_state,
             "run_params": {
@@ -241,6 +320,7 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
                 "speed": params.speed,
                 "warmup_ticks": params.warmup_ticks,
                 "window_ticks": params.window_ticks,
+                "fixed_window": params.fixed_window,
                 "scenario_name": params.scenario_name,
             },
             "game_version": paths::PINNED_VERSION,
@@ -255,6 +335,85 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     println!("(factorio log: {:?})", outcome.log_path);
 
     Ok(())
+}
+
+fn print_meter_probe(meter: &meter_probe::MeterProbe, manifest: &manifest::Manifest) {
+    println!();
+    println!(
+        "=== report-only meter: warmup={} window={} ticks ===",
+        meter.warmup_ticks, meter.window_ticks
+    );
+    if let Some(error) = &meter.error {
+        println!("meter: ERROR — {error}");
+        println!("meter: no sim verdict or gate decision was changed");
+        return;
+    }
+    let Some(report) = &meter.report else {
+        println!("meter: ERROR — no report returned");
+        println!("meter: no sim verdict or gate decision was changed");
+        return;
+    };
+    println!(
+        "meter: converged={} boundary_refusals={} notes={}",
+        report.converged,
+        report.boundary_refusals,
+        report.notes.len()
+    );
+    println!(
+        "{:<24} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "target", "planned/s", "produced/s", "delivered/s", "gate/s", "gate d%"
+    );
+    for target in &manifest.targets {
+        let planned = report
+            .planned_per_s
+            .get(&target.item)
+            .copied()
+            .unwrap_or(target.rate);
+        let produced = report
+            .produced_per_s
+            .get(&target.item)
+            .copied()
+            .unwrap_or(0.0);
+        let delivered = report
+            .delivered_per_s
+            .get(&target.item)
+            .copied()
+            .unwrap_or(0.0);
+        // Match the sim harness's own target verdict: solid targets are
+        // judged on delivered output, while fluid targets are judged on
+        // machine production because the boundary drain is not meaningful.
+        let gate_rate = if target.is_fluid { produced } else { delivered };
+        let delta = if planned > 0.0 {
+            (gate_rate / planned - 1.0) * 100.0
+        } else {
+            f64::NAN
+        };
+        println!(
+            "{:<24} {:>10.2} {:>10.2} {:>10.2} {:>10.2} {:>+9.1}%",
+            target.item, planned, produced, delivered, gate_rate, delta
+        );
+    }
+    println!("meter: recipe attribution (measurement window)");
+    for (recipe, a) in &report.recipe_attribution {
+        println!(
+            "  {recipe:<28} machines={:>3} crafts={:>6} working={:>7} output_blocked={:>7} inserter_blocked={:>7} item_shortage={:>7} fluid_shortage={:>7} supplied={:?} consumed={:?}",
+            a.machines,
+            a.crafts,
+            a.working_ticks,
+            a.output_blocked_ticks,
+            a.output_inserter_blocked_ticks,
+            a.item_shortage_ticks,
+            a.fluid_shortage_ticks,
+            a.fluid_supplied,
+            a.fluid_consumed,
+        );
+    }
+    println!(
+        "meter: report-only; gate metric is delivered for solid targets and produced for fluids; an at-plan reading is not clearance"
+    );
+    println!(
+        "meter: inserter_blocked is summed per output-inserter tick, so it can exceed machine-level output_blocked"
+    );
 }
 
 /// Run a fixture as a live, joinable Factorio server so a human can look

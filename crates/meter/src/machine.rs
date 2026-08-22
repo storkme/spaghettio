@@ -21,6 +21,7 @@
 //! `scripts/sim-capture-state.sh` transfer unchanged.
 
 use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use spaghettio_core::recipe_db;
 
 use crate::belt::ItemId;
@@ -102,6 +103,10 @@ pub struct Machine {
     /// throughput, two halves of one report, silently disagreed. Reading
     /// the emitted units means there is only one accumulator.
     pub emitted_this_tick: Vec<(u16, u32)>,
+    /// Whole fluid units emitted into `fluid_output` by the most recent
+    /// `tick`. This is the fluid counterpart to `emitted_this_tick`; keeping
+    /// it explicit lets the factory report production before pipe delivery.
+    pub fluid_emitted_this_tick: Vec<(u16, u32)>,
     /// Finished products awaiting an output inserter.
     pub output: FxHashMap<u16, u32>,
     /// Per-ingredient buffer ceiling.
@@ -110,11 +115,22 @@ pub struct Machine {
     pub output_cap: u32,
     pub state: MachineState,
     pub crafts: u64,
+    /// Per-window ticks spent in each diagnostic state. These are reset with
+    /// `Factory::reset_counters`; unlike `state`, they describe the whole
+    /// measurement window rather than one final-tick snapshot.
+    pub working_ticks: u64,
+    pub output_blocked_ticks: u64,
+    pub item_shortage_ticks: u64,
+    pub fluid_shortage_ticks: u64,
     /// Recipe ingredients that are fluids — recorded so the report can say
     /// so rather than silently treating the machine as solid-fed.
     pub fluid_ingredients: Vec<String>,
     /// Fluid ingredients ON HAND, keyed by interned id. (#570 Phase A)
     pub fluid_input: FxHashMap<u16, u32>,
+    /// Fluid units accepted into this machine during the measurement window.
+    pub fluid_supplied: FxHashMap<u16, u64>,
+    /// Fluid units consumed to start crafts during the measurement window.
+    pub fluid_consumed: FxHashMap<u16, u64>,
     /// (interned fluid id, per-craft amount) — the fluid side of
     /// `ingredients`.
     pub fluid_needs: Vec<(u16, u32)>,
@@ -122,11 +138,14 @@ pub struct Machine {
     fluid_products: Vec<(u16, f64)>,
     /// Fractional carry for fluid products (fluid side of `product_debt`).
     fluid_debt: FxHashMap<u16, f64>,
-    /// Finished fluid products awaiting delivery to an adjacent consumer /
-    /// boundary drain.
+    /// Finished fluid products awaiting delivery to a connected consumer;
+    /// unconsumed output drains only when the fluid network has no consumer.
     pub fluid_output: FxHashMap<u16, u32>,
+    /// Fluid ids whose output ports share a network with same-fluid
+    /// consumers. Standalone fluid outputs keep the meter's drain semantics
+    /// and must not be blocked by this machine-local cap.
+    pub bounded_fluid_outputs: FxHashSet<u16>,
 }
-
 
 /// Factorio's productivity rule: the bonus multiplies output per craft and
 /// leaves ingredients untouched, except for the catalyst portion a recipe
@@ -223,18 +242,26 @@ impl Machine {
             products,
             product_debt: FxHashMap::default(),
             emitted_this_tick: Vec::new(),
+            fluid_emitted_this_tick: Vec::new(),
             input: FxHashMap::default(),
             output: FxHashMap::default(),
             buffer_cap,
             output_cap: 100,
             state: MachineState::ItemIngredientShortage,
             crafts: 0,
+            working_ticks: 0,
+            output_blocked_ticks: 0,
+            item_shortage_ticks: 0,
+            fluid_shortage_ticks: 0,
             fluid_ingredients,
             fluid_input: FxHashMap::default(),
+            fluid_supplied: FxHashMap::default(),
+            fluid_consumed: FxHashMap::default(),
             fluid_needs,
             fluid_products,
             fluid_debt: FxHashMap::default(),
             fluid_output: FxHashMap::default(),
+            bounded_fluid_outputs: FxHashSet::default(),
         })
     }
 
@@ -275,8 +302,23 @@ impl Machine {
         let take = count.min(self.fluid_room_for(item));
         if take > 0 {
             *self.fluid_input.entry(item.0).or_insert(0) += take;
+            *self.fluid_supplied.entry(item.0).or_insert(0) += take as u64;
         }
         take
+    }
+
+    /// Reset counters that describe the current measurement window while
+    /// retaining the simulated machine state and its buffers.
+    pub fn reset_counters(&mut self) {
+        self.crafts = 0;
+        self.working_ticks = 0;
+        self.output_blocked_ticks = 0;
+        self.item_shortage_ticks = 0;
+        self.fluid_shortage_ticks = 0;
+        self.fluid_supplied.clear();
+        self.fluid_consumed.clear();
+        self.emitted_this_tick.clear();
+        self.fluid_emitted_this_tick.clear();
     }
 
     /// Remove up to `max` finished products of any kind.
@@ -305,7 +347,13 @@ impl Machine {
     }
 
     fn total_output(&self) -> u32 {
-        self.output.values().sum()
+        self.output.values().sum::<u32>()
+            + self
+                .fluid_output
+                .iter()
+                .filter(|(id, _)| self.bounded_fluid_outputs.contains(id))
+                .map(|(_, n)| *n)
+                .sum::<u32>()
     }
 
     fn has_ingredients(&self) -> bool {
@@ -337,23 +385,30 @@ impl Machine {
     /// Advance one tick.
     pub fn tick(&mut self) {
         self.emitted_this_tick.clear();
+        self.fluid_emitted_this_tick.clear();
         if self.total_output() >= self.output_cap {
             self.state = MachineState::FullOutput;
+            self.output_blocked_ticks += 1;
             return;
         }
         if self.progress <= 0.0 {
             if !self.has_ingredients() {
                 // Distinguish a missing fluid from a missing solid so the
                 // census is comparable to the sim's.
-                self.state = if self
+                let fluid_shortage = self
                     .missing()
                     .map(|(_, is_fluid)| is_fluid)
-                    .unwrap_or(false)
-                {
+                    .unwrap_or(false);
+                self.state = if fluid_shortage {
                     MachineState::FluidIngredientShortage
                 } else {
                     MachineState::ItemIngredientShortage
                 };
+                if fluid_shortage {
+                    self.fluid_shortage_ticks += 1;
+                } else {
+                    self.item_shortage_ticks += 1;
+                }
                 return;
             }
             // Consume and start a craft — solids AND fluids.
@@ -362,12 +417,14 @@ impl Machine {
             }
             for (id, amount) in &self.fluid_needs {
                 *self.fluid_input.get_mut(id).unwrap() -= amount;
+                *self.fluid_consumed.entry(*id).or_insert(0) += *amount as u64;
             }
             // ACCUMULATE, never assign (see the existing comment: the
             // fractional overshoot of `progress` must carry forward).
             self.progress += self.craft_ticks;
         }
         self.state = MachineState::Working;
+        self.working_ticks += 1;
         self.progress -= 1.0;
         if self.progress <= 0.0 {
             for (id, amount) in &self.products {
@@ -389,6 +446,7 @@ impl Machine {
                 if whole >= 1.0 {
                     *debt -= whole;
                     *self.fluid_output.entry(*id).or_insert(0) += whole as u32;
+                    self.fluid_emitted_this_tick.push((*id, whole as u32));
                 }
             }
             self.crafts += 1;
@@ -419,18 +477,26 @@ mod tests {
             products: vec![(id, 0.25)],
             product_debt: FxHashMap::default(),
             emitted_this_tick: Vec::new(),
+            fluid_emitted_this_tick: Vec::new(),
             input: FxHashMap::default(),
             output: FxHashMap::default(),
             buffer_cap: FxHashMap::default(),
             output_cap: u32::MAX,
             crafts: 0,
             state: MachineState::Working,
+            working_ticks: 0,
+            output_blocked_ticks: 0,
+            item_shortage_ticks: 0,
+            fluid_shortage_ticks: 0,
             fluid_ingredients: Vec::new(),
             fluid_input: FxHashMap::default(),
+            fluid_supplied: FxHashMap::default(),
+            fluid_consumed: FxHashMap::default(),
             fluid_needs: Vec::new(),
             fluid_products: Vec::new(),
             fluid_debt: FxHashMap::default(),
             fluid_output: FxHashMap::default(),
+            bounded_fluid_outputs: FxHashSet::default(),
         };
         // output_cap is unbounded here, so nothing blocks and the machine
         // crafts every tick.
@@ -538,6 +604,22 @@ mod tests {
         }
         assert_eq!(m.state, MachineState::FullOutput);
         assert!(m.crafts <= m.output_cap as u64 + 1);
+    }
+
+    /// Fluid products must apply the same output ceiling as belt products.
+    /// Otherwise a downstream fluid consumer that is full cannot propagate
+    /// backpressure to the producing machine.
+    #[test]
+    fn fluid_output_counts_toward_output_capacity() {
+        let mut items = ItemInterner::default();
+        let mut m = ec_machine(&mut items);
+        m.output_cap = 1;
+        let acid = items.intern("sulfuric-acid");
+        m.bounded_fluid_outputs.insert(acid.0);
+        m.fluid_output.insert(acid.0, 1);
+        m.tick();
+        assert_eq!(m.state, MachineState::FullOutput);
+        assert_eq!(m.output_blocked_ticks, 1);
     }
 
     /// The buffer ceiling must bind — an unbounded input is what made the
@@ -664,8 +746,13 @@ mod tests {
         let base = {
             let mut items = ItemInterner::default();
             Machine::new(
-                "assembling-machine-3", "electronic-circuit", (0, 0), (3, 3),
-                &mut items, DEFAULT_BUFFER_CRAFTS, 0.0,
+                "assembling-machine-3",
+                "electronic-circuit",
+                (0, 0),
+                (3, 3),
+                &mut items,
+                DEFAULT_BUFFER_CRAFTS,
+                0.0,
             )
             .expect("EC on AM3 is a known recipe")
             .products
@@ -676,8 +763,13 @@ mod tests {
         let boosted = {
             let mut items = ItemInterner::default();
             Machine::new(
-                "assembling-machine-3", "electronic-circuit", (0, 0), (3, 3),
-                &mut items, DEFAULT_BUFFER_CRAFTS, 0.10,
+                "assembling-machine-3",
+                "electronic-circuit",
+                (0, 0),
+                (3, 3),
+                &mut items,
+                DEFAULT_BUFFER_CRAFTS,
+                0.10,
             )
             .expect("EC on AM3 is a known recipe")
             .products

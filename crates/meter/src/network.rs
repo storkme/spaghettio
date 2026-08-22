@@ -32,10 +32,20 @@
 //! as `TopologyNote`s on the built network rather than being silent.
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::Serialize;
 
 use crate::belt::{ItemId, Lane};
 use crate::blueprint_in::Dir;
-use crate::entity_data::{BeltTier, SLOTS_PER_TILE};
+use crate::entity_data::{
+    BeltTier, INNER_TURN_SLOTS, OUTER_TURN_SLOTS, SIDELOAD_EARLY_POSITION, SIDELOAD_LATE_POSITION,
+    SLOTS_PER_TILE,
+};
+
+const SPLITTER_BLOCK_MEMORY_ITEMS: u8 = 5;
+
+type SplitterMemory = [[Option<(usize, u8)>; 2]; 2];
+type LanePath = Vec<(usize, usize)>;
+type DownstreamLines = [LanePath; 2];
 
 /// Rotate a facing 90° counter-clockwise — the "left" side of a belt
 /// (`factorio-mechanics.md` **B3**: a north-facing belt's left lane is on
@@ -64,7 +74,10 @@ pub enum TileKind {
     /// `Option` rather than a sentinel index: the sentinel (`usize::MAX`)
     /// was indexed unguarded in `step_splitter_exit` and panicked the
     /// first time such a tile was stepped.
-    Splitter { partner: Option<usize>, id: usize },
+    Splitter {
+        partner: Option<usize>,
+        id: usize,
+    },
 }
 
 /// How lanes map when items cross from one tile to the next.
@@ -125,6 +138,23 @@ pub enum TopologyNote {
     OrphanSplitterHalf { pos: (i32, i32) },
 }
 
+/// Report-only counters for splitter routing decisions. These are reset with
+/// the meter window and do not participate in movement decisions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct SplitterStats {
+    pub attempts: [u64; 2],
+    pub first_blocked: [u64; 2],
+    pub fallback_accepted: [u64; 2],
+    pub first_accepted: [u64; 2],
+    pub both_blocked: [u64; 2],
+    pub remembered_accepted: [u64; 2],
+    pub memory_started: [u64; 2],
+    pub memory_expired: [u64; 2],
+    pub half_attempts: [[u64; 2]; 2],
+    pub half_fallback_accepted: [[u64; 2]; 2],
+    pub half_both_blocked: [[u64; 2]; 2],
+}
+
 #[derive(Debug, Default)]
 pub struct BeltNetwork {
     pub tiles: Vec<BeltTile>,
@@ -134,8 +164,25 @@ pub struct BeltNetwork {
     /// Sub-slot advance carried per tier. Tiles of a tier step in lockstep,
     /// because belt speed is a property of the tier, not of the tile.
     progress: [f64; 4],
-    /// Round-robin state per splitter id.
-    splitter_toggle: Vec<bool>,
+    /// Continuous coordinate of each tile lane within its connected
+    /// transport line, measured in item spacings.  The coordinates are
+    /// intentionally per lane: a sideload can join two upstream lanes while
+    /// a straight belt keeps its two transport lines independent.
+    lane_bases: Vec<[f64; 2]>,
+    lane_components: Vec<[usize; 2]>,
+    /// Precomputed forward line paths used by inserter collision checks.
+    downstream_lines: Vec<DownstreamLines>,
+    /// Whether a tile has an orthogonal straight feeder, i.e. is the curved
+    /// leg of a turn-to-sideload merge. This is fixed by topology.
+    turn_feeder: Vec<bool>,
+    /// Independent round-robin state for each splitter input lane.
+    splitter_toggle: Vec<[bool; 2]>,
+    /// Per-half, per-input-lane memory of an output that was blocked. This is
+    /// a bounded imbalance debt: forced-away items raise it to at most five,
+    /// and remembered returns pay it down when that output recovers.
+    splitter_memory: Vec<SplitterMemory>,
+    /// Report-only routing counters, one record per splitter.
+    pub splitter_stats: Vec<SplitterStats>,
     /// Items that left the network at a tile with no downstream, since the
     /// caller last drained this. Boundary outputs are counted from here.
     pub exited_log: Vec<(usize, ItemId)>,
@@ -164,9 +211,22 @@ impl BeltNetwork {
         self.tiles.is_empty()
     }
 
+    /// Continuous connected-line coordinate for diagnostics and probes.
+    pub fn lane_segment(&self, tile: usize, lane: usize) -> Option<(usize, f64)> {
+        Some((
+            *self.lane_components.get(tile)?.get(lane)?,
+            *self.lane_bases.get(tile)?.get(lane)?,
+        ))
+    }
+
     /// Total items currently on the network.
     pub fn item_count(&self) -> usize {
         self.tiles.iter().map(|t| t.occupancy()).sum()
+    }
+
+    /// Clear report-only splitter counters at a measurement-window boundary.
+    pub fn reset_splitter_stats(&mut self) {
+        self.splitter_stats.fill(SplitterStats::default());
     }
 
     /// Take up to `max` items from a tile, both lanes (**I6**).
@@ -209,13 +269,69 @@ impl BeltNetwork {
     }
 
     /// Drop an item onto a tile's far lane (**I5**) — where an inserter
-    /// puts things. Returns false when that lane's slots are full.
+    /// puts things. Vanilla inserters target the midpoint of the belt tile;
+    /// the phase-aware projection is handled by [`Lane::try_insert_at`].
+    /// Returns false when the local collision window is blocked.
     pub fn drop_onto_tile(&mut self, tile: usize, from: (i32, i32), item: ItemId) -> bool {
-        let t = &mut self.tiles[tile];
+        self.drop_onto_tile_at(tile, from, 0.5, item)
+    }
+
+    /// Drop at a continuous local position on the target tile.
+    pub fn drop_onto_tile_at(
+        &mut self,
+        tile: usize,
+        from: (i32, i32),
+        local_position: f64,
+        item: ItemId,
+    ) -> bool {
         // Far lane = the one on the opposite side from the dropper.
-        let near = near_lane_from(t.dir, t.pos, from);
+        let (dir, pos, tier) = (
+            self.tiles[tile].dir,
+            self.tiles[tile].pos,
+            self.tiles[tile].tier,
+        );
+        let near = near_lane_from(dir, pos, from);
         let far = 1 - near;
-        t.lanes[far].try_insert_anywhere(item)
+        let base = self.lane_bases[tile][far];
+        let progress_slots = self.progress[tier_ix(tier)];
+
+        // A weak component is not a transport line: two feeder lanes can
+        // share a component only after a sideload merge.  Walk forward from
+        // this lane so an item on the other feeder is not treated as
+        // colliding with a drop before the merge.  The target tile itself is
+        // still handled by the slot projection below, preserving its proven
+        // midpoint admission rule.
+        for &(downstream_tile, downstream_lane) in
+            self.downstream_line_nodes(tile, far).iter().skip(1)
+        {
+            let downstream_ref = &self.tiles[downstream_tile];
+            let downstream_base = self.lane_bases[downstream_tile][downstream_lane];
+            let phase = self.progress[tier_ix(downstream_ref.tier)];
+            for (idx, slot) in downstream_ref.lanes[downstream_lane]
+                .slots_debug()
+                .iter()
+                .enumerate()
+            {
+                if slot.is_some()
+                    && (downstream_base
+                        + idx as f64
+                        + phase
+                        + downstream_ref.lanes[downstream_lane].slot_offset(idx)
+                        - (base + local_position / crate::entity_data::ITEM_SPACING_TILES))
+                        .abs()
+                        <= crate::belt::DROP_COLLISION_WINDOW_SLOTS + f64::EPSILON
+                {
+                    return false;
+                }
+            }
+        }
+
+        self.tiles[tile].lanes[far].try_insert_at_segment(
+            local_position,
+            progress_slots,
+            base,
+            item,
+        )
     }
 
     /// Advance the whole network one tick.
@@ -266,9 +382,62 @@ impl BeltNetwork {
         }
     }
 
+    /// Return the precomputed forward transport-line nodes reachable from one lane.
+    fn downstream_line_nodes(&self, tile: usize, lane: usize) -> &[(usize, usize)] {
+        self.downstream_lines
+            .get(tile)
+            .and_then(|lanes| lanes.get(lane))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Compute forward transport-line nodes for every tile lane. A
+    /// merge intentionally appears only after the two feeder paths converge;
+    /// walking backwards through the weak component would incorrectly make
+    /// the feeders share a line before that point.
+    fn collect_downstream_line_nodes(&self, tile: usize, lane: usize) -> LanePath {
+        let mut out = Vec::new();
+        let mut seen: FxHashSet<(usize, usize)> = FxHashSet::default();
+        let mut stack = vec![(tile, lane)];
+        while let Some(node @ (id, lane_ix)) = stack.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            out.push(node);
+            for downstream in self.downstream_edges(id) {
+                let target_lane = match downstream.lanes {
+                    LaneMap::Straight => lane_ix,
+                    LaneMap::OntoLane(target) => target,
+                };
+                stack.push((downstream.tile, target_lane));
+            }
+        }
+        out
+    }
+
+    fn compute_downstream_lines(net: &mut BeltNetwork) {
+        let mut lines = vec![[Vec::new(), Vec::new()]; net.tiles.len()];
+        for (tile, tile_lines) in lines.iter_mut().enumerate() {
+            for (lane, path) in tile_lines.iter_mut().enumerate() {
+                *path = net.collect_downstream_line_nodes(tile, lane);
+            }
+        }
+        net.downstream_lines = lines;
+    }
+
+    fn downstream_edges(&self, id: usize) -> Vec<Downstream> {
+        // A splitter's partner output is an alternate runtime route, not a
+        // continuation of this lane's transport line. The splitter stepper
+        // probes both outputs when it actually routes an item; the
+        // pre-insertion collision walk must stay on the branch represented by
+        // this physical half or an item on the sibling branch can reject a
+        // drop on an otherwise free line.
+        self.tiles[id].downstream.into_iter().collect()
+    }
+
     fn step_plain_exit(&mut self, id: usize, downstream: Option<Downstream>) {
         for lane_ix in 0..2 {
-            let Some(item) = self.tiles[id].lanes[lane_ix].peek_exit() else {
+            let Some((item, offset)) = self.tiles[id].lanes[lane_ix].peek_exit_with_offset() else {
                 continue;
             };
             match downstream {
@@ -276,35 +445,100 @@ impl BeltNetwork {
                     // A designated boundary output drains, so backpressure
                     // cannot falsify the measurement — the same reason the
                     // harness uses remove-mode chests.
-                    self.tiles[id].lanes[lane_ix].take_exit();
+                    self.tiles[id].lanes[lane_ix].take_exit_with_offset();
                     self.tiles[id].exited += 1;
                     self.exited_log.push((id, item));
                 }
                 // Interior dead end: hold. The lane backs up, which is what
                 // lets it re-compress.
                 None => {}
-                Some(d) => {
-                    let target_lane = match d.lanes {
-                        LaneMap::Straight => lane_ix,
-                        LaneMap::OntoLane(l) => l,
-                    };
-                    if self.tiles[d.tile].lanes[target_lane].try_insert_entry(item) {
-                        self.tiles[id].lanes[lane_ix].take_exit();
-                    }
-                    // else: downstream full — back up, which is the whole
-                    // mechanism behind re-compression.
+                Some(d) if self.try_insert_downstream(id, lane_ix, d, item, offset) => {
+                    self.tiles[id].lanes[lane_ix].take_exit_with_offset();
+                }
+                Some(_) => {
+                    // Downstream full — back up, which is the whole mechanism
+                    // behind re-compression.
                 }
             }
         }
     }
 
-    /// Splitters alternate between their two outputs and preserve lanes
-    /// (**S3**/**S4**). Output priority and filters are not modelled.
+    /// Insert an item at the correct target-line point for a belt handoff.
+    /// Straight feeds enter at the upstream edge. A sideload enters at one of
+    /// the two measured internal positions within the target tile, rather
+    /// than teleporting to its entry slot.
+    fn try_insert_downstream(
+        &mut self,
+        source: usize,
+        source_lane: usize,
+        downstream: Downstream,
+        item: ItemId,
+        offset: f64,
+    ) -> bool {
+        let target_lane = match downstream.lanes {
+            LaneMap::Straight => source_lane,
+            LaneMap::OntoLane(lane) => lane,
+        };
+        match downstream.lanes {
+            LaneMap::Straight => self.tiles[downstream.tile].lanes[target_lane]
+                .try_insert_entry_with_offset(item, offset),
+            LaneMap::OntoLane(_) => {
+                let turn_merge = self.turn_feeder.get(source).copied().unwrap_or(false);
+                let target = &self.tiles[downstream.tile];
+                let local_position =
+                    sideload_position(target.dir, target.pos, self.tiles[source].pos);
+                let progress = self.progress[tier_ix(target.tier)];
+                let inner_lane = turn_inner_lane(self.tiles[source].dir, target.dir);
+                if turn_merge && inner_lane == Some(source_lane) {
+                    self.tiles[downstream.tile].lanes[target_lane].try_insert_at_inner_turn_merge(
+                        local_position,
+                        progress,
+                        0.0,
+                        item,
+                    )
+                } else if turn_merge {
+                    self.tiles[downstream.tile].lanes[target_lane].try_insert_at_turn_merge(
+                        local_position,
+                        progress,
+                        0.0,
+                        item,
+                    )
+                } else {
+                    self.tiles[downstream.tile].lanes[target_lane].try_insert_at(
+                        local_position,
+                        progress,
+                        item,
+                    )
+                }
+            }
+        }
+    }
+
+    fn compute_turn_feeders(net: &mut BeltNetwork) {
+        let mut turn_feeder = vec![false; net.tiles.len()];
+        for candidate in 0..net.tiles.len() {
+            let Some(downstream) = net.tiles[candidate].downstream else {
+                continue;
+            };
+            if matches!(downstream.lanes, LaneMap::Straight)
+                && net.tiles[candidate].dir != net.tiles[downstream.tile].dir
+            {
+                turn_feeder[downstream.tile] = true;
+            }
+        }
+        net.turn_feeder = turn_feeder;
+    }
+
+    /// Splitters distribute each input lane independently, preserving lanes
+    /// and retaining bounded memory when an output is blocked
+    /// (**S3**/**S4**/**S10**/**S11**). Output priority and filters are not
+    /// modelled.
     fn step_splitter_exit(&mut self, id: usize, sid: usize) {
         let partner = match self.tiles[id].kind {
             TileKind::Splitter { partner, .. } => partner,
             _ => return,
         };
+        let half_ix = usize::from(partner.is_some_and(|partner| id > partner));
         // An unpaired half has no second output. It still moves items —
         // degrading to plain-belt behaviour is closer to the truth than
         // either panicking or dropping the item on the floor — and the
@@ -315,36 +549,101 @@ impl BeltNetwork {
             partner.map(|p| self.tiles[p].downstream).unwrap_or(None),
         ];
         for lane_ix in 0..2 {
-            let Some(item) = self.tiles[id].lanes[lane_ix].peek_exit() else {
+            let Some((item, offset)) = self.tiles[id].lanes[lane_ix].peek_exit_with_offset() else {
                 continue;
             };
-            let first = usize::from(self.splitter_toggle[sid]);
+            let remembered = self.splitter_memory[sid][half_ix][lane_ix];
+            self.splitter_stats[sid].attempts[lane_ix] += 1;
+            self.splitter_stats[sid].half_attempts[half_ix][lane_ix] += 1;
+            let first = if let Some((output, _)) = remembered {
+                // Memory is intentionally half-local: it remembers the
+                // output index in this half's `outs` array.
+                output
+            } else {
+                // The shared round-robin state names a physical branch,
+                // while `outs` is half-local: index 0 is this half's branch
+                // and index 1 is its partner's. Translate the shared choice
+                // before probing so the two physical halves alternate across
+                // one branch pair.
+                let physical_first = usize::from(self.splitter_toggle[sid][lane_ix]);
+                if half_ix == 0 {
+                    physical_first
+                } else {
+                    1 - physical_first
+                }
+            };
             let mut placed = false;
             for probe in 0..2 {
                 let which = (first + probe) % 2;
                 match outs[which] {
                     None if self.tiles[id].is_sink => {
-                        self.tiles[id].lanes[lane_ix].take_exit();
+                        self.tiles[id].lanes[lane_ix].take_exit_with_offset();
                         self.tiles[id].exited += 1;
                         self.exited_log.push((id, item));
                         placed = true;
                     }
                     None => {}
-                    Some(d) => {
-                        let target_lane = match d.lanes {
-                            LaneMap::Straight => lane_ix,
-                            LaneMap::OntoLane(l) => l,
-                        };
-                        if self.tiles[d.tile].lanes[target_lane].try_insert_entry(item) {
-                            self.tiles[id].lanes[lane_ix].take_exit();
-                            placed = true;
-                        }
+                    Some(d) if self.try_insert_downstream(id, lane_ix, d, item, offset) => {
+                        self.tiles[id].lanes[lane_ix].take_exit_with_offset();
+                        placed = true;
+                    }
+                    Some(_) => {
                     }
                 }
+                // Missing output geometry is not backpressure. Keep the
+                // counters about a real first-output blockage so orphan
+                // splitter halves do not manufacture congestion telemetry.
+                if !placed && probe == 0 && outs[which].is_some() {
+                    self.splitter_stats[sid].first_blocked[lane_ix] += 1;
+                }
                 if placed {
-                    self.splitter_toggle[sid] = which == 0;
+                    if which == first {
+                        self.splitter_stats[sid].first_accepted[lane_ix] += 1;
+                    } else {
+                        self.splitter_stats[sid].fallback_accepted[lane_ix] += 1;
+                        self.splitter_stats[sid].half_fallback_accepted[half_ix][lane_ix] += 1;
+                    }
+                    if let Some((remembered_output, remaining)) = remembered {
+                        if which == remembered_output {
+                            self.splitter_stats[sid].remembered_accepted[lane_ix] += 1;
+                            let next = remaining.saturating_sub(1);
+                            self.splitter_memory[sid][half_ix][lane_ix] =
+                                (next > 0).then_some((remembered_output, next));
+                            if next == 0 {
+                                self.splitter_stats[sid].memory_expired[lane_ix] += 1;
+                            }
+                        } else {
+                            // A recovered output can become blocked again.
+                            // Its newly diverted item restores the bounded
+                            // imbalance debt instead of leaving a partially
+                            // paid episode permanently under-counted.
+                            let next = remaining
+                                .saturating_add(1)
+                                .min(SPLITTER_BLOCK_MEMORY_ITEMS);
+                            self.splitter_memory[sid][half_ix][lane_ix] =
+                                Some((remembered_output, next));
+                        }
+                    } else if which != first && outs[first].is_some() {
+                        // Start with one item of imbalance debt. Further
+                        // forced-away items grow it up to the five-item cap;
+                        // they do not start another episode.
+                        self.splitter_stats[sid].memory_started[lane_ix] += 1;
+                        self.splitter_memory[sid][half_ix][lane_ix] =
+                            Some((first, 1));
+                    }
+                    if self.splitter_memory[sid][half_ix][lane_ix].is_none() {
+                        let physical_which = if half_ix == 0 { which } else { 1 - which };
+                        self.splitter_toggle[sid][lane_ix] = physical_which == 0;
+                    }
                     break;
                 }
+            }
+            // With only one physical output, an orphan half is not a
+            // two-sided blockage. Count this event only when both outputs
+            // exist and neither accepted the item.
+            if !placed && outs[0].is_some() && outs[1].is_some() {
+                self.splitter_stats[sid].both_blocked[lane_ix] += 1;
+                self.splitter_stats[sid].half_both_blocked[half_ix][lane_ix] += 1;
             }
         }
     }
@@ -468,7 +767,9 @@ impl NetworkBuilder {
                     pending_splitters.push((splitter_id, (e.x, e.y)));
                 }
                 splitter_id += 1;
-                net.splitter_toggle.push(false);
+                net.splitter_toggle.push([false; 2]);
+                net.splitter_memory.push([[None; 2]; 2]);
+                net.splitter_stats.push(SplitterStats::default());
             }
         }
         for (_, pos) in pending_splitters {
@@ -480,9 +781,13 @@ impl NetworkBuilder {
 
         // --- 3. Downstream links -------------------------------------------
         Self::link_downstream(&mut net);
+        BeltNetwork::compute_turn_feeders(&mut net);
+        BeltNetwork::compute_downstream_lines(&mut net);
+        Self::configure_inner_turn_merge_lanes(&mut net);
 
         // --- 4. Update order ------------------------------------------------
         Self::compute_order(&mut net);
+        Self::compute_lane_segments(&mut net);
 
         net
     }
@@ -586,7 +891,42 @@ impl NetworkBuilder {
                     LaneMap::OntoLane(near_lane_from(tdir, ahead, pos))
                 }
             };
-            net.tiles[id].downstream = Some(Downstream { tile: target, lanes });
+            net.tiles[id].downstream = Some(Downstream {
+                tile: target,
+                lanes,
+            });
+        }
+    }
+
+    /// The inner arc is a short continuous line (106 internal positions),
+    /// but it does not expose two independently insertable quarter-grid
+    /// slots when it immediately merges into a target.  Retaining one
+    /// discrete slot here reproduces the measured steady-state asymmetry:
+    /// the target gets three inner-lane items while one remains on the arc.
+    /// This is scoped to turn-to-sideload topology; ordinary turns retain
+    /// the four-slot tile representation.
+    fn configure_inner_turn_merge_lanes(net: &mut BeltNetwork) {
+        for source in 0..net.tiles.len() {
+            let Some(curve) = net.tiles[source].downstream else {
+                continue;
+            };
+            if !matches!(curve.lanes, LaneMap::Straight)
+                || net.tiles[source].dir == net.tiles[curve.tile].dir
+            {
+                continue;
+            }
+            let Some(merge) = net.tiles[curve.tile].downstream else {
+                continue;
+            };
+            if !matches!(merge.lanes, LaneMap::OntoLane(_)) {
+                continue;
+            }
+            let Some(inner_lane) =
+                turn_inner_lane(net.tiles[source].dir, net.tiles[curve.tile].dir)
+            else {
+                continue;
+            };
+            net.tiles[curve.tile].lanes[inner_lane] = Lane::new(INNER_TURN_SLOTS.floor() as usize);
         }
     }
 
@@ -629,6 +969,131 @@ impl NetworkBuilder {
             order.extend(leftover);
         }
         net.order = order;
+    }
+
+    /// Assign continuous coordinates to the transport-line graph. A directed
+    /// handoff advances along the actual connected line: straight neighbours
+    /// differ by four item spacings, while a 90-degree curve uses Factorio's
+    /// asymmetric inner/outer arc lengths. The graph is walked as undirected
+    /// for the purpose of finding the connected line; this also joins both
+    /// inputs of a sideload to the one target lane.
+    fn compute_lane_segments(net: &mut BeltNetwork) {
+        let node_count = net.tiles.len() * 2;
+        let mut graph: Vec<Vec<(usize, f64)>> = vec![Vec::new(); node_count];
+        let mut add_edge = |source: usize, downstream: Downstream| {
+            for lane in 0..2 {
+                let target_lane = match downstream.lanes {
+                    LaneMap::Straight => lane,
+                    LaneMap::OntoLane(target) => target,
+                };
+                let a = source * 2 + lane;
+                let b = downstream.tile * 2 + target_lane;
+                let delta = handoff_length_slots(
+                    net.tiles[source].dir,
+                    net.tiles[downstream.tile].dir,
+                    downstream.lanes,
+                    lane,
+                );
+                graph[a].push((b, delta));
+                graph[b].push((a, -delta));
+            }
+        };
+
+        for id in 0..net.tiles.len() {
+            match net.tiles[id].kind {
+                TileKind::Splitter { partner, .. } => {
+                    if let Some(downstream) = net.tiles[id].downstream {
+                        add_edge(id, downstream);
+                    }
+                    if let Some(partner) = partner {
+                        if let Some(downstream) = net.tiles[partner].downstream {
+                            add_edge(id, downstream);
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(downstream) = net.tiles[id].downstream {
+                        add_edge(id, downstream);
+                    }
+                }
+            }
+        }
+
+        let mut bases = vec![[0.0f64; 2]; net.tiles.len()];
+        let mut components = vec![[0usize; 2]; net.tiles.len()];
+        let mut seen = vec![false; node_count];
+        let mut component = 0;
+        for root in 0..node_count {
+            if seen[root] {
+                continue;
+            }
+            seen[root] = true;
+            let mut stack = vec![root];
+            while let Some(node) = stack.pop() {
+                let tile = node / 2;
+                let lane = node % 2;
+                components[tile][lane] = component;
+                let base = bases[tile][lane];
+                for &(next, delta) in &graph[node] {
+                    let next_tile = next / 2;
+                    let next_lane = next % 2;
+                    if !seen[next] {
+                        seen[next] = true;
+                        bases[next_tile][next_lane] = base + delta;
+                        stack.push(next);
+                    }
+                }
+            }
+            component += 1;
+        }
+        net.lane_bases = bases;
+        net.lane_components = components;
+    }
+}
+
+/// Distance, in item spacings, between the local origins of two connected
+/// lane segments. A single side-fed target is represented as a curve by
+/// [`link_downstream`], so only that `Straight` handoff gets the asymmetric
+/// inner/outer turn lengths.
+fn handoff_length_slots(source_dir: Dir, target_dir: Dir, lanes: LaneMap, lane: usize) -> f64 {
+    if !matches!(lanes, LaneMap::Straight) || source_dir == target_dir {
+        return SLOTS_PER_TILE as f64;
+    }
+
+    let Some(inner_lane) = turn_inner_lane(source_dir, target_dir) else {
+        return SLOTS_PER_TILE as f64;
+    };
+    if lane == inner_lane {
+        INNER_TURN_SLOTS
+    } else {
+        OUTER_TURN_SLOTS
+    }
+}
+
+/// Lane index occupied by the inside of a quarter-turn. Lane 0 is the
+/// source belt's left lane and lane 1 its right lane.
+fn turn_inner_lane(source: Dir, target: Dir) -> Option<usize> {
+    match (source, target) {
+        (Dir::North, Dir::West)
+        | (Dir::West, Dir::South)
+        | (Dir::South, Dir::East)
+        | (Dir::East, Dir::North) => Some(0),
+        (Dir::North, Dir::East)
+        | (Dir::East, Dir::South)
+        | (Dir::South, Dir::West)
+        | (Dir::West, Dir::North) => Some(1),
+        _ => None,
+    }
+}
+
+/// Local position at which a perpendicular belt feed enters the target line.
+/// The two sides of a target belt have the game's measured 68/188-position
+/// entry geometry; lane 0 (the target's left side) is the late case and lane
+/// 1 (the target's right side) the early case in the meter's lane convention.
+fn sideload_position(target_dir: Dir, target_pos: (i32, i32), source_pos: (i32, i32)) -> f64 {
+    match near_lane_from(target_dir, target_pos, source_pos) {
+        0 => SIDELOAD_LATE_POSITION,
+        _ => SIDELOAD_EARLY_POSITION,
     }
 }
 
@@ -711,8 +1176,14 @@ mod tests {
                 .unwrap_or_else(|| panic!("{dir:?}: second cell at {expected_second:?}"));
             match (net.tiles[a].kind, net.tiles[b].kind) {
                 (
-                    TileKind::Splitter { partner: pa, id: ia },
-                    TileKind::Splitter { partner: pb, id: ib },
+                    TileKind::Splitter {
+                        partner: pa,
+                        id: ia,
+                    },
+                    TileKind::Splitter {
+                        partner: pb,
+                        id: ib,
+                    },
                 ) => {
                     assert_eq!(pa, Some(b), "{dir:?}: partner links must be mutual");
                     assert_eq!(pb, Some(a), "{dir:?}: partner links must be mutual");
@@ -738,7 +1209,9 @@ mod tests {
         ];
         let net = NetworkBuilder::build(&ents);
         let feeder = net.tile_at((10, 4)).unwrap();
-        let half = net.tile_at((10, 5)).expect("splitter occupies its own tile");
+        let half = net
+            .tile_at((10, 5))
+            .expect("splitter occupies its own tile");
         assert_eq!(
             net.tiles[feeder].downstream.map(|d| d.tile),
             Some(half),
@@ -746,34 +1219,253 @@ mod tests {
         );
         for out in [(10, 6), (11, 6)] {
             let id = net.tile_at(out).unwrap();
-            let fed = net.tiles.iter().any(|t| t.downstream.is_some_and(|d| d.tile == id));
+            let fed = net
+                .tiles
+                .iter()
+                .any(|t| t.downstream.is_some_and(|d| d.tile == id));
             assert!(fed, "belt at {out:?} must have an upstream feeder");
         }
     }
 
-#[test]
-fn orphan_splitter_half_does_not_panic_when_stepped() {
-    // A splitter whose second cell is already occupied by a belt: the
-    // second half is never created, so `partner` stays at its sentinel.
-    let ents = vec![
-        belt("transport-belt", 11, 5, Dir::South), // occupies the splitter's 2nd cell
-        splitter(10, 5, Dir::South),
-        belt("transport-belt", 10, 6, Dir::South),
-    ];
-    let mut net = NetworkBuilder::build(&ents);
-    assert!(
-        net.notes
-            .iter()
-            .any(|n| matches!(n, TopologyNote::OrphanSplitterHalf { .. })),
-        "expected an orphan note, got {:?}",
-        net.notes
-    );
-    // The real assertion: stepping must not panic.
-    for _ in 0..10 {
-        net.tick();
+    #[test]
+    fn orphan_splitter_half_does_not_panic_when_stepped() {
+        // A splitter whose second cell is already occupied by a belt: the
+        // second half is never created, so `partner` stays at its sentinel.
+        let ents = vec![
+            belt("transport-belt", 11, 5, Dir::South), // occupies the splitter's 2nd cell
+            splitter(10, 5, Dir::South),
+            belt("transport-belt", 10, 6, Dir::South),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        assert!(
+            net.notes
+                .iter()
+                .any(|n| matches!(n, TopologyNote::OrphanSplitterHalf { .. })),
+            "expected an orphan note, got {:?}",
+            net.notes
+        );
+        // The real assertion: stepping must not panic.
+        for _ in 0..10 {
+            net.tick();
+        }
     }
-}
 
+    #[test]
+    fn splitter_remembers_a_blocked_output_per_lane() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East),
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let input = net.tile_at((1, 0)).unwrap();
+        let output0 = net.tile_at((2, 0)).unwrap();
+        let output1 = net.tile_at((2, 1)).unwrap();
+        let sid = match net.tiles[input].kind {
+            TileKind::Splitter { id, .. } => id,
+            _ => panic!("expected splitter input half"),
+        };
+
+        for _ in 0..SLOTS_PER_TILE {
+            assert!(net.tiles[output0].lanes[0].try_insert_anywhere(ItemId(9)));
+        }
+        assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(input, sid);
+        assert_eq!(net.tiles[output1].lanes[0].occupancy(), 1);
+        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 1)));
+        assert_eq!(net.splitter_stats[sid].attempts[0], 1);
+        assert_eq!(net.splitter_stats[sid].first_blocked[0], 1);
+        assert_eq!(net.splitter_stats[sid].fallback_accepted[0], 1);
+        assert_eq!(net.splitter_stats[sid].memory_started[0], 1);
+
+        // A second item also falls back while the remembered output remains
+        // blocked. It must not restart the same memory episode, but it does
+        // add one item to the bounded imbalance debt.
+        let mut discarded_second = Vec::new();
+        net.tiles[output1]
+            .lanes[0]
+            .take_all(99, &mut discarded_second);
+        assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(input, sid);
+        assert_eq!(net.tiles[output1].lanes[0].occupancy(), 1);
+        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 2)));
+        assert_eq!(net.splitter_stats[sid].memory_started[0], 1);
+
+        let mut discarded = Vec::new();
+        net.tiles[output0].lanes[0].take_all(99, &mut discarded);
+        assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(input, sid);
+        assert_eq!(net.tiles[output0].lanes[0].occupancy(), 1);
+        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 1)));
+        assert_eq!(net.splitter_stats[sid].attempts[0], 3);
+        assert_eq!(net.splitter_stats[sid].fallback_accepted[0], 2);
+        assert_eq!(net.splitter_stats[sid].remembered_accepted[0], 1);
+    }
+
+    #[test]
+    fn splitter_memory_debt_is_capped_and_pays_down_after_recovery() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East),
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let input = net.tile_at((1, 0)).unwrap();
+        let output0 = net.tile_at((2, 0)).unwrap();
+        let output1 = net.tile_at((2, 1)).unwrap();
+        let sid = match net.tiles[input].kind {
+            TileKind::Splitter { id, .. } => id,
+            _ => panic!("expected splitter input half"),
+        };
+
+        for _ in 0..SLOTS_PER_TILE {
+            assert!(net.tiles[output0].lanes[0].try_insert_anywhere(ItemId(9)));
+        }
+
+        // Five forced-away items raise, but do not exceed, the debt cap.
+        for expected in 1..=SPLITTER_BLOCK_MEMORY_ITEMS {
+            let mut discarded = Vec::new();
+            net.tiles[output1]
+                .lanes[0]
+                .take_all(99, &mut discarded);
+            assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+            net.step_splitter_exit(input, sid);
+            assert_eq!(net.splitter_memory[sid][0][0], Some((0, expected)));
+        }
+
+        // Once the remembered output recovers, each accepted item pays one
+        // unit of debt; the fifth return clears the episode entirely.
+        let mut discarded = Vec::new();
+        net.tiles[output0]
+            .lanes[0]
+            .take_all(99, &mut discarded);
+        for expected in (0..SPLITTER_BLOCK_MEMORY_ITEMS).rev() {
+            let mut discarded = Vec::new();
+            net.tiles[output1]
+                .lanes[0]
+                .take_all(99, &mut discarded);
+            assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+            net.step_splitter_exit(input, sid);
+            let memory = (expected > 0).then_some((0, expected));
+            assert_eq!(net.splitter_memory[sid][0][0], memory);
+            net.tiles[output0]
+                .lanes[0]
+                .take_all(99, &mut discarded);
+        }
+        assert_eq!(net.splitter_stats[sid].memory_expired[0], 1);
+    }
+
+    #[test]
+    fn splitter_blocked_memory_is_isolated_between_physical_halves() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East),
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let first_half = net.tile_at((1, 0)).unwrap();
+        let second_half = net.tile_at((1, 1)).unwrap();
+        let first_output = net.tile_at((2, 0)).unwrap();
+        let second_output = net.tile_at((2, 1)).unwrap();
+        let sid = match net.tiles[first_half].kind {
+            TileKind::Splitter { id, .. } => id,
+            _ => panic!("expected splitter input half"),
+        };
+        let first_half_ix = usize::from(first_half > second_half);
+        let second_half_ix = 1 - first_half_ix;
+
+        // Seed only the first physical half. Set the shared physical toggle
+        // so the second half prefers the first branch; its independent
+        // remembered output must not affect that choice.
+        net.splitter_memory[sid][first_half_ix][0] = Some((0, 5));
+        net.splitter_toggle[sid][0] = false;
+        assert!(net.tiles[second_half].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+
+        net.step_splitter_exit(second_half, sid);
+
+        assert_eq!(net.tiles[first_output].lanes[0].occupancy(), 1);
+        assert_eq!(net.tiles[second_output].lanes[0].occupancy(), 0);
+        assert_eq!(net.splitter_memory[sid][second_half_ix][0], None);
+        assert_eq!(net.splitter_memory[sid][first_half_ix][0], Some((0, 5)));
+    }
+
+    #[test]
+    fn splitter_round_robin_toggle_alternates_physical_branches() {
+        let ents = vec![
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let first_half = net.tile_at((1, 0)).unwrap();
+        let second_half = net.tile_at((1, 1)).unwrap();
+        let first_output = net.tile_at((2, 0)).unwrap();
+        let second_output = net.tile_at((2, 1)).unwrap();
+        let sid = match net.tiles[first_half].kind {
+            TileKind::Splitter { id, .. } => id,
+            _ => panic!("expected splitter input half"),
+        };
+
+        assert!(net.tiles[first_half].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(first_half, sid);
+        assert!(net.tiles[second_half].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(second_half, sid);
+
+        assert_eq!(net.tiles[first_output].lanes[0].occupancy(), 1);
+        assert_eq!(net.tiles[second_output].lanes[0].occupancy(), 1);
+    }
+
+    #[test]
+    fn splitter_memory_output_index_stays_half_local() {
+        let ents = vec![
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let first_half = net.tile_at((1, 0)).unwrap();
+        let second_half = net.tile_at((1, 1)).unwrap();
+        let first_output = net.tile_at((2, 0)).unwrap();
+        let second_output = net.tile_at((2, 1)).unwrap();
+        let sid = match net.tiles[first_half].kind {
+            TileKind::Splitter { id, .. } => id,
+            _ => panic!("expected splitter input half"),
+        };
+        let second_half_ix = usize::from(second_half > first_half);
+
+        // Index 0 means second_output for this half, even though it means
+        // first_output for the other physical half.
+        net.splitter_memory[sid][second_half_ix][0] = Some((0, 1));
+        assert!(net.tiles[second_half].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(second_half, sid);
+
+        assert_eq!(net.tiles[first_output].lanes[0].occupancy(), 0);
+        assert_eq!(net.tiles[second_output].lanes[0].occupancy(), 1);
+        assert_eq!(net.splitter_memory[sid][second_half_ix][0], None);
+    }
+
+    #[test]
+    fn downstream_line_stays_on_the_splitter_half_branch() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East),
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let net = NetworkBuilder::build(&ents);
+        let input = net.tile_at((0, 0)).unwrap();
+        let own_half = net.tile_at((1, 0)).unwrap();
+        let own_output = net.tile_at((2, 0)).unwrap();
+        let sibling_output = net.tile_at((2, 1)).unwrap();
+
+        let path = net.downstream_line_nodes(input, 0);
+        assert!(path.contains(&(own_half, 0)));
+        assert!(path.contains(&(own_output, 0)));
+        assert!(!path.contains(&(sibling_output, 0)));
+    }
 
     /// **I5**: an inserter drops on the FAR lane — the one on the opposite
     /// side from where it stands. Asserted at reach 1 *and* reach 2,
@@ -791,18 +1483,26 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
             let tile = net.tile_at((10, 5)).unwrap();
             let item = ItemId(1);
 
-            assert!(net.drop_onto_tile(tile, (10 + dist, 5), item), "east drop, dist {dist}");
+            assert!(
+                net.drop_onto_tile(tile, (10 + dist, 5), item),
+                "east drop, dist {dist}"
+            );
             assert_eq!(
-                net.tiles[tile].lanes[1].occupancy(), 1,
+                net.tiles[tile].lanes[1].occupancy(),
+                1,
                 "dist {dist}: a dropper on the east (near) side must fill the FAR lane 1"
             );
             assert_eq!(net.tiles[tile].lanes[0].occupancy(), 0, "dist {dist}");
 
             let mut net = NetworkBuilder::build(&[belt("transport-belt", 10, 5, Dir::South)]);
             let tile = net.tile_at((10, 5)).unwrap();
-            assert!(net.drop_onto_tile(tile, (10 - dist, 5), item), "west drop, dist {dist}");
+            assert!(
+                net.drop_onto_tile(tile, (10 - dist, 5), item),
+                "west drop, dist {dist}"
+            );
             assert_eq!(
-                net.tiles[tile].lanes[0].occupancy(), 1,
+                net.tiles[tile].lanes[0].occupancy(),
+                1,
                 "dist {dist}: a dropper on the west (far-side) must fill lane 0"
             );
             assert_eq!(net.tiles[tile].lanes[1].occupancy(), 0, "dist {dist}");
@@ -843,7 +1543,7 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
     #[test]
     fn lone_side_feed_is_a_curve_not_a_sideload() {
         let ents = vec![
-            belt("transport-belt", 0, 0, Dir::East),  // feeds (1,0) from its west side
+            belt("transport-belt", 0, 0, Dir::East), // feeds (1,0) from its west side
             belt("transport-belt", 1, 0, Dir::South), // turns south
         ];
         let net = NetworkBuilder::build(&ents);
@@ -891,6 +1591,40 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
         );
     }
 
+    #[test]
+    fn sideload_enters_at_the_measured_side_dependent_position() {
+        for (side_y, target_lane, expected_slot) in [
+            (-1, 0, 3), // target-left side: late entry at 188/256 of the tile
+            (1, 1, 1),  // target-right side: early entry at 68/256 of the tile
+        ] {
+            let ents = vec![
+                belt("transport-belt", 0, 0, Dir::East),
+                belt("transport-belt", 1, 0, Dir::East),
+                belt(
+                    "transport-belt",
+                    1,
+                    side_y,
+                    if side_y < 0 { Dir::South } else { Dir::North },
+                ),
+            ];
+            let mut net = NetworkBuilder::build(&ents);
+            let side = net.tile_at((1, side_y)).unwrap();
+            let target = net.tile_at((1, 0)).unwrap();
+            assert!(net.tiles[side].lanes[0].try_insert(ItemId(7)));
+            for _ in 0..(SLOTS_PER_TILE - 1) {
+                net.tiles[side].lanes[0].shift_forward();
+            }
+            let downstream = net.tiles[side].downstream.unwrap();
+            net.step_plain_exit(side, Some(downstream));
+
+            assert_eq!(downstream.tile, target);
+            assert_eq!(
+                net.tiles[target].lanes[target_lane].slots_debug()[expected_slot],
+                Some(ItemId(7))
+            );
+        }
+    }
+
     /// **U7**: sideloading onto an underground INPUT fills the **far**
     /// lane, the opposite of B8's near-lane rule for plain belt.
     ///
@@ -910,7 +1644,9 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
                 ug("underground-belt", 4, 0, Dir::East, "output"),
             ];
             let net = NetworkBuilder::build(&ents);
-            let side = net.tiles[net.tile_at((fx, fy)).unwrap()].downstream.unwrap();
+            let side = net.tiles[net.tile_at((fx, fy)).unwrap()]
+                .downstream
+                .unwrap();
             let near = near_lane_from(Dir::East, (1, 0), (fx, fy));
             assert_eq!(
                 side.lanes,
@@ -998,5 +1734,178 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
                 .any(|n| matches!(n, TopologyNote::CycleInUpdateOrder { .. })),
             "a loop must be recorded, not silently ordered"
         );
+    }
+
+    #[test]
+    fn connected_lane_segments_share_a_coordinate_system() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East),
+            belt("transport-belt", 1, 0, Dir::East),
+        ];
+        let net = NetworkBuilder::build(&ents);
+        let a = net.tile_at((0, 0)).unwrap();
+        let b = net.tile_at((1, 0)).unwrap();
+        for lane in 0..2 {
+            let (a_component, a_base) = net.lane_segment(a, lane).unwrap();
+            let (b_component, b_base) = net.lane_segment(b, lane).unwrap();
+            assert_eq!(a_component, b_component);
+            assert!((b_base - a_base).abs() == SLOTS_PER_TILE as f64);
+        }
+    }
+
+    #[test]
+    fn curve_lane_segments_use_inner_and_outer_lengths() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East),
+            belt("transport-belt", 1, 0, Dir::South),
+        ];
+        let net = NetworkBuilder::build(&ents);
+        let source = net.tile_at((0, 0)).unwrap();
+        let target = net.tile_at((1, 0)).unwrap();
+
+        for lane in 0..2 {
+            let (source_component, source_base) = net.lane_segment(source, lane).unwrap();
+            let (target_component, target_base) = net.lane_segment(target, lane).unwrap();
+            assert_eq!(source_component, target_component);
+            let expected = if lane == 1 {
+                INNER_TURN_SLOTS
+            } else {
+                OUTER_TURN_SLOTS
+            };
+            assert!((target_base - source_base - expected).abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn turn_merge_curve_fixture_fills_target_by_tick_twenty_two() {
+        let ents = vec![
+            belt("express-transport-belt", 0, 0, Dir::East),
+            belt("express-transport-belt", 1, 0, Dir::South),
+            belt("express-transport-belt", 1, 1, Dir::West),
+            belt("express-transport-belt", 2, 1, Dir::West),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let source = net.tile_at((0, 0)).unwrap();
+        let back = net.tile_at((2, 1)).unwrap();
+        let target = net.tile_at((1, 1)).unwrap();
+        for _ in 0..4 {
+            assert!(net.tiles[source].lanes[0].try_insert_anywhere(ItemId(1)));
+            assert!(net.tiles[back].lanes[0].try_insert_anywhere(ItemId(2)));
+        }
+
+        for _ in 0..22 {
+            net.tick();
+        }
+
+        assert_eq!(net.tiles[target].lanes[0].occupancy(), 4);
+        assert_eq!(net.tiles[target].lanes[1].occupancy(), 4);
+    }
+
+    #[test]
+    fn inner_turn_merge_curve_fixture_keeps_one_item_on_the_curve() {
+        let ents = vec![
+            belt("express-transport-belt", 0, 0, Dir::East),
+            belt("express-transport-belt", 1, 0, Dir::South),
+            belt("express-transport-belt", 1, 1, Dir::West),
+            belt("express-transport-belt", 2, 1, Dir::West),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let source = net.tile_at((0, 0)).unwrap();
+        let curve = net.tile_at((1, 0)).unwrap();
+        let back = net.tile_at((2, 1)).unwrap();
+        let target = net.tile_at((1, 1)).unwrap();
+        for _ in 0..4 {
+            assert!(net.tiles[source].lanes[1].try_insert_anywhere(ItemId(1)));
+            assert!(net.tiles[back].lanes[0].try_insert_anywhere(ItemId(2)));
+        }
+
+        // The exact Factorio line-2 probe admits at ticks 5, 8, and 10.
+        // The discrete inner merge is one tick behind the first and third
+        // admissions, but preserves the measured three-on-target/one-on-arc
+        // steady state without applying the outer-lane packing rule.
+        for _ in 0..5 {
+            net.tick();
+        }
+        assert_eq!(net.tiles[target].lanes[1].occupancy(), 0);
+        net.tick();
+        assert_eq!(net.tiles[target].lanes[1].occupancy(), 1);
+        net.tick();
+        net.tick();
+        assert_eq!(net.tiles[target].lanes[1].occupancy(), 2);
+        net.tick();
+        net.tick();
+        assert_eq!(net.tiles[target].lanes[1].occupancy(), 2);
+        net.tick();
+        assert_eq!(net.tiles[target].lanes[1].occupancy(), 3);
+        for _ in 0..19 {
+            net.tick();
+        }
+
+        assert_eq!(net.tiles[target].lanes[0].occupancy(), 4);
+        assert_eq!(net.tiles[target].lanes[1].occupancy(), 3);
+        assert_eq!(net.tiles[curve].lanes[1].occupancy(), 1);
+    }
+
+    #[test]
+    fn left_turn_merge_uses_the_orientation_aware_inner_lane() {
+        let ents = vec![
+            belt("express-transport-belt", 0, 0, Dir::East),
+            belt("express-transport-belt", 1, 0, Dir::North),
+            belt("express-transport-belt", 1, -1, Dir::West),
+            belt("express-transport-belt", 2, -1, Dir::West),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let source = net.tile_at((0, 0)).unwrap();
+        let curve = net.tile_at((1, 0)).unwrap();
+        let back = net.tile_at((2, -1)).unwrap();
+        let target = net.tile_at((1, -1)).unwrap();
+
+        // East -> North is the opposite chirality from the existing
+        // East -> South fixture, so lane 0 is the inner lane here.
+        assert_eq!(net.tiles[curve].lanes[0].slots_debug().len(), 1);
+        assert_eq!(
+            net.tiles[curve].lanes[1].slots_debug().len(),
+            SLOTS_PER_TILE
+        );
+        for _ in 0..4 {
+            assert!(net.tiles[source].lanes[0].try_insert_anywhere(ItemId(1)));
+            assert!(net.tiles[back].lanes[1].try_insert_anywhere(ItemId(2)));
+        }
+
+        for _ in 0..30 {
+            net.tick();
+        }
+
+        assert_eq!(net.tiles[target].lanes[1].occupancy(), 4);
+        assert_eq!(net.tiles[target].lanes[0].occupancy(), 1);
+        assert_eq!(net.tiles[curve].lanes[0].occupancy(), 1);
+    }
+
+    #[test]
+    fn merged_feeders_share_a_component_but_not_a_premerge_line() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East),
+            belt("transport-belt", 1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            // A south-facing side feeder joins the target's left lane.
+            belt("transport-belt", 1, -1, Dir::South),
+        ];
+        let net = NetworkBuilder::build(&ents);
+        let main = net.tile_at((0, 0)).unwrap();
+        let target = net.tile_at((1, 0)).unwrap();
+        let side = net.tile_at((1, -1)).unwrap();
+        let downstream = net.tile_at((2, 0)).unwrap();
+
+        let (main_component, _) = net.lane_segment(main, 0).unwrap();
+        let (side_component, _) = net.lane_segment(side, 0).unwrap();
+        let (target_component, _) = net.lane_segment(target, 0).unwrap();
+        assert_eq!(main_component, side_component);
+        assert_eq!(side_component, target_component);
+
+        let target_line = net.downstream_line_nodes(target, 0);
+        assert!(target_line.contains(&(target, 0)));
+        assert!(target_line.contains(&(downstream, 0)));
+        assert!(!target_line.contains(&(main, 0)));
+        assert!(!target_line.contains(&(side, 0)));
     }
 }

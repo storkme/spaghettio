@@ -521,9 +521,11 @@ const FIXTURES: &[Fixture] = &[
 struct Measurement {
     label: &'static str,
     target: String,
-    /// "produced" or "delivered" — selected by the target's `is_fluid`
-    /// flag (fluids never enter `produced_per_s`; matches
-    /// `sweep_corpus.rs`'s metric-matching rule).
+    /// Machine production, the calibration metric for this meter-only
+    /// stability tripwire. This intentionally differs from the CLI's gate
+    /// metric for solid targets, which mirrors the sim verdict's delivered
+    /// rate; fluid rows remain excluded from bless/check because they are not
+    /// yet calibrated against a real Factorio baseline.
     metric: &'static str,
     /// True when the target is a fluid. Excluded from bless/check — see
     /// the module doc's "Fluid targets are excluded" section — but still
@@ -582,17 +584,14 @@ fn build_and_measure(f: &Fixture) -> Result<Measurement, String> {
     let report = factory.measure(WARMUP, WINDOW);
 
     let planned = report.planned_per_s.get(&target.item).copied().unwrap_or(0.0);
-    let (measured, metric) = if target.is_fluid {
-        (
-            report.delivered_per_s.get(&target.item).copied().unwrap_or(0.0),
-            "delivered",
-        )
-    } else {
-        (
-            report.produced_per_s.get(&target.item).copied().unwrap_or(0.0),
-            "produced",
-        )
-    };
+    // This tripwire watches the target machine's production series so a
+    // downstream sink change does not masquerade as a meter regression. The
+    // CLI gate uses delivered for solids to mirror the simulator verdict;
+    // that is a deliberate decision boundary, not an accidental mismatch.
+    let (measured, metric) = (
+        report.produced_per_s.get(&target.item).copied().unwrap_or(0.0),
+        "produced",
+    );
     let deficit_pct = if planned > 0.0 {
         (measured / planned - 1.0) * 100.0
     } else {
@@ -1212,7 +1211,7 @@ mod tests {
     fn fluid_measurement(label: &'static str, deficit_pct: f64) -> Measurement {
         let mut m = measurement(label, deficit_pct, 100, true);
         m.is_fluid = true;
-        m.metric = "delivered";
+        m.metric = "produced";
         m
     }
 

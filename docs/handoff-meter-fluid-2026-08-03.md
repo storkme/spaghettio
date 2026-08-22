@@ -88,11 +88,13 @@ Clippy clean; 51 unit tests pass. Full corpus sweep ~3–4 min.
 
 1. **`sweep_corpus.rs` had THREE metric bugs** (all fixed):
    (a) it picked the alphabetically-first planned item → must use
-   `manifest.targets[0]`; (b) for the meter rate it read `produced_per_s` only →
-   fluids live in `delivered_per_s`; (c) the metric choice must be based on
-   `manifest.targets[0].is_fluid`, NOT on whether the sim report has a produced
-   value (the sim reports both for fluid targets). If you re-derive or extend
-   this, re-check all three.
+   `manifest.targets[0]`; (b) it read only one meter rate even though the
+   report carries both `produced_per_s` and `delivered_per_s`; (c) it treated
+   the sim report's fluid values as calibrated just because the sim reports
+   both rates. The current sweep compares `produced` for solid targets and
+   keeps fluid rows visible but marks them `excluded-fluid` without counting
+   them in the calibration total. If you re-derive or extend this, re-check
+   the target's `is_fluid` flag before judging a delta.
 2. **`ingest_real_fixtures::topology_builds_cleanly_on_every_fixture` FAILS** on
    `rfc057-topology-free-mil5`: "only 719/1026 tiles link downstream". This is a
    belt-topology check, **NOT** the fluid change — attributed to the **#567
