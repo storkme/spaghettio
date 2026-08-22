@@ -363,13 +363,28 @@ jobs:
           # empty-review failure class those comments document, silently and with no file
           # change to review. Set them in the same visit.
           #
-          # AND MIND THE JOB CAP. pass-timeout-seconds is now settable from Settings, but
-          # `timeout-minutes: 90` on the job is not. The budget arithmetic below assumes
-          # 1800s; past roughly 2400s the worst case exceeds 90 minutes and the JOB cap
-          # fires mid-pass instead, which is strictly worse than a pass timeout — it skips
-          # the degraded report entirely, so there is no annotation and no failure notice,
-          # just a red required check with nothing explaining it. Raise timeout-minutes in
-          # the same PR if you raise this past ~2400.
+          # AND MIND THE JOB CAP. pass-timeout-seconds is now settable from Settings;
+          # `timeout-minutes: 90` on the job is not. From the budget derivation at the top
+          # of this job, the parallel worst case is
+          #     pass + 1200s merge + ~300s cold build
+          # so it meets the 5400s cap at pass = 5400 - 1500 = 3900s. Below that there is
+          # real margin (at 2400s the worst case is 65 min, 25 min spare); at or above it
+          # the JOB cap fires mid-pass instead, which is strictly worse than a pass
+          # timeout — it skips the degraded report entirely, so there is no annotation and
+          # no failure notice, just a red required check with nothing explaining it. Raise
+          # timeout-minutes in the same PR if you take this near 3900.
+          #
+          # That knee assumes PARALLEL passes. The sequential fallback is already over the
+          # cap at today's 1800 (3 x 1800 + 1200 = 110 min), so if a future action version
+          # serialises them the timeout variable is not what saves you — see the job
+          # comment, which says to re-check parallelism across an upgrade.
+          #
+          # The trade this whole block makes, stated plainly: a variable moves without a
+          # commit, so these values stop having a git history. That is the point — it is
+          # what lets you unblock a stuck required check without a PR through the gate
+          # that is stuck — but it means `git log` on this file no longer tells you what
+          # the reviewer was actually run with. The review events in Loki do: every one
+          # records model and k as emitted.
           model: ${{ vars.SECOND_OPINION_MODEL || 'deepseek/deepseek-v4-flash-0731' }}
           # Flash-tier model, so union 3 independent agentic passes — the
           # recall lever the second-opinion README prescribes for weaker

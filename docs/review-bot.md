@@ -243,6 +243,46 @@ Validation history: planted-bug canary #330 (2026-07-21) — first-ever bot
 comment correctly flagged the bug inline with a committable fix; canary
 #368 re-validated after the installer overwrite was restored in #369.
 
+## Tuning knobs (repo variables)
+
+Six inputs are set through repo variables rather than literals in the workflow. Each falls
+back to the value shown when unset, so an untouched repo behaves exactly as before.
+
+| Variable | Default | What it is |
+|---|---|---|
+| `SECOND_OPINION_MODEL` | `deepseek/deepseek-v4-flash-0731` | Review model |
+| `SECOND_OPINION_K` | `3` | Independent passes, union-merged |
+| `SECOND_OPINION_MAX_TOKENS` | `65536` | Per-turn output cap — the model's own limit |
+| `SECOND_OPINION_MAX_DIFF_CHARS` | `300000` | Diff budget sent to the model |
+| `SECOND_OPINION_PASS_TIMEOUT` | `1800` | Wall clock per pass, seconds |
+| `SECOND_OPINION_MAX_PASS_TOKENS` | `6000000` | Spend ceiling per pass |
+
+**Why variables:** `second-opinion` is a required check on `main`. A model id that is wrong,
+withdrawn, or reliably erroring blocks every merge on the repo — including the PR that
+would fix it. As a variable, unblocking is Settings → Variables; as a literal it was a PR
+through the gate that is already stuck.
+
+**They are coupled.** Every one of the last four is calibrated to the *current* model —
+`65536` is its cap, `300000` assumes its 1M context, `1800` is measured against its speed
+on these diffs, `6000000` against its per-pass burn here. Changing `SECOND_OPINION_MODEL`
+alone leaves four budgets pointing at the model you swapped away from, which re-triggers
+the empty-review failure classes in the history section above. Set them in one visit.
+
+**Two edges worth knowing:**
+
+- The fallback protects the *unset* case only. A typo'd id, or `SECOND_OPINION_K=0` (truthy
+  to GitHub, being a non-empty string), beats the default and blocks the gate exactly as a
+  bad literal would. Unsetting the variable is the cure.
+- `SECOND_OPINION_PASS_TIMEOUT` interacts with the job's fixed `timeout-minutes: 90`. The
+  parallel worst case is `pass + 1200s merge + ~300s build`, so it reaches the cap at
+  `3900s`. At or past that the job cap fires mid-pass, which skips the degraded report
+  entirely — no annotation, no failure notice, just a red check with nothing explaining it.
+  Raise `timeout-minutes` in the same change.
+
+**No git trail.** A variable changes without a commit, so `git log` on the workflow no
+longer tells you what a given review actually ran with. The Loki review events do — each
+one records `model` and `k` as emitted.
+
 ## Merge-time gating (the review is REQUIRED)
 
 **`claude-review` is a required status check on `main`** — enabled 2026-07-29
