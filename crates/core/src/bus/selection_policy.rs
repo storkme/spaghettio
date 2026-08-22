@@ -322,6 +322,14 @@ impl IssueProfile {
                 // would resolve the wrong way (#698 review round 3).
                 // The gate's own observation is not lost; it rides in
                 // the refusal reason above.
+                //
+                // `score` above STAYS `Some`, and the asymmetry is the
+                // point (#698 review round 7): a score is a
+                // MEASUREMENT, which the refusal does not invalidate —
+                // the layout really did have that density and entity
+                // count. `accepted` is a VERDICT about admitting the
+                // layout, and there is no admitting a discarded one.
+                // v1 has neither, because it never measured.
                 accepted: None,
                 accepted_reason: None,
                 counts: Some(IssueCounts {
@@ -1133,6 +1141,23 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
         return None;
     }
 
+    // At most one stage may defer. The chain holds ONE deferred answer
+    // and a second deferring stage would overwrite the first with
+    // nothing noticing — the same policy-authoring class as two
+    // incumbents, so it gets the same treatment rather than a comment
+    // saying it would need thought (#698 review round 7).
+    debug_assert!(
+        policy
+            .program
+            .stages
+            .iter()
+            .filter(|s| s.on_incumbent_win == ChainBehavior::DeferToRemainingPairwiseStages)
+            .count()
+            <= 1,
+        "a program may declare at most one deferring stage; this one declares several, \
+         and the chain holds only one held answer"
+    );
+
     let incumbent = policy.incumbent_index();
     let incumbent_produced = incumbent.is_some_and(|i| profiles[i].produced());
     let produced_count = profiles.iter().filter(|p| p.produced()).count();
@@ -1814,6 +1839,37 @@ mod tests {
     // printing a panic trace into every suite run. The release
     // behaviour it guards (decide nothing rather than rank the wrong
     // producers) is stated at the call site.
+
+    /// The NaN tie-break direction, pinned because #698 review round 7
+    /// claimed v2 diverges from v1 here and the claim does not survive
+    /// working v1's comparator out.
+    ///
+    /// v1: `max_by(|(ia, a), (ib, b)| a.partial_cmp(b)
+    /// .unwrap_or(Equal).then(ib.cmp(ia)))`. A NaN makes `partial_cmp`
+    /// return `None` → `Equal`, so the index term decides — and it is
+    /// REVERSED (`ib.cmp(ia)`), which makes the SMALLER index compare
+    /// as Greater, so the max is the earliest index. v2 keeps its
+    /// incumbent unless a challenger is strictly ahead, and
+    /// `partial_cmp` against a NaN is never `Some(Greater)` — also the
+    /// earliest index. Same answer, by two routes.
+    #[test]
+    fn a_nan_score_keeps_the_earliest_registration_as_v1_does() {
+        let mut ps = blank();
+        ps[NATIVE] = produced(f64::NAN, true);
+        ps[CELLS] = produced(5.0, true);
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d,
+            Decision { winner: NATIVE, stage: SelectionStage::BestAccepted },
+            "v1's reversed index tie-break makes the earliest index the max on a NaN; \
+             v2's strictly-better-only fold keeps the same one"
+        );
+        // …and the direction is not an artifact of NaN sitting first.
+        let mut swapped = blank();
+        swapped[NATIVE] = produced(5.0, true);
+        swapped[CELLS] = produced(f64::NAN, true);
+        assert_eq!(decide(&swapped, &SelectionPolicy::current()).unwrap().winner, NATIVE);
+    }
 
     #[test]
     fn best_accepted_takes_the_highest_score_ties_to_the_earlier() {

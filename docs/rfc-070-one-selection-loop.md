@@ -1362,3 +1362,35 @@ fixtures / docs split per the churn norm).
     signals — the drifted-cell guard from round 1 is exactly that fix,
     and on a NON-drifted cell v1 equals the baseline, so the two
     comparisons cannot disagree.*
+- *2026-08-21 — **#698 review round 7: NO BLOCKERS, NO MAJORS**, seven
+  minors and four nits, every one a re-raise or refutable. The campaign
+  note worth keeping is about the INSTRUMENT: across seven rounds the
+  bot raised "the corpus is not CI-gated" seven times and the
+  unreachable-arm assert four times, while the four findings that
+  actually changed the design all appeared exactly once each. **A
+  re-raise carries no additional evidence, and the count of raises is
+  not a measure of a finding's weight** — the same lesson #694's
+  close-out recorded about its own six rounds.*
+  - *Refuted with a worked receipt, and this is the round's one
+    genuinely new claim: "the NaN tie-break direction diverges from v1
+    — v1 keeps the later candidate, v2 the earlier". It does not. v1's
+    comparator is `a.partial_cmp(b).unwrap_or(Equal).then(ib.cmp(ia))`
+    under `max_by`; the index term is REVERSED, so a smaller index
+    compares as Greater and the max is the EARLIEST index — which is
+    what v2's strictly-better-only fold also yields, since `partial_cmp`
+    against a NaN is never `Some(Greater)`. The reading dropped the
+    reversal. Now pinned both directions by
+    `a_nan_score_keeps_the_earliest_registration_as_v1_does`, so the
+    claim is answerable from the test rather than from a re-derivation.*
+  - *Absorbed: a `debug_assert` that a program declares at most ONE
+    deferring stage — the chain holds a single held answer and a second
+    would overwrite it silently, which is the same policy-authoring
+    class as two incumbents and now gets the same treatment. And the
+    `score: Some` / `accepted: None` asymmetry on a produce-time refusal
+    is now explained where it lives: a score is a MEASUREMENT the
+    refusal does not invalidate, `accepted` is a VERDICT about admitting
+    a layout that no longer exists. Refuted: the corpus's two comparator
+    blind spots (this PR's own finding, disclosed in three places), the
+    speculative third-scoped-producer fold (v2's fold reduces exactly to
+    v1's two-valued join on the two that exist), and the unreachable-arm
+    assert for the fourth time.*
