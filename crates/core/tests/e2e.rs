@@ -193,13 +193,9 @@ fn run_e2e_with_strategy(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         &FxHashSet::default(),
-        strategy,
-        spaghettio_core::bus::layout::RowLayout::default(),
-        spaghettio_core::bus::layout::SurplusPolicy::default(),
-        true,
+        HarnessOptions { belt_tier, strategy, ..Default::default() },
     )
 }
 
@@ -220,13 +216,9 @@ fn run_e2e_with_strategy_and_row_layout(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         &FxHashSet::default(),
-        strategy,
-        row_layout,
-        spaghettio_core::bus::layout::SurplusPolicy::default(),
-        true,
+        HarnessOptions { belt_tier, strategy, row_layout, ..Default::default() },
     )
 }
 
@@ -236,6 +228,23 @@ fn run_e2e_with_strategy_and_row_layout(
 /// strategy × row-layout combination in isolation; the default engine
 /// behavior (candidate competing) is the sweep's separate `default`
 /// column.
+///
+/// "Pure" means **the horizontal-stack candidate is off**, and only that
+/// (#699 review rounds 2 and 4 read it as "no candidate competes"). Every
+/// other candidate — `cell-composed` included — runs exactly as
+/// production has it, and so does the L2 inserter ladder. Before RFC-070
+/// W2c that was accidentally untrue: the harness pinned
+/// `cell_composition: Off` and `inserter_capacity: 0`, so the
+/// cell-composed arm and the shipped ladder were absent from these
+/// columns AND from the `default` column, by fossil rather than by
+/// design. Both now apply to both, which keeps the sweep's comparison
+/// apples-to-apples; restoring the fossil in the pure columns alone would
+/// not — it would make the baseline columns and the `default` column
+/// differ on two axes instead of the one the sweep is about.
+/// Consequence for readers: **`full_knob_sweep` tables produced before
+/// 2026-08-21 are not comparable to ones produced after**, and a pure
+/// cell can now be decided by a layout family the pre-W2c tables never
+/// saw.
 fn run_e2e_pure_combo(
     test_name: &str,
     item: &str,
@@ -251,13 +260,12 @@ fn run_e2e_pure_combo(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         &FxHashSet::default(),
-        strategy,
-        row_layout,
-        spaghettio_core::bus::layout::SurplusPolicy::default(),
-        false,
+        // The one deliberate non-default in any wrapper, and the whole
+        // point of this one.
+        HarnessOptions { belt_tier, strategy, row_layout, horizontal_candidate: false,
+            ..Default::default() },
     )
 }
 
@@ -275,13 +283,9 @@ fn run_e2e_with_exclusions(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         excluded_recipes,
-        spaghettio_core::bus::layout::LayoutStrategy::Pooled,
-        spaghettio_core::bus::layout::RowLayout::default(),
-        spaghettio_core::bus::layout::SurplusPolicy::default(),
-        true,
+        HarnessOptions { belt_tier, ..Default::default() },
     )
 }
 
@@ -304,32 +308,285 @@ fn run_e2e_with_exclusions_and_surplus_policy(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         excluded_recipes,
-        spaghettio_core::bus::layout::LayoutStrategy::Pooled,
-        spaghettio_core::bus::layout::RowLayout::default(),
-        surplus_policy,
-        true,
+        HarnessOptions { belt_tier, surplus_policy, ..Default::default() },
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The knobs a `run_e2e*` caller may vary. Everything NOT listed here is
+/// the engine's shipped default, by construction — see [`harness_options`].
+///
+/// `Default` is deliberately **manual and derived from the engine's own
+/// group defaults at runtime** rather than `#[derive(Default)]`. A derived
+/// impl would give `horizontal_candidate: false` (the `bool` default),
+/// which is not the engine default (`true`) — i.e. it would recreate the
+/// exact class of bug this struct exists to kill, one level up.
+struct HarnessOptions<'a> {
+    belt_tier: Option<&'a str>,
+    strategy: layout::LayoutStrategy,
+    row_layout: layout::RowLayout,
+    surplus_policy: layout::SurplusPolicy,
+    horizontal_candidate: bool,
+}
+
+impl Default for HarnessOptions<'_> {
+    fn default() -> Self {
+        // Read through the engine's group defaults, never re-spelled here:
+        // if a default flips, this follows it with no edit.
+        let axes = layout::SearchAxes::default();
+        let constraints = layout::UserConstraints::default();
+        Self {
+            belt_tier: None,
+            strategy: axes.strategy,
+            row_layout: axes.row_layout,
+            surplus_policy: constraints.surplus_policy,
+            horizontal_candidate: axes.horizontal_candidate,
+        }
+    }
+}
+
+/// Build the `LayoutOptions` every `run_e2e*` fixture runs under: **true
+/// engine defaults**, overridden only where a test's own parameters say so.
+///
+/// RFC-070 W2c (#689). This replaced a flat `LayoutOptions` struct literal
+/// that carried TWO fossils — fields spelled `Default::default()` or a
+/// literal that were correct when written and went stale when the engine
+/// default moved underneath them:
+///
+/// * `cell_composition: Default::default()` → the ENUM's `#[default]`,
+///   `Off`, next to a `..Default::default()` that would have given the
+///   STRUCT default, `Candidate` (flipped by RFC-051 Phase B, 2026-07-22).
+///   The suite therefore never exercised the cell-composed candidate arm.
+/// * `inserter_capacity: 0` → correct at RFC-049 Phase 1 (`40fd48dc`), stale
+///   two days later when #383 flipped the default to
+///   `common::DEFAULT_INSERTER_CAPACITY` = 2. The suite ran a different
+///   inserter ladder than production.
+///
+/// Both are dead here: [`LayoutOptions::from_groups`] takes whole groups,
+/// and each group's `Default` is a MANUAL impl that matches the engine
+/// defaults field for field (`bus::layout`'s field legend, "the fossil this
+/// split guards against"). The remaining rule for anyone editing this
+/// function: **never spell `field: Default::default()` inside one of these
+/// group literals.** Per-field `Default::default()` resolves to that
+/// field's own type's default and silently ignores the `..Default::default()`
+/// spread — that is the trap, and it is still reachable one level down.
+/// Spell a real value, or leave the field to the spread.
+fn harness_options(o: HarnessOptions<'_>) -> layout::LayoutOptions {
+    layout::LayoutOptions::from_groups(
+        layout::UserConstraints {
+            max_belt_tier: o.belt_tier.map(|s| s.to_string()),
+            surplus_policy: o.surplus_policy,
+            ..Default::default()
+        },
+        layout::SearchAxes {
+            strategy: o.strategy,
+            row_layout: o.row_layout,
+            horizontal_candidate: o.horizontal_candidate,
+            ..Default::default()
+        },
+        layout::EngineTuning::default(),
+    )
+}
+
+/// The guard on [`harness_options`]: with nothing overridden, the harness
+/// must run EXACTLY what production ships. Both RFC-070 W2c fossils are
+/// named individually as well as covered by the group comparison, because
+/// the whole failure mode was that a stale value looks like a deliberate
+/// one — a reader of a group assert cannot tell which field regressed.
+///
+/// Non-ignored and free: no solve, no layout. Restoring either fossil
+/// fails it (checked by doing so, RFC-070 W2c).
+///
+/// Compared against `LayoutOptions::default()`'s OWN views, not against
+/// `UserConstraints::default()` et al (#699 review): the group defaults
+/// are a second, hand-written copy of the engine defaults, so comparing
+/// this harness's product against them would pass whenever both copies
+/// were wrong the same way. `LayoutOptions::default()` is the value the
+/// engine actually ships. (That the two copies agree is a separate
+/// property, asserted by `layout_options_group_defaults_match_facade` in
+/// `bus::layout`.)
+#[test]
+fn harness_options_are_engine_defaults() {
+    let o = harness_options(HarnessOptions::default());
+    let shipped = layout::LayoutOptions::default();
+    assert_eq!(o.constraints(), shipped.constraints(), "user-pinned group drifted");
+    assert_eq!(o.axes(), shipped.axes(), "search-axis group drifted");
+    assert_eq!(o.engine_tuning(), shipped.engine_tuning(), "engine-tuning group drifted");
+    assert_eq!(
+        o.cell_composition,
+        spaghettio_core::bus::cells::CellComposition::Candidate,
+        "cells-off fossil is back (RFC-070 W2c): the suite would stop exercising \
+         the cell-composed candidate arm and nothing else would notice",
+    );
+    assert_eq!(
+        o.inserter_capacity,
+        spaghettio_core::common::DEFAULT_INSERTER_CAPACITY,
+        "inserter_capacity fossil is back (RFC-070 W2c): the suite would run a \
+         different inserter ladder than production",
+    );
+
+    // (Round 2 added two assertions here pinning `LayoutStrategy::Pooled`
+    // and `horizontal_candidate == true`, because every `run_e2e*` wrapper
+    // spelled those as hard literals and so bypassed the spread. Round 6
+    // pointed out that an assertion re-spelling an engine default is
+    // itself a second copy of it — the shape this whole track is about. So
+    // the wrappers were fixed instead: they now build a `HarnessOptions`
+    // with `..Default::default()` and spell only what they deliberately
+    // vary, which makes them follow a default flip on their own and makes
+    // those two assertions redundant. They are deleted rather than kept as
+    // belt-and-braces: a redundant re-spelling of a default is exactly the
+    // artifact that goes stale.)
+}
+
+/// **The fossil pattern is dead on the `run_e2e` path only.** It survives,
+/// verbatim, at other call sites in this file that build their own
+/// `LayoutOptions` — #699's review named this 3/3 passes, and it was right:
+/// "both fossils killed" is a claim about the harness, not about the suite.
+///
+/// This test pins the residual so it cannot grow silently, and so the
+/// follow-up has a number to work against. As of RFC-070 W2c there are
+/// **15 distinct tests** carrying the copy-pasted block — 13 carry both
+/// lines, `research_l7_thins_output_inserters_s4` carries only the cells
+/// line (its capacity is a swept variable), `rfc061_allocation_probe_ac5`
+/// only the capacity line:
+///
+///   `tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing`,
+///   `tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass`,
+///   `tier5_processing_unit_25s_horizontal_stack_pole_coverage`,
+///   `quality_differential_ec_normal_vs_legendary`,
+///   `quality_ec_45s_express_legendary_from_ore`,
+///   `quality_differential_kovarex_self_loop_normal_vs_legendary`,
+///   `quality_ec_45s_legendary_tree_wire_differential`,
+///   `stacking_ec_60s_red_one_belt_headline`,
+///   `stacking_fanin_wall_lift_ec6_yellow_legendary`,
+///   `stacking_hs_dual_input_output_cap`, `stacking_refuses_low_inserter_cap`,
+///   `stacking_kovarex_family_exempt_s2`, `stacking_ec_60s_express_legendary_s2`,
+///   `research_l7_thins_output_inserters_s4`, `rfc061_allocation_probe_ac5`.
+///
+/// None of them carries a COMMENT explaining its `0` / `Off`; every one is
+/// textually the same copy of `run_e2e_inner`'s old literal. That is a
+/// claim about the prose, not about whether the value is load-bearing —
+/// **no per-site audit has been done**, and #699's review round 2 was
+/// right to flag that at least one site (`stacking_refuses_low_inserter_cap`,
+/// whose whole subject is a low-capacity config) reads as though it might
+/// be deliberate even if its refusal predicate actually names
+/// `max_inserter_tier`. They are NOT migrated here because each carries
+/// its own pins and assertions, so flipping them is a second adjudication
+/// of the same size as this PR's, not a rider on it.
+///
+/// **Reducing a count here is the good direction, but not unconditionally**:
+/// per site, first decide whether the value is load-bearing for what that
+/// test asserts. If it is, spell it with a comment saying so and lower the
+/// count anyway (a documented deliberate value is not a fossil). If it is
+/// not, migrate the site to `harness_options` — which will move that
+/// test's own pins, so adjudicate them the way this PR adjudicated the
+/// harness's. Either way, name the site in the commit that lowers the
+/// number, so a reader can tell a migration from a weakened tripwire.
+///
+/// **Raising a count is allowed, but only on the record** (#699 review
+/// round 9, and the correction is fair — the earlier wording, "raising a
+/// count means a new copy of a known trap — don't", forbade a legitimate
+/// case). RFC-049's unresearched world IS a valid thing to test, and a
+/// new test whose subject is capacity 0 or cells off needs the literal.
+/// Raise the number, and say in the same commit which test and why the
+/// value is load-bearing. What the gauge is for is that a copy-paste
+/// arrives with a reason attached, not that the count never moves up.
+///
+/// **This is a source-text gauge, not a behavioural one** (#699 review
+/// rounds 3-5 argued its reach; round 8 argued it was pointed at the
+/// wrong shape, and was right). It counts non-comment lines CONTAINING
+/// either pattern — substring, not exact-trimmed-line — which is what
+/// makes it see the resurrection path round 8 named as most likely now
+/// that `from_groups` is the recommended constructor: the GROUP-level
+/// partial `SearchAxes { cell_composition: Default::default(), ..SearchAxes::default() }`,
+/// which resolves to `Off` exactly like the flat form. An
+/// exact-trimmed-line match saw that only when rustfmt happened to break
+/// it across lines. **Discrimination check executed**: a single-line
+/// group partial added anywhere in this file takes the count 14 → 15.
+///
+/// Still not seen: a re-spelled literal (`cell_composition:
+/// CellComposition::Off`), a semantically equivalent construction, one
+/// inside dead code. Conversely a trailing comment or a rustfmt re-wrap
+/// on an existing line moves the count and forces an edit here. So the
+/// claim is bounded: **a textual copy of either pattern, flat or
+/// group-level, cannot be added silently.** That is not "the fossil
+/// cannot come back". The behavioural guard, for the one path that
+/// builds every regression fixture, is
+/// `harness_options_are_engine_defaults`; these 15 sites have no
+/// behavioural guard, which is a reason to migrate them, not a reason to
+/// keep widening this gauge.
+///
+/// Cost, since it is not free and not obvious: `include_str!` embeds
+/// this ~11k-line file into the test binary (a few hundred KB). Accepted
+/// for a non-ignored test that runs in microseconds.
+#[test]
+fn residual_fossil_literals_are_pinned() {
+    // Self-read. SUBSTRING match on non-comment lines, not exact-trimmed
+    // (#699 review round 8): the review's "highest-probability
+    // resurrection path" is the group-level partial
+    // `SearchAxes { cell_composition: Default::default(), ..SearchAxes::default() }`,
+    // and an exact-trimmed match sees it only when rustfmt happens to
+    // break it across lines. A substring match sees it either way, and
+    // sees an inline flat literal too. Comment lines are skipped so the
+    // docblock above — which quotes both patterns on purpose — does not
+    // count itself; that skip is why the `//` filter is not optional.
+    // Needles are ASSEMBLED AT RUNTIME rather than written whole, so this
+    // function's own code and messages do not match themselves. (Round 8
+    // found the counts reading 16/14 for exactly that reason — a
+    // self-counting gauge is worse than no gauge, because it is wrong in
+    // the direction of "looks fine".) For the same reason the assertion
+    // messages below spell the fields with an `=` instead of the `:` the
+    // source uses.
+    const SRC: &str = include_str!("e2e.rs");
+    let cells_needle = format!("cell_composition: {}", "Default::default()");
+    let capacity_needle = format!("inserter_capacity: {}", 0);
+    let count_of = |needle: &str| {
+        SRC.lines()
+            .filter(|l| !l.trim_start().starts_with("//") && l.contains(needle))
+            .count()
+    };
+    let cells = count_of(&cells_needle);
+    let capacity = count_of(&capacity_needle);
+    assert_eq!(
+        cells, 14,
+        "residual `cell_composition` = `Default::default()` sites moved (was 14 at \
+         RFC-070 W2c). Fewer = a site was migrated or its value was spelled \
+         deliberately: lower this number in the same commit and NAME the site. \
+         More = a new copy of a known-stale pattern, flat or group-level: use \
+         `harness_options`, or spell the value with a reason.",
+    );
+    assert_eq!(
+        capacity, 14,
+        "residual `inserter_capacity` = 0 sites moved (was 14 at RFC-070 W2c). \
+         Same rule as above.",
+    );
+}
+
+/// Takes the varied knobs as one `HarnessOptions` rather than as loose
+/// parameters (#699 review round 6). The wrappers above used to hand in
+/// `LayoutStrategy::Pooled` and `true` as HARD LITERALS — a second copy
+/// of two engine defaults, and the same stale-fossil shape one level out
+/// from the one this track killed. Every wrapper now spells only what it
+/// deliberately varies and leaves the rest to `HarnessOptions::default()`,
+/// which reads the engine's group defaults at runtime. The only
+/// non-default any wrapper sets is `run_e2e_pure_combo`'s
+/// `horizontal_candidate: false`, which is that wrapper's entire purpose.
+///
+/// (The `#[allow(clippy::too_many_arguments)]` this used to carry went
+/// with the four params: seven is the limit, and this now has seven.)
 fn run_e2e_inner(
     test_name: &str,
     item: &str,
     rate: f64,
     machine: &str,
-    belt_tier: Option<&str>,
     available_inputs: &FxHashSet<String>,
     excluded_recipes: &FxHashSet<String>,
-    strategy: spaghettio_core::bus::layout::LayoutStrategy,
-    row_layout: spaghettio_core::bus::layout::RowLayout,
-    surplus_policy: spaghettio_core::bus::layout::SurplusPolicy,
-    horizontal_candidate: bool,
+    opts: HarnessOptions<'_>,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     spaghettio_core::zone_cache::set_thread_source(Some(test_name));
+    let belt_tier = opts.belt_tier;
     let run_params = RunParams { item, rate, machine, belt_tier, available_inputs };
 
     let solver_result = solver::solve_with_exclusions(item, rate, available_inputs, machine, excluded_recipes)
@@ -339,25 +596,7 @@ fn run_e2e_inner(
             msg
         })?;
 
-    let layout = layout::build_bus_layout(
-        &solver_result,
-        layout::LayoutOptions {
-            strategy,
-            surplus_policy,
-            max_belt_tier: belt_tier.map(|s| s.to_string()),
-            row_layout,
-            max_inserter_tier: Default::default(),
-            quality: Default::default(),
-            wire_mode: Default::default(),
-            merge_tap: false,
-            stacking: 1,
-            inserter_capacity: 0,
-            cell_composition: Default::default(),
-            splitter_tap_spacers: false,
-            horizontal_candidate,
-            ..Default::default()
-        },
-    )
+    let layout = layout::build_bus_layout(&solver_result, harness_options(opts))
         .map_err(|e| {
             let msg = format!("layout: {e}");
             dump_partial_snapshot(test_name, &run_params, Some(&solver_result), &msg);
@@ -672,9 +911,44 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // that cover single_input_row-shaped fixtures moved even though entity
     // COUNT and layout geometry (KC4) stayed byte-identical — only the
     // inserter entity NAMES at the same positions changed.
-    ("tier1_iron_gear_wheel", "61ae6bb3babd5e5921e4ca3351664903444614ef9bd57e3579f08a9b2d12e503"),
-    ("tier1_iron_gear_wheel_from_ore", "7e7fbc36c596e237a8aa6838d2095f03a67284392085d8af4b6dea96af4d1f61"),
-    ("tier1_iron_gear_wheel_20s", "d00a81cb51d646c3755b5f7d5659a6f31f1cbfcdeb21ab2303c1dfd3b2121c02"),
+    // RFC-070 W2c (#689): re-blessed when `run_e2e` stopped pinning
+    // `inserter_capacity: 0` and started running production's L2 default.
+    // A capacity-2 hand moves ~2x per swing, so the sizing ladder needs
+    // fewer inserters per machine side and places different entities —
+    // the SAME re-bless class as the rfc-inserter-sizing note above.
+    // Attribution is measured, not assumed: an A/B that killed only the
+    // cells fossil left the next two entries byte-identical; killing
+    // only the capacity fossil moved all three.
+    ("tier1_iron_gear_wheel", "ffb66596f449156e3844d9bf23d004361b76c1c011c4746dd5cefa3131160285"),
+    ("tier1_iron_gear_wheel_from_ore", "a688889d2beb81ba3adbf0a9ec5f7f070a240db9800d21a383bd2ddfc0c7e8e4"),
+    // …except this one, which moved under BOTH arms, because it is the
+    // single fixture in the suite whose WINNER changes: with the
+    // cell-composed candidate restored to the search it wins the outer
+    // selection (`SelectionDecided { winner: cell-composed, stage:
+    // best-error-free }`, score 0.1129 vs native's 0.1081), taking the
+    // fixture from 148 entities / 47x8 to 105 / 38x14 at the same 12.3%
+    // density and the same ZERO validation issues. #694's corpus does
+    // not cover gear@20/s — see the W2c finding in the RFC decision log.
+    //
+    // "Same 12.3%" is `density::score_density(_, (1,1))`, printed by the
+    // harness on both arms (`260 filled / 2116` and `169 filled / 1369`),
+    // not entities/(w*h) — the score normalises to a 1:1 SQUARE bounding
+    // box and counts filled TILES, so the two are 12.3% each while a
+    // naive entity ratio would read 39% vs 20% (#699 review round 7 asked;
+    // the receipt is in the `Layout: ...` lines of any --nocapture run).
+    //
+    // **THE NEW WINNER UNDER-DELIVERS — see #700.** This hash pins a
+    // layout the meter reads at 15.0/s against a 20.0/s plan (75%), where
+    // both native arms read 21.0/s. The re-bless still stands, because a
+    // golden's job is to record what the engine produces and production
+    // has produced THIS since RFC-051 Phase B flipped `cell_composition`
+    // on 2026-07-22 — the fossil is why no test could see it. But note
+    // that `assert_produces(…, 20.0)` below passes on this layout: it
+    // reads `analysis.throughput_estimates`, a static estimate the meter
+    // contradicts. Do not read this fixture's greenness as delivery.
+    // Reproduce with the `w2c_gear20_meter_export` exporter at the bottom
+    // of this file.
+    ("tier1_iron_gear_wheel_20s", "8ab74dc08c91cd8d13faf0a376c0c3eabe9b21df3a80f3b5a3768f89371d794c"),
     // Updated when `(m, m)` family balancers became passthroughs
     // (issue #268) — splitter blocks replaced by a single south-facing
     // belt per output column.
@@ -682,7 +956,11 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // copper-plate) ladder-sized, see note above.
     // RFC rfc-inserter-sizing.md Phase 2: dual_input_row (this fixture's EC
     // row is dual-input) is now ladder-sized + near/far reassigned.
-    ("tier2_electronic_circuit_from_ore", "0ae4d39372e33cf6c82dc96404a5f05b5a3b9888c2cea1f65ef542caeb91f182"),
+    // RFC-070 W2c: inserter-capacity re-bless (see the note above);
+    // winner + stage unchanged, as #694 predicts for
+    // `e2e_tier2_electronic_circuit_from_ore` @ am1 (native /
+    // best-error-free under both `e2e-harness` and `default`).
+    ("tier2_electronic_circuit_from_ore", "8db994a14cba2abdece21fe705ecd110c48bd572fa91adf79b2b4839a9e394e0"),
     // Hashes below changed when row inputs were switched to always
     // use `max_belt_tier` instead of per-row consumption rate (fixes
     // tier-mismatch seam where bus tap-off feeds row belt-in).
@@ -692,13 +970,31 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // RFC rfc-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
     // RFC rfc-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
     // RFC rfc-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
-    ("tier2_electronic_circuit_20s_from_ore", "7a23126d5f857d22db9374cc6269eb9ea2d7bdb2a69c6dc34f60f322cc63e134"),
+    // RFC-070 W2c: inserter-capacity re-bless. #694 predicts winner +
+    // stage hold at am2 (the tier this test runs) — the corpus's winner
+    // change on this fixture is at am3, which the suite never invokes.
+    ("tier2_electronic_circuit_20s_from_ore", "428fd17294c0d2b50a2217abf29b4e1ed723e23b04da4b89a9188608266d59e0"),
     // (RFC-047 Leg B: `tier2_electronic_circuit_splitter_stamp_regression`
     // no longer builds — it is now a named-refusal guard — so its golden
     // hash entry was removed.)
     // RFC rfc-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (coal) is now ladder-sized. Reaches fully clean.
-    ("tier3_plastic_bar", "bb1cccc422f0e44bfdb1d18ef59d870d71d8fe5d7147b659e7b388c79a526166"),
+    // RFC-070 W2c: inserter-capacity re-bless (the coal side is the
+    // ladder-sized one). The two fluid-target fixtures below are the
+    // negative control on this whole re-bless: they did NOT move under
+    // either fossil kill, and they are the only two golden-pinned
+    // fixtures that didn't.
+    //
+    // The asymmetry is UNEXPLAINED, deliberately (#699 review round 7
+    // noticed it): `tier3_sulfuric_acid`'s iron-plate side is
+    // ladder-sized too, per its own note below, yet it is
+    // capacity-invariant while this fixture's coal side moved. A
+    // plausible story is that sulfuric-acid's side already sits at the
+    // bottom rung, where a bigger hand changes nothing — but that was
+    // not measured, so it is not written as though it were. Do not
+    // "fix" either hash on the strength of the asymmetry; both were
+    // captured from clean runs, twice.
+    ("tier3_plastic_bar", "847a0cf0ba7c7d8d54bd3a6f1630b1d8e7ac5efad78978f86435387e070d5758"),
     // RFC rfc-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (iron-plate) is now ladder-sized — this fixture (sulfuric-acid:
     // iron-plate + water) is exactly that shape. Stays fully clean
@@ -860,10 +1156,28 @@ fn tier1_iron_gear_wheel() {
 /// (`docs/rfc-decomposition-search.md`). Confirms the layer is
 /// actually exercising — not just compiling but emitting the
 /// `DecompositionCandidateScored` and `DecompositionChosen` trace
-/// events. With Phase 0's single `NativeCandidate`, exactly one of
-/// each fires per layout call.
+/// events.
+///
+/// RFC-070 W2c re-pin. This used to assert "exactly one of each fires",
+/// citing Phase 0's single `NativeCandidate`. That claim stopped being
+/// true of PRODUCTION at RFC-051 Phase B and RFC-053; it kept passing
+/// only because `run_e2e` pinned `cell_composition: Off` (the fossil this
+/// track killed). The candidate set this fixture really runs is the one
+/// #694's parity corpus records for `tier1_gear_am1` @ am1 under
+/// `default`: `native` produced, `cell-composed` produced, deciding stage
+/// `best-error-free`, winner `native`. The assertions below now pin THAT
+/// — including cell-composed's presence, so a re-fossilization fails here
+/// as well as at `harness_options_are_engine_defaults`.
+///
+/// Timeout raised 10 s → 30 s in the same change (#699 review round 2):
+/// this fixture now runs a SECOND full layout pass (the cell-composed
+/// candidate), and `ntest::timeout` is wall-clock, so a loaded box is the
+/// binding constraint, not the work. The neighbouring
+/// `tier2_electronic_circuit_20s_from_ore` already tripped its 10 s at
+/// 10003 ms on this PR's own BASELINE run while passing solo in 0.63 s.
+/// 30 s still catches a ~1000x regression on a test that runs in ~0.02 s.
 #[test]
-#[ntest::timeout(10000)]
+#[ntest::timeout(30000)]
 fn decomposition_search_native_candidate_fires_trace_events() {
     let inputs: FxHashSet<String> = ["iron-plate"].iter().map(|s| s.to_string()).collect();
     let result = run_e2e(
@@ -891,28 +1205,104 @@ fn decomposition_search_native_candidate_fires_trace_events() {
         })
         .collect();
 
-    assert_eq!(scored.len(), 1,
-        "expected exactly one DecompositionCandidateScored event under Phase 0; got {scored:?}");
-    assert_eq!(scored[0].0, "native", "expected `native` candidate; got {:?}", scored[0].0);
-    assert!(scored[0].1, "Phase 0 stub should always accept");
+    // `native` is scored and accepted — the layer is wired up at all.
+    assert!(
+        scored.iter().any(|(n, accepted)| n == "native" && *accepted),
+        "expected an accepted `native` candidate; got {scored:?}",
+    );
+    // …and so is `cell-composed`, because production's default candidate
+    // set includes it (#694: `tier1_gear_am1` / am1 / `default`). This
+    // assertion is the behavioural half of the W2c fossil guard: it fails
+    // if anything pins the harness back to `cell_composition: Off`.
+    assert!(
+        scored.iter().any(|(n, _)| n == "cell-composed"),
+        "expected the `cell-composed` candidate to run under production defaults \
+         (#694 records it as `produced` for this fixture) — if it is missing, the \
+         harness has been re-pinned to a candidate set nothing ships; got {scored:?}",
+    );
 
-    assert_eq!(chosen.len(), 1,
-        "expected exactly one DecompositionChosen event; got {chosen:?}");
-    assert_eq!(chosen[0], "native", "expected `native` to win; got {:?}", chosen[0]);
+    // The cell-composed candidate runs a NESTED selection of its own, and
+    // its events are replayed into the same flat stream (RFC-070 oracle
+    // gap (g)), so the OUTER selection's terminal is the LAST terminal,
+    // not the only one. That is a stated contract, not an accident:
+    // `trace.rs`'s `SelectionCandidateEvaluated` doc — "the two are emitted
+    // adjacently at the very end of the selection… without a nested
+    // selection splicing itself into the outer block" — and it is the same
+    // rule `tests/parity_corpus.rs` reads the corpus by.
+    //
+    // #699 review (2/3 passes) called `last()` an ordering-dependent
+    // oracle. It is, so it is corroborated rather than trusted: the two
+    // INDEPENDENT terminals (`DecompositionChosen` from the search,
+    // `SelectionDecided` from the scoreboard) must agree, and the stage is
+    // pinned against #694's `tier1_gear_am1` / am1 / `default` row.
+    //
+    // Honest residuals, both from #699's review, both correct:
+    //
+    // 1. (round 4, 3/3) **The corroboration is currently vacuous HERE.**
+    //    Measured: this fixture emits exactly ONE `DecompositionChosen`
+    //    and ONE `SelectionDecided`, because `native` wins and native has
+    //    no nested selection — the cell-composed candidate runs and
+    //    LOSES, and `run_candidate` truncates a loser's nested trace block
+    //    (RFC-070 oracle gap (g)). So `chosen.last() == decided.last()`
+    //    cannot fail here for any ordering. It is kept as a cheap
+    //    consistency check that becomes load-bearing the moment a nesting
+    //    candidate wins this fixture — which is precisely the event this
+    //    test exists to notice. The assertion that carries weight today is
+    //    the STAGE pin plus the cell-composed-presence check above. The
+    //    fixture where the ordering IS exercised is
+    //    `tier1_iron_gear_wheel_20s`, whose winner nests.
+    // 2. (round 2/3) A reordering that flipped BOTH emitters consistently
+    //    would sail through even where the check is not vacuous.
+    //    Corroboration narrows the failure mode, it does not remove it —
+    //    and it cannot be removed from here: the fix is a structural
+    //    nesting marker in the trace contract itself, which is the
+    //    selection loop's to own (RFC-070 Phase 1b/2a), not this test's.
+    let decided: Vec<_> = result.trace_events.iter()
+        .filter_map(|e| match e {
+            TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
+            _ => None,
+        })
+        .collect();
+    assert!(!chosen.is_empty(), "expected at least one DecompositionChosen event");
+    assert!(!decided.is_empty(), "expected at least one SelectionDecided event");
+    assert_eq!(
+        decided.last().map(|(w, s)| (w.as_str(), *s)),
+        Some(("native", spaghettio_core::trace::SelectionStage::BestErrorFree)),
+        "expected the outer selection to decide `native` at `best-error-free` \
+         (#694: `tier1_gear_am1` / assembling-machine-1 / `default`); got {decided:?}",
+    );
+    assert_eq!(
+        chosen.last().map(String::as_str),
+        decided.last().map(|(w, _)| w.as_str()),
+        "the two terminal emitters disagree on the outer winner — the \
+         nested-before-outer ordering both this test and tests/parity_corpus.rs \
+         depend on has changed. chosen={chosen:?} decided={decided:?}",
+    );
 }
 
 /// K-DS1-1 from `docs/rfc-decomposition-search.md`: on cases where
 /// Native produces a clean layout (no `missing-balancer-template`
-/// warnings), the search must pick `NativeCandidate`. With sequential
-/// dispatch — Native runs first, search exits early if Native is
-/// accepted — this is true by construction; the test guards against
-/// future changes that would remove that property.
+/// warnings), the search must pick `NativeCandidate`.
 ///
 /// Runs `tier3_plastic_bar` under `PartitionedDecomposed` because
 /// that's the strategy where `ModuleSizeSplit` becomes a possible
 /// competitor (under `Pooled` it's never added to the candidate list).
+///
+/// RFC-070 W2c re-pin. The old version also asserted that `native` was
+/// the ONLY candidate scored, on the reasoning that "sequential dispatch
+/// — Native runs first, search exits early if Native is accepted — makes
+/// this true by construction". That reasoning describes a candidate set
+/// nothing ships: under production defaults `cell-composed` runs here too
+/// and native still wins, so the early-exit-on-native claim was an
+/// artifact of the `cell_composition: Off` fossil, not a property of the
+/// search. What K-DS1-1 actually asserts — native wins the clean case,
+/// and `size-split-2` is not paid for on it — survives verbatim below.
+///
+/// Timeout raised 30 s → 60 s for the same reason as its sibling above
+/// (#699 review round 2): one extra full layout pass under a wall-clock
+/// budget on a box that already flakes a 10 s one.
 #[test]
-#[ntest::timeout(30000)]
+#[ntest::timeout(60000)]
 fn decomposition_search_picks_native_on_clean_partitioned_case() {
     use spaghettio_core::bus::layout::LayoutStrategy;
     let inputs: FxHashSet<String> = ["petroleum-gas", "coal"]
@@ -937,26 +1327,52 @@ fn decomposition_search_picks_native_on_clean_partitioned_case() {
             _ => None,
         })
         .collect();
-    assert_eq!(chosen.len(), 1, "expected one DecompositionChosen event; got {chosen:?}");
+    // The last terminal is the outer selection's — nested candidate
+    // selections replay their own into the same stream (RFC-070 oracle gap
+    // (g); the contract is stated on `trace.rs`'s
+    // `SelectionCandidateEvaluated`). Corroborated across both independent
+    // terminal emitters rather than trusted, per #699's review — with the
+    // same honest caveat as the sibling test above: while `native` wins
+    // and nests nothing, only one terminal of each kind is emitted, so the
+    // cross-check cannot fail. It is a cheap guard that arms itself if a
+    // nesting candidate ever takes this fixture.
+    let decided: Vec<_> = result.trace_events.iter()
+        .filter_map(|e| match e {
+            TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
+            _ => None,
+        })
+        .collect();
+    assert!(!chosen.is_empty(), "expected at least one DecompositionChosen event");
     assert_eq!(
-        chosen[0], "native",
+        chosen.last().map(String::as_str),
+        Some("native"),
         "K-DS1-1: search must pick `native` when Native produces a clean layout; \
-         got {:?}. If a non-Native candidate won, scoring or acceptance is wrong.",
-        chosen[0]
+         got {chosen:?}. If a non-Native candidate won, scoring or acceptance is wrong.",
+    );
+    assert_eq!(
+        decided.last().map(|(w, _)| w.as_str()),
+        Some("native"),
+        "K-DS1-1: the scoreboard's terminal must name `native` too; got {decided:?}",
     );
 
-    // ModuleSizeSplit should not have run at all (sequential dispatch:
-    // Native accepted → search exits). Confirms the runtime cost of the
-    // candidate is paid only on cases that need it.
+    // ModuleSizeSplit must not have run: it is the candidate this
+    // strategy makes *available*, and a clean native case must not pay
+    // for it. (Unlike the old form, this does not claim to be the only
+    // candidate that ran — `cell-composed` does, and always did in
+    // production.)
     let scored_names: Vec<_> = result.trace_events.iter()
         .filter_map(|e| match e {
             TraceEvent::DecompositionCandidateScored { name, .. } => Some(name.clone()),
             _ => None,
         })
         .collect();
-    assert_eq!(
-        scored_names, vec!["native".to_string()],
-        "expected only `native` to be scored on a clean case; got {scored_names:?}"
+    assert!(
+        scored_names.iter().any(|n| n == "native"),
+        "expected `native` to be scored; got {scored_names:?}",
+    );
+    assert!(
+        !scored_names.iter().any(|n| n == "size-split-2"),
+        "K-DS1-1: `size-split-2` must not run on a clean native case; got {scored_names:?}",
     );
 }
 
@@ -1092,8 +1508,122 @@ fn tier1_iron_gear_wheel_20s() {
     // RFC Phase 1: 28 inserter-bound machine-sides at 20/s (more gear machines than
     // the 10/s case; each side > 0.84/s).
     // RFC rfc-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (28 -> 0).
+    //
+    // 2026-08-21 (RFC-070 W2c): this fixture now ships a CELL-COMPOSED
+    // layout — the only one in the suite where that candidate wins — and
+    // the meter reads it at 15.0/s against this 20.0/s plan while both
+    // native arms read 21.0/s. Tracked as #700, adjudicated there, not
+    // fixed here. Everything below is validator- and estimate-level and
+    // passes on the under-delivering layout; do NOT read this test's
+    // greenness as evidence of delivery.
+    //
+    // **The deficit itself is not new, and this is not the only guard on
+    // it.** W1a's meter tripwire found it on day one (#693's own table:
+    // `gear20-am2-plate` 20.000 planned / 15.000 produced / −25.0% BELOW
+    // PLAN) and its committed baseline
+    // (`crates/meter/tests/e2e_tripwire_baseline.json`) carries the row
+    // ARMED, at `entities: 105, deficit_pct: -25.0, converged: true` — a
+    // STANDING BELOW-PLAN row that `SPAGHETTIO_METER_TRIPWIRE=check`
+    // fails on if it worsens. What W2c adds is the ATTRIBUTION, and the
+    // reason nobody joined the two facts: **the tripwire's 105 entities
+    // and this fixture's pre-W2c golden's 148 were different layouts of
+    // the same named config.** The tripwire built `LayoutOptions::
+    // default()` (production, cell-composed, −25 %); the e2e fixture
+    // built the fossil's options (native, +5 %). Two instruments, one
+    // fixture name, two artifacts, no contradiction visible from either
+    // side. That is what the fossil cost.
+    //
+    // **The winner declared its own unverifiedness, and the stage ranked
+    // past it** (#699 review round 6 asked how the same layout scores
+    // `layout_warnings: 1` at selection and 0 at validation; decoded from
+    // the snapshot, and there is no contradiction — they are different
+    // fields). `LayoutResult.warnings` is the producer's own list;
+    // `validate()`'s issues are the 37 functional checks, and
+    // `assert_warnings_golden` counts the latter. The one entry reads:
+    //
+    //   "cell-composed: geometry NOT sim-verified (hash c5c5f88087df894c)
+    //    — run spaghettio-sim and add the entry to cell-sim-registry.json"
+    //
+    // RFC-051's own machinery flagged this exact geometry as unverified,
+    // `best-error-free` filters on errors and ranks on score with warnings
+    // taking no part, and the thing it was not verified for is precisely
+    // what the meter later measured. Recorded here because it is the
+    // sharpest available argument for W2b's severity-aware verdict.
+    //
+    // The pin below is this file's share of the guard (#699 review round
+    // 2, 3/3 — "the only guard is prose and an external issue number").
+    // Neither the golden hash nor `assert_produces` can say WHY this
+    // fixture is special: the hash's failure message asks whether the
+    // layout change was intentional, and `assert_produces` reads
+    // `analysis.throughput_estimates`, a static estimate the meter
+    // contradicts. This one names #700, so whoever changes the selection
+    // here — including whoever FIXES #700 — is told what they just moved
+    // instead of being invited to re-bless.
+    let outer = result.trace_events.iter().rev().find_map(|e| match e {
+        TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
+        _ => None,
+    });
+    assert_eq!(
+        outer.as_ref().map(|(w, s)| (w.as_str(), *s)),
+        Some(("cell-composed", spaghettio_core::trace::SelectionStage::BestErrorFree)),
+        "tier1_iron_gear_wheel_20s pins a KNOWN UNDER-DELIVERING winner (#700): \
+         `cell-composed` at `best-error-free`, metered at 15.0/s against a 20.0/s \
+         plan while both native arms meter 21.0/s. If this assertion just failed, \
+         the selection moved — if that is #700 being fixed: (1) re-take the meter \
+         reading with `w2c_gear20_meter_export` at the bottom of this file, \
+         (2) update #700 with it, (3) update THIS pin, (4) re-bless the fixture's \
+         GOLDEN HASH (and its warning pin, if the tally moved), and (5) re-bless \
+         the meter tripwire's `gear20-am2-plate` row, which is the ARMED guard \
+         on the deficit (crates/meter/tests/e2e_tripwire_baseline.json, currently \
+         entities 105 / -25.0%). Those five are the coupled artifacts; nothing \
+         else is. Do NOT re-bless on validator greenness alone: that is exactly \
+         what hid this for a month. got {outer:?}",
+    );
     assert_warnings_golden(&result, "tier1_iron_gear_wheel_20s");
-    assert_produces(&result, "iron-gear-wheel", 20.0);
+
+    // NOT `assert_produces` (#699 review round 5, 3/3). That helper reads
+    // `analysis.throughput_estimates` — a static estimate derived from the
+    // machine count, not a measurement — and on THIS fixture it says 20/s
+    // about a layout the meter reads at 15/s. Calling it here would leave
+    // a green "produces 20/s" assertion standing next to a known 25%
+    // deficit, which is the exact "the suite is green so the engine
+    // delivers" inference this PR exists to break. So the estimate is
+    // still checked (it is the plan, and a plan regression is worth
+    // catching) but under a name and a message that say what it is.
+    //
+    // **Be precise about what that bought** (#699 round 8, and it was
+    // right to press): this assertion is still GREEN on the 15/s layout.
+    // The check was RELABELLED, not made stricter — nothing here can fail
+    // on delivery, because nothing in `crates/core`'s test suite measures
+    // it. What changed is that the suite no longer ASSERTS something
+    // false. Any claim that "the false delivery signal is gone" is an
+    // overclaim; the honest one is "the suite no longer says this layout
+    // produces 20/s". Failing on delivery needs the meter, and that lives
+    // behind `SPAGHETTIO_METER_TRIPWIRE=check` by a standing decision with
+    // its own recorded reasoning (`crates/meter/tests/e2e_tripwire.rs`,
+    // "Why report-only stays the default").
+    //
+    // Rejected alternative, recorded because it is the obvious one:
+    // metering in-suite. `spaghettio_meter` depends on `spaghettio_core`,
+    // so a dev-dependency back would close a cycle and drag the meter into
+    // every `cargo test -p spaghettio_core`; and the meter's own tripwire
+    // ALREADY carries this fixture armed (`gear20-am2-plate`, -25.0%,
+    // entities 105). Duplicating it here would add a second, weaker copy
+    // of a guard that exists, not a new guard.
+    let estimated = result
+        .analysis
+        .throughput_estimates
+        .get("iron-gear-wheel")
+        .copied()
+        .unwrap_or(0.0);
+    assert!(
+        estimated >= 20.0 * 0.99,
+        "PLAN check only — this is `analysis.throughput_estimates`, not delivery. \
+         Expected the plan to still be >=20/s, got {estimated:.1}/s. The MEASURED \
+         rate for this fixture is 15.0/s (meter tripwire `gear20-am2-plate`, \
+         -25.0%, #700); do not read this assertion, or this test passing, as \
+         evidence that the layout delivers 20/s.",
+    );
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_20s");
 }
@@ -1306,8 +1836,16 @@ fn tier2_electronic_circuit_from_ore() {
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
 }
 
+/// Timeout raised 10 s → 60 s (RFC-070 W2c). `ntest::timeout` is
+/// wall-clock, and this fixture sat right on the old boundary: it tripped
+/// at 10003 ms on this PR's BASELINE run (before any change) and again at
+/// 10001 ms afterwards, while passing SOLO in 0.63 s. Restoring the
+/// cell-composed candidate adds a second layout pass and makes the
+/// boundary case worse, so the budget is raised rather than left to flake
+/// a 4-minute suite run. 60 s still catches a ~100x regression on a test
+/// that runs in well under a second.
 #[test]
-#[ntest::timeout(10000)]
+#[ntest::timeout(60000)]
 fn tier2_electronic_circuit_20s_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
         .iter()
@@ -2750,11 +3288,33 @@ fn tier5_processing_unit_from_ore_am3() {
     // (ratio >= 2.0 AND excess >= 8), not evidence that this particular
     // belt is newly pathological.
     //
-    // ACCEPTED: errors stay 0, input-rate-delivery is unchanged at 13,
-    // and the check is diagnostic-only by construction (never promotes
-    // to Error). A SECOND detour appearing here would mean the width
-    // grew again — re-trace with the same instrument rather than
-    // re-blessing.
+    // ACCEPTED: errors stay 0, input-rate-delivery was unchanged at 13
+    // AS OF THAT DATE (it is 10 now — see the 2026-08-21 block below;
+    // this sentence read as a present-tense claim until #699's review
+    // round 7 caught it sitting next to its own correction), and the
+    // check is diagnostic-only by construction (never promotes to
+    // Error). A SECOND detour appearing here would mean the width grew
+    // again — re-trace with the same instrument rather than re-blessing.
+    //
+    // 2026-08-21 (RFC-070 W2c, #689) — ADJUDICATION for
+    // `input-rate-delivery 13 -> 10`. This is the ONLY warning pin in the
+    // suite that moved when `run_e2e` stopped pinning
+    // `inserter_capacity: 0` and started running production's L2 default
+    // (2). Attributed by A/B: killing only the cells fossil leaves this
+    // pin at 13; killing only the capacity fossil takes it to 10.
+    //
+    // NOT a check going quiet (docs/validator-reporting.md). Both issue
+    // lists were decoded from snapshots and diffed instance by instance:
+    // ten iron-plate/copper-cable rows that read "across 2 inserters" at
+    // capacity 0 read "across 1 inserter" at capacity 2 — one L2 hand
+    // does the work of two L0 hands, so the row geometry places fewer,
+    // fatter inserters — and seven equivalent warnings re-appear at the
+    // shifted coordinates. Net 13 -> 10; every surviving warning still
+    // carries its own position and its own delivered-vs-needed pair
+    // (e.g. "(50,164) delivers 0.0/s but machine needs 2.4/s"). The
+    // fixture's known deficits are NOT resolved by this change and the
+    // meter's open reading on #644 is untouched: what changed is that
+    // the pin now describes the configuration production ships.
     assert_warnings_golden(&result, "tier5_processing_unit_from_ore_am3");
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
@@ -3364,11 +3924,20 @@ fn scoreboard_strategy_sweep() {
                     let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
                     let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
                     let density_score = density::score_density(&r.layout, (1, 1));
-                    // Decomposition-search winner. Phase 0: always
-                    // "native". Future-proofs the column for later
-                    // phases when non-Native candidates can win. See
-                    // `docs/rfc-decomposition-search.md`.
-                    let chosen = r.trace_events.iter().find_map(|e| match e {
+                    // Decomposition-search winner. `.rev()` is load-bearing
+                    // (#699 review round 7): a winning candidate that runs
+                    // its own nested selection replays the inner events
+                    // FIRST, so `find_map` from the front reports the
+                    // NESTED winner. That was harmless while `run_e2e`
+                    // pinned `cell_composition: Off` and nothing nested;
+                    // RFC-070 W2c restored the cell-composed candidate, so
+                    // from-the-front would print "native" for exactly the
+                    // fixtures where cell-composed wins. Same rule as
+                    // `tests/parity_corpus.rs` and the re-pinned
+                    // decomposition tests: the OUTER terminal is the last.
+                    // (The comment here used to say "Phase 0: always
+                    // native" — stale since RFC-051/053.)
+                    let chosen = r.trace_events.iter().rev().find_map(|e| match e {
                         TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
                         _ => None,
                     }).unwrap_or_else(|| "?".to_string());
@@ -8831,6 +9400,20 @@ fn full_knob_sweep() {
     let mut md = String::new();
     let _ = writeln!(md, "# Knob sweep: strategy x row-layout\n");
     let _ = writeln!(md, "{} cases x {} combos. Lexicographic winner key: (errors, warnings, entities).\n", cases.len(), combos.len());
+    // Provenance stamped into the ARTIFACT, not just the source doc
+    // (#699 review round 5): these tables get pasted into issues and PRs,
+    // where a `run_e2e_pure_combo` doc comment is invisible, and the W2c
+    // option-set change makes old and new tables silently non-comparable.
+    let _ = writeln!(
+        md,
+        "> **Option-set epoch: post-RFC-070-W2c (2026-08-21).** Every column here — \
+         including the `pure` baselines — runs production's full candidate set \
+         (`cell-composed` competes) and the L2 inserter ladder. Before W2c the \
+         harness pinned cells OFF and the inserter capacity at 0, so \
+         tables generated earlier are NOT comparable to this one: a cell can be \
+         decided by a layout family the old tables never saw. \"Pure\" means the \
+         horizontal-stack candidate is off, and only that.\n",
+    );
     let _ = writeln!(md, "## Per-run data\n");
     let _ = writeln!(md, "| case | combo | errs | warns | entities | WxH | dens% | candidate | ms |");
     let _ = writeln!(md, "|---|---|---|---|---|---|---|---|---|");
@@ -8858,7 +9441,13 @@ fn full_knob_sweep() {
                 Ok(r) => {
                     let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
                     let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
-                    let candidate = r.trace_events.iter().find_map(|e| match e {
+                    // `.rev()`: the OUTER selection's terminal is the LAST
+                    // one — see the sibling comment in
+                    // `scoreboard_strategy_sweep`. Reading from the front
+                    // reports a nested winner's inner pick, which since
+                    // RFC-070 W2c is reachable on any fixture the
+                    // cell-composed candidate wins (#699 review round 7).
+                    let candidate = r.trace_events.iter().rev().find_map(|e| match e {
                         TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
                         _ => None,
                     }).unwrap_or_else(|| "?".to_string());
@@ -8945,6 +9534,17 @@ fn full_knob_sweep() {
 ///     --warmup 216000 --out <case>-<arm>.report.json
 /// (long warmup per the deep-chain caveat in docs/sim-harness.md; pu3
 /// used 288000).
+///
+/// **Artifacts exported after 2026-08-21 are NOT comparable to the K60-3
+/// numbers recorded in `docs/rfc-060-*`** (#699 review, absorbed). Those
+/// were measured on artifacts this exporter built with
+/// `inserter_capacity: 0` — a hand-copied fossil of `run_e2e_inner`'s old
+/// literal, which had itself drifted (it kept the capacity pin but not the
+/// cells-off one, so it matched neither the harness nor production).
+/// RFC-070 W2c routed it through `harness_options`, so it now emits
+/// production's capacity 2 and production's candidate set. The exports are
+/// not hash-pinned and there is no golden to catch this — hence this note.
+/// Re-measure both arms before comparing against a recorded K60-3 figure.
 #[test]
 #[ignore = "artifact exporter for sim runs; run explicitly with --ignored"]
 fn rfc060_sim_export() {
@@ -8972,7 +9572,12 @@ fn rfc060_sim_export() {
         for (arm, candidate) in [("on", true), ("off", false)] {
             let label = format!("{}-{}", case.name, arm);
             // Mirror run_e2e_inner exactly so the artifacts match the
-            // sweep's layouts bit for bit.
+            // sweep's layouts bit for bit. Since RFC-070 W2c that is
+            // enforced by calling the same `harness_options` builder,
+            // not by a hand-copied struct literal — the copy here had
+            // ALREADY drifted (it kept `inserter_capacity: 0` but not
+            // the cells-off fossil, so it matched neither the harness
+            // nor production).
             let solved = match solver::solve_with_exclusions(
                 case.item, case.rate, &inputs, case.machine, &FxHashSet::default(),
             ) {
@@ -8984,15 +9589,11 @@ fn rfc060_sim_export() {
             };
             let lay = match layout::build_bus_layout(
                 &solved,
-                layout::LayoutOptions {
-                    max_belt_tier: case.belt_tier.map(|s| s.to_string()),
-                    merge_tap: false,
-                    stacking: 1,
-                    inserter_capacity: 0,
-                    splitter_tap_spacers: false,
+                harness_options(HarnessOptions {
+                    belt_tier: case.belt_tier,
                     horizontal_candidate: candidate,
                     ..Default::default()
-                },
+                }),
             ) {
                 Ok(l) => l,
                 Err(e) => {
@@ -9024,6 +9625,93 @@ fn rfc060_sim_export() {
                 lay.height,
             );
         }
+    }
+}
+
+/// Issue #700 / RFC-070 W2c: export `tier1_iron_gear_wheel_20s` under three
+/// option arms so the meter can be pointed at each, in the layout the
+/// `crates/meter` `check_one` example expects (`bp.txt` +
+/// `manifest-real.json` per directory).
+///
+/// This exists because #699's re-bless of that fixture's golden hash rests
+/// on a measurement, and a measurement nobody can re-take is a claim, not
+/// evidence — the same gap `rfc060_sim_export` above was written to close.
+///
+/// ```text
+///   W2C_GEAR20_OUT=/tmp/gear20 cargo test --manifest-path crates/core/Cargo.toml \
+///       --test e2e -- w2c_gear20_meter_export --ignored --exact --nocapture
+///   cargo run --release -p spaghettio_meter --example check_one -- /tmp/gear20/cells-on
+/// ```
+///
+/// Readings taken 2026-08-21 (`measure(108_000, 216_000)`, no notes):
+///
+/// | arm          | cells       | capacity | entities | validator | meter        |
+/// |--------------|-------------|----------|----------|-----------|--------------|
+/// | `cells-on`   | `Candidate` | 2        | 105 38x14| 0 issues  | **15.0/20.0**|
+/// | `cells-off`  | `Off`       | 2        | 148 47x8 | 0 issues  | 21.0/20.0    |
+/// | `old-golden` | `Off`       | 0        | 148 47x8 | 0 issues  | 21.0/20.0    |
+///
+/// `cells-on` IS production's configuration. See #700.
+#[test]
+#[ignore = "artifact exporter for meter/sim runs; run explicitly with --ignored"]
+fn w2c_gear20_meter_export() {
+    use spaghettio_core::bus::cells::CellComposition;
+    let out = std::env::var("W2C_GEAR20_OUT")
+        .unwrap_or_else(|_| snapshot_dir().join("gear20").to_string_lossy().into_owned());
+    let inputs: FxHashSet<String> = ["iron-plate"].iter().map(|s| s.to_string()).collect();
+    let solved = solver::solve("iron-gear-wheel", 20.0, &inputs, "assembling-machine-2")
+        .expect("gear20 solve");
+
+    for (arm, cells, capacity, expect_entities) in [
+        ("cells-on", CellComposition::Candidate, 2u8, 105usize),
+        ("cells-off", CellComposition::Off, 2u8, 148),
+        // The exact pre-W2c golden: both fossils in place. Kept as an arm
+        // so the "the capacity fossil is not what moved this" claim is
+        // re-measurable, not just asserted.
+        ("old-golden", CellComposition::Off, 0u8, 148),
+    ] {
+        let opts = layout::LayoutOptions::from_groups(
+            layout::UserConstraints { inserter_capacity: capacity, ..Default::default() },
+            layout::SearchAxes { cell_composition: cells, ..Default::default() },
+            layout::EngineTuning::default(),
+        );
+        let lay = layout::build_bus_layout(&solved, opts).expect("gear20 layout");
+        let issues = match validate::validate(&lay, Some(&solved)) {
+            Ok(v) => v,
+            Err(e) => e.issues,
+        };
+        let (bp, manifest) =
+            blueprint::export_with_manifest_validated(&lay, &solved, "gear20", &issues);
+        let dir = format!("{out}/{arm}");
+        std::fs::create_dir_all(&dir).expect("create arm dir");
+        std::fs::write(format!("{dir}/bp.txt"), &bp).expect("write bp");
+        std::fs::write(
+            format!("{dir}/manifest-real.json"),
+            serde_json::to_string_pretty(&manifest).expect("manifest json"),
+        )
+        .expect("write manifest");
+        eprintln!(
+            "{arm}: {} entities, {}x{}, {} issues -> {dir}",
+            lay.entities.len(),
+            lay.width,
+            lay.height,
+            issues.len(),
+        );
+        // Asserted, not just printed (#699 review round 7): the table in
+        // this fn's doc pairs each arm's entity count with its meter
+        // reading, so an arm that silently changes shape would leave a
+        // committed meter number attached to a different layout — the
+        // exact 105-vs-148 confusion this exporter exists to make
+        // visible. If one of these fires, the meter numbers in the doc
+        // (and in #700) are stale, not this assertion.
+        assert_eq!(
+            lay.entities.len(),
+            expect_entities,
+            "{arm}: entity count moved; the meter readings recorded in this \
+             function's doc table and in #700 describe the OLD layout. Re-meter \
+             all three arms before updating either.",
+        );
+        assert!(issues.is_empty(), "{arm}: expected 0 validation issues, got {}", issues.len());
     }
 }
 

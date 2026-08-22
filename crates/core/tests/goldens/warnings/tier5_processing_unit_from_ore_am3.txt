@@ -1,2 +1,2 @@
 belt-detour 1
-input-rate-delivery 13
+input-rate-delivery 10
