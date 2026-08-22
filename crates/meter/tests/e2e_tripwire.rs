@@ -521,9 +521,9 @@ const FIXTURES: &[Fixture] = &[
 struct Measurement {
     label: &'static str,
     target: String,
-    /// "produced" or "delivered" — selected by the target's `is_fluid`
-    /// flag. Fluid targets use delivery here to retain this tripwire's
-    /// historical calibration metric; the simulator gate uses production.
+    /// Machine production, matching the simulator's fluid target metric.
+    /// Fluid rows remain excluded from bless/check because they are not yet
+    /// calibrated against a real Factorio baseline.
     metric: &'static str,
     /// True when the target is a fluid. Excluded from bless/check — see
     /// the module doc's "Fluid targets are excluded" section — but still
@@ -582,17 +582,10 @@ fn build_and_measure(f: &Fixture) -> Result<Measurement, String> {
     let report = factory.measure(WARMUP, WINDOW);
 
     let planned = report.planned_per_s.get(&target.item).copied().unwrap_or(0.0);
-    let (measured, metric) = if target.is_fluid {
-        (
-            report.delivered_per_s.get(&target.item).copied().unwrap_or(0.0),
-            "delivered",
-        )
-    } else {
-        (
-            report.produced_per_s.get(&target.item).copied().unwrap_or(0.0),
-            "produced",
-        )
-    };
+    let (measured, metric) = (
+        report.produced_per_s.get(&target.item).copied().unwrap_or(0.0),
+        "produced",
+    );
     let deficit_pct = if planned > 0.0 {
         (measured / planned - 1.0) * 100.0
     } else {
@@ -1212,7 +1205,7 @@ mod tests {
     fn fluid_measurement(label: &'static str, deficit_pct: f64) -> Measurement {
         let mut m = measurement(label, deficit_pct, 100, true);
         m.is_fluid = true;
-        m.metric = "delivered";
+        m.metric = "produced";
         m
     }
 

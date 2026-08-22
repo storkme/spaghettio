@@ -562,21 +562,28 @@ impl Factory {
                 // the established drain philosophy for genuine byproducts /
                 // declared fluid outputs.
                 let producer_used: u64 = pool_alloc.iter().map(|&(_, n)| n as u64).sum();
-                if consumers.is_empty() {
-                    if total_held > 0 {
-                        *drained.entry(item).or_insert(0) += total_held;
-                    }
+                if consumers.is_empty() && total_held > 0 {
+                    *drained.entry(item).or_insert(0) += total_held;
+                }
+                // Remove what was consumed by attached consumers, or the
+                // whole pool when this is a genuine boundary drain. The
+                // latter is important: counting a producer buffer as
+                // delivered without emptying it re-counts the same fluid on
+                // every tick and turns a steady output into a triangular
+                // delivery curve.
+                let mut remaining_used = if consumers.is_empty() {
+                    total_held
                 } else {
-                    let mut remaining_used = producer_used;
-                    for &pj in &producers {
-                        if remaining_used == 0 {
-                            break;
-                        }
-                        if let Some(v) = self.machines[pj].fluid_output.get_mut(&item) {
-                            let take = (*v as u64).min(remaining_used) as u32;
-                            *v -= take;
-                            remaining_used -= take as u64;
-                        }
+                    producer_used
+                };
+                for &pj in &producers {
+                    if remaining_used == 0 {
+                        break;
+                    }
+                    if let Some(v) = self.machines[pj].fluid_output.get_mut(&item) {
+                        let take = (*v as u64).min(remaining_used) as u32;
+                        *v -= take;
+                        remaining_used -= take as u64;
                     }
                 }
                 // Credit consumers: their pool allocation, topped up from the
@@ -1037,7 +1044,17 @@ mod note_tests {
             io_type: None,
             mirror: false,
         };
-        let mut f = Factory::from_entities(&[entity], Manifest::default()).expect("builds");
+        let output_pipe = RawEntity {
+            name: "pipe".into(),
+            x: 0,
+            y: 3,
+            direction: Dir::North,
+            recipe: None,
+            io_type: None,
+            mirror: false,
+        };
+        let mut f =
+            Factory::from_entities(&[entity, output_pipe], Manifest::default()).expect("builds");
         let iron = f.items.intern("iron-plate");
         let sulfur = f.items.intern("sulfur");
         let water = f.items.intern("water");
@@ -1055,6 +1072,11 @@ mod note_tests {
                 .unwrap_or(0.0)
                 > 0.0,
             "fluid production must be present even when delivery is a separate pipe concern"
+        );
+        assert_eq!(
+            report.produced_per_s.get("sulfuric-acid"),
+            report.delivered_per_s.get("sulfuric-acid"),
+            "a no-consumer fluid network must drain each emitted unit once"
         );
     }
 }

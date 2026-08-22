@@ -70,22 +70,16 @@ fn main() {
             let planned = rep.planned_per_s.get(&target).copied().unwrap_or(0.0);
             let m_prod = rep.produced_per_s.get(&target).copied().unwrap_or(0.0);
             let m_del = rep.delivered_per_s.get(&target).copied().unwrap_or(0.0);
-            // Compare the metric that matches how the target is measured:
-            // solid targets report delivered output; fluid targets report
-            // machine production because their boundary drain is not a
-            // meaningful delivery metric.
-            let is_fluid = manifest.targets.first().map(|t| t.is_fluid).unwrap_or(false);
-            let metric = if is_fluid { "produced" } else { "delivered" };
-            let delta = if metric == "produced" {
-                match sim_prod {
-                    Some(sp) if sp > 0.0 => { compared += 1; (m_prod - sp) / sp * 100.0 }
-                    _ => f64::NAN,
+            // Compare machine production for every target. Fluid production
+            // is now reported at machine emission, so it no longer needs the
+            // old delivery fallback; solid target semantics remain unchanged.
+            let metric = "produced";
+            let delta = match sim_prod {
+                Some(sp) if sp > 0.0 => {
+                    compared += 1;
+                    (m_prod - sp) / sp * 100.0
                 }
-            } else {
-                match sim_del {
-                    Some(sd) if sd > 0.0 => { compared += 1; (m_del - sd) / sd * 100.0 }
-                    _ => f64::NAN,
-                }
+                _ => f64::NAN,
             };
             let sp = sim_prod.map(|v| format!("{v:.3}")).unwrap_or_else(|| "NA".into());
             let sd = sim_del.map(|v| format!("{v:.3}")).unwrap_or_else(|| "NA".into());
