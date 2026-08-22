@@ -562,6 +562,12 @@ static T_3_1_OUTPUT: &[(i32, i32)] = &[(2, 8)];
 // routed to dead-end outputs in each case). The family stamp relies on
 // full-input throughput; its structural waist is covered by the min-cut
 // audit in `crates/core/tests/balancer_lane_audit.rs::audit_min_cut_capacity`.
+// `balancer_classify` can still report MX3/`ThroughputTier::Unlimited`: its
+// predicate is belt-level Menger flow over recovered splitter edges (including
+// sideloads), not this walker's partial-input lane/dead-end scenario.
+// The ec30-am2-ore Factorio anchor (`--warmup 432000 --speed 32`) delivered
+// 29.09/s against 30.00/s planned, so this is sim-anchored at 97% of plan,
+// not claimed fixed.
 static T_3_2_ENTITIES: &[BalancerTemplateEntity] = &[
     BalancerTemplateEntity { name: "transport-belt", x: 3, y: 6, direction: 0, io_type: None, input_priority: None, output_priority: None },
     BalancerTemplateEntity { name: "transport-belt", x: 2, y: 6, direction: 2, io_type: None, input_priority: None, output_priority: None },

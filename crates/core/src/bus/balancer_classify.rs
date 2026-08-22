@@ -1632,6 +1632,30 @@ mod tests {
         );
     }
 
+    /// `(3,2)` is composition-balanced and passes this classifier's separate
+    /// belt-level Menger audit, but fails the lane walker's partial-input
+    /// scenarios. Keep the semantic gap explicit: `BalancerClass` is the
+    /// MX3-first public ladder, while `throughput` is the Menger result.
+    #[test]
+    fn restored_3_2_reconciles_balanced_class_with_lane_walker_gap() {
+        let t = balancer_templates()
+            .get(&(3, 2))
+            .expect("(3,2) template missing");
+        let report = classify(t).expect("(3,2) should classify structurally");
+
+        assert_eq!(report.class, BalancerClass::Balanced);
+        assert_eq!(report.throughput, ThroughputTier::Unlimited);
+        assert!(report.mx2_counterexample.is_none());
+
+        let walker_issues =
+            crate::bus::template_validate::check_throughput_unlimited(BalancerTemplateRef::from(t));
+        assert_eq!(walker_issues.len(), 2);
+        assert!(walker_issues[0].message.contains("10.00/s"));
+        assert!(walker_issues[0].message.contains("15.00/s"));
+        assert!(walker_issues[1].message.contains("20.00/s"));
+        assert!(walker_issues[1].message.contains("30.00/s"));
+    }
+
     #[test]
     fn known_throughput_limited_shapes_are_pinned() {
         const KNOWN_THROUGHPUT_LIMITED: [(u32, u32); 1] = [(5, 8)];
