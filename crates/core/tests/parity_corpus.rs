@@ -545,10 +545,10 @@ impl ShadowOutcome {
     /// 2. *Within the event.* The engine's `agree` bit against (1) — a
     ///    stuck-true bit, or a comparison written against the wrong
     ///    pair, shows up as a mismatch rather than as silence.
-    /// 3. **ANCHORED: v1's side against `SelectionDecided`**, a
-    ///    different event emitted by a different code path. Catches a
-    ///    mis-indexed winner name and a shadow paired with the wrong
-    ///    block.
+    /// 3. **ANCHORED: v2's side against `SelectionDecided`**, a
+    ///    different event emitted by a different code path. The terminal
+    ///    now records the shipped v2 winner, so this catches a mis-indexed
+    ///    winner name and a shadow paired with the wrong block.
     /// 4. **ANCHORED: v2's side against the harness's OWN `decide` run**
     ///    over the same cell's recorded rows (`anchor` below). This is
     ///    the one the event cannot fake: the harness reaches the v2
@@ -580,17 +580,23 @@ impl ShadowOutcome {
                 self.agree
             ));
         }
-        let cell_side = (cell.winner.clone(), cell.stage.clone());
-        let shadow_side = (self.v1.0.clone(), self.v1.1.map(|s| stage_name(s).to_string()));
-        if cell_side != shadow_side {
+        if let Some(v1_name) = self.v1.0.as_deref() {
+            if !SelectionPolicy::current().producers.iter().any(|p| p.name == v1_name) {
+                out.push(format!(
+                    "the shadow's v1 winner `{v1_name}` is not a registered selection candidate"
+                ));
+            }
+        }
+        let cell_side = cell.winner.clone().zip(cell.stage.clone());
+        let shadow_v2 =
+            self.v2.0.clone().zip(self.v2.1.map(|s| stage_name(s).to_string()));
+        if cell_side != shadow_v2 {
             out.push(format!(
-                "the shadow's v1 side {shadow_side:?} is not what `SelectionDecided` \
+                "the shadow's v2 side {shadow_v2:?} is not what `SelectionDecided` \
                  recorded for this cell ({cell_side:?}) — the two events are from \
                  different selections"
             ));
         }
-        let shadow_v2 =
-            self.v2.0.clone().zip(self.v2.1.map(|s| stage_name(s).to_string()));
         if anchor != shadow_v2 {
             out.push(format!(
                 "the event's v2 side {shadow_v2:?} is not what this harness's own \
@@ -734,8 +740,8 @@ impl ShadowReport {
         );
         assert!(
             self.disagreements.is_empty(),
-            "the v2 shadow disagreed with production on {} of {} cell(s). **THIS IS A \
-             CAMPAIGN-LEVEL FINDING (RFC-070 K70-1 / K70-2), not a test bug.** Record the \
+            "the v1 shadow disagreed with production on {} of {} cell(s). **THIS IS A \
+             CAMPAIGN-LEVEL FINDING (RFC-070 K70-2), not a test bug.** Record the \
              cell and the mechanism and take it to the campaign lead. A transcription bug \
              may be fixed with receipts; a semantic one MUST be reported — do not tune \
              policy data until the numbers line up.\n{}",

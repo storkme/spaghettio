@@ -17,8 +17,9 @@ fail-fast = false
 # couple of them run concurrently on the 4-thread runner.
 #
 # Default slow-timeout: flag tests slower than 60s, hard-kill at 300s.
-# Tests that can legitimately exceed 300s carry overrides below; their
-# own #[ntest::timeout] ceilings (≤720s) fire before the nextest kill.
+# Tests that can legitimately exceed 300s carry overrides below. The default
+# nextest kill therefore fires before any longer #[ntest::timeout]; overrides
+# raise the nextest cap where the test's own ceiling needs to remain in charge.
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 # `partition_strategy_scoreboard` runs Pool/P1/P2 across 2 cases — 200s to

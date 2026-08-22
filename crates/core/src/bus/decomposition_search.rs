@@ -1451,6 +1451,32 @@ fn emit_selection_shadow(
     });
 }
 
+/// Validate the index contract before the shipping decision is allowed to
+/// select a candidate. `Decision::winner` is an index into the candidate
+/// array, while the policy is keyed by registration order; a mismatch would
+/// ship one candidate's layout under another candidate's policy.
+fn validate_shipping_alignment(
+    policy: &selection_policy::SelectionPolicy,
+    profile_count: usize,
+) -> Result<(), String> {
+    if profile_count != policy.producers.len() {
+        return Err(format!(
+            "selection policy/profile misalignment: {profile_count} v2 profiles for {} policy producers",
+            policy.producers.len()
+        ));
+    }
+
+    let producer_order: Vec<&str> = policy.producers.iter().map(|p| p.name).collect();
+    if producer_order.as_slice() != CANDIDATE_ORDER || policy.producers.len() != CANDIDATE_ORDER.len() {
+        return Err(format!(
+            "selection policy producer-order misalignment: expected CANDIDATE_ORDER {:?}, got {:?}",
+            CANDIDATE_ORDER, producer_order
+        ));
+    }
+
+    Ok(())
+}
+
 /// Run candidates and pick the winner.
 ///
 /// The dispatch is **sequential, not parallel**: Native runs first; if
@@ -1470,6 +1496,18 @@ fn emit_selection_shadow(
 pub fn select_best_decomposition(
     solver_result: &SolverResult,
     opts: LayoutOptions,
+) -> Result<LayoutResult, String> {
+    select_best_decomposition_with_policy(
+        solver_result,
+        opts,
+        selection_policy::SelectionPolicy::current(),
+    )
+}
+
+fn select_best_decomposition_with_policy(
+    solver_result: &SolverResult,
+    opts: LayoutOptions,
+    policy: selection_policy::SelectionPolicy,
 ) -> Result<LayoutResult, String> {
     // Per-candidate run + captured trace events. Detach the sink for the
     // duration so the streaming web UI doesn't render every candidate's
@@ -2096,16 +2134,18 @@ pub fn select_best_decomposition(
     // Phase 2b: v2 is the shipped decision, unconditionally. It consumes
     // the scoreboard projections of the measurements already computed by
     // v1's mechanisms; it does not re-run validation or consult v1's
-    // answer. A policy no-winner is the existing all-candidates-refused
-    // error path below.
-    let policy = selection_policy::SelectionPolicy::current();
-    let v2_winner = selection_policy::decide(&board.v2_profiles(), &policy);
+    // answer. A policy no-winner is the refusal path below; if v1 had a
+    // winner, the error identifies it as a v2-declined case.
+    let profiles = board.v2_profiles();
+    validate_shipping_alignment(&policy, profiles.len())?;
+    let v2_winner = selection_policy::decide(&profiles, &policy);
     let Some(v2_decision) = v2_winner else {
-        // Every candidate failed. The scoreboard still goes out — WHY each
-        // of the seven produced nothing is exactly what a refusal
-        // investigation needs — but no `SelectionDecided` follows it,
-        // because there is no winner and the stage enum is deliberately
-        // closed over the five ways a winner CAN be picked.
+        // The final TieredRank stage always names an admitted produced
+        // candidate whenever one exists. Therefore a v2 `None` alongside
+        // a v1 winner is a v2-declined case, not an all-candidates refusal.
+        // The scoreboard still goes out — WHY each candidate was declined
+        // is exactly what a refusal investigation needs — but no
+        // `SelectionDecided` follows it because there is no v2 winner.
         board.emit();
         // The reverse shadow still runs on this path, including when v1
         // and v2 both refuse, so the schema remains emitted for every
@@ -2123,10 +2163,12 @@ pub fn select_best_decomposition(
                 format!("{name}: {}", err.as_deref().unwrap_or("did not run"))
             })
             .collect();
-        return Err(format!(
-            "no decomposition candidate produced a layout — {}",
-            details.join("; ")
-        ));
+        let reason = if v1_winner_idx.is_some() {
+            "selection policy declined a winner despite v1 producing a layout"
+        } else {
+            "no decomposition candidate produced a layout"
+        };
+        return Err(format!("{reason} — {}", details.join("; ")));
     };
 
     let idx = v2_decision.winner;
@@ -2137,7 +2179,7 @@ pub fn select_best_decomposition(
     // entities the web UI / snapshot debugger see are the winner's.
     let mut candidates = candidates.into_iter().collect::<Vec<_>>();
     let (outcome, events, name) = candidates.swap_remove(idx);
-    let (layout, score) = outcome.expect("winner_idx must point to Some outcome");
+    let (layout, score) = outcome.expect("v2 winner index must point to Some outcome");
     for ev in events {
         // Skip Score events — already replayed for telemetry above.
         if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
@@ -2330,6 +2372,20 @@ mod tests {
     #[test]
     fn native_candidate_name() {
         assert_eq!(NativeCandidate.name(), "native");
+    }
+
+    #[test]
+    fn shipping_refuses_a_misordered_policy_instead_of_shipping_a_layout() {
+        let solver = empty_solver();
+        let mut policy = selection_policy::SelectionPolicy::current();
+        policy.producers.swap(0, 1);
+
+        let err = select_best_decomposition_with_policy(&solver, LayoutOptions::default(), policy)
+            .expect_err("a misordered shipping policy must refuse, never select by raw index");
+        assert!(
+            err.contains("selection policy producer-order misalignment"),
+            "unexpected refusal: {err}"
+        );
     }
 
     #[test]
