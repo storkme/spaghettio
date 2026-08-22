@@ -509,6 +509,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn book_three_to_two_passes_lane_validation() {
+        let templates = balancer_templates();
+        let t = &templates[&(3, 2)];
+        let issues = validate_template_lanes(t.into());
+        let blocking: Vec<_> = issues
+            .iter()
+            .filter(|i| matches!(i.severity, Severity::Error | Severity::Warning))
+            .collect();
+        assert!(
+            blocking.is_empty(),
+            "(3, 2) book template should pass the lane gate, got: {blocking:#?}"
+        );
+    }
+
     /// A synthetic template with an L=1 underground-belt pair (input at x=0,
     /// output at x=1, both going east — no transit tile underground). This
     /// is structurally invalid in Factorio (minimum reach is L=2).

@@ -551,6 +551,39 @@ static T_3_1_ENTITIES: &[BalancerTemplateEntity] = &[
 static T_3_1_INPUT: &[(i32, i32)] = &[(0, 0), (1, 0), (2, 0)];
 static T_3_1_OUTPUT: &[(i32, i32)] = &[(2, 8)];
 
+// === (3, 2) — Raynquist balancer book (fall 2025), imported 2026-08-22 ===
+// This is the independent 4x8 book design, not the old
+// Lib(3,1) -> Lib(1,2) compose. The latter had a one-belt middle cut for a
+// rated-two shape and was correctly culled as waisted in 61babd51.
+static T_3_2_ENTITIES: &[BalancerTemplateEntity] = &[
+    BalancerTemplateEntity { name: "transport-belt", x: 3, y: 6, direction: 0, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 2, y: 6, direction: 2, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 7, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 7, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "splitter", x: 0, y: 6, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "underground-belt", x: 2, y: 4, direction: 4, io_type: Some("output"), input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 3, y: 4, direction: 0, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 3, y: 5, direction: 0, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "splitter", x: 1, y: 5, direction: 4, io_type: None, input_priority: None, output_priority: Some("right") },
+    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 4, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 5, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 4, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 2, y: 2, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 3, y: 2, direction: 6, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 3, y: 3, direction: 0, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "splitter", x: 1, y: 3, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 3, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "splitter", x: 0, y: 2, direction: 4, io_type: None, input_priority: None, output_priority: Some("right") },
+    BalancerTemplateEntity { name: "transport-belt", x: 2, y: 0, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "underground-belt", x: 2, y: 1, direction: 4, io_type: Some("input"), input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 0, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 0, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 1, direction: 4, io_type: None, input_priority: None, output_priority: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 1, direction: 4, io_type: None, input_priority: None, output_priority: None },
+];
+static T_3_2_INPUT: &[(i32, i32)] = &[(0, 0), (1, 0), (2, 0)];
+static T_3_2_OUTPUT: &[(i32, i32)] = &[(0, 7), (1, 7)];
+
 static T_3_3_ENTITIES: &[BalancerTemplateEntity] = &[
     BalancerTemplateEntity { name: "transport-belt", x: 3, y: 0, direction: 4, io_type: None, input_priority: None, output_priority: None },
     BalancerTemplateEntity { name: "underground-belt", x: 3, y: 2, direction: 4, io_type: Some("input"), input_priority: None, output_priority: None },
@@ -4335,6 +4368,11 @@ pub fn template_provenance(shape: (u32, u32)) -> TemplateProvenance {
             strategy: "hand-tuned with priority annotations",
             reference: RAYNQUIST_URL,
         },
+        (3, 2) => P {
+            source: RAYNQUIST,
+            strategy: "3-2 TU balancer",
+            reference: RAYNQUIST_URL,
+        },
 
         // Compose-baked re-bakes. Strategy = the recipe used in
         // `bake_missing_shapes` to construct via `compose_series`.
@@ -4454,6 +4492,12 @@ fn build_templates() -> FxHashMap<(u32, u32), BalancerTemplate> {
         n_inputs: 3, n_outputs: 1, width: 3, height: 9,
         entities: T_3_1_ENTITIES, input_tiles: T_3_1_INPUT, output_tiles: T_3_1_OUTPUT,
         source_blueprint: "0eNqtlOFuhCAMx1/lwufbIpyi7lWWy6J35EKiYACXGcO7r3Nmu2xdMyOfbGvpD8q/zKztRjU4bQJ7OsxMX6zxYD3PzOubabolGqZBgcF0UD07Hphp+sX3Q6dDUI5FCGpzVW8Q5fF8XFMh5bs8BF+V89oaiIuK52Vel7LkmSwk/FMm6KDVCl+86cWMfQvloShkDNZDxrJ8Zh+k7LGA8PRpxbt9BdcYP1gXHlrVLeSrduqyLhaQ+psgMAJPSThhBJGSkGOEU0pCgRGKlASJEcqUhBIjVCkJFa1Wvp9Q01r6QRhhNN3NWfjiDPC/ZtwMY2AolGe0vhKci6ODnt8hsog9QP8rLmj17uiaHcPfbUMHXyY6U07Py6Y7yXFEQctZJLh2Sb++YleLSlq29P7xkhUt000tkTiipsWaACEyWpgpEJyW50bEOcZ3cM2oWg==",
+    });
+
+    m.insert((3, 2), BalancerTemplate {
+        n_inputs: 3, n_outputs: 2, width: 4, height: 8,
+        entities: T_3_2_ENTITIES, input_tiles: T_3_2_INPUT, output_tiles: T_3_2_OUTPUT,
+        source_blueprint: "0eNqllttu4jAQhl/F8tVWCog4J4K0V32DFb1qq8ohbrBk7MgHWhbx7jtJdlkW4i7gq8iH+f7R+Lcze1wJx1rNpcWLPa6ZWWneWq4kXuBHtWmp5ZVgi2du2ea7kzXTjVbwnVRM2Ndh+p0aO/Gssc9WM2N8y9bpSl0uvsgXuVzDRLNuXccWfAP7a/Rt+fSAKiqoXDFtEBUfdGdQq9WW1wy9OyGQPcZNEfrBGieoPg3RDCkpdqhxVFNpGVCt8iHQx5pJkBGISxgapHQ/Us72w47mLBf8J6unOMJ8paTBi+c9NryRVHRFtbuWQTW3XFsHMxGWdNNNDDsmCT5AHFTgEy/iQ3RDJDmJJDdFLk8ik8NrhJm03HI2pN4Pdm/SbSqmIalj9J/DtFA40ypt+9MCeqsMH0yzx4BMy9k0i/AO0sqSaQZaNddsNeyYd5meSZA7JGK/RExGNJI7NJKjBgGNEWh6B5T8D5pdQE0ruLWwNpbjSRVGYPkF7Py2fV3crC/ubz8NtscjMkWQSbJrTDIPkkivkShvqjz5Bz3U5g3eUqWBCQzNm/VoseJZkG2y8ZOO4yCHpx4qCaL6ck2CbnzhoaZBFinOLZKOaWRBGvk1Nozzu3yYe6pSBJ2gjzq/65Uqbr4rZZBTyvHsySzwWZyfPot9bzCWPAm7kr7kSdDz4aOG/SDnHmrYH7KnQn/SNYuA+NusRlhQCIe5ZELQ8unY4cHKFvq8HpflpEzLMivKNCFlfjj8AqrNq1s=",
     });
 
     m.insert((3, 3), BalancerTemplate {
@@ -4744,8 +4788,9 @@ mod tests {
         // defective shapes culled 2026-08-14 (#632 A3: the 12
         // waist-capped #631 shapes plus lane-imbalanced (7,4), all
         // corpus-unexercised per scripts/balancer_usage_census.py;
-        // adjudication in rfc-balancer-bake-lane-validation.md).
-        assert_eq!(templates.len(), 64);
+        // adjudication in rfc-balancer-bake-lane-validation.md), plus the
+        // independently validated book (3,2) restored for issue #701.
+        assert_eq!(templates.len(), 65);
     }
 
     #[test]
@@ -4757,6 +4802,17 @@ mod tests {
         assert_eq!(t.height, 3);
         assert_eq!(t.input_tiles, &[(0, 0), (1, 0)]);
         assert_eq!(t.output_tiles, &[(1, 2)]);
+    }
+
+    #[test]
+    fn test_3_2_book_template_shape() {
+        let t = balancer_templates().get(&(3, 2)).expect("(3,2) template missing");
+        assert_eq!((t.n_inputs, t.n_outputs), (3, 2));
+        assert_eq!((t.width, t.height), (4, 8));
+        assert_eq!(t.input_tiles, &[(0, 0), (1, 0), (2, 0)]);
+        assert_eq!(t.output_tiles, &[(0, 7), (1, 7)]);
+        assert_eq!(t.entities.len(), 24);
+        assert_eq!(template_provenance((3, 2)).strategy, "3-2 TU balancer");
     }
 
     #[test]
@@ -4896,10 +4952,9 @@ mod tests {
     /// generator and must keep its blueprint string for round-trip
     /// regeneration.
     const COMPOSE_GENERATED_SHAPES: &[(u32, u32)] = &[
-        // Culled shapes ((3,2), (7,3), (8,6), (9,2), (9,4..8)) removed
-        // from this list 2026-08-14 (#632 A3 review round): a stale entry
-        // here would exempt a regenerated defective template from the
-        // source_blueprint gate — the two regressions compound.
+        // Compose-generated shapes remain listed here so the source-blueprint
+        // gate does not reject their intentionally source-less output. The
+        // restored (3,2) is a book import and must retain its blueprint.
         (1, 9), (9, 1), (1, 10), (10, 1), (2, 9),
         (6, 1), (6, 2), (8, 1), (8, 2),
         // (6, 3): lane-balance re-bake 2026-08-13 (the #624 provisional
