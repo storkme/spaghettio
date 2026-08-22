@@ -22,6 +22,7 @@
 
 use rustc_hash::FxHashMap;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 use crate::belt::ItemId;
 use crate::blueprint_in::{self, Dir, RawEntity};
@@ -77,12 +78,31 @@ pub struct MeterReport {
     /// judges neither — a verdict is the caller's business.
     pub planned_per_s: std::collections::BTreeMap<String, f64>,
     pub machine_census: std::collections::BTreeMap<String, usize>,
+    /// Window-scoped attribution by recipe. This is diagnostic evidence, not
+    /// a second verdict: it says where the meter spent time and fluid, so a
+    /// meter/sim disagreement can be traced to a stage instead of guessed
+    /// from the target rate alone.
+    pub recipe_attribution: BTreeMap<String, RecipeAttribution>,
     pub converged: bool,
     /// Boundary feeds that could not push — a starved rig, not a starved
     /// factory. Surfaced so the two are never confused.
     pub boundary_refusals: u64,
     /// Things the build could not model faithfully.
     pub notes: Vec<String>,
+}
+
+/// Per-recipe evidence collected over the measurement window.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct RecipeAttribution {
+    pub machines: usize,
+    pub crafts: u64,
+    pub working_ticks: u64,
+    pub output_blocked_ticks: u64,
+    pub output_inserter_blocked_ticks: u64,
+    pub item_shortage_ticks: u64,
+    pub fluid_shortage_ticks: u64,
+    pub fluid_supplied: BTreeMap<String, u64>,
+    pub fluid_consumed: BTreeMap<String, u64>,
 }
 
 impl MeterReport {
@@ -382,6 +402,23 @@ impl Factory {
         }
         let fluids_system =
             fluid::build_networks(&pipe_entities, &machine_ports, &fluid_feed_tiles);
+        // Fluid output only creates machine backpressure when this exact
+        // fluid has a consumer on the same connected component. Unconnected
+        // and boundary-only products retain the meter's report-only drain
+        // semantics; multi-output recipes are handled per fluid id.
+        for net in &fluids_system.networks {
+            for producer in net.ports.iter().filter(|p| !p.is_input) {
+                if net
+                    .ports
+                    .iter()
+                    .any(|p| p.is_input && p.item == producer.item)
+                {
+                    machines[producer.machine]
+                        .bounded_fluid_outputs
+                        .insert(producer.item);
+                }
+            }
+        }
         for (item, (x, y)) in &fluids_system.unconnected_feeds {
             notes.push(format!(
                 "fluid boundary input for {} at ({},{}) touches no pipe network",
@@ -429,10 +466,10 @@ impl Factory {
     /// saturated input rig) and producer `fluid_output` are pooled per item
     /// and drawn by the component's consumers up to their per-craft need —
     /// pipe-fast, so a petroleum→plastic→AC chain is not throttled to one
-    /// unit a tick the way Phase A's port-adjacency was. Unconsumed producer
-    /// output is drained as delivered (the target-fluid boundary exit),
-    /// preserving the Phase A behaviour that keeps e.g. an oil-refinery's
-    /// target petroleum-gas measuring correctly.
+    /// unit a tick the way Phase A's port-adjacency was. Surplus is retained
+    /// when a fluid has attached consumers, allowing downstream full buffers
+    /// to back up the producer; a component with no consumer still drains as
+    /// delivered, preserving the target-fluid boundary behavior.
     fn tick_fluids(&mut self) {
         let mut drained: FxHashMap<u16, u64> = FxHashMap::default();
         for net in &self.fluids.networks {
@@ -450,7 +487,7 @@ impl Factory {
                 // Boundary standing source: infinite (saturated rig).
                 let boundary = net.boundary.contains(&item);
                 // Snapshot each producer's on-hand amount for this item.
-                let mut total_held: u64 = producers
+                let total_held: u64 = producers
                     .iter()
                     .map(|&mi| {
                         self.machines[mi]
@@ -483,9 +520,6 @@ impl Factory {
                         for (i, &(c, room)) in rooms.iter().enumerate() {
                             pool_alloc[i] = (c, room);
                         }
-                        // fill every room; the excess the consumers cannot take
-                        // is genuine surplus and drains as delivered below.
-                        total_held -= total_room;
                     } else {
                         // deficient supply: proportional share, floor, then
                         // hand leftover to the largest fractional remainders.
@@ -508,17 +542,35 @@ impl Factory {
                                 left -= 1;
                             }
                         }
-                        total_held = left;
                     }
                 }
-                // Drain whatever the producers held that no consumer took.
-                if total_held > 0 {
-                    *drained.entry(item).or_insert(0) += total_held;
-                }
-                // Every producer buffer is fully routed this tick.
-                for &pj in &producers {
-                    if let Some(v) = self.machines[pj].fluid_output.get_mut(&item) {
-                        *v = 0;
+
+                // A fluid output with attached consumers is a bounded
+                // machine output, not an implicit world drain. Retain the
+                // producer surplus when all consumer buffers are full; the
+                // next machine tick will then see `FullOutput` once the
+                // output cap is reached. This is the coupling the report-only
+                // meter needs for a downstream solid shortage to propagate
+                // back through a pipe-fed intermediate (e.g. sulfuric acid
+                // into processing units). A component with no consumer keeps
+                // the established drain philosophy for genuine byproducts /
+                // declared fluid outputs.
+                let producer_used: u64 = pool_alloc.iter().map(|&(_, n)| n as u64).sum();
+                if consumers.is_empty() {
+                    if total_held > 0 {
+                        *drained.entry(item).or_insert(0) += total_held;
+                    }
+                } else {
+                    let mut remaining_used = producer_used;
+                    for &pj in &producers {
+                        if remaining_used == 0 {
+                            break;
+                        }
+                        if let Some(v) = self.machines[pj].fluid_output.get_mut(&item) {
+                            let take = (*v as u64).min(remaining_used) as u32;
+                            *v -= take;
+                            remaining_used -= take as u64;
+                        }
                     }
                 }
                 // Credit consumers: their pool allocation, topped up from the
@@ -680,6 +732,7 @@ impl Factory {
     pub fn reset_counters(&mut self) {
         self.crafted.clear();
         self.delivered.clear();
+        self.net.reset_splitter_stats();
         // Checkpoints describe the window we just discarded; keeping them
         // would let a pre-warmup transient decide `converged`. The window's
         // OWN start is a sample though — cumulative zero at tick zero — and
@@ -688,7 +741,10 @@ impl Factory {
         self.checkpoints.clear();
         self.checkpoints.push((0, 0));
         for m in &mut self.machines {
-            m.crafts = 0;
+            m.reset_counters();
+        }
+        for wired in &mut self.inserters {
+            wired.core.deposit_blocked_ticks = 0;
         }
         for f in &mut self.feeds {
             f.refused = 0;
@@ -696,6 +752,47 @@ impl Factory {
             f.injected = 0;
         }
         self.ticks = 0;
+    }
+
+    /// Aggregate each machine's window-scoped counters by recipe. Machine
+    /// indices are intentionally not exposed here: recipe-level attribution
+    /// is stable across blueprint entity ordering and is what calibration
+    /// comparisons need.
+    fn recipe_attribution(&self) -> BTreeMap<String, RecipeAttribution> {
+        let mut out: BTreeMap<String, RecipeAttribution> = BTreeMap::new();
+        for machine in &self.machines {
+            let entry = out.entry(machine.recipe.clone()).or_default();
+            entry.machines += 1;
+            entry.crafts += machine.crafts;
+            entry.working_ticks += machine.working_ticks;
+            entry.output_blocked_ticks += machine.output_blocked_ticks;
+            entry.item_shortage_ticks += machine.item_shortage_ticks;
+            entry.fluid_shortage_ticks += machine.fluid_shortage_ticks;
+            for (id, amount) in &machine.fluid_supplied {
+                *entry
+                    .fluid_supplied
+                    .entry(self.items.name(ItemId(*id)).to_string())
+                    .or_insert(0) += amount;
+            }
+            for (id, amount) in &machine.fluid_consumed {
+                *entry
+                    .fluid_consumed
+                    .entry(self.items.name(ItemId(*id)).to_string())
+                    .or_insert(0) += amount;
+            }
+        }
+        for wired in &self.inserters {
+            let Endpoint::Machine(machine) = wired.pickup else {
+                continue;
+            };
+            if !matches!(wired.drop, Endpoint::Belt(_)) {
+                continue;
+            }
+            out.entry(self.machines[machine].recipe.clone())
+                .or_default()
+                .output_inserter_blocked_ticks += wired.core.deposit_blocked_ticks;
+        }
+        out
     }
 
     pub fn census(&self) -> std::collections::BTreeMap<String, usize> {
@@ -731,6 +828,7 @@ impl Factory {
             delivered_per_s: rate(&self.delivered),
             planned_per_s: self.manifest.planned_rates.clone().into_iter().collect(),
             machine_census: self.census(),
+            recipe_attribution: self.recipe_attribution(),
             converged: self.detect_converged(),
             boundary_refusals: self.feeds.iter().map(|f| f.refused).sum(),
             notes: self.notes.clone(),

@@ -19,6 +19,24 @@ pub const ITEM_SPACING_TILES: f64 = 0.25;
 /// Slots per lane per belt tile. `1.0 / ITEM_SPACING_TILES`.
 pub const SLOTS_PER_TILE: usize = 4;
 
+/// Internal transport-line length of the inner half of a 90-degree belt
+/// turn, expressed in item spacings. Factorio uses 106 internal positions
+/// for the inner lane and 64 positions per item spacing.
+pub const INNER_TURN_SLOTS: f64 = 106.0 / 64.0;
+
+/// Internal transport-line length of the outer half of a 90-degree belt
+/// turn, expressed in item spacings. Factorio uses 295 internal positions
+/// for the outer lane and 64 positions per item spacing.
+pub const OUTER_TURN_SLOTS: f64 = 295.0 / 64.0;
+
+/// Local target-line position of an early sideload, derived from the measured
+/// 68 internal positions from the target's upstream edge.
+pub const SIDELOAD_EARLY_POSITION: f64 = 68.0 / 256.0;
+
+/// Local target-line position of a late sideload, derived from the measured
+/// 188 internal positions from the target's upstream edge.
+pub const SIDELOAD_LATE_POSITION: f64 = 188.0 / 256.0;
+
 /// Ticks per second.
 pub const TICKS_PER_SECOND: f64 = 60.0;
 

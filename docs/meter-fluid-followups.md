@@ -162,6 +162,17 @@ Factorio physics but a different measurement philosophy; recorded here so the ca
 is explicit, not accidental. Revisit only if a sim-baselined byproduct-loop fixture
 ever enters the corpus.
 
+**Narrowed 2026-08-19:** this decision still applies to fluids with no
+consumer (including the unhandled-byproduct case), but it does not apply to a
+fluid producer whose connected component has a same-fluid consumer. Those
+outputs now remain bounded when the consumer buffer is full, because otherwise
+a solid-shortage downstream silently lets an intermediate keep crafting and
+removes the `full_output` coupling the meter is intended to measure. PU1
+confirmed the distinction: processing-unit moved from 0.778/s to 1.018/s
+against the sim's 1.020/s, while standalone sulfuric-acid and heavy-oil
+fixtures retained nonzero crafting rather than being blocked by their
+unconnected fluid outputs.
+
 ### Confirm/close the PU-from-ore −13% — **diagnosis CLOSED 2026-08-06 (parity gap), fix OPEN**
 Measured, not inferred. The sim harness now dumps realized productivity (PR
 #580): **processing-unit +10.0%** and **plastic-bar +10.0%** (the latter found only

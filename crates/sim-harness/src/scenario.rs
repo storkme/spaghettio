@@ -206,6 +206,9 @@ pub struct RunParams {
     pub speed: u32,
     pub warmup_ticks: u32,
     pub window_ticks: u32,
+    /// Diagnostic mode: close one exact post-warmup window and suppress
+    /// early convergence. Normal runs retain item-driven windows.
+    pub fixed_window: bool,
     pub scenario_name: String,
     /// `serve` only: reveal the map and speed the operator up on join.
     /// Never set for measurement runs — it changes force bonuses, and a
@@ -219,6 +222,11 @@ pub struct RunParams {
     /// long/grinding run can be watched and scored live (is it ramping toward
     /// plan, or flat-zero and dead?) without waiting for finalize.
     pub write_timeseries: bool,
+    /// Diagnostic performance mode: retain only the belt-to-machine pickup
+    /// trace and skip the per-tick belt-drop probes. This is useful for a
+    /// long engine-vs-meter pickup comparison on large layouts; it changes
+    /// no simulation state or measurement counters.
+    pub pickup_trace_only: bool,
     /// `serve` only: keep the boundary kit ALIVE after the scenario
     /// finalizes, so an inspected world keeps running instead of dying
     /// under the operator.
@@ -280,9 +288,11 @@ impl RunParams {
             speed,
             warmup_ticks: warmup,
             window_ticks: window,
+            fixed_window: false,
             scenario_name,
             operator_qol: false,
             write_timeseries: false,
+            pickup_trace_only: false,
             keep_alive: false,
         }
     }
@@ -297,6 +307,13 @@ impl RunParams {
     /// (`run --timeseries`). Independent of `operator_qol`.
     pub fn with_timeseries(mut self) -> RunParams {
         self.write_timeseries = true;
+        self
+    }
+
+    /// Keep only the pickup-event telemetry on a diagnostic run. See
+    /// [`RunParams::pickup_trace_only`].
+    pub fn with_pickup_trace_only(mut self) -> RunParams {
+        self.pickup_trace_only = true;
         self
     }
 
@@ -324,6 +341,18 @@ impl RunParams {
         self.end_tick = self
             .end_tick
             .max(viable_end_tick(self.warmup_ticks, self.window_ticks));
+        self
+    }
+
+    /// Use one exact post-warmup window instead of item-driven convergence.
+    /// This is an opt-in diagnostic so a long meter window can be compared
+    /// with the real engine without changing ordinary verdict runs.
+    pub fn with_fixed_window(mut self, window: u32) -> RunParams {
+        self.window_ticks = round_up_60(window.max(MIN_WINDOW_TICKS));
+        self.fixed_window = true;
+        self.end_tick = self
+            .end_tick
+            .max(self.warmup_ticks.saturating_add(self.window_ticks));
         self
     }
 }
@@ -739,6 +768,7 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     let _ = writeln!(out, "local END_TICK = {}", params.end_tick);
     let _ = writeln!(out, "local WARMUP_TICKS = {}", params.warmup_ticks);
     let _ = writeln!(out, "local WINDOW_TICKS = {}", params.window_ticks);
+    let _ = writeln!(out, "local FIXED_WINDOW = {}", params.fixed_window);
     let _ = writeln!(out, "local WINDOW_ITEM_FLOOR = {WINDOW_ITEM_FLOOR}");
     let _ = writeln!(out, "local WINDOW_MIN_TICKS = {MIN_WINDOW_TICKS}");
     let _ = writeln!(
@@ -747,6 +777,7 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
         window_tick_cap(params.window_ticks)
     );
     let _ = writeln!(out, "local KEEP_ALIVE = {}", params.keep_alive);
+    let _ = writeln!(out, "local PICKUP_TRACE_ONLY = {}", params.pickup_trace_only);
     let _ = writeln!(out, "local STABILITY_TOL = {STABILITY_TOLERANCE}");
     let _ = writeln!(out, "local STABILITY_WINDOWS = {STABILITY_WINDOWS}");
     let _ = writeln!(
@@ -877,6 +908,18 @@ script.on_init(function()
   -- true per-window value rather than a running total re-derived later.
   storage.timeseries = {}
   storage.machine_last_crafts, storage.item_last_produced = {}, {}
+  storage.drop_probes = {}
+  storage.drop_event_trace = {}
+  storage.drop_event_previous_held = {}
+  storage.drop_event_previous_sample = {}
+  storage.drop_event_inserters = nil
+  storage.pickup_event_trace = {}
+  storage.pickup_event_previous_held = {}
+  storage.pickup_event_previous_item = {}
+  storage.pickup_event_inserters = nil
+  storage.drop_physics_probe = {}
+  storage.curve_sideload_probe = nil
+  storage.fixed_window_state_dumped = false
   if WRITE_TIMESERIES_CSV then
     helpers.write_file(TIMESERIES_CSV_FILE,
       "tick,kind,unit,name,x,y,crafts_delta,status,item,produced_delta\n", false)
@@ -1019,8 +1062,116 @@ script.on_init(function()
         let _ = writeln!(
             out,
             "  add_fluid_void(s, force, {x} - LX0 + storage.offx, {y} - LY0 + storage.offy, \"{item}\")",
-        );
+    );
     }
+
+    out.push_str(
+        r#"  -- Controlled belt admission probe.  This is deliberately a temporary
+  -- engine-side fixture rather than a deduction from the production layout:
+  -- force_insert_at gives us known item positions, and can_insert_at tells
+  -- us exactly which gaps the game considers admissible for a new item.
+  do
+    local probe_position = {x = storage.offx + DIMS_X + 8,
+                            y = storage.offy + DIMS_Y + 8}
+    local probe = s.create_entity{name = "express-transport-belt",
+                                  position = probe_position,
+                                  direction = defines.direction.east,
+                                  force = force}
+    if probe ~= nil then
+      local line = probe.get_transport_line(1)
+      local cases = {
+        {label = "empty", positions = {}},
+        {label = "one_left", positions = {0.4375}},
+        {label = "one_target", positions = {0.5}},
+        {label = "two_around_target", positions = {0.375, 0.625}},
+        {label = "gap_at_target", positions = {0.25, 0.75}},
+        {label = "full_quarter_grid", positions = {0, 0.25, 0.5, 0.75}}
+      }
+      for _, case in pairs(cases) do
+        line.clear()
+        local insert_results = {}
+        for _, p in pairs(case.positions) do
+          local ok, inserted = pcall(function()
+            return line.force_insert_at(p, {name = "iron-plate", count = 1}, 1)
+          end)
+          table.insert(insert_results, {position = p,
+                                        result = ok and (inserted and "yes" or "no") or "error"})
+        end
+        local checks = {}
+        for _, p in pairs({0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1}) do
+          local ok, can_insert = pcall(function() return line.can_insert_at(p) end)
+          table.insert(checks, {position = p,
+                                can_insert = ok and (can_insert and "yes" or "no") or "error"})
+        end
+        local detailed = {}
+        for _, entry in pairs(line.get_detailed_contents()) do
+          local name, count = nil, nil
+          local stack_ok, stack = pcall(function() return entry.stack end)
+          if stack_ok and stack ~= nil then
+            local name_ok, stack_name = pcall(function() return stack.name end)
+            local count_ok, stack_count = pcall(function() return stack.count end)
+            if name_ok then name = stack_name end
+            if count_ok then count = stack_count end
+          end
+          table.insert(detailed, {name = name, count = count,
+                                  position = entry.position,
+                                  unique_id = entry.unique_id})
+        end
+        table.insert(storage.drop_physics_probe, {
+          label = case.label,
+          line_length = line.line_length,
+          total_segment_length = line.total_segment_length,
+          insert_results = insert_results,
+          checks = checks,
+          detailed = detailed
+        })
+      end
+      probe.destroy()
+    end
+  end
+"#,
+    );
+
+    out.push_str(
+        r#"  -- Isolated curve-to-sideload probe. One feeder turns into the
+  -- target from the side while a second feeder enters its back. This is
+  -- the topology in which the production meter still has a lane-phase
+  -- mismatch. Keep it outside the pasted layout and destroy it after a few
+  -- belt phases; it must never participate in factory measurement.
+  do
+    local px = storage.offx + DIMS_X + 16
+    local py = storage.offy + DIMS_Y + 16
+    local probe_entities = {}
+    local function make(pos, direction)
+      local b = s.create_entity{name = "express-transport-belt", position = pos,
+                                direction = direction, force = force}
+      if b then table.insert(probe_entities, b) end
+      return b
+    end
+    local curve_source = make({px, py}, defines.direction.east)
+    local curve = make({px + 1, py}, defines.direction.south)
+    local target = make({px + 1, py + 1}, defines.direction.west)
+    local back = make({px + 2, py + 1}, defines.direction.west)
+    if curve_source and curve and target and back then
+      local function fill(b, name)
+        local line = b.get_transport_line(1)
+        for _, position in pairs({0, 0.25, 0.5, 0.75}) do
+          line.force_insert_at(position, {name = name, count = 1}, 1)
+        end
+      end
+      fill(curve_source, "copper-cable")
+      fill(back, "iron-plate")
+      storage.curve_sideload_probe = {
+        sample_ticks = {1, 2, 3, 4, 5, 10, 30}, next_sample = 1,
+        curve_source = curve_source, curve = curve, target = target,
+        back = back, entities = probe_entities
+      }
+    else
+      for _, b in pairs(probe_entities) do if b.valid then b.destroy() end end
+    end
+  end
+"#,
+    );
 
     out.push_str(
         r#"  -- Kit overlap audit (#357): create_entity in script mode stacks
@@ -1091,9 +1242,398 @@ end
 -- The placeholder can never collide with a real value in this array
 -- (item/entity names never contain it).
 local SIM_STATE_NULL = "__spaghettio_sim_state_null__"
+-- Periodic runtime evidence for the belt-drop discrepancy. The final
+-- snapshot below tells us what a held inserter looked like once; this sample
+-- keeps the destination's continuous insertion window visible across the
+-- measurement, including the exact point and nearby offsets. Counts are
+-- numeric because helpers.table_to_json may omit false-valued fields.
+local DROP_PROBE_OFFSETS = {-2, -1.5, -1, -0.75, -0.5, -0.25, -0.125,
+                            0, 0.125, 0.25, 0.5, 0.75, 1, 1.5, 2}
+local DROP_PROBE_LOCAL_POSITIONS = {0, 0.125, 0.25, 0.375, 0.5, 0.625,
+                                    0.75, 0.875, 1}
+local function sample_drop_probes(s)
+  for _, i in pairs(s.find_entities_filtered{type = "inserter"}) do
+    local target = i.drop_target
+    if target ~= nil and target.valid then
+      local ok, line_no, position = pcall(function()
+        return target.get_item_insert_specification(i.drop_position)
+      end)
+      if ok and line_no ~= nil then
+        local rec = storage.drop_probes[i.unit_number]
+        if rec == nil then
+          rec = {unit_number = i.unit_number, samples = 0, held_samples = 0,
+                 statuses = {}, segment_checks = {}, local_checks = {}}
+          for _, offset in pairs(DROP_PROBE_OFFSETS) do
+            table.insert(rec.segment_checks, {offset = offset, yes = 0, no = 0, error = 0})
+          end
+          for _, position_sample in pairs(DROP_PROBE_LOCAL_POSITIONS) do
+            table.insert(rec.local_checks, {position = position_sample,
+                                            yes = 0, no = 0, error = 0})
+          end
+          storage.drop_probes[i.unit_number] = rec
+        end
+        rec.samples = rec.samples + 1
+        rec.line = line_no
+        rec.position = position
+        local map_ok, map_position = pcall(function()
+          return target.get_line_item_position(line_no, position)
+        end)
+        if map_ok then
+          rec.map_position = {x = map_position.x, y = map_position.y}
+        end
+        local status = stn(i.status)
+        rec.statuses[status] = (rec.statuses[status] or 0) + 1
+        local held_ok, held = pcall(function() return i.held_stack end)
+        if held_ok and held ~= nil and held.valid_for_read then
+          rec.held_samples = rec.held_samples + 1
+        end
+        local line = target.get_transport_line(line_no)
+        rec.line_length = line.line_length
+        rec.total_segment_length = line.total_segment_length
+        for n, offset in pairs(DROP_PROBE_OFFSETS) do
+          local check_ok, can_insert = pcall(function()
+            return line.can_insert_at(position + offset)
+          end)
+          local check = rec.segment_checks[n]
+          if not check_ok then
+            check.error = check.error + 1
+          elseif can_insert then
+            check.yes = check.yes + 1
+          else
+            check.no = check.no + 1
+          end
+        end
+        for n, position_sample in pairs(DROP_PROBE_LOCAL_POSITIONS) do
+          local check_ok, can_insert = pcall(function()
+            return line.can_insert_at(position_sample)
+          end)
+          local check = rec.local_checks[n]
+          if not check_ok then
+            check.error = check.error + 1
+          elseif can_insert then
+            check.yes = check.yes + 1
+          else
+            check.no = check.no + 1
+          end
+        end
+      end
+    end
+  end
+end
+
+-- Tick-synchronised drop evidence. The older drop_probes channel is useful
+-- for aggregate occupancy, but samples every 60 ticks and cannot tell a
+-- successful deposit from a nearby free window. This channel records only
+-- state transitions, so it can run every tick without producing a complete
+-- copy of every inserter state.
+local DROP_EVENT_LIMIT = 512
+local DROP_EVENT_NEIGHBOUR_RADIUS = 2.5
+
+local function drop_line_snapshot(target, line_no, position)
+  local ok, line = pcall(function() return target.get_transport_line(line_no) end)
+  if not ok or line == nil then return nil end
+  local detailed_ok, detailed = pcall(function() return line.get_detailed_contents() end)
+  if not detailed_ok or type(detailed) ~= "table" then return nil end
+  local nearby = {}
+  for _, entry in pairs(detailed) do
+    if math.abs(entry.position - position) <= DROP_EVENT_NEIGHBOUR_RADIUS then
+      local name, count = nil, nil
+      local stack_ok, stack = pcall(function() return entry.stack end)
+      if stack_ok and stack ~= nil then
+        local name_ok, stack_name = pcall(function() return stack.name end)
+        local count_ok, stack_count = pcall(function() return stack.count end)
+        if name_ok then name = stack_name end
+        if count_ok then count = stack_count end
+      end
+      table.insert(nearby, {name = name, count = count,
+                             position = entry.position,
+                             unique_id = entry.unique_id})
+    end
+  end
+  table.sort(nearby, function(a, b) return a.position < b.position end)
+  return nearby
+end
+
+local function sample_drop_events(s)
+  if storage.drop_event_inserters == nil or #storage.drop_event_inserters == 0 then
+    storage.drop_event_inserters = {}
+    for _, candidate in pairs(s.find_entities_filtered{type = "inserter"}) do
+      local target = candidate.drop_target
+      if target ~= nil and target.valid
+          and (target.type == "transport-belt"
+            or target.type == "underground-belt"
+            or target.type == "splitter") then
+        table.insert(storage.drop_event_inserters, candidate)
+      end
+    end
+  end
+  for _, i in pairs(storage.drop_event_inserters) do
+    if i.valid then
+      local target = i.drop_target
+      local held_ok, held_stack = pcall(function() return i.held_stack end)
+      local held = 0
+      if held_ok and held_stack ~= nil and held_stack.valid_for_read then
+        held = held_stack.count
+      end
+      local previous = storage.drop_event_previous_held[i.unit_number]
+      storage.drop_event_previous_held[i.unit_number] = held
+      if target == nil or not target.valid then goto continue end
+
+      local spec_ok, line_no, position = pcall(function()
+        return target.get_item_insert_specification(i.drop_position)
+      end)
+      if not spec_ok or line_no == nil then goto continue end
+      local line_ok, line = pcall(function() return target.get_transport_line(line_no) end)
+      if not line_ok or line == nil then goto continue end
+      local can_ok, can_insert = pcall(function() return line.can_insert_at(position) end)
+      local can_state = "error"
+      if can_ok then can_state = can_insert and "yes" or "no" end
+      -- get_item_insert_specification returns a coordinate along the
+      -- connected segment.  can_insert_at on the line object expects that
+      -- line's local coordinate; for the belt lines used here this is the
+      -- within-tile fractional part.
+      local local_position = position - math.floor(position)
+      local local_can_ok, local_can_insert = pcall(function()
+        return line.can_insert_at(local_position)
+      end)
+      local local_can_state = "error"
+      if local_can_ok then local_can_state = local_can_insert and "yes" or "no" end
+      local status = stn(i.status)
+      local rec = storage.drop_event_trace[i.unit_number]
+      if rec == nil then
+        rec = {unit_number = i.unit_number, samples = 0, held_ticks = 0,
+               blocked_ticks = 0, accepted_items = 0, blocked_events = 0,
+               events = {}, events_truncated = 0}
+        storage.drop_event_trace[i.unit_number] = rec
+      end
+      rec.samples = rec.samples + 1
+      if held > 0 then rec.held_ticks = rec.held_ticks + 1 end
+      if held > 0 and local_can_ok and local_can_insert then
+        rec.can_insert_yes = (rec.can_insert_yes or 0) + 1
+      elseif held > 0 and local_can_ok then
+        rec.can_insert_no = (rec.can_insert_no or 0) + 1
+      end
+
+      -- A decrease in held_stack is the engine-side evidence that at least
+      -- one item was accepted during the preceding tick. A held stack that
+      -- remains unchanged while the inserter reports destination-space wait
+      -- is the corresponding blocked event.
+      local accepted = previous ~= nil and previous > held and previous - held or 0
+      local blocked = previous ~= nil and previous > 0 and previous == held
+                    and status == "waiting_for_space_in_destination"
+      local previous_sample = storage.drop_event_previous_sample[i.unit_number]
+      local current_sample = {
+        tick = game.tick,
+        held = held,
+        status = status,
+        line = line_no,
+        position = position,
+        local_position = local_position,
+        line_length = line.line_length,
+        total_segment_length = line.total_segment_length,
+        raw_can_insert = can_state,
+        can_insert = local_can_state
+      }
+      if accepted > 0 or blocked then
+        if accepted > 0 then rec.accepted_items = rec.accepted_items + accepted end
+        if blocked then
+          rec.blocked_events = rec.blocked_events + 1
+          rec.blocked_ticks = rec.blocked_ticks + 1
+        end
+        if #rec.events < DROP_EVENT_LIMIT then
+          local after = {
+            tick = current_sample.tick,
+            held = current_sample.held,
+            status = current_sample.status,
+            line = current_sample.line,
+            position = current_sample.position,
+            local_position = current_sample.local_position,
+            line_length = current_sample.line_length,
+            total_segment_length = current_sample.total_segment_length,
+            raw_can_insert = current_sample.raw_can_insert,
+            can_insert = current_sample.can_insert,
+            nearby = drop_line_snapshot(target, line_no, position)
+          }
+          table.insert(rec.events, {
+            tick = game.tick,
+            kind = accepted > 0 and "accepted" or "blocked",
+            accepted_items = accepted,
+            held = held,
+            previous_held = previous,
+            status = status,
+            line = line_no,
+            position = position,
+            local_position = local_position,
+            line_length = line.line_length,
+            total_segment_length = line.total_segment_length,
+            raw_can_insert = can_state,
+            can_insert = local_can_state,
+            before = previous_sample,
+            after = after
+          })
+        else
+          rec.events_truncated = rec.events_truncated + 1
+        end
+      end
+      storage.drop_event_previous_sample[i.unit_number] = current_sample
+    end
+    ::continue::
+  end
+end
+
+-- Tick-synchronised pickup evidence for the opposite side of the
+-- meter/sim comparison.  For a belt -> machine inserter, a rise in the
+-- held stack means the inserter picked an item from the belt; a fall means
+-- it delivered an item into the machine.  Keep complete counters and only
+-- cap the forensic transition list, matching drop_event_trace.
+local PICKUP_EVENT_LIMIT = 512
+
+local function pickup_machine_recipe(machine)
+  local ok, recipe = pcall(function() return machine.get_recipe() end)
+  if not ok or recipe == nil then return nil end
+  local name_ok, name = pcall(function() return recipe.name end)
+  return name_ok and name or nil
+end
+
+local function pickup_is_transport(entity)
+  if entity == nil or not entity.valid then return false end
+  local name = entity.name or ""
+  return name == "splitter"
+      or string.find(name, "transport-belt", 1, true) ~= nil
+      or string.find(name, "underground-belt", 1, true) ~= nil
+end
+
+local function pickup_is_machine(entity)
+  if entity == nil or not entity.valid then return false end
+  local name = entity.name or ""
+  return entity.type == "assembling-machine" or entity.type == "furnace"
+      or string.find(name, "assembling-machine", 1, true) ~= nil
+      or string.find(name, "furnace", 1, true) ~= nil
+end
+
+local function sample_pickup_events(s, sample_tick)
+  -- Resolve the belt-to-machine population once.  The trace is sampled on
+  -- every measurement tick, and re-running a surface-wide inserter query at
+  -- that cadence made a full red replay CPU-bound before its steady window.
+  -- Keep the population as LuaEntity references, just as drop_event_trace
+  -- does; validity is checked below so blueprint cleanup remains safe.
+  -- Blueprint revival can leave pickup targets unresolved during the first
+  -- tick. Do not permanently cache that transient empty population; retry
+  -- until the engine has attached the inserter targets.
+  if storage.pickup_event_inserters == nil or #storage.pickup_event_inserters == 0 then
+    storage.pickup_event_inserters = {}
+    for _, candidate in pairs(s.find_entities_filtered{type = "inserter"}) do
+      local pickup_target = candidate.pickup_target
+      local drop_target = candidate.drop_target
+      if pickup_target ~= nil and pickup_target.valid
+          and drop_target ~= nil and drop_target.valid
+          and pickup_is_transport(pickup_target)
+          and pickup_is_machine(drop_target) then
+        table.insert(storage.pickup_event_inserters, candidate)
+      end
+    end
+  end
+  for _, i in pairs(storage.pickup_event_inserters) do
+    if not i.valid then goto continue end
+    local pickup_target = i.pickup_target
+    local drop_target = i.drop_target
+    if pickup_target == nil or not pickup_target.valid
+        or drop_target == nil or not drop_target.valid
+        or not pickup_is_transport(pickup_target)
+        or not pickup_is_machine(drop_target) then
+      goto continue
+    end
+
+    local held_ok, held_stack = pcall(function() return i.held_stack end)
+    local held = 0
+    if held_ok and held_stack ~= nil and held_stack.valid_for_read then
+      held = held_stack.count
+    end
+    local held_item = nil
+    if held_ok and held_stack ~= nil and held_stack.valid_for_read then
+      held_item = held_stack.name
+    end
+    local previous = storage.pickup_event_previous_held[i.unit_number]
+    local previous_item = storage.pickup_event_previous_item[i.unit_number]
+    storage.pickup_event_previous_held[i.unit_number] = held
+    storage.pickup_event_previous_item[i.unit_number] = held_item
+
+    local rec = storage.pickup_event_trace[i.unit_number]
+    if rec == nil then
+      rec = {unit_number = i.unit_number, samples = 0, held_ticks = 0,
+             picked_items = 0, delivered_items = 0, pickup_events = 0,
+             delivery_events = 0, events = {}, events_truncated = 0,
+             measurement_picked_items = 0, measurement_delivered_items = 0,
+             items = {},
+             machine_recipe = pickup_machine_recipe(drop_target),
+             pickup_target = pickup_target.name,
+             drop_target = drop_target.name,
+             pickup_x = pickup_target.position.x,
+             pickup_y = pickup_target.position.y,
+             machine_x = drop_target.position.x,
+             machine_y = drop_target.position.y}
+      storage.pickup_event_trace[i.unit_number] = rec
+    end
+    if sample_tick >= WARMUP_TICKS and rec.measurement_start_picked == nil then
+      rec.measurement_start_picked = rec.picked_items
+      rec.measurement_start_delivered = rec.delivered_items
+    end
+    rec.samples = rec.samples + 1
+    if held > 0 then rec.held_ticks = rec.held_ticks + 1 end
+    local picked = previous ~= nil and held > previous and held - previous or 0
+    local delivered = previous ~= nil and previous > held and previous - held or 0
+    if picked > 0 then
+      rec.picked_items = rec.picked_items + picked
+      rec.pickup_events = rec.pickup_events + 1
+    end
+    if delivered > 0 then
+      rec.delivered_items = rec.delivered_items + delivered
+      rec.delivery_events = rec.delivery_events + 1
+    end
+    if rec.measurement_start_picked ~= nil then
+      rec.measurement_picked_items = rec.picked_items - rec.measurement_start_picked
+      rec.measurement_delivered_items = rec.delivered_items - rec.measurement_start_delivered
+    end
+    local event_item = picked > 0 and held_item or previous_item
+    if event_item ~= nil and (picked > 0 or delivered > 0) then
+      local item_rec = rec.items[event_item]
+      if item_rec == nil then
+        item_rec = {picked_items = 0, delivered_items = 0}
+        rec.items[event_item] = item_rec
+      end
+      item_rec.picked_items = item_rec.picked_items + picked
+      item_rec.delivered_items = item_rec.delivered_items + delivered
+      if sample_tick >= WARMUP_TICKS and item_rec.measurement_start_picked == nil then
+        item_rec.measurement_start_picked = item_rec.picked_items - picked
+        item_rec.measurement_start_delivered = item_rec.delivered_items - delivered
+      end
+      if item_rec.measurement_start_picked ~= nil then
+        item_rec.measurement_picked_items = item_rec.picked_items - item_rec.measurement_start_picked
+        item_rec.measurement_delivered_items = item_rec.delivered_items - item_rec.measurement_start_delivered
+      end
+    end
+    if picked > 0 or delivered > 0 then
+      if #rec.events < PICKUP_EVENT_LIMIT then
+        table.insert(rec.events, {
+          tick = game.tick,
+          kind = picked > 0 and "picked" or "delivered",
+          picked_items = picked,
+          delivered_items = delivered,
+          item = event_item,
+          held = held,
+          previous_held = previous,
+          status = stn(i.status)
+        })
+      else
+        rec.events_truncated = rec.events_truncated + 1
+      end
+    end
+    ::continue::
+  end
+end
 
 local function dump_sim_state(s)
-  local belts, machines, inserters, pipes = {}, {}, {}, {}
+  local belts, belt_positions, machines, inserters, inserter_trace, pipes = {}, {}, {}, {}, {}, {}
   for _, b in pairs(s.find_entities_filtered{type = {"transport-belt", "underground-belt", "splitter"}}) do
     local n = 0
     -- Per-line item detail (line index -> {{name, count}, ...}). Belt
@@ -1113,6 +1653,36 @@ local function dump_sim_state(s)
         end
       end
       det[li] = lane
+
+      -- `get_detailed_contents()` is the game's continuous line position
+      -- view. Keep this in a separate additive channel: the older `belts`
+      -- shape is consumed by existing forensic scripts and only carries
+      -- compressed counts.
+      local detailed_ok, detailed = pcall(function() return tl.get_detailed_contents() end)
+      if detailed_ok and type(detailed) == "table" then
+        local positions = {}
+        for _, entry in pairs(detailed) do
+          local item_map_ok, item_map = pcall(function()
+            return tl.get_line_item_position(entry.position)
+          end)
+          local item_map_position = nil
+          if item_map_ok then
+            item_map_position = {x = item_map.x, y = item_map.y}
+          end
+          table.insert(positions, {
+            name = entry.name,
+            count = entry.count,
+            position = entry.position,
+            map_position = item_map_position
+          })
+        end
+        table.insert(belt_positions, {
+          x = math.floor(b.position.x - storage.offx) + LX0,
+          y = math.floor(b.position.y - storage.offy) + LY0,
+          lane = li,
+          items = positions
+        })
+      end
     end
     -- Name + direction (belts never carried these, unlike pipes which got
     -- them for the same reason in #364 a few lines below) and, for
@@ -1169,6 +1739,104 @@ local function dump_sim_state(s)
   for _, i in pairs(s.find_entities_filtered{type = "inserter"}) do
     table.insert(inserters, {math.floor(i.position.x - storage.offx) + LX0,
                              math.floor(i.position.y - storage.offy) + LY0, stn(i.status)})
+
+    -- Diagnostic channel for the meter/sim belt-drop discrepancy. Keep the
+    -- legacy three-field `inserters` census above stable; this richer record
+    -- is deliberately additive and converts every Lua object to plain data
+    -- before JSON serialization. Positions include both raw world values and
+    -- the layout coordinates used by the other state-dump sections.
+    local function point_record(p)
+      if p == nil then return nil end
+      return {
+        world = {x = p.x, y = p.y},
+        layout = {x = math.floor(p.x - storage.offx) + LX0,
+                  y = math.floor(p.y - storage.offy) + LY0}
+      }
+    end
+    local function read_point(get)
+      local ok, p = pcall(get)
+      if not ok then return nil end
+      return point_record(p)
+    end
+    local function target_record(get)
+      local ok, target = pcall(get)
+      if not ok or target == nil or not target.valid then return nil end
+      return {
+        name = target.name,
+        position = point_record(target.position)
+      }
+    end
+    local held = nil
+    local held_ok, stack = pcall(function() return i.held_stack end)
+    if held_ok and stack ~= nil then
+      local readable = pcall(function() return stack.valid_for_read end)
+      if readable and stack.valid_for_read then
+        held = {name = stack.name, count = stack.count}
+      end
+    end
+    local drop_specification = nil
+    local spec_ok, spec_line, spec_position = pcall(function()
+      local target = i.drop_target
+      if target == nil then return nil, nil end
+      return target.get_item_insert_specification(i.drop_position)
+    end)
+    if spec_ok and spec_line ~= nil then
+      local segment_checks = {}
+      local target = i.drop_target
+      local line = target.get_transport_line(spec_line)
+      local map_ok, map_position = pcall(function()
+        return target.get_line_item_position(spec_line, spec_position)
+      end)
+      for _, offset in pairs({-0.5, -0.25, -0.125, 0, 0.125, 0.25, 0.5}) do
+        local check_ok, can_insert = pcall(function()
+          return line.can_insert_at(spec_position + offset)
+        end)
+        local result = "error"
+        if check_ok then
+          result = can_insert and "yes" or "no"
+        end
+        table.insert(segment_checks, {offset = offset,
+                              can_insert = result,
+                              map_position = (function()
+                                local ok, p = pcall(function()
+                                  return target.get_line_item_position(spec_line,
+                                                                        spec_position + offset)
+                                end)
+                                if not ok then return nil end
+                                return point_record(p)
+                              end)()})
+      end
+      local local_checks = {}
+      for _, position_sample in pairs(DROP_PROBE_LOCAL_POSITIONS) do
+        local check_ok, can_insert = pcall(function()
+          return line.can_insert_at(position_sample)
+        end)
+        local result = "error"
+        if check_ok then
+          result = can_insert and "yes" or "no"
+        end
+        table.insert(local_checks, {position = position_sample, can_insert = result})
+      end
+      drop_specification = {line = spec_line, position = spec_position,
+                            line_length = line.line_length,
+                            total_segment_length = line.total_segment_length,
+                            map_position = map_ok and point_record(map_position) or nil,
+                            segment_position_checks = segment_checks,
+                            local_can_insert_checks = local_checks}
+    end
+    table.insert(inserter_trace, {
+      name = i.name,
+      position = point_record(i.position),
+      status = stn(i.status),
+      held_stack = held,
+      held_stack_position = read_point(function() return i.held_stack_position end),
+      pickup_position = read_point(function() return i.pickup_position end),
+      drop_position = read_point(function() return i.drop_position end),
+      drop_specification = drop_specification,
+      pickup_target = target_record(function() return i.pickup_target end),
+      drop_target = target_record(function() return i.drop_target end),
+      drop_probe = storage.drop_probes[i.unit_number]
+    })
   end
   -- UG pairing as the GAME resolved it (mis-pairs teleport items across
   -- lines) and splitter priority/filter state as revived — wrong-item
@@ -1202,9 +1870,28 @@ local function dump_sim_state(s)
     table.insert(chests, {math.floor(c.position.x - storage.offx) + LX0,
                           math.floor(c.position.y - storage.offy) + LY0, contents})
   end
+  -- The live traces are keyed by inserter unit number for O(1) updates, but
+  -- Factorio's JSON helper treats a sparse numeric-keyed table as an empty
+  -- object.  Materialise them as stable arrays before serialization or the
+  -- forensic channels silently disappear from sim-state.json.
+  local function trace_values(trace)
+    local values = {}
+    for _, rec in pairs(trace) do table.insert(values, rec) end
+    table.sort(values, function(a, b)
+      return (a.unit_number or 0) < (b.unit_number or 0)
+    end)
+    return values
+  end
   local sim_state_json = helpers.table_to_json{
     offx = storage.offx, offy = storage.offy, fed = storage.fed_total,
-    belts = belts, machines = machines, inserters = inserters, pipes = pipes,
+    belts = belts, belt_positions = belt_positions,
+    machines = machines, inserters = inserters,
+    inserter_trace = inserter_trace, drop_probes = storage.drop_probes,
+    drop_event_inserter_count = storage.drop_event_inserters and #storage.drop_event_inserters or 0,
+    pickup_event_inserter_count = storage.pickup_event_inserters and #storage.pickup_event_inserters or 0,
+    drop_event_trace = trace_values(storage.drop_event_trace),
+    pickup_event_trace = trace_values(storage.pickup_event_trace),
+    drop_physics_probe = storage.drop_physics_probe, pipes = pipes,
     ugs = ugs, splitters = splitters, chests = chests}
   -- Convert the belts' ug_type sentinel (see SIM_STATE_NULL above) to a
   -- real JSON null now that the whole structure has been serialized.
@@ -1408,6 +2095,55 @@ end
 -- measurement run it must stop, because the report's numbers were sampled
 -- at the checkpoints and the kit must not keep mutating the world past the
 -- moment it was measured.
+script.on_nth_tick(1, function(ev)
+  if storage.finalized == true then return end
+  local s = game.get_surface("lab")
+  if s then
+    local probe = storage.curve_sideload_probe
+    if probe and probe.next_sample <= #probe.sample_ticks
+       and ev.tick >= probe.sample_ticks[probe.next_sample] then
+      local function line_snapshot(b)
+        local lines = {}
+        for li = 1, b.get_max_transport_line_index() do
+          local detailed = {}
+          for _, entry in pairs(b.get_transport_line(li).get_detailed_contents()) do
+            local name, count = nil, nil
+            local stack_ok, stack = pcall(function() return entry.stack end)
+            if stack_ok and stack ~= nil then
+              local name_ok, stack_name = pcall(function() return stack.name end)
+              local count_ok, stack_count = pcall(function() return stack.count end)
+              if name_ok then name = stack_name end
+              if count_ok then count = stack_count end
+            end
+            table.insert(detailed, {name = name, count = count,
+                                    position = entry.position})
+          end
+          table.insert(lines, detailed)
+        end
+        return lines
+      end
+      table.insert(storage.drop_physics_probe, {
+        label = "curve_sideload_tick_" .. probe.sample_ticks[probe.next_sample],
+        tick = ev.tick,
+        curve_source = line_snapshot(probe.curve_source),
+        curve = line_snapshot(probe.curve),
+        target = line_snapshot(probe.target),
+        back = line_snapshot(probe.back)
+      })
+      probe.next_sample = probe.next_sample + 1
+      if probe.next_sample > #probe.sample_ticks then
+        for _, b in pairs(probe.entities) do if b.valid then b.destroy() end end
+        storage.curve_sideload_probe = nil
+      end
+    end
+    if not PICKUP_TRACE_ONLY then sample_drop_events(s) end
+    -- Pickup-only runs pay for this channel at tick resolution so a fast
+    -- inserter cannot complete a whole hand cycle between samples. Ordinary
+    -- runs keep the cheaper 60-tick sampling below.
+    if PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end
+  end
+end)
+
 script.on_nth_tick(60, function(ev)
   if storage.finalized and not KEEP_ALIVE then return end
   for _, e in ipairs(storage.eeis) do if e.valid then e.energy = 1e13 end end
@@ -1454,6 +2190,8 @@ script.on_nth_tick(60, function(ev)
   if storage.finalized then return end
 
   local s = game.get_surface("lab")
+  if not PICKUP_TRACE_ONLY then sample_drop_probes(s) end
+  if not PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end
   local stats = game.forces.player.get_item_production_statistics(s)
   local fstats = game.forces.player.get_fluid_production_statistics(s)
   -- Fluid intermediates (mega-cells, RFC-052) live in the fluid
@@ -1549,11 +2287,13 @@ script.on_nth_tick(60, function(ev)
       -- the item floor alone could close a window shorter than the
       -- producer's burst cycle -- reintroducing snapshot aliasing, which
       -- MIN_WINDOW_TICKS exists to prevent. Both floors must be met.
-      local by_items = d_items >= WINDOW_ITEM_FLOOR and d_ticks >= WINDOW_MIN_TICKS
-      if by_items or d_ticks >= WINDOW_TICK_CAP then
+      local by_items = (not FIXED_WINDOW) and d_items >= WINDOW_ITEM_FLOOR
+                       and d_ticks >= WINDOW_MIN_TICKS
+      local by_fixed_window = FIXED_WINDOW and d_ticks >= WINDOW_TICKS
+      if by_items or by_fixed_window or (not FIXED_WINDOW and d_ticks >= WINDOW_TICK_CAP) then
         table.insert(storage.checkpoints, {tick = ev.tick, produced = produced,
           delivered = delivered, window_ticks = d_ticks, window_items = d_items,
-          short_sampled = not by_items, items = checkpoint_items()})
+          short_sampled = not by_items and not by_fixed_window, items = checkpoint_items()})
         n = n + 1
 
         -- Per-window machine + item time-series (#537): sampled on the
@@ -1603,6 +2343,17 @@ script.on_nth_tick(60, function(ev)
           end
         end
 
+        -- Fixed-window diagnostics need the rich state even when the
+        -- layout's derived END_TICK is much later than the requested
+        -- measurement window.  Dump once at the first closed window so a
+        -- CPU-bound run can still expose belt positions and drop events
+        -- before the harness timeout; the normal final dump remains the
+        -- authoritative output for ordinary runs.
+        if FIXED_WINDOW and not storage.fixed_window_state_dumped then
+          dump_sim_state(s)
+          storage.fixed_window_state_dumped = true
+        end
+
         -- Convergence = the trailing STABILITY_WINDOWS window rates all
         -- agree, compared widest-vs-narrowest rather than pairwise.
         --
@@ -1612,7 +2363,7 @@ script.on_nth_tick(60, function(ev)
         -- the last window as steady state. Across a span a ramp keeps
         -- accumulating (+8.3% there) while real noise cancels, so the
         -- group comparison rejects what the pairwise one waved through.
-        if n >= STABILITY_WINDOWS + 1 then
+        if not FIXED_WINDOW and n >= STABILITY_WINDOWS + 1 then
           local lo, hi, ok = nil, nil, true
           for i = n - STABILITY_WINDOWS + 1, n do
             local a, b = storage.checkpoints[i - 1], storage.checkpoints[i]
@@ -1698,9 +2449,11 @@ mod tests {
             speed: 16,
             warmup_ticks: 3600,
             window_ticks: 1800,
+            fixed_window: false,
             scenario_name: "t".into(),
             operator_qol: false,
             write_timeseries: false,
+            pickup_trace_only: false,
             keep_alive: false,
         }
         .with_warmup(216_001);
@@ -1755,9 +2508,10 @@ mod tests {
         // reach 300 items inside its own burst cycle and alias.
         assert!(lua.contains(&format!("local WINDOW_MIN_TICKS = {MIN_WINDOW_TICKS}")));
         assert!(lua.contains(
-            "local by_items = d_items >= WINDOW_ITEM_FLOOR and d_ticks >= WINDOW_MIN_TICKS"
+            "local by_items = (not FIXED_WINDOW) and d_items >= WINDOW_ITEM_FLOOR"
         ));
-        assert!(lua.contains("if by_items or d_ticks >= WINDOW_TICK_CAP then"));
+        assert!(lua.contains("local by_fixed_window = FIXED_WINDOW and d_ticks >= WINDOW_TICKS"));
+        assert!(lua.contains("not FIXED_WINDOW and d_ticks >= WINDOW_TICK_CAP"));
         // Measurement opens exactly at warmup, not at whatever absolute
         // multiple of the window length happens to fall after it.
         assert!(lua.contains("if ev.tick >= WARMUP_TICKS then"));
@@ -1771,8 +2525,43 @@ mod tests {
         // not the last pair — a decelerating ramp passes any
         // last-step test once its slope flattens under tolerance.
         assert!(lua.contains(&format!("local STABILITY_WINDOWS = {STABILITY_WINDOWS}")));
-        assert!(lua.contains("if n >= STABILITY_WINDOWS + 1 then"));
+        assert!(lua.contains("if not FIXED_WINDOW and n >= STABILITY_WINDOWS + 1 then"));
         assert!(lua.contains("(hi - lo) / lo <= STABILITY_TOL"));
+    }
+
+    #[test]
+    fn fixed_window_disables_convergence_and_uses_the_requested_budget() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "fixed".into(), 32, Some(18_000))
+            .with_warmup(108_000)
+            .with_fixed_window(216_000);
+        assert!(params.fixed_window);
+        assert_eq!(params.window_ticks, 216_000);
+        assert_eq!(params.end_tick, 324_000);
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(lua.contains("local FIXED_WINDOW = true"));
+        assert!(lua.contains("local by_fixed_window = FIXED_WINDOW and d_ticks >= WINDOW_TICKS"));
+        assert!(lua.contains("if not FIXED_WINDOW and n >= STABILITY_WINDOWS + 1 then"));
+        assert!(lua.contains("short_sampled = not by_items and not by_fixed_window"));
+        assert!(lua.contains("storage.fixed_window_state_dumped = false"));
+        assert!(lua.contains("if FIXED_WINDOW and not storage.fixed_window_state_dumped then"));
+        assert!(lua.contains("storage.fixed_window_state_dumped = true"));
+        assert!(lua.contains("storage.pickup_event_trace = {}"));
+        assert!(lua.contains("local function sample_pickup_events(s, sample_tick)"));
+        assert!(lua.contains("local function pickup_is_transport(entity)"));
+        assert!(lua.contains("pickup_event_inserter_count = storage.pickup_event_inserters"));
+        assert!(lua.contains("storage.pickup_event_inserters = nil"));
+        assert!(lua.contains("if storage.pickup_event_inserters == nil or #storage.pickup_event_inserters == 0 then"));
+        assert!(lua.contains("local function trace_values(trace)"));
+        assert!(lua.contains("drop_event_trace = trace_values(storage.drop_event_trace)"));
+        assert!(lua.contains("pickup_event_trace = trace_values(storage.pickup_event_trace)"));
+        assert!(lua.contains("storage.pickup_event_previous_item = {}"));
+        assert!(lua.contains("item_rec.delivered_items = item_rec.delivered_items + delivered"));
+        assert!(lua.contains("measurement_delivered_items = 0"));
+        assert!(lua.contains("sample_tick >= WARMUP_TICKS"));
+        assert!(lua.contains("if PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end"));
+        assert!(lua.contains("if not PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end"));
+        assert!(lua.contains("local PICKUP_TRACE_ONLY = false"));
     }
 
     /// An inspected world must keep being fed after it finalizes.
@@ -1808,7 +2597,8 @@ mod tests {
         // re-fires every 60 ticks and calls `finalize` forever (observed
         // live on this fix's first cut). Exactly one of each guard.
         assert_eq!(
-            lua.matches("if storage.finalized and not KEEP_ALIVE then return end").count(),
+            lua.matches("if storage.finalized and not KEEP_ALIVE then return end")
+                .count(),
             1,
             "kit-upkeep guard must appear exactly once"
         );
@@ -1844,8 +2634,8 @@ mod tests {
         let handler = &lua[upkeep_guard..];
         let measure_rel = measure_guard - upkeep_guard;
         for kit_stmt in [
-            "e.energy = 1e13",            // power upkeep
-            "for item, banks in pairs(storage.feeds) do", // feed top-up
+            "e.energy = 1e13",                              // power upkeep
+            "for item, banks in pairs(storage.feeds) do",   // feed top-up
             "for item, chests in pairs(storage.drains) do", // drain empty
         ] {
             let at = handler
@@ -1886,7 +2676,10 @@ mod tests {
 
         // A measurement run must still stop its kit at finalize.
         let measured = RunParams::defaults_for(&m, "t".into(), 32, None);
-        assert!(!measured.keep_alive, "measurement runs must never keep-alive");
+        assert!(
+            !measured.keep_alive,
+            "measurement runs must never keep-alive"
+        );
         assert!(build_control_lua(&m, "bp", &measured).contains("local KEEP_ALIVE = false"));
 
         // The ceiling is not, and never was, sufficient on its own — the
@@ -2417,7 +3210,9 @@ mod tests {
         assert!(lua.contains(
             "delivered = delivered, window_ticks = 0, window_items = 0, short_sampled = false,\n        items = checkpoint_items()"
         ));
-        assert!(lua.contains("short_sampled = not by_items, items = checkpoint_items()"));
+        assert!(lua.contains(
+            "short_sampled = not by_items and not by_fixed_window, items = checkpoint_items()"
+        ));
     }
 
     /// N >= 2 targets: `TARGETS` carries every one of them (in manifest
@@ -2554,7 +3349,8 @@ mod tests {
     #[test]
     fn declared_productivity_values_reach_the_lua_table() {
         let mut m = fixture();
-        m.research_productivity.insert("processing-unit".to_string(), 0.10);
+        m.research_productivity
+            .insert("processing-unit".to_string(), 0.10);
         let params = RunParams::defaults_for(&m, "test-prod-declared".into(), 16, Some(18000));
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
         assert!(

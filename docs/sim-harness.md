@@ -124,6 +124,113 @@ cargo run -p spaghettio_sim_harness -- run \
     --bp bp.txt --manifest manifest.json --out report.json
 ```
 
+For an opt-in fast cross-check, add `--meter`. This runs the independent
+item-level meter on the same blueprint and manifest using its calibrated
+108,000-tick warmup and 216,000-tick measurement window; override those with
+`--meter-warmup` and `--meter-window`. The result is printed beside the sim
+report and stored under the top-level `meter` key in `--out`.
+
+This is deliberately report-only. It does not change the Factorio verdict,
+candidate selection, or any validator result. The post-lift calibration has a
+known missed-defect case, so an at-plan meter reading is not clearance; use a
+low reading as a cheap finding to investigate.
+
+For an apples-to-apples long-window diagnostic, add `--fixed-window --window
+216000`. This suppresses early convergence, closes exactly one 216,000-tick
+post-warmup window, and reports the resulting simulator state. It is opt-in
+diagnostic mode only; ordinary `run` remains item-driven and
+convergence-based. Use it when comparing against the meter's long measurement
+window, especially before attributing a small rate difference to belt physics.
+
+The meter payload also includes `recipe_attribution`: window-scoped machine
+counts, crafts, working ticks, output-blocked ticks, item/fluid shortage ticks,
+and fluid supplied/consumed by recipe. This is diagnostic evidence for tracing
+meter/sim divergence; it is not another verdict.
+
+The raw `sim_state` payload additionally contains `inserter_trace` and
+`drop_probes`. Each trace record preserves the legacy status census while
+exposing the inserter kind, held stack, arm position, pickup/drop positions,
+and resolved pickup/drop targets. `drop_probes` is a periodic, report-only
+sample keyed by inserter unit number: it records the resolved transport-line
+position, whether the hand was carrying an item, status counts, and numeric
+yes/no/error counts for `can_insert_at`. `local_checks` probes the valid local
+`[0, line_length]` domain; `segment_checks` deliberately keeps the raw
+`get_item_insert_specification` coordinate for comparison and must not be
+interpreted as a local belt-slot probe.
+`belt_positions` carries the continuous positions from the game's detailed
+transport-line view. These channels are intended for diagnosing belt-drop
+backpressure; they are not part of baseline comparison.
+
+`drop_event_trace` is the tick-synchronised transition channel: accepted and
+blocked events include the immediately preceding and following inserter state.
+Its `can_insert` field is the local line-coordinate result; `raw_can_insert`
+is retained only to expose the connected-segment/local-coordinate distinction.
+`drop_physics_probe` is a temporary isolated belt fixture that records known
+occupancy patterns against `can_insert_at`; the fixture is destroyed before
+factory measurement.
+
+`pickup_event_trace` is the corresponding belt-to-machine channel. It records
+per-inserter counters for items picked from a belt and delivered into the
+machine, along with the transferred item name, resolved machine recipe, and
+positions. Its transition list is capped for forensic size, but the aggregate
+per-item counters are complete. Both trace channels are emitted as arrays
+sorted by inserter unit number in `sim-state.json`; the live Lua tables remain
+unit-number keyed so sampling stays O(1). Each pickup record also includes
+`measurement_picked_items` and `measurement_delivered_items`, with matching
+per-item fields, reset at the configured warmup boundary so fixed-window runs
+can be compared directly with meter rates. In `--pickup-trace-only` mode the
+channel samples every tick so fast inserter hand cycles are not skipped;
+ordinary runs retain the lower-cost 60-tick sampling cadence.
+
+On large layouts, `run --pickup-trace-only` keeps this pickup channel while
+skipping the unrelated per-tick drop probes. It is a performance-only
+diagnostic switch: it does not alter the imported world, simulation state,
+measurement counters, or verdict logic. Use it when a long engine-vs-meter
+pickup comparison would otherwise spend its wall-clock budget on drop
+forensics.
+
+In `--fixed-window` diagnostic mode, the harness also writes the rich
+`sim-state.json` snapshot at the first closed measurement window, before the
+possibly much later derived tick ceiling. This makes the belt/drop telemetry
+available for CPU-bound fixtures that time out during their long tail; normal
+runs retain their existing finalization-only dump semantics.
+
+## Debugging a sim/meter divergence
+
+Use the simulator as the behavioral reference and the meter as a fast,
+inspectable differential model. A useful investigation follows this order:
+
+1. **Align the measurement.** Run both models with the same blueprint,
+   manifest, warmup, and steady-state window. Compare produced rates before
+   delivered rates: a drain that flushes buffered output can make delivery
+   include items produced before the measurement window.
+2. **Localize by attribution.** Use the meter's recipe attribution and
+   `trace_recipe` output to identify blocked machines, starved inserters, and
+   the exact belt path feeding them. Use the simulator's machine time-series,
+   item counters, and `drop_event_trace` to find the corresponding engine
+   state.
+3. **Reduce the topology.** Build a disposable fixture containing only the
+   suspected belt, turn, sideload, or inserter interaction. Keep it outside
+   the factory and destroy it before the production measurement so diagnostic
+   entities cannot affect the verdict.
+4. **Control initial state.** Insert known items at known transport-line
+   positions, fill one lane at a time, and sample every tick. Compare lane
+   identity, occupancy, local positions, and admission ticks—not only the
+   final item count.
+5. **Test one hypothesis.** Make the smallest topology-scoped model change
+   that explains the observation. Require both the isolated tick sequence and
+   the full replay to improve; a toy-fixture improvement that lowers the real
+   replay is a rejected hypothesis and must be reverted.
+6. **Record the boundary.** Keep the measured engine facts, rejected
+   experiments, full-replay rates, and remaining uncertainty in the handoff.
+   This prevents a successful fixture from being mistaken for a complete
+   sim/meter match.
+
+This workflow separates four commonly conflated causes: warmup or window
+artifacts, endpoint/inserter resolution, discrete belt occupancy, and
+continuous turn/sideload geometry. The raw report is the evidence record;
+the meter must not alter the simulator verdict.
+
 What happens: the harness generates a scenario (`control.lua` that pastes
 the blueprint, superforce-builds it, revives ghosts, attaches feed/drain
 boundary infrastructure at the manifest's coordinates), launches the
