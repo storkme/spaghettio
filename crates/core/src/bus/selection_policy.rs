@@ -947,7 +947,7 @@ fn current_program() -> SelectionProgram {
                 on_incumbent_win: ChainBehavior::Terminate,
             },
             StageSpec {
-                // The degraded fallback, and the `ec30` trap #694
+                // The degraded fallback, and the pre-#701 `ec30` trap #694
                 // measured: an error-laden best SHIPS rather than the
                 // solve refusing. v2 reproduces it bit-for-bit under
                 // parity; changing it is Phase-3 calibration work, not

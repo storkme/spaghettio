@@ -732,7 +732,7 @@ fixtures / docs split per the churn norm).
     retires `status.md`'s "AC is bit-identical declared-or-not". The
     undeclared run measured identically on every solid stage and differed
     only on petroleum (−8.9% vs −0.6%), which is the axis mismatch itself.
-  - ***`ec30-am2` (merge-tap, winner `native`): FAIL, and it is REAL.***
+  - ***`ec30-am2` (pre-#701 merge-tap, winner `native`): FAIL, and it was REAL.***
     **0.00/s at every stage, −100.0%**, 4 checkpoints at a 2-game-hour
     warmup; kit-clean, fluid-clean, 1991/1991 ghosts revived; census 150
     `full_output` + 20 `item_ingredient_shortage` — a jam, not a starve.
@@ -741,7 +741,10 @@ fixtures / docs split per the churn norm).
     fixture-confusion it clears up (the "#644-era ec30 ≈99.4%" anchor is a
     different fixture AND a different artifact) in `docs/status.md`. **This
     is a Phase-0 finding, not a Phase-0 fix**: nothing here changes the
-    layout.
+    layout. This is the pre-restore artifact, not the current layout receipt:
+    after #701, meter evidence removes the 0/s jam but reads **25.0/s against
+    30 planned**, a below-plan result that must be believed rather than used
+    to clear the layout; a fresh sim anchor is still required.
   - *Structural consequence for Phase 2a, recorded now: the corpus's
     `default` cells are not all directly sim-anchorable. Any fixture whose
     chain contains a force-boosted recipe (plastic-bar, processing-unit)
@@ -2235,3 +2238,13 @@ fixtures / docs split per the churn norm).
   the two named rows above; all other 143 cells are verdict-unchanged. The
   parity baseline compares only `(status, winner, stage)`; associated
   outcome-vector changes are retained for adjudication.*
+
+- *2026-08-22 — **#701 ec30-am2-ore sim-anchor attempt.** The restored
+  production-default layout is **not cleared**: the meter's **25.0/s vs
+  30 planned** is a below-plan reading to be believed, and it is the evidence
+  that the earlier sim-confirmed 0/s jam is gone. The tracked export succeeded
+  (2,071 entities, 0 validator errors), but the required harness invocation
+  with `--warmup 432000` exited 1 before Factorio launched with the exact
+  sandbox error `binding ephemeral port: Operation not permitted (os error 1)`.
+  No delivered electronic-circuit rate or stage breakdown is available from
+  this attempt; a successful sim anchor remains required.*
