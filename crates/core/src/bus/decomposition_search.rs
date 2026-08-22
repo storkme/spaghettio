@@ -1315,14 +1315,15 @@ impl Scoreboard {
     }
 }
 
-/// RFC-070 Phase 2a (#689 W3a): run the v2 policy loop in SHADOW over
-/// the same scoreboard v1 just decided from, and emit the comparison.
+/// RFC-070 Phase 2b (#689 OWNER GATE 2): run the v2 policy loop over the
+/// same scoreboard v1 just decided from, and emit the reverse comparison.
 ///
-/// **Zero behaviour change by construction**: this function returns
-/// nothing, mutates nothing, and is called after the winner has already
-/// been chosen and replayed. v1's answer ships regardless of what v2
-/// says. A disagreement is DATA for the campaign's K70-1 adjudication
-/// — never a panic, never a fix-it-so-it-passes signal.
+/// **Phase 2b reverse shadow**: this function returns nothing, mutates
+/// nothing, and compares the v1 answer against the v2 answer that now
+/// ships. The `v1_*` field names are retained by the trace schema; they
+/// identify the former shipped side, not the current direction of the
+/// comparison. A disagreement is DATA for the campaign's K70-2
+/// adjudication — never a panic, never a fix-it-so-it-passes signal.
 ///
 /// Two things are compared, and they fail differently:
 ///
@@ -1899,10 +1900,9 @@ pub fn select_best_decomposition(
         }
     }
 
-    // Pick winner: best accepted candidate by score; otherwise best
-    // unaccepted candidate (degraded path so the user still sees a
-    // layout — same behaviour as today's pipeline when shape-fix can't
-    // resolve a (n, m) trap).
+    // Compute the v1 answer in full. It remains live as the reverse shadow
+    // until Phase 2c deletes this chain; it no longer feeds the shipped
+    // layout or terminal selection events.
     // Index order MUST match NATIVE_IDX (0) / MERGE_TAP_IDX (3) above.
     // Refusal reasons for the all-candidates-failed message, taken from
     // the same checked list everything else is keyed by. This was a
@@ -2072,7 +2072,7 @@ pub fn select_best_decomposition(
     // candidate displacing native is a different decision from native
     // surviving merge-tap, and the oracle must not merge them).
     use crate::trace::SelectionStage;
-    let winner_idx: Option<(usize, SelectionStage)> = match merge_tap_choice {
+    let v1_winner_idx: Option<(usize, SelectionStage)> = match merge_tap_choice {
         Some(MERGE_TAP_IDX) => Some((MERGE_TAP_IDX, SelectionStage::MergeTap)),
         Some(_) => match scoped_choice {
             Some(i) => Some((i, SelectionStage::ScopedPairwise)),
@@ -2093,18 +2093,24 @@ pub fn select_best_decomposition(
             .map(|i| (i, SelectionStage::FirstProduced))
     });
 
-    let Some((idx, stage)) = winner_idx else {
+    // Phase 2b: v2 is the shipped decision, unconditionally. It consumes
+    // the scoreboard projections of the measurements already computed by
+    // v1's mechanisms; it does not re-run validation or consult v1's
+    // answer. A policy no-winner is the existing all-candidates-refused
+    // error path below.
+    let policy = selection_policy::SelectionPolicy::current();
+    let v2_winner = selection_policy::decide(&board.v2_profiles(), &policy);
+    let Some(v2_decision) = v2_winner else {
         // Every candidate failed. The scoreboard still goes out — WHY each
         // of the seven produced nothing is exactly what a refusal
         // investigation needs — but no `SelectionDecided` follows it,
         // because there is no winner and the stage enum is deliberately
         // closed over the five ways a winner CAN be picked.
         board.emit();
-        // RFC-070 Phase 2a: the shadow runs on this path too. "v2 named
-        // a winner where v1 refused everything" is a divergence worth
-        // seeing, and it is invisible if the comparison only happens
-        // where v1 succeeded.
-        emit_selection_shadow(&board, solver_result, &opts, None);
+        // The reverse shadow still runs on this path, including when v1
+        // and v2 both refuse, so the schema remains emitted for every
+        // selection call.
+        emit_selection_shadow(&board, solver_result, &opts, v1_winner_idx);
         // Both sides keyed by `CANDIDATE_ORDER`: the names from the list
         // itself and the reasons from `run_refs`, whose slots are checked
         // against it. Nothing here is positional against a separately
@@ -2122,6 +2128,9 @@ pub fn select_best_decomposition(
             details.join("; ")
         ));
     };
+
+    let idx = v2_decision.winner;
+    let stage = v2_decision.stage;
 
     // Move winning entry out of the array; replay its captured trace
     // events to the live sink and back into the collector so the only
@@ -2152,13 +2161,13 @@ pub fn select_best_decomposition(
         winner: name.to_string(),
         stage,
     });
-    // RFC-070 Phase 2a (#689 W3a): the SHADOW, emitted immediately after
-    // the verdict it shadows and strictly after it. Ordering matters to
+    // RFC-070 Phase 2b (#689 OWNER GATE 2): the SHADOW is emitted
+    // immediately after the v2 terminal it reverses. Ordering matters to
     // the readers: `parity_corpus`'s extractor pairs the last seven
     // scoreboard rows with the last `SelectionDecided`, so the shadow
-    // must not sit between them. Nothing above this line reads its
-    // result — v1 has already chosen, replayed and returned its winner.
-    emit_selection_shadow(&board, solver_result, &opts, Some((idx, stage)));
+    // must not sit between them. v2 has already chosen, replayed and
+    // returned the shipped winner; v1 is carried only in the comparison.
+    emit_selection_shadow(&board, solver_result, &opts, v1_winner_idx);
     Ok(layout)
 }
 
