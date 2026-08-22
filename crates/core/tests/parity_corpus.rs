@@ -1704,7 +1704,7 @@ const SMOKE_CELLS: &[(&str, &str)] = &[
 /// the real gate for a phase boundary — this is the tripwire between
 /// them, sized so it can run unconditionally.
 ///
-/// # Cost, and why the ceiling is 600s for a 31-second test
+/// # Cost, and why the ceiling is 720s for a 31-second test
 ///
 /// Measured: **~15s local warm** (16 threads, pinned cache) and **30.9s
 /// on the CI runner** (PR #703 head `12b1ea87`, job 97039777698) — a 2x
@@ -1717,10 +1717,10 @@ const SMOKE_CELLS: &[(&str, &str)] = &[
 /// The ceiling is sized for the case that is NOT measured: an unpinned
 /// host solving all six fixtures' zones fresh (#703 review round 2).
 /// That is the 8-18x regime, which puts a cold run in the 120-270s band
-/// — uncomfortably close to a 300s ceiling for a run that is working
+/// — uncomfortably close to the old 300s ceiling for a run that is working
 /// correctly, just slowly. **A hang detector that fires on a cold cache
 /// is a false positive on the one gate that runs everywhere**, which is
-/// the same class as the `status == "decided"` pin round 1 removed. 600s
+/// the same class as the `status == "decided"` pin round 1 removed. 720s
 /// keeps the detector without that failure mode, and costs nothing in
 /// the pinned case.
 ///
@@ -1736,7 +1736,7 @@ const SMOKE_CELLS: &[(&str, &str)] = &[
 /// `cargo nextest` (both profiles); plain `cargo test` reads none of
 /// that, which is exactly why the ntest ceiling is the real guard.
 #[test]
-#[ntest::timeout(600_000)]
+#[ntest::timeout(720_000)]
 fn shadow_agrees_with_production_on_the_census_fixtures() {
     // Self-describing rather than self-enforcing: a cold-cache run is
     // legitimate here (the comparison is cache-independent) but is many

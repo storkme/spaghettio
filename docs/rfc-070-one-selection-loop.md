@@ -1993,7 +1993,7 @@ fixtures / docs split per the churn norm).
     comparison, not fixture stability). Hence
     `shadow_agrees_with_production_on_the_census_fixtures`, NON-ignored
     (~15s local warm, six census fixtures at their #691 machine tiers,
-    `threads-required = 2` and a 300s ntest ceiling for the 4-thread
+    `threads-required = 2` and the authoritative 720s ntest ceiling for the 4-thread
     runner), running on every push — the first always-on assertion this
     campaign has been able to make, and the thing Verification plan
     item 2 was pointing at all along. The 160-cell sweep under
@@ -2015,7 +2015,7 @@ fixtures / docs split per the churn norm).
     thing being measured is 0.002%, so the A/B measures the host, and
     the in-process ratio is the answer. No stress-corpus timeout is
     approached: the shadow adds tens of microseconds to a selection, and
-    the one new CI test is 15 s local warm inside a 300 s ceiling.*
+    the one new CI test is 15 s local warm inside the authoritative 720 s ceiling.*
   - ***What the shadow still does NOT see, recorded before anyone
     quotes 140/140.*** (i) **Nested selections in LOSING candidates.**
     The shadow event is emitted like any other, so `run_candidate`
@@ -2104,8 +2104,8 @@ fixtures / docs split per the churn norm).
     concurrency to two heavy tests at a time") replaces it.*
   - *Refuted with a receipt: the nit extrapolated the ceiling risk from
     this file's cold-cache note (`partition_strategy_scoreboard`, ~26s
-    local warm vs 200-480s CI) and recommended raising the 300s ntest
-    ceiling. That ratio does not apply — the rust job PINS
+    local warm vs 200-480s CI) and recommended raising the then-stale 300s
+    ntest ceiling. That ratio does not apply — the rust job PINS
     `SPAGHETTIO_ZONE_CACHE_PATH`, so the gate is not solving zones fresh.
     **Measured on the PR's own head**: 30.9s in CI against 15s local warm,
     a 2x host penalty, leaving a ~10x margin. The sizing is now stated
@@ -2157,13 +2157,13 @@ fixtures / docs split per the churn norm).
     two agree (correctly — no false alarm) and FAILS the moment a real
     divergence exists, naming both the anchor mismatch and the
     inconsistent `agree` bit.*
-  - *Timing, absorbed: the 300s ntest ceiling was sized against the
+  - *Timing, absorbed: the then-stale 300s ntest ceiling was sized against the
     MEASURED pinned-cache CI number (30.9s) and said nothing about an
     unpinned host, where this file's own cold-cache note implies 8-18x
     and a 120-270s run. **A hang detector that fires on a cold cache is
     a false positive on the one gate that runs everywhere** — the same
     class as the `status == "decided"` pin round 1 removed — so the
-    ceiling is 600s, which costs nothing in the pinned case. Setting the
+    parity-gate ceiling is 720s, which costs nothing in the pinned case. Setting the
     pin from inside the test was rejected and the reason recorded at the
     test: `zone_cache::lookup_table()` is a process-wide `OnceLock` and
     `cargo test` runs the binary's tests as threads of one process, so a
@@ -2191,3 +2191,18 @@ fixtures / docs split per the churn norm).
     a `run_refs`/`candidates` desync is caught in the environment the
     oracle is designed for — debug and CI, per the #692 round-4
     precedent.*
+- *2026-08-22 — **Phase 2b flipped (RFC-070, #689 OWNER GATE 2).** The
+  owner evidence package records 140/140 shadow agreement on winner and
+  stage with zero divergences; the committed parity gate remains
+  160/160 baseline-clean. Accordingly, `selection_policy::decide()` over
+  the scoreboard's profiles is now the unconditional shipped decision:
+  its winner supplies the returned layout, `DecompositionChosen`, and
+  `SelectionDecided`; a v2 no-winner uses the existing all-candidates-
+  refused error path. The complete v1 chain remains computed and is the
+  reverse shadow until Phase 2c deletes it. `SelectionShadowCompared`
+  keeps its `v1_*`/`v2_*` schema names, now documenting v1 as the former
+  shipped side. The parity-gate timeout is settled at **720s authoritative**
+  across the `#[ntest::timeout]`, nextest effective cap, and this RFC's
+  Phase-2a entry; the stale 300s comment and former 600s attribute were
+  reconciled to that value. K70-3's separate stress-corpus timeout remains
+  600s.*
