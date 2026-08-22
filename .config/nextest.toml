@@ -17,8 +17,9 @@ fail-fast = false
 # couple of them run concurrently on the 4-thread runner.
 #
 # Default slow-timeout: flag tests slower than 60s, hard-kill at 300s.
-# Tests that can legitimately exceed 300s carry overrides below; their
-# own #[ntest::timeout] ceilings (≤600s) fire before the nextest kill.
+# Tests that can legitimately exceed 300s carry overrides below. The default
+# nextest kill therefore fires before any longer #[ntest::timeout]; overrides
+# raise the nextest cap where the test's own ceiling needs to remain in charge.
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 # `partition_strategy_scoreboard` runs Pool/P1/P2 across 2 cases — 200s to
@@ -35,7 +36,7 @@ threads-required = 4
 # Heavy group: ≥8s local warm on 16 threads, so plausibly minutes on the
 # cold-cache 2-core runner. threads-required = 2 limits concurrency to two
 # heavy tests at a time; the 600s nextest kill defers to each test's own
-# #[ntest::timeout] ceiling (300–600s) as the real hang detector.
+# #[ntest::timeout] ceiling (300–720s) as the real hang detector.
 [[profile.ci.overrides]]
 filter = "test(stress_electronic_circuit) | test(layout_retry_is_trace_independent) | test(merge_tap_fallback_fires_with_correct_k_and_priority_taps) | test(processing_unit_2s_am2_fast_belts_validation_baseline) | test(tier5_processing_unit_from_ore_am3)"
 slow-timeout = { period = "60s", terminate-after = 10 }
@@ -56,17 +57,17 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # slot cost, NOT a reservation, so this test still co-schedules with one
 # other 2-slot test — it just cannot be one of three (#703 review round 1
 # corrected an earlier "keeps it off the box alongside another heavy
-# test", which overclaimed). The `#[ntest::timeout(300_000)]` is the real
-# hang detector; the 600s kill sits above it.
+# test", which overclaimed). The `#[ntest::timeout(720_000)]` is the same
+# authoritative 720s hang detector; nextest's effective cap is also 720s.
 #
 # Measured, not extrapolated: 30.9s on the pinned-cache CI runner (PR
 # #703 head 12b1ea87, job 97039777698) against 15s local warm — a 2x host
 # penalty, not the 8-18x the cold-cache note above records, because this
 # job pins SPAGHETTIO_ZONE_CACHE_PATH. The test's own
-# #[ntest::timeout(600_000)] is sized for the UNPINNED case instead (the
+# #[ntest::timeout(720_000)] is sized for the UNPINNED case instead (the
 # 8-18x regime puts a cold run at 120-270s, and a hang detector that
 # fires on a cold cache is a false positive on the one gate that runs
-# everywhere — #703 review round 2). This kill sits above it.
+# everywhere — #703 review round 2). Nextest uses the same 720s cap.
 [[profile.ci.overrides]]
 filter = "test(shadow_agrees_with_production_on_the_census_fixtures)"
 slow-timeout = { period = "60s", terminate-after = 12 }
