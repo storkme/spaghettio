@@ -2278,15 +2278,25 @@ fixtures / docs split per the churn norm).
   flip there to explain; if a different baseline was intended, it is not
   present in this branch's committed parent/blob pair.*
 
-  *Classifier reconciliation for the restored template: `classify((3,2))`
-  returns `BalancerClass::Balanced` and `ThroughputTier::Unlimited`, while
-  `check_throughput_unlimited` warns at the documented **10/15** and **20/30**
-  partial-input cases. This is a classifier↔walker semantic gap, not evidence
-  that the shipped template is TU: the classifier's predicate is uniform MX3
-  composition plus belt-level Menger max-flow over recovered splitter edges
-  (including sideloads), whereas the lane walker stamps active input subsets
-  and observes physical lane/dead-end routing. The `(3,2)` provenance therefore
-  remains deliberately non-TU-advertised; no classifier TU claim is added.*
+  *Classifier reconciliation for the restored template: before the round-3
+  downgrade, `classify((3,2))` returned `BalancerClass::Balanced` and
+  `ThroughputTier::Unlimited`, while `check_throughput_unlimited` warned at the
+  documented **10/15** and **20/30** partial-input cases. That pre-reconciliation
+  result exposed a classifier↔walker semantic gap: the classifier's predicate
+  was uniform MX3 composition plus belt-level Menger max-flow over recovered
+  splitter edges (including sideloads), whereas the lane walker stamped active
+  input subsets and observed physical lane/dead-end routing. The `(3,2)`
+  provenance therefore remained deliberately non-TU-advertised; no classifier
+  TU claim was added.*
+
+- *2026-08-22 — **#701 review round 3 classification correction.** Round 3
+  changed the shipped `(3,2)` result to
+  `BalancerClass::ThroughputLimited` / `ThroughputTier::Limited`: the lane
+  walker's warnings at **10/15** and **20/30** are authoritative for this
+  pinned shape because the walker owns lane-level partial-input behaviour,
+  while the Menger classifier is belt-level. The report now records both
+  views. The preceding paragraph is retained as the pre-downgrade record; its
+  `Balanced` / `Unlimited` values are not the shipped result.*
 
 - *2026-08-22 — **#701 ec30-am2-ore sim anchor landed.** The restored
   production-default layout is **sim-anchored at 97% of plan, not claimed

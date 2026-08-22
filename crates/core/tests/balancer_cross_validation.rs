@@ -20,7 +20,8 @@
 
 use spaghettio_core::balancer::{from_splitter_graph, verify_balancer, VerifyError};
 use spaghettio_core::bus::balancer_classify::{
-    classify, topology_of_template, BalancerTemplateRef, ClassificationReport,
+    classify, topology_of_template, BalancerClass, BalancerTemplateRef, ClassificationReport,
+    ThroughputTier, KNOWN_THROUGHPUT_LIMITED,
 };
 use spaghettio_core::bus::balancer_library::balancer_templates;
 
@@ -35,6 +36,19 @@ fn has_uniform_composition(report: &ClassificationReport) -> bool {
 #[test]
 fn cross_validate_existing_templates() {
     let templates = balancer_templates();
+
+    for &shape in &KNOWN_THROUGHPUT_LIMITED {
+        let report = classify(
+            templates
+                .get(&shape)
+                .unwrap_or_else(|| panic!("known throughput-limited shape {shape:?} missing")),
+        )
+        .unwrap_or_else(|error| {
+            panic!("known throughput-limited shape {shape:?} failed: {error:?}")
+        });
+        assert_eq!(report.class, BalancerClass::ThroughputLimited, "{shape:?}");
+        assert_eq!(report.throughput, ThroughputTier::Limited, "{shape:?}");
+    }
 
     let mut shapes: Vec<(u32, u32)> = templates.keys().copied().collect();
     shapes.sort();
@@ -165,7 +179,7 @@ fn cross_validate_existing_templates() {
     //      on whether a template is balanced (they may give different
     //      *errors* for not-balanced templates; that's `both_not_balanced`,
     //      tracked separately).
-    //   2. `both_not_balanced` is exactly the three known templates that
+    //   2. `both_not_balanced` is exactly the two known templates that
     //      both rejecters reject. Adding a new not-balanced shape is a
     //      regression in the library; losing one means the rejecters are
     //      too lenient.

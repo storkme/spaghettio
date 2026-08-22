@@ -159,10 +159,11 @@ pub const SUBSET_ENUM_MAX: usize = 16;
 
 /// Library shapes whose lane-walker result is authoritative over the generic
 /// belt-level Menger result. The `(3, 2)` entry is measured at 10/15 with
-/// one of three inputs active and 20/30 with two of three active; both lose
-/// 67% of routed flow to dead ends under the walker's partial-input probe.
+/// one of three inputs active and 20/30 with two of three active; both deliver
+/// 67% of the expected flow and lose 33% to dead ends under the walker's
+/// partial-input probe.
 /// `(5, 8)` is the pre-existing accepted MX1 pin.
-const KNOWN_THROUGHPUT_LIMITED: [(u32, u32); 2] = [(3, 2), (5, 8)];
+pub const KNOWN_THROUGHPUT_LIMITED: [(u32, u32); 2] = [(3, 2), (5, 8)];
 
 /// The throughput tier of a graph, computed without reference to its
 /// composition matrix — so it is available even for templates whose
@@ -330,10 +331,9 @@ pub fn classify_ref(template: BalancerTemplateRef<'_>) -> Result<ClassificationR
     let graph = recover_graph(template)?;
     let mut report = classify_graph(&graph)?;
 
-    // The graph classifier cannot see physical lanes or partial-input
-    // routing. For the explicitly pinned library shapes, let the lane walker
-    // close that gap rather than allowing an aggregate Menger/TU result to
-    // certify a template the walker has disproved.
+    // This downgrade is keyed on the walker's partial-input warnings by
+    // design: the walker is the lane-level authority and Menger is belt-level;
+    // the report fields reflect both views.
     if KNOWN_THROUGHPUT_LIMITED.contains(&(template.n_inputs, template.n_outputs))
         && !crate::bus::template_validate::check_throughput_unlimited(template).is_empty()
     {
@@ -1690,25 +1690,40 @@ mod tests {
             .map(|issue| parse_partial_input_warning(&issue.message))
             .collect();
         measured.sort_by_key(|warning| warning.active_inputs);
-        assert_eq!(
-            measured,
-            vec![
-                PartialInputWarning {
-                    shape: (3, 2),
-                    active_inputs: 1,
-                    total_inputs: 3,
-                    actual_output: 10.0,
-                    expected_output: 15.0,
-                },
-                PartialInputWarning {
-                    shape: (3, 2),
-                    active_inputs: 2,
-                    total_inputs: 3,
-                    actual_output: 20.0,
-                    expected_output: 30.0,
-                },
-            ]
-        );
+        let expected = vec![
+            PartialInputWarning {
+                shape: (3, 2),
+                active_inputs: 1,
+                total_inputs: 3,
+                actual_output: 10.0,
+                expected_output: 15.0,
+            },
+            PartialInputWarning {
+                shape: (3, 2),
+                active_inputs: 2,
+                total_inputs: 3,
+                actual_output: 20.0,
+                expected_output: 30.0,
+            },
+        ];
+        assert_eq!(measured.len(), expected.len());
+        for (actual, expected) in measured.iter().zip(expected.iter()) {
+            assert_eq!(actual.shape, expected.shape);
+            assert_eq!(actual.active_inputs, expected.active_inputs);
+            assert_eq!(actual.total_inputs, expected.total_inputs);
+            assert!(
+                (actual.actual_output - expected.actual_output).abs() < 1e-9,
+                "actual output drifted: got {}, expected {}",
+                actual.actual_output,
+                expected.actual_output
+            );
+            assert!(
+                (actual.expected_output - expected.expected_output).abs() < 1e-9,
+                "expected output drifted: got {}, expected {}",
+                actual.expected_output,
+                expected.expected_output
+            );
+        }
     }
 
     #[derive(Debug, PartialEq)]

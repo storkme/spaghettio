@@ -560,7 +560,8 @@ static T_3_1_OUTPUT: &[(i32, i32)] = &[(2, 8)];
 // The restored book design is min-cut-clean at rated=min(3,2)=2, but it is
 // lossy under partial input. The advisory `check_throughput_unlimited`
 // measurement records 10/15 with 1/3 input rows active and 20/30 with 2/3
-// active (67% routed to dead-end outputs in each case). The classifier pins
+// active (67% delivered and 33% routed to dead-end outputs in each case). The
+// classifier pins
 // that lane-walker result rather than certifying TU from its generic
 // belt-level Menger result.
 // The ec30-am2-ore Factorio anchor (`--warmup 432000 --speed 32`) delivered
