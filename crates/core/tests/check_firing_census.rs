@@ -109,7 +109,16 @@ use spaghettio_core::{solver, validate};
 /// `f64` has no `Ord`, so the rate travels as `to_bits`: exact equality
 /// is all this needs, and the sort only wants a total order, not a
 /// numerically meaningful one.
-type EntitySignature = Vec<(String, i32, i32, u8, Option<String>, Option<String>, bool, Option<u64>)>;
+type EntitySignature = Vec<(
+    String,
+    i32,
+    i32,
+    u8,
+    Option<String>,
+    Option<String>,
+    bool,
+    Option<u64>,
+)>;
 
 fn layout_signature(l: &LayoutResult) -> EntitySignature {
     let mut sig: Vec<_> = l
@@ -140,12 +149,11 @@ fn layout_signature(l: &LayoutResult) -> EntitySignature {
 /// 1. Candidate refusal (`decomposition_search.rs`) is supposed to key on
 ///    `Severity::Error` only, so a Warning-only firing on a non-default
 ///    variant is not by itself evidence of invisible selection work — but
-///    `select_best_decomposition`'s error-free tier (`best_error_free_idx`)
+///    `select_best_decomposition`'s error-free policy tier
 ///    only WINS the pick when some candidate validates clean; if the whole
 ///    ranking is error-laden, selection falls through to the best-accepted
-///    candidate and ships it anyway (see the comment above
-///    `best_error_free_idx` in `decomposition_search.rs`: "still returns
-///    the error-laden best rather than refusing"). A default build CAN
+///    candidate and ships it anyway (the policy's error-free stage still
+///    returns the error-laden best rather than refusing). A default build CAN
 ///    carry a `Severity::Error`, so `err-loser`/`loser-only` must not be
 ///    gated on the any-severity `winner` flag — the two are unrelated
 ///    facts.
@@ -251,10 +259,30 @@ impl CatRow {
 /// different fixture set could not be read against the census rows.
 /// Fields: item, rate, machine, external inputs.
 const FIXTURES: &[(&str, f64, &str, &[&str])] = &[
-    ("iron-gear-wheel", 10.0, "assembling-machine-1", &["iron-plate"]),
-    ("electronic-circuit", 10.0, "assembling-machine-1", &["iron-ore", "copper-ore"]),
-    ("electronic-circuit", 30.0, "assembling-machine-2", &["iron-ore", "copper-ore"]),
-    ("plastic-bar", 5.0, "chemical-plant", &["coal", "water", "crude-oil"]),
+    (
+        "iron-gear-wheel",
+        10.0,
+        "assembling-machine-1",
+        &["iron-plate"],
+    ),
+    (
+        "electronic-circuit",
+        10.0,
+        "assembling-machine-1",
+        &["iron-ore", "copper-ore"],
+    ),
+    (
+        "electronic-circuit",
+        30.0,
+        "assembling-machine-2",
+        &["iron-ore", "copper-ore"],
+    ),
+    (
+        "plastic-bar",
+        5.0,
+        "chemical-plant",
+        &["coal", "water", "crude-oil"],
+    ),
     (
         "advanced-circuit",
         5.0,
@@ -285,11 +313,27 @@ fn check_firing_census() {
     type Variant = (&'static str, fn(&mut LayoutOptions), bool);
     let variants: &[Variant] = &[
         ("default", |_| {}, false),
-        ("di-off", |o| o.direct_insertion = DirectInsertion::Off, true),
-        ("di-forced", |o| o.direct_insertion = DirectInsertion::Forced, false),
-        ("cells-off", |o| o.cell_composition = CellComposition::Off, true),
+        (
+            "di-off",
+            |o| o.direct_insertion = DirectInsertion::Off,
+            true,
+        ),
+        (
+            "di-forced",
+            |o| o.direct_insertion = DirectInsertion::Forced,
+            false,
+        ),
+        (
+            "cells-off",
+            |o| o.cell_composition = CellComposition::Off,
+            true,
+        ),
         ("hs-off", |o| o.horizontal_candidate = false, true),
-        ("partitioned", |o| o.strategy = LayoutStrategy::PartitionedDecomposed, false),
+        (
+            "partitioned",
+            |o| o.strategy = LayoutStrategy::PartitionedDecomposed,
+            false,
+        ),
     ];
     let native_adjacent_names: Vec<&str> = variants
         .iter()
@@ -414,7 +458,11 @@ fn check_firing_census() {
     } else {
         let mut entries: Vec<_> = refusals_by_variant.iter().collect();
         entries.sort_by_key(|(name, _)| **name);
-        entries.iter().map(|(name, n)| format!("{name}={n}")).collect::<Vec<_>>().join(" ")
+        entries
+            .iter()
+            .map(|(name, n)| format!("{name}={n}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     };
     println!("\n=== check-firing census: {builds} builds, refusals: {refusal_summary} ===");
     println!(
@@ -444,8 +492,17 @@ fn check_firing_census() {
         // on that fixture's default having actually built (points 2-3).
         let loser_only = row.loser_only(&defaults_built);
         let err_loser = row.err_loser(&defaults_built);
-        let err_variants_str = row.err_variants.iter().copied().collect::<Vec<_>>().join(",");
-        let err_variants_disp = if err_variants_str.is_empty() { "-" } else { &err_variants_str };
+        let err_variants_str = row
+            .err_variants
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .join(",");
+        let err_variants_disp = if err_variants_str.is_empty() {
+            "-"
+        } else {
+            &err_variants_str
+        };
         let variants_str = row.variants.iter().copied().collect::<Vec<_>>().join(",");
         println!(
             "{:<32} {:>7} {:>10} {:>9} {:>6}  {:<24}  {}",
@@ -482,7 +539,11 @@ fn check_firing_census() {
         let total = comparable_builds.get(vname).copied().unwrap_or(0);
         let noop = noop_count.get(vname).copied().unwrap_or(0);
         let uncomparable = noncomparable_builds.get(vname).copied().unwrap_or(0);
-        let tag = if native_adjacent { "native-adjacent" } else { "user-elected" };
+        let tag = if native_adjacent {
+            "native-adjacent"
+        } else {
+            "user-elected"
+        };
         println!(
             "  {vname:<12} {noop}/{total} comparable builds identical to default \
              (+{uncomparable} with no default to compare)  ({tag})"
@@ -548,9 +609,8 @@ fn check_firing_census() {
 // ---------------------------------------------------------------------------
 
 /// Render `select_best_decomposition`'s own scoreboard for each fixture:
-/// which of the seven candidates were evaluated, what each of the THREE
-/// verdict mechanisms said about them, who won, and which precedence
-/// stage did the deciding.
+/// which of the seven candidates were evaluated, what measurements were
+/// recorded for them, who won, and which policy stage did the deciding.
 ///
 /// Relationship to the census above: same fixtures, opposite direction.
 /// The census approximates the candidate field from OUTSIDE, by
@@ -564,8 +624,8 @@ fn check_firing_census() {
 /// the "which categories fire" gap this says nothing about.
 ///
 /// What it CANNOT show, by construction: the instrumentation records only
-/// what the decision path already computed, never a fresh `validate()`
-/// call. A candidate that no comparison mechanism needed carries no issue
+/// what the selection path already computed, never a fresh `validate()`
+/// call. A candidate that no measurement site needed carries no issue
 /// counts at all, and those blanks print as `-`. A `-` is "nothing
 /// computed this", NOT "zero" — reading it as zero is the `unwrap_or(0)`
 /// mistake this instrument exists to avoid making at scale.
@@ -669,7 +729,10 @@ fn selection_scoreboard_census() {
                     pending.push(ev);
                 }
                 TraceEvent::SelectionDecided { winner, stage } => {
-                    blocks.push((std::mem::take(&mut pending), Some((winner.as_str(), *stage))));
+                    blocks.push((
+                        std::mem::take(&mut pending),
+                        Some((winner.as_str(), *stage)),
+                    ));
                 }
                 _ => {}
             }
@@ -752,12 +815,18 @@ fn selection_scoreboard_census() {
                     // that produced but failed the hard gate — the
                     // `accepted=no` tag, which is the only place the
                     // missing-balancer-template count surfaces.
-                    reason.as_deref().or(accepted_reason.as_deref()).unwrap_or("-"),
+                    reason
+                        .as_deref()
+                        .or(accepted_reason.as_deref())
+                        .unwrap_or("-"),
                 );
             }
             match decided {
                 Some((winner, stage)) => {
-                    println!("   => winner: {winner}   deciding stage: {}", stage_name(*stage));
+                    println!(
+                        "   => winner: {winner}   deciding stage: {}",
+                        stage_name(*stage)
+                    );
                     // The block-pairing invariant, checked rather than
                     // assumed (#692 review round 2, 3/3): a selection's
                     // winner must be one of ITS OWN rows. If grouping ever
@@ -812,25 +881,19 @@ fn selection_scoreboard_census() {
         println!("{fixture:<44} {winner:<18} {stage}");
     }
     println!(
-        "\nInterpretation: the three verdict mechanisms are not \
-         commensurable and the columns must not be read as one ranking. \
+        "\nInterpretation: the columns are measurements consumed by the \
+         shipped policy; they must not be read as one ranking. \
          `score`/`acc` is the soft score (`score_layout`), whose `acc` \
          carries ONLY the missing-balancer-template hard gate and is not \
          a validation verdict. `err`/`selw`/`laww` are the component-wise \
-         `IssueCounts` floor used by the DI and horizontal pairwise \
-         comparisons — never lexicographic, so a better `selw` does NOT \
+         `IssueCounts` floor used by the policy's scoped-pairwise stage — \
+         never lexicographic, so a better `selw` does NOT \
          buy a worse `laww`. `kinds` is the lexicographic `ErrorKinds` \
-         key, computed only by the Pooled merge-tap decision. A blank \
-         column is a candidate NO mechanism examined, and the blanks are \
-         structural rather than incidental: a merge-tap decision \
-         short-circuits the `clean_flags` tier entirely, so the only \
-         counts such a fixture can show are ones a scoped pairwise \
-         already computed — and where DI and horizontal both refused, \
-         that is none, leaving the kinds key as the whole of what the \
-         decision looked at and the whole of what this can report. That \
-         is also why the deciding STAGE is the load-bearing column: it \
-         says which question was actually asked, where the counts only \
-         say what the answer was made of."
+         key, retained for the policy's merge-tap stage. A blank column \
+         means no measurement site examined that candidate on this call, \
+         not that its value was zero. The deciding STAGE is the \
+         load-bearing column: it says which policy question was asked, \
+         while the measurements say what the answer was made of."
     );
 }
 
@@ -1006,8 +1069,8 @@ fn assert_scoreboard_contract(
 ///
 /// Everything else here is a print-only diagnostic a human runs with
 /// `--ignored`. That is fine for a table nobody's build depends on — but
-/// the Phase-0b scoreboard is the oracle every later RFC-070 phase diffs
-/// its shadow loop against, and an oracle whose only reader is a human
+/// the Phase-0b scoreboard is the evidence the RFC-070 parity corpus checks
+/// against, and an oracle whose only reader is a human
 /// running a diagnostic by hand has no failure mode: a broken stage tag,
 /// a row that stops being emitted, or an `from_run` outcome deduced
 /// backwards would all ship green (#692 review round 2, 3/3). The repo's
@@ -1139,7 +1202,7 @@ fn selection_scoreboard_contract_scoped_pairwise_stage() {
     assert_eq!(
         facts.stage,
         SelectionStage::ScopedPairwise,
-        "expected `horizontal_choice`'s pairwise comparison to decide ac@5/am2. TWO \
+        "expected the policy's horizontal component-wise comparison to decide ac@5/am2. TWO \
          readings: (1) the stage TAGGING broke — fix here; (2) the ENGINE changed so \
          horizontal no longer strictly improves, in which case the winner assertion \
          above fires first and the RFC-070 parity corpus needs re-taking (this fixture \

@@ -6,8 +6,8 @@
 //! an explicit fixture × machine-tier × OPTION-SET grid, each cell
 //! recording who won `select_best_decomposition` and which precedence
 //! stage decided it. `parity_corpus_baseline.json` is the committed
-//! result; Phase 2a's shadow loop diffs against it under the
-//! divergence-equivalence rule in the RFC's Verification plan.
+//! result; the shipped selection path is checked against it under the
+//! winner-plus-stage rule in the RFC's Verification plan.
 //!
 //! # Why the option-set axis exists
 //!
@@ -42,7 +42,8 @@
 //! entry — so a baseline pinning them would pin gaps as facts. The
 //! diagnostic that PRINTS those numbers is
 //! `check_firing_census.rs::selection_scoreboard_census`; this one
-//! commits only what a shadow loop can be held to.
+//! commits only the shipped winner and deciding stage, plus candidate
+//! outcomes for adjudication.
 //!
 //! # Corpus scope
 //!
@@ -75,7 +76,7 @@
 //!
 //! # Reproducibility is of the WHOLE RUN, in order — not of one cell
 //!
-//! A trap worth knowing before Phase 2a re-runs a divergent cell on its
+//! A trap worth knowing before a later run re-takes a divergent cell on its
 //! own (#694 review round 6). `zone_cache::lookup_table()` is a
 //! process-wide `OnceLock`, seeded once from disk and then **mutated in
 //! memory** as solves append newly-found zones. All 160 cells run in one
@@ -99,18 +100,11 @@
 //! nothing to notice it by. `=bless-repin` is the escape hatch for
 //! deliberately re-taking the baseline on a new cache.
 //!
-//! **Not CI-gated, deliberately, and the reason is scheduling rather
-//! than cost** (#694 review, finding 2). Gating this against production
-//! today would only assert "production has not changed", which every
-//! engine PR legitimately falsifies — a re-bless treadmill with no
-//! reader. The consumer that makes a gate meaningful is Phase 2a's
-//! shadow loop, and the RFC already commits to gating THAT
-//! (Verification plan item 2: "winner mismatch fails the check"). Until
-//! then the guard on the instrument is the three non-ignored contract
-//! tests in `check_firing_census.rs`; the guard on the DATA is that the
-//! next phase re-takes it. Same posture as the stress goldens for the
-//! same underlying reason: the layouts depend on which zone solutions
-//! the pinned cache replays.
+//! The 160-cell corpus check is not CI-gated because it compares
+//! cache-relative layout output against a committed record; an intentional
+//! engine change must re-bless it. The six-cell smoke tier below is always-on
+//! and CI-gated. The Phase-2c verification run uses the committed zone-cache
+//! pin and requires every cell to match.
 
 use std::collections::BTreeMap;
 
@@ -119,9 +113,6 @@ use serde::{Deserialize, Serialize};
 use spaghettio_core::bus::cells::CellComposition;
 use spaghettio_core::bus::di_cell::DirectInsertion;
 use spaghettio_core::bus::layout::{self, LayoutOptions};
-use spaghettio_core::bus::selection_policy::{
-    decide, ErrorKindCounts, IssueCounts, IssueProfile, SelectionPolicy,
-};
 use spaghettio_core::solver;
 use spaghettio_core::trace::{self, SelectionCandidateOutcome, SelectionStage, TraceEvent};
 
@@ -150,8 +141,11 @@ struct Fixture {
     machines: &'static [&'static str],
 }
 
-const ASSEMBLERS: &[&str] =
-    &["assembling-machine-1", "assembling-machine-2", "assembling-machine-3"];
+const ASSEMBLERS: &[&str] = &[
+    "assembling-machine-1",
+    "assembling-machine-2",
+    "assembling-machine-3",
+];
 const CHEM: &[&str] = &["chemical-plant"];
 
 /// The #691 corpus, verbatim (labels included, so the three censuses can
@@ -260,7 +254,7 @@ const FIXTURES: &[Fixture] = &[
 ];
 
 /// The option-set axis. `default` is what production ships; the rest are
-/// the configurations a shadow loop has to reproduce too.
+/// configurations retained in the committed parity claim surface.
 ///
 /// `cells-off` and `e2e-harness` are NOT the same cell: see the module
 /// doc's second-fossil note. Keeping both is what lets a divergence be
@@ -324,6 +318,10 @@ const OPTION_SETS: &[OptionSet] = &[
     ("hs-off", |o| o.horizontal_candidate = false),
 ];
 
+fn expected_cell_count() -> usize {
+    FIXTURES.iter().map(|f| f.machines.len()).sum::<usize>() * OPTION_SETS.len()
+}
+
 /// One grid cell's outcome. `status` is the coarse verdict, so a reader
 /// (and `check`) never has to infer one from a `None`. The complete set
 /// the code can emit, which is the set a baseline reader should expect
@@ -360,27 +358,39 @@ struct Cell {
     /// Empty when no selection ran. Deliberately one string, not seven
     /// JSON entries: it keeps a cell to one line, so a baseline diff
     /// shows a changed candidate field as one changed line rather than
-    /// a re-indent. NOT part of the equivalence rule — recorded so a
-    /// divergence can be adjudicated without re-taking the baseline.
+    /// a re-indent. Equality is asserted under a matching pinned cache as
+    /// a gate-transcription guard, but outcomes are not part of the
+    /// winner/stage equivalence rule; they are recorded so a divergence
+    /// can be adjudicated without re-taking the baseline.
     outcomes: String,
 }
 
 impl Cell {
     fn key(&self) -> (&str, &str, &str) {
-        (self.fixture.as_str(), self.machine.as_str(), self.options.as_str())
+        (
+            self.fixture.as_str(),
+            self.machine.as_str(),
+            self.options.as_str(),
+        )
     }
     /// The equivalence rule's comparison surface: winner name and
     /// deciding stage (plus status, which is what makes "no winner" and
     /// "winner unrecorded" different facts). See RFC-070's Verification
     /// plan §"Divergence-equivalence rule".
     fn verdict(&self) -> (&str, Option<&str>, Option<&str>) {
-        (self.status.as_str(), self.winner.as_deref(), self.stage.as_deref())
+        (
+            self.status.as_str(),
+            self.winner.as_deref(),
+            self.stage.as_deref(),
+        )
     }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Baseline {
     zone_cache_hash: Option<String>,
+    zone_cache_prefix_len: Option<u64>,
+    zone_cache_prefix_hash: Option<String>,
     cells: Vec<Cell>,
 }
 
@@ -399,7 +409,11 @@ fn resolve_zone_cache_path() -> std::path::PathBuf {
         .ok()
         .filter(|s| !s.is_empty())
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".cache")))
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".cache"))
+        })
         .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
     base.join("spaghettio").join("sat-zones.bin")
 }
@@ -458,6 +472,32 @@ fn hash_zone_cache() -> Option<String> {
     Some(format!("{:x}", h.finalize()))
 }
 
+/// SHA-256 of exactly the first `prefix_len` bytes of the configured binary
+/// cache. The committed prefix is the pin identity: zone-cache writes append
+/// records, so bytes after the committed boundary are not part of the pin.
+fn hash_zone_cache_prefix(prefix_len: u64) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let pin = std::fs::read(resolve_zone_cache_path()).ok()?;
+    let prefix_len = usize::try_from(prefix_len).ok()?;
+    let prefix = pin.get(..prefix_len)?;
+    let mut h = Sha256::new();
+    h.update(prefix);
+    Some(format!("{:x}", h.finalize()))
+}
+
+/// Capture the committed-prefix fields for a bless before this process can
+/// append newly solved zones. The old `zone_cache_hash` remains the full
+/// source hash used by the ignored corpus check's provenance diagnostics;
+/// this identity is deliberately only the binary pin file's starting bytes.
+fn zone_cache_prefix_identity() -> Option<(u64, String)> {
+    use sha2::{Digest, Sha256};
+    let pin = std::fs::read(resolve_zone_cache_path()).ok()?;
+    let prefix_len = u64::try_from(pin.len()).ok()?;
+    let mut h = Sha256::new();
+    h.update(&pin);
+    Some((prefix_len, format!("{:x}", h.finalize())))
+}
+
 fn stage_name(s: SelectionStage) -> &'static str {
     match s {
         SelectionStage::MergeTap => "merge-tap",
@@ -477,328 +517,12 @@ fn outcome_name(o: SelectionCandidateOutcome) -> &'static str {
     }
 }
 
-/// One build's outer selection: what the cell records, plus the
-/// per-candidate rows themselves (which `policy_replay` feeds through
-/// the v2 comparators — see its own docs for why they cannot come from
-/// the committed baseline).
+/// One build's outer selection: what the cell records plus the
+/// per-candidate scoreboard rows used for structural extraction.
 #[derive(Default)]
 struct OuterSelection {
     outcomes: String,
     decided: Option<(String, SelectionStage)>,
-    /// The seven `SelectionCandidateEvaluated` events of the outer
-    /// block, in canonical slot order. Empty when no selection ran.
-    rows: Vec<TraceEvent>,
-    /// RFC-070 Phase 2a: the live shadow comparison the engine emitted
-    /// for this selection. `None` when no selection ran at all — and
-    /// that is the ONLY reason it may be absent, which is why the
-    /// harnesses below assert its presence on every decided cell rather
-    /// than skipping a missing one (a skipped comparison reads as clean,
-    /// the #693 shape this campaign keeps re-closing).
-    shadow: Option<ShadowOutcome>,
-}
-
-/// One `SelectionShadowCompared` event, flattened for reporting.
-#[derive(Debug, Clone)]
-struct ShadowOutcome {
-    agree: bool,
-    v1: (Option<String>, Option<SelectionStage>),
-    v2: (Option<String>, Option<SelectionStage>),
-    gate_disagreements: Vec<String>,
-}
-
-impl ShadowOutcome {
-    /// Everything an adjudicator needs on one line: both verdicts and
-    /// any gate disagreement, NAMED. A disagreement is a campaign-level
-    /// finding, so the message has to carry enough to act on without
-    /// re-running.
-    fn describe(&self) -> String {
-        let side = |(w, s): &(Option<String>, Option<SelectionStage>)| {
-            format!(
-                "{}/{}",
-                w.as_deref().unwrap_or("<none>"),
-                s.map(stage_name).unwrap_or("<none>")
-            )
-        };
-        let gates = if self.gate_disagreements.is_empty() {
-            String::new()
-        } else {
-            format!("  gates: [{}]", self.gate_disagreements.join("; "))
-        };
-        format!("v1 {} -> v2 {}{gates}", side(&self.v1), side(&self.v2))
-    }
-    /// Everything wrong with this comparison, or an empty vec.
-    ///
-    /// **Deliberately does NOT trust the engine's `agree` bit** (#703
-    /// review round 1, the 1/3-pass finding and the most useful one):
-    /// a harness that reads a boolean the thing under test computed is
-    /// asserting "it says it agrees", not "the two programs agree".
-    ///
-    /// Four checks. **Two of them are ANCHORED OUTSIDE the shadow event
-    /// and two are not**, and the distinction is the whole point — the
-    /// first draft of this doc called all four "independent surfaces",
-    /// which overstated it (#703 review round 2, and correctly: an
-    /// internally-consistent-but-wrong event passes anything computed
-    /// only from itself).
-    ///
-    /// 1. *Within the event.* The recomputed verdict:
-    ///    `(v1_winner, v1_stage)` vs `(v2_winner, v2_stage)`.
-    /// 2. *Within the event.* The engine's `agree` bit against (1) — a
-    ///    stuck-true bit, or a comparison written against the wrong
-    ///    pair, shows up as a mismatch rather than as silence.
-    /// 3. **ANCHORED: v2's side against `SelectionDecided`**, a
-    ///    different event emitted by a different code path. The terminal
-    ///    now records the shipped v2 winner, so this catches a mis-indexed
-    ///    winner name and a shadow paired with the wrong block.
-    /// 4. **ANCHORED: v2's side against the harness's OWN `decide` run**
-    ///    over the same cell's recorded rows (`anchor` below). This is
-    ///    the one the event cannot fake: the harness reaches the v2
-    ///    answer independently, through `profile_from_row` — a
-    ///    different projection of the same scoreboard than
-    ///    `Scoreboard::v2_profiles`, so it also pins those two
-    ///    constructions against each other.
-    ///
-    /// Plus the producer gates, which are anchored by construction:
-    /// they compare v2's clauses against v1's ACTUAL dispatch (did v1
-    /// run that candidate), not against a re-reading of the same source.
-    /// A gate disagreement that does not happen to move the winner on
-    /// this solve is still a mis-transcription.
-    ///
-    /// What remains out of reach, stated so the coverage is not
-    /// overread: a clause that is wrong AND behaviourally identical to
-    /// v1's on every cell the corpus runs. That is a coverage limit, not
-    /// something an assertion can close.
-    fn faults(&self, cell: &Cell, anchor: Option<(String, String)>) -> Vec<String> {
-        let mut out = Vec::new();
-        let recomputed = self.v1.0 == self.v2.0 && self.v1.1 == self.v2.1;
-        if !recomputed {
-            out.push("v1 and v2 named different verdicts".to_string());
-        }
-        if self.agree != recomputed {
-            out.push(format!(
-                "the engine's own `agree` bit says {} where the four recorded fields say \
-                 {recomputed} — the shadow's comparison disagrees with its own data",
-                self.agree
-            ));
-        }
-        if let Some(v1_name) = self.v1.0.as_deref() {
-            if !SelectionPolicy::current().producers.iter().any(|p| p.name == v1_name) {
-                out.push(format!(
-                    "the shadow's v1 winner `{v1_name}` is not a registered selection candidate"
-                ));
-            }
-        }
-        let cell_side = cell.winner.clone().zip(cell.stage.clone());
-        let shadow_v2 =
-            self.v2.0.clone().zip(self.v2.1.map(|s| stage_name(s).to_string()));
-        if cell_side != shadow_v2 {
-            out.push(format!(
-                "the shadow's v2 side {shadow_v2:?} is not what `SelectionDecided` \
-                 recorded for this cell ({cell_side:?}) — the two events are from \
-                 different selections"
-            ));
-        }
-        if anchor != shadow_v2 {
-            out.push(format!(
-                "the event's v2 side {shadow_v2:?} is not what this harness's own \
-                 `decide` run over the same rows produced ({anchor:?}) — either the \
-                 shadow's profile projection and `profile_from_row` disagree, or the \
-                 event does not report what `decide` actually said"
-            ));
-        }
-        if !self.gate_disagreements.is_empty() {
-            out.push(format!("gates: [{}]", self.gate_disagreements.join("; ")));
-        }
-        out
-    }
-}
-
-/// The shadow-agreement tally over a sweep of cells, and the failure
-/// message it produces.
-///
-/// **Why this gate is CI-shaped where the baseline is not.** Five review
-/// rounds across #694/#698 refused "CI-gate the corpus", and correctly:
-/// a baseline gate asserts "production has not changed", which every
-/// engine PR legitimately falsifies, and the record is cache-relative
-/// besides. The shadow is neither. It compares two dispatches on ONE
-/// solve, so it says nothing about which layout was produced and
-/// everything about whether the two programs answer alike — a fixture
-/// whose winner legitimately moved still has a well-defined shadow
-/// verdict, and a host with a different zone cache computes the same
-/// one. That is what makes the smoke tier below runnable on every push
-/// (RFC-070 Verification plan item 2, whose promise the earlier
-/// refusals kept pointing at).
-///
-/// **Scoped precisely** (#703 review round 1): what is cache- and
-/// layout-independent is the VERDICT COMPARISON. The fixture list is
-/// still a list — a smoke cell that stops reaching the search has
-/// nothing to shadow and fails the count check below, which is a
-/// maintenance obligation like any hand-written fixture list. The claim
-/// is "no re-bless treadmill for the DECISION", not "no fixture can
-/// ever need replacing".
-#[derive(Default)]
-struct ShadowReport {
-    /// Cells where BOTH programs named a winner and agreed.
-    agreed_decided: usize,
-    /// Cells where both programs named NO winner. Also an agreement,
-    /// and counted apart from the one above so the headline figure
-    /// cannot quietly mean something wider than "decided cells agree"
-    /// (#703 review round 1: today's corpus has zero of these, so the
-    /// two numbers coincide — the split is what keeps that checkable
-    /// rather than assumed).
-    agreed_no_winner: usize,
-    disagreements: Vec<String>,
-    /// Cells whose selection RAN but emitted no shadow event. A missing
-    /// comparison must never read as agreement — that is the "compared
-    /// nothing reads as clean" shape (#693) this campaign has now closed
-    /// in four places.
-    missing: Vec<String>,
-}
-
-impl ShadowReport {
-    fn compared(&self) -> usize {
-        self.agreed_decided + self.agreed_no_winner + self.disagreements.len()
-    }
-
-    /// The harness's OWN v2 answer for this cell, reached without
-    /// reading the shadow event: `decide` over the profiles built from
-    /// the recorded scoreboard rows. `None` when there are no rows to
-    /// decide from, or when `decide` names no winner.
-    fn independent_v2(rows: &[TraceEvent]) -> Option<(String, String)> {
-        if rows.len() != EXPECTED_ORDER.len() {
-            return None;
-        }
-        let policy = SelectionPolicy::current();
-        let profiles: Vec<IssueProfile> = rows.iter().map(profile_from_row).collect();
-        decide(&profiles, &policy).map(|d| {
-            (policy.producers[d.winner].name.to_string(), stage_name(d.stage).to_string())
-        })
-    }
-
-    fn absorb(&mut self, key: &str, run: &CellRun) {
-        match (&run.shadow, run.cell.status.as_str()) {
-            (Some(s), _) => {
-                let faults = s.faults(&run.cell, Self::independent_v2(&run.rows));
-                if faults.is_empty() {
-                    if run.cell.winner.is_some() {
-                        self.agreed_decided += 1;
-                    } else {
-                        self.agreed_no_winner += 1;
-                    }
-                } else {
-                    self.disagreements
-                        .push(format!("  {key}: {}\n      {}", s.describe(), faults.join("\n      ")));
-                }
-            }
-            // The two statuses where there is genuinely nothing to
-            // shadow, because no selection ran at all: `no-solve` (the
-            // solver refused this fixture×machine pair) and
-            // `no-selection` (`build_bus_layout` refused BEFORE reaching
-            // the search — the cell emits no scoreboard rows either).
-            //
-            // `no-selection` was hard-failing here in the first draft,
-            // on a comment claiming "every other status means the search
-            // ran" that is simply false of it (#703 review round 1). It
-            // is latent today (zero such cells) but it would have turned
-            // a legitimately-refusing cell into a campaign-finding-style
-            // failure with no divergence — a criterion the baseline
-            // comparison never had and this gate has no business adding.
-            (None, "no-solve" | "no-selection") => {}
-            (None, status) => self.missing.push(format!("  {key}: status {status}")),
-        }
-    }
-
-    fn print(&self) {
-        println!("\n=== RFC-070 Phase 2a shadow ===");
-        println!(
-            "cells compared: {}  (agreed: {} decided + {} no-winner)  |  disagreements: {}  \
-             |  missing comparisons: {}",
-            self.compared(),
-            self.agreed_decided,
-            self.agreed_no_winner,
-            self.disagreements.len(),
-            self.missing.len()
-        );
-        for d in self.disagreements.iter().chain(self.missing.iter()) {
-            println!("{d}");
-        }
-    }
-
-    /// Fails the sweep on a disagreement, a missing comparison, or an
-    /// empty tally.
-    fn assert_clean(&self) {
-        assert!(
-            self.compared() > 0,
-            "the shadow compared NOTHING across the whole sweep — the comparison is not \
-             running, which is not the same fact as it agreeing"
-        );
-        assert!(
-            self.missing.is_empty(),
-            "{} cell(s) ran a selection but emitted no `SelectionShadowCompared`. A \
-             missing comparison is a HOLE, not an agreement:\n{}",
-            self.missing.len(),
-            self.missing.join("\n")
-        );
-        assert!(
-            self.disagreements.is_empty(),
-            "the v1 shadow disagreed with production on {} of {} cell(s). **THIS IS A \
-             CAMPAIGN-LEVEL FINDING (RFC-070 K70-2), not a test bug.** Record the \
-             cell and the mechanism and take it to the campaign lead. A transcription bug \
-             may be fixed with receipts; a semantic one MUST be reported — do not tune \
-             policy data until the numbers line up.\n{}",
-            self.disagreements.len(),
-            self.compared(),
-            self.disagreements.join("\n")
-        );
-    }
-}
-
-/// Pull the outer selection's shadow event out of one build's stream,
-/// **by adjacency to its own anchor** rather than by "the last one
-/// anywhere".
-///
-/// The first draft took the last `SelectionShadowCompared` in the
-/// stream, on the argument that a nested selection's shadow is replayed
-/// before the outer board. That argument is true and it is not enough
-/// (found by an independent read of this PR's head): if the OUTER
-/// emission is ever missing — suppressed, skipped by the alignment
-/// guard, or lost to a future refactor — a WINNING nested candidate's
-/// own shadow event is then the last one, and if its verdict happens to
-/// match the outer `SelectionDecided` the cell reads as compared and
-/// agreed. The missing-comparison guard never fires, and the gate
-/// silently measures a different selection than the one it names.
-///
-/// So the outer event is identified POSITIVELY, with the same adjacency
-/// discipline the scoreboard already uses. Verified at source
-/// (`decomposition_search.rs`), both emission paths:
-///
-/// - success: `board.emit()` → `SelectionDecided` → shadow, with no
-///   intervening `emit`, so the shadow is at `terminal + 1`;
-/// - all-candidates-failed: `board.emit()` → shadow (no terminal at
-///   all), so the shadow is at `last_row + 1`.
-///
-/// A nested block cannot occupy either slot: nested events are replayed
-/// from the winner's captured buffer BEFORE the outer board is emitted.
-/// If the anchor's successor is not a shadow event, this returns `None`
-/// and the caller reports a missing comparison — which is the loud
-/// answer, not the quiet one.
-fn outer_shadow(events: &[TraceEvent], anchor: Option<usize>) -> Option<ShadowOutcome> {
-    let after = events.get(anchor? + 1)?;
-    match after {
-        TraceEvent::SelectionShadowCompared {
-            v1_winner,
-            v1_stage,
-            v2_winner,
-            v2_stage,
-            agree,
-            gate_disagreements,
-        } => Some(ShadowOutcome {
-            agree: *agree,
-            v1: (v1_winner.clone(), *v1_stage),
-            v2: (v2_winner.clone(), *v2_stage),
-            gate_disagreements: gate_disagreements.clone(),
-        }),
-        _ => None,
-    }
 }
 
 /// Pull the OUTER selection out of one build's event stream.
@@ -832,7 +556,8 @@ fn outer_selection(events: &[TraceEvent]) -> OuterSelection {
         .collect();
     let names: Vec<&str> = row_fields.iter().map(|(n, _)| *n).collect();
     assert_eq!(
-        names, EXPECTED_ORDER,
+        names,
+        EXPECTED_ORDER,
         "the last {} scoreboard rows must be the outer selection's seven slots in \
          canonical order; got {names:?}. TWO readings: (1) the ENGINE gained, lost or \
          reordered a candidate — update `EXPECTED_ORDER` here and RE-TAKE the baseline, \
@@ -843,8 +568,11 @@ fn outer_selection(events: &[TraceEvent]) -> OuterSelection {
          row-before-terminal ordering on a single-selection fixture",
         EXPECTED_ORDER.len()
     );
-    let outcomes =
-        row_fields.iter().map(|(_, o)| outcome_name(*o)).collect::<Vec<_>>().join(",");
+    let outcomes = row_fields
+        .iter()
+        .map(|(_, o)| outcome_name(*o))
+        .collect::<Vec<_>>()
+        .join(",");
     let terminal = events
         .iter()
         .rposition(|e| matches!(e, TraceEvent::SelectionDecided { .. }));
@@ -891,40 +619,16 @@ fn outer_selection(events: &[TraceEvent]) -> OuterSelection {
              different blocks. Do not bless this baseline"
         );
     }
-    // The shadow's anchor: the outer terminal when there is one, else
-    // the outer block's last row (the all-candidates-failed path emits
-    // a board and no terminal). See `outer_shadow` for why the shadow
-    // is located by ADJACENCY to this rather than by "the last one in
-    // the stream".
-    let anchor = terminal.or_else(|| {
-        events.iter().rposition(|e| matches!(e, TraceEvent::SelectionCandidateEvaluated { .. }))
-    });
-    OuterSelection {
-        outcomes,
-        decided,
-        rows: tail.iter().map(|e| (*e).clone()).collect(),
-        shadow: outer_shadow(events, anchor),
-    }
+    OuterSelection { outcomes, decided }
 }
 
-/// One cell's result: the committed record, the scoreboard rows
-/// `policy_replay` replays, and the live shadow comparison the engine
-/// emitted alongside them.
-///
-/// `rows` and `shadow` are deliberately NOT fields of [`Cell`]: `Cell`
-/// is what gets serialised into the committed baseline, and adding to it
-/// would force a re-bless of 160 rows for data the equivalence rule does
-/// not compare. The baseline stays byte-identical across this phase,
-/// which is itself part of the evidence that nothing moved.
+/// One cell's result. `rows` is retained for the scoreboard/census
+/// extraction; the committed baseline remains byte-identical.
 struct CellRun {
     cell: Cell,
-    rows: Vec<TraceEvent>,
-    shadow: Option<ShadowOutcome>,
 }
 
-/// One cell: the committed record, the scoreboard rows `policy_replay`
-/// replays, and the shadow comparison. One solve, three consumers —
-/// `policy_replay`'s shape, widened by Phase 2a.
+/// Run one corpus cell and extract the shipped selection's verdict.
 fn run_cell(
     f: &Fixture,
     machine: &str,
@@ -943,13 +647,17 @@ fn run_cell(
     let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
     let Ok(sr) = solver::solve(f.item, f.rate, &inputs, machine) else {
         return CellRun {
-            cell: Cell { status: "no-solve".into(), ..base },
-            rows: Vec::new(),
-            shadow: None,
+            cell: Cell {
+                status: "no-solve".into(),
+                ..base
+            },
         };
     };
 
-    let mut opts = LayoutOptions { max_belt_tier: f.belt.map(str::to_string), ..Default::default() };
+    let mut opts = LayoutOptions {
+        max_belt_tier: f.belt.map(str::to_string),
+        ..Default::default()
+    };
     apply(&mut opts);
 
     let guard = trace::start_trace();
@@ -957,23 +665,34 @@ fn run_cell(
     let events = trace::drain_events();
     drop(guard);
 
-    let OuterSelection { outcomes, decided, rows, shadow } = outer_selection(&events);
+    let OuterSelection { outcomes, decided } = outer_selection(&events);
     let cell = match decided {
         Some((winner, stage)) => Cell {
             // A build can refuse AFTER the search picked a winner (the
             // pick is not the last thing `build_bus_layout` does), so
             // status distinguishes them rather than collapsing both into
             // "decided".
-            status: if built.is_ok() { "decided".into() } else { "decided-then-refused".into() },
+            status: if built.is_ok() {
+                "decided".into()
+            } else {
+                "decided-then-refused".into()
+            },
             winner: Some(winner),
             stage: Some(stage_name(stage).to_string()),
             outcomes,
             ..base
         },
-        None if outcomes.is_empty() => Cell { status: "no-selection".into(), ..base },
-        None => Cell { status: "no-winner".into(), outcomes, ..base },
+        None if outcomes.is_empty() => Cell {
+            status: "no-selection".into(),
+            ..base
+        },
+        None => Cell {
+            status: "no-winner".into(),
+            outcomes,
+            ..base
+        },
     };
-    CellRun { cell, rows, shadow }
+    CellRun { cell }
 }
 
 /// Print the corpus as the campaign's key table: rows are
@@ -1000,7 +719,7 @@ fn print_grid(cells: &[Cell]) {
     println!("\n=== RFC-070 parity corpus: {} cells ===", cells.len());
     println!(
         "(cell = winner/deciding-stage. `!=` marks an option set whose verdict differs \
-         from that row's `default` — the claim surface Phase 2a's shadow loop must \
+         from that row's `default` — the claim surface the shipped path must \
          reproduce)"
     );
     let mut changed_rows = 0usize;
@@ -1014,7 +733,12 @@ fn print_grid(cells: &[Cell]) {
             if differs {
                 row_changed = true;
             }
-            println!("   {:<12} {:<2} {}", label, if differs { "!=" } else { "" }, cell_text(c));
+            println!(
+                "   {:<12} {:<2} {}",
+                label,
+                if differs { "!=" } else { "" },
+                cell_text(c)
+            );
         }
         if row_changed {
             changed_rows += 1;
@@ -1053,7 +777,9 @@ fn print_divergences(cells: &[Cell]) {
     let mut major = 0usize;
     let mut minor = 0usize;
     for ((fixture, machine), sets) in &by_row {
-        let Some(d) = sets.get("default") else { continue };
+        let Some(d) = sets.get("default") else {
+            continue;
+        };
         for (label, _) in OPTION_SETS {
             if *label == "default" {
                 continue;
@@ -1087,339 +813,20 @@ fn print_divergences(cells: &[Cell]) {
 }
 
 // =====================================================================
-// RFC-070 Phase 1b (#689 W2b): the `policy_replay` acceptance harness
+// RFC-070 Phase 2c: the shipped-path parity gate
 // =====================================================================
-
-/// Turn one recorded scoreboard row into the profile the v2 comparators
-/// consume. Gaps stay gaps: a `None` count means no mechanism computed
-/// one on that call, and the stage that would have read it skips —
-/// which is precisely how v1's lazy sites behave.
-fn profile_from_row(ev: &TraceEvent) -> IssueProfile {
-    let TraceEvent::SelectionCandidateEvaluated {
-        outcome,
-        reason,
-        score,
-        accepted,
-        accepted_reason,
-        errors,
-        selection_warnings,
-        layout_warnings,
-        contamination_errors,
-        starvation_errors,
-        structural_errors,
-        ..
-    } = ev
-    else {
-        panic!("profile_from_row wants a scoreboard row, got {ev:?}");
-    };
-    // All three channels are written together by `record_counts`, and
-    // all three kind fields by `record_kinds`. A partial would mean the
-    // instrument changed under us, and silently reading the present half
-    // would fabricate the absent one.
-    let counts_present =
-        [errors.is_some(), selection_warnings.is_some(), layout_warnings.is_some()];
-    assert!(
-        counts_present.iter().all(|p| *p) || counts_present.iter().all(|p| !*p),
-        "a scoreboard row carries a PARTIAL count triple {counts_present:?} — the three \
-         channels are written together, so this is an instrument change, not a gap"
-    );
-    let kinds_present = [
-        contamination_errors.is_some(),
-        starvation_errors.is_some(),
-        structural_errors.is_some(),
-    ];
-    assert!(
-        kinds_present.iter().all(|p| *p) || kinds_present.iter().all(|p| !*p),
-        "a scoreboard row carries a PARTIAL kind triple {kinds_present:?}"
-    );
-    IssueProfile {
-        outcome: Some(*outcome),
-        refusal_reason: reason.clone(),
-        score: *score,
-        accepted: *accepted,
-        accepted_reason: accepted_reason.clone(),
-        counts: match (errors, selection_warnings, layout_warnings) {
-            (Some(e), Some(w), Some(lw)) => Some(IssueCounts {
-                errors: *e,
-                selection_warnings: *w,
-                layout_warnings: *lw,
-            }),
-            _ => None,
-        },
-        kinds: match (contamination_errors, starvation_errors, structural_errors) {
-            (Some(c), Some(s), Some(st)) => Some(ErrorKindCounts {
-                contamination: *c,
-                starvation: *s,
-                structural: *st,
-            }),
-            _ => None,
-        },
-    }
-}
-
-/// **The Phase-1b acceptance bar** (RFC-070 §"The Phase-1b acceptance
-/// harness"): the offline precursor to K70-1.
-///
-/// One live corpus run, two consumers. v1 decides each cell as normal;
-/// the harness captures that cell's emitted per-candidate profiles
-/// in-process, feeds them through `selection_policy::decide`, and
-/// requires v2's winner AND deciding stage to match **both** the live v1
-/// decision and the committed #694 baseline, on all 140 decided cells.
-///
-/// Why the profiles are captured live rather than read from the
-/// baseline: the committed baseline deliberately stores only
-/// `(status, winner, stage, outcomes)`. The verdict NUMBERS are
-/// structurally holed (RFC-070's Phase-0b oracle gaps) and a baseline
-/// pinning them would pin gaps as facts. So the profiles exist only in
-/// the live `SelectionCandidateEvaluated` events. There is no second
-/// layout pass per cell — the "replay" is over captured profiles, not
-/// re-produced layouts. The live shadow against freshly produced layouts
-/// is Phase 2a's job, and K70-1 is adjudicated there.
-///
-/// Same cache-relative posture as `parity_corpus` itself: run with the
-/// zone-cache pin, and read a divergence out of a whole-corpus re-run
-/// rather than an isolated one (see the module doc's reproducibility
-/// note).
-///
-/// A failure here is a CAMPAIGN-LEVEL finding, not a test bug: it means
-/// today's decisions are not expressible as policy data over the
-/// recorded measurements, which is K70-1's precursor firing.
-///
-/// # What this does NOT cover — read before quoting "140/140"
-///
-/// - **CI never runs it.** `#[ignore]`d like its sibling, for the same
-///   cache-relative reason. "The parity harness passes" always refers to
-///   a hand-run sweep with the pin, never to a green CI badge. The
-///   always-on gate is the comparator unit tier in
-///   `bus::selection_policy`.
-/// - **Zero gate coverage.** `decide()` consumes already-produced
-///   profiles and never evaluates a `ProducerGate`, so every clause of
-///   every producer's eligibility gate is untested by this harness; the
-///   only gate coverage is two unit tests. A mis-transcribed gate is
-///   invisible here and would first surface at the Phase-2a shadow,
-///   where it changes the candidate SET rather than the ranking.
-/// - **Two of the three comparators are unexercised by the corpus** —
-///   the component-wise floor's non-lexicographic-ness and the #474
-///   non-shadowing rule both survive being broken with 140/140 intact.
-///   Measured, not assumed; see the RFC decision log.
-#[test]
-#[ignore = "RFC-070 Phase 1b policy replay — runs the full #694 corpus; \
-            run with --ignored --nocapture and the zone-cache pin"]
-fn policy_replay() {
-    let policy = SelectionPolicy::current();
-    // The profile vector is keyed by registration order, so a
-    // registration that does not line up with the recorded slot order
-    // would rank one candidate's measurement under another's policy.
-    // Spelled longhand against this file's own EXPECTED_ORDER for the
-    // same reason that list exists at all.
-    assert_eq!(
-        policy.producers.iter().map(|p| p.name).collect::<Vec<_>>(),
-        EXPECTED_ORDER,
-        "SelectionPolicy::current() does not register the seven producers in the slot \
-         order the scoreboard records"
-    );
-
-    let pin_hash = hash_zone_cache();
-    // REQUIRED, not optional. An absent baseline used to leave
-    // `baseline_cells` empty, which silently turned every
-    // v2-vs-baseline comparison into a no-op while the run still
-    // reported green — the "compared nothing reads as clean" shape #693
-    // closed elsewhere (#698 review round 1 named the neighbouring case;
-    // this disjunct is the same hazard one path over).
-    let text = std::fs::read_to_string(baseline_path())
-        .expect("policy_replay compares against the committed #694 baseline; it must exist");
-    let baseline: Baseline = serde_json::from_str(&text).expect("committed baseline parses");
-    let baseline_cells: BTreeMap<(&str, &str, &str), &Cell> =
-        baseline.cells.iter().map(|c| (c.key(), c)).collect();
-    // The count of DECIDED cells comes from the committed record, not a
-    // hand-typed literal that can go stale against it (#698 review round
-    // 1, finding 4). A legitimate corpus widening re-blesses the
-    // baseline and this follows; a candidate field that moved without a
-    // re-bless still fails, which is the case the guard is for.
-    let expected_decided = baseline.cells.iter().filter(|c| c.stage.is_some()).count();
-    let provenance_ok =
-        baseline.zone_cache_hash.is_some() && baseline.zone_cache_hash == pin_hash;
-
-    let mut decided = 0usize;
-    let mut replay_diffs: Vec<String> = Vec::new();
-    let mut baseline_diffs: Vec<String> = Vec::new();
-    let mut stage_hits: BTreeMap<&str, usize> = BTreeMap::new();
-
-    for f in FIXTURES {
-        for machine in f.machines {
-            for (label, apply) in OPTION_SETS {
-                let CellRun { cell, rows, .. } = run_cell(f, machine, label, *apply);
-                let key = format!("{}[{machine}]/{label}", f.label);
-
-                // v1 decided this cell against the committed record.
-                // Reported separately from the replay result: a live-vs-
-                // baseline difference is an ENGINE or provenance change,
-                // and reading it as a policy failure would misattribute
-                // the finding.
-                let baseline_cell = baseline_cells.get(&cell.key());
-                let drifted = baseline_cell.is_some_and(|b| b.verdict() != cell.verdict());
-                if drifted {
-                    let b = baseline_cell.expect("drifted implies a baseline cell");
-                    baseline_diffs.push(format!(
-                        "  {key}: baseline {:?} -> live {:?}",
-                        b.verdict(),
-                        cell.verdict()
-                    ));
-                }
-
-                let Some(stage) = cell.stage.as_deref() else {
-                    // `no-solve` / `no-selection` / `no-winner`: v1 named
-                    // no winner, so there is nothing for the program to
-                    // reproduce. The 20 `no-solve` cells live here.
-                    assert!(
-                        rows.is_empty() || cell.status == "no-winner",
-                        "cell {key} has scoreboard rows but no stage and status {:?}",
-                        cell.status
-                    );
-                    continue;
-                };
-                decided += 1;
-                *stage_hits.entry(stage_label(stage)).or_default() += 1;
-
-                assert_eq!(
-                    rows.len(),
-                    EXPECTED_ORDER.len(),
-                    "cell {key} decided but recorded {} rows",
-                    rows.len()
-                );
-                let profiles: Vec<IssueProfile> = rows.iter().map(profile_from_row).collect();
-                let v2 = decide(&profiles, &policy);
-                let v2_verdict = v2.map(|d| {
-                    (policy.producers[d.winner].name.to_string(), stage_name(d.stage).to_string())
-                });
-                let v1_verdict = Some((
-                    cell.winner.clone().expect("a decided cell names a winner"),
-                    stage.to_string(),
-                ));
-                if v2_verdict != v1_verdict {
-                    replay_diffs.push(format!(
-                        "  {key}: v1 {v1_verdict:?} -> policy {v2_verdict:?}\n      \
-                         outcomes: {}",
-                        cell.outcomes
-                    ));
-                    continue;
-                }
-                // …and against the committed baseline, which is the
-                // record Phase 2a will diff against.
-                //
-                // SKIPPED on a drifted cell, and that guard is
-                // load-bearing (#698 review round 1, finding 1). Where
-                // v1 itself has moved off the baseline, "policy == live
-                // v1" is the correct result and "policy != baseline"
-                // follows from the drift alone — pushing it into
-                // `replay_diffs` would fire the campaign-finding
-                // assertion at the bottom against exactly the cells the
-                // NOTE above tells the reader to treat as an ENGINE
-                // change. That is a manufactured K70-1 finding, and the
-                // conditions that produce it (a stale baseline, a
-                // mis-pinned cache) are the ones where a reader is most
-                // primed to believe it.
-                if !drifted {
-                    if let Some(b) = baseline_cell {
-                        let b_verdict = Some((
-                            b.winner.clone().unwrap_or_default(),
-                            b.stage.clone().unwrap_or_default(),
-                        ));
-                        if v2_verdict != b_verdict {
-                            replay_diffs.push(format!(
-                                "  {key}: baseline {b_verdict:?} -> policy {v2_verdict:?}"
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    eprintln!("\n=== RFC-070 policy replay ===");
-    eprintln!("decided cells replayed: {decided}");
-    eprintln!("deciding-stage distribution: {stage_hits:?}");
-    if !baseline_diffs.is_empty() {
-        eprintln!(
-            "\nNOTE: v1 itself diverged from the committed baseline on {} cell(s). The \
-             replay below is still meaningful (it compares against the LIVE v1 decision \
-             too), but these cells are an engine or provenance change, not a policy \
-             finding:\n{}",
-            baseline_diffs.len(),
-            baseline_diffs.join("\n")
-        );
-    }
-    // A provenance mismatch FAILS. It used to print a NOTE and pass —
-    // which is the "compared nothing reads as clean" shape #693 closed
-    // and #694 round 3 closed again in this very file's `check` mode,
-    // reappearing one path over (#698 review round 5, the one genuinely
-    // new argument in five rounds of raising this test's coverage).
-    // Under an unidentifiable cache a green replay is not evidence that
-    // the committed record reproduces; it is evidence about a corpus
-    // nobody else can re-take.
-    let provenance_escape =
-        std::env::var("SPAGHETTIO_POLICY_REPLAY").as_deref() == Ok("any-cache");
-    assert!(
-        provenance_ok || provenance_escape,
-        "PROVENANCE MISMATCH: this run's zone cache is {pin_hash:?}, the baseline was \
-         blessed against {:?}. (A `null` on EITHER side counts as a mismatch — an \
-         unidentified cache is not the same cache, it is an unknown one.) The corpus is \
-         cache-relative, so a replay taken here is not evidence about the committed \
-         record. Re-run with \
-         SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/sat-zones-ci.bin, or pass \
-         SPAGHETTIO_POLICY_REPLAY=any-cache if comparing across caches is what you meant.",
-        baseline.zone_cache_hash
-    );
-
-    // "Verified clean" must be distinguishable from "compared nothing"
-    // (the #693 lesson). The expected count is the committed record's
-    // own, so a deliberate corpus widening travels with its re-bless
-    // while a candidate field that moved under a stale baseline still
-    // fails here.
-    assert!(expected_decided > 0, "the committed baseline records no decided cells at all");
-    assert_eq!(
-        decided, expected_decided,
-        "the corpus decided {decided} cells, not the {expected_decided} the committed \
-         baseline records — the candidate field moved, and a replay over a different cell \
-         set is not evidence about this baseline"
-    );
-    assert!(
-        replay_diffs.is_empty(),
-        "SelectionPolicy::decide did not reproduce {} of {decided} decided cells. THIS IS \
-         A CAMPAIGN-LEVEL FINDING, not a test bug: it means today's selection is not \
-         expressible as policy data over the recorded measurements — K70-1's precursor. \
-         Report it; do not add candidate-name-keyed logic to make it pass.\n{}",
-        replay_diffs.len(),
-        replay_diffs.join("\n")
-    );
-}
-
-/// `stage_name`'s inverse-ish: the label a `Cell` stores, normalised for
-/// the histogram. A stage the corpus records but this file does not know
-/// is a loud `unknown:` row rather than a silent bucket.
-fn stage_label(stage: &str) -> &'static str {
-    match stage {
-        "merge-tap" => "merge-tap",
-        "scoped-pairwise" => "scoped-pairwise",
-        "best-error-free" => "best-error-free",
-        "best-accepted" => "best-accepted",
-        "first-produced" => "first-produced",
-        _ => "unknown",
-    }
-}
 
 #[test]
 #[ignore = "RFC-070 Phase 0c corpus baseline — run with --ignored --nocapture; \
             see module docs for bless/check"]
 fn parity_corpus() {
     let pin_hash = hash_zone_cache();
+    let pin_prefix = zone_cache_prefix_identity();
     let mut cells = Vec::new();
-    let mut shadow_report = ShadowReport::default();
     for f in FIXTURES {
         for machine in f.machines {
             for (label, apply) in OPTION_SETS {
                 let run = run_cell(f, machine, label, *apply);
-                shadow_report.absorb(&format!("{}[{machine}]/{label}", f.label), &run);
                 cells.push(run.cell);
             }
         }
@@ -1427,7 +834,6 @@ fn parity_corpus() {
 
     print_grid(&cells);
     print_divergences(&cells);
-    shadow_report.print();
 
     match std::env::var("SPAGHETTIO_PARITY_CORPUS").as_deref() {
         Ok(mode @ ("bless" | "bless-repin")) => {
@@ -1464,19 +870,17 @@ fn parity_corpus() {
                          or pass SPAGHETTIO_PARITY_CORPUS=bless-repin to overwrite it \
                          deliberately"
                     ),
-                    Ok(text) => Some(serde_json::from_str::<Baseline>(&text).unwrap_or_else(
-                        |e| {
-                            panic!(
-                                "the committed baseline exists but does not parse ({e}) — \
+                    Ok(text) => Some(serde_json::from_str::<Baseline>(&text).unwrap_or_else(|e| {
+                        panic!(
+                            "the committed baseline exists but does not parse ({e}) — \
                                  refusing to bless over it, because a corrupt file cannot \
                                  supply the zone-cache hash this run must be checked \
                                  against. Restore it (`git checkout -- {:?}`) and re-run, \
                                  or pass SPAGHETTIO_PARITY_CORPUS=bless-repin to overwrite \
                                  it deliberately",
-                                baseline_path()
-                            )
-                        },
-                    )),
+                            baseline_path()
+                        )
+                    })),
                 };
                 assert!(
                     pin_hash.is_some(),
@@ -1485,6 +889,11 @@ fn parity_corpus() {
                      anyone later. Set SPAGHETTIO_ZONE_CACHE_PATH to \
                      crates/core/data/sat-zones-ci.bin, or pass \
                      SPAGHETTIO_PARITY_CORPUS=bless-repin if you really mean it"
+                );
+                assert!(
+                    pin_prefix.is_some(),
+                    "refusing to bless without a readable binary zone-cache pin: the \
+                     committed prefix length and hash cannot be recorded"
                 );
                 if let Some(p) = &prior {
                     // NOT `is_none() || ==`. A prior baseline recording
@@ -1508,7 +917,12 @@ fn parity_corpus() {
                     );
                 }
             }
-            let baseline = Baseline { zone_cache_hash: pin_hash.clone(), cells };
+            let baseline = Baseline {
+                zone_cache_hash: pin_hash.clone(),
+                zone_cache_prefix_len: pin_prefix.as_ref().map(|(len, _)| *len),
+                zone_cache_prefix_hash: pin_prefix.as_ref().map(|(_, hash)| hash.clone()),
+                cells,
+            };
             let json = serde_json::to_string_pretty(&baseline).expect("baseline serializes");
             std::fs::write(baseline_path(), json + "\n").expect("write baseline");
             eprintln!(
@@ -1518,24 +932,17 @@ fn parity_corpus() {
             );
         }
         Ok(mode @ ("check" | "check-any-cache")) => {
-            // RFC-070 Phase 2a: the shadow gate, asserted BEFORE the
-            // baseline comparison and deliberately so. The two failures
-            // are independent and answer different questions, but only
-            // one of them is interpretable under a mis-pinned cache: a
-            // baseline divergence may be provenance, while a shadow
-            // disagreement is two programs answering differently about
-            // the same solve — true regardless of which layout that
-            // solve produced. So the interpretable failure leads.
-            shadow_report.assert_clean();
             let text = std::fs::read_to_string(baseline_path())
                 .expect("SPAGHETTIO_PARITY_CORPUS=check needs a committed baseline");
             let baseline: Baseline = serde_json::from_str(&text).expect("baseline parses");
             // A mismatched (or absent) pin does not stop the comparison —
             // a clean result under a different cache is still worth
-            // knowing — but it must LEAD the failure if there is one,
-            // rather than trailing it as a NOTE the reader met before the
-            // diffs and has forgotten by the time they matter (#694
-            // review round 1, finding 4).
+            // knowing — but candidate-outcome drift is diagnostic only
+            // until the run's cache identity matches the baseline. Verdict
+            // drift must still LEAD the failure if there is one, rather
+            // than trailing it as a NOTE the reader met before the diffs
+            // and has forgotten by the time they matter (#694 review round
+            // 1, finding 4).
             //
             // And it must FAIL, even when the cells all match (#694 review
             // round 3). Round 1's version printed the mismatch and passed
@@ -1576,27 +983,10 @@ fn parity_corpus() {
             let old: BTreeMap<_, _> = baseline.cells.iter().map(|c| (c.key(), c)).collect();
             let new: BTreeMap<_, _> = cells.iter().map(|c| (c.key(), c)).collect();
             let mut diffs = Vec::new();
-            // Reported, never failed: a cell whose CANDIDATE FIELD moved
-            // while the verdict held — an arm that used to produce now
-            // refuses, say. The equivalence rule is winner+stage, so
-            // failing here would be inventing a stricter contract than
-            // the RFC states; but staying silent would let the field
-            // shift under a green check, which is the shape this repo
-            // keeps getting bitten by. So it prints.
-            let mut field_shifts = Vec::new();
+            let mut outcome_diffs = Vec::new();
             for (k, c) in &new {
                 match old.get(k) {
-                    // Equality is the RFC's rule, not `Cell::eq`:
-                    // `outcomes` is recorded for adjudication and is
-                    // deliberately NOT part of the comparison.
-                    Some(b) if b.verdict() == c.verdict() => {
-                        if b.outcomes != c.outcomes {
-                            field_shifts.push(format!(
-                                "  {k:?}: {} -> {}",
-                                b.outcomes, c.outcomes
-                            ));
-                        }
-                    }
+                    Some(b) if b.verdict() == c.verdict() => {}
                     Some(b) => diffs.push(format!(
                         "  DIVERGED {k:?}: baseline {:?} -> now {:?}",
                         b.verdict(),
@@ -1604,19 +994,31 @@ fn parity_corpus() {
                     )),
                     None => diffs.push(format!("  NEW CELL {k:?}: {:?}", c.verdict())),
                 }
+                if let Some(b) = old.get(k) {
+                    if b.outcomes != c.outcomes {
+                        outcome_diffs.push(format!(
+                            "  OUTCOMES DRIFT {k:?}: {} -> {}",
+                            b.outcomes, c.outcomes
+                        ));
+                    }
+                }
             }
-            if !field_shifts.is_empty() {
+            if provenance.is_none() {
+                diffs.extend(outcome_diffs);
+            } else if !outcome_diffs.is_empty() {
                 eprintln!(
-                    "\nNOTE: {} cell(s) kept their verdict but changed which candidates \
-                     produced/refused. Not a divergence under the equivalence rule; still \
-                     worth reading before trusting a green check:\n{}",
-                    field_shifts.len(),
-                    field_shifts.join("\n")
+                    "\nNOTE: {} cell(s) changed which candidates produced/refused under a \
+                     cache whose identity does not match the baseline (unidentified or \
+                     pinned-but-mismatched); outcome drift is reported only:\n{}",
+                    outcome_diffs.len(),
+                    outcome_diffs.join("\n")
                 );
             }
             for k in old.keys() {
                 if !new.contains_key(k) {
-                    diffs.push(format!("  MISSING CELL {k:?} (in baseline, not produced now)"));
+                    diffs.push(format!(
+                        "  MISSING CELL {k:?} (in baseline, not produced now)"
+                    ));
                 }
             }
             // "Verified clean" must be distinguishable from "compared
@@ -1628,6 +1030,19 @@ fn parity_corpus() {
                 baseline.cells.len(),
                 new.len()
             );
+            let expected_cells = expected_cell_count();
+            assert_eq!(
+                baseline.cells.len(),
+                expected_cells,
+                "the committed parity corpus must retain its {expected_cells}-cell claim surface"
+            );
+            assert_eq!(
+                new.len(),
+                baseline.cells.len(),
+                "the shipped path produced {} cells, not the committed {}",
+                new.len(),
+                baseline.cells.len()
+            );
             assert!(
                 diffs.is_empty(),
                 "{}parity corpus diverged from the committed baseline ({} cell(s)):\n{}",
@@ -1635,7 +1050,10 @@ fn parity_corpus() {
                 // diffs are uninterpretable, and a failure message that
                 // opens with the diff list invites reading them as
                 // findings anyway.
-                provenance.as_deref().map(|p| format!("{p}\n\n")).unwrap_or_default(),
+                provenance
+                    .as_deref()
+                    .map(|p| format!("{p}\n\n"))
+                    .unwrap_or_default(),
                 diffs.len(),
                 diffs.join("\n")
             );
@@ -1651,8 +1069,9 @@ fn parity_corpus() {
                 provenance.as_deref().unwrap_or_default()
             );
             eprintln!(
-                "checked {} cell(s) against the committed baseline{}",
+                "checked {}/{} cells against the committed baseline{}",
                 new.len(),
+                baseline.cells.len(),
                 if provenance.is_some() {
                     " (check-any-cache: UNDER A DIFFERENT ZONE CACHE — see above)"
                 } else {
@@ -1667,7 +1086,7 @@ fn parity_corpus() {
 }
 
 // =====================================================================
-// RFC-070 Phase 2a (#689 W3a): the non-ignored shadow smoke tier
+// RFC-070 Phase 2c: the non-ignored shipped-path smoke tier
 // =====================================================================
 
 /// The six census fixtures at the machine tier their #691 labels name,
@@ -1675,9 +1094,9 @@ fn parity_corpus() {
 /// `FIXTURES` — a list derived from the thing it checks cannot notice
 /// that thing changing, the same argument `EXPECTED_ORDER` rests on.
 ///
-/// These are the six that `check_firing_census.rs` and the junction-seed
-/// census also describe, so a shadow finding here is readable against
-/// both of the campaign's other instruments row by row.
+/// These six cells are the fast always-on sample of the committed
+/// winner-plus-stage baseline. The ignored corpus check remains the
+/// phase-boundary gate for all 160 cells.
 const SMOKE_CELLS: &[(&str, &str)] = &[
     ("tier1_gear_am1", "assembling-machine-1"),
     ("tier2_ec_am1_10_ore", "assembling-machine-1"),
@@ -1687,84 +1106,65 @@ const SMOKE_CELLS: &[(&str, &str)] = &[
     ("tier5_pu_am3_2_unconstrained", "assembling-machine-3"),
 ];
 
-/// **The parity CI gate.** Not `#[ignore]`d: this is what runs on every
-/// push, and it is the first assertion in this campaign that can.
-///
-/// Its two ignored siblings are cache-relative — they compare a live run
-/// against a COMMITTED record, so a host with a different zone cache
-/// gets different layouts and a meaningless diff, and every legitimate
-/// engine change falsifies them. This test compares the v1 and v2
-/// dispatches **on the same solve**: whatever layout each fixture
-/// produces on this host with this cache, both programs see the same
-/// scoreboard and must reach the same `(winner, stage)`. Nothing about
-/// the VERDICT depends on WHICH layout that was, so there is no
-/// re-bless treadmill and no pin to get wrong for the comparison — the
-/// fixture list is still a list, and a cell that stops deciding fails
-/// the liveness check at the bottom like any hand-written fixture
-/// would.
-///
-/// What it therefore covers, and what it does not: six of the corpus's
-/// 160 cells, all at the `default` option set. The option-set axis
-/// carries this corpus's claim surface (RFC-070 decision log), so the
-/// full 160-cell sweep under `SPAGHETTIO_PARITY_CORPUS=check` remains
-/// the real gate for a phase boundary — this is the tripwire between
-/// them, sized so it can run unconditionally.
-///
-/// # Cost, and why the ceiling is 720s for a 31-second test
-///
-/// Measured: **~15s local warm** (16 threads, pinned cache) and **30.9s
-/// on the CI runner** (PR #703 head `12b1ea87`, job 97039777698) — a 2x
-/// host penalty, not the 8-18x `.config/nextest.toml`'s cold-cache note
-/// records, because the rust job pins `SPAGHETTIO_ZONE_CACHE_PATH`
-/// (`ci.yml`'s `rust` job, `env:
-/// SPAGHETTIO_ZONE_CACHE_PATH: ${{ github.workspace }}/crates/core/data/
-/// sat-zones-ci.bin`).
-///
-/// The ceiling is sized for the case that is NOT measured: an unpinned
-/// host solving all six fixtures' zones fresh (#703 review round 2).
-/// That is the 8-18x regime, which puts a cold run in the 120-270s band
-/// — uncomfortably close to the old 300s ceiling for a run that is working
-/// correctly, just slowly. **A hang detector that fires on a cold cache
-/// is a false positive on the one gate that runs everywhere**, which is
-/// the same class as the `status == "decided"` pin round 1 removed. 720s
-/// keeps the detector without that failure mode, and costs nothing in
-/// the pinned case.
-///
-/// Setting the pin from inside the test was considered and rejected:
-/// `zone_cache::lookup_table()` is a process-wide `OnceLock` seeded on
-/// first use, and `cargo test` runs this binary's tests as threads of
-/// one process, so a test that mutated the environment would be racing
-/// its siblings for a global. The test REPORTS which cache it resolved
-/// instead, so a slow run is self-diagnosing, and does not fail on an
-/// unpinned one — the verdict comparison genuinely does not care.
-///
-/// The `threads-required` override in `.config/nextest.toml` covers
-/// `cargo nextest` (both profiles); plain `cargo test` reads none of
-/// that, which is exactly why the ntest ceiling is the real guard.
+/// **The shipped-path smoke gate.** It checks the six named fixtures
+/// against the committed baseline's winner and deciding stage when the
+/// run uses the blessed zone cache. Under another cache it checks only
+/// that each fixture reaches a decision. This is deliberately smaller
+/// than the cache-relative corpus check above, but it exercises the same
+/// production path and has no second selector to compare.
 #[test]
 #[ntest::timeout(720_000)]
-fn shadow_agrees_with_production_on_the_census_fixtures() {
-    // Self-describing rather than self-enforcing: a cold-cache run is
-    // legitimate here (the comparison is cache-independent) but is many
-    // times slower, so the one thing a slow or timed-out run needs is to
-    // say which cache it was using.
+fn shipped_path_matches_baseline_on_the_census_fixtures() {
+    let explicit_cache_pin = std::env::var_os("SPAGHETTIO_ZONE_CACHE_PATH").is_some();
     println!(
-        "shadow gate: zone cache = {:?} (pinned: {})",
+        "parity smoke: zone cache = {:?} (explicit pin: {})",
         resolve_zone_cache_path(),
-        std::env::var("SPAGHETTIO_ZONE_CACHE_PATH").is_ok()
+        explicit_cache_pin
     );
-    // The third parallel candidate list, bound in CI (#698 rounds 9-10
-    // carry-over (e) — the unit tier binds the other two). A shadow
-    // whose profile vector is keyed differently from the scoreboard
-    // would compare mis-keyed slots and could agree by luck.
-    assert_eq!(
-        SelectionPolicy::current().producers.iter().map(|p| p.name).collect::<Vec<_>>(),
-        EXPECTED_ORDER,
-        "SelectionPolicy::current() does not register the seven producers in the slot \
-         order this file expects"
+    let text = std::fs::read_to_string(baseline_path())
+        .expect("the shipped-path smoke gate needs a committed baseline");
+    let baseline: Baseline = serde_json::from_str(&text).expect("baseline parses");
+    let cache_prefix_hash = baseline
+        .zone_cache_prefix_len
+        .and_then(hash_zone_cache_prefix);
+    let cache_is_pinned = matches!(
+        (&cache_prefix_hash, &baseline.zone_cache_prefix_hash),
+        (Some(actual), Some(expected)) if actual == expected
     );
+    let require_pin = std::env::var("SPAGHETTIO_PARITY_REQUIRE_PIN")
+        .ok()
+        .as_deref()
+        == Some("1");
+    if require_pin && !cache_is_pinned {
+        panic!(
+            "PARITY PIN REQUIRED: smoke cache prefix ({} bytes) hash \
+             {cache_prefix_hash:?} does not match the baseline prefix ({} bytes) hash {:?}; \
+             SPAGHETTIO_PARITY_REQUIRE_PIN=1 refuses to degrade to decision-existence checks. \
+             Set SPAGHETTIO_ZONE_CACHE_PATH to the committed cache before running this gate.",
+            baseline.zone_cache_prefix_len.unwrap_or_default(),
+            baseline.zone_cache_prefix_len.unwrap_or_default(),
+            baseline.zone_cache_prefix_hash
+        );
+    }
+    if !cache_is_pinned {
+        let cache_description = if explicit_cache_pin {
+            "PINNED-BUT-MISMATCHED CACHE"
+        } else {
+            "UNPINNED CACHE"
+        };
+        eprintln!(
+            "\n{cache_description}: parity smoke is checking decision existence only (run \
+             prefix ({} bytes) hash {cache_prefix_hash:?}, baseline prefix ({} bytes) hash \
+             {:?}). Set \
+             SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/sat-zones-ci.bin to run the exact \
+             winner/stage smoke check.",
+            baseline.zone_cache_prefix_len.unwrap_or_default(),
+            baseline.zone_cache_prefix_len.unwrap_or_default(),
+            baseline.zone_cache_prefix_hash
+        );
+    }
 
-    let mut report = ShadowReport::default();
+    let mut checked = 0usize;
     for (label, machine) in SMOKE_CELLS {
         let f = FIXTURES
             .iter()
@@ -1772,51 +1172,37 @@ fn shadow_agrees_with_production_on_the_census_fixtures() {
             .unwrap_or_else(|| panic!("smoke cell {label} is not a corpus fixture"));
         assert!(
             f.machines.contains(machine),
-            "smoke cell {label} names machine {machine}, which is not on that fixture's \
-             swept axis"
+            "smoke cell {label} names machine {machine}, which is not on that fixture's swept axis"
         );
-        let run = run_cell(f, machine, "default", |_| {});
-        report.absorb(&format!("{label}[{machine}]"), &run);
+        let expected = baseline
+            .cells
+            .iter()
+            .find(|c| c.fixture == *label && c.machine == *machine && c.options == "default")
+            .unwrap_or_else(|| panic!("smoke cell {label}[{machine}] is missing from baseline"));
+
+        let CellRun { cell, .. } = run_cell(f, machine, "default", |_| {});
+        if cache_is_pinned {
+            assert_eq!(
+                cell.verdict(),
+                expected.verdict(),
+                "shipped smoke cell {label}[{machine}] verdict changed"
+            );
+        } else {
+            assert!(
+                matches!(cell.status.as_str(), "decided" | "decided-then-refused")
+                    && cell.winner.is_some()
+                    && cell.stage.is_some(),
+                "shipped smoke cell {label}[{machine}] did not produce a decision: {:?}",
+                cell.verdict()
+            );
+        }
+        checked += 1;
     }
-    report.print();
-    // The ONLY fixture-shaped requirement: each smoke cell must reach
-    // the search, so there is something to compare. Nothing here pins
-    // WHICH winner, WHICH stage, or even that the build succeeded.
-    //
-    // The first draft asserted `status == "decided"` per cell, and that
-    // was the wrong pin (#703 review round 1, the major): the shadow's
-    // verdict comparison is layout-independent, but "decided" is not —
-    // a host whose zone cache differs can legitimately land a cell in
-    // `decided-then-refused` (the search picked a winner and a LATER
-    // build step refused, which `run_cell` distinguishes on purpose),
-    // and that would red the one always-on gate with no v1/v2
-    // divergence anywhere. The shadow is emitted on that path too, so
-    // the comparison is still available and still meaningful; only the
-    // over-tight assertion had to go.
-    //
-    // `agreed_decided`, NOT `compared()` (#703 review round 2): the
-    // count alone is satisfied by `agreed_no_winner` cells, so all six
-    // fixtures silently refusing everything — both programs naming
-    // nobody, which agrees — would have read green. That is a natural
-    // signature for the engine regression this tripwire is meant to
-    // notice, and it is the "compared nothing reads as clean" shape
-    // wearing yet another hat. All six ARE known-decided; requiring it
-    // is a fixture-liveness pin, not a verdict pin (nothing here says
-    // WHICH winner or WHICH stage).
-    //
-    // ORDER: the disagreement assertion FIRST. A shortfall in the count
-    // below is usually a CONSEQUENCE of a disagreement, and the
-    // disagreement is the campaign-level finding a reader has to act on;
-    // leading with "5 of 6 agreed" would bury it.
-    report.assert_clean();
+
     assert_eq!(
-        report.agreed_decided,
+        checked,
         SMOKE_CELLS.len(),
-        "{} of {} smoke cells reached a selection, named a winner, and agreed. Every one \
-         must: a cell that stopped deciding has nothing (or almost nothing) to shadow, so \
-         this gate would be silently measuring less than it claims. Tally was {:?}",
-        report.agreed_decided,
-        SMOKE_CELLS.len(),
-        (report.agreed_decided, report.agreed_no_winner, report.disagreements.len())
+        "checked {checked}/{} committed smoke cells",
+        SMOKE_CELLS.len()
     );
 }

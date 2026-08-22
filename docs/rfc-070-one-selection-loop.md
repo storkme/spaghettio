@@ -2,17 +2,14 @@
 
 ## Summary
 
-Replace `select_best_decomposition` — the production candidate-selection
-loop, which today braids three incompatible verdict mechanisms through
-~880 lines and lets three of its seven candidate arms carry bespoke
-refusal logic inside their own `produce()` — with a single policy-driven selection loop derived from
-`candidate_runner`'s architecture, migrated under a netflow-style
-shadow/parity/flip sequence. After this RFC, "how does a candidate
-layout win?" has exactly one answer, expressed as policy data in one
-place: one severity-aware verdict model, one ranking, one calibration
-point for every floor and firewall. Every future capability (celldb
-template promotion included) integrates by registering a producer, not
-by growing an eighth bespoke arm.
+Replace the former `select_best_decomposition` candidate-selection loop,
+which braided three incompatible verdict mechanisms through ~880 lines,
+with a single policy-driven loop derived from `candidate_runner`'s
+architecture. The shadow/parity/flip migration is complete through Phase
+2c: "how does a candidate layout win?" now has exactly one answer,
+expressed as policy data in one place. Every future capability (celldb
+template promotion included) integrates by registering a producer, not by
+growing an eighth bespoke arm.
 
 ## Motivation
 
@@ -23,7 +20,7 @@ independently-falsifiable claims than its verification covers — and
 candidate selection is the worst offender, because every capability
 must integrate there and each one has grown its own verdict logic.
 
-**What exists today** (all confirmed at source, 2026-08-21):
+**Pre-Phase-2c source inventory** (confirmed at source, 2026-08-21):
 
 - The only production selection loop is
   `decomposition_search::select_best_decomposition`
@@ -38,7 +35,8 @@ must integrate there and each one has grown its own verdict logic.
   `build_k1_enrollment_plan`) carrying a bespoke plan argument the
   trait signature cannot pass —
   a distinction Phase 1b must handle explicitly, see Design).
-- **Three verdict mechanisms coexist in the one function**:
+- **Before Phase 2c, three verdict mechanisms coexisted in the one
+  function**:
   1. a generic soft score (`score_layout` :896 — density minus
      overproduction minus entity count), hard-gated only on missing
      balancer templates;
@@ -57,7 +55,7 @@ must integrate there and each one has grown its own verdict logic.
   warning-recalibration firewall (:862-883) and the corpus-timeout cost
   gating (:1040-1054) are further loop-adjacent special cases. The
   final winner falls out of a four-stage precedence chain (:1589-1600)
-  whose stages use different verdict mechanisms.
+  whose stages used different verdict mechanisms.
 - `candidate_runner.rs` (RFC-064 Phase 2b) is a structurally clean
   produce→verdict→rank loop — incumbent ranked as a real competitor,
   uniform validation, scoreboard result type — but has **zero
@@ -77,24 +75,28 @@ selection miscalibration damages shipped output, not just velocity:
 #644 phantom warnings steered winners for three days; and the #686
 firing census proved two checks (`input-rate-delivery`, `belt-detour`)
 do *invisible* selection work — they fire only on losers, so corpus
-quietness proves nothing about them. Three mechanisms means three
-places to miscalibrate and three places to firewall; nobody can state
-today's complete selection semantics without reading ~900 lines.
+quietness proves nothing about them. The former three mechanisms meant
+three places to miscalibrate and three places to firewall; the complete
+semantics are now expressed by the shipped policy.
 
 The reproducible failing case, per the template's preference: run the
-#686 census — the current machinery's verdicts cannot even be *audited*
+#686 census — the former machinery's verdicts could not even be *audited*
 per-mechanism without the instrument this RFC builds in Phase 0.
 
 ## Design
 
+Phase 2c is the close-out of this design: the former generation-1
+comparators and reverse-shadow event have been deleted, while the
+scoreboard measurements remain as the inputs to `SelectionPolicy`.
+
 **Central call: generation 4's shape absorbs generation 1's semantics
 as explicit policy.** The unified loop keeps `candidate_runner`'s
-architecture; the verdict layer is rebuilt so that everything currently
+architecture; the verdict layer is rebuilt so that everything formerly
 scattered across arms becomes data the loop is configured with:
 
 - **`SelectionPolicy`** — one type expressing, per validator category:
   severity channels (errors vs selection-participating warnings vs
-  layout warnings — the three channels `IssueCounts` tracks today),
+  layout warnings — the three channels retained in `IssueProfile`),
   gate mode (hard floor / pairwise never-worse / report-only), and
   participation (the `SELECTION_EXCLUDED_WARNING_CATEGORIES` set
   becomes policy data). The non-lexicographic floor comparison and the
@@ -113,8 +115,8 @@ scattered across arms becomes data the loop is configured with:
   trait cannot pass — so Phase 1b specifies a plan-accepting producer
   variant for it (a producer constructed *with* its plan, or a
   two-stage producer contract) rather than pretending it registers as
-  a plain arm. The incumbent (native) is a ranked competitor, as in
-  `candidate_runner` today.
+  a plain arm. The incumbent (native) is a ranked competitor, as in the
+  former `candidate_runner` architecture.
 - **`LayoutOptions` split** — the doc-only legend at
   `bus/layout.rs:79-111` is promoted to types: user-pinned constraints
   (public boundary; belt tier is never a search axis, per standing
@@ -140,8 +142,8 @@ condition named in this decision log.
 - *Keep gen 1 and delete gen 4.* Viable (it is K70-1's contingency),
   but it leaves three mechanisms braided and the integration tax
   standing; it is the fallback, not the plan.
-- *Parallelize the loop.* The corpus timeout is managed by cost
-  gating today; parallelism trades a measured constraint for
+- *Parallelize the loop.* The corpus timeout is managed by the shipped
+  cost-gating rule; parallelism trades a measured constraint for
   nondeterministic scheduling in WASM-hostile territory. Out of scope.
 - *Rewrite the big modules while we're in there.* `templates.rs` /
   `ghost_router.rs` are near-perfectly exercised and domain-essential;
@@ -156,7 +158,7 @@ harness (`tests/celldb_template.rs`, `tests/candidate_runner.rs`)
 green, and the post-migration loop must offer RFC-068 an equivalent
 inert registration point. After unification, RFC-068's promotion path
 becomes "register `TemplateCandidate` as a producer behind its sim
-gate" — strictly simpler than today's.
+  gate" — strictly simpler than the former loop's.
 
 ## Kill criteria
 
@@ -205,18 +207,19 @@ instruments:
 
 1. **Phase-0 baseline is the oracle.** The selection scoreboard
    (extension of #686's census) records, per corpus fixture: candidate
-   set, per-candidate verdicts under each mechanism, winner, and
-   *which precedence-chain stage decided it*. Committed as data;
-   every later phase diffs against it.
-2. **Shadow parity in CI** (Phase 2a onward): the v2 loop runs beside
-   production on the **named parity corpus** (fixture × machine-tier
-   list committed with the Phase-0c baseline); winner mismatch fails
-   the check. The census slice alone is NOT the parity corpus — it is
-   a hardcoded approximation that cannot re-enact the search-internal
+   set, retained per-candidate measurements, winner, and *which policy
+   stage decided it*. Committed as data; every later phase diffs against
+   it.
+2. **Shipped-path parity** (Phase 2c): the production policy runs on the
+   **named parity corpus** (fixture × machine-tier list committed with
+   the Phase-0c baseline); winner and deciding-stage mismatch fails the
+   check. The former shadow was the Phase-2a/2b migration instrument and
+   is now deleted. The census slice alone is NOT the parity corpus — it
+   is a hardcoded approximation that cannot re-enact the search-internal
    arms.
 3. **Sim anchors** on every adjudicated divergence and on a
-   pre-registered contested sample (fixtures where `di_choice` /
-   `horizontal_choice` actually fired) before the flip.
+   pre-registered contested sample (fixtures where the policy's
+   `ScopedPairwise` stage actually fired) before the flip.
 4. **Meter tripwire** (separate track, dependency): report-only
    below-plan meter check over e2e exports — "meter says below plan ⇒
    believe it" applied to every campaign PR.
@@ -234,7 +237,8 @@ tier × option set** grid — and its committed result is
 `crates/core/tests/parity_corpus_baseline.json`
 (`SPAGHETTIO_PARITY_CORPUS=bless|check`, `#[ignore]`d, never CI-gated:
 like the stress goldens it is host-cache-relative and must be run with
-the zone-cache pin).
+the zone-cache pin). The always-on six-cell smoke tier is CI-gated; the
+full 160-cell corpus check is intentionally not.
 
 **160 cells.** 12 fixtures (the #691 corpus verbatim: G2's six
 tier-ladder solves plus the six e2e "from-ore" ones) × the machine tiers
@@ -246,17 +250,32 @@ advanced-circuit or processing-unit). The option-set axis is not
 optional decoration: it is the axis W1b's finding made load-bearing, and
 it is where the corpus's claim surface lives (below).
 
-Two cells are **equal** iff their `(status, winner, deciding stage)`
-triples are equal. Nothing else is compared. The per-candidate outcome
-vector is recorded alongside, for adjudication only; the verdict
-NUMBERS are deliberately absent, because they are structurally holed
-(see the Phase-0b oracle-gaps entry) and a baseline pinning them would
-pin gaps as facts.
+Two cells are **equivalent** iff their `(status, winner, deciding stage)`
+triples are equal. The per-candidate outcome vector is not part of that
+winner/stage equivalence, but equality is asserted under a matching pinned
+cache as a gate-transcription guard; under a different or unidentified cache
+it is reported for diagnosis only. The verdict NUMBERS are deliberately
+absent, because they are structurally holed (see the Phase-0b oracle-gaps
+entry) and a baseline pinning them would pin gaps as facts.
+
+The pinned-cache identity is the **committed prefix**: the baseline records
+the byte length of the committed `sat-zones-ci.bin` and the SHA-256 of exactly
+those first bytes. The smoke gate and `SPAGHETTIO_PARITY_REQUIRE_PIN=1` hash
+only that prefix. This is necessary because native solves append newly found
+zones to the cache during a run; appended records must not make the original
+pin fail, while changing or truncating any byte within the committed prefix
+must fail. The older full-cache `zone_cache_hash` remains for the ignored
+corpus check's informational provenance note.
+
+Because the corpus is cache-relative, candidate-outcome drift is a hard
+parity failure only when the run's cache identity matches the baseline;
+under an unidentified or pinned-but-mismatched cache it is reported for
+diagnosis but does not affect the equivalence result.
 
 - **Minor divergence** — same `status` and `winner`, different deciding
-  stage. The shadow loop reached the same shipped layout by answering a
-  different question, which is expected wherever v2's policy merges two
-  of today's five stages. Adjudicated individually in this log; **no sim
+  stage. The migration loop reached the same shipped layout by answering a
+  different question, which is expected wherever the policy merges two
+  of the former five stages. Adjudicated individually in this log; **no sim
   required**, because no shipped geometry changed.
 - **Major divergence** — `winner` or `status` differs. A different
   layout ships. Adjudicated individually in this log **and sim-anchored
@@ -283,12 +302,13 @@ verdict mechanisms" into a cleaner factorization the RFC's Motivation
 could not yet see: there is **one underlying measurement** and **three
 comparators consuming different projections of it**:
 
-- `classify_errors` (:786), `count_issues` (:852), and the
-  `clean_flags` closure (:1585) each independently run
-  `validate::validate` on the same layout and project the same issue
+- `classify_errors` (:786), `count_issues` (:852), and the former
+  `clean_flags` closure (:1585) each independently ran
+  `validate::validate` on the same layout and projected the same issue
   list three different ways (kind classes / severity-channel counts /
-  clean-bit + warning key). Today a contested candidate is validated
-  up to three times per selection.
+  clean-bit + warning key). Phase 2c deliberately retains the live
+  measurement sites and their scoreboard projections; only the duplicate
+  decision machinery is gone.
 - The comparators are: the **quality-key lexicograph** (structural
   dominates weighted-functional; merge-tap scope), the
   **component-wise floor** (non-lexicographic across three channels,
@@ -297,7 +317,8 @@ comparators consuming different projections of it**:
   score-desc on the success path; then accepted-by-score; then
   first-produced).
 
-v2 therefore measures **once** and derives all projections.
+The shipped policy therefore makes the decision **once** from the
+scoreboard's retained projections.
 
 ### `IssueProfile` — the unified per-candidate measurement
 
@@ -312,24 +333,26 @@ and score:
 - `kinds: {contamination, starvation, structural}` — the Error-only
   kind classification, with the category→kind map as policy data (the
   match at :799-806 becomes a table).
-- `accepted: bool` + `accepted_reason` — the acceptance gates (today
-  exactly one: `missing-balancer-template > 0` disqualifies).
+- `accepted: bool` + `accepted_reason` — the acceptance gates (the
+  shipped policy currently has exactly one: `missing-balancer-template > 0`
+  disqualifies).
 - `score: f64` + components — `score_layout` unchanged.
 
 A `None` field is a **gap, never a zero** (the scoreboard's rule):
-stages whose inputs are absent skip, exactly as today's lazy sites do.
+stages whose inputs are absent skip, exactly as the retained lazy
+measurement sites do.
 
 ### `SelectionPolicy` — the data
 
 ```
 SelectionPolicy {
-  excluded_warning_categories: BTreeSet<String>,   // today: belt-detour ONLY — the two #632 B6
+  excluded_warning_categories: BTreeSet<String>,   // shipped: belt-detour ONLY — the two #632 B6
                                                    // demotions left the set by DELETION (#684);
                                                    // decomposition_search.rs:870-871 still carries
                                                    // the stale two-demotions prose (pre-existing;
                                                    // W2b sweeps it)
   error_kind_classes: BTreeMap<String, Kind>,      // the :799 match, as a table
-  acceptance_gates: Vec<AcceptanceGate>,           // today: MissingBalancerTemplate
+  acceptance_gates: Vec<AcceptanceGate>,           // shipped: MissingBalancerTemplate
   contamination_weight: usize,                     // KIND_CONTAMINATION_WEIGHT
   firewalls: Vec<Firewall>,                        // named, with receipt strings — the #519
                                                    // exemption lives here as the record of WHY
@@ -342,7 +365,7 @@ SelectionPolicy {
 ### `SelectionProgram` — the five stages as data
 
 An ordered stage list; each stage names its `SelectionStage` tag, its
-scope, its comparator, and its chain behavior. Today's program:
+scope, its comparator, and its chain behavior. The shipped program:
 
 1. **MergeTap** — scope: merge-tap vs incumbent, gated on merge-tap
    having produced (which its own gate restricts to Pooled +
@@ -378,7 +401,7 @@ class) and the spec preserves it as such.
 ```
 ProducerRegistration {
   name, producer,                  // DecompositionCandidate, or PlanProducer for k1
-  gate: GatePredicate,             // today's try_* predicates (cost gating), as data
+  gate: GatePredicate,             // source try_* predicates (cost gating), as data
   refuse_on_error: bool,           // DI/horizontal/cells true; native/k1/split/merge-tap FALSE.
                                    // PRECISE SEMANTICS (this is a PRODUCE-TIME gate, never a
                                    // stage/win gate): when true, a produced layout carrying any
@@ -408,8 +431,8 @@ registration names.
 
 ### Uniform loop stages
 
-`catch_unwind` becomes uniform (7/7; today 5/7 — native and k1 are
-unprotected, so a native panic aborts the solve today but would become
+`catch_unwind` becomes uniform (7/7; the former path was 5/7 — native and k1 were
+unprotected, so a native panic aborted the pre-Phase-2c solve but would become
 an all-refused error under v2). This is a deliberate, strictly
 degradation-softening divergence on a path the corpus cannot witness
 (no corpus fixture panics); it is documented here rather than hidden,
@@ -419,13 +442,11 @@ truncated) move into the loop unchanged.
 
 ### Validation-once and laziness
 
-v2 may validate each produced candidate exactly once (eager profile)
-or preserve today's lazy per-stage validation — implementer's choice,
-adjudicated by K70-3's isolated-run comparator. `validate()` is
-deterministic, so eager vs lazy cannot change outcomes, only cost.
-The lazy skips that exist today (merge-tap- or scoped-decided solves
-skip `clean_flags` entirely; single-layout solves skip) are the
-cost-relevant cases to measure.
+Phase 2c retains the former lazy measurement boundary: merge-tap- or
+scoped-decided solves skip the `clean_flags` measurement entirely, as do
+single-layout solves. The shipped policy consumes whichever scoreboard
+measurements are present; `validate()` remains deterministic, so retaining
+the boundary preserves both the deciding stage and the established cost.
 
 ### `verdict.rs` extension and RFC-068 compat
 
@@ -439,16 +460,17 @@ campaign migrates.
 
 ### The Phase-1b acceptance harness
 
-`policy_replay` (a test, non-ignored where cheap): **one live corpus
-run, two consumers.** The committed #694 baseline deliberately stores
+`policy_replay` (the historical Phase-1b acceptance test): **one live
+corpus run, two consumers.** The committed #694 baseline deliberately stores
 only `(status, winner, stage, outcomes)` per cell — the per-candidate
 profiles exist only in the live `SelectionCandidateEvaluated` events
 and are never persisted (pinning them would pin gaps as facts, per the
 Phase-0b principle). So the harness runs the #694 corpus once with the
-scoreboard enabled; v1 decides each cell as normal, the harness
+scoreboard enabled; the then-live generation-1 path decided each cell as
+normal, and the harness
 captures that cell's emitted per-candidate profiles in-process, feeds
 them through the v2 comparator/program, and requires v2's winner
-**and** stage to match both the live v1 decision and the committed
+**and** stage to match both the generation-1 decision and the committed
 baseline on all 140 decided cells. No second layout pass per cell —
 the "replay" is over captured profiles, not re-produced layouts.
 Profile gaps (fields the recorded mechanisms never computed) must be
@@ -2312,3 +2334,23 @@ fixtures / docs split per the churn norm).
   validator-warned `input-rate-delivery` class, not evidence of the balancer's
   partial-input behaviour. The sim removes the old 0/s failure mode without
   proving the path fixed. Receipt: [`ec30-am2-ore-32-sim-receipt.json`](../artifacts/ec30-am2-ore-32-sim-receipt.json).*
+- *2026-08-22 — **Phase 2c executed (RFC-070, #689 OWNER GATE 3).** The
+  §Design / “Migration shape” flip condition was: “the v2 loop first runs
+  in shadow behind `select_best_decomposition` under a parity gate (same
+  winner, or an adjudicated divergence), flips only after corpus-wide parity
+  plus sim anchors on divergences, then the old loop is deleted with the flip
+  condition named in this decision log.” It was met: parity held through 2b
+  with zero unadjudicated divergences; PR #707 recorded **160/160 cells** and
+  **140/140 agreement**. Phase 2c therefore deletes the generation-1
+  decision chain, `SelectionShadowCompared` and its emission, and the
+  reverse-shadow parity agreement machinery. The committed parity check is
+  now the shipped winner-plus-stage gate: **160/160**; the six-fixture smoke
+  tier checks the same winners and stages against the committed baseline.
+  Exact final diff deletion count is **2,055 lines** (`git diff --numstat`,
+  deletion column). The measurement code is deliberately retained:
+  `classify_errors` feeds the policy's `ErrorKindCounts::quality_key`,
+  `count_issues` feeds its component-wise floor and error-free tier, and the
+  scoreboard's projections remain the source for `selection_policy::decide`,
+  `SelectionCandidateEvaluated`, the firing census, and snapshot/debug traces.
+  Old local snapshots containing the deleted shadow event must be regenerated;
+  committed snapshots were clean.*

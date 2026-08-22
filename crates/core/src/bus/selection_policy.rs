@@ -1,17 +1,17 @@
-//! RFC-070 Phase 1b (#689 track W2b): candidate selection expressed as
+//! RFC-070 Phase 2c: candidate selection expressed as
 //! **policy data** instead of open-coded mechanisms.
 //!
 //! Phase 2b wires `select_best_decomposition` to ship this decision over
-//! its scoreboard profiles. The v1 chain remains beside it as a reverse
-//! shadow until Phase 2c; the proof that this module reproduces the
-//! Phase-0 oracle is `tests/parity_corpus.rs::policy_replay`.
+//! its scoreboard profiles. Phase 2c removes the former v1 chain, leaving
+//! this policy as the sole decision path; the committed parity corpus is
+//! the proof that the shipped winner and stage remain unchanged.
 //!
 //! # The reframe: one measurement, three comparators
 //!
 //! Reading the mechanisms at source dissolves RFC-070's "three verdict
 //! mechanisms" into a cleaner factorization: there is **one underlying
 //! measurement** and three comparators consuming different projections
-//! of it. Today `classify_errors`, `count_issues` and the `clean_flags`
+//! of it. The selection path retains `classify_errors`, `count_issues` and the `clean_flags`
 //! closure each independently run `validate::validate` on the same
 //! layout and project the same issue list three ways, so a contested
 //! candidate is validated up to three times per selection.
@@ -24,7 +24,7 @@
 //! that makes offline replay honest: an absent field means *no mechanism
 //! computed this on this call*, which is not the same fact as "computed
 //! it and got 0". Every stage that needs a field it does not have
-//! **skips**, exactly as today's lazy sites do (`clean_flags` is not
+//! **skips**, exactly as the retained lazy measurement sites do (`clean_flags` is not
 //! computed at all when merge-tap or a scoped pairwise already decided,
 //! or when only one candidate produced a layout). Reading a gap as 0 is
 //! the `unwrap_or(0)` trap that has silently reported "no findings"
@@ -69,7 +69,7 @@ use super::layout::{run_layout_with_explicit_plan, LayoutOptions, LayoutStrategy
 use super::partitioner::PartitionPlan;
 
 /// The density tie-break epsilon in the `equal_and_denser` arm,
-/// transcribed from `decomposition_search.rs`'s `di_choice`
+/// transcribed from the former `decomposition_search.rs` `di_choice`
 /// (`di_score.score > nat_score.score + 1e-9`). Parity depends on the
 /// literal, so it lives next to the comparator that uses it.
 pub const DENSITY_TIEBREAK_EPSILON: f64 = 1e-9;
@@ -112,7 +112,10 @@ impl ErrorKindCounts {
     /// is worse than any functional defect), then the weighted
     /// functional total breaks ties within equal structural.
     pub fn quality_key(&self, contamination_weight: usize) -> (usize, usize) {
-        (self.structural, self.weighted_functional(contamination_weight))
+        (
+            self.structural,
+            self.weighted_functional(contamination_weight),
+        )
     }
 }
 
@@ -194,14 +197,15 @@ impl IssueProfile {
     /// layout warnings (`clean_flags`' `warnings + l.warnings.len()`).
     /// `None` when no mechanism counted this candidate.
     pub fn warning_key(&self) -> Option<usize> {
-        self.counts.map(|c| c.selection_warnings + c.layout_warnings)
+        self.counts
+            .map(|c| c.selection_warnings + c.layout_warnings)
     }
 
     /// Measure a produced layout ONCE and derive every projection.
     ///
     /// This is the whole point of the reframe: `classify_errors`,
     /// `count_issues` and `clean_flags` each run `validate()`
-    /// separately today; here one call feeds the kind classes, the
+    /// separately in the former loop; here one call feeds the kind classes, the
     /// three severity channels and the acceptance gates.
     ///
     /// # Eager measurement changes the deciding STAGE. Read this before
@@ -282,7 +286,10 @@ impl IssueProfile {
             }
         }
         let score = score_layout(layout, solver_result);
-        let refusal = policy.acceptance_gates.iter().find_map(|g| g.refusal(layout));
+        let refusal = policy
+            .acceptance_gates
+            .iter()
+            .find_map(|g| g.refusal(layout));
 
         // The PRODUCE-TIME gate, as a DEFENSIVE GUARD rather than a live
         // path (softened in W3a, having been written in #698 review
@@ -301,8 +308,8 @@ impl IssueProfile {
         // would hand `decide` an error-laden `Produced` profile able to
         // displace a healthy incumbent, inverting the asymmetry
         // `refuse_on_error_is_asymmetric_and_that_asymmetry_is_load_bearing`
-        // pins. `policy_replay` cannot see that class at all, because it
-        // replays rows where v1 already refused. See
+        // pins. The parity corpus cannot see that class because it records
+        // the shipped path's final rows. See
         // [`MeasurementRule::min_produced_for_error_free_tier`], whose
         // equality with v1's `n_layouts` rests on the same pairing.
         //
@@ -324,7 +331,9 @@ impl IssueProfile {
                 .map(|(c, n)| format!("{c}×{n}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let gate_note = refusal.map(|r| format!("; acceptance gate also: {r}")).unwrap_or_default();
+            let gate_note = refusal
+                .map(|r| format!("; acceptance gate also: {r}"))
+                .unwrap_or_default();
             return Self {
                 outcome: Some(SelectionCandidateOutcome::Refused),
                 refusal_reason: Some(format!(
@@ -670,7 +679,7 @@ impl ProducerRegistration {
 pub enum AdmissionRule {
     /// Scoped producers are admitted iff the incumbent produced nothing.
     ScopedOnIncumbentRefusal,
-    /// Everything always ranked (not today's policy; here so the rule is
+    /// Everything always ranked (not the shipped policy; here so the rule is
     /// visibly a choice rather than an assumption).
     AdmitAll,
 }
@@ -690,7 +699,7 @@ pub enum ChainBehavior {
     /// A plain `.or()` chain got this wrong: `merge_tap_choice` is
     /// `Some` even when it means "native beat merge-tap", so it
     /// short-circuited DI's already-computed, already-validated result
-    /// unread. Measured live on `electronic-circuit@35/s` from ore.
+    /// This was measured live on `electronic-circuit@35/s` from ore.
     DeferToRemainingPairwiseStages,
 }
 
@@ -756,7 +765,10 @@ impl StageSpec {
     /// Pairwise stages are the ones a deferred incumbent answer waits
     /// on (see [`ChainBehavior::DeferToRemainingPairwiseStages`]).
     fn is_pairwise(&self) -> bool {
-        matches!(self.kind, StageKind::QualityKeyPairwise | StageKind::ComponentWiseFloor)
+        matches!(
+            self.kind,
+            StageKind::QualityKeyPairwise | StageKind::ComponentWiseFloor
+        )
     }
 }
 
@@ -792,8 +804,8 @@ pub struct MeasurementRule {
     /// producer given the flag here but no equivalent self-refusal on
     /// the produce side would be counted as produced by v1 and refused
     /// by v2, moving the error-free tier's availability — and
-    /// `policy_replay` would not see it, because it bypasses `measure`
-    /// entirely.
+    /// the committed parity corpus would not see it, because it reads the
+    /// shipped path's final rows rather than bypassing `measure`.
     pub min_produced_for_error_free_tier: usize,
 }
 
@@ -824,7 +836,10 @@ pub struct SelectionPolicy {
 
 impl SelectionPolicy {
     pub fn kind_of(&self, category: &str) -> IssueKind {
-        self.error_kind_classes.get(category).copied().unwrap_or(IssueKind::Starvation)
+        self.error_kind_classes
+            .get(category)
+            .copied()
+            .unwrap_or(IssueKind::Starvation)
     }
 
     /// Index of the incumbent registration.
@@ -847,11 +862,11 @@ impl SelectionPolicy {
         self.producers.iter().position(|p| p.incumbent)
     }
 
-    /// **Today's policy**, transcribed from the source sites RFC-070's
+    /// **The shipped policy**, transcribed from the source sites RFC-070's
     /// Phase 1b specification anchors. Every value here is a
-    /// transcription, not a redesign: `policy_replay` is the proof, and
-    /// a wrong transcription shows up as a diverging cell rather than as
-    /// a plausible-looking constant.
+    /// transcription, not a redesign: the committed parity corpus is the
+    /// external proof, and a wrong transcription shows up as a diverging
+    /// cell rather than as a plausible-looking constant.
     pub fn current() -> Self {
         let excluded_warning_categories = crate::validate::SELECTION_EXCLUDED_WARNING_CATEGORIES
             .iter()
@@ -903,12 +918,14 @@ impl SelectionPolicy {
     }
 }
 
-/// Today's five stages, in precedence order.
+/// The shipped five stages, in policy order.
 fn current_program() -> SelectionProgram {
     SelectionProgram {
         admission: AdmissionRule::ScopedOnIncumbentRefusal,
-        // v1's `clean_flags` guard: `n_layouts > 1`.
-        measurement: MeasurementRule { min_produced_for_error_free_tier: 2 },
+        // Former `clean_flags` guard: `n_layouts > 1`.
+        measurement: MeasurementRule {
+            min_produced_for_error_free_tier: 2,
+        },
         stages: vec![
             StageSpec {
                 tag: SelectionStage::MergeTap,
@@ -1036,7 +1053,10 @@ fn current_producers() -> Vec<ProducerRegistration> {
         GateClause {
             name: "belt-tier-unconstrained-or-express",
             test: |c| {
-                c.opts.max_belt_tier.as_deref().is_none_or(|t| t == "express-transport-belt")
+                c.opts
+                    .max_belt_tier
+                    .as_deref()
+                    .is_none_or(|t| t == "express-transport-belt")
             },
         },
         GateClause {
@@ -1141,8 +1161,8 @@ enum StageOutcome {
 ///
 /// Three review rounds asked for `debug_assert`s on those states inside
 /// the stages. They live at the BOUNDARY instead
-/// (`policy_replay::profile_from_row` rejects a partial count or kind
-/// triple), for two reasons: this function's stated rule is that a gap
+/// (the scoreboard recorder rejects a partial count or kind triple),
+/// for two reasons: this function's stated rule is that a gap
 /// SKIPS — a panic path for one gap and a skip for the next would make
 /// the rule unstatable — and a pure decision function is the wrong place
 /// to validate data it did not build. Untrusted profiles get checked
@@ -1208,7 +1228,9 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
         }
         let outcome = match &stage.kind {
             StageKind::QualityKeyPairwise => quality_key_stage(profiles, policy, incumbent),
-            StageKind::ComponentWiseFloor => component_wise_floor_stage(profiles, policy, incumbent),
+            StageKind::ComponentWiseFloor => {
+                component_wise_floor_stage(profiles, policy, incumbent)
+            }
             StageKind::TieredRank(spec) => tiered_rank_stage(
                 profiles,
                 spec,
@@ -1220,17 +1242,28 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
             ),
         };
         match outcome {
-            StageOutcome::Winner(i) => return Some(Decision { winner: i, stage: stage.tag }),
+            StageOutcome::Winner(i) => {
+                return Some(Decision {
+                    winner: i,
+                    stage: stage.tag,
+                })
+            }
             StageOutcome::HeldIncumbent(i) => match stage.on_incumbent_win {
                 ChainBehavior::Terminate => {
-                    return Some(Decision { winner: i, stage: stage.tag })
+                    return Some(Decision {
+                        winner: i,
+                        stage: stage.tag,
+                    })
                 }
                 ChainBehavior::DeferToRemainingPairwiseStages => {
                     // Last defer wins. Today's program has exactly one
                     // deferring stage, so this cannot overwrite; a
                     // second one would need its own precedence rule
                     // rather than inheriting this one silently.
-                    held = Some(Decision { winner: i, stage: stage.tag });
+                    held = Some(Decision {
+                        winner: i,
+                        stage: stage.tag,
+                    });
                 }
             },
             StageOutcome::NoOpinion => {}
@@ -1349,7 +1382,8 @@ fn component_wise_floor_stage(
             Some(prev) => prev,
         });
     }
-    best.map(|(i, _)| StageOutcome::Winner(i)).unwrap_or(StageOutcome::NoOpinion)
+    best.map(|(i, _)| StageOutcome::Winner(i))
+        .unwrap_or(StageOutcome::NoOpinion)
 }
 
 /// The tiered rank: admission by `spec`, ordering by whether the
@@ -1368,7 +1402,11 @@ fn tiered_rank_stage(
     if spec.require_error_free && !error_free_tier_measured {
         return StageOutcome::NoOpinion;
     }
-    let order = if incumbent_produced { spec.success_order } else { spec.refusal_order };
+    let order = if incumbent_produced {
+        spec.success_order
+    } else {
+        spec.refusal_order
+    };
     let mut best: Option<usize> = None;
     for &i in admitted {
         let p = &profiles[i];
@@ -1394,7 +1432,8 @@ fn tiered_rank_stage(
             Some(b) => b,
         });
     }
-    best.map(StageOutcome::Winner).unwrap_or(StageOutcome::NoOpinion)
+    best.map(StageOutcome::Winner)
+        .unwrap_or(StageOutcome::NoOpinion)
 }
 
 /// Does `a` rank strictly ahead of `b` under `order`?
@@ -1485,16 +1524,40 @@ mod tests {
     }
 
     fn counts(errors: usize, selection_warnings: usize, layout_warnings: usize) -> IssueCounts {
-        IssueCounts { errors, selection_warnings, layout_warnings }
+        IssueCounts {
+            errors,
+            selection_warnings,
+            layout_warnings,
+        }
     }
 
     fn kinds(contamination: usize, starvation: usize, structural: usize) -> ErrorKindCounts {
-        ErrorKindCounts { contamination, starvation, structural }
+        ErrorKindCounts {
+            contamination,
+            starvation,
+            structural,
+        }
     }
 
     /// Seven `not-run` profiles, to be filled in per test.
     fn blank() -> Vec<IssueProfile> {
         (0..7).map(|_| not_run()).collect()
+    }
+
+    fn quality_key_decision(
+        native: ErrorKindCounts,
+        merge_tap: ErrorKindCounts,
+        contamination_weight: usize,
+    ) -> Decision {
+        let mut profiles = blank();
+        profiles[NATIVE] = produced(1.0, false);
+        profiles[NATIVE].kinds = Some(native);
+        profiles[MERGE_TAP] = produced(1.0, true);
+        profiles[MERGE_TAP].kinds = Some(merge_tap);
+
+        let mut policy = SelectionPolicy::current();
+        policy.contamination_weight = contamination_weight;
+        decide(&profiles, &policy).expect("native and merge-tap both produced")
     }
 
     const NATIVE: usize = 0;
@@ -1565,9 +1628,13 @@ mod tests {
         // 2. The scoped registrations are exactly the TAIL, contiguously
         //    — the equivalence between v1's slice bound and v2's field
         //    filter, asserted rather than assumed.
-        let scoped: Vec<usize> =
-            (0..p.producers.len()).filter(|&i| p.producers[i].scoped).collect();
-        assert!(!scoped.is_empty(), "the AdmissionRule needs something to admit");
+        let scoped: Vec<usize> = (0..p.producers.len())
+            .filter(|&i| p.producers[i].scoped)
+            .collect();
+        assert!(
+            !scoped.is_empty(),
+            "the AdmissionRule needs something to admit"
+        );
         let tail: Vec<usize> = (p.producers.len() - scoped.len()..p.producers.len()).collect();
         assert_eq!(
             scoped, tail,
@@ -1590,9 +1657,14 @@ mod tests {
         // 4. Exactly one quality-key rival, and it is registered BEFORE
         //    the scoped tail — its stage runs first in the program and
         //    its gate reads only the incumbent.
-        let rivals: Vec<usize> =
-            (0..p.producers.len()).filter(|&i| p.producers[i].quality_key_rival).collect();
-        assert_eq!(rivals.len(), 1, "the quality-key stage compares exactly one rival");
+        let rivals: Vec<usize> = (0..p.producers.len())
+            .filter(|&i| p.producers[i].quality_key_rival)
+            .collect();
+        assert_eq!(
+            rivals.len(),
+            1,
+            "the quality-key stage compares exactly one rival"
+        );
         assert!(rivals[0] < scoped[0]);
     }
 
@@ -1602,18 +1674,34 @@ mod tests {
         // `ec30` ships an error-laden native through the fallback stage
         // precisely because native does NOT carry the gate.
         let p = SelectionPolicy::current();
-        let refusing: Vec<&str> =
-            p.producers.iter().filter(|r| r.refuse_on_error).map(|r| r.name).collect();
-        assert_eq!(refusing, vec!["cell-composed", "direct-insertion", "horizontal-stack"]);
+        let refusing: Vec<&str> = p
+            .producers
+            .iter()
+            .filter(|r| r.refuse_on_error)
+            .map(|r| r.name)
+            .collect();
+        assert_eq!(
+            refusing,
+            vec!["cell-composed", "direct-insertion", "horizontal-stack"]
+        );
     }
 
     #[test]
     fn only_di_carries_the_equal_and_denser_arm() {
         let p = SelectionPolicy::current();
-        let arms: Vec<&str> =
-            p.producers.iter().filter(|r| r.equal_and_denser).map(|r| r.name).collect();
+        let arms: Vec<&str> = p
+            .producers
+            .iter()
+            .filter(|r| r.equal_and_denser)
+            .map(|r| r.name)
+            .collect();
         assert_eq!(arms, vec!["direct-insertion"]);
-        let scoped: Vec<&str> = p.producers.iter().filter(|r| r.scoped).map(|r| r.name).collect();
+        let scoped: Vec<&str> = p
+            .producers
+            .iter()
+            .filter(|r| r.scoped)
+            .map(|r| r.name)
+            .collect();
         assert_eq!(scoped, vec!["direct-insertion", "horizontal-stack"]);
     }
 
@@ -1622,7 +1710,10 @@ mod tests {
         // The two #632 B6 demotions left the set by DELETION (#684).
         let p = SelectionPolicy::current();
         assert_eq!(
-            p.excluded_warning_categories.iter().map(String::as_str).collect::<Vec<_>>(),
+            p.excluded_warning_categories
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
             vec!["belt-detour"]
         );
     }
@@ -1636,7 +1727,10 @@ mod tests {
         assert_eq!(p.kind_of("pipe-to-ground"), IssueKind::Structural);
         // The `_ =>` arm.
         assert_eq!(p.kind_of("input-rate-delivery"), IssueKind::Starvation);
-        assert_eq!(p.kind_of("a-category-that-does-not-exist"), IssueKind::Starvation);
+        assert_eq!(
+            p.kind_of("a-category-that-does-not-exist"),
+            IssueKind::Starvation
+        );
         assert_eq!(p.contamination_weight, 3);
     }
 
@@ -1652,7 +1746,13 @@ mod tests {
         ps[MERGE_TAP] = produced(0.5, true);
         ps[MERGE_TAP].kinds = Some(kinds(0, 1, 0));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_eq!(d, Decision { winner: MERGE_TAP, stage: SelectionStage::MergeTap });
+        assert_eq!(
+            d,
+            Decision {
+                winner: MERGE_TAP,
+                stage: SelectionStage::MergeTap
+            }
+        );
     }
 
     #[test]
@@ -1665,7 +1765,10 @@ mod tests {
         ps[MERGE_TAP] = produced(1.0, true);
         ps[MERGE_TAP].kinds = Some(kinds(0, 0, 1));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_eq!(d.winner, NATIVE, "structural must dominate the weighted functional total");
+        assert_eq!(
+            d.winner, NATIVE,
+            "structural must dominate the weighted functional total"
+        );
     }
 
     #[test]
@@ -1682,6 +1785,91 @@ mod tests {
         assert_eq!(d.winner, NATIVE);
     }
 
+    /// The deleted v1 test's two measured profiles pin the `[3, 17]`
+    /// robustness window. This exercises the v2 stage, not just the
+    /// arithmetic helper: every weight in the window returns the same
+    /// `(winner, stage)` pair for both merge-tap-style decisions.
+    #[test]
+    fn contamination_weight_window_is_stable_for_quality_key_policy() {
+        let ec_native = kinds(0, 4, 0);
+        let ec_merge_tap = kinds(1, 2, 0);
+        let utility_native = kinds(0, 175, 0);
+        let utility_merge_tap = kinds(8, 38, 0);
+
+        let reference_decisions = (
+            quality_key_decision(ec_native, ec_merge_tap, 3),
+            quality_key_decision(utility_native, utility_merge_tap, 3),
+        );
+        assert_eq!(reference_decisions.0.winner, NATIVE);
+        assert_eq!(reference_decisions.1.winner, MERGE_TAP);
+        for weight in 3..=17 {
+            assert_eq!(
+                (
+                    quality_key_decision(ec_native, ec_merge_tap, weight),
+                    quality_key_decision(utility_native, utility_merge_tap, weight),
+                ),
+                reference_decisions,
+                "v2 quality-key verdicts changed inside the [3, 17] window at weight {weight}"
+            );
+        }
+
+        // Compare the rival to the incumbent, so the boundary assertions
+        // pin the comparator result itself. At weight 2 the EC keys tie;
+        // v2 deliberately still returns native because ties keep the
+        // incumbent. The comparator decision nevertheless differs from
+        // the strict native win throughout the window.
+        let quality_relation = |weight| {
+            (
+                ec_merge_tap
+                    .quality_key(weight)
+                    .cmp(&ec_native.quality_key(weight)),
+                utility_merge_tap
+                    .quality_key(weight)
+                    .cmp(&utility_native.quality_key(weight)),
+            )
+        };
+        assert_eq!(
+            quality_relation(2),
+            (std::cmp::Ordering::Equal, std::cmp::Ordering::Less),
+            "weight 2 is the EC tie boundary from the deleted test"
+        );
+        assert_eq!(
+            quality_relation(3),
+            (std::cmp::Ordering::Greater, std::cmp::Ordering::Less)
+        );
+        assert_ne!(
+            quality_relation(2),
+            quality_relation(3),
+            "the lower boundary must differ from the in-window comparator verdict"
+        );
+        assert_eq!(
+            quality_relation(17),
+            (std::cmp::Ordering::Greater, std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            quality_relation(18),
+            (std::cmp::Ordering::Greater, std::cmp::Ordering::Greater),
+            "weight 18 is the utility flip boundary from the deleted test"
+        );
+        assert_ne!(
+            quality_relation(18),
+            quality_relation(17),
+            "the upper boundary must differ from the in-window comparator verdict"
+        );
+
+        assert_eq!(
+            quality_key_decision(ec_native, ec_merge_tap, 2),
+            reference_decisions.0,
+            "the EC tie at weight 2 must resolve to the incumbent, native"
+        );
+        assert_ne!(
+            quality_key_decision(utility_native, utility_merge_tap, 18),
+            reference_decisions.1,
+            "the utility boundary at weight 18 must change the v2 winner"
+        );
+        assert!((3..=17).contains(&SelectionPolicy::current().contamination_weight));
+    }
+
     #[test]
     fn quality_key_ties_favour_the_incumbent() {
         let mut ps = blank();
@@ -1692,7 +1880,10 @@ mod tests {
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(
             d,
-            Decision { winner: NATIVE, stage: SelectionStage::MergeTap },
+            Decision {
+                winner: NATIVE,
+                stage: SelectionStage::MergeTap
+            },
             "an equal key keeps the incumbent, and a far better score does not rescue it"
         );
     }
@@ -1731,7 +1922,13 @@ mod tests {
         ps[DI] = produced(0.9, true);
         ps[DI].counts = Some(counts(0, 1, 0));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_eq!(d, Decision { winner: DI, stage: SelectionStage::ScopedPairwise });
+        assert_eq!(
+            d,
+            Decision {
+                winner: DI,
+                stage: SelectionStage::ScopedPairwise
+            }
+        );
     }
 
     #[test]
@@ -1751,7 +1948,10 @@ mod tests {
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(
             d,
-            Decision { winner: NATIVE, stage: SelectionStage::MergeTap },
+            Decision {
+                winner: NATIVE,
+                stage: SelectionStage::MergeTap
+            },
             "a held incumbent must terminate the chain, not fall through to a ranked \
              stage where merge-tap's better score would win"
         );
@@ -1771,8 +1971,11 @@ mod tests {
         ps[DI] = produced(1.0, true);
         ps[DI].counts = Some(counts(0, 0, 12));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_ne!(d.winner, DI, "a layout-warning regression must not hide behind a \
-                                  validator-warning improvement");
+        assert_ne!(
+            d.winner, DI,
+            "a layout-warning regression must not hide behind a \
+                                  validator-warning improvement"
+        );
     }
 
     #[test]
@@ -1787,7 +1990,10 @@ mod tests {
         let d = decide(&with_di, &SelectionPolicy::current()).unwrap();
         assert_eq!(
             d,
-            Decision { winner: DI, stage: SelectionStage::ScopedPairwise },
+            Decision {
+                winner: DI,
+                stage: SelectionStage::ScopedPairwise
+            },
             "equal on every channel and strictly denser: DI's arm fires"
         );
 
@@ -1809,7 +2015,10 @@ mod tests {
         ps[DI] = produced(1.0 + DENSITY_TIEBREAK_EPSILON / 2.0, true);
         ps[DI].counts = Some(counts(0, 2, 1));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_ne!(d.winner, DI, "a sub-epsilon score difference is a tie, and ties keep native");
+        assert_ne!(
+            d.winner, DI,
+            "a sub-epsilon score difference is a tie, and ties keep native"
+        );
     }
 
     #[test]
@@ -1820,7 +2029,10 @@ mod tests {
         ps[DI] = produced(9.0, false);
         ps[DI].counts = Some(counts(0, 0, 0));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_ne!(d.winner, DI, "`accepted` is a hard constraint the issue channels cannot see");
+        assert_ne!(
+            d.winner, DI,
+            "`accepted` is a hard constraint the issue channels cannot see"
+        );
     }
 
     #[test]
@@ -1833,7 +2045,10 @@ mod tests {
         ps[HS] = produced(9.0, true);
         ps[HS].counts = Some(counts(0, 1, 0));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_eq!(d.winner, HS, "horizontal is strictly better than DI on the floor");
+        assert_eq!(
+            d.winner, HS,
+            "horizontal is strictly better than DI on the floor"
+        );
 
         // Tie on the floor: the far better score must NOT rescue
         // horizontal — the earlier registration keeps it.
@@ -1883,7 +2098,10 @@ mod tests {
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(
             d,
-            Decision { winner: HS, stage: SelectionStage::ScopedPairwise },
+            Decision {
+                winner: HS,
+                stage: SelectionStage::ScopedPairwise
+            },
             "v1's both-scoped-won arm compares the two by the floor ALONE (no density \
              tiebreak), and DI's counts are the incumbent's — so a strictly-better \
              horizontal takes it despite DI's 90x score"
@@ -1893,7 +2111,10 @@ mod tests {
         ps[HS] = not_run();
         assert_eq!(
             decide(&ps, &SelectionPolicy::current()).unwrap(),
-            Decision { winner: DI, stage: SelectionStage::ScopedPairwise },
+            Decision {
+                winner: DI,
+                stage: SelectionStage::ScopedPairwise
+            },
         );
     }
 
@@ -1959,7 +2180,13 @@ mod tests {
         ps[DI] = produced(50.0, true);
         ps[DI].counts = Some(counts(0, 1, 0));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_eq!(d, Decision { winner: NATIVE, stage: SelectionStage::BestErrorFree });
+        assert_eq!(
+            d,
+            Decision {
+                winner: NATIVE,
+                stage: SelectionStage::BestErrorFree
+            }
+        );
     }
 
     #[test]
@@ -1979,7 +2206,10 @@ mod tests {
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(
             d,
-            Decision { winner: DI, stage: SelectionStage::BestErrorFree },
+            Decision {
+                winner: DI,
+                stage: SelectionStage::BestErrorFree
+            },
             "the refusal path orders the error-free tier warnings-first, so DI's clean \
              0/0 beats cell-composed's denser 0/6"
         );
@@ -1999,7 +2229,10 @@ mod tests {
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(
             d,
-            Decision { winner: CELLS, stage: SelectionStage::BestErrorFree },
+            Decision {
+                winner: CELLS,
+                stage: SelectionStage::BestErrorFree
+            },
             "with the incumbent produced, #392's score-first order applies unchanged"
         );
     }
@@ -2012,7 +2245,13 @@ mod tests {
         ps[CELLS] = produced(1.0, true);
         ps[CELLS].counts = Some(counts(0, 0, 0));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_eq!(d, Decision { winner: CELLS, stage: SelectionStage::BestErrorFree });
+        assert_eq!(
+            d,
+            Decision {
+                winner: CELLS,
+                stage: SelectionStage::BestErrorFree
+            }
+        );
     }
 
     #[test]
@@ -2022,7 +2261,13 @@ mod tests {
         let mut ps = blank();
         ps[NATIVE] = produced(1.0, true);
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_eq!(d, Decision { winner: NATIVE, stage: SelectionStage::BestAccepted });
+        assert_eq!(
+            d,
+            Decision {
+                winner: NATIVE,
+                stage: SelectionStage::BestAccepted
+            }
+        );
     }
 
     /// The [`MeasurementRule`], and why it is enforced in [`decide`]
@@ -2048,8 +2293,15 @@ mod tests {
         let policy = SelectionPolicy::current();
         let lazy_d = decide(&lazy, &policy).unwrap();
         let eager_d = decide(&eager, &policy).unwrap();
-        assert_eq!(lazy_d, eager_d, "the measurement rule must erase the eager/lazy split");
-        assert_eq!(lazy_d.stage, SelectionStage::BestAccepted, "v1's answer, either way");
+        assert_eq!(
+            lazy_d, eager_d,
+            "the measurement rule must erase the eager/lazy split"
+        );
+        assert_eq!(
+            lazy_d.stage,
+            SelectionStage::BestAccepted,
+            "v1's answer, either way"
+        );
 
         // …and the rule is a THRESHOLD, not a blanket skip: add a second
         // produced candidate and the tier is evaluated normally.
@@ -2057,7 +2309,13 @@ mod tests {
         two[CELLS] = produced(2.0, true);
         two[CELLS].counts = Some(counts(0, 0, 0));
         let d = decide(&two, &policy).unwrap();
-        assert_eq!(d, Decision { winner: CELLS, stage: SelectionStage::BestErrorFree });
+        assert_eq!(
+            d,
+            Decision {
+                winner: CELLS,
+                stage: SelectionStage::BestErrorFree
+            }
+        );
     }
 
     // No test for the length-mismatch path: the `debug_assert` fires
@@ -2087,7 +2345,10 @@ mod tests {
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(
             d,
-            Decision { winner: NATIVE, stage: SelectionStage::BestAccepted },
+            Decision {
+                winner: NATIVE,
+                stage: SelectionStage::BestAccepted
+            },
             "v1's reversed index tie-break makes the earliest index the max on a NaN; \
              v2's strictly-better-only fold keeps the same one"
         );
@@ -2095,7 +2356,12 @@ mod tests {
         let mut swapped = blank();
         swapped[NATIVE] = produced(5.0, true);
         swapped[CELLS] = produced(f64::NAN, true);
-        assert_eq!(decide(&swapped, &SelectionPolicy::current()).unwrap().winner, NATIVE);
+        assert_eq!(
+            decide(&swapped, &SelectionPolicy::current())
+                .unwrap()
+                .winner,
+            NATIVE
+        );
     }
 
     #[test]
@@ -2106,7 +2372,13 @@ mod tests {
         assert_eq!(decide(&ps, &SelectionPolicy::current()).unwrap().winner, K1);
         ps[K1] = produced(1.0, true);
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
-        assert_eq!(d, Decision { winner: NATIVE, stage: SelectionStage::BestAccepted });
+        assert_eq!(
+            d,
+            Decision {
+                winner: NATIVE,
+                stage: SelectionStage::BestAccepted
+            }
+        );
     }
 
     #[test]
@@ -2121,7 +2393,10 @@ mod tests {
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(
             d,
-            Decision { winner: NATIVE, stage: SelectionStage::FirstProduced },
+            Decision {
+                winner: NATIVE,
+                stage: SelectionStage::FirstProduced
+            },
             "the fallback is positional, not score-ranked"
         );
     }
@@ -2203,7 +2478,10 @@ mod tests {
             registration_index: MERGE_TAP,
         };
         // The incumbent is always eligible.
-        assert_eq!(policy.producers[NATIVE].gate.evaluate(&ctx), GateVerdict::Eligible);
+        assert_eq!(
+            policy.producers[NATIVE].gate.evaluate(&ctx),
+            GateVerdict::Eligible
+        );
         // The default strategy IS Pooled, so merge-tap clears its first
         // clause and is stopped by the second — the incumbent has not
         // produced an unaccepted layout (it has not run at all here).
@@ -2253,7 +2531,10 @@ mod tests {
         };
         assert_eq!(excluded_by(&prior), GateVerdict::Eligible);
         prior[K1] = Some(true);
-        assert_eq!(excluded_by(&prior), GateVerdict::Excluded("no-earlier-producer-accepted"));
+        assert_eq!(
+            excluded_by(&prior),
+            GateVerdict::Excluded("no-earlier-producer-accepted")
+        );
 
         // …and a LATER registration's acceptance must NOT stand it
         // down. Unbounded, this scanned the whole array, so a
@@ -2267,7 +2548,7 @@ mod tests {
         assert_eq!(excluded_by(&later), GateVerdict::Eligible);
     }
 
-    /// The four gates `policy_replay` cannot reach and the two tests
+    /// The four gates the corpus cannot reach and the two tests
     /// above did not cover (#698 review round 4). The harness feeds
     /// already-produced profiles to `decide`, which never evaluates a
     /// gate at all — so a mis-transcribed eligibility clause survives
@@ -2330,32 +2611,48 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            verdict(CELLS, &LayoutOptions {
-                cell_composition: crate::bus::cells::CellComposition::Off,
-                ..Default::default()
-            }, &prior),
+            verdict(
+                CELLS,
+                &LayoutOptions {
+                    cell_composition: crate::bus::cells::CellComposition::Off,
+                    ..Default::default()
+                },
+                &prior
+            ),
             GateVerdict::Excluded("cell-composition-is-candidate")
         );
         assert_eq!(
-            verdict(CELLS, &LayoutOptions {
-                direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
-                ..cells_on.clone()
-            }, &prior),
+            verdict(
+                CELLS,
+                &LayoutOptions {
+                    direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
+                    ..cells_on.clone()
+                },
+                &prior
+            ),
             GateVerdict::Excluded("direct-insertion-not-forced"),
             "Forced DI is an explicit topology request; a competing variant stands down"
         );
         assert_eq!(
-            verdict(CELLS, &LayoutOptions {
-                max_belt_tier: Some("transport-belt".to_string()),
-                ..cells_on.clone()
-            }, &prior),
+            verdict(
+                CELLS,
+                &LayoutOptions {
+                    max_belt_tier: Some("transport-belt".to_string()),
+                    ..cells_on.clone()
+                },
+                &prior
+            ),
             GateVerdict::Excluded("belt-tier-unconstrained-or-express")
         );
         assert_eq!(
-            verdict(CELLS, &LayoutOptions {
-                max_belt_tier: Some("express-transport-belt".to_string()),
-                ..cells_on.clone()
-            }, &prior),
+            verdict(
+                CELLS,
+                &LayoutOptions {
+                    max_belt_tier: Some("express-transport-belt".to_string()),
+                    ..cells_on.clone()
+                },
+                &prior
+            ),
             GateVerdict::Eligible,
             "express IS allowed by that clause — an unconstrained tier is not the only \
              admissible one"
@@ -2370,14 +2667,25 @@ mod tests {
         // horizontal-stack: enabled, VerticalSplit, DI not Forced, and
         // the solve has a dual-input row. A gear solve has none.
         assert_eq!(
-            verdict(HS, &LayoutOptions { horizontal_candidate: false, ..Default::default() }, &prior),
+            verdict(
+                HS,
+                &LayoutOptions {
+                    horizontal_candidate: false,
+                    ..Default::default()
+                },
+                &prior
+            ),
             GateVerdict::Excluded("horizontal-candidate-enabled")
         );
         assert_eq!(
-            verdict(HS, &LayoutOptions {
-                direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
-                ..Default::default()
-            }, &prior),
+            verdict(
+                HS,
+                &LayoutOptions {
+                    direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
+                    ..Default::default()
+                },
+                &prior
+            ),
             GateVerdict::Excluded("direct-insertion-not-forced")
         );
         assert_eq!(
@@ -2431,10 +2739,12 @@ mod tests {
         };
         let sr = SolverResult::default();
         let policy = SelectionPolicy::current();
-        let profile =
-            IssueProfile::measure(&layout, &sr, &policy, &policy.producers[NATIVE]);
+        let profile = IssueProfile::measure(&layout, &sr, &policy, &policy.producers[NATIVE]);
         assert_eq!(profile.accepted, Some(false));
-        assert!(profile.accepted_reason.unwrap().contains("missing-balancer-template"));
+        assert!(profile
+            .accepted_reason
+            .unwrap()
+            .contains("missing-balancer-template"));
         // The layout channel is counted separately from the validator's.
         assert_eq!(profile.counts.unwrap().layout_warnings, 1);
     }
@@ -2462,7 +2772,10 @@ mod tests {
         let policy = SelectionPolicy::current();
 
         let native = IssueProfile::measure(&layout, &sr, &policy, &policy.producers[NATIVE]);
-        assert!(native.counts.unwrap().errors > 0, "the fixture must actually produce Errors");
+        assert!(
+            native.counts.unwrap().errors > 0,
+            "the fixture must actually produce Errors"
+        );
         assert!(
             native.produced(),
             "native does NOT carry refuse_on_error — an error-laden layout stays in play, \
@@ -2470,9 +2783,15 @@ mod tests {
         );
 
         let di = IssueProfile::measure(&layout, &sr, &policy, &policy.producers[DI]);
-        assert!(!di.produced(), "DI carries refuse_on_error, so this layout is discarded");
+        assert!(
+            !di.produced(),
+            "DI carries refuse_on_error, so this layout is discarded"
+        );
         assert_eq!(di.outcome, Some(SelectionCandidateOutcome::Refused));
-        let reason = di.refusal_reason.clone().expect("a refusal names its reason");
+        let reason = di
+            .refusal_reason
+            .clone()
+            .expect("a refusal names its reason");
         assert!(
             reason.contains("entity-overlap"),
             "the refusal must retain WHICH categories fired (Phase-0b oracle gap (d)); \

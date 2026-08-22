@@ -1,5 +1,7 @@
 {
   "zone_cache_hash": "29166d1b2c8ab69dc8b539472c449a046e9719162dd6c651d54996ea436e9ad1",
+  "zone_cache_prefix_len": 6614576,
+  "zone_cache_prefix_hash": "29166d1b2c8ab69dc8b539472c449a046e9719162dd6c651d54996ea436e9ad1",
   "cells": [
     {
       "fixture": "tier1_gear_am1",

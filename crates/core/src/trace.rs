@@ -6,8 +6,8 @@
 
 use std::cell::{Cell, RefCell};
 
-use serde::{Deserialize, Serialize};
 use crate::models::PlacedEntity;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Collector
@@ -210,7 +210,9 @@ pub fn remove_capped_events_since(start: usize) {
 #[serde(tag = "phase", content = "data")]
 pub enum TraceEvent {
     // Phase 1: Row Placement
-    RowsPlaced { rows: Vec<RowInfo> },
+    RowsPlaced {
+        rows: Vec<RowInfo>,
+    },
     /// A DI spec was eligible in a coupling that could not claim it, because
     /// the spec was already fused into another cell (RFC-059 phase 1, output
     /// 2/3). This is the CONTENTION signal: the dispatcher resolves such a
@@ -699,7 +701,6 @@ pub enum TraceEvent {
         recipes: Vec<String>,
     },
 
-
     /// The reactive power-repair pass (RFC `docs/rfc-power-reservation.md`
     /// Phase 3a-ii / 3b) re-ran the full pipeline with widened substation bands,
     /// but `place_poles` STILL reported uncovered electric inserters afterward —
@@ -1071,7 +1072,6 @@ pub enum TraceEvent {
     // `JunctionGrowthCapped` / `RegionWalkerVeto` events to give a full
     // per-iteration view of the growth loop and each strategy attempt.
     // Designed for CLI replay + UI step-through.
-
     /// Emitted once per `solve_crossing` call, at entry (iteration 0
     /// not yet attempted). Reports the seed and the specs that will
     /// participate.
@@ -1410,9 +1410,9 @@ pub enum TraceEvent {
     // runs its own search, replayed inside the winner's events) splicing
     // itself into the outer block.
     //
-    // Purely observational: the fields RECORD what each verdict mechanism
+    // Purely observational: the fields RECORD what each measurement site
     // already computed on the decision path, never a recomputation, which
-    // is why so many are `Option`. A `None` means "no mechanism computed
+    // is why so many are `Option`. A `None` means "no site computed
     // this for this candidate on this call" — an oracle GAP, not a zero.
     // Reading one as 0 is the `unwrap_or(0)` trap that has silently
     // reported "no findings" here before.
@@ -1426,35 +1426,31 @@ pub enum TraceEvent {
         /// predicate lives at the call site, not in `produce`.
         reason: Option<String>,
         /// Soft score (`score_layout`) and its acceptance verdict — `Some`
-        /// iff the candidate produced a layout (mechanism 1). `accepted`
+        /// iff the candidate produced a layout. `accepted`
         /// carries only the `missing-balancer-template` hard gate; it is
         /// NOT a validation verdict.
         score: Option<f64>,
         accepted: Option<bool>,
         accepted_reason: Option<String>,
-        /// `IssueCounts` (mechanism 2) as computed by whichever comparison
-        /// site ran first — `errors` / `selection_warning_count` /
+        /// `IssueCounts` as computed by whichever measurement site ran
+        /// first — `errors` / `selection_warning_count` /
         /// `LayoutResult.warnings.len()`. All three are `None` together
-        /// when no comparison needed this candidate's counts.
+        /// when no site measured this candidate's counts.
         errors: Option<usize>,
         selection_warnings: Option<usize>,
         layout_warnings: Option<usize>,
         /// Which site FIRST computed the counts above (`"di-vs-native"`,
         /// `"horizontal-vs-native"`, `"clean-flags"`) — provenance of the
         /// number, **not** the site that decided. Recording is
-        /// first-write-wins and several sites compute the same candidate's
-        /// counts, so a later deciding tier can inherit an earlier tag;
+        /// first-write-wins and several sites can measure the same
+        /// candidate's counts, so a later policy stage can inherit an earlier tag;
         /// the value is identical either way (same deterministic call on
         /// the same layout). For "who decided", read `SelectionDecided`'s
         /// stage.
         counts_source: Option<String>,
-        /// `ErrorKinds` (mechanism 3) — computed ONLY by the merge-tap
-        /// decision, so `None` on every call where merge-tap did not run.
-        /// One row can therefore carry counts from one mechanism and kinds
-        /// from another (a Pooled solve where DI also ran gives native
-        /// `di-vs-native` counts AND merge-tap kinds): a row is a
-        /// per-candidate summary of everything any mechanism computed
-        /// about it, not the record of one decision. The decision is
+        /// `ErrorKinds` as measured for the merge-tap profile. A row is a
+        /// per-candidate summary of every projection measured for it, not
+        /// the record of a separate decision. The decision is
         /// `SelectionDecided::stage`, and only that.
         contamination_errors: Option<usize>,
         starvation_errors: Option<usize>,
@@ -1463,50 +1459,6 @@ pub enum TraceEvent {
     SelectionDecided {
         winner: String,
         stage: SelectionStage,
-    },
-
-    // RFC-070 Phase 2b (#689 OWNER GATE 2): the reverse-shadow comparison.
-    // Emitted once per `select_best_decomposition` call, immediately after
-    // the scoreboard's terminal, recording the v1 answer beside the v2
-    // policy decision that now ships on the same solve.
-    //
-    // **v2 ships, unconditionally; v1 is the reverse shadow until Phase
-    // 2c.** A disagreement is DATA for the campaign's K70-2 adjudication,
-    // never a panic and never a behaviour change — the whole point of a
-    // shadow is that a divergence survives long enough to be read.
-    //
-    // Why this can gate CI where the parity corpus cannot: it compares
-    // two dispatches on ONE solve rather than one dispatch against a
-    // committed record, so it is independent of which zone-cache
-    // solutions the layout replayed. A cell that lands a different
-    // layout than the baseline still has a well-defined shadow verdict.
-    SelectionShadowCompared {
-        /// The former v1 shipped winner, and the stage that picked it.
-        /// `None` on the all-candidates-failed path, where v1 names no winner
-        /// at all — kept comparable rather than unemitted, because "v2
-        /// found a winner where v1 refused" is exactly the kind of
-        /// divergence a shadow exists to surface.
-        v1_winner: Option<String>,
-        v1_stage: Option<SelectionStage>,
-        /// What `selection_policy::decide` answered over the SAME
-        /// scoreboard rows. Never re-validates: it consumes the
-        /// measurements the decision path already computed, so a
-        /// disagreement is about the PROGRAM, not about a second
-        /// opinion on the layout.
-        v2_winner: Option<String>,
-        v2_stage: Option<SelectionStage>,
-        /// `(winner, stage)` equal on both sides — the corpus's
-        /// divergence-equivalence rule, minus `status` (which is a
-        /// property of the build, not of the selection).
-        agree: bool,
-        /// Producers whose v2 `ProducerGate` verdict disagreed with
-        /// whether v1 actually ran them. One entry per producer, named
-        /// — never a count in a message (`docs/validator-reporting.md`).
-        /// This is the ONLY instrument that can see a mis-transcribed
-        /// eligibility clause: `policy_replay` consumes already-produced
-        /// profiles and evaluates zero gates (RFC-070 decision log,
-        /// #698's standing hand-off note).
-        gate_disagreements: Vec<String>,
     },
 
     // `ModuleSizeSplit` candidate (see `docs/rfc-decomposition-search.md`)
@@ -1800,29 +1752,28 @@ pub enum SelectionCandidateOutcome {
     NotRun,
 }
 
-/// The precedence stage of `select_best_decomposition` that picked the
-/// winner — a CLOSED enum of the five arms of the `winner_idx` chain, in
-/// precedence order. Exhaustive by construction: every return path of
-/// that chain maps to exactly one variant, so a future stage that is
-/// added without a variant here fails to compile.
+/// The policy stage of `select_best_decomposition` that picked the winner.
+/// This CLOSED enum is exhaustive by construction: every return path of
+/// the policy maps to exactly one variant, so a future stage added without
+/// a variant here fails to compile.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SelectionStage {
-    /// The scoped Pooled merge-tap decision (`ErrorKinds::quality_key`).
-    /// Covers BOTH of its answers: merge-tap won, or native beat merge-tap
-    /// and no scoped-pairwise choice displaced it.
+    /// The policy's scoped Pooled merge-tap decision
+    /// (`ErrorKindCounts::quality_key`). Covers both outcomes of that
+    /// stage: merge-tap won, or native held against it.
     MergeTap,
-    /// The DI / horizontal-stack pairwise `IssueCounts` comparison
-    /// (`scoped_choice`) — reached either directly or through the
-    /// merge-tap chain's native arm.
+    /// The policy's DI / horizontal-stack component-wise `IssueCounts`
+    /// floor.
     ScopedPairwise,
-    /// `best_error_free_idx` — the validation tier (#392).
+    /// The policy's error-free validation tier (#392).
     BestErrorFree,
-    /// `best_accepted_idx` — best soft score among accepted candidates.
+    /// The policy's best-soft-score stage among accepted candidates.
     BestAccepted,
-    /// The positional fallback: first candidate that produced anything.
+    /// The policy's positional fallback: first candidate that produced
+    /// anything.
     FirstProduced,
 }
 
@@ -1862,14 +1813,20 @@ mod tests {
         emit(capped(1)); // before `start` — must survive
         let start = peek_events_len();
         emit(capped(2)); // in range — must be removed
-        emit(TraceEvent::PhaseTime { phase: "place_rows_1".into(), duration_ms: 1 });
+        emit(TraceEvent::PhaseTime {
+            phase: "place_rows_1".into(),
+            duration_ms: 1,
+        });
         emit(capped(3)); // in range — must be removed
 
         remove_capped_events_since(start);
 
         let events = peek_events_since(0);
         assert_eq!(events.len(), 2, "{events:?}");
-        assert!(matches!(&events[0], TraceEvent::InserterSideCapped { machine_x: 1, .. }));
+        assert!(matches!(
+            &events[0],
+            TraceEvent::InserterSideCapped { machine_x: 1, .. }
+        ));
         assert!(matches!(&events[1], TraceEvent::PhaseTime { .. }));
     }
 }
