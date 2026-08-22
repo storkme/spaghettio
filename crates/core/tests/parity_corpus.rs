@@ -488,6 +488,160 @@ struct OuterSelection {
     /// The seven `SelectionCandidateEvaluated` events of the outer
     /// block, in canonical slot order. Empty when no selection ran.
     rows: Vec<TraceEvent>,
+    /// RFC-070 Phase 2a: the live shadow comparison the engine emitted
+    /// for this selection. `None` when no selection ran at all — and
+    /// that is the ONLY reason it may be absent, which is why the
+    /// harnesses below assert its presence on every decided cell rather
+    /// than skipping a missing one (a skipped comparison reads as clean,
+    /// the #693 shape this campaign keeps re-closing).
+    shadow: Option<ShadowOutcome>,
+}
+
+/// One `SelectionShadowCompared` event, flattened for reporting.
+#[derive(Debug, Clone)]
+struct ShadowOutcome {
+    agree: bool,
+    v1: (Option<String>, Option<SelectionStage>),
+    v2: (Option<String>, Option<SelectionStage>),
+    gate_disagreements: Vec<String>,
+}
+
+impl ShadowOutcome {
+    /// Everything an adjudicator needs on one line: both verdicts and
+    /// any gate disagreement, NAMED. A disagreement is a campaign-level
+    /// finding, so the message has to carry enough to act on without
+    /// re-running.
+    fn describe(&self) -> String {
+        let side = |(w, s): &(Option<String>, Option<SelectionStage>)| {
+            format!(
+                "{}/{}",
+                w.as_deref().unwrap_or("<none>"),
+                s.map(stage_name).unwrap_or("<none>")
+            )
+        };
+        let gates = if self.gate_disagreements.is_empty() {
+            String::new()
+        } else {
+            format!("  gates: [{}]", self.gate_disagreements.join("; "))
+        };
+        format!("v1 {} -> v2 {}{gates}", side(&self.v1), side(&self.v2))
+    }
+    /// Agreement on BOTH surfaces the shadow compares. A gate
+    /// disagreement that happens not to move the winner on this
+    /// particular solve is still a mis-transcription, and letting it
+    /// ride on `agree` alone would hide exactly the class the gate
+    /// comparison exists to catch.
+    fn clean(&self) -> bool {
+        self.agree && self.gate_disagreements.is_empty()
+    }
+}
+
+/// The shadow-agreement tally over a sweep of cells, and the failure
+/// message it produces.
+///
+/// **Why this gate is CI-shaped where the baseline is not.** Five review
+/// rounds across #694/#698 refused "CI-gate the corpus", and correctly:
+/// a baseline gate asserts "production has not changed", which every
+/// engine PR legitimately falsifies, and the record is cache-relative
+/// besides. The shadow is neither. It compares two dispatches on ONE
+/// solve, so it says nothing about which layout was produced and
+/// everything about whether the two programs answer alike — a fixture
+/// whose winner legitimately moved still has a well-defined shadow
+/// verdict, and a host with a different zone cache computes the same
+/// one. That is what makes the smoke tier below runnable on every push
+/// (RFC-070 Verification plan item 2, whose promise the earlier
+/// refusals kept pointing at).
+#[derive(Default)]
+struct ShadowReport {
+    compared: usize,
+    disagreements: Vec<String>,
+    /// Cells that decided but emitted no shadow event at all. A missing
+    /// comparison must never read as agreement — that is the "compared
+    /// nothing reads as clean" shape (#693) this campaign has now closed
+    /// in four places.
+    missing: Vec<String>,
+}
+
+impl ShadowReport {
+    fn absorb(&mut self, key: &str, run: &CellRun) {
+        match (&run.shadow, run.cell.status.as_str()) {
+            (Some(s), _) => {
+                self.compared += 1;
+                if !s.clean() {
+                    self.disagreements.push(format!("  {key}: {}", s.describe()));
+                }
+            }
+            // `no-solve` never reaches the search, so there is nothing
+            // to shadow. Every other status means the search ran.
+            (None, "no-solve") => {}
+            (None, status) => self.missing.push(format!("  {key}: status {status}")),
+        }
+    }
+
+    fn print(&self) {
+        println!("\n=== RFC-070 Phase 2a shadow ===");
+        println!(
+            "cells compared: {}  |  disagreements: {}  |  missing comparisons: {}",
+            self.compared,
+            self.disagreements.len(),
+            self.missing.len()
+        );
+        for d in self.disagreements.iter().chain(self.missing.iter()) {
+            println!("{d}");
+        }
+    }
+
+    /// Fails the sweep on a disagreement, a missing comparison, or an
+    /// empty tally.
+    fn assert_clean(&self) {
+        assert!(
+            self.compared > 0,
+            "the shadow compared NOTHING across the whole sweep — the comparison is not \
+             running, which is not the same fact as it agreeing"
+        );
+        assert!(
+            self.missing.is_empty(),
+            "{} cell(s) ran a selection but emitted no `SelectionShadowCompared`. A \
+             missing comparison is a HOLE, not an agreement:\n{}",
+            self.missing.len(),
+            self.missing.join("\n")
+        );
+        assert!(
+            self.disagreements.is_empty(),
+            "the v2 shadow disagreed with production on {} of {} cell(s). **THIS IS A \
+             CAMPAIGN-LEVEL FINDING (RFC-070 K70-1 / K70-2), not a test bug.** Record the \
+             cell and the mechanism and take it to the campaign lead. A transcription bug \
+             may be fixed with receipts; a semantic one MUST be reported — do not tune \
+             policy data until the numbers line up.\n{}",
+            self.disagreements.len(),
+            self.compared,
+            self.disagreements.join("\n")
+        );
+    }
+}
+
+/// Pull the outer selection's shadow event out of one build's stream.
+/// Same "last one wins" rule as the rows: a nested selection's shadow is
+/// emitted inside that candidate's captured events and is replayed
+/// (winner only) BEFORE the outer board, so the last event is the outer
+/// one.
+fn outer_shadow(events: &[TraceEvent]) -> Option<ShadowOutcome> {
+    events.iter().rev().find_map(|e| match e {
+        TraceEvent::SelectionShadowCompared {
+            v1_winner,
+            v1_stage,
+            v2_winner,
+            v2_stage,
+            agree,
+            gate_disagreements,
+        } => Some(ShadowOutcome {
+            agree: *agree,
+            v1: (v1_winner.clone(), *v1_stage),
+            v2: (v2_winner.clone(), *v2_stage),
+            gate_disagreements: gate_disagreements.clone(),
+        }),
+        _ => None,
+    })
 }
 
 /// Pull the OUTER selection out of one build's event stream.
@@ -580,21 +734,38 @@ fn outer_selection(events: &[TraceEvent]) -> OuterSelection {
              different blocks. Do not bless this baseline"
         );
     }
-    OuterSelection { outcomes, decided, rows: tail.iter().map(|e| (*e).clone()).collect() }
+    OuterSelection {
+        outcomes,
+        decided,
+        rows: tail.iter().map(|e| (*e).clone()).collect(),
+        shadow: outer_shadow(events),
+    }
 }
 
-fn run_cell(f: &Fixture, machine: &str, opts_label: &str, apply: fn(&mut LayoutOptions)) -> Cell {
-    run_cell_capturing(f, machine, opts_label, apply).0
+/// One cell's result: the committed record, the scoreboard rows
+/// `policy_replay` replays, and the live shadow comparison the engine
+/// emitted alongside them.
+///
+/// `rows` and `shadow` are deliberately NOT fields of [`Cell`]: `Cell`
+/// is what gets serialised into the committed baseline, and adding to it
+/// would force a re-bless of 160 rows for data the equivalence rule does
+/// not compare. The baseline stays byte-identical across this phase,
+/// which is itself part of the evidence that nothing moved.
+struct CellRun {
+    cell: Cell,
+    rows: Vec<TraceEvent>,
+    shadow: Option<ShadowOutcome>,
 }
 
-/// `run_cell`, plus the outer selection's seven scoreboard rows. One
-/// solve, two consumers — `policy_replay`'s whole shape.
-fn run_cell_capturing(
+/// One cell: the committed record, the scoreboard rows `policy_replay`
+/// replays, and the shadow comparison. One solve, three consumers —
+/// `policy_replay`'s shape, widened by Phase 2a.
+fn run_cell(
     f: &Fixture,
     machine: &str,
     opts_label: &str,
     apply: fn(&mut LayoutOptions),
-) -> (Cell, Vec<TraceEvent>) {
+) -> CellRun {
     let base = Cell {
         fixture: f.label.to_string(),
         machine: machine.to_string(),
@@ -606,7 +777,11 @@ fn run_cell_capturing(
     };
     let inputs: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
     let Ok(sr) = solver::solve(f.item, f.rate, &inputs, machine) else {
-        return (Cell { status: "no-solve".into(), ..base }, Vec::new());
+        return CellRun {
+            cell: Cell { status: "no-solve".into(), ..base },
+            rows: Vec::new(),
+            shadow: None,
+        };
     };
 
     let mut opts = LayoutOptions { max_belt_tier: f.belt.map(str::to_string), ..Default::default() };
@@ -617,7 +792,7 @@ fn run_cell_capturing(
     let events = trace::drain_events();
     drop(guard);
 
-    let OuterSelection { outcomes, decided, rows } = outer_selection(&events);
+    let OuterSelection { outcomes, decided, rows, shadow } = outer_selection(&events);
     let cell = match decided {
         Some((winner, stage)) => Cell {
             // A build can refuse AFTER the search picked a winner (the
@@ -633,7 +808,7 @@ fn run_cell_capturing(
         None if outcomes.is_empty() => Cell { status: "no-selection".into(), ..base },
         None => Cell { status: "no-winner".into(), outcomes, ..base },
     };
-    (cell, rows)
+    CellRun { cell, rows, shadow }
 }
 
 /// Print the corpus as the campaign's key table: rows are
@@ -908,7 +1083,7 @@ fn policy_replay() {
     for f in FIXTURES {
         for machine in f.machines {
             for (label, apply) in OPTION_SETS {
-                let (cell, rows) = run_cell_capturing(f, machine, label, *apply);
+                let CellRun { cell, rows, .. } = run_cell(f, machine, label, *apply);
                 let key = format!("{}[{machine}]/{label}", f.label);
 
                 // v1 decided this cell against the committed record.
@@ -1074,16 +1249,20 @@ fn stage_label(stage: &str) -> &'static str {
 fn parity_corpus() {
     let pin_hash = hash_zone_cache();
     let mut cells = Vec::new();
+    let mut shadow_report = ShadowReport::default();
     for f in FIXTURES {
         for machine in f.machines {
             for (label, apply) in OPTION_SETS {
-                cells.push(run_cell(f, machine, label, *apply));
+                let run = run_cell(f, machine, label, *apply);
+                shadow_report.absorb(&format!("{}[{machine}]/{label}", f.label), &run);
+                cells.push(run.cell);
             }
         }
     }
 
     print_grid(&cells);
     print_divergences(&cells);
+    shadow_report.print();
 
     match std::env::var("SPAGHETTIO_PARITY_CORPUS").as_deref() {
         Ok(mode @ ("bless" | "bless-repin")) => {
@@ -1174,6 +1353,15 @@ fn parity_corpus() {
             );
         }
         Ok(mode @ ("check" | "check-any-cache")) => {
+            // RFC-070 Phase 2a: the shadow gate, asserted BEFORE the
+            // baseline comparison and deliberately so. The two failures
+            // are independent and answer different questions, but only
+            // one of them is interpretable under a mis-pinned cache: a
+            // baseline divergence may be provenance, while a shadow
+            // disagreement is two programs answering differently about
+            // the same solve — true regardless of which layout that
+            // solve produced. So the interpretable failure leads.
+            shadow_report.assert_clean();
             let text = std::fs::read_to_string(baseline_path())
                 .expect("SPAGHETTIO_PARITY_CORPUS=check needs a committed baseline");
             let baseline: Baseline = serde_json::from_str(&text).expect("baseline parses");
@@ -1311,4 +1499,83 @@ fn parity_corpus() {
             // Report-only default: prints, asserts nothing.
         }
     }
+}
+
+// =====================================================================
+// RFC-070 Phase 2a (#689 W3a): the non-ignored shadow smoke tier
+// =====================================================================
+
+/// The six census fixtures at the machine tier their #691 labels name,
+/// under production defaults. Spelled longhand rather than sliced off
+/// `FIXTURES` — a list derived from the thing it checks cannot notice
+/// that thing changing, the same argument `EXPECTED_ORDER` rests on.
+///
+/// These are the six that `check_firing_census.rs` and the junction-seed
+/// census also describe, so a shadow finding here is readable against
+/// both of the campaign's other instruments row by row.
+const SMOKE_CELLS: &[(&str, &str)] = &[
+    ("tier1_gear_am1", "assembling-machine-1"),
+    ("tier2_ec_am1_10_ore", "assembling-machine-1"),
+    ("tier2_ec_am2_30_ore", "assembling-machine-2"),
+    ("tier3_plastic_cp_5", "chemical-plant"),
+    ("tier4_ac_am2_5_unconstrained", "assembling-machine-2"),
+    ("tier5_pu_am3_2_unconstrained", "assembling-machine-3"),
+];
+
+/// **The parity CI gate.** Not `#[ignore]`d: this is what runs on every
+/// push, and it is the first assertion in this campaign that can.
+///
+/// Its two ignored siblings are cache-relative — they compare a live run
+/// against a COMMITTED record, so a host with a different zone cache
+/// gets different layouts and a meaningless diff, and every legitimate
+/// engine change falsifies them. This test compares the v1 and v2
+/// dispatches **on the same solve**: whatever layout each fixture
+/// produces on this host with this cache, both programs see the same
+/// scoreboard and must reach the same `(winner, stage)`. Nothing about
+/// the assertion depends on WHICH layout that was, so there is no
+/// re-bless treadmill and no pin to get wrong.
+///
+/// What it therefore covers, and what it does not: six of the corpus's
+/// 160 cells, all at the `default` option set. The option-set axis
+/// carries this corpus's claim surface (RFC-070 decision log), so the
+/// full 160-cell sweep under `SPAGHETTIO_PARITY_CORPUS=check` remains
+/// the real gate for a phase boundary — this is the tripwire between
+/// them, sized so it can run unconditionally.
+#[test]
+fn shadow_agrees_with_production_on_the_census_fixtures() {
+    // The third parallel candidate list, bound in CI (#698 rounds 9-10
+    // carry-over (e) — the unit tier binds the other two). A shadow
+    // whose profile vector is keyed differently from the scoreboard
+    // would compare mis-keyed slots and could agree by luck.
+    assert_eq!(
+        SelectionPolicy::current().producers.iter().map(|p| p.name).collect::<Vec<_>>(),
+        EXPECTED_ORDER,
+        "SelectionPolicy::current() does not register the seven producers in the slot \
+         order this file expects"
+    );
+
+    let mut report = ShadowReport::default();
+    for (label, machine) in SMOKE_CELLS {
+        let f = FIXTURES
+            .iter()
+            .find(|f| f.label == *label)
+            .unwrap_or_else(|| panic!("smoke cell {label} is not a corpus fixture"));
+        assert!(
+            f.machines.contains(machine),
+            "smoke cell {label} names machine {machine}, which is not on that fixture's \
+             swept axis"
+        );
+        let run = run_cell(f, machine, "default", |_| {});
+        assert_eq!(
+            run.cell.status, "decided",
+            "smoke cell {label}[{machine}] did not decide (status {:?}) — the shadow gate \
+             needs a live selection to compare, so a fixture that stopped deciding must \
+             be replaced rather than silently skipped",
+            run.cell.status
+        );
+        report.absorb(&format!("{label}[{machine}]"), &run);
+    }
+    report.print();
+    assert_eq!(report.compared, SMOKE_CELLS.len(), "one comparison per smoke cell");
+    report.assert_clean();
 }

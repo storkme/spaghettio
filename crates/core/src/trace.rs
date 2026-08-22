@@ -1465,6 +1465,51 @@ pub enum TraceEvent {
         stage: SelectionStage,
     },
 
+    // RFC-070 Phase 2a (#689 W3a): the SHADOW comparison. Emitted once
+    // per `select_best_decomposition` call, immediately after the
+    // scoreboard's terminal, recording what the v2 policy loop
+    // (`bus::selection_policy::decide`) would have answered on the same
+    // solve.
+    //
+    // **Observational only. v1's answer ships, always.** A disagreement
+    // is DATA for the campaign's K70-1/K70-2 adjudication, never a
+    // panic and never a behaviour change — the whole point of a shadow
+    // is that a divergence survives long enough to be read.
+    //
+    // Why this can gate CI where the parity corpus cannot: it compares
+    // two dispatches on ONE solve rather than one dispatch against a
+    // committed record, so it is independent of which zone-cache
+    // solutions the layout replayed. A cell that lands a different
+    // layout than the baseline still has a well-defined shadow verdict.
+    SelectionShadowCompared {
+        /// The winner v1 shipped, and the stage that picked it. `None`
+        /// on the all-candidates-failed path, where v1 names no winner
+        /// at all — kept comparable rather than unemitted, because "v2
+        /// found a winner where v1 refused" is exactly the kind of
+        /// divergence a shadow exists to surface.
+        v1_winner: Option<String>,
+        v1_stage: Option<SelectionStage>,
+        /// What `selection_policy::decide` answered over the SAME
+        /// scoreboard rows. Never re-validates: it consumes the
+        /// measurements the decision path already computed, so a
+        /// disagreement is about the PROGRAM, not about a second
+        /// opinion on the layout.
+        v2_winner: Option<String>,
+        v2_stage: Option<SelectionStage>,
+        /// `(winner, stage)` equal on both sides — the corpus's
+        /// divergence-equivalence rule, minus `status` (which is a
+        /// property of the build, not of the selection).
+        agree: bool,
+        /// Producers whose v2 `ProducerGate` verdict disagreed with
+        /// whether v1 actually ran them. One entry per producer, named
+        /// — never a count in a message (`docs/validator-reporting.md`).
+        /// This is the ONLY instrument that can see a mis-transcribed
+        /// eligibility clause: `policy_replay` consumes already-produced
+        /// profiles and evaluates zero gates (RFC-070 decision log,
+        /// #698's standing hand-off note).
+        gate_disagreements: Vec<String>,
+    },
+
     // `ModuleSizeSplit` candidate (see `docs/rfc-decomposition-search.md`)
     // applied a k-way split to one module of the partition plan. Fires
     // once per split module per `produce()` call. With Phase 1's k=2,
