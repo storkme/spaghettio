@@ -470,6 +470,48 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
        remain outside the replay — fixtures don't record belt-tier mode
        — so `solved_by` pins are relative to the core only: a change
        confined to auto-mode dispatch is not caught by these fixtures.
+    3. **DELETED 2026-08-22 (#689, PR #698), owner green-lit on the
+       strength of the census above.** Removed the entire ~795-line rung
+       from `crates/core/src/bus/ghost_router.rs`:
+       `solve_perpendicular_template`, `try_bridge`,
+       `bridge_belt_over_pipe`, the `PerpendicularTemplateStrategy`
+       wrapper (struct + impl) and its registration in
+       `pinned_tier_core_strategies` (it was the first rung; the
+       ladder's remaining order — `sat-surface` → `sat-1ug-native` →
+       `sat-2ug-native` → `sat-native` — is unchanged), plus the helpers
+       that went dead with them once verified to have no other callers:
+       `ClusterZone`, `is_perpendicular`, `is_horizontal`, `ug_for_belt`,
+       `any_spec_turns_at`, `ug_endpoint_conflicts`, and the
+       `CrossingInfo.tile` field (the struct itself, `classify_crossing`,
+       and `emit_unresolved_junctions` stay — they're used by the
+       still-live unresolved-junction diagnostic, not just the rung).
+       The `TraceEvent::JunctionTemplateRejected` variant (zero emitters
+       once `try_bridge`/`bridge_belt_over_pipe` were gone) was deleted
+       too, per the #632 A4 precedent (declared-but-unemitted variants
+       get deleted, not kept dark) — its consumers (`fixture.rs`'s
+       `solved_by`-mismatch diagnostic, and the `examples/
+       {trace_junction,diagnose_junctions,replay_region_trace}.rs` debug
+       tools) had their match arms removed to match.
+       **Evidence chain for the deletion call:** #687 (rung
+       production-unreachable on both shapes it handles) → #691 (census:
+       0 of 111 seeds across the 12-fixture corpus matched the rung's
+       remaining same-item-crossing hypothesis) → owner green-light on
+       #689. **Fixtures:** `perp_template_pipe_belt_bridge.json` (a
+       static unit pin of the rung's internal pipe×belt logic, not a
+       reachability probe) was deleted with the rung — its
+       `solved_by: "perpendicular_template"` expectation can no longer
+       pass, since the code it names no longer exists.
+       `perp_template_single_tile_crossing.json` survives: it already
+       pinned the pinned-tier-core ladder's dispatch on this shape
+       (`solved_by: "sat-1ug-native"`), re-verified green after the
+       deletion, and its notes were updated to record that the rung it
+       references is gone — the fixture now pins the ladder minus rung 1.
+       **Parity-baseline byte-identity** (the #694 zone-cache-pinned
+       parity corpus, re-run before/after with the pin restored
+       afterwards) confirms the unreachability conclusion: since the
+       rung never fired in production, removing it changes zero bytes
+       of shipped layout output. See the PR body for the exact
+       before/after hash comparison.
 - **`region_reimprove.rs` has zero Rust-side tests** while auto-firing in the
   web app on every clean layout with SAT zones.
 
