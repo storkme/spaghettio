@@ -262,7 +262,6 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
         params = params.with_drop_trace();
     }
     if meter_enabled
-        && (meter_warmup_arg.is_some() || meter_window_arg.is_some())
         && (meter_warmup != u64::from(params.warmup_ticks)
             || meter_window != u64::from(params.window_ticks))
     {

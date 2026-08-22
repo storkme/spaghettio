@@ -177,9 +177,9 @@ pub struct BeltNetwork {
     turn_feeder: Vec<bool>,
     /// Independent round-robin state for each splitter input lane.
     splitter_toggle: Vec<[bool; 2]>,
-    /// Per-half, per-input-lane memory of an output that was blocked. Factorio keeps
-    /// up to five items for that side so a transiently blocked output catches
-    /// up when it becomes available again (splitter mechanics, 0.3.0).
+    /// Per-half, per-input-lane memory of an output that was blocked. This is
+    /// a bounded imbalance debt: forced-away items raise it to at most five,
+    /// and remembered returns pay it down when that output recovers.
     splitter_memory: Vec<SplitterMemory>,
     /// Report-only routing counters, one record per splitter.
     pub splitter_stats: Vec<SplitterStats>,
@@ -590,27 +590,32 @@ impl BeltNetwork {
                         self.splitter_stats[sid].half_fallback_accepted[half_ix][lane_ix] += 1;
                     }
                     if let Some((remembered_output, remaining)) = remembered {
-                        // A memory episode stays pinned while its recalled
-                        // output remains unavailable. This is intentional:
-                        // repeated fallbacks do not refresh the five-item
-                        // debt, and expiry is observed only as the recalled
-                        // output recovers and accepts its remaining items.
                         if which == remembered_output {
                             self.splitter_stats[sid].remembered_accepted[lane_ix] += 1;
+                            let next = remaining.saturating_sub(1);
                             self.splitter_memory[sid][half_ix][lane_ix] =
-                                (remaining > 1).then_some((remembered_output, remaining - 1));
-                            if remaining == 1 {
+                                (next > 0).then_some((remembered_output, next));
+                            if next == 0 {
                                 self.splitter_stats[sid].memory_expired[lane_ix] += 1;
                             }
+                        } else {
+                            // A recovered output can become blocked again.
+                            // Its newly diverted item restores the bounded
+                            // imbalance debt instead of leaving a partially
+                            // paid episode permanently under-counted.
+                            let next = remaining
+                                .saturating_add(1)
+                                .min(SPLITTER_BLOCK_MEMORY_ITEMS);
+                            self.splitter_memory[sid][half_ix][lane_ix] =
+                                Some((remembered_output, next));
                         }
                     } else if which != first && outs[first].is_some() {
-                        // This branch is reached only when `remembered` was
-                        // None. A fallback while an existing memory episode
-                        // is still active must not refresh its five-item
-                        // budget or inflate `memory_started`.
+                        // Start with one item of imbalance debt. Further
+                        // forced-away items grow it up to the five-item cap;
+                        // they do not start another episode.
                         self.splitter_stats[sid].memory_started[lane_ix] += 1;
                         self.splitter_memory[sid][half_ix][lane_ix] =
-                            Some((first, SPLITTER_BLOCK_MEMORY_ITEMS));
+                            Some((first, 1));
                     }
                     if self.splitter_memory[sid][half_ix][lane_ix].is_none() {
                         self.splitter_toggle[sid][lane_ix] = which == 0;
@@ -1253,15 +1258,15 @@ mod tests {
         assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
         net.step_splitter_exit(input, sid);
         assert_eq!(net.tiles[output1].lanes[0].occupancy(), 1);
-        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 5)));
+        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 1)));
         assert_eq!(net.splitter_stats[sid].attempts[0], 1);
         assert_eq!(net.splitter_stats[sid].first_blocked[0], 1);
         assert_eq!(net.splitter_stats[sid].fallback_accepted[0], 1);
         assert_eq!(net.splitter_stats[sid].memory_started[0], 1);
 
         // A second item also falls back while the remembered output remains
-        // blocked. It must not restart the same memory episode or refresh its
-        // budget; only acceptance by the remembered output consumes memory.
+        // blocked. It must not restart the same memory episode, but it does
+        // add one item to the bounded imbalance debt.
         let mut discarded_second = Vec::new();
         net.tiles[output1]
             .lanes[0]
@@ -1269,7 +1274,7 @@ mod tests {
         assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
         net.step_splitter_exit(input, sid);
         assert_eq!(net.tiles[output1].lanes[0].occupancy(), 1);
-        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 5)));
+        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 2)));
         assert_eq!(net.splitter_stats[sid].memory_started[0], 1);
 
         let mut discarded = Vec::new();
@@ -1277,10 +1282,64 @@ mod tests {
         assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
         net.step_splitter_exit(input, sid);
         assert_eq!(net.tiles[output0].lanes[0].occupancy(), 1);
-        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 4)));
+        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 1)));
         assert_eq!(net.splitter_stats[sid].attempts[0], 3);
         assert_eq!(net.splitter_stats[sid].fallback_accepted[0], 2);
         assert_eq!(net.splitter_stats[sid].remembered_accepted[0], 1);
+    }
+
+    #[test]
+    fn splitter_memory_debt_is_capped_and_pays_down_after_recovery() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East),
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let input = net.tile_at((1, 0)).unwrap();
+        let output0 = net.tile_at((2, 0)).unwrap();
+        let output1 = net.tile_at((2, 1)).unwrap();
+        let sid = match net.tiles[input].kind {
+            TileKind::Splitter { id, .. } => id,
+            _ => panic!("expected splitter input half"),
+        };
+
+        for _ in 0..SLOTS_PER_TILE {
+            assert!(net.tiles[output0].lanes[0].try_insert_anywhere(ItemId(9)));
+        }
+
+        // Five forced-away items raise, but do not exceed, the debt cap.
+        for expected in 1..=SPLITTER_BLOCK_MEMORY_ITEMS {
+            let mut discarded = Vec::new();
+            net.tiles[output1]
+                .lanes[0]
+                .take_all(99, &mut discarded);
+            assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+            net.step_splitter_exit(input, sid);
+            assert_eq!(net.splitter_memory[sid][0][0], Some((0, expected)));
+        }
+
+        // Once the remembered output recovers, each accepted item pays one
+        // unit of debt; the fifth return clears the episode entirely.
+        let mut discarded = Vec::new();
+        net.tiles[output0]
+            .lanes[0]
+            .take_all(99, &mut discarded);
+        for expected in (0..SPLITTER_BLOCK_MEMORY_ITEMS).rev() {
+            let mut discarded = Vec::new();
+            net.tiles[output1]
+                .lanes[0]
+                .take_all(99, &mut discarded);
+            assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+            net.step_splitter_exit(input, sid);
+            let memory = (expected > 0).then_some((0, expected));
+            assert_eq!(net.splitter_memory[sid][0][0], memory);
+            net.tiles[output0]
+                .lanes[0]
+                .take_all(99, &mut discarded);
+        }
+        assert_eq!(net.splitter_stats[sid].memory_expired[0], 1);
     }
 
     #[test]
