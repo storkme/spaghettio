@@ -1316,9 +1316,13 @@ fn tiered_rank_stage(
 /// Does `a` rank strictly ahead of `b` under `order`?
 fn ranks_ahead(profiles: &[IssueProfile], a: usize, b: usize, order: RankOrder) -> bool {
     let score = |i: usize| profiles[i].score.unwrap_or(f64::NEG_INFINITY);
-    // `usize::MAX` for an unmeasured candidate mirrors v1's unclean
-    // `warn_key`: a candidate with no warning key sorts last, never
-    // first.
+    // The `usize::MAX` fallback is DEAD, and saying so is the point
+    // (#698 review round 5): the only order that reads `warn` is the
+    // error-free tier's, whose admission already skipped every
+    // candidate without counts, so `warning_key()` is `Some` at every
+    // reachable call. It is a sort-last sentinel for an unreachable
+    // input, not a reproduction of v1's `usize::MAX` unclean key — v1
+    // sets that for candidates its own tier then filters out.
     let warn = |i: usize| profiles[i].warning_key().unwrap_or(usize::MAX);
     let score_ahead = || score(a).partial_cmp(&score(b)) == Some(std::cmp::Ordering::Greater);
     match order {
@@ -1820,7 +1824,21 @@ mod tests {
         let begin = SRC.find("// K70-1-FENCE-BEGIN").expect("fence opens");
         let end = SRC.find("// K70-1-FENCE-END").expect("fence closes");
         assert!(begin < end, "fence markers are out of order");
-        let fenced = &SRC[begin..end];
+        // CODE only: comment lines are stripped before scanning. The
+        // boundary is about what stage logic BRANCHES on, and a fence
+        // that also policed prose would push a future author to write
+        // worse comments or to widen the fence — both worse than the
+        // thing it prevents (#698 review round 5). Its limits, stated
+        // rather than implied: it catches the literal form, not a name
+        // assembled at runtime, and it needs `EXPECTED_ORDER` kept in
+        // step with the registrations by hand — deliberately, since a
+        // list that reads the thing it checks cannot detect a reorder.
+        let fenced: String = SRC[begin..end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let fenced = fenced.as_str();
         for name in EXPECTED_ORDER {
             assert!(
                 !fenced.contains(name),
@@ -1931,6 +1949,14 @@ mod tests {
     /// gate at all — so a mis-transcribed eligibility clause survives
     /// 140/140 and first appears in Phase 2a, where it moves the
     /// candidate SET rather than the ranking.
+    ///
+    /// **What this is not** (#698 review round 5): an equivalence check
+    /// against production. It pins each clause against the v1 condition
+    /// as READ from `select_best_decomposition`'s `try_*` booleans; a
+    /// mis-reading of that source would be reproduced faithfully here.
+    /// Only the Phase-2a shadow, which runs both dispatches on the same
+    /// solve, can close that — this closes the weaker but real hole of
+    /// a clause nothing exercises at all.
     #[test]
     fn every_registered_gate_is_pinned_against_its_v1_conjunction() {
         let policy = SelectionPolicy::current();

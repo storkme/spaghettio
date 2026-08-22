@@ -1285,3 +1285,45 @@ fixtures / docs split per the churn norm).
     PRs. `measure`'s refusal string not matching v1's is deliberate and
     nothing compares them: the equivalence rule is (status, winner,
     stage), and v1's string is the lossy artifact being replaced.*
+- *2026-08-21 — **#698 review round 5 adjudicated** (1 "major", 9 minors;
+  5 absorbed, 4 refuted — closing round). **The one thing worth the
+  round**: the fifth raise of "the corpus isn't CI-gated" carried a NEW
+  sub-argument that was correct — `policy_replay`'s provenance guard
+  PRINTED a note and passed, so a hand-run under a mis-pinned zone cache
+  green-lit a comparison against a record it could not reproduce. That
+  is the "compared nothing reads as clean" shape #693 closed and #694
+  round 3 closed again in `parity_corpus`'s own `check` mode,
+  reappearing one path over in the sibling test. It now hard-fails, with
+  `SPAGHETTIO_POLICY_REPLAY=any-cache` as the named escape — the same
+  posture, and the same escape shape, as `check-any-cache`. **The
+  generalisation: when a file gains a second consumer of the same
+  cache-relative data, the hardening does not come with it.** The
+  CI-gating half is refuted for the fifth time; the answer is unchanged.*
+  - *Also absorbed: the K70-1 fence now strips COMMENT lines before
+    scanning, so stage-logic prose may name a candidate while stage code
+    may not — a fence that policed prose would push a future author to
+    write worse comments or widen the fence, both worse than what it
+    prevents (discrimination re-executed after the change: a
+    `p.name == "native"` branch inside the fence fails it with the right
+    message, restored green). The gate tests now say what they are NOT —
+    self-consistency against the v1 condition as READ, not equivalence
+    against production's dispatch, which only the 2a shadow can give.
+    `ranks_ahead`'s `usize::MAX` fallback is labelled DEAD rather than
+    described as reproducing v1's unclean key. `Verdict::candidate_errors`
+    says it is a whole-side total, not a regression count.
+    `Policy::selection()` says its `pass` is always true because it gates
+    nothing.*
+  - *Refuted with receipts: (a) "`prior_slot`'s `min` re-introduces the
+    later-producer bug in release when `registration_index >
+    prior.len()`" — it does not: if the index exceeds the array, EVERY
+    slot is registered before it, so scanning all of them is exactly the
+    intended set. The assert catches the authoring mistake; the release
+    fallback is not wrong. (b) "the two kind lookups could drift" —
+    stale by one round: both now read the same
+    `CONTAMINATION_CATEGORIES` / `STRUCTURAL_CATEGORIES` constants, so
+    there is one definition, not two. (c) a `debug_assert` on
+    `quality_key_stage`'s unreachable arm, for the third round running —
+    same answer. (d) the scoped pair-winner's gap handling matches v1
+    (a candidate whose counts are absent has no `di_choice`/
+    `horizontal_choice` either), and the reviewer concedes it is
+    unreachable against the live recorder.*

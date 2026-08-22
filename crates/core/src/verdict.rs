@@ -295,6 +295,12 @@ impl Policy {
     /// [`Verdict::candidate_selection_warnings`] answers. Named so the
     /// correct setup is a thing you reach for rather than a step you
     /// remember (#698 review round 3).
+    ///
+    /// **Its `pass` is always `true`**, because it gates nothing — this
+    /// preset supplies COUNTS, and the pass/fail bit is not one of its
+    /// outputs. Reading both from one verdict would read a gate that was
+    /// never asked to gate; add overrides if you want it to (#698 review
+    /// round 5).
     pub fn selection() -> Self {
         Self::new(GatePolicy::ReportOnly).with_live_selection_exclusions()
     }
@@ -410,6 +416,13 @@ impl Verdict {
     }
 
     /// Total `Severity::Error` count on the candidate side.
+    ///
+    /// A WHOLE-SIDE total, not a regression count: it includes errors
+    /// that matched a native one and were carried over unchanged. For
+    /// "what got worse", read `regressed_categories` or
+    /// [`Verdict::all_new_issues`] — summing this against the native
+    /// total overcounts on a partially-matched category (#698 review
+    /// round 5).
     pub fn candidate_errors(&self) -> usize {
         self.categories.values().map(|o| o.candidate_errors).sum()
     }

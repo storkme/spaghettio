@@ -970,11 +970,11 @@ fn policy_replay() {
         }
     }
 
-    println!("\n=== RFC-070 policy replay ===");
-    println!("decided cells replayed: {decided}");
-    println!("deciding-stage distribution: {stage_hits:?}");
+    eprintln!("\n=== RFC-070 policy replay ===");
+    eprintln!("decided cells replayed: {decided}");
+    eprintln!("deciding-stage distribution: {stage_hits:?}");
     if !baseline_diffs.is_empty() {
-        println!(
+        eprintln!(
             "\nNOTE: v1 itself diverged from the committed baseline on {} cell(s). The \
              replay below is still meaningful (it compares against the LIVE v1 decision \
              too), but these cells are an engine or provenance change, not a policy \
@@ -983,14 +983,27 @@ fn policy_replay() {
             baseline_diffs.join("\n")
         );
     }
-    if !provenance_ok {
-        println!(
-            "\nNOTE: this run's zone cache is {pin_hash:?}, the baseline was blessed \
-             against {:?} — run with SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/\
-             sat-zones-ci.bin before reading any divergence as a finding.",
-            baseline.zone_cache_hash
-        );
-    }
+    // A provenance mismatch FAILS. It used to print a NOTE and pass —
+    // which is the "compared nothing reads as clean" shape #693 closed
+    // and #694 round 3 closed again in this very file's `check` mode,
+    // reappearing one path over (#698 review round 5, the one genuinely
+    // new argument in five rounds of raising this test's coverage).
+    // Under an unidentifiable cache a green replay is not evidence that
+    // the committed record reproduces; it is evidence about a corpus
+    // nobody else can re-take.
+    let provenance_escape =
+        std::env::var("SPAGHETTIO_POLICY_REPLAY").as_deref() == Ok("any-cache");
+    assert!(
+        provenance_ok || provenance_escape,
+        "PROVENANCE MISMATCH: this run's zone cache is {pin_hash:?}, the baseline was \
+         blessed against {:?}. (A `null` on EITHER side counts as a mismatch — an \
+         unidentified cache is not the same cache, it is an unknown one.) The corpus is \
+         cache-relative, so a replay taken here is not evidence about the committed \
+         record. Re-run with \
+         SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/sat-zones-ci.bin, or pass \
+         SPAGHETTIO_POLICY_REPLAY=any-cache if comparing across caches is what you meant.",
+        baseline.zone_cache_hash
+    );
 
     // "Verified clean" must be distinguishable from "compared nothing"
     // (the #693 lesson). The expected count is the committed record's
