@@ -470,7 +470,7 @@ code); netflow's `allow_voiding` branch (parked pending UI hookup).
        remain outside the replay — fixtures don't record belt-tier mode
        — so `solved_by` pins are relative to the core only: a change
        confined to auto-mode dispatch is not caught by these fixtures.
-    3. **DELETED 2026-08-22 (#689, PR #698), owner green-lit on the
+    3. **DELETED 2026-08-22 (#689, PR #702), owner green-lit on the
        strength of the census above.** Removed the entire ~795-line rung
        from `crates/core/src/bus/ghost_router.rs`:
        `solve_perpendicular_template`, `try_bridge`,

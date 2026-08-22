@@ -102,7 +102,7 @@ doesn't attempt to fully resolve.
 >   — the trailing ` \{` is load-bearing; without it this over-matches
 >   doc-comment text and other 4-space-indented identifiers (107, not 93).
 >
-> **Amendment 2026-08-22 (issue #689/#691, PR TBD):** `JunctionTemplateRejected`
+> **Amendment 2026-08-22 (issue #689/#691, PR #702):** `JunctionTemplateRejected`
 > (listed above at the time, 2026-08-14) is now ABSENT too, for the same
 > reason as `RouteFailure`/`BridgeDropped`: its only emitters
 > (`try_bridge`/`bridge_belt_over_pipe` in the perpendicular-template rung)
