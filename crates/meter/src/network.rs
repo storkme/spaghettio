@@ -576,7 +576,10 @@ impl BeltNetwork {
                     Some(_) => {
                     }
                 }
-                if !placed && probe == 0 {
+                // Missing output geometry is not backpressure. Keep the
+                // counters about a real first-output blockage so orphan
+                // splitter halves do not manufacture congestion telemetry.
+                if !placed && probe == 0 && outs[which].is_some() {
                     self.splitter_stats[sid].first_blocked[lane_ix] += 1;
                 }
                 if placed {
@@ -587,6 +590,11 @@ impl BeltNetwork {
                         self.splitter_stats[sid].half_fallback_accepted[half_ix][lane_ix] += 1;
                     }
                     if let Some((remembered_output, remaining)) = remembered {
+                        // A memory episode stays pinned while its recalled
+                        // output remains unavailable. This is intentional:
+                        // repeated fallbacks do not refresh the five-item
+                        // debt, and expiry is observed only as the recalled
+                        // output recovers and accepts its remaining items.
                         if which == remembered_output {
                             self.splitter_stats[sid].remembered_accepted[lane_ix] += 1;
                             self.splitter_memory[sid][half_ix][lane_ix] =
@@ -610,7 +618,10 @@ impl BeltNetwork {
                     break;
                 }
             }
-            if !placed {
+            // With only one physical output, an orphan half is not a
+            // two-sided blockage. Count this event only when both outputs
+            // exist and neither accepted the item.
+            if !placed && outs[0].is_some() && outs[1].is_some() {
                 self.splitter_stats[sid].both_blocked[lane_ix] += 1;
                 self.splitter_stats[sid].half_both_blocked[half_ix][lane_ix] += 1;
             }

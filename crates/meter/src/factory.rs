@@ -1083,4 +1083,60 @@ mod note_tests {
             "a no-consumer fluid network must drain each emitted unit once"
         );
     }
+
+    #[test]
+    fn attached_fluid_consumer_keeps_producer_output_bounded() {
+        // The acid output port at (0,3) touches this pipe; the processing
+        // plant's sulfuric-acid input at (1,3) touches it from the side.
+        // This exercises the Factory build-time port/network derivation and
+        // the tick-level retention path together, rather than only testing
+        // Machine::tick with hand-seeded bounded_fluid_outputs.
+        let producer = RawEntity {
+            name: "chemical-plant".into(),
+            x: 0,
+            y: 0,
+            direction: Dir::North,
+            recipe: Some("sulfuric-acid".into()),
+            io_type: None,
+            mirror: false,
+        };
+        let consumer = RawEntity {
+            name: "assembling-machine-3".into(),
+            x: 0,
+            y: 4,
+            direction: Dir::North,
+            recipe: Some("processing-unit".into()),
+            io_type: None,
+            mirror: false,
+        };
+        let pipe = RawEntity {
+            name: "pipe".into(),
+            x: 0,
+            y: 3,
+            direction: Dir::North,
+            recipe: None,
+            io_type: None,
+            mirror: false,
+        };
+        let mut f = Factory::from_entities(&[producer, consumer, pipe], Manifest::default())
+            .expect("builds");
+        let acid = f.items.intern("sulfuric-acid");
+        assert!(
+            f.machines[0].bounded_fluid_outputs.contains(&acid.0),
+            "a same-network acid consumer must mark the producer output bounded"
+        );
+
+        let room = f.machines[1].fluid_room_for(acid);
+        assert!(room > 0, "processing-unit must expose sulfuric-acid input room");
+        assert_eq!(f.machines[1].insert_fluid(acid, room), room);
+        f.machines[0].fluid_output.insert(acid.0, 1);
+        f.tick_fluids();
+
+        assert_eq!(
+            f.machines[0].fluid_output.get(&acid.0).copied(),
+            Some(1),
+            "a full attached consumer must retain producer fluid instead of draining it"
+        );
+        assert_eq!(f.delivered.get(&acid.0).copied().unwrap_or(0), 0);
+    }
 }

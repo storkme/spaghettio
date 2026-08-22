@@ -190,14 +190,20 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
         })
         .transpose()?;
     let out_path = flag_value(args, "--out");
-    let meter_warmup: u64 = flag_value(args, "--meter-warmup")
+    let meter_warmup_arg = flag_value(args, "--meter-warmup");
+    let meter_window_arg = flag_value(args, "--meter-window");
+    let meter_enabled = has_flag(args, "--meter");
+    if !meter_enabled && (meter_warmup_arg.is_some() || meter_window_arg.is_some()) {
+        return Err("--meter-warmup and --meter-window require --meter".to_string());
+    }
+    let meter_warmup: u64 = meter_warmup_arg
         .map(|s| {
             s.parse()
                 .map_err(|_| format!("--meter-warmup must be an integer, got '{s}'"))
         })
         .transpose()?
         .unwrap_or(meter_probe::DEFAULT_WARMUP_TICKS);
-    let meter_window: u64 = flag_value(args, "--meter-window")
+    let meter_window: u64 = meter_window_arg
         .map(|s| {
             s.parse()
                 .map_err(|_| format!("--meter-window must be an integer, got '{s}'"))
@@ -255,7 +261,8 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     if has_flag(args, "--drop-trace") {
         params = params.with_drop_trace();
     }
-    if has_flag(args, "--meter")
+    if meter_enabled
+        && (meter_warmup_arg.is_some() || meter_window_arg.is_some())
         && (meter_warmup != u64::from(params.warmup_ticks)
             || meter_window != u64::from(params.window_ticks))
     {
@@ -267,7 +274,7 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
             params.window_ticks
         );
     }
-    let meter = has_flag(args, "--meter").then(|| {
+    let meter = meter_enabled.then(|| {
         println!(
             "Running report-only meter (warmup={} window={} ticks; it cannot alter the sim verdict)...",
             meter_warmup, meter_window
