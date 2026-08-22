@@ -399,7 +399,11 @@ tells you which check fired and how often; `warnings: 3` would not.
 **Web overlay (RFC-050 Phase 4):** load the `--out` file via the sim
 report panel in the web app to get the verdict banner plus a `sim-state`
 entity overlay tinting machines/belts/inserters by their simulated state
-— the fastest way to see *where* a FAIL is starving.
+— the fastest way to see *where* a FAIL is starving. Without a browser
+(or for a scriptable/agent-facing equivalent), `scripts/sim-localize.py
+<report.json>` renders the same "where" as a starved-machine ranking plus
+an ASCII map — see [`sim-harness-forensics.md`](sim-harness-forensics.md)'s
+forensic playbook, step 0.
 
 ## Reading the time-series
 
@@ -411,6 +415,23 @@ a final census (`fluid_ingredient_shortage: 2, item_ingredient_shortage:
 2, full_output: 4`) that reads equally well as "never started" or "ran
 fine for an hour then jammed". A rate-vs-time series distinguishes those
 at a glance; the final aggregate cannot.
+
+`sim_state.belts` entries are `[x, y, n, det, name, direction, ug_type]`:
+layout-space tile coordinate, total item count across all transport
+lines, per-line `{name, count}` detail, the entity name (e.g.
+`"transport-belt"`, `"fast-underground-belt"`, `"express-splitter"`),
+the raw Factorio 2.0 16-way `defines.direction` integer (unremapped —
+0=north, 4=east, 8=south, 12=west), and — for underground belts only —
+`"input"`/`"output"`, `null` otherwise. Empty belts (`n == 0`) are
+included: a dried-up lane is the primary localization signal for belt
+forensics, so the dump no longer skips them. `scripts/sim-localize.py`
+is what renders them (`.` on its map, `L1: —  L2: —` in lane detail);
+the web overlay deliberately draws nothing for an empty belt, so in the
+browser this change is invisible. Cost: `sim-state.json` grows by the
+empty-belt share of the layout — 12% and 10.5% of belt entries on the
+two dogfood fixtures (gear@10, EC@10). Older reports carry `[x, y, n]`
+(pre-#357) or `[x, y, n, det]`, nonempty belts only; all shapes load
+fine since the trailing fields are additive.
 
 Every report now carries `timeseries`, one entry per checkpoint window
 (the same item-driven windows the target/intermediate rates are computed

@@ -57,9 +57,24 @@ export interface SimRunParams {
   end_tick: number;
 }
 
-/** `[x, y, count]` — layout-space tile coordinate + item tally. Not
- *  strictly per-tile-capacity bounded (see `simStateOverlay.ts`). */
-export type SimBeltEntry = [x: number, y: number, count: number];
+/** `[x, y, count, det?, name?, direction?, ug_type?]` — layout-space tile
+ *  coordinate + item tally, plus per-line item detail and (new format
+ *  only) the entity name, raw 16-way `defines.direction` integer
+ *  (0=north, 4=east, 8=south, 12=west; unremapped), and — for
+ *  underground belts only — `"input"`/`"output"`, `null` for everything
+ *  else. The trailing four fields are optional so older reports (plain
+ *  `[x, y, count]`, nonempty belts only) still load; `count` can be `0`
+ *  in new-format reports since empty belts are now included (the
+ *  localization signal for a dried-up lane, not previously visible). */
+export type SimBeltEntry = [
+  x: number,
+  y: number,
+  count: number,
+  det?: unknown,
+  name?: string,
+  direction?: number,
+  ug_type?: "input" | "output" | null,
+];
 /** `[x, y, name, status]` — `status` is the raw in-game `LuaEntity.status`
  *  name (`working`, `item_ingredient_shortage`, `no_power`, ...). */
 export type SimMachineEntry = [x: number, y: number, name: string, status: string];

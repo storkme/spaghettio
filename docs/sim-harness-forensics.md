@@ -69,12 +69,15 @@ production per stage" panel on `/d/spaghettio-sim`.
   whole run *including warmup*. This is the trajectory record — bin it
   to see transients, plateaus, and oscillations. Whole-run averages and
   first-divergence ordering both come from here.
-- **`sim_state`** (frame at finalize): per-belt per-line item contents,
-  machine statuses + input/output inventories, inserter statuses, UG
-  pairing as the game resolved it, splitter priority/filter state, kit
-  chest census. A *single frame* — statuses are instantaneous (a
-  demand-limited machine flickers `working`/`full_output`; do not read
-  one frame's status as a time-average).
+- **`sim_state`** (frame at finalize): per-belt per-line item contents
+  (belts now also carry entity name, direction, and underground pairing
+  type, and empty belts are included rather than skipped — see
+  `docs/sim-harness.md`), machine statuses + input/output inventories,
+  inserter statuses, UG pairing as the game resolved it, splitter
+  priority/filter state, kit chest census. A *single frame* — statuses
+  are instantaneous (a demand-limited machine flickers
+  `working`/`full_output`; do not read one frame's status as a
+  time-average).
 - **`kit_errors`**: the boundary kit's self-audit. Non-empty ⇒ the run
   is invalid and the verdict is forced NO DATA. Never interpret rates
   from a run with kit errors.
@@ -219,6 +222,17 @@ which measures fine) doesn't share — no need to trust a note about the
 instrument that was true when written and false when read.
 
 ## Forensic playbook (in escalation order)
+
+**Step 0, before any of the below: `scripts/sim-localize.py <report.json>`.**
+It renders the "where" in one command instead of an improvised read (which
+has gotten the belt-count semantics wrong before — see the `n` warning
+above): a kit-error banner if the run is invalid, the item table with its
+below-plan intermediates listed (a listing, not a causal order), a starved/backpressured machine ranking (from
+`timeseries` when present, falling back to the final `sim_state` frame with
+an explicit "can't distinguish transient from persistent" caveat), an ASCII
+map of machines/inserters/belts by status and direction, and per-lane belt
+contents around the worst machines. It renders and ranks; it does not
+diagnose — steps 1-4 below are still where the reasoning happens.
 
 1. **Trajectory first** (`samples`, and now `timeseries` for a
    per-machine breakdown on the SAME checkpoint-window cadence the

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSimReport } from "./simReportLoader.js";
+import { parseSimReport, type SimBeltEntry } from "./simReportLoader.js";
 import ec10Fail from "./testdata/sim-report-ec10-fail.json";
 import gear10Pass from "./testdata/sim-report-gear10-pass.json";
 
@@ -60,5 +60,55 @@ describe("parseSimReport — defensive parsing", () => {
     const partial: any = JSON.parse(JSON.stringify(gear10Pass));
     partial.report.items = [{ item: "no-rate" }];
     expect(() => parseSimReport(JSON.stringify(partial))).toThrowError(/report\.items/);
+  });
+});
+
+// New belt-entry format: `[x, y, n, det, name, direction, ug_type]` (belt
+// name/direction + underground pairing type, and empty belts now included
+// rather than skipped). The loader must accept both this 7-tuple and the
+// old 3-tuple (`isTupleArray` only enforces a minimum length).
+describe("parseSimReport — new-format belt entries", () => {
+  it("parses a report whose belts carry name/direction/ug_type, including an empty belt and a UG entry", () => {
+    const withNewBelts: any = JSON.parse(JSON.stringify(gear10Pass));
+    const emptyBelt: SimBeltEntry = [12, 4, 0, [], "transport-belt", 4, null];
+    const fullBelt: SimBeltEntry = [
+      13,
+      4,
+      6,
+      [[["iron-gear-wheel", 6]]],
+      "fast-transport-belt",
+      8,
+      null,
+    ];
+    const ugBelt: SimBeltEntry = [
+      14,
+      4,
+      3,
+      [[["iron-gear-wheel", 3]]],
+      "underground-belt",
+      0,
+      "input",
+    ];
+    withNewBelts.sim_state.belts = [emptyBelt, fullBelt, ugBelt];
+
+    const report = parseSimReport(JSON.stringify(withNewBelts));
+    expect(report.sim_state.belts).toHaveLength(3);
+
+    const [x, y, count, , name, direction, ugType] = report.sim_state.belts[0];
+    expect([x, y, count, name, direction, ugType]).toEqual([12, 4, 0, "transport-belt", 4, null]);
+
+    const ug = report.sim_state.belts[2];
+    expect(ug[4]).toBe("underground-belt");
+    expect(ug[6]).toBe("input");
+  });
+
+  it("still accepts old-format belt entries with only [x, y, count]", () => {
+    // The two real fixtures above already exercise this path (dumps
+    // predating name/direction/ug_type), but assert it directly against
+    // a minimal hand-built entry too.
+    const withOldBelts: any = JSON.parse(JSON.stringify(gear10Pass));
+    withOldBelts.sim_state.belts = [[1, 2, 5]];
+    const report = parseSimReport(JSON.stringify(withOldBelts));
+    expect(report.sim_state.belts).toEqual([[1, 2, 5]]);
   });
 });
