@@ -46,8 +46,15 @@
 //! The stage logic in this file is fenced between the
 //! `K70-1-FENCE-BEGIN` / `K70-1-FENCE-END` markers, and
 //! `k70_1_fence_holds` asserts that no candidate name and no `.name`
-//! read occurs inside the fence. Grep the markers before adding a branch
-//! there.
+//! read occurs in the non-comment lines inside the fence. Grep the
+//! markers before adding a branch there.
+//!
+//! It is mechanical **for the literal form**, which is the form the
+//! failure actually takes; it is not a proof. A name assembled at
+//! runtime would pass it, and an inline `// native` on a code line would
+//! fail it — the second direction being the safe one. Treat it as the
+//! tripwire that makes the boundary checkable, with the argument in this
+//! doc as the boundary itself.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1087,6 +1094,27 @@ enum StageOutcome {
 /// Returns `None` when no stage names a winner — v1's
 /// all-candidates-failed path, which emits the scoreboard and then
 /// returns `Err` with no `SelectionDecided` at all.
+///
+/// # Precondition: gaps must be COHERENT, and that is checked at the
+/// boundary, not here
+///
+/// Equivalence to v1 holds for profiles that respect the recorder's own
+/// invariant: **a projection is present for every candidate a mechanism
+/// examined, and absent for every candidate it did not** — kinds for
+/// both sides of the quality-key comparison or neither, counts for all
+/// three channels or none. Hand a profile a half-gap (a produced
+/// quality-key rival with no kinds, say) and stages that would have
+/// decided in v1 will skip here.
+///
+/// Three review rounds asked for `debug_assert`s on those states inside
+/// the stages. They live at the BOUNDARY instead
+/// (`policy_replay::profile_from_row` rejects a partial count or kind
+/// triple), for two reasons: this function's stated rule is that a gap
+/// SKIPS — a panic path for one gap and a skip for the next would make
+/// the rule unstatable — and a pure decision function is the wrong place
+/// to validate data it did not build. Untrusted profiles get checked
+/// where they are constructed; `decide` is total over whatever it is
+/// handed.
 pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Decision> {
     // `debug_assert` for the message, and a REFUSAL rather than a
     // best-effort answer in release (#698 review round 3). The module's
@@ -1158,6 +1186,12 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
             StageOutcome::NoOpinion => {}
         }
     }
+    // Program exhausted. UNREACHABLE under today's program, whose last
+    // stage is ranked, not pairwise — so a held answer has already
+    // returned at the loop head. It is `held` rather than `None` because
+    // a program ending in a pairwise stage should still honour a
+    // deferral, not discard it (#698 review round 6: the prose used to
+    // imply this line does work today).
     held
 }
 
@@ -1316,23 +1350,30 @@ fn tiered_rank_stage(
 /// Does `a` rank strictly ahead of `b` under `order`?
 fn ranks_ahead(profiles: &[IssueProfile], a: usize, b: usize, order: RankOrder) -> bool {
     let score = |i: usize| profiles[i].score.unwrap_or(f64::NEG_INFINITY);
-    // The `usize::MAX` fallback is DEAD, and saying so is the point
-    // (#698 review round 5): the only order that reads `warn` is the
-    // error-free tier's, whose admission already skipped every
-    // candidate without counts, so `warning_key()` is `Some` at every
-    // reachable call. It is a sort-last sentinel for an unreachable
-    // input, not a reproduction of v1's `usize::MAX` unclean key — v1
-    // sets that for candidates its own tier then filters out.
-    let warn = |i: usize| profiles[i].warning_key().unwrap_or(usize::MAX);
+    // No `usize::MAX` sentinel for a missing warning key: see the
+    // warnings-first arm below, which abstains instead.
     let score_ahead = || score(a).partial_cmp(&score(b)) == Some(std::cmp::Ordering::Greater);
     match order {
         RankOrder::RegistrationOrder => false,
         RankOrder::ScoreDesc => score_ahead(),
-        RankOrder::WarningsAscThenScoreDesc => match warn(a).cmp(&warn(b)) {
-            std::cmp::Ordering::Less => true,
-            std::cmp::Ordering::Greater => false,
-            std::cmp::Ordering::Equal => score_ahead(),
-        },
+        RankOrder::WarningsAscThenScoreDesc => {
+            // A gap ABSTAINS from this criterion rather than sorting
+            // last through the sentinel — the module's own rule, applied
+            // locally instead of relying on a non-local invariant to
+            // keep the sentinel dead (#698 review round 6). Unreachable
+            // under today's program, where the error-free tier's
+            // admission already required counts; the point is that a
+            // future `require_error_free: false` stage cannot quietly
+            // turn "unmeasured" into "worst".
+            match (profiles[a].warning_key(), profiles[b].warning_key()) {
+                (Some(wa), Some(wb)) => match wa.cmp(&wb) {
+                    std::cmp::Ordering::Less => true,
+                    std::cmp::Ordering::Greater => false,
+                    std::cmp::Ordering::Equal => score_ahead(),
+                },
+                _ => score_ahead(),
+            }
+        }
     }
 }
 

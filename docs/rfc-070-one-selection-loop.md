@@ -1327,3 +1327,38 @@ fixtures / docs split per the churn norm).
     (a candidate whose counts are absent has no `di_choice`/
     `horizontal_choice` either), and the reviewer concedes it is
     unreachable against the live recorder.*
+- *2026-08-21 — **#698 review round 6 adjudicated** (no majors, 9 minors,
+  and the pass itself was thinner — union ×2 rather than ×3, with most
+  findings re-raises). **Review close-out: six rounds, ~40 findings; the
+  load-bearing ones were all about the same thing — a Phase-1b helper
+  that Phase 2a will call, silently dropping a v1 discipline
+  (`refuse_on_error` unapplied, `validate()` unmuted, laziness
+  unenforced, the provenance guard that printed instead of failing).
+  The 140 cells never moved once across five reproductions.***
+  - *Absorbed: `severity_split` counted warnings as `len() - errors`,
+    which hardwires `Severity` to two variants — a third would land
+    silently in the warning channel; `ranks_ahead`'s warnings-first arm
+    now ABSTAINS on a missing key instead of sorting it last through a
+    sentinel, so the module's "a gap skips" rule holds locally rather
+    than depending on a non-local invariant to keep the sentinel dead;
+    `decide`'s terminal `return held` is labelled unreachable under
+    today's program (the prose implied it did work); and the fence is
+    now described as mechanical **for the literal form** rather than as
+    a proof — a runtime-assembled name passes it, an inline comment
+    naming a candidate fails it, and the second direction is the safe
+    one.*
+  - ***The gap-assert family is settled***, having been raised in some
+    form in rounds 3, 4, 5 and 6: `decide`'s doc now states the
+    precondition explicitly — projections are present for every
+    candidate a mechanism examined and absent for every one it did not —
+    and names where it is CHECKED, which is the boundary
+    (`profile_from_row` rejects a partial count or kind triple), not the
+    stages. Two reasons, recorded so the next round does not re-open it:
+    a rule that says "a gap skips" cannot also panic on selected gaps
+    without becoming unstatable, and a pure decision function is the
+    wrong place to validate data it did not build. Refuted with
+    receipts: the ignored-test governance finding (sixth raise), and the
+    claim that `policy_replay` still conflates its two comparison
+    signals — the drifted-cell guard from round 1 is exactly that fix,
+    and on a NON-drifted cell v1 equals the baseline, so the two
+    comparisons cannot disagree.*

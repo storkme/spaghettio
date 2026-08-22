@@ -538,9 +538,15 @@ pub fn never_worse(
 }
 
 /// `(errors, warnings)` for one category's issues.
+///
+/// Both counted by their own predicate rather than one subtracted from
+/// the total: `len() - errors` hardwires `Severity` to exactly two
+/// variants, so an added third would silently land in the warning
+/// channel with nothing failing (#698 review round 6).
 fn severity_split(issues: &[&ValidationIssue]) -> (usize, usize) {
     let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
-    (errors, issues.len() - errors)
+    let warnings = issues.iter().filter(|i| i.severity == Severity::Warning).count();
+    (errors, warnings)
 }
 
 /// The position a native issue's problem is expected to occupy in the
