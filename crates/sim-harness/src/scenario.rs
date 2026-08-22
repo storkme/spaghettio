@@ -790,8 +790,20 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
         window_tick_cap(params.window_ticks)
     );
     let _ = writeln!(out, "local KEEP_ALIVE = {}", params.keep_alive);
-    let _ = writeln!(out, "local PICKUP_TRACE_ONLY = {}", params.pickup_trace_only);
+    let _ = writeln!(
+        out,
+        "local PICKUP_TRACE_ONLY = {}",
+        params.pickup_trace_only
+    );
     let _ = writeln!(out, "local DROP_TRACE = {}", params.drop_trace);
+    // Detailed belt-position and inserter admission telemetry is useful for
+    // focused engine-vs-meter comparisons, but it is not part of an ordinary
+    // production-rate run. Fixed-window runs are diagnostic by definition and
+    // retain the rich snapshot used by their calibration workflow.
+    let _ = writeln!(
+        out,
+        "local TRACE_FORENSICS = PICKUP_TRACE_ONLY or DROP_TRACE or FIXED_WINDOW"
+    );
     let _ = writeln!(out, "local STABILITY_TOL = {STABILITY_TOLERANCE}");
     let _ = writeln!(out, "local STABILITY_WINDOWS = {STABILITY_WINDOWS}");
     let _ = writeln!(
@@ -1263,8 +1275,12 @@ local SIM_STATE_NULL = "__spaghettio_sim_state_null__"
 -- numeric because helpers.table_to_json may omit false-valued fields.
 local DROP_PROBE_OFFSETS = {-2, -1.5, -1, -0.75, -0.5, -0.25, -0.125,
                             0, 0.125, 0.25, 0.5, 0.75, 1, 1.5, 2}
-local DROP_PROBE_LOCAL_POSITIONS = {0, 0.125, 0.25, 0.375, 0.5, 0.625,
-                                    0.75, 0.875, 1}
+local function line_local_position(segment_position)
+  -- get_item_insert_specification returns a coordinate on the connected
+  -- segment, while can_insert_at consumes the coordinate on this line's
+  -- one-tile local fragment.
+  return segment_position - math.floor(segment_position)
+end
 local function sample_drop_probes(s)
   for _, i in pairs(s.find_entities_filtered{type = "inserter"}) do
     local target = i.drop_target
@@ -1273,22 +1289,22 @@ local function sample_drop_probes(s)
         return target.get_item_insert_specification(i.drop_position)
       end)
       if ok and line_no ~= nil then
+        local local_position = line_local_position(position)
         local rec = storage.drop_probes[i.unit_number]
         if rec == nil then
           rec = {unit_number = i.unit_number, samples = 0, held_samples = 0,
-                 statuses = {}, segment_checks = {}, local_checks = {}}
+                 statuses = {}, segment_checks = {},
+                 local_checks = {{position = local_position,
+                                  yes = 0, no = 0, error = 0}}}
           for _, offset in pairs(DROP_PROBE_OFFSETS) do
             table.insert(rec.segment_checks, {offset = offset, yes = 0, no = 0, error = 0})
-          end
-          for _, position_sample in pairs(DROP_PROBE_LOCAL_POSITIONS) do
-            table.insert(rec.local_checks, {position = position_sample,
-                                            yes = 0, no = 0, error = 0})
           end
           storage.drop_probes[i.unit_number] = rec
         end
         rec.samples = rec.samples + 1
         rec.line = line_no
         rec.position = position
+        rec.local_position = local_position
         local map_ok, map_position = pcall(function()
           return target.get_line_item_position(line_no, position)
         end)
@@ -1317,18 +1333,17 @@ local function sample_drop_probes(s)
             check.no = check.no + 1
           end
         end
-        for n, position_sample in pairs(DROP_PROBE_LOCAL_POSITIONS) do
-          local check_ok, can_insert = pcall(function()
-            return line.can_insert_at(position_sample)
-          end)
-          local check = rec.local_checks[n]
-          if not check_ok then
-            check.error = check.error + 1
-          elseif can_insert then
-            check.yes = check.yes + 1
-          else
-            check.no = check.no + 1
-          end
+        local check_ok, can_insert = pcall(function()
+          return line.can_insert_at(local_position)
+        end)
+        local check = rec.local_checks[1]
+        check.position = local_position
+        if not check_ok then
+          check.error = check.error + 1
+        elseif can_insert then
+          check.yes = check.yes + 1
+        else
+          check.no = check.no + 1
         end
       end
     end
@@ -1406,7 +1421,7 @@ local function sample_drop_events(s)
       -- connected segment.  can_insert_at on the line object expects that
       -- line's local coordinate; for the belt lines used here this is the
       -- within-tile fractional part.
-      local local_position = position - math.floor(position)
+      local local_position = line_local_position(position)
       local local_can_ok, local_can_insert = pcall(function()
         return line.can_insert_at(local_position)
       end)
@@ -1668,34 +1683,36 @@ local function dump_sim_state(s)
       end
       det[li] = lane
 
-      -- `get_detailed_contents()` is the game's continuous line position
-      -- view. Keep this in a separate additive channel: the older `belts`
-      -- shape is consumed by existing forensic scripts and only carries
-      -- compressed counts.
-      local detailed_ok, detailed = pcall(function() return tl.get_detailed_contents() end)
-      if detailed_ok and type(detailed) == "table" then
-        local positions = {}
-        for _, entry in pairs(detailed) do
-          local item_map_ok, item_map = pcall(function()
-            return tl.get_line_item_position(entry.position)
-          end)
-          local item_map_position = nil
-          if item_map_ok then
-            item_map_position = {x = item_map.x, y = item_map.y}
+      if TRACE_FORENSICS then
+        -- `get_detailed_contents()` is the game's continuous line position
+        -- view. Keep this in a separate additive channel: the older `belts`
+        -- shape is consumed by existing forensic scripts and only carries
+        -- compressed counts.
+        local detailed_ok, detailed = pcall(function() return tl.get_detailed_contents() end)
+        if detailed_ok and type(detailed) == "table" then
+          local positions = {}
+          for _, entry in pairs(detailed) do
+            local item_map_ok, item_map = pcall(function()
+              return tl.get_line_item_position(entry.position)
+            end)
+            local item_map_position = nil
+            if item_map_ok then
+              item_map_position = {x = item_map.x, y = item_map.y}
+            end
+            table.insert(positions, {
+              name = entry.name,
+              count = entry.count,
+              position = entry.position,
+              map_position = item_map_position
+            })
           end
-          table.insert(positions, {
-            name = entry.name,
-            count = entry.count,
-            position = entry.position,
-            map_position = item_map_position
+          table.insert(belt_positions, {
+            x = math.floor(b.position.x - storage.offx) + LX0,
+            y = math.floor(b.position.y - storage.offy) + LY0,
+            lane = li,
+            items = positions
           })
         end
-        table.insert(belt_positions, {
-          x = math.floor(b.position.x - storage.offx) + LX0,
-          y = math.floor(b.position.y - storage.offy) + LY0,
-          lane = li,
-          items = positions
-        })
       end
     end
     -- Name + direction (belts never carried these, unlike pipes which got
@@ -1754,103 +1771,104 @@ local function dump_sim_state(s)
     table.insert(inserters, {math.floor(i.position.x - storage.offx) + LX0,
                              math.floor(i.position.y - storage.offy) + LY0, stn(i.status)})
 
-    -- Diagnostic channel for the meter/sim belt-drop discrepancy. Keep the
-    -- legacy three-field `inserters` census above stable; this richer record
-    -- is deliberately additive and converts every Lua object to plain data
-    -- before JSON serialization. Positions include both raw world values and
-    -- the layout coordinates used by the other state-dump sections.
-    local function point_record(p)
-      if p == nil then return nil end
-      return {
-        world = {x = p.x, y = p.y},
-        layout = {x = math.floor(p.x - storage.offx) + LX0,
-                  y = math.floor(p.y - storage.offy) + LY0}
-      }
-    end
-    local function read_point(get)
-      local ok, p = pcall(get)
-      if not ok then return nil end
-      return point_record(p)
-    end
-    local function target_record(get)
-      local ok, target = pcall(get)
-      if not ok or target == nil or not target.valid then return nil end
-      return {
-        name = target.name,
-        position = point_record(target.position)
-      }
-    end
-    local held = nil
-    local held_ok, stack = pcall(function() return i.held_stack end)
-    if held_ok and stack ~= nil then
-      local readable = pcall(function() return stack.valid_for_read end)
-      if readable and stack.valid_for_read then
-        held = {name = stack.name, count = stack.count}
+    if TRACE_FORENSICS then
+      -- Diagnostic channel for the meter/sim belt-drop discrepancy. Keep the
+      -- legacy three-field `inserters` census above stable; this richer record
+      -- is deliberately additive and converts every Lua object to plain data
+      -- before JSON serialization. Positions include both raw world values and
+      -- the layout coordinates used by the other state-dump sections.
+      local function point_record(p)
+        if p == nil then return nil end
+        return {
+          world = {x = p.x, y = p.y},
+          layout = {x = math.floor(p.x - storage.offx) + LX0,
+                    y = math.floor(p.y - storage.offy) + LY0}
+        }
       end
-    end
-    local drop_specification = nil
-    local spec_ok, spec_line, spec_position = pcall(function()
-      local target = i.drop_target
-      if target == nil then return nil, nil end
-      return target.get_item_insert_specification(i.drop_position)
-    end)
-    if spec_ok and spec_line ~= nil then
-      local segment_checks = {}
-      local target = i.drop_target
-      local line = target.get_transport_line(spec_line)
-      local map_ok, map_position = pcall(function()
-        return target.get_line_item_position(spec_line, spec_position)
+      local function read_point(get)
+        local ok, p = pcall(get)
+        if not ok then return nil end
+        return point_record(p)
+      end
+      local function target_record(get)
+        local ok, target = pcall(get)
+        if not ok or target == nil or not target.valid then return nil end
+        return {
+          name = target.name,
+          position = point_record(target.position)
+        }
+      end
+      local held = nil
+      local held_ok, stack = pcall(function() return i.held_stack end)
+      if held_ok and stack ~= nil then
+        local readable = pcall(function() return stack.valid_for_read end)
+        if readable and stack.valid_for_read then
+          held = {name = stack.name, count = stack.count}
+        end
+      end
+      local drop_specification = nil
+      local spec_ok, spec_line, spec_position = pcall(function()
+        local target = i.drop_target
+        if target == nil then return nil, nil end
+        return target.get_item_insert_specification(i.drop_position)
       end)
-      for _, offset in pairs({-0.5, -0.25, -0.125, 0, 0.125, 0.25, 0.5}) do
+      if spec_ok and spec_line ~= nil then
+        local segment_checks = {}
+        local target = i.drop_target
+        local line = target.get_transport_line(spec_line)
+        local map_ok, map_position = pcall(function()
+          return target.get_line_item_position(spec_line, spec_position)
+        end)
+        for _, offset in pairs({-0.5, -0.25, -0.125, 0, 0.125, 0.25, 0.5}) do
+          local check_ok, can_insert = pcall(function()
+            return line.can_insert_at(spec_position + offset)
+          end)
+          local result = "error"
+          if check_ok then
+            result = can_insert and "yes" or "no"
+          end
+          table.insert(segment_checks, {offset = offset,
+                                can_insert = result,
+                                map_position = (function()
+                                  local ok, p = pcall(function()
+                                    return target.get_line_item_position(spec_line,
+                                                                          spec_position + offset)
+                                  end)
+                                  if not ok then return nil end
+                                  return point_record(p)
+                                end)()})
+        end
+        local local_position = line_local_position(spec_position)
         local check_ok, can_insert = pcall(function()
-          return line.can_insert_at(spec_position + offset)
+          return line.can_insert_at(local_position)
         end)
         local result = "error"
         if check_ok then
           result = can_insert and "yes" or "no"
         end
-        table.insert(segment_checks, {offset = offset,
-                              can_insert = result,
-                              map_position = (function()
-                                local ok, p = pcall(function()
-                                  return target.get_line_item_position(spec_line,
-                                                                        spec_position + offset)
-                                end)
-                                if not ok then return nil end
-                                return point_record(p)
-                              end)()})
+        local local_checks = {{position = local_position, can_insert = result}}
+        drop_specification = {line = spec_line, position = spec_position,
+                              local_position = local_position,
+                              line_length = line.line_length,
+                              total_segment_length = line.total_segment_length,
+                              map_position = map_ok and point_record(map_position) or nil,
+                              segment_position_checks = segment_checks,
+                              local_can_insert_checks = local_checks}
       end
-      local local_checks = {}
-      for _, position_sample in pairs(DROP_PROBE_LOCAL_POSITIONS) do
-        local check_ok, can_insert = pcall(function()
-          return line.can_insert_at(position_sample)
-        end)
-        local result = "error"
-        if check_ok then
-          result = can_insert and "yes" or "no"
-        end
-        table.insert(local_checks, {position = position_sample, can_insert = result})
-      end
-      drop_specification = {line = spec_line, position = spec_position,
-                            line_length = line.line_length,
-                            total_segment_length = line.total_segment_length,
-                            map_position = map_ok and point_record(map_position) or nil,
-                            segment_position_checks = segment_checks,
-                            local_can_insert_checks = local_checks}
+      table.insert(inserter_trace, {
+        name = i.name,
+        position = point_record(i.position),
+        status = stn(i.status),
+        held_stack = held,
+        held_stack_position = read_point(function() return i.held_stack_position end),
+        pickup_position = read_point(function() return i.pickup_position end),
+        drop_position = read_point(function() return i.drop_position end),
+        drop_specification = drop_specification,
+        pickup_target = target_record(function() return i.pickup_target end),
+        drop_target = target_record(function() return i.drop_target end),
+        drop_probe = storage.drop_probes[i.unit_number]
+      })
     end
-    table.insert(inserter_trace, {
-      name = i.name,
-      position = point_record(i.position),
-      status = stn(i.status),
-      held_stack = held,
-      held_stack_position = read_point(function() return i.held_stack_position end),
-      pickup_position = read_point(function() return i.pickup_position end),
-      drop_position = read_point(function() return i.drop_position end),
-      drop_specification = drop_specification,
-      pickup_target = target_record(function() return i.pickup_target end),
-      drop_target = target_record(function() return i.drop_target end),
-      drop_probe = storage.drop_probes[i.unit_number]
-    })
   end
   -- UG pairing as the GAME resolved it (mis-pairs teleport items across
   -- lines) and splitter priority/filter state as revived — wrong-item
@@ -2153,7 +2171,8 @@ script.on_nth_tick(1, function(ev)
     if DROP_TRACE then sample_drop_events(s) end
     -- Pickup-only runs pay for this channel at tick resolution so a fast
     -- inserter cannot complete a whole hand cycle between samples. Ordinary
-    -- runs keep the cheaper 60-tick sampling below.
+    -- runs do not collect pickup telemetry at all; the 60-tick handler below
+    -- is reserved for the lower-cost drop probe.
     if PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end
   end
 end)
@@ -2205,7 +2224,6 @@ script.on_nth_tick(60, function(ev)
 
   local s = game.get_surface("lab")
   if not PICKUP_TRACE_ONLY then sample_drop_probes(s) end
-  if not PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end
   local stats = game.forces.player.get_item_production_statistics(s)
   local fstats = game.forces.player.get_fluid_production_statistics(s)
   -- Fluid intermediates (mega-cells, RFC-052) live in the fluid
@@ -2577,9 +2595,18 @@ mod tests {
         assert!(lua.contains("sample_tick >= WARMUP_TICKS"));
         assert!(lua.contains("if DROP_TRACE then sample_drop_events(s) end"));
         assert!(lua.contains("if PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end"));
-        assert!(lua.contains("if not PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end"));
+        assert!(
+            !lua.contains("if not PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end"),
+            "ordinary runs must not pay for pickup telemetry"
+        );
         assert!(lua.contains("local PICKUP_TRACE_ONLY = false"));
         assert!(lua.contains("local DROP_TRACE = false"));
+        assert!(lua.contains(
+            "local TRACE_FORENSICS = PICKUP_TRACE_ONLY or DROP_TRACE or FIXED_WINDOW"
+        ));
+        assert!(lua.contains("local_position = line_local_position(spec_position)"));
+        assert!(lua.contains("return line.can_insert_at(local_position)"));
+        assert!(!lua.contains("return line.can_insert_at(position_sample)"));
         let drop_trace_lua = build_control_lua(&m, "0eNBPFAKE", &params.with_drop_trace());
         assert!(drop_trace_lua.contains("local DROP_TRACE = true"));
     }

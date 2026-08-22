@@ -603,6 +603,10 @@ impl BeltNetwork {
                             }
                         }
                     } else if which != first && outs[first].is_some() {
+                        // This branch is reached only when `remembered` was
+                        // None. A fallback while an existing memory episode
+                        // is still active must not refresh its five-item
+                        // budget or inflate `memory_started`.
                         self.splitter_stats[sid].memory_started[lane_ix] += 1;
                         self.splitter_memory[sid][half_ix][lane_ix] =
                             Some((first, SPLITTER_BLOCK_MEMORY_ITEMS));
@@ -1251,13 +1255,27 @@ mod tests {
         assert_eq!(net.splitter_stats[sid].fallback_accepted[0], 1);
         assert_eq!(net.splitter_stats[sid].memory_started[0], 1);
 
+        // A second item also falls back while the remembered output remains
+        // blocked. It must not restart the same memory episode or refresh its
+        // budget; only acceptance by the remembered output consumes memory.
+        let mut discarded_second = Vec::new();
+        net.tiles[output1]
+            .lanes[0]
+            .take_all(99, &mut discarded_second);
+        assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(input, sid);
+        assert_eq!(net.tiles[output1].lanes[0].occupancy(), 1);
+        assert_eq!(net.splitter_memory[sid][0][0], Some((0, 5)));
+        assert_eq!(net.splitter_stats[sid].memory_started[0], 1);
+
         let mut discarded = Vec::new();
         net.tiles[output0].lanes[0].take_all(99, &mut discarded);
         assert!(net.tiles[input].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
         net.step_splitter_exit(input, sid);
         assert_eq!(net.tiles[output0].lanes[0].occupancy(), 1);
         assert_eq!(net.splitter_memory[sid][0][0], Some((0, 4)));
-        assert_eq!(net.splitter_stats[sid].attempts[0], 2);
+        assert_eq!(net.splitter_stats[sid].attempts[0], 3);
+        assert_eq!(net.splitter_stats[sid].fallback_accepted[0], 2);
         assert_eq!(net.splitter_stats[sid].remembered_accepted[0], 1);
     }
 

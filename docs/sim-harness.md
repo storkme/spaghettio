@@ -147,19 +147,21 @@ counts, crafts, working ticks, output-blocked ticks, item/fluid shortage ticks,
 and fluid supplied/consumed by recipe. This is diagnostic evidence for tracing
 meter/sim divergence; it is not another verdict.
 
-The raw `sim_state` payload additionally contains `inserter_trace` and
-`drop_probes`. Each trace record preserves the legacy status census while
-exposing the inserter kind, held stack, arm position, pickup/drop positions,
-and resolved pickup/drop targets. `drop_probes` is a periodic, report-only
-sample keyed by inserter unit number: it records the resolved transport-line
-position, whether the hand was carrying an item, status counts, and numeric
-yes/no/error counts for `can_insert_at`. `local_checks` probes the valid local
-`[0, line_length]` domain; `segment_checks` deliberately keeps the raw
-`get_item_insert_specification` coordinate for comparison and must not be
-interpreted as a local belt-slot probe.
-`belt_positions` carries the continuous positions from the game's detailed
-transport-line view. These channels are intended for diagnosing belt-drop
-backpressure; they are not part of baseline comparison.
+The raw `sim_state` payload additionally contains diagnostic `inserter_trace`
+and `drop_probes` channels. Each trace record preserves the legacy status
+census while exposing the inserter kind, held stack, arm position, pickup/drop
+positions, and resolved pickup/drop targets. `drop_probes` is a periodic,
+report-only sample keyed by inserter unit number: it records the resolved
+transport-line position, whether the hand was carrying an item, status counts,
+and numeric yes/no/error counts for `can_insert_at`. Its `local_checks` probe
+uses the drop tile's line-local fractional position (`position - floor(position)`);
+`segment_checks` deliberately keeps the raw `get_item_insert_specification`
+coordinate for comparison and must not be interpreted as a local belt-slot
+probe. `belt_positions` carries the continuous positions from the game's
+detailed transport-line view. These detailed channels are emitted for focused
+diagnostic modes (`--pickup-trace-only`, `--drop-trace`, or `--fixed-window`);
+ordinary runs keep the legacy compressed state and the cheaper drop probe but
+do not scan detailed belt positions or inserter admission traces.
 
 `drop_event_trace` is the tick-synchronised transition channel: accepted and
 blocked events include the immediately preceding and following inserter state.
@@ -180,7 +182,7 @@ Lua tables remain unit-number keyed so sampling stays O(1). Each pickup record a
 per-item fields, reset at the configured warmup boundary so fixed-window runs
 can be compared directly with meter rates. In `--pickup-trace-only` mode the
 channel samples every tick so fast inserter hand cycles are not skipped;
-ordinary runs retain the lower-cost 60-tick sampling cadence.
+ordinary runs do not collect this pickup channel.
 
 On large layouts, `run --pickup-trace-only` keeps this pickup channel while
 skipping the unrelated drop forensics. The expensive tick-synchronised

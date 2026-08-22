@@ -1347,3 +1347,20 @@ All pass. The remaining advisory nits (turn-lane geometry, exposing splitter
 stats in the top-level report, fixed-window checkpoint edge cases, and serve
 probe cleanup) are separate follow-up candidates rather than blockers for
 these critical fixes.
+
+## 45. 2026-08-22 advisory telemetry follow-up
+
+The advisory pass found two real simulator-harness regressions in the previous
+telemetry iteration. Ordinary runs were still sampling the full pickup event
+population every 60 ticks, and finalization always performed the detailed belt
+position and inserter admission scans. Pickup sampling is now strictly limited
+to `--pickup-trace-only`; detailed belt/inserter snapshots are limited to the
+focused trace modes and `--fixed-window`. The legacy compressed state and the
+cheaper drop probe remain available to ordinary runs.
+
+The same pass corrected the remaining probe-domain mismatch. Both periodic
+`drop_probes.local_checks` and final `inserter_trace` local checks now derive
+the line-local drop coordinate as `position - floor(position)` before calling
+`can_insert_at`. The connected-segment coordinate remains in the additive
+`segment_checks` channel for comparison, but is no longer passed to the local
+API.
