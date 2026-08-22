@@ -335,16 +335,33 @@ jobs:
           otlp-endpoint: ${{ vars.OTLP_ENDPOINT }}
           otlp-user: ${{ vars.OTLP_USER }}
           otlp-token: ${{ secrets.OTLP_TOKEN }}
-          # DeepSeek V4 Flash (2026-07-31 release): 1M context, priced at
-          # ~$0.14/M input. Pinned rather than left to the action's default
-          # for the same reason claude-review pinned its model: review
-          # quality and cost both depend on it.
-          model: deepseek/deepseek-v4-flash-0731
+          # DeepSeek V4 Flash (2026-07-31 release): 1M context, currently
+          # $0.08/Mtok input, $0.18 output, $0.016 cache read (checked against
+          # OpenRouter's models API 2026-08-22 — the old "~$0.14/M input" here
+          # was stale). Pinned rather than left to the action's default for the
+          # same reason claude-review pinned its model: review quality and cost
+          # both depend on it.
+          #
+          # Through a repo VARIABLE so the pin can be moved without a PR, the same
+          # pattern as loki-url/otlp-endpoint above. That matters here specifically
+          # because `second-opinion` is a REQUIRED check on main: a model id that is
+          # wrong, withdrawn, or reliably erroring blocks every merge on the repo,
+          # and with the literal inline the only way to unblock it is another PR
+          # through the gate that is already stuck. As a variable it is a settings
+          # revert. Unset falls back to the value below, so nothing changes until
+          # someone sets it.
+          model: ${{ vars.SECOND_OPINION_MODEL || 'deepseek/deepseek-v4-flash-0731' }}
           # Flash-tier model, so union 3 independent agentic passes — the
           # recall lever the second-opinion README prescribes for weaker
           # models. Passes are sampled; the union keeps a finding if ANY
           # pass raises it. Still ~cents per PR at this pricing.
-          k: "3"
+          #
+          # A variable for the same unblocking reason, plus one of its own: k
+          # multiplies the bill directly (k passes plus a merge call per review), so
+          # it is the knob most likely to want turning in a hurry. Turning it DOWN
+          # trades recall for cost and that trade is measurable — run
+          # `second-opinion-eval --auto 5` at each value rather than guessing.
+          k: ${{ vars.SECOND_OPINION_K || '3' }}
           # Generated artifacts are enormous here and sort BEFORE crates/ in git
           # path order, and the diff filter stops at the first file chunk that
           # overflows the cap rather than skipping it — so they deterministically
