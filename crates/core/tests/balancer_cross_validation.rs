@@ -10,19 +10,27 @@
 //!     under the all-fluid steady-state restriction of Couëtoux et al. §3.
 //!
 //! For a well-formed balancer they should agree on the load-balancing
-//! property (classifier MX3 ⇔ verifier reports balanced). Disagreement
-//! flags a bug in either implementation or a graph the all-fluid model
-//! can't represent.
+//! property (uniform classifier composition ⇔ verifier reports balanced).
+//! The classifier's public class also carries lane-throughput pins, so its
+//! `ThroughputLimited` class is not by itself a composition verdict.
 //!
-//! Hard pin: 0 disagreements; exactly `[(5,8), (7,6), (8,6)]` rejected
+//! Hard pin: 0 disagreements; exactly `[(5,8), (7,6)]` rejected
 //! by both checkers; 0 conversion errors. New disagreements or set
 //! changes surface as test failures, not silent drift.
 
 use spaghettio_core::balancer::{from_splitter_graph, verify_balancer, VerifyError};
 use spaghettio_core::bus::balancer_classify::{
-    classify, topology_of_template, BalancerClass, BalancerTemplateRef,
+    classify, topology_of_template, BalancerTemplateRef, ClassificationReport,
 };
 use spaghettio_core::bus::balancer_library::balancer_templates;
+
+fn has_uniform_composition(report: &ClassificationReport) -> bool {
+    let target = 1.0 / report.composition.len() as f64;
+    report
+        .composition
+        .iter()
+        .all(|row| row.iter().all(|&value| (value - target).abs() < 1e-9))
+}
 
 #[test]
 fn cross_validate_existing_templates() {
@@ -64,7 +72,7 @@ fn cross_validate_existing_templates() {
         // Compare.
         match (&classifier_outcome, &verifier_outcome) {
             (Ok(report), Ok(_)) => {
-                let their_balanced = matches!(report.class, BalancerClass::Balanced);
+                let their_balanced = has_uniform_composition(report);
                 if their_balanced {
                     both_balanced.push(shape);
                 } else {
@@ -77,7 +85,7 @@ fn cross_validate_existing_templates() {
                 }
             }
             (Ok(report), Err(verr)) => {
-                let their_balanced = matches!(report.class, BalancerClass::Balanced);
+                let their_balanced = has_uniform_composition(report);
                 if their_balanced {
                     disagreements.push((
                         shape.0,

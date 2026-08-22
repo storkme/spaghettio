@@ -553,18 +553,16 @@ static T_3_1_OUTPUT: &[(i32, i32)] = &[(2, 8)];
 
 // === (3, 2) — Raynquist balancer book (fall 2025), imported 2026-08-22 ===
 // This is the independent 4x8 book design, not the old
-// Lib(3,1) -> Lib(1,2) compose. The latter had a one-belt middle cut for a
-// rated-two shape and was correctly culled as waisted in 61babd51.
+// Lib(3,1) -> Lib(1,2) compose. That culled compose was removed as waist-
+// capped: its full-input flow crossed one middle belt, below
+// rated=min(3,2)=2.
 //
-// The book calls this a TU design, but the shipped family template is not
-// advertised as TU. The advisory `check_throughput_unlimited` measurement
-// records 10/15 with 1/3 input rows active and 20/30 with 2/3 active (67%
-// routed to dead-end outputs in each case). The family stamp relies on
-// full-input throughput; its structural waist is covered by the min-cut
-// audit in `crates/core/tests/balancer_lane_audit.rs::audit_min_cut_capacity`.
-// `balancer_classify` can still report MX3/`ThroughputTier::Unlimited`: its
-// predicate is belt-level Menger flow over recovered splitter edges (including
-// sideloads), not this walker's partial-input lane/dead-end scenario.
+// The restored book design is min-cut-clean at rated=min(3,2)=2, but it is
+// lossy under partial input. The advisory `check_throughput_unlimited`
+// measurement records 10/15 with 1/3 input rows active and 20/30 with 2/3
+// active (67% routed to dead-end outputs in each case). The classifier pins
+// that lane-walker result rather than certifying TU from its generic
+// belt-level Menger result.
 // The ec30-am2-ore Factorio anchor (`--warmup 432000 --speed 32`) delivered
 // 29.09/s against 30.00/s planned, so this is sim-anchored at 97% of plan,
 // not claimed fixed.
