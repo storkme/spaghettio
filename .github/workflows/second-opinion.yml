@@ -350,6 +350,13 @@ jobs:
           # through the gate that is already stuck. As a variable it is a settings
           # revert. Unset falls back to the value below, so nothing changes until
           # someone sets it.
+          #
+          # THE MODEL DOES NOT TRAVEL ALONE. max-tokens, max-diff-chars and
+          # pass-timeout-seconds below are all calibrated to THIS model (its 65536-token
+          # cap, its 1M context, its speed on these diffs) and are variables for the same
+          # reason — swapping to a smaller-context or slower model without moving them
+          # re-triggers the empty-review failure class those comments document, silently
+          # and with no file change to review. Set them in the same visit.
           model: ${{ vars.SECOND_OPINION_MODEL || 'deepseek/deepseek-v4-flash-0731' }}
           # Flash-tier model, so union 3 independent agentic passes — the
           # recall lever the second-opinion README prescribes for weaker
@@ -393,11 +400,11 @@ jobs:
           # has 1M context, and layout-engine PRs here routinely exceed
           # 60k chars of diff. 300k because 200k still truncated #575 once
           # artifacts were excluded (its source alone is ~214k).
-          max-diff-chars: "300000"
+          max-diff-chars: ${{ vars.SECOND_OPINION_MAX_DIFF_CHARS || '300000' }}
           # 65536 = deepseek-v4-flash-0731's cap. A reasoning model can exhaust a
           # smaller max_tokens in its reasoning channel and return an empty 200
           # (the #565/#566/#574 empty-review failure class), so give it headroom.
-          max-tokens: "65536"
+          max-tokens: ${{ vars.SECOND_OPINION_MAX_TOKENS || '65536' }}
           # 900s (the action default at time of writing) is too tight for a
           # reasoning model on these diffs: #575 and #574-attempt-1 both had ALL
           # passes hit the wall and post nothing, and the attempt that did
@@ -408,7 +415,7 @@ jobs:
           # explicit guard so a future default change cannot silently shorten it.
           # See the job-budget comment above: the merge can retry once, so the
           # worst case is 1800 + 1200 + build, not 1800 + 600.
-          pass-timeout-seconds: "1800"
+          pass-timeout-seconds: ${{ vars.SECOND_OPINION_PASS_TIMEOUT || '1800' }}
           # Spend ceiling. The wall clock above bounds TIME, not money: a looping agent
           # burns tokens at full rate for the whole 1800s and a longer timeout only
           # raises the bill (#29 elsewhere: 12.6M tokens producing nothing, ended only by
