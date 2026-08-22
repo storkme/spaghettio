@@ -1044,8 +1044,15 @@ fixtures / docs split per the churn norm).
   spaghettio_core -- -D warnings` clean, all PR CI checks (`rust`,
   `rust-clippy`, `web`, `second-opinion`, `deploy-preview`,
   `workflow-guard`) green on the prior commit.
-- *2026-08-21 — **W2c: both `run_e2e` fossils killed; the suite now runs
-  production defaults.** `run_e2e_inner` builds its `LayoutOptions` through
+- *2026-08-21 — **W2c: both `run_e2e` fossils killed; the `run_e2e*`
+  HARNESS now runs production defaults.** Scoped deliberately (#699 review
+  round 6 flagged the first wording, "the suite now runs production
+  defaults", as overstating what the body itself measures): 15 other tests
+  in `tests/e2e.rs` still build their own `LayoutOptions` with
+  `cell_composition: Off` / `inserter_capacity: 0` and are pinned, not
+  migrated. Every fixture routed through `run_e2e*` — which is every tier
+  and stress fixture — does run production defaults.
+  `run_e2e_inner` builds its `LayoutOptions` through
   `LayoutOptions::from_groups` (the #696 scaffolding's first production
   caller) via a new `harness_options(HarnessOptions { .. })` helper, so
   every field the harness does not deliberately override is the engine's
@@ -1213,11 +1220,18 @@ fixtures / docs split per the churn norm).
   the fossilized suite decided — the file's doc comments were updated to
   say so instead of continuing to claim a present-tense fossil.
 
-  **Pre-existing flake noted, not caused**: `tier2_electronic_circuit_20s_from_ore`
-  carries `#[ntest::timeout(10000)]` and tripped it at 10003 ms on the
-  BASELINE (pre-change) parallel run while passing solo in 0.63 s. It
-  passed on every post-change run. Wall-clock timeouts on a loaded box are
-  a suite-wide hazard the extra candidate makes marginally worse.
+  **Pre-existing flake, made marginally worse, now fixed for the three
+  fixtures that showed it.** `tier2_electronic_circuit_20s_from_ore`
+  carried `#[ntest::timeout(10000)]` and tripped it at 10003 ms on the
+  BASELINE (pre-change) parallel run and again at 10001 ms on a later
+  post-change run, while passing SOLO in 0.63 s. `ntest::timeout` is
+  wall-clock, so on a loaded box the budget, not the work, is binding —
+  and restoring the cell-composed candidate adds a layout pass to every
+  fixture. Raised to 60 s here, and 10 s → 30 s / 30 s → 60 s on the two
+  re-pinned decomposition tests (#699 review round 2 predicted exactly
+  this). **Residual, not fixed**: 60-odd other tests in the file carry the
+  same 10 s wall-clock budget and are subject to the same hazard; a
+  blanket raise is housekeeping for its own change, not a rider here.
 
   **#699 review round 1 absorbed** (7 findings, 1 union-major + 6 minor,
   all absorbed, none refuted — the major paid out immediately):
@@ -1366,3 +1380,77 @@ fixtures / docs split per the churn norm).
   restated ordering residual and the restated in-suite-tripwire major are
   answered by the correction above — the armed guard is W1a's tripwire
   row, which predates this PR.
+
+  **#699 review rounds 5 and 6 absorbed** (6 + 6 findings). Four produced
+  real changes, and one produced the best single detail in the whole
+  campaign so far:
+  * *(round 6, minor, 2/2 — asked as a question, answered with a
+    receipt)* "How does the same layout score `layout_warnings: 1` at
+    selection and 0 at validation?" No contradiction — different fields
+    (`LayoutResult.warnings` is the producer's own list; `validate()`'s
+    issues are the 39 functional checks, which is what the warning golden
+    counts). **But the one entry is the story**: decoded from the
+    snapshot, gear@20's winning cell-composed candidate carries
+    `"cell-composed: geometry NOT sim-verified (hash c5c5f88087df894c) —
+    run spaghettio-sim and add the entry to cell-sim-registry.json"`.
+    RFC-051's own machinery flagged this exact geometry as unverified;
+    `best-error-free` filters on errors and ranks on score with warnings
+    taking no part; and the thing it was not verified for is precisely
+    what the meter measured. That is the sharpest available argument for
+    W2b's severity-aware verdict, and it was sitting in the trace the
+    whole time.
+  * *(round 5, minor, 1/3 — correct, and my own bug class in W2a's file)*
+    `bus/layout.rs`'s legend said "**Zero production callers as of this
+    PR**" about `from_groups`. This PR makes `e2e.rs` the first caller, so
+    the sentence became false in the same diff that falsified it.
+    Replaced with an adoption-status list naming the caller, the two
+    exporters, and what is still open.
+  * *(round 5, major, 3/3, fourth restatement — answered with code)*
+    `assert_produces(…, 20.0)` was deleted from
+    `tier1_iron_gear_wheel_20s`. It reads `analysis.throughput_estimates`
+    — a static estimate from the machine count — and asserted "produces
+    20/s" about a layout the meter reads at 15/s: a green assertion
+    saying the opposite of the measurement. Replaced by an inline check of
+    the same number under a message that names it a PLAN check, states the
+    measured 15.0/s and the tripwire row, and says not to read the test
+    passing as delivery. Rejected alternative recorded at the call site:
+    metering in-suite would close a dev-dependency cycle
+    (`spaghettio_meter` → `spaghettio_core`) to duplicate a guard that
+    already exists armed.
+  * *(round 6, minor, 1/2 — correct, and fixed structurally rather than
+    by assertion)* Round 2 had added two guard assertions pinning
+    `LayoutStrategy::Pooled` and `horizontal_candidate == true`, because
+    every `run_e2e*` wrapper spelled those as hard literals. Round 6
+    pointed out that an assertion re-spelling an engine default is itself
+    a second copy of it. So the wrappers were fixed instead: `run_e2e_inner`
+    now takes one `HarnessOptions`, and every wrapper spells only what it
+    deliberately varies (`run_e2e_pure_combo`'s `horizontal_candidate:
+    false` is the sole non-default in any of them), leaving the rest to
+    `HarnessOptions::default()`, which reads the engine's group defaults
+    at runtime. The two assertions were deleted as redundant. **Verified
+    behaviour-neutral**: a full golden+STRESSGOLD fingerprint run before
+    and after the refactor is byte-identical on all 8 + 8 hashes. The
+    stale `#[allow(clippy::too_many_arguments)]` went with the four
+    dropped params.
+  * *(round 5, major, 1/3)* `full_knob_sweep`'s markdown now stamps an
+    "Option-set epoch: post-RFC-070-W2c" banner into the ARTIFACT — these
+    tables get pasted into issues, where a doc comment on
+    `run_e2e_pure_combo` is invisible.
+  * *(round 6, major, 2/2, fifth restatement — REFUTED with a receipt)*
+    "the pin monitors who wins, not whether it delivers, and the meter
+    tripwire never runs under `cargo test -p spaghettio_core`." Both true.
+    The tripwire being opt-in is a **standing project decision with its
+    own recorded reasoning**, not an oversight of this track:
+    `e2e_tripwire.rs`'s "Why report-only stays the default, and this is
+    NOT wired into CI as a gate" — gating a host-cache-relative instrument
+    with no track record repeats #632 B7's mistake, and promoting `check`
+    is named there as future work. Overturning it is not W2c's to do. The
+    residual is real and recorded: a further regression from 15.0 to, say,
+    13.5 would pass every core-suite check. That is an argument for
+    promoting the tripwire, which belongs with whoever owns the gate.
+  * *(round 6, minor, 1/2, REFUTED)* "no fixture-level ancestry is
+    recorded for the non-golden-pinned fixtures." The per-fixture stress
+    deltas ARE recorded above (ec22 5→4, ec23 7→6, ec40 283→235, entity
+    counts on all 8), measured under the new config, with the direction
+    stated and the alarm condition (a category reaching zero) checked and
+    absent.

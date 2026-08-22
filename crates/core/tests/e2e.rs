@@ -193,13 +193,9 @@ fn run_e2e_with_strategy(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         &FxHashSet::default(),
-        strategy,
-        spaghettio_core::bus::layout::RowLayout::default(),
-        spaghettio_core::bus::layout::SurplusPolicy::default(),
-        true,
+        HarnessOptions { belt_tier, strategy, ..Default::default() },
     )
 }
 
@@ -220,13 +216,9 @@ fn run_e2e_with_strategy_and_row_layout(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         &FxHashSet::default(),
-        strategy,
-        row_layout,
-        spaghettio_core::bus::layout::SurplusPolicy::default(),
-        true,
+        HarnessOptions { belt_tier, strategy, row_layout, ..Default::default() },
     )
 }
 
@@ -268,13 +260,12 @@ fn run_e2e_pure_combo(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         &FxHashSet::default(),
-        strategy,
-        row_layout,
-        spaghettio_core::bus::layout::SurplusPolicy::default(),
-        false,
+        // The one deliberate non-default in any wrapper, and the whole
+        // point of this one.
+        HarnessOptions { belt_tier, strategy, row_layout, horizontal_candidate: false,
+            ..Default::default() },
     )
 }
 
@@ -292,13 +283,9 @@ fn run_e2e_with_exclusions(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         excluded_recipes,
-        spaghettio_core::bus::layout::LayoutStrategy::Pooled,
-        spaghettio_core::bus::layout::RowLayout::default(),
-        spaghettio_core::bus::layout::SurplusPolicy::default(),
-        true,
+        HarnessOptions { belt_tier, ..Default::default() },
     )
 }
 
@@ -321,13 +308,9 @@ fn run_e2e_with_exclusions_and_surplus_policy(
         item,
         rate,
         machine,
-        belt_tier,
         available_inputs,
         excluded_recipes,
-        spaghettio_core::bus::layout::LayoutStrategy::Pooled,
-        spaghettio_core::bus::layout::RowLayout::default(),
-        surplus_policy,
-        true,
+        HarnessOptions { belt_tier, surplus_policy, ..Default::default() },
     )
 }
 
@@ -443,30 +426,17 @@ fn harness_options_are_engine_defaults() {
          different inserter ladder than production",
     );
 
-    // The fields `run_e2e_inner` takes as PARAMETERS bypass the spread —
-    // the wrappers hand them in explicitly — so
-    // `harness_options(HarnessOptions::default())` alone cannot see them
-    // go stale (#699 review round 2). Two of the four are spelled as HARD
-    // LITERALS by every wrapper (`LayoutStrategy::Pooled`, `true`), which
-    // is the same fossil shape one level out; assert the engine defaults
-    // still equal them, so a default flip fails here instead of silently
-    // pinning every fixture to the old value.
-    //
-    // The other two — `row_layout` and `surplus_policy` — are absent
-    // deliberately: the wrappers pass `RowLayout::default()` /
-    // `SurplusPolicy::default()`, which follow a flip on their own.
-    assert_eq!(
-        shipped.strategy,
-        layout::LayoutStrategy::Pooled,
-        "the engine's default strategy moved, but `run_e2e`/`run_e2e_with_exclusions` \
-         still hand `LayoutStrategy::Pooled` to `run_e2e_inner` — update the wrappers \
-         (and adjudicate the goldens) rather than this assertion",
-    );
-    assert!(
-        shipped.horizontal_candidate,
-        "the engine's default `horizontal_candidate` moved to false, but the \
-         `run_e2e*` wrappers still hand `true` to `run_e2e_inner`",
-    );
+    // (Round 2 added two assertions here pinning `LayoutStrategy::Pooled`
+    // and `horizontal_candidate == true`, because every `run_e2e*` wrapper
+    // spelled those as hard literals and so bypassed the spread. Round 6
+    // pointed out that an assertion re-spelling an engine default is
+    // itself a second copy of it — the shape this whole track is about. So
+    // the wrappers were fixed instead: they now build a `HarnessOptions`
+    // with `..Default::default()` and spell only what they deliberately
+    // vary, which makes them follow a default flip on their own and makes
+    // those two assertions redundant. They are deleted rather than kept as
+    // belt-and-braces: a redundant re-spelling of a default is exactly the
+    // artifact that goes stale.)
 }
 
 /// **The fossil pattern is dead on the `run_e2e` path only.** It survives,
@@ -561,22 +531,30 @@ fn residual_fossil_literals_are_pinned() {
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Takes the varied knobs as one `HarnessOptions` rather than as loose
+/// parameters (#699 review round 6). The wrappers above used to hand in
+/// `LayoutStrategy::Pooled` and `true` as HARD LITERALS — a second copy
+/// of two engine defaults, and the same stale-fossil shape one level out
+/// from the one this track killed. Every wrapper now spells only what it
+/// deliberately varies and leaves the rest to `HarnessOptions::default()`,
+/// which reads the engine's group defaults at runtime. The only
+/// non-default any wrapper sets is `run_e2e_pure_combo`'s
+/// `horizontal_candidate: false`, which is that wrapper's entire purpose.
+///
+/// (The `#[allow(clippy::too_many_arguments)]` this used to carry went
+/// with the four params: seven is the limit, and this now has seven.)
 fn run_e2e_inner(
     test_name: &str,
     item: &str,
     rate: f64,
     machine: &str,
-    belt_tier: Option<&str>,
     available_inputs: &FxHashSet<String>,
     excluded_recipes: &FxHashSet<String>,
-    strategy: spaghettio_core::bus::layout::LayoutStrategy,
-    row_layout: spaghettio_core::bus::layout::RowLayout,
-    surplus_policy: spaghettio_core::bus::layout::SurplusPolicy,
-    horizontal_candidate: bool,
+    opts: HarnessOptions<'_>,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     spaghettio_core::zone_cache::set_thread_source(Some(test_name));
+    let belt_tier = opts.belt_tier;
     let run_params = RunParams { item, rate, machine, belt_tier, available_inputs };
 
     let solver_result = solver::solve_with_exclusions(item, rate, available_inputs, machine, excluded_recipes)
@@ -586,13 +564,7 @@ fn run_e2e_inner(
             msg
         })?;
 
-    let layout = layout::build_bus_layout(&solver_result, harness_options(HarnessOptions {
-        belt_tier,
-        strategy,
-        row_layout,
-        surplus_policy,
-        horizontal_candidate,
-    }))
+    let layout = layout::build_bus_layout(&solver_result, harness_options(opts))
         .map_err(|e| {
             let msg = format!("layout: {e}");
             dump_partial_snapshot(test_name, &run_params, Some(&solver_result), &msg);
@@ -1512,6 +1484,23 @@ fn tier1_iron_gear_wheel_20s() {
     // fixture name, two artifacts, no contradiction visible from either
     // side. That is what the fossil cost.
     //
+    // **The winner declared its own unverifiedness, and the stage ranked
+    // past it** (#699 review round 6 asked how the same layout scores
+    // `layout_warnings: 1` at selection and 0 at validation; decoded from
+    // the snapshot, and there is no contradiction — they are different
+    // fields). `LayoutResult.warnings` is the producer's own list;
+    // `validate()`'s issues are the 39 functional checks, and
+    // `assert_warnings_golden` counts the latter. The one entry reads:
+    //
+    //   "cell-composed: geometry NOT sim-verified (hash c5c5f88087df894c)
+    //    — run spaghettio-sim and add the entry to cell-sim-registry.json"
+    //
+    // RFC-051's own machinery flagged this exact geometry as unverified,
+    // `best-error-free` filters on errors and ranks on score with warnings
+    // taking no part, and the thing it was not verified for is precisely
+    // what the meter later measured. Recorded here because it is the
+    // sharpest available argument for W2b's severity-aware verdict.
+    //
     // The pin below is this file's share of the guard (#699 review round
     // 2, 3/3 — "the only guard is prose and an external issue number").
     // Neither the golden hash nor `assert_produces` can say WHY this
@@ -1786,8 +1775,16 @@ fn tier2_electronic_circuit_from_ore() {
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
 }
 
+/// Timeout raised 10 s → 60 s (RFC-070 W2c). `ntest::timeout` is
+/// wall-clock, and this fixture sat right on the old boundary: it tripped
+/// at 10003 ms on this PR's BASELINE run (before any change) and again at
+/// 10001 ms afterwards, while passing SOLO in 0.63 s. Restoring the
+/// cell-composed candidate adds a second layout pass and makes the
+/// boundary case worse, so the budget is raised rather than left to flake
+/// a 4-minute suite run. 60 s still catches a ~100x regression on a test
+/// that runs in well under a second.
 #[test]
-#[ntest::timeout(10000)]
+#[ntest::timeout(60000)]
 fn tier2_electronic_circuit_20s_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
         .iter()
