@@ -329,7 +329,11 @@ impl IssueProfile {
                 // the layout really did have that density and entity
                 // count. `accepted` is a VERDICT about admitting the
                 // layout, and there is no admitting a discarded one.
-                // v1 has neither, because it never measured.
+                // v1 has neither, because it never measured. So a
+                // profile built here and one built from a recorded row
+                // are NOT field-identical for a refused candidate
+                // (#698 review round 8): compare decisions across the
+                // two construction sites, never profiles.
                 accepted: None,
                 accepted_reason: None,
                 counts: Some(IssueCounts {
@@ -808,16 +812,20 @@ impl SelectionPolicy {
 
     /// Index of the incumbent registration.
     ///
-    /// Exactly one registration may carry the flag. Two would silently
-    /// break every pairwise stage — `position()` takes the first and the
-    /// second's profile would be ranked as an ordinary challenger
-    /// against it — so the invariant is asserted rather than assumed
-    /// (#698 review round 4).
+    /// **Exactly one** registration must carry the flag. Two would
+    /// silently break every pairwise stage — `position()` takes the
+    /// first and the second's profile would be ranked as an ordinary
+    /// challenger against it. ZERO is equally malformed and less
+    /// obviously so: the two pairwise stages disagree about what it
+    /// means, the quality-key one handing its rival an unconditional
+    /// win while the floor abstains forever (#698 review rounds 4 and
+    /// 8). The return stays `Option` because release must degrade
+    /// rather than panic, not because zero is a supported shape.
     pub fn incumbent_index(&self) -> Option<usize> {
-        debug_assert!(
-            self.producers.iter().filter(|p| p.incumbent).count() <= 1,
-            "a policy declares at most one incumbent; this one declares {}",
-            self.producers.iter().filter(|p| p.incumbent).count()
+        debug_assert_eq!(
+            self.producers.iter().filter(|p| p.incumbent).count(),
+            1,
+            "a policy declares exactly one incumbent"
         );
         self.producers.iter().position(|p| p.incumbent)
     }
@@ -2182,6 +2190,14 @@ mod tests {
              receipt must not claim a category that is no longer excluded"
         );
         assert!(p.firewalls.iter().all(|f| !f.receipt.is_empty()));
+        // Per-receipt, not just the union: a receipt claiming nothing
+        // would otherwise ride along inside a set-equality that another
+        // receipt satisfied, which is weaker than "each receipt names
+        // the categories it argues for" (#698 review round 8).
+        assert!(
+            p.firewalls.iter().all(|f| !f.justifies.is_empty()),
+            "a firewall that justifies no category is a comment wearing the type"
+        );
     }
 
     // -----------------------------------------------------------------

@@ -1394,3 +1394,29 @@ fixtures / docs split per the churn norm).
     speculative third-scoped-producer fold (v2's fold reduces exactly to
     v1's two-valued join on the two that exist), and the unreachable-arm
     assert for the fourth time.*
+- *2026-08-21 — **#698 review round 8: no majors for the third round
+  running**, four minors, union ×2. **Review cycle CLOSED here**, on the
+  instrument's own evidence rather than on patience: three consecutive
+  rounds without a major, the passes thinning from ×3 to ×2, and the
+  "not CI-gated" finding raised for the EIGHTH time. Absorbed, all
+  one-liners: `incumbent_index` now asserts EXACTLY one incumbent rather
+  than at most one — zero is equally malformed and less obvious, since
+  the two pairwise stages disagree about what it means (the quality-key
+  one hands its rival an unconditional win, the floor abstains forever);
+  the `firewall_receipts` test checks each receipt claims a non-empty
+  set, not only that the union matches, so an empty one cannot ride
+  along inside another's set-equality; and `measure`'s comment now says
+  outright that a profile built there and one built from a recorded row
+  are NOT field-identical for a refused candidate — compare decisions
+  across construction sites, never profiles.*
+  - ***Standing hand-off note for Phase 2a***, since it is the one thing
+    every round agreed on and it is this PR's own finding: **the 140/140
+    result covers the comparators' RANKING, not the gates, and not two
+    of the three comparators' defining semantics.** What a shadow loop
+    must therefore not conclude from corpus parity: that its floor is
+    component-wise, that it honours the #474 non-shadowing rule, that
+    `first-produced` behaves, or that any eligibility gate was
+    transcribed correctly. Each of those has its own cover — the unit
+    tier for the first three, the clause-by-clause gate tests for the
+    fourth — and the 2a shadow, which runs both dispatches on the same
+    solve, is the first instrument that can check them together.*
