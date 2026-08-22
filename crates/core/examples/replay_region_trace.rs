@@ -82,9 +82,6 @@ fn main() {
             TraceEvent::JunctionGrowthCapped { iters, region_tiles, reason, .. } => {
                 println!("💥 CAPPED iters={iters} region_tiles={region_tiles} reason=\"{reason}\"");
             }
-            TraceEvent::JunctionTemplateRejected { tile_x, tile_y, bridge_dir, reason } => {
-                println!("    template reject @ ({tile_x},{tile_y}) dir={bridge_dir} reason={reason}");
-            }
             _ => {}
         }
     }));

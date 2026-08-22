@@ -1561,11 +1561,16 @@ fn find_item_conflict(
     // A belt×pipe crossing puts the belt's item and the pipe's fluid on
     // the same boundary tile — structurally distinct items, but *not* a
     // belt-on-belt conflict that growth can fix. The pipe is a fixed
-    // surface entity (`bridge_belt_over_pipe` handles the UG-bypass
-    // directly at the 1×1 region); treating it as a conflict makes the
-    // item-conflict fast-fail skip perp-template every time and grow
-    // the region into a multi-spec blob that SAT then guards against.
+    // surface entity strategies bypass via UG rather than route around;
+    // treating it as a conflict would grow the region into a multi-spec
+    // blob that SAT then guards against instead of solving directly.
     // Filter pipe items out before counting distinct items per tile.
+    // (Historical note: this filter originally existed so the
+    // item-conflict fast-fail wouldn't skip the perpendicular-template
+    // rung's `bridge_belt_over_pipe` arm every time; that rung was
+    // deleted 2026-08-22, #689/#691, as production-unreachable — see
+    // docs/offpath-code-followups.md G1 — but the filter's rationale
+    // above stands independent of that rung.)
     let mut by_tile: FxHashMap<(i32, i32), Vec<String>> = FxHashMap::default();
     for b in boundaries {
         if pipe_items.contains(&b.item) {
@@ -1619,8 +1624,8 @@ fn try_solve_on_region(
     // for this iter and let growth expand outward to put the conflict
     // in the interior (where SAT can route around it via UG tunnels).
     // Exclude pipe-kind items — a fluid trunk sharing a boundary tile
-    // with a belt isn't an unroutable conflict; `bridge_belt_over_pipe`
-    // handles that shape.
+    // with a belt isn't an unroutable conflict; see `find_item_conflict`
+    // above for why.
     let pipe_items: FxHashSet<String> = junction
         .specs
         .iter()

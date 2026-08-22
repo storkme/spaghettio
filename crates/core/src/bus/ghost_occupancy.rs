@@ -445,10 +445,14 @@ impl Occupancy {
                         // junction-solver-aware replacement, so releasing
                         // them and letting a SAT solution stamp a belt
                         // over the tile silently destroys fluid networks.
-                        // The `bridge_belt_over_pipe` template tunnels
-                        // belts UNDER pipes via UG (per U4); any path
-                        // that reaches release time AND lands on a pipe
-                        // tile is a strategy bug, not a license to clobber.
+                        // Production dispatch filters pipe specs out of
+                        // junction seeding entirely (`keys_at_tile` —
+                        // pipes participate as forbidden tiles only, and
+                        // SAT bypasses them as obstacles per U4), so no
+                        // strategy should ever need to route a belt
+                        // through one; any path that reaches release
+                        // time AND lands on a pipe tile is a strategy
+                        // bug, not a license to clobber.
                         if entity.name == "pipe" || entity.name == "pipe-to-ground" {
                             return false;
                         }

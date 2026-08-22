@@ -340,16 +340,6 @@ pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
                     format!("cost={cost} considered={considered:?}"),
                 ))
             }
-            // The perp rung's inner `try_bridge` refusals carry the reason a
-            // template attempt came back Unsatisfiable — fold them in so an
-            // attribution mismatch is diagnosable without re-instrumenting.
-            TraceEvent::JunctionTemplateRejected { tile_x, tile_y, bridge_dir, reason } => {
-                Some((
-                    "perpendicular_template".to_string(),
-                    format!("Rejected[{bridge_dir}]"),
-                    format!("({tile_x},{tile_y}) {reason}"),
-                ))
-            }
             _ => None,
         })
         .collect();

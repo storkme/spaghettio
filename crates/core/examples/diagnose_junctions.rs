@@ -160,11 +160,14 @@ fn run_case(label: &str, recipe: &str, rate: f64, machine: &str, inputs: &[&str]
         .filter(|i| matches!(i.severity, validate::Severity::Error))
         .collect();
 
-    // Build tile → Vec<(bridge_dir, reason)> map from JunctionTemplateRejected
-    // events. A single crossing can generate two events (vertical then
-    // horizontal fallback), both with the same (tile_x, tile_y). Unresolved
-    // perpendicular regions are per-tile so we can look up by region (x, y).
-    let mut rejections: BTreeMap<(i32, i32), Vec<(String, String)>> = BTreeMap::new();
+    // Tile → Vec<(bridge_dir, reason)> map, formerly populated from
+    // JunctionTemplateRejected events emitted by the perpendicular-template
+    // rung's try_bridge/bridge_belt_over_pipe. The rung and that trace
+    // variant were deleted 2026-08-22 (#689/#691, production-unreachable —
+    // see docs/offpath-code-followups.md G1), so this map is now always
+    // empty; kept as a stub so the lookup below stays valid and the
+    // "(no trace events — investigate)" fallback below prints unconditionally.
+    let rejections: BTreeMap<(i32, i32), Vec<(String, String)>> = BTreeMap::new();
     // Tally which strategy solved each successful crossing, plus how many
     // regions hit the growth-cap (and why). Used below to explain why SAT
     // is or isn't firing.
@@ -173,17 +176,6 @@ fn run_case(label: &str, recipe: &str, rate: f64, machine: &str, inputs: &[&str]
     if let Some(events) = layout.trace.as_ref() {
         for ev in events {
             match ev {
-                TraceEvent::JunctionTemplateRejected {
-                    tile_x,
-                    tile_y,
-                    bridge_dir,
-                    reason,
-                } => {
-                    rejections
-                        .entry((*tile_x, *tile_y))
-                        .or_default()
-                        .push((bridge_dir.clone(), reason.clone()));
-                }
                 TraceEvent::JunctionSolved { strategy, .. } => {
                     *solved_by_strategy.entry(strategy.clone()).or_insert(0) += 1;
                 }
