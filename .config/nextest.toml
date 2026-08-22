@@ -48,6 +48,39 @@ threads-required = 2
 filter = "test(stress_advanced_circuit_partitioned_7s_from_plates)"
 slow-timeout = { period = "60s", terminate-after = 10 }
 
+# RFC-070 Phase 2a (#689 W3a): the shadow parity gate runs six SAT-heavy
+# fixtures in ONE non-ignored test — the shape that blew a ceiling the
+# first time parallelism was tried on this 4-thread runner.
+# `threads-required = 2` limits concurrency to two heavy tests at a time,
+# the same frame (and the accurate one) as the heavy group above: it is a
+# slot cost, NOT a reservation, so this test still co-schedules with one
+# other 2-slot test — it just cannot be one of three (#703 review round 1
+# corrected an earlier "keeps it off the box alongside another heavy
+# test", which overclaimed). The `#[ntest::timeout(300_000)]` is the real
+# hang detector; the 600s kill sits above it.
+#
+# Measured, not extrapolated: 30.9s on the pinned-cache CI runner (PR
+# #703 head 12b1ea87, job 97039777698) against 15s local warm — a 2x host
+# penalty, not the 8-18x the cold-cache note above records, because this
+# job pins SPAGHETTIO_ZONE_CACHE_PATH. The test's own
+# #[ntest::timeout(600_000)] is sized for the UNPINNED case instead (the
+# 8-18x regime puts a cold run at 120-270s, and a hang detector that
+# fires on a cold cache is a false positive on the one gate that runs
+# everywhere — #703 review round 2). This kill sits above it.
+[[profile.ci.overrides]]
+filter = "test(shadow_agrees_with_production_on_the_census_fixtures)"
+slow-timeout = { period = "60s", terminate-after = 12 }
+threads-required = 2
+
+# The same cap for a local `cargo nextest run` with no --profile, so a
+# developer's box gets the concurrency behaviour CI gets. Plain
+# `cargo test` reads none of this file, which is why the ntest ceiling —
+# not this entry — is the real guard (#703 review round 2).
+[[profile.default.overrides]]
+filter = "test(shadow_agrees_with_production_on_the_census_fixtures)"
+slow-timeout = { period = "60s", terminate-after = 12 }
+threads-required = 2
+
 [profile.ci.junit]
 path = "junit.xml"
 store-success-output = true

@@ -335,16 +335,68 @@ jobs:
           otlp-endpoint: ${{ vars.OTLP_ENDPOINT }}
           otlp-user: ${{ vars.OTLP_USER }}
           otlp-token: ${{ secrets.OTLP_TOKEN }}
-          # DeepSeek V4 Flash (2026-07-31 release): 1M context, priced at
-          # ~$0.14/M input. Pinned rather than left to the action's default
-          # for the same reason claude-review pinned its model: review
-          # quality and cost both depend on it.
-          model: deepseek/deepseek-v4-flash-0731
+          # DeepSeek V4 Flash (2026-07-31 release): 1M context, currently
+          # $0.08/Mtok input, $0.18 output, $0.016 cache read (checked against
+          # OpenRouter's models API 2026-08-22 — the old "~$0.14/M input" here
+          # was stale). Pinned rather than left to the action's default for the
+          # same reason claude-review pinned its model: review quality and cost
+          # both depend on it.
+          #
+          # Through a repo VARIABLE so the pin can be moved without a PR, the same
+          # pattern as loki-url/otlp-endpoint above. That matters here specifically
+          # because `second-opinion` is a REQUIRED check on main: a model id that is
+          # wrong, withdrawn, or reliably erroring blocks every merge on the repo,
+          # and with the literal inline the only way to unblock it is another PR
+          # through the gate that is already stuck. As a variable it is a settings
+          # revert. Unset falls back to the value below, so nothing changes until someone
+          # sets one — but note that is the only case it protects: a set-but-WRONG value
+          # (a typo'd id, or SECOND_OPINION_K=0, which GitHub's expression engine treats
+          # as truthy because it is a non-empty string) beats the default and blocks the
+          # gate exactly as a bad literal would. Unsetting it is the fix, and that is
+          # still a settings edit rather than a PR — which is the whole point.
+          #
+          # THE MODEL DOES NOT TRAVEL ALONE. max-tokens, max-diff-chars,
+          # pass-timeout-seconds and max-pass-tokens below are ALL calibrated to THIS
+          # model — its 65536-token cap, its 1M context, its speed on these diffs, its
+          # measured per-pass burn — and are variables for the same reason. Swapping to a
+          # smaller-context, slower or leakier model without moving them re-triggers the
+          # empty-review failure class those comments document, silently and with no file
+          # change to review. Set them in the same visit.
+          #
+          # AND MIND THE JOB CAP. pass-timeout-seconds is now settable from Settings;
+          # `timeout-minutes: 90` on the job is not. From the budget derivation at the top
+          # of this job, the parallel worst case is
+          #     pass + 1200s merge + ~300s cold build
+          # so it meets the 5400s cap at pass = 5400 - 1500 = 3900s. Below that there is
+          # real margin (at 2400s the worst case is 65 min, 25 min spare); at or above it
+          # the JOB cap fires mid-pass instead, which is strictly worse than a pass
+          # timeout — it skips the degraded report entirely, so there is no annotation and
+          # no failure notice, just a red required check with nothing explaining it. Raise
+          # timeout-minutes in the same PR if you take this near 3900.
+          #
+          # That knee assumes PARALLEL passes. The sequential fallback is already over the
+          # cap at today's 1800 (3 x 1800 + 1200 = 110 min), so if a future action version
+          # serialises them the timeout variable is not what saves you — see the job
+          # comment, which says to re-check parallelism across an upgrade.
+          #
+          # The trade this whole block makes, stated plainly: a variable moves without a
+          # commit, so these values stop having a git history. That is the point — it is
+          # what lets you unblock a stuck required check without a PR through the gate
+          # that is stuck — but it means `git log` on this file no longer tells you what
+          # the reviewer was actually run with. The review events in Loki do: every one
+          # records model and k as emitted.
+          model: ${{ vars.SECOND_OPINION_MODEL || 'deepseek/deepseek-v4-flash-0731' }}
           # Flash-tier model, so union 3 independent agentic passes — the
           # recall lever the second-opinion README prescribes for weaker
           # models. Passes are sampled; the union keeps a finding if ANY
           # pass raises it. Still ~cents per PR at this pricing.
-          k: "3"
+          #
+          # A variable for the same unblocking reason, plus one of its own: k
+          # multiplies the bill directly (k passes plus a merge call per review), so
+          # it is the knob most likely to want turning in a hurry. Turning it DOWN
+          # trades recall for cost and that trade is measurable — run
+          # `second-opinion-eval --auto 5` at each value rather than guessing.
+          k: ${{ vars.SECOND_OPINION_K || '3' }}
           # Generated artifacts are enormous here and sort BEFORE crates/ in git
           # path order, and the diff filter stops at the first file chunk that
           # overflows the cap rather than skipping it — so they deterministically
@@ -376,11 +428,11 @@ jobs:
           # has 1M context, and layout-engine PRs here routinely exceed
           # 60k chars of diff. 300k because 200k still truncated #575 once
           # artifacts were excluded (its source alone is ~214k).
-          max-diff-chars: "300000"
+          max-diff-chars: ${{ vars.SECOND_OPINION_MAX_DIFF_CHARS || '300000' }}
           # 65536 = deepseek-v4-flash-0731's cap. A reasoning model can exhaust a
           # smaller max_tokens in its reasoning channel and return an empty 200
           # (the #565/#566/#574 empty-review failure class), so give it headroom.
-          max-tokens: "65536"
+          max-tokens: ${{ vars.SECOND_OPINION_MAX_TOKENS || '65536' }}
           # 900s (the action default at time of writing) is too tight for a
           # reasoning model on these diffs: #575 and #574-attempt-1 both had ALL
           # passes hit the wall and post nothing, and the attempt that did
@@ -391,7 +443,7 @@ jobs:
           # explicit guard so a future default change cannot silently shorten it.
           # See the job-budget comment above: the merge can retry once, so the
           # worst case is 1800 + 1200 + build, not 1800 + 600.
-          pass-timeout-seconds: "1800"
+          pass-timeout-seconds: ${{ vars.SECOND_OPINION_PASS_TIMEOUT || '1800' }}
           # Spend ceiling. The wall clock above bounds TIME, not money: a looping agent
           # burns tokens at full rate for the whole 1800s and a longer timeout only
           # raises the bill (#29 elsewhere: 12.6M tokens producing nothing, ended only by
@@ -417,7 +469,7 @@ jobs:
           # fail, and a failed lookup is left uncached, so a cost-only ceiling degrades to
           # a no-op while stalling on the fetch. Tokens are read straight from the
           # transcript. Revisit if per-pass events show a legitimate pass above ~4M.
-          max-pass-tokens: "6000000"
+          max-pass-tokens: ${{ vars.SECOND_OPINION_MAX_PASS_TOKENS || '6000000' }}
           # Persist per-pass pi session transcripts under the runner workspace so
           # the step below can upload them as an artifact. Lets us replay a
           # blocked/empty review pass (and read real token/cost usage) instead of

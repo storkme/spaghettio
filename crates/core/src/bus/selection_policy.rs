@@ -230,8 +230,13 @@ impl IssueProfile {
     /// So Phase 2a must either preserve the laziness as policy (skip
     /// measuring when fewer than two candidates produced) or accept
     /// those cells as MINOR divergences and adjudicate them. It is not
-    /// a free implementer's choice. Pinned by
-    /// `eager_measurement_moves_the_deciding_stage`.
+    /// a free implementer's choice. **Settled**: [`MeasurementRule`] is
+    /// that policy and [`decide`] enforces it, so eager and lazy reach
+    /// the same stage by construction (#698 review round 3). Pinned by
+    /// `the_measurement_rule_makes_eager_and_lazy_decide_alike` — the
+    /// round-1 test this line used to name
+    /// (`eager_measurement_moves_the_deciding_stage`) was replaced by it
+    /// and no longer exists.
     pub fn measure(
         layout: &LayoutResult,
         solver_result: &SolverResult,
@@ -280,14 +285,27 @@ impl IssueProfile {
         let score = score_layout(layout, solver_result);
         let refusal = policy.acceptance_gates.iter().find_map(|g| g.refusal(layout));
 
-        // The PRODUCE-TIME gate. A flag no code path applies is a trap
-        // for whoever wires this (#698 review round 2): without it, a
-        // naive `measure -> decide` hands DI / horizontal / cell-composed
-        // an error-laden `Produced` profile that can displace a healthy
-        // incumbent, inverting the very asymmetry
+        // The PRODUCE-TIME gate, as a DEFENSIVE GUARD rather than a live
+        // path (softened in W3a, having been written in #698 review
+        // round 2 as though it were load-bearing today). All three
+        // producers that carry the flag — cell-composed, direct-insertion,
+        // horizontal-stack — already self-refuse inside their own
+        // `produce()`, so an error-laden layout from one of them never
+        // reaches this function in the first place; on the live path this
+        // branch does not fire.
+        //
+        // It is kept because the flag would otherwise be policy data no
+        // code path applies, and the failure it guards is a construction
+        // mistake rather than an input: a producer registered WITH the
+        // flag but WITHOUT the produce-side refusal (a new arm, or a
+        // future loop that stops calling `produce()`'s self-validation)
+        // would hand `decide` an error-laden `Produced` profile able to
+        // displace a healthy incumbent, inverting the asymmetry
         // `refuse_on_error_is_asymmetric_and_that_asymmetry_is_load_bearing`
-        // exists to pin — and `policy_replay` cannot catch it, because
-        // it replays rows where v1 already refused.
+        // pins. `policy_replay` cannot see that class at all, because it
+        // replays rows where v1 already refused. See
+        // [`MeasurementRule::min_produced_for_error_free_tier`], whose
+        // equality with v1's `n_layouts` rests on the same pairing.
         //
         // Unlike v1, the refusal KEEPS the measurement: v1 stringifies
         // its own validation failure as `e.to_string().lines().next()`
@@ -1390,21 +1408,44 @@ fn ranks_ahead(profiles: &[IssueProfile], a: usize, b: usize, order: RankOrder) 
         RankOrder::RegistrationOrder => false,
         RankOrder::ScoreDesc => score_ahead(),
         RankOrder::WarningsAscThenScoreDesc => {
-            // A gap ABSTAINS from this criterion rather than sorting
-            // last through the sentinel — the module's own rule, applied
-            // locally instead of relying on a non-local invariant to
-            // keep the sentinel dead (#698 review round 6). Unreachable
-            // under today's program, where the error-free tier's
-            // admission already required counts; the point is that a
-            // future `require_error_free: false` stage cannot quietly
-            // turn "unmeasured" into "worst".
+            // A missing warning key ABSTAINS — `false`, "does not rank
+            // ahead" — rather than sorting last through a sentinel OR
+            // falling through to the score. Both alternatives answer a
+            // question the module says is unanswerable: this order's
+            // PRIMARY criterion is the warning key, and a gap means no
+            // mechanism computed one, so there is nothing to compare
+            // first. Falling through to score would silently promote the
+            // SECONDARY criterion to primary for exactly the candidates
+            // least is known about, which is the `unwrap_or(0)` trap
+            // wearing a different hat (#698 review round 6 removed the
+            // sentinel; the fall-through it left behind is this
+            // carry-over, W3a).
+            //
+            // Unreachable under today's program — the error-free tier's
+            // admission already requires counts, so both keys are always
+            // present here. The point is that a future
+            // `require_error_free: false` stage using this order cannot
+            // quietly turn "unmeasured" into either "worst" or
+            // "ranked on density alone". Pinned by
+            // `a_missing_warning_key_abstains_rather_than_ranking_on_score`.
+            //
+            // The consequence, by design and worth naming (#703 review
+            // round 2 nit): under such a stage, an unmeasured candidate
+            // registered EARLIER becomes an immovable floor — nothing
+            // ranks ahead of it, because every comparison against it
+            // abstains. That is the correct reading of "the primary
+            // criterion is unanswerable" combined with "ties keep the
+            // earlier registration"; a stage that wants unmeasured
+            // candidates ranked must either measure them or declare a
+            // different `RankOrder`, not lean on this arm to invent an
+            // ordering.
             match (profiles[a].warning_key(), profiles[b].warning_key()) {
                 (Some(wa), Some(wb)) => match wa.cmp(&wb) {
                     std::cmp::Ordering::Less => true,
                     std::cmp::Ordering::Greater => false,
                     std::cmp::Ordering::Equal => score_ahead(),
                 },
-                _ => score_ahead(),
+                _ => false,
             }
         }
     }
@@ -1475,6 +1516,85 @@ mod tests {
         let names: Vec<&str> = p.producers.iter().map(|r| r.name).collect();
         assert_eq!(names, EXPECTED_ORDER);
         assert_eq!(p.incumbent_index(), Some(NATIVE));
+    }
+
+    /// Carry-over (e) of #698 rounds 9-10: bind the THREE parallel
+    /// candidate lists — this file's `EXPECTED_ORDER`, the engine's
+    /// `decomposition_search::CANDIDATE_ORDER`, and the registration
+    /// vector — and then bind the order itself to the semantics that
+    /// depend on it.
+    ///
+    /// **Why the equality checks are not enough.** Every existing check
+    /// compares one list against another, so a COORDINATED permutation
+    /// (the same swap applied to all three) passes all of them while
+    /// genuinely reordering the candidate field: `FirstProduced` is
+    /// positional, `BestAccepted`'s ties go to the earliest index, and
+    /// v1's `ranking_len` is a SLICE BOUND, not a predicate. The
+    /// positional assertions below are the part a coordinated swap
+    /// cannot satisfy, because they are stated against what the
+    /// positions MEAN rather than against another copy of the list.
+    ///
+    /// The load-bearing one is the tail: v1 excludes the scoped
+    /// candidates from the generic ranking with `candidates[..DI_IDX]`,
+    /// and v2 excludes them with a `scoped` field test. Those two are
+    /// equivalent **only while the scoped registrations are exactly the
+    /// tail** — move DI to slot 2 with everything else consistent and
+    /// v1's slice would drop three unrelated candidates while v2's
+    /// filter drops the right two, silently. (RFC-070 decision log,
+    /// "the `ranking_len` slice becomes the AdmissionRule as a FILTER".)
+    #[test]
+    fn the_candidate_order_is_bound_to_its_positional_semantics() {
+        let p = SelectionPolicy::current();
+        let names: Vec<&str> = p.producers.iter().map(|r| r.name).collect();
+        assert_eq!(
+            super::super::decomposition_search::CANDIDATE_ORDER.to_vec(),
+            EXPECTED_ORDER.to_vec(),
+            "the engine's candidate slots and this module's expectation have diverged"
+        );
+        assert_eq!(names, EXPECTED_ORDER.to_vec());
+
+        // 1. The incumbent is slot 0. `FirstProduced` is positional and
+        //    every rank tie resolves to the earliest registration, so the
+        //    incumbent sitting anywhere else changes the degraded answer.
+        assert_eq!(
+            p.incumbent_index(),
+            Some(0),
+            "the preference order puts the incumbent first; a later slot would hand \
+             `first-produced` and every score tie to a challenger"
+        );
+
+        // 2. The scoped registrations are exactly the TAIL, contiguously
+        //    — the equivalence between v1's slice bound and v2's field
+        //    filter, asserted rather than assumed.
+        let scoped: Vec<usize> =
+            (0..p.producers.len()).filter(|&i| p.producers[i].scoped).collect();
+        assert!(!scoped.is_empty(), "the AdmissionRule needs something to admit");
+        let tail: Vec<usize> = (p.producers.len() - scoped.len()..p.producers.len()).collect();
+        assert_eq!(
+            scoped, tail,
+            "the `scoped` registrations must occupy the TAIL of the order. v1 confines \
+             them with the slice `candidates[..ranking_len]` — a POSITION — while v2 \
+             confines them with the `scoped` FIELD; the two agree only while `scoped` is \
+             a suffix. A coordinated reorder of all three name lists passes every \
+             equality check above and fails here, which is the point"
+        );
+
+        // 3. Within that tail, DI precedes horizontal: the pairwise
+        //    resolution's ties go to the earlier registration, and
+        //    RFC-060 fixed that as DI.
+        assert_eq!(
+            p.producers[scoped[0]].name, "direct-insertion",
+            "ties between two scoped winners go to the earlier registration, which \
+             RFC-060 fixed as DI"
+        );
+
+        // 4. Exactly one quality-key rival, and it is registered BEFORE
+        //    the scoped tail — its stage runs first in the program and
+        //    its gate reads only the incumbent.
+        let rivals: Vec<usize> =
+            (0..p.producers.len()).filter(|&i| p.producers[i].quality_key_rival).collect();
+        assert_eq!(rivals.len(), 1, "the quality-key stage compares exactly one rival");
+        assert!(rivals[0] < scoped[0]);
     }
 
     #[test]
@@ -1721,6 +1841,106 @@ mod tests {
         ps[HS].counts = Some(counts(0, 2, 0));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(d.winner, DI);
+    }
+
+    /// The one overlap of the two scoped arms that neither the test above
+    /// nor the corpus reaches: **DI qualifies only by its
+    /// equal-and-denser arm while horizontal qualifies by being strictly
+    /// better than the incumbent.** The arms admit them for different
+    /// reasons, so "which is better" is not obviously the same question
+    /// in v2's single loop as in v1's two-then-one structure.
+    ///
+    /// v1 answers HORIZONTAL, and it is worth spelling out why, because
+    /// the reason is arithmetic rather than precedence: `di_choice` is
+    /// `Some(DI)` (equal counts, denser), `horizontal_choice` is
+    /// `Some(HS)` (strictly better counts), so `scoped_choice`'s
+    /// both-Some arm compares them directly with
+    /// `hs_counts.strictly_better_than(&di_counts)` — and DI's counts ARE
+    /// the incumbent's, so horizontal is strictly better than DI too.
+    /// **Density does not enter that comparison at all**: v1's pairwise
+    /// resolution has no density tiebreak, deliberately (RFC-060), so
+    /// DI's whole claim evaporates the moment a genuinely quieter rival
+    /// exists.
+    ///
+    /// v2 reaches the same answer by a different route — one fold over
+    /// the scoped registrations, where DI is admitted by
+    /// `equal_and_denser`, seated as `best`, and then displaced by
+    /// horizontal under the same `strictly_better_than`. Same answer,
+    /// and the two routes agreeing is the point of the test
+    /// (#698 rounds 9-10 carry-over (d)).
+    #[test]
+    fn a_strictly_better_horizontal_beats_a_merely_denser_di() {
+        let mut ps = blank();
+        ps[NATIVE] = produced(1.0, true);
+        ps[NATIVE].counts = Some(counts(0, 3, 1));
+        // DI: equal on every channel, strictly denser — its arm, and
+        // ONLY its arm, admits it.
+        ps[DI] = produced(9.0, true);
+        ps[DI].counts = Some(counts(0, 3, 1));
+        // Horizontal: strictly better on the warning channel, and far
+        // sparser than DI.
+        ps[HS] = produced(0.1, true);
+        ps[HS].counts = Some(counts(0, 2, 1));
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d,
+            Decision { winner: HS, stage: SelectionStage::ScopedPairwise },
+            "v1's both-scoped-won arm compares the two by the floor ALONE (no density \
+             tiebreak), and DI's counts are the incumbent's — so a strictly-better \
+             horizontal takes it despite DI's 90x score"
+        );
+
+        // The control: remove horizontal and DI's denser arm stands.
+        ps[HS] = not_run();
+        assert_eq!(
+            decide(&ps, &SelectionPolicy::current()).unwrap(),
+            Decision { winner: DI, stage: SelectionStage::ScopedPairwise },
+        );
+    }
+
+    /// Carry-over (a) of #698 rounds 9-10: the warnings-first order's
+    /// missing-key arm ABSTAINS instead of falling through to the score.
+    ///
+    /// Unreachable under today's program — `BestErrorFree` is the only
+    /// stage using this order and its admission already requires counts —
+    /// so it is exercised through a policy whose ranked stage drops
+    /// `require_error_free`, which is exactly the future stage the arm
+    /// exists for. Without the fix the unmeasured candidate wins on
+    /// density alone; with it, the primary criterion being unanswerable
+    /// means the challenger does not rank ahead and the earlier
+    /// registration keeps its seat.
+    #[test]
+    fn a_missing_warning_key_abstains_rather_than_ranking_on_score() {
+        let mut policy = SelectionPolicy::current();
+        policy.program.stages = vec![StageSpec {
+            tag: SelectionStage::BestAccepted,
+            kind: StageKind::TieredRank(RankSpec {
+                require_accepted: true,
+                require_error_free: false,
+                success_order: RankOrder::WarningsAscThenScoreDesc,
+                refusal_order: RankOrder::WarningsAscThenScoreDesc,
+            }),
+            on_incumbent_win: ChainBehavior::Terminate,
+        }];
+
+        let mut ps = blank();
+        ps[NATIVE] = produced(1.0, true);
+        ps[NATIVE].counts = Some(counts(0, 5, 0));
+        // No counts at all: nothing measured this candidate, so it has
+        // no warning key — and a 50x score must not smuggle it past the
+        // criterion it cannot answer.
+        ps[CELLS] = produced(50.0, true);
+        assert_eq!(
+            decide(&ps, &policy).unwrap().winner,
+            NATIVE,
+            "an unmeasured candidate must not rank ahead on the SECONDARY criterion when \
+             the primary one is a gap"
+        );
+
+        // Control, in the same policy: give it a key and the ordinary
+        // warnings-asc comparison applies.
+        ps[CELLS].counts = Some(counts(0, 4, 0));
+        assert_eq!(decide(&ps, &policy).unwrap().winner, CELLS);
     }
 
     // -----------------------------------------------------------------
