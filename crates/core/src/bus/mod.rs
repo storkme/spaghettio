@@ -60,6 +60,7 @@ pub mod layout;
 pub mod output_merger;
 pub mod partitioner;
 pub mod placer;
+pub mod selection_policy;
 pub mod stacking_ctx;
 pub(crate) mod shape_fix;
 pub mod tapoff_search;

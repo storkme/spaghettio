@@ -628,7 +628,7 @@ fn k1_consumer_for_item(
 /// Returns `None` if no enrollments would apply (e.g. all warnings are
 /// for K≥2 items or shard-only fixes), so the caller can skip the
 /// follow-up layout pass.
-fn build_k1_enrollment_plan(
+pub(crate) fn build_k1_enrollment_plan(
     native_layout: &LayoutResult,
     solver_result: &SolverResult,
     opts: &LayoutOptions,
@@ -719,7 +719,7 @@ fn compute_overproduction(solver_result: &SolverResult) -> f64 {
 /// window on the merge-tap corpus (see `contamination_weight_window` test):
 /// electronic-circuit@35/s stays native for any integer weight `> 2`, and
 /// utility-science-pack@10/s flips to merge-tap for any weight `< 18`.
-const KIND_CONTAMINATION_WEIGHT: usize = 3;
+pub(crate) const KIND_CONTAMINATION_WEIGHT: usize = 3;
 
 /// `Severity::Error` count from a full validation pass, split by in-game
 /// severity CLASS rather than counted flat. The classes are ranked by how the
@@ -796,17 +796,37 @@ fn classify_errors(layout: &LayoutResult, solver_result: &SolverResult) -> Error
         .iter()
         .filter(|i| i.severity == crate::validate::Severity::Error)
     {
-        match i.category.as_str() {
-            "belt-item-isolation" | "fluid-network" | "pipe-isolation"
-            | "fluid-connectivity" | "belt-junction" => {
-                kinds.contamination += 1
-            }
-            "entity-overlap" | "pipe-to-ground" => kinds.structural += 1,
-            _ => kinds.starvation += 1,
+        let cat = i.category.as_str();
+        if CONTAMINATION_CATEGORIES.contains(&cat) {
+            kinds.contamination += 1;
+        } else if STRUCTURAL_CATEGORIES.contains(&cat) {
+            kinds.structural += 1;
+        } else {
+            kinds.starvation += 1;
         }
     }
     kinds
 }
+
+/// The Error categories that classify as CONTAMINATION — a wrong item on
+/// a trunk, which propagates downstream. Hoisted out of the `match` this
+/// function used to spell inline so `bus::selection_policy` can build its
+/// category→kind table from the same list rather than re-typing it beside
+/// this one (#698 review round 2: the "two definitions that disagree"
+/// class, where a category added here would silently fall to Starvation
+/// there).
+pub(crate) const CONTAMINATION_CATEGORIES: [&str; 5] = [
+    "belt-item-isolation",
+    "fluid-network",
+    "pipe-isolation",
+    "fluid-connectivity",
+    "belt-junction",
+];
+
+/// The Error categories that classify as STRUCTURAL — the blueprint does
+/// not import at all. Everything not in either list is STARVATION (the
+/// `_` arm above).
+pub(crate) const STRUCTURAL_CATEGORIES: [&str; 2] = ["entity-overlap", "pipe-to-ground"];
 
 /// Issue counts for the DI-vs-native comparison: validator errors,
 /// validator warnings, and the SECOND issue channel
@@ -868,9 +888,16 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
         // that follows is kept as the record of WHY it was excluded and
         // what it cost, not as a description of current behaviour.
         // The `SELECTION_EXCLUDED_WARNING_CATEGORIES` set remains
-        // excluded (belt-detour, plus the two #632 B6 demotions).
-        // Receipts: validator-trust.md
-        // hole 2.
+        // excluded — as of 2026-08-21 that is `belt-detour` ALONE. The
+        // two #632 B6 demotions left the set by DELETION: PR #684
+        // removed the inserter-throughput check pair, under the #675
+        // off-path campaign's Tier 2 item 9. (Both numbers name the same
+        // event — the PR that did it and the issue that tracked it — so
+        // this comment and the constant's own, which cites #675, do not
+        // disagree.) The "plus the two demotions" this line used to
+        // claim described a set with three entries that has had one
+        // since. Read the constant, not this comment. Receipts:
+        // validator-trust.md hole 2.
         // Honest scope statement (review finding on #525 corrected an
         // earlier "bit-identical to pre-#519" overclaim here): the
         // category PRE-EXISTED with nonzero counts, so excluding it DOES

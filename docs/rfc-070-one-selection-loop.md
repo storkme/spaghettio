@@ -1553,3 +1553,379 @@ fixtures / docs split per the churn norm).
   core-side delivery gate, a textual rather than semantic fossil gauge, an
   opt-in meter tripwire — are recorded above with their reasons and are
   not W2c's to close.
+- *2026-08-21 — **Phase 1b built** (#689 track W2b), additively:
+  `bus/selection_policy.rs` plus the severity channels on `verdict.rs`.
+  Nothing is wired; `select_best_decomposition` is unchanged apart from
+  the stale-prose sweep the spec asked for and one `pub(crate)`
+  widening. **`policy_replay` reproduces all 140 decided #694 cells by
+  winner AND deciding stage** (`best-error-free` 87, `scoped-pairwise`
+  26, `merge-tap` 15, `best-accepted` 12 — identical to the committed
+  baseline), so K70-1's offline precursor PASSES: **no
+  candidate-identity-conditioned logic was needed anywhere**, and the
+  boundary is now a mechanical test (`k70_1_fence_holds` reads the
+  module's own source between fence markers and fails on any candidate
+  name or `.name` read inside the stage logic). Transcription calls,
+  each then checked by the replay: the `ranking_len` slice becomes the
+  AdmissionRule as a FILTER — equivalent because the two `scoped`
+  producers are exactly the tail the slice excluded, so the rule is
+  field-keyed rather than position-keyed; the #474 non-shadowing rule
+  becomes `ChainBehavior::DeferToRemainingPairwiseStages`, where a held
+  incumbent answer waits on the remaining pairwise stages and then
+  TERMINATES rather than falling through to the ranked ones; v1's lazy
+  `clean_flags` needs no laziness flag because the gap rule already
+  reproduces it (a single-layout solve records no counts, so the
+  error-free tier is empty and `best-accepted` decides); the gate
+  becomes an ordered clause list reporting the FIRST failing conjunct,
+  which closes Phase-0b oracle gap (c); the `verdict.rs` severity
+  channels are RECORDED-ONLY, never consulted by `regressed`/`pass`, so
+  the celldb-harness-green obligation holds with those tests
+  unmodified.*
+- *2026-08-21 — **the parity corpus does NOT discriminate two of the
+  three comparators**, found by EXECUTING the discrimination checks
+  rather than assuming them, and this is a direct warning to Phase 2a.
+  Three deliberate breaks, one whole corpus run each:*
+  - *making the component-wise floor LEXICOGRAPHIC — the #474 bug the
+    `IssueCounts` doc is written against — **passes 140/140**. No corpus
+    cell has a scoped candidate that is better on one severity channel
+    and worse on another.*
+  - *making stage 1's `on_incumbent_win` `Terminate` — the #474
+    SHADOWING bug, where merge-tap's "native won" short-circuits DI's
+    already-computed result — **passes 140/140**. On every merge-tap
+    cell in the corpus the scoped candidates refuse or lose, so the
+    deferral is never load-bearing there (consistent with the
+    `ec@30` observation in the oracle-gaps entry).*
+  - *`AdmissionRule::AdmitAll` — dropping `ranking_len` — **FAILS**, and
+    the failures are exactly the regression class the rule exists to
+    block: horizontal-stack displacing native in the error-free tier on
+    the `electronic-circuit` / `advanced-circuit` / `processing-unit`
+    rows. So the harness is not vacuous; it is BLIND in two specific
+    places.*
+  - ***The generalisation for Phase 2a: corpus parity is not evidence
+    about the floor's component-wise-ness or about non-shadowing.***
+    That is the same shape as the recorded `first-produced` hole — a
+    shadow loop can hold parity across all 160 cells with either of
+    those two semantics implemented wrongly. The unit tier is what
+    covers them, and each cover was executed rather than assumed: the
+    lexicographic-floor break failed
+    `the_floor_is_component_wise_not_lexicographic` ("a layout-warning
+    regression must not hide behind a validator-warning improvement");
+    the `Terminate` break failed
+    `an_incumbent_win_at_stage_one_does_not_shadow_the_pairwise_floor`
+    (`{winner: native, MergeTap}` where `{winner: DI, ScopedPairwise}`
+    was required) and — correctly — left
+    `a_held_incumbent_stands_when_no_pairwise_stage_displaces_it`
+    passing, since that test guards the OPPOSITE direction; deleting the
+    held-answer early return failed that second test plus three
+    stage-1 pins. All four breaks were restored and re-verified green.
+    A future widening of the corpus toward a cell where merge-tap runs
+    AND a scoped candidate wins would close the non-shadowing hole;
+    nothing in the current fixture list reaches it.*
+- *2026-08-21 — **#698 review round 1 adjudicated** (2 major, 5 minor, 1
+  nit; all absorbed, nothing refuted). The headline is a **correction to
+  this RFC's own §"Validation-once and laziness"**, and it is a Phase-2a
+  constraint rather than a W2b bug: the spec says eager vs lazy
+  measurement "cannot change outcomes, only cost" because `validate()`
+  is deterministic. **That is true of the WINNER and false of the
+  deciding STAGE**, and the divergence-equivalence rule compares
+  `(status, winner, stage)`. `IssueProfile::measure` always fills
+  `counts`, so the gap rule cannot fire on a live profile; v1 skips
+  `clean_flags` entirely on a single-layout solve (`n_layouts > 1`),
+  leaving the error-free tier empty so `best-accepted` decides, while an
+  eagerly-measured v2 populates the tier and decides at
+  `best-error-free`. **That is exactly the shape of the 12
+  `best-accepted` cells** this log already attributes to the
+  cells-off/only-native mechanism. So Phase 2a must either preserve the
+  laziness AS POLICY (skip measuring below two produced candidates) or
+  accept those 12 as minor divergences and adjudicate them — it is not
+  the free implementer's choice the spec offers. Demonstrated, not
+  argued: `eager_measurement_moves_the_deciding_stage` pins both halves
+  (same winner, different stage) from hand-built profiles.*
+  - *Also absorbed: `policy_replay` could **manufacture a false K70-1
+    finding** — where v1 itself had drifted off the committed baseline,
+    the harness reported the drift as "an ENGINE change, not a policy
+    finding" and then ALSO pushed the same cell into the campaign-level
+    assertion, whose message says the opposite. The v2-vs-baseline
+    comparison is now skipped on a drifted cell. Same round: an absent
+    baseline silently no-op'd every v2-vs-baseline comparison while the
+    run still read green (the #693 "compared nothing reads as clean"
+    shape, one path over) — the baseline is now required; the
+    `decided == 140` literal now derives from the committed record's own
+    decided count, so a deliberate corpus widening travels with its
+    re-bless; `GateContext::any_prior_accepted` scanned the WHOLE
+    `prior` array while its doc claimed "registrations before this one",
+    which would have let a later producer's acceptance stand
+    `size-split-2` down — bounded, with a test for the later-slot case;
+    and `contamination_weight` is now sourced from
+    `KIND_CONTAMINATION_WEIGHT` rather than re-typed beside it.*
+  - ***Two further blind spots in the acceptance harness, recorded
+    alongside the two comparator holes above***: `decide()` consumes
+    already-produced profiles and never evaluates a `ProducerGate`, so
+    **the 140/140 result covers zero gate transcription** — a
+    mis-transcribed eligibility clause is invisible until the Phase-2a
+    shadow, where it moves the candidate SET rather than the ranking;
+    and `policy_replay` is `#[ignore]`d, so **CI never runs the
+    acceptance bar** — "the parity harness passes" always means a
+    hand-run sweep with the zone-cache pin. Both are now stated at the
+    test's own doc so the claim cannot be quoted without them.*
+- *2026-08-21 — **#698 review round 2 adjudicated** (2 major, 5 minor, 1
+  nit; 6 absorbed, 1 half-refuted, 1 refuted). **Both majors were about
+  the same thing and it is the useful pattern of the round: a
+  Phase-1b helper that Phase 2a will call is a place where a v1
+  discipline can be silently dropped.** (a) `refuse_on_error` was policy
+  data no code path applied — a naive `measure → decide` wiring would
+  have handed DI / horizontal / cell-composed an error-laden `Produced`
+  profile able to displace a healthy incumbent, inverting the asymmetry
+  the flag exists to state, and `policy_replay` cannot see it because it
+  replays rows where v1 already refused. `IssueProfile::measure` now
+  takes the registration and applies the gate — and, unlike v1, KEEPS
+  the measurement: the refusal reason carries the error categories and
+  the counts/kinds stay on the profile, which is Phase-0b oracle gap (d)
+  closed rather than merely deferred. (b) `measure` ran `validate()`
+  with no emission discipline, where v1 wraps every one of its
+  `validate()` calls in peek/truncate so a loser's `ValidationCompleted`
+  cannot leak into the winner's replayed stream — that is #396, hit
+  twice before; `measure` now runs muted.*
+  - *Also absorbed: the category→kind table was a SECOND hand-typed copy
+    of `classify_errors`'s match, guarded only by a seven-category unit
+    test, so a category added there would have fallen silently to
+    Starvation here — both now read
+    `CONTAMINATION_CATEGORIES` / `STRUCTURAL_CATEGORIES`, hoisted out of
+    the match (behaviour-identical; the merge-tap corpus cells exercise
+    it); `any_prior_accepted`'s bound was a `min()` that silently
+    degraded an out-of-range index back into the whole-array scan it had
+    just removed — now `debug_assert`ed; and
+    `Verdict::candidate_selection_warnings`'s doc promised
+    `selection_warning_count` semantics that only hold when the policy
+    carries the exclusions, which `fold()`/`decomposition()`
+    deliberately do not.*
+  - *Half-refuted: `quality_key_stage`'s "incumbent produced nothing →
+    the rival wins" arm IS unreachable under today's gates, as the
+    reviewer says — but it is a faithful transcription of v1's
+    `merge_tap_choice` arm, which carries the same unreachability note
+    at its own site, and deleting it would leave the stage undefined in
+    a state v1 answers. The claimed inconsistency with the floor stage's
+    opposite convention is also v1's (`di_choice`'s early return):
+    two mechanisms, deliberately different. Comment strengthened, branch
+    kept. Refuted outright: the gate-coverage / `#[ignore]` finding is a
+    re-raise of round 1's, absorbed there and already disclosed in the
+    code the reviewer is reading. The nit (a `debug_assert` on the
+    incumbent-kinds gap branch) is declined on principle: this module's
+    stated rule is that a gap SKIPS, and a panic path inside a pure
+    decision function contradicts it — the caller-contract violation in
+    `any_prior_accepted` is a different class, which is why that one got
+    the assert.*
+- *2026-08-21 — **#698 review round 3 adjudicated** (3 major, 6 minor, 4
+  nits; 5 absorbed, 4 refuted as re-raises or as-designed). **The
+  round's real contribution is that it refused to let round 2's
+  eager-measurement finding stay a documented note**, and it was right
+  to: v1's `clean_flags` laziness is now
+  `MeasurementRule { min_produced_for_error_free_tier: 2 }` — policy
+  data that `decide()` ENFORCES, rather than a property that held only
+  because the recorder happened not to compute counts on single-layout
+  solves. Eager and lazy measurement now reach the same stage by
+  construction, so **the 12 `best-accepted` cells are no longer a
+  Phase-2a trap**; the RFC's "cannot change outcomes, only cost" is true
+  as written once the rule is part of the program. `policy_replay` is
+  unaffected (the recorded profiles carry the gap either way) and was
+  re-run to confirm.*
+  - *Also absorbed: `Verdict::candidate_selection_warnings` now returns
+    `Option<usize>` and answers `None` unless the policy DECLARED a
+    selection scope — under `fold()`/`decomposition()` it previously
+    returned a plausible number that counted `belt-detour`, i.e. the
+    opposite of the selection-scoped figure, to a caller who asked for
+    selection semantics. A gap, not a wrong number, per this campaign's
+    own rule; `Policy::selection()` is the named preset that answers.
+    A `refuse_on_error` refusal no longer reports `accepted: Some(true)`
+    (v1 never emits `Refused`-and-accepted; the gate's observation now
+    rides in the refusal reason). `decide()`'s length check became a
+    `debug_assert` plus a release refusal, so a caller bug degrades to
+    "no decision" instead of a plausible wrong winner. The
+    `any_prior_accepted` bound was `<=` where valid indices are
+    `0..len`, which let `== len` slice the whole array through the
+    `min` — the exact scan the bound removes.*
+  - *Refuted: the "acceptance bar is not executable / should be
+    CI-gated" finding, for the third time across three rounds — the
+    answer is unchanged and is #694's, adjudicated four times there: a
+    corpus gate today asserts only "production has not changed", which
+    every engine PR legitimately falsifies. The gate that means
+    something is Phase 2a's shadow-vs-production check, which
+    Verification plan item 2 already commits to; the always-on gate here
+    is the comparator unit tier, which is what the finding recommends
+    and what already exists. Also refuted: a `debug_assert` on
+    `quality_key_stage`'s unreachable incumbent-refused arm (same
+    reasoning as round 2 — a gap SKIPS, and a pure decision function
+    does not gain panic paths for impossible states), and the
+    NaN-vs-None score asymmetry in `ranks_ahead` (both are v1's: NaN
+    ties via `partial_cmp().unwrap_or(Equal)`, and a produced candidate
+    never lacks a score).*
+- *2026-08-21 — **#698 review round 4 adjudicated** (no majors — 8 minors
+  and 3 nits, the round the findings converge). Absorbed, and the two
+  worth keeping: (a) **four of the seven producer gates had no test at
+  all** — `policy_replay` evaluates ZERO gates by construction, and only
+  merge-tap's and size-split's were unit-pinned, so a mis-transcribed
+  eligibility clause in k1 / cell-composed / DI / horizontal would have
+  survived 140/140 and first appeared in Phase 2a as a changed candidate
+  SET. All seven are now pinned clause-by-clause against v1's
+  conjunctions. Writing them found one of my own assumptions wrong: a
+  gear solve IS chain-eligible, so the `chain-eligible` clause has no
+  negative case among the cheap fixtures — recorded at the test rather
+  than papered over. (b) `firewalls` was a vector nothing read, which
+  makes "firewall" a word for a comment; a `Firewall` now names the
+  categories its receipt argues for and a test pins that set against the
+  live exclusions, so changing them without touching the argument fails.*
+  - *Also absorbed: `incumbent_accepted()` was not order-bounded the way
+    `any_prior_accepted` is — both now go through one `prior_slot`
+    helper enforcing "a gate may only read producers registered before
+    it"; `incumbent_index()` asserts at most one incumbent (two would
+    silently rank the second as an ordinary challenger); the
+    `min_produced_for_error_free_tier` doc now states the dependence
+    that makes it equal v1's `n_layouts` — v1's scoped arms self-refuse
+    INSIDE `produce()`, so a producer given `refuse_on_error` without an
+    equivalent produce-side refusal would shift the tier's availability
+    invisibly to the replay; and the #632-B6-deletion provenance now
+    names BOTH numbers at every site — **PR #684** did the removal under
+    **issue #675**'s Tier 2 item 9 — since the RFC cited one and the
+    canonical constant the other, which reads as a contradiction to
+    anyone reconciling them (verified against both: #684 is
+    "del(t2e): remove the never-sim-anchored inserter-throughput check
+    pair (item 9)", #675 is the off-path tracking issue).*
+  - *Refuted: CI-gating the corpus, for the FOURTH time in four rounds —
+    the answer is #694's and has now been given eight times across two
+    PRs. `measure`'s refusal string not matching v1's is deliberate and
+    nothing compares them: the equivalence rule is (status, winner,
+    stage), and v1's string is the lossy artifact being replaced.*
+- *2026-08-21 — **#698 review round 5 adjudicated** (1 "major", 9 minors;
+  5 absorbed, 4 refuted — closing round). **The one thing worth the
+  round**: the fifth raise of "the corpus isn't CI-gated" carried a NEW
+  sub-argument that was correct — `policy_replay`'s provenance guard
+  PRINTED a note and passed, so a hand-run under a mis-pinned zone cache
+  green-lit a comparison against a record it could not reproduce. That
+  is the "compared nothing reads as clean" shape #693 closed and #694
+  round 3 closed again in `parity_corpus`'s own `check` mode,
+  reappearing one path over in the sibling test. It now hard-fails, with
+  `SPAGHETTIO_POLICY_REPLAY=any-cache` as the named escape — the same
+  posture, and the same escape shape, as `check-any-cache`. **The
+  generalisation: when a file gains a second consumer of the same
+  cache-relative data, the hardening does not come with it.** The
+  CI-gating half is refuted for the fifth time; the answer is unchanged.*
+  - *Also absorbed: the K70-1 fence now strips COMMENT lines before
+    scanning, so stage-logic prose may name a candidate while stage code
+    may not — a fence that policed prose would push a future author to
+    write worse comments or widen the fence, both worse than what it
+    prevents (discrimination re-executed after the change: a
+    `p.name == "native"` branch inside the fence fails it with the right
+    message, restored green). The gate tests now say what they are NOT —
+    self-consistency against the v1 condition as READ, not equivalence
+    against production's dispatch, which only the 2a shadow can give.
+    `ranks_ahead`'s `usize::MAX` fallback is labelled DEAD rather than
+    described as reproducing v1's unclean key. `Verdict::candidate_errors`
+    says it is a whole-side total, not a regression count.
+    `Policy::selection()` says its `pass` is always true because it gates
+    nothing.*
+  - *Refuted with receipts: (a) "`prior_slot`'s `min` re-introduces the
+    later-producer bug in release when `registration_index >
+    prior.len()`" — it does not: if the index exceeds the array, EVERY
+    slot is registered before it, so scanning all of them is exactly the
+    intended set. The assert catches the authoring mistake; the release
+    fallback is not wrong. (b) "the two kind lookups could drift" —
+    stale by one round: both now read the same
+    `CONTAMINATION_CATEGORIES` / `STRUCTURAL_CATEGORIES` constants, so
+    there is one definition, not two. (c) a `debug_assert` on
+    `quality_key_stage`'s unreachable arm, for the third round running —
+    same answer. (d) the scoped pair-winner's gap handling matches v1
+    (a candidate whose counts are absent has no `di_choice`/
+    `horizontal_choice` either), and the reviewer concedes it is
+    unreachable against the live recorder.*
+- *2026-08-21 — **#698 review round 6 adjudicated** (no majors, 9 minors,
+  and the pass itself was thinner — union ×2 rather than ×3, with most
+  findings re-raises). **Review close-out: six rounds, ~40 findings; the
+  load-bearing ones were all about the same thing — a Phase-1b helper
+  that Phase 2a will call, silently dropping a v1 discipline
+  (`refuse_on_error` unapplied, `validate()` unmuted, laziness
+  unenforced, the provenance guard that printed instead of failing).
+  The 140 cells never moved once across five reproductions.***
+  - *Absorbed: `severity_split` counted warnings as `len() - errors`,
+    which hardwires `Severity` to two variants — a third would land
+    silently in the warning channel; `ranks_ahead`'s warnings-first arm
+    now ABSTAINS on a missing key instead of sorting it last through a
+    sentinel, so the module's "a gap skips" rule holds locally rather
+    than depending on a non-local invariant to keep the sentinel dead;
+    `decide`'s terminal `return held` is labelled unreachable under
+    today's program (the prose implied it did work); and the fence is
+    now described as mechanical **for the literal form** rather than as
+    a proof — a runtime-assembled name passes it, an inline comment
+    naming a candidate fails it, and the second direction is the safe
+    one.*
+  - ***The gap-assert family is settled***, having been raised in some
+    form in rounds 3, 4, 5 and 6: `decide`'s doc now states the
+    precondition explicitly — projections are present for every
+    candidate a mechanism examined and absent for every one it did not —
+    and names where it is CHECKED, which is the boundary
+    (`profile_from_row` rejects a partial count or kind triple), not the
+    stages. Two reasons, recorded so the next round does not re-open it:
+    a rule that says "a gap skips" cannot also panic on selected gaps
+    without becoming unstatable, and a pure decision function is the
+    wrong place to validate data it did not build. Refuted with
+    receipts: the ignored-test governance finding (sixth raise), and the
+    claim that `policy_replay` still conflates its two comparison
+    signals — the drifted-cell guard from round 1 is exactly that fix,
+    and on a NON-drifted cell v1 equals the baseline, so the two
+    comparisons cannot disagree.*
+- *2026-08-21 — **#698 review round 7: NO BLOCKERS, NO MAJORS**, seven
+  minors and four nits, every one a re-raise or refutable. The campaign
+  note worth keeping is about the INSTRUMENT: across seven rounds the
+  bot raised "the corpus is not CI-gated" seven times and the
+  unreachable-arm assert four times, while the four findings that
+  actually changed the design all appeared exactly once each. **A
+  re-raise carries no additional evidence, and the count of raises is
+  not a measure of a finding's weight** — the same lesson #694's
+  close-out recorded about its own six rounds.*
+  - *Refuted with a worked receipt, and this is the round's one
+    genuinely new claim: "the NaN tie-break direction diverges from v1
+    — v1 keeps the later candidate, v2 the earlier". It does not. v1's
+    comparator is `a.partial_cmp(b).unwrap_or(Equal).then(ib.cmp(ia))`
+    under `max_by`; the index term is REVERSED, so a smaller index
+    compares as Greater and the max is the EARLIEST index — which is
+    what v2's strictly-better-only fold also yields, since `partial_cmp`
+    against a NaN is never `Some(Greater)`. The reading dropped the
+    reversal. Now pinned both directions by
+    `a_nan_score_keeps_the_earliest_registration_as_v1_does`, so the
+    claim is answerable from the test rather than from a re-derivation.*
+  - *Absorbed: a `debug_assert` that a program declares at most ONE
+    deferring stage — the chain holds a single held answer and a second
+    would overwrite it silently, which is the same policy-authoring
+    class as two incumbents and now gets the same treatment. And the
+    `score: Some` / `accepted: None` asymmetry on a produce-time refusal
+    is now explained where it lives: a score is a MEASUREMENT the
+    refusal does not invalidate, `accepted` is a VERDICT about admitting
+    a layout that no longer exists. Refuted: the corpus's two comparator
+    blind spots (this PR's own finding, disclosed in three places), the
+    speculative third-scoped-producer fold (v2's fold reduces exactly to
+    v1's two-valued join on the two that exist), and the unreachable-arm
+    assert for the fourth time.*
+- *2026-08-21 — **#698 review round 8: no majors for the third round
+  running**, four minors, union ×2. **Review cycle CLOSED here**, on the
+  instrument's own evidence rather than on patience: three consecutive
+  rounds without a major, the passes thinning from ×3 to ×2, and the
+  "not CI-gated" finding raised for the EIGHTH time. Absorbed, all
+  one-liners: `incumbent_index` now asserts EXACTLY one incumbent rather
+  than at most one — zero is equally malformed and less obvious, since
+  the two pairwise stages disagree about what it means (the quality-key
+  one hands its rival an unconditional win, the floor abstains forever);
+  the `firewall_receipts` test checks each receipt claims a non-empty
+  set, not only that the union matches, so an empty one cannot ride
+  along inside another's set-equality; and `measure`'s comment now says
+  outright that a profile built there and one built from a recorded row
+  are NOT field-identical for a refused candidate — compare decisions
+  across construction sites, never profiles.*
+  - ***Standing hand-off note for Phase 2a***, since it is the one thing
+    every round agreed on and it is this PR's own finding: **the 140/140
+    result covers the comparators' RANKING, not the gates, and not two
+    of the three comparators' defining semantics.** What a shadow loop
+    must therefore not conclude from corpus parity: that its floor is
+    component-wise, that it honours the #474 non-shadowing rule, that
+    `first-produced` behaves, or that any eligibility gate was
+    transcribed correctly. Each of those has its own cover — the unit
+    tier for the first three, the clause-by-clause gate tests for the
+    fourth — and the 2a shadow, which runs both dispatches on the same
+    solve, is the first instrument that can check them together.*
