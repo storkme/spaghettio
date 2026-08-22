@@ -59,14 +59,26 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # test", which overclaimed). The `#[ntest::timeout(300_000)]` is the real
 # hang detector; the 600s kill sits above it.
 #
-# The ceiling is sized from a MEASURED CI run, not extrapolated: 30.9s on
-# the pinned-cache runner (PR #703 head 12b1ea87, job 97039777698) against
-# 15s local warm — a 2x host penalty, not the 8-18x the cold-cache note
-# above records, because this job pins SPAGHETTIO_ZONE_CACHE_PATH. 300s
-# is a ~10x margin over the observed number.
+# Measured, not extrapolated: 30.9s on the pinned-cache CI runner (PR
+# #703 head 12b1ea87, job 97039777698) against 15s local warm — a 2x host
+# penalty, not the 8-18x the cold-cache note above records, because this
+# job pins SPAGHETTIO_ZONE_CACHE_PATH. The test's own
+# #[ntest::timeout(600_000)] is sized for the UNPINNED case instead (the
+# 8-18x regime puts a cold run at 120-270s, and a hang detector that
+# fires on a cold cache is a false positive on the one gate that runs
+# everywhere — #703 review round 2). This kill sits above it.
 [[profile.ci.overrides]]
 filter = "test(shadow_agrees_with_production_on_the_census_fixtures)"
-slow-timeout = { period = "60s", terminate-after = 10 }
+slow-timeout = { period = "60s", terminate-after = 12 }
+threads-required = 2
+
+# The same cap for a local `cargo nextest run` with no --profile, so a
+# developer's box gets the concurrency behaviour CI gets. Plain
+# `cargo test` reads none of this file, which is why the ntest ceiling —
+# not this entry — is the real guard (#703 review round 2).
+[[profile.default.overrides]]
+filter = "test(shadow_agrees_with_production_on_the_census_fixtures)"
+slow-timeout = { period = "60s", terminate-after = 12 }
 threads-required = 2
 
 [profile.ci.junit]

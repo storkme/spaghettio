@@ -1338,6 +1338,33 @@ impl Scoreboard {
 ///    would show up as a changed winner with no obvious cause. #698's
 ///    standing hand-off note names this as the thing only the 2a shadow
 ///    can check.
+///
+/// # Two boundary changes this wiring makes, stated because they are
+/// easy to miss in a diff
+///
+/// **`selection_policy`'s `debug_assert`s are now on the LIVE path in
+/// debug builds** (#703 review round 2). `decide`'s profile-length
+/// check, `prior_slot`'s registration-order bound and
+/// `incumbent_index`'s exactly-one check were written for a replay
+/// harness; every one of them now runs on every solve of every
+/// `cargo test` and CI job. That is the intended tripwire — those
+/// asserts guard policy-AUTHORING mistakes, which is precisely what
+/// Phase 2b will be doing — and it is why they are `debug_assert`s
+/// rather than `assert`s: release and WASM keep their documented
+/// degradation (`decide` refuses, gates fall back to the safe scan)
+/// and a browser solve cannot be panicked by a code-level slip. The
+/// consequence to be aware of: a future producer whose gate reads a
+/// slot at or after its own index will now fail the SUITE, not just
+/// the replay.
+///
+/// **The seven-slot arrays are a latent invariant.**
+/// `Scoreboard::prior_acceptance` and `v1_ran` return `[_; 7]` because
+/// the board is `[CandidateVerdict; 7]`. The alignment check below is
+/// what corrals a registration count that stops matching: an
+/// eight-producer policy fails it, the shadow skips, and the harnesses
+/// report a named missing comparison rather than indexing off the end.
+/// So a candidate-count change is caught, but by the corral, not by an
+/// assertion at the array.
 fn emit_selection_shadow(
     board: &Scoreboard,
     solver_result: &SolverResult,
@@ -1352,13 +1379,25 @@ fn emit_selection_shadow(
     // wrong verdict — and the harnesses assert the event is PRESENT for
     // every decided cell, so a silent skip fails there rather than
     // reading as agreement.
+    // NO `debug_assert` here, deliberately, and this is a correction
+    // (#703 review round 2, 3/3): the first draft had one, which made
+    // the guard below DEAD in every debug build — i.e. in every
+    // `cargo test` run and every CI job. A misalignment would then have
+    // aborted the shipped `select_best_decomposition` path with a panic,
+    // which is the exact opposite of what this function's doc promises
+    // and of what a shadow is for. Phase 2b reorders and extends the
+    // candidate set, so this is a state the campaign will actually
+    // visit.
+    //
+    // The failure is REPORTED instead of thrown, and by the right
+    // reader: skipping emits no `SelectionShadowCompared`, and both
+    // harnesses assert the event is PRESENT for every cell whose
+    // selection ran (`ShadowReport::missing` / the smoke tier's
+    // comparison count). A misalignment therefore surfaces as a named
+    // "missing comparison" on the cells it affects, not as a panicked
+    // solve.
     let aligned = policy.producers.len() == CANDIDATE_ORDER.len()
         && policy.producers.iter().zip(CANDIDATE_ORDER).all(|(p, n)| p.name == n);
-    debug_assert!(
-        aligned,
-        "SelectionPolicy::current() does not register the seven producers in \
-         CANDIDATE_ORDER; the shadow would compare mis-keyed slots"
-    );
     if !aligned {
         return;
     }

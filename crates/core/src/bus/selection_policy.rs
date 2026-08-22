@@ -1428,6 +1428,17 @@ fn ranks_ahead(profiles: &[IssueProfile], a: usize, b: usize, order: RankOrder) 
             // quietly turn "unmeasured" into either "worst" or
             // "ranked on density alone". Pinned by
             // `a_missing_warning_key_abstains_rather_than_ranking_on_score`.
+            //
+            // The consequence, by design and worth naming (#703 review
+            // round 2 nit): under such a stage, an unmeasured candidate
+            // registered EARLIER becomes an immovable floor — nothing
+            // ranks ahead of it, because every comparison against it
+            // abstains. That is the correct reading of "the primary
+            // criterion is unanswerable" combined with "ties keep the
+            // earlier registration"; a stage that wants unmeasured
+            // candidates ranked must either measure them or declare a
+            // different `RankOrder`, not lean on this arm to invent an
+            // ordering.
             match (profiles[a].warning_key(), profiles[b].warning_key()) {
                 (Some(wa), Some(wb)) => match wa.cmp(&wb) {
                     std::cmp::Ordering::Less => true,

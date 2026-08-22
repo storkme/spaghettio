@@ -2110,3 +2110,84 @@ fixtures / docs split per the churn norm).
     **Measured on the PR's own head**: 30.9s in CI against 15s local warm,
     a 2x host penalty, leaving a ~10x margin. The sizing is now stated
     from that measurement rather than from a band, at both sites.*
+- *2026-08-22 — **#703 review round 2 adjudicated and the review cycle
+  CLOSED** (no majors from the bot — six minors and two nits, plus one
+  **major-latent** from an independent read-only audit of the same head
+  that the bot missed; all absorbed, none refuted). **The audit finding
+  is the one to keep, and it is the fourth appearance of this campaign's
+  signature bug**: `outer_shadow` took the LAST `SelectionShadowCompared`
+  anywhere in the stream, on the (true) argument that a nested
+  selection's shadow is replayed before the outer board. True, and not
+  enough — if the OUTER emission is ever missing (suppressed, skipped by
+  the alignment guard, lost to a refactor), a winning nested candidate's
+  own shadow becomes the last one, and if its verdict matches the outer
+  `SelectionDecided` the cell reads as compared and agreed while the
+  missing-comparison guard stays silent. The gate would then be
+  measuring a different selection than the one it names. The outer event
+  is now identified POSITIVELY by adjacency to its own anchor — the
+  terminal on the success path, the last board row on the
+  all-candidates-failed path — which is verified at source as strictly
+  adjacent on both, and is the same discipline the scoreboard extractor
+  already uses. Discrimination executed: emitting the shadow where a
+  nested one would sit AND suppressing the outer emission fails all six
+  smoke cells as "missing comparison" (it passed under the old rule);
+  restored and re-verified green.*
+  - *Absorbed from the bot, and the 3/3 one was a real defect: the
+    `debug_assert!(aligned, …)` beside `emit_selection_shadow`'s guard
+    made that guard DEAD in every debug build, so a registration
+    misalignment would have panicked the shipped
+    `select_best_decomposition` path — the exact opposite of the
+    function's own doc and of what a shadow is for, on a state Phase 2b
+    will actually visit. Dropped; skipping emits no event and the
+    harnesses report a named missing comparison. Also: the smoke gate's
+    count check was satisfied by agreed-NO-WINNER cells, so all six
+    fixtures silently refusing everything would have read green — it now
+    requires `agreed_decided == 6`, a fixture-liveness pin that still
+    says nothing about which winner or stage; the disagreement assertion
+    runs FIRST so a count shortfall cannot bury the campaign-level
+    finding that caused it; and the "four independent surfaces" claim in
+    `ShadowOutcome::faults` was overstated, since two of them derive
+    from the same event. The doc now marks which two are ANCHORED
+    OUTSIDE it, and a fourth check was added that genuinely is: the
+    harness re-runs `decide()` over the cell's recorded rows and
+    compares to the event's v2 side. That also pins
+    `Scoreboard::v2_profiles` against `profile_from_row` — two
+    projections of the same scoreboard that nothing previously compared.
+    Discrimination executed: a v2 side faked to echo v1 passes while the
+    two agree (correctly — no false alarm) and FAILS the moment a real
+    divergence exists, naming both the anchor mismatch and the
+    inconsistent `agree` bit.*
+  - *Timing, absorbed: the 300s ntest ceiling was sized against the
+    MEASURED pinned-cache CI number (30.9s) and said nothing about an
+    unpinned host, where this file's own cold-cache note implies 8-18x
+    and a 120-270s run. **A hang detector that fires on a cold cache is
+    a false positive on the one gate that runs everywhere** — the same
+    class as the `status == "decided"` pin round 1 removed — so the
+    ceiling is 600s, which costs nothing in the pinned case. Setting the
+    pin from inside the test was rejected and the reason recorded at the
+    test: `zone_cache::lookup_table()` is a process-wide `OnceLock` and
+    `cargo test` runs the binary's tests as threads of one process, so a
+    test mutating the environment would race its siblings for a global.
+    It PRINTS the resolved cache instead, so a slow run is
+    self-diagnosing. A `profile.default` nextest override was added
+    alongside the `profile.ci` one; plain `cargo test` reads neither,
+    which is precisely why the ntest ceiling is the real guard.*
+  - *Documented rather than changed, both flagged at 1/3: `decide()`,
+    `prior_slot` and `incumbent_index`'s `debug_assert`s are now on the
+    LIVE path in debug builds — the intended tripwire, since they guard
+    policy-AUTHORING mistakes and Phase 2b is authoring policy, and they
+    stay `debug_assert`s so release and WASM keep their documented
+    degradation. The consequence to know: a future producer whose gate
+    reads a slot at or after its own index now fails the SUITE, not just
+    the replay. And the seven-slot arrays in
+    `Scoreboard::prior_acceptance` / `v1_ran` are a latent invariant
+    corralled by the alignment check rather than asserted at the array —
+    an eight-producer policy fails alignment, the shadow skips, and the
+    harnesses report a named missing comparison. Reply-only: the
+    positional `debug_assert`s in `select_best_decomposition` are
+    release-silent, but the shadow's surface-3 check compares NAMES
+    (`CANDIDATE_ORDER[idx]` against the string `SelectionDecided`
+    carries from the winner's own `CandidateRun::name`), not indices, so
+    a `run_refs`/`candidates` desync is caught in the environment the
+    oracle is designed for — debug and CI, per the #692 round-4
+    precedent.*
