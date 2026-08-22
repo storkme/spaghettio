@@ -237,7 +237,8 @@ tier × option set** grid — and its committed result is
 `crates/core/tests/parity_corpus_baseline.json`
 (`SPAGHETTIO_PARITY_CORPUS=bless|check`, `#[ignore]`d, never CI-gated:
 like the stress goldens it is host-cache-relative and must be run with
-the zone-cache pin).
+the zone-cache pin). The always-on six-cell smoke tier is CI-gated; the
+full 160-cell corpus check is intentionally not.
 
 **160 cells.** 12 fixtures (the #691 corpus verbatim: G2's six
 tier-ladder solves plus the six e2e "from-ore" ones) × the machine tiers
@@ -255,6 +256,11 @@ vector is recorded alongside, for adjudication only; the verdict
 NUMBERS are deliberately absent, because they are structurally holed
 (see the Phase-0b oracle-gaps entry) and a baseline pinning them would
 pin gaps as facts.
+
+Because the corpus is cache-relative, candidate-outcome drift is a hard
+parity failure only when the run's cache identity matches the baseline;
+under an unidentified or pinned-but-mismatched cache it is reported for
+diagnosis but does not affect the equivalence result.
 
 - **Minor divergence** — same `status` and `winner`, different deciding
   stage. The migration loop reached the same shipped layout by answering a

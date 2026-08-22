@@ -100,9 +100,10 @@
 //! nothing to notice it by. `=bless-repin` is the escape hatch for
 //! deliberately re-taking the baseline on a new cache.
 //!
-//! The check is not CI-gated because it compares cache-relative layout
-//! output against a committed record; an intentional engine change must
-//! re-bless it. The Phase-2c verification run uses the committed zone-cache
+//! The 160-cell corpus check is not CI-gated because it compares
+//! cache-relative layout output against a committed record; an intentional
+//! engine change must re-bless it. The six-cell smoke tier below is always-on
+//! and CI-gated. The Phase-2c verification run uses the committed zone-cache
 //! pin and requires every cell to match.
 
 use std::collections::BTreeMap;
@@ -898,10 +899,12 @@ fn parity_corpus() {
             let baseline: Baseline = serde_json::from_str(&text).expect("baseline parses");
             // A mismatched (or absent) pin does not stop the comparison —
             // a clean result under a different cache is still worth
-            // knowing — but it must LEAD the failure if there is one,
-            // rather than trailing it as a NOTE the reader met before the
-            // diffs and has forgotten by the time they matter (#694
-            // review round 1, finding 4).
+            // knowing — but candidate-outcome drift is diagnostic only
+            // until the run's cache identity matches the baseline. Verdict
+            // drift must still LEAD the failure if there is one, rather
+            // than trailing it as a NOTE the reader met before the diffs
+            // and has forgotten by the time they matter (#694 review round
+            // 1, finding 4).
             //
             // And it must FAIL, even when the cells all match (#694 review
             // round 3). Round 1's version printed the mismatch and passed
@@ -966,8 +969,9 @@ fn parity_corpus() {
                 diffs.extend(outcome_diffs);
             } else if !outcome_diffs.is_empty() {
                 eprintln!(
-                    "\nNOTE: {} cell(s) changed which candidates produced/refused under an \
-                     unpinned cache; outcome drift is reported only:\n{}",
+                    "\nNOTE: {} cell(s) changed which candidates produced/refused under a \
+                     cache whose identity does not match the baseline (unidentified or \
+                     pinned-but-mismatched); outcome drift is reported only:\n{}",
                     outcome_diffs.len(),
                     outcome_diffs.join("\n")
                 );
@@ -1073,20 +1077,39 @@ const SMOKE_CELLS: &[(&str, &str)] = &[
 #[test]
 #[ntest::timeout(720_000)]
 fn shipped_path_matches_baseline_on_the_census_fixtures() {
+    let explicit_cache_pin = std::env::var_os("SPAGHETTIO_ZONE_CACHE_PATH").is_some();
     println!(
-        "parity smoke: zone cache = {:?} (pinned: {})",
+        "parity smoke: zone cache = {:?} (explicit pin: {})",
         resolve_zone_cache_path(),
-        std::env::var("SPAGHETTIO_ZONE_CACHE_PATH").is_ok()
+        explicit_cache_pin
     );
     let text = std::fs::read_to_string(baseline_path())
         .expect("the shipped-path smoke gate needs a committed baseline");
     let baseline: Baseline = serde_json::from_str(&text).expect("baseline parses");
     let cache_hash = hash_zone_cache();
     let cache_is_pinned = cache_hash.is_some() && cache_hash == baseline.zone_cache_hash;
+    let require_pin = std::env::var("SPAGHETTIO_PARITY_REQUIRE_PIN")
+        .ok()
+        .as_deref()
+        == Some("1");
+    if require_pin && !cache_is_pinned {
+        panic!(
+            "PARITY PIN REQUIRED: smoke cache hash {cache_hash:?} does not match the \
+             baseline hash {:?}; SPAGHETTIO_PARITY_REQUIRE_PIN=1 refuses to degrade to \
+             decision-existence checks. Set SPAGHETTIO_ZONE_CACHE_PATH to the committed \
+             cache before running this gate.",
+            baseline.zone_cache_hash
+        );
+    }
     if !cache_is_pinned {
+        let cache_description = if explicit_cache_pin {
+            "PINNED-BUT-MISMATCHED CACHE"
+        } else {
+            "UNPINNED CACHE"
+        };
         eprintln!(
-            "\nUNPINNED CACHE: parity smoke is checking decision existence only (run cache \
-             {cache_hash:?}, baseline cache {:?}). Set \
+            "\n{cache_description}: parity smoke is checking decision existence only (run \
+             cache {cache_hash:?}, baseline cache {:?}). Set \
              SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/sat-zones-ci.bin to run the exact \
              winner/stage smoke check.",
             baseline.zone_cache_hash
@@ -1101,7 +1124,7 @@ fn shipped_path_matches_baseline_on_the_census_fixtures() {
             .unwrap_or_else(|| panic!("smoke cell {label} is not a corpus fixture"));
         assert!(
             f.machines.contains(machine),
-            "smoke cell {label} names machine {machine}, which is not on that fixture's              swept axis"
+            "smoke cell {label} names machine {machine}, which is not on that fixture's swept axis"
         );
         let expected = baseline
             .cells

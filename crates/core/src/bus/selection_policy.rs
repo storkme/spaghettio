@@ -1544,6 +1544,22 @@ mod tests {
         (0..7).map(|_| not_run()).collect()
     }
 
+    fn quality_key_decision(
+        native: ErrorKindCounts,
+        merge_tap: ErrorKindCounts,
+        contamination_weight: usize,
+    ) -> Decision {
+        let mut profiles = blank();
+        profiles[NATIVE] = produced(1.0, false);
+        profiles[NATIVE].kinds = Some(native);
+        profiles[MERGE_TAP] = produced(1.0, true);
+        profiles[MERGE_TAP].kinds = Some(merge_tap);
+
+        let mut policy = SelectionPolicy::current();
+        policy.contamination_weight = contamination_weight;
+        decide(&profiles, &policy).expect("native and merge-tap both produced")
+    }
+
     const NATIVE: usize = 0;
     const K1: usize = 1;
     const SPLIT: usize = 2;
@@ -1767,6 +1783,91 @@ mod tests {
         ps[MERGE_TAP].kinds = Some(kinds(1, 2, 0));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(d.winner, NATIVE);
+    }
+
+    /// The deleted v1 test's two measured profiles pin the `[3, 17]`
+    /// robustness window. This exercises the v2 stage, not just the
+    /// arithmetic helper: every weight in the window returns the same
+    /// `(winner, stage)` pair for both merge-tap-style decisions.
+    #[test]
+    fn contamination_weight_window_is_stable_for_quality_key_policy() {
+        let ec_native = kinds(0, 4, 0);
+        let ec_merge_tap = kinds(1, 2, 0);
+        let utility_native = kinds(0, 175, 0);
+        let utility_merge_tap = kinds(8, 38, 0);
+
+        let reference_decisions = (
+            quality_key_decision(ec_native, ec_merge_tap, 3),
+            quality_key_decision(utility_native, utility_merge_tap, 3),
+        );
+        assert_eq!(reference_decisions.0.winner, NATIVE);
+        assert_eq!(reference_decisions.1.winner, MERGE_TAP);
+        for weight in 3..=17 {
+            assert_eq!(
+                (
+                    quality_key_decision(ec_native, ec_merge_tap, weight),
+                    quality_key_decision(utility_native, utility_merge_tap, weight),
+                ),
+                reference_decisions,
+                "v2 quality-key verdicts changed inside the [3, 17] window at weight {weight}"
+            );
+        }
+
+        // Compare the rival to the incumbent, so the boundary assertions
+        // pin the comparator result itself. At weight 2 the EC keys tie;
+        // v2 deliberately still returns native because ties keep the
+        // incumbent. The comparator decision nevertheless differs from
+        // the strict native win throughout the window.
+        let quality_relation = |weight| {
+            (
+                ec_merge_tap
+                    .quality_key(weight)
+                    .cmp(&ec_native.quality_key(weight)),
+                utility_merge_tap
+                    .quality_key(weight)
+                    .cmp(&utility_native.quality_key(weight)),
+            )
+        };
+        assert_eq!(
+            quality_relation(2),
+            (std::cmp::Ordering::Equal, std::cmp::Ordering::Less),
+            "weight 2 is the EC tie boundary from the deleted test"
+        );
+        assert_eq!(
+            quality_relation(3),
+            (std::cmp::Ordering::Greater, std::cmp::Ordering::Less)
+        );
+        assert_ne!(
+            quality_relation(2),
+            quality_relation(3),
+            "the lower boundary must differ from the in-window comparator verdict"
+        );
+        assert_eq!(
+            quality_relation(17),
+            (std::cmp::Ordering::Greater, std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            quality_relation(18),
+            (std::cmp::Ordering::Greater, std::cmp::Ordering::Greater),
+            "weight 18 is the utility flip boundary from the deleted test"
+        );
+        assert_ne!(
+            quality_relation(18),
+            quality_relation(17),
+            "the upper boundary must differ from the in-window comparator verdict"
+        );
+
+        assert_eq!(
+            quality_key_decision(ec_native, ec_merge_tap, 2),
+            reference_decisions.0,
+            "the EC tie at weight 2 must resolve to the incumbent, native"
+        );
+        assert_ne!(
+            quality_key_decision(utility_native, utility_merge_tap, 18),
+            reference_decisions.1,
+            "the utility boundary at weight 18 must change the v2 winner"
+        );
+        assert!((3..=17).contains(&SelectionPolicy::current().contamination_weight));
     }
 
     #[test]

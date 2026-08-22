@@ -92,6 +92,7 @@ jobs:
       - run: cargo nextest run -p spaghettio_core --profile ci
         env:
           SPAGHETTIO_ZONE_CACHE_PATH: ${{ github.workspace }}/crates/core/data/sat-zones-ci.bin
+          SPAGHETTIO_PARITY_REQUIRE_PIN: "1"
       # The non-core crates were UNTESTED in CI until 2026-07-24 (#434):
       # a broken `sim-harness` unit test shipped green because every gate
       # here was `-p spaghettio_core`. Kept as its own step so the tuned
