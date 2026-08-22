@@ -555,6 +555,13 @@ static T_3_1_OUTPUT: &[(i32, i32)] = &[(2, 8)];
 // This is the independent 4x8 book design, not the old
 // Lib(3,1) -> Lib(1,2) compose. The latter had a one-belt middle cut for a
 // rated-two shape and was correctly culled as waisted in 61babd51.
+//
+// The book calls this a TU design, but the shipped family template is not
+// advertised as TU. The advisory `check_throughput_unlimited` measurement
+// records 10/15 with 1/3 input rows active and 20/30 with 2/3 active (67%
+// routed to dead-end outputs in each case). The family stamp relies on
+// full-input throughput; its structural waist is covered by the min-cut
+// audit in `crates/core/tests/balancer_lane_audit.rs::audit_min_cut_capacity`.
 static T_3_2_ENTITIES: &[BalancerTemplateEntity] = &[
     BalancerTemplateEntity { name: "transport-belt", x: 3, y: 6, direction: 0, io_type: None, input_priority: None, output_priority: None },
     BalancerTemplateEntity { name: "transport-belt", x: 2, y: 6, direction: 2, io_type: None, input_priority: None, output_priority: None },
@@ -4368,9 +4375,12 @@ pub fn template_provenance(shape: (u32, u32)) -> TemplateProvenance {
             strategy: "hand-tuned with priority annotations",
             reference: RAYNQUIST_URL,
         },
+        // The book labels (3,2) TU, but its shipped family stamp is based on
+        // full-input throughput; see the template comment above for the
+        // measured partial-input limitation.
         (3, 2) => P {
-            source: RAYNQUIST,
-            strategy: "3-2 TU balancer",
+            source: "Raynquist",
+            strategy: "3-2 book family balancer; full-input stamp",
             reference: RAYNQUIST_URL,
         },
 
@@ -4812,7 +4822,10 @@ mod tests {
         assert_eq!(t.input_tiles, &[(0, 0), (1, 0), (2, 0)]);
         assert_eq!(t.output_tiles, &[(0, 7), (1, 7)]);
         assert_eq!(t.entities.len(), 24);
-        assert_eq!(template_provenance((3, 2)).strategy, "3-2 TU balancer");
+        assert_eq!(
+            template_provenance((3, 2)).strategy,
+            "3-2 book family balancer; full-input stamp"
+        );
     }
 
     #[test]
@@ -4958,7 +4971,8 @@ mod tests {
         (1, 9), (9, 1), (1, 10), (10, 1), (2, 9),
         (6, 1), (6, 2), (8, 1), (8, 2),
         // (6, 3): lane-balance re-bake 2026-08-13 (the #624 provisional
-        // KNOWN_IMBALANCED pair, owner-directed re-bake). (6, 4) is NOT
+        // KNOWN_IMBALANCED pair, owner-directed re-bake). (9, 3) is
+        // compose-generated with no original blueprint provenance. (6, 4) is NOT
         // here: its compose re-bake was withdrawn (structural waist —
         // #631) and it is a native factorio-sat re-solve with a real
         // source blueprint.

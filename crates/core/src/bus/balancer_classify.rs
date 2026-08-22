@@ -77,7 +77,7 @@ pub enum BalancerClass {
 /// Menger subset checks ever run, and can never be labelled TU no matter
 /// how good it is.
 ///
-/// That is not a hypothetical: before this split, across the 64 registered
+/// That is not a hypothetical: before this split, across the 65 registered
 /// templates the registry contained **zero** certified
 /// `ThroughputUnlimited` — including every shape whose provenance
 /// advertises "Raynquist (TU)". Not a fact about the library: the balanced
@@ -87,6 +87,9 @@ pub enum BalancerClass {
 /// every input into every output in equal proportion (MX3) and still fail
 /// to reroute around a blocked output subset (not MX2b). This enum reports
 /// the throughput axis on its own.
+///
+/// The standalone TU audit is env-gated and non-enforced: its partial-input
+/// warnings are advisory and do not reject a family stamp.
 ///
 /// It is computed for every graph within the subset-enumeration bound and
 /// reports [`ThroughputTier::Unknown`] outside it — see that variant.
@@ -166,7 +169,7 @@ pub fn throughput_tier(graph: &SplitterGraph) -> ThroughputTier {
     // "Costs nothing" is true here and was WRONG when this comment's twin
     // claimed it for `classify_graph` (#662 review). There the checks moved
     // in front of an MX3 early-return that used to skip them for every
-    // balanced template, which is 62 of the registry's 64. Measured over the
+    // balanced template, which is 63 of the registry's 65. Measured over the
     // registry, 20 passes each: 11.3us -> 198.2us per template, a 17.6x
     // slowdown. Kept anyway — the throughput axis cannot be computed without
     // running them, which is the entire point of the change — and the
