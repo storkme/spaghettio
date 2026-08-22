@@ -836,6 +836,33 @@ fn count_issues(
     }
 }
 
+fn count_issues_with_source(
+    layout: &LayoutResult,
+    solver_result: &SolverResult,
+) -> (selection_policy::IssueCounts, &'static str) {
+    match crate::validate::validate(layout, Some(solver_result)) {
+        Ok(issues) => (count_issue_channels(layout, &issues), "clean-flags"),
+        Err(e) => (
+            count_issue_channels(layout, &e.issues),
+            "clean-flags(unclean)",
+        ),
+    }
+}
+
+fn count_issue_channels(
+    layout: &LayoutResult,
+    issues: &[crate::validate::ValidationIssue],
+) -> selection_policy::IssueCounts {
+    selection_policy::IssueCounts {
+        errors: issues
+            .iter()
+            .filter(|i| i.severity == crate::validate::Severity::Error)
+            .count(),
+        selection_warnings: crate::validate::selection_warning_count(issues),
+        layout_warnings: layout.warnings.len(),
+    }
+}
+
 /// Score a candidate's layout. Returns the soft score plus the input
 /// metrics so the trace event can report them. Hard constraint: layout
 /// must have zero `missing-balancer-template` warnings (the (n, m)
@@ -1477,18 +1504,19 @@ fn select_best_decomposition_with_policy(
     }
 
     // Preserve the old error-free-tier measurement boundary: below two
-    // produced layouts no validation is needed for that tier. First let
-    // the policy inspect the measurements already recorded for its earlier
-    // stages; only if those stages have no answer does this retained site
-    // fill the error-free profiles. This removes the old clean-flags
-    // decision while keeping its validation cost and intentional gaps.
-    let preliminary = selection_policy::decide(&board.v2_profiles(), &policy);
+    // produced layouts no validation is needed for that tier. The bijection
+    // is: for any candidate set with >1 produced layouts, an early
+    // MergeTap/ScopedPairwise decision means clean-flags is not needed, and
+    // any other preliminary result means it is needed. This is the old v1
+    // laziness condition expressed through the policy's stage ordering;
+    // `decide()` is pure and cheap over the already-recorded profiles, so
+    // re-running it after filling the profiles is safe. See K70-3.
+    let profiles = board.v2_profiles();
+    validate_shipping_alignment(&policy, profiles.len())?;
+    let preliminary = selection_policy::decide(&profiles, &policy);
     let early_stage_decided = matches!(
         preliminary.as_ref().map(|d| d.stage),
-        Some(
-            crate::trace::SelectionStage::MergeTap
-                | crate::trace::SelectionStage::ScopedPairwise
-        )
+        Some(crate::trace::SelectionStage::MergeTap | crate::trace::SelectionStage::ScopedPairwise)
     );
     let tier_outcomes = run_refs.map(|r| r.outcome.as_ref());
     let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
@@ -1496,7 +1524,8 @@ fn select_best_decomposition_with_policy(
         let start = crate::trace::peek_events_len();
         for (idx, outcome) in tier_outcomes.iter().enumerate() {
             if let Some((layout, _)) = outcome {
-                board.record_counts(idx, count_issues(layout, solver_result), "clean-flags");
+                let (counts, source) = count_issues_with_source(layout, solver_result);
+                board.record_counts(idx, counts, source);
             }
         }
         crate::trace::truncate_events(start);
@@ -1566,12 +1595,9 @@ fn select_best_decomposition_with_policy(
         );
     }
 
-    // Phase 2b/2c: v2 is the sole shipped decision. It consumes the
-    // scoreboard projections of the measurements already computed; it
-    // never re-validates and there is no second winner to consult. The
-    // shipping path refuses LOUDLY on policy/profile misalignment (#707
-    // review round 1) rather than indexing `candidates` with a slot that
-    // names a different producer than the policy believes it does.
+    // v2 is the sole shipped decision. It consumes the scoreboard
+    // projections of the measurements already computed; it never
+    // re-validates and there is no second winner to consult.
     let profiles = board.v2_profiles();
     validate_shipping_alignment(&policy, profiles.len())?;
     let v2_winner = selection_policy::decide(&profiles, &policy);

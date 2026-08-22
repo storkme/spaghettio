@@ -358,8 +358,10 @@ struct Cell {
     /// Empty when no selection ran. Deliberately one string, not seven
     /// JSON entries: it keeps a cell to one line, so a baseline diff
     /// shows a changed candidate field as one changed line rather than
-    /// a re-indent. NOT part of the equivalence rule — recorded so a
-    /// divergence can be adjudicated without re-taking the baseline.
+    /// a re-indent. Equality is asserted under a matching pinned cache as
+    /// a gate-transcription guard, but outcomes are not part of the
+    /// winner/stage equivalence rule; they are recorded so a divergence
+    /// can be adjudicated without re-taking the baseline.
     outcomes: String,
 }
 
@@ -387,6 +389,8 @@ impl Cell {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Baseline {
     zone_cache_hash: Option<String>,
+    zone_cache_prefix_len: Option<u64>,
+    zone_cache_prefix_hash: Option<String>,
     cells: Vec<Cell>,
 }
 
@@ -466,6 +470,32 @@ fn hash_zone_cache() -> Option<String> {
     h.update(&pin);
     h.update(&legacy);
     Some(format!("{:x}", h.finalize()))
+}
+
+/// SHA-256 of exactly the first `prefix_len` bytes of the configured binary
+/// cache. The committed prefix is the pin identity: zone-cache writes append
+/// records, so bytes after the committed boundary are not part of the pin.
+fn hash_zone_cache_prefix(prefix_len: u64) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let pin = std::fs::read(resolve_zone_cache_path()).ok()?;
+    let prefix_len = usize::try_from(prefix_len).ok()?;
+    let prefix = pin.get(..prefix_len)?;
+    let mut h = Sha256::new();
+    h.update(prefix);
+    Some(format!("{:x}", h.finalize()))
+}
+
+/// Capture the committed-prefix fields for a bless before this process can
+/// append newly solved zones. The old `zone_cache_hash` remains the full
+/// source hash used by the ignored corpus check's provenance diagnostics;
+/// this identity is deliberately only the binary pin file's starting bytes.
+fn zone_cache_prefix_identity() -> Option<(u64, String)> {
+    use sha2::{Digest, Sha256};
+    let pin = std::fs::read(resolve_zone_cache_path()).ok()?;
+    let prefix_len = u64::try_from(pin.len()).ok()?;
+    let mut h = Sha256::new();
+    h.update(&pin);
+    Some((prefix_len, format!("{:x}", h.finalize())))
 }
 
 fn stage_name(s: SelectionStage) -> &'static str {
@@ -791,6 +821,7 @@ fn print_divergences(cells: &[Cell]) {
             see module docs for bless/check"]
 fn parity_corpus() {
     let pin_hash = hash_zone_cache();
+    let pin_prefix = zone_cache_prefix_identity();
     let mut cells = Vec::new();
     for f in FIXTURES {
         for machine in f.machines {
@@ -859,6 +890,11 @@ fn parity_corpus() {
                      crates/core/data/sat-zones-ci.bin, or pass \
                      SPAGHETTIO_PARITY_CORPUS=bless-repin if you really mean it"
                 );
+                assert!(
+                    pin_prefix.is_some(),
+                    "refusing to bless without a readable binary zone-cache pin: the \
+                     committed prefix length and hash cannot be recorded"
+                );
                 if let Some(p) = &prior {
                     // NOT `is_none() || ==`. A prior baseline recording
                     // no hash must fail the guard too, not satisfy it:
@@ -883,6 +919,8 @@ fn parity_corpus() {
             }
             let baseline = Baseline {
                 zone_cache_hash: pin_hash.clone(),
+                zone_cache_prefix_len: pin_prefix.as_ref().map(|(len, _)| *len),
+                zone_cache_prefix_hash: pin_prefix.as_ref().map(|(_, hash)| hash.clone()),
                 cells,
             };
             let json = serde_json::to_string_pretty(&baseline).expect("baseline serializes");
@@ -1086,19 +1124,26 @@ fn shipped_path_matches_baseline_on_the_census_fixtures() {
     let text = std::fs::read_to_string(baseline_path())
         .expect("the shipped-path smoke gate needs a committed baseline");
     let baseline: Baseline = serde_json::from_str(&text).expect("baseline parses");
-    let cache_hash = hash_zone_cache();
-    let cache_is_pinned = cache_hash.is_some() && cache_hash == baseline.zone_cache_hash;
+    let cache_prefix_hash = baseline
+        .zone_cache_prefix_len
+        .and_then(hash_zone_cache_prefix);
+    let cache_is_pinned = matches!(
+        (&cache_prefix_hash, &baseline.zone_cache_prefix_hash),
+        (Some(actual), Some(expected)) if actual == expected
+    );
     let require_pin = std::env::var("SPAGHETTIO_PARITY_REQUIRE_PIN")
         .ok()
         .as_deref()
         == Some("1");
     if require_pin && !cache_is_pinned {
         panic!(
-            "PARITY PIN REQUIRED: smoke cache hash {cache_hash:?} does not match the \
-             baseline hash {:?}; SPAGHETTIO_PARITY_REQUIRE_PIN=1 refuses to degrade to \
-             decision-existence checks. Set SPAGHETTIO_ZONE_CACHE_PATH to the committed \
-             cache before running this gate.",
-            baseline.zone_cache_hash
+            "PARITY PIN REQUIRED: smoke cache prefix ({} bytes) hash \
+             {cache_prefix_hash:?} does not match the baseline prefix ({} bytes) hash {:?}; \
+             SPAGHETTIO_PARITY_REQUIRE_PIN=1 refuses to degrade to decision-existence checks. \
+             Set SPAGHETTIO_ZONE_CACHE_PATH to the committed cache before running this gate.",
+            baseline.zone_cache_prefix_len.unwrap_or_default(),
+            baseline.zone_cache_prefix_len.unwrap_or_default(),
+            baseline.zone_cache_prefix_hash
         );
     }
     if !cache_is_pinned {
@@ -1109,10 +1154,13 @@ fn shipped_path_matches_baseline_on_the_census_fixtures() {
         };
         eprintln!(
             "\n{cache_description}: parity smoke is checking decision existence only (run \
-             cache {cache_hash:?}, baseline cache {:?}). Set \
+             prefix ({} bytes) hash {cache_prefix_hash:?}, baseline prefix ({} bytes) hash \
+             {:?}). Set \
              SPAGHETTIO_ZONE_CACHE_PATH=crates/core/data/sat-zones-ci.bin to run the exact \
              winner/stage smoke check.",
-            baseline.zone_cache_hash
+            baseline.zone_cache_prefix_len.unwrap_or_default(),
+            baseline.zone_cache_prefix_len.unwrap_or_default(),
+            baseline.zone_cache_prefix_hash
         );
     }
 

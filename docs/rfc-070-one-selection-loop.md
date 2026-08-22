@@ -250,12 +250,22 @@ advanced-circuit or processing-unit). The option-set axis is not
 optional decoration: it is the axis W1b's finding made load-bearing, and
 it is where the corpus's claim surface lives (below).
 
-Two cells are **equal** iff their `(status, winner, deciding stage)`
-triples are equal. Nothing else is compared. The per-candidate outcome
-vector is recorded alongside, for adjudication only; the verdict
-NUMBERS are deliberately absent, because they are structurally holed
-(see the Phase-0b oracle-gaps entry) and a baseline pinning them would
-pin gaps as facts.
+Two cells are **equivalent** iff their `(status, winner, deciding stage)`
+triples are equal. The per-candidate outcome vector is not part of that
+winner/stage equivalence, but equality is asserted under a matching pinned
+cache as a gate-transcription guard; under a different or unidentified cache
+it is reported for diagnosis only. The verdict NUMBERS are deliberately
+absent, because they are structurally holed (see the Phase-0b oracle-gaps
+entry) and a baseline pinning them would pin gaps as facts.
+
+The pinned-cache identity is the **committed prefix**: the baseline records
+the byte length of the committed `sat-zones-ci.bin` and the SHA-256 of exactly
+those first bytes. The smoke gate and `SPAGHETTIO_PARITY_REQUIRE_PIN=1` hash
+only that prefix. This is necessary because native solves append newly found
+zones to the cache during a run; appended records must not make the original
+pin fail, while changing or truncating any byte within the committed prefix
+must fail. The older full-cache `zone_cache_hash` remains for the ignored
+corpus check's informational provenance note.
 
 Because the corpus is cache-relative, candidate-outcome drift is a hard
 parity failure only when the run's cache identity matches the baseline;
