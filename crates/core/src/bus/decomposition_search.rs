@@ -4,15 +4,10 @@
 //! See `docs/rfc-decomposition-search.md`. The search layer sits above
 //! the existing `LayoutStrategy` enum: each candidate produces a full
 //! `LayoutResult` via the existing pipeline (with whatever per-strategy
-//! and per-module shape-fix machinery applies), the layouts are scored,
-//! and the winner's layout is returned.
-//!
-//! ## Phase 0 status
-//!
-//! Only `NativeCandidate` exists — wraps today's dispatch. With one
-//! candidate the search is a no-op pass-through (K-DS0-1 inertness
-//! gate); the abstraction is in place so non-Native candidates can land
-//! in Phase 1+ without refactoring `build_bus_layout`.
+//! and per-module shape-fix machinery applies), the layouts are measured
+//! and scored, and the policy-driven selection loop returns the winner's
+//! layout. Candidate production remains here; the decision stages live in
+//! [`selection_policy`].
 
 use crate::density;
 use crate::models::{LayoutResult, SolverResult};
@@ -124,11 +119,11 @@ impl DecompositionCandidate for MergeTapCandidate {
 }
 
 /// RFC-053: the direct-insertion candidate. Builds the layout with DI
-/// `Forced` so it can be compared against the DI-free native one.
+/// `Forced` so the policy can compare it with the DI-free native one.
 ///
-/// Unlike every other candidate here, this one does **not** compete in
-/// the generic score ranking — see `di_choice` in
-/// [`select_best_decomposition`]. The reason is specific and measured:
+/// Unlike ordinary ranked candidates, this one is registered with the
+/// policy's component-wise issue-floor stage. The reason is specific and
+/// measured:
 /// `score_layout` is density-dominated and hard-gates only on
 /// `missing-balancer-template`, while DI removes roughly a third of the
 /// entities and is typically *denser*. It would therefore win the raw
@@ -188,12 +183,8 @@ impl DecompositionCandidate for DirectInsertionCandidate {
             // `CellComposedCandidate` does: `score_layout.accepted` never
             // runs the full validator, so an error-laden DI layout would
             // reach real callers as a silently broken `Ok`. Errors refuse;
-            // warnings pass here and are weighed by `di_choice` instead.
-            let issues = crate::validate::validate(
-                &l,
-                Some(solver_result),
-            )
-            .map_err(|e| {
+            // warnings pass here and are weighed by the selection policy.
+            let issues = crate::validate::validate(&l, Some(solver_result)).map_err(|e| {
                 format!(
                     "direct insertion failed validation: {}",
                     e.to_string().lines().next().unwrap_or("")
@@ -234,10 +225,15 @@ impl DecompositionCandidate for DirectInsertionCandidate {
             // stay bit-identical to what shipped before, or every unaffected
             // target in the corpus becomes a diff to explain.
             (Ok((lu, wu)), Ok((ld, wd))) => {
-                let downstream_wins =
-                    (wd, ld.warnings.len(), ld.entities.len()) < (wu, lu.warnings.len(), lu.entities.len());
+                let downstream_wins = (wd, ld.warnings.len(), ld.entities.len())
+                    < (wu, lu.warnings.len(), lu.entities.len());
                 crate::trace::emit(crate::trace::TraceEvent::DiClaimOrderChosen {
-                    order: if downstream_wins { "downstream" } else { "upstream" }.to_string(),
+                    order: if downstream_wins {
+                        "downstream"
+                    } else {
+                        "upstream"
+                    }
+                    .to_string(),
                     upstream_entities: lu.entities.len(),
                     downstream_entities: ld.entities.len(),
                     upstream_warnings: wu,
@@ -261,12 +257,11 @@ impl DecompositionCandidate for DirectInsertionCandidate {
 /// vertical-split native one.
 ///
 /// Like `DirectInsertionCandidate` (and for the same measured reason),
-/// this does **not** compete in the generic score ranking when native
-/// succeeded: horizontal rows are typically denser (sweep: +7–10pp
-/// density on the AC/PU cases), so the density-dominated soft score
-/// would let it win layouts where it regresses warnings. Its safety is
-/// structural — see `horizontal_choice` in [`select_best_decomposition`]:
-/// strict improvement on both issue channels, ties to native.
+/// this is registered with the policy's component-wise issue-floor stage:
+/// horizontal rows are typically denser (sweep: +7–10pp density on the
+/// AC/PU cases), so the density-dominated soft score would let it win
+/// layouts where it regresses warnings. Its safety is structural: strict
+/// improvement on every issue channel, with ties to native.
 pub struct HorizontalStackCandidate;
 
 impl DecompositionCandidate for HorizontalStackCandidate {
@@ -292,18 +287,16 @@ impl DecompositionCandidate for HorizontalStackCandidate {
         // `score_layout.accepted` never runs the full validator, so an
         // error-laden horizontal layout would reach real callers as a
         // silently broken `Ok`. Errors refuse; warnings pass here and are
-        // weighed by `horizontal_choice` instead. (Conscious conservatism,
+        // weighed by the selection policy instead. (Conscious conservatism,
         // RFC-060 decision log: an E1 horizontal never displaces an E10
         // native — on sweep evidence horizontal's wins all land at E0, so
         // the forgone region is empty.)
-        let issues =
-            crate::validate::validate(&l, Some(solver_result))
-                .map_err(|e| {
-                    format!(
-                        "horizontal-stack failed validation: {}",
-                        e.to_string().lines().next().unwrap_or("")
-                    )
-                })?;
+        let issues = crate::validate::validate(&l, Some(solver_result)).map_err(|e| {
+            format!(
+                "horizontal-stack failed validation: {}",
+                e.to_string().lines().next().unwrap_or("")
+            )
+        })?;
         let n_err = issues
             .iter()
             .filter(|i| i.severity == crate::validate::Severity::Error)
@@ -351,7 +344,10 @@ impl DecompositionCandidate for CellComposedCandidate {
                 ));
             }
         }
-        let mut l = crate::bus::cells::chain::compose_chain_with_capacity(solver_result, opts.inserter_capacity)?;
+        let mut l = crate::bus::cells::chain::compose_chain_with_capacity(
+            solver_result,
+            opts.inserter_capacity,
+        )?;
         // Self-validate before competing: `score_layout.accepted` never
         // runs the full validator, so an error-laden composition that
         // "wins" on a bus refusal would reach real callers as a
@@ -359,14 +355,12 @@ impl DecompositionCandidate for CellComposedCandidate {
         // class). Composition's contract is pre-verified cells +
         // template corridors — errors refuse, surfacing the bus
         // refusal instead. Warnings pass (the adjudicated categories).
-        let issues =
-            crate::validate::validate(&l, Some(solver_result))
-                .map_err(|e| {
-                    format!(
-                        "cell composition failed validation: {}",
-                        e.to_string().lines().next().unwrap_or("")
-                    )
-                })?;
+        let issues = crate::validate::validate(&l, Some(solver_result)).map_err(|e| {
+            format!(
+                "cell composition failed validation: {}",
+                e.to_string().lines().next().unwrap_or("")
+            )
+        })?;
         let n_err = issues
             .iter()
             .filter(|i| i.severity == crate::validate::Severity::Error)
@@ -379,7 +373,10 @@ impl DecompositionCandidate for CellComposedCandidate {
         // Tier-1 verification annotation (RFC-051 registry): sim-verified
         // geometries carry their measurement; unverified ones say so.
         if let Some(t) = solver_result.external_outputs.first() {
-            l.warnings.push(crate::bus::cells::registry::verification_note(&t.item, t.rate, &l));
+            l.warnings
+                .push(crate::bus::cells::registry::verification_note(
+                    &t.item, t.rate, &l,
+                ));
         }
         Ok(l)
     }
@@ -567,15 +564,21 @@ fn estimate_producer_count(
 fn parse_unstampable_warnings(layout: &LayoutResult) -> Vec<(String, u32, u32)> {
     let mut out = Vec::new();
     for w in &layout.warnings {
-        let Some(rest) = w.strip_prefix("No ") else { continue };
+        let Some(rest) = w.strip_prefix("No ") else {
+            continue;
+        };
         let Some((shape_str, item_part)) = rest.split_once(" balancer template for ") else {
             continue;
         };
         let Some((n_str, m_str)) = shape_str.split_once('\u{2192}') else {
             continue;
         };
-        let Ok(n) = n_str.parse::<u32>() else { continue };
-        let Ok(m) = m_str.parse::<u32>() else { continue };
+        let Ok(n) = n_str.parse::<u32>() else {
+            continue;
+        };
+        let Ok(m) = m_str.parse::<u32>() else {
+            continue;
+        };
         let item = match item_part.split_once(';') {
             Some((before_semi, _)) => before_semi.trim().to_string(),
             None => item_part.trim().to_string(),
@@ -589,12 +592,8 @@ fn parse_unstampable_warnings(layout: &LayoutResult) -> Vec<(String, u32, u32)> 
 /// name and total consumption rate, or `None` if `item` is consumed by
 /// zero or 2+ recipes (in which case enrollment doesn't make sense —
 /// K=1 path doesn't apply).
-fn k1_consumer_for_item(
-    item: &str,
-    solver_result: &SolverResult,
-) -> Option<(String, f64)> {
-    let mut by_recipe: rustc_hash::FxHashMap<String, f64> =
-        rustc_hash::FxHashMap::default();
+fn k1_consumer_for_item(item: &str, solver_result: &SolverResult) -> Option<(String, f64)> {
+    let mut by_recipe: rustc_hash::FxHashMap<String, f64> = rustc_hash::FxHashMap::default();
     let mut found_fluid = false;
     for m in &solver_result.machines {
         for inp in &m.inputs {
@@ -645,9 +644,8 @@ pub(crate) fn build_k1_enrollment_plan(
 
     // Base plan first; if `item` already has a module here it is K≥2 and
     // out of scope for this pass.
-    let mut plan = crate::trace::with_muted(|| {
-        plan_partitioning(solver_result, opts.strategy, max_belt_tier)
-    });
+    let mut plan =
+        crate::trace::with_muted(|| plan_partitioning(solver_result, opts.strategy, max_belt_tier));
 
     let pad = PadLanesStrategy { max_pad: 4 };
     let shard = ShardStrategy { max_shards: 3 };
@@ -687,7 +685,11 @@ pub(crate) fn build_k1_enrollment_plan(
         });
         enrolled_any = true;
     }
-    if enrolled_any { Some(plan) } else { None }
+    if enrolled_any {
+        Some(plan)
+    } else {
+        None
+    }
 }
 
 /// Sum of `max(0, production - demand)` across external output items.
@@ -715,84 +717,25 @@ fn compute_overproduction(solver_result: &SolverResult) -> f64 {
     total
 }
 
-/// Contamination is weighted this many starvation units in the merge-tap-vs-
-/// native decision (see [`ErrorKinds`]). `3` sits inside a robust `[3, 17]`
-/// window on the merge-tap corpus (see `contamination_weight_window` test):
-/// electronic-circuit@35/s stays native for any integer weight `> 2`, and
-/// utility-science-pack@10/s flips to merge-tap for any weight `< 18`.
+/// Contamination is weighted this many starvation units by the selection
+/// policy's quality-key stage. `3` sits inside a robust `[3, 17]` window on
+/// the merge-tap corpus (see the policy tests): electronic-circuit@35/s stays
+/// native for any integer weight `> 2`, and utility-science-pack@10/s flips to
+/// merge-tap for any weight `< 18`.
 pub(crate) const KIND_CONTAMINATION_WEIGHT: usize = 3;
 
-/// `Severity::Error` count from a full validation pass, split by in-game
-/// severity CLASS rather than counted flat. The classes are ranked by how the
-/// defect behaves in a running factory, not by how many there are:
-///
-/// - **structural** (`entity-overlap`, `pipe-to-ground`) — the exported
-///   blueprint is invalid and will not import at all. Categorically worse than
-///   any number of functional defects, so it dominates the comparison
-///   lexicographically (a candidate with one structural error loses to one
-///   with fifty functional ones — the latter at least imports and can be
-///   patched).
-/// - **contamination** (`belt-item-isolation`, `fluid-network`,
-///   `pipe-isolation`, `fluid-connectivity`, `belt-junction`) — a wrong
-///   item/fluid reaches a shared belt/pipe. It jams and PROPAGATES
-///   downstream, poisoning the sink; a single one can stall a whole branch.
-///   Weighted [`KIND_CONTAMINATION_WEIGHT`]× starvation.
-/// - **starvation** (everything else: `belt-dead-end`, `lane-throughput`,
-///   `unresolved-junction`, `input-rate-delivery`, `belt-flow-reachability`,
-///   inserter/power) — a LOCAL underdelivery that stays put and is recoverable
-///   (add a belt, widen a lane). Weight 1.
-///
-/// This taxonomy was fixed on Factorio propagation semantics BEFORE it was
-/// measured against the fixtures it decides — it is not tuned to pass them.
-/// The decision it drives: on electronic-circuit@35/s the merge-tap candidate
-/// trades 2 starvation dead-ends for 1 contamination (copper-plate sideloaded
-/// onto the iron trunk), so it has fewer errors by COUNT (3 < 4) but is worse
-/// by KIND, and native is kept; on utility-science-pack@10/s merge-tap's
-/// contamination is dwarfed by native's error mass and it wins under both.
-///
-/// Deliberately kept out of the common `score_layout` path — every accepted
-/// layout (all goldens, the bulk of the stress corpus) then pays no extra
-/// validation cost, and `validate()`'s terminal `ValidationCompleted` trace
-/// event never perturbs those already-blessed trace streams.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct ErrorKinds {
-    contamination: usize,
-    starvation: usize,
-    structural: usize,
-}
-
-impl ErrorKinds {
-    /// Weighted functional-error total at a given contamination weight.
-    /// Excludes structural (handled lexicographically in `quality_key`).
-    fn weighted_functional(&self, contamination_weight: usize) -> usize {
-        contamination_weight * self.contamination + self.starvation
-    }
-
-    /// Lexicographic quality key, lower is better: structural dominates (an
-    /// unimportable blueprint is worse than any functional defect), then the
-    /// weighted functional total breaks ties within equal structural.
-    fn quality_key(&self) -> (usize, usize) {
-        (
-            self.structural,
-            self.weighted_functional(KIND_CONTAMINATION_WEIGHT),
-        )
-    }
-}
-
 /// Classify a candidate layout's `Severity::Error` issues into the three
-/// [`ErrorKinds`] classes. Used only by the scoped Pooled merge-tap decision
-/// in `select_best_decomposition`: when native leaves an unstampable shape,
-/// native and the merge-tap fallback are compared by `quality_key` and the
-/// strictly-lower one wins (ties favour native).
-fn classify_errors(layout: &LayoutResult, solver_result: &SolverResult) -> ErrorKinds {
-    let issues = match crate::validate::validate(
-        layout,
-        Some(solver_result),
-    ) {
+/// policy projections. This measurement is retained for the scoreboard's
+/// `IssueProfile`; `selection_policy::decide` owns the comparison.
+fn classify_errors(
+    layout: &LayoutResult,
+    solver_result: &SolverResult,
+) -> selection_policy::ErrorKindCounts {
+    let issues = match crate::validate::validate(layout, Some(solver_result)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     };
-    let mut kinds = ErrorKinds::default();
+    let mut kinds = selection_policy::ErrorKindCounts::default();
     for i in issues
         .iter()
         .filter(|i| i.severity == crate::validate::Severity::Error)
@@ -829,7 +772,7 @@ pub(crate) const CONTAMINATION_CATEGORIES: [&str; 5] = [
 /// `_` arm above).
 pub(crate) const STRUCTURAL_CATEGORIES: [&str; 2] = ["entity-overlap", "pipe-to-ground"];
 
-/// Issue counts for the DI-vs-native comparison: validator errors,
+/// Issue counts for the selection profile: validator errors,
 /// validator warnings, and the SECOND issue channel
 /// (`LayoutResult.warnings`, stamped by the layout pipeline itself and
 /// never seen by `validate()`).
@@ -846,39 +789,15 @@ pub(crate) const STRUCTURAL_CATEGORIES: [&str; 2] = ["entity-overlap", "pipe-to-
 /// tiebreakers when they are meant to be protected floors, which is the
 /// opposite of this type's purpose (review finding on #474).
 ///
-/// Use [`IssueCounts::strictly_better_than`] instead; it is component-wise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct IssueCounts {
-    errors: usize,
-    warnings: usize,
-    layout_warnings: usize,
-}
-
-impl IssueCounts {
-    /// No worse on ANY channel — the floor each channel is meant to be.
-    fn no_worse_than(&self, other: &Self) -> bool {
-        self.errors <= other.errors
-            && self.warnings <= other.warnings
-            && self.layout_warnings <= other.layout_warnings
-    }
-
-    /// No worse anywhere AND better somewhere. Since `no_worse_than`
-    /// already pins every channel at `<=`, being unequal is exactly "at
-    /// least one channel is strictly better".
-    fn strictly_better_than(&self, other: &Self) -> bool {
-        self.no_worse_than(other) && self != other
-    }
-}
-
-fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCounts {
-    let issues = match crate::validate::validate(
-        layout,
-        Some(solver_result),
-    ) {
+fn count_issues(
+    layout: &LayoutResult,
+    solver_result: &SolverResult,
+) -> selection_policy::IssueCounts {
+    let issues = match crate::validate::validate(layout, Some(solver_result)) {
         Ok(issues) => issues,
         Err(e) => e.issues,
     };
-    IssueCounts {
+    selection_policy::IssueCounts {
         errors: issues
             .iter()
             .filter(|i| i.severity == crate::validate::Severity::Error)
@@ -912,7 +831,7 @@ fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCou
         // flux into selection (the #520 teeth) is the recorded follow-up,
         // gated on sim-anchoring — decision log:
         // docs/rfc-lane-demand-flow.md.
-        warnings: crate::validate::selection_warning_count(&issues),
+        selection_warnings: crate::validate::selection_warning_count(&issues),
         layout_warnings: layout.warnings.len(),
     }
 }
@@ -989,13 +908,19 @@ impl CandidateRun {
     /// A candidate that wasn't tried (e.g. gating predicate was false).
     /// No outcome, no events; the winner-selection code skips it.
     fn skipped(name: &'static str) -> Self {
-        Self { name, outcome: None, events: Vec::new(), error: None, panicked: false }
+        Self {
+            name,
+            outcome: None,
+            events: Vec::new(),
+            error: None,
+            panicked: false,
+        }
     }
 }
 
 /// The canonical candidate order. Every index-keyed structure in
 /// [`select_best_decomposition`] — the `*_IDX` constants, the scoreboard
-/// rows, `tier_outcomes`, `clean_flags` and `candidates` — is keyed by
+/// rows, `tier_outcomes` and `candidates` — is keyed by
 /// THIS list, and each of those is checked against it at construction
 /// using each run's own [`CandidateRun::name`]. Adding or reordering a
 /// candidate without updating the list therefore fails loudly instead of
@@ -1063,7 +988,13 @@ where
             None
         }
     };
-    CandidateRun { name, outcome, events, error, panicked: false }
+    CandidateRun {
+        name,
+        outcome,
+        events,
+        error,
+        panicked: false,
+    }
 }
 
 /// Like `run_candidate` but wraps the produce call in `catch_unwind`.
@@ -1072,7 +1003,11 @@ where
 /// configurations the multi-stage balancer doesn't yet handle). Captures
 /// the panic so the search degrades to whichever earlier candidate had
 /// a layout instead of bringing the whole call down.
-fn run_candidate_catch_unwind<F>(name: &'static str, solver_result: &SolverResult, f: F) -> CandidateRun
+fn run_candidate_catch_unwind<F>(
+    name: &'static str,
+    solver_result: &SolverResult,
+    f: F,
+) -> CandidateRun
 where
     F: FnOnce() -> Result<LayoutResult, String> + std::panic::UnwindSafe,
 {
@@ -1115,16 +1050,21 @@ where
             None
         }
     };
-    CandidateRun { name, outcome, events, error, panicked }
+    CandidateRun {
+        name,
+        outcome,
+        events,
+        error,
+        panicked,
+    }
 }
 
 /// RFC-070 Phase 0b (#689 W1b): one candidate's row on the selection
 /// scoreboard.
 ///
-/// Purely observational — no decision reads it. A row starts from the
-/// candidate's `CandidateRun` (outcome + soft score, mechanism 1) and is
-/// then FILLED IN by whichever verdict mechanism happens to touch that
-/// candidate, **at the site where the decision path already computed the
+/// A row starts from the candidate's `CandidateRun` (outcome + soft score)
+/// and is then FILLED IN by whichever measurement site touches that
+/// candidate, **at the site where the selection path already computed the
 /// number**. Nothing here recomputes: a scoreboard that re-ran
 /// `validate()` on its own could disagree with the value the decision
 /// actually used, and an oracle that disagrees with the thing it is
@@ -1142,9 +1082,9 @@ struct CandidateVerdict {
     score: Option<f64>,
     accepted: Option<bool>,
     accepted_reason: Option<String>,
-    counts: Option<IssueCounts>,
+    counts: Option<selection_policy::IssueCounts>,
     counts_source: Option<&'static str>,
-    kinds: Option<ErrorKinds>,
+    kinds: Option<selection_policy::ErrorKindCounts>,
 }
 
 impl CandidateVerdict {
@@ -1199,22 +1139,17 @@ impl Scoreboard {
             CandidateVerdict::from_run(runs[i])
         }))
     }
-    /// Record the `IssueCounts` a comparison site just computed.
+    /// Record the issue-channel measurement a validation site computed.
     ///
-    /// FIRST WRITE WINS, and `source` therefore names the site that FIRST
-    /// computed this candidate's counts — **not** necessarily the site
-    /// that went on to decide. `count_issues` runs at SIX call sites — two
-    /// in `di_choice`, two in `horizontal_choice` (which is why native is
-    /// computed twice), and two in `scoped_choice`'s DI-vs-horizontal arm,
-    /// which records at none of them because both its inputs are already
-    /// on the board by construction. (The doc said "five places" until
-    /// #692 review round 3 counted them.) Every repeat is the same deterministic call on
-    /// the same layout, so the recorded VALUE is identical whichever site
-    /// wrote it; only the label differs. Read `source` as provenance of
-    /// the number, and the terminal event's stage as the deciding site
-    /// (#692 review, 3/3 — the two are not the same question and the
-    /// earlier wording let them be read as one).
-    fn record_counts(&mut self, idx: usize, counts: IssueCounts, source: &'static str) {
+    /// FIRST WRITE WINS, so `source` names the site that first measured
+    /// this candidate. Repeated validation is deterministic; the label is
+    /// provenance, while `SelectionDecided::stage` names the decision.
+    fn record_counts(
+        &mut self,
+        idx: usize,
+        counts: selection_policy::IssueCounts,
+        source: &'static str,
+    ) {
         let row = &mut self.0[idx];
         if row.counts.is_none() {
             row.counts = Some(counts);
@@ -1222,9 +1157,9 @@ impl Scoreboard {
         }
     }
 
-    /// Record the `ErrorKinds` the merge-tap decision just computed.
-    /// First write wins, for the same reason as `record_counts`.
-    fn record_kinds(&mut self, idx: usize, kinds: ErrorKinds) {
+    /// Record the error-kind measurement. First write wins, for the same
+    /// reason as `record_counts`.
+    fn record_kinds(&mut self, idx: usize, kinds: selection_policy::ErrorKindCounts) {
         let row = &mut self.0[idx];
         if row.kinds.is_none() {
             row.kinds = Some(kinds);
@@ -1246,7 +1181,7 @@ impl Scoreboard {
                 accepted: row.accepted,
                 accepted_reason: row.accepted_reason.clone(),
                 errors: row.counts.map(|c| c.errors),
-                selection_warnings: row.counts.map(|c| c.warnings),
+                selection_warnings: row.counts.map(|c| c.selection_warnings),
                 layout_warnings: row.counts.map(|c| c.layout_warnings),
                 counts_source: row.counts_source.map(str::to_string),
                 contamination_errors: row.kinds.map(|k| k.contamination),
@@ -1260,17 +1195,16 @@ impl Scoreboard {
     /// derived from the rows this board already holds.
     ///
     /// **Nothing is re-validated, and that is the discipline, not an
-    /// optimisation.** The rows record what each verdict mechanism
-    /// computed at its own site; a shadow that ran `validate()` again
-    /// could disagree with the number the v1 decision actually used, and
-    /// then a divergence would be uninterpretable — is the PROGRAM
-    /// different, or is it being fed different inputs? Measuring once
-    /// and projecting is also what makes v1's laziness carry across
-    /// unchanged: a candidate no mechanism examined has no counts here
-    /// either, which is exactly the gap [`decide`] skips on.
+    /// optimisation.** The rows record what each measurement site
+    /// computed; re-running `validate()` here could disagree with the
+    /// number a site supplied, and then a policy result would be
+    /// uninterpretable. Measuring at the retained sites and projecting is
+    /// also what preserves the
+    /// intentional gaps: a candidate no site examined has no counts here,
+    /// which is exactly the gap [`decide`] skips on.
     ///
-    /// Consequence, stated so the shadow's coverage is not overread:
-    /// this path does NOT exercise [`IssueProfile::measure`], so the
+    /// The production recorder intentionally does not call
+    /// [`IssueProfile::measure`], so the
     /// produce-time `refuse_on_error` gate and the eager-measurement
     /// question are not under test here. They are covered by the unit
     /// tier in `bus::selection_policy`.
@@ -1283,172 +1217,11 @@ impl Scoreboard {
                 score: row.score,
                 accepted: row.accepted,
                 accepted_reason: row.accepted_reason.clone(),
-                counts: row.counts.map(|c| selection_policy::IssueCounts {
-                    errors: c.errors,
-                    selection_warnings: c.warnings,
-                    layout_warnings: c.layout_warnings,
-                }),
-                kinds: row.kinds.map(|k| selection_policy::ErrorKindCounts {
-                    contamination: k.contamination,
-                    starvation: k.starvation,
-                    structural: k.structural,
-                }),
+                counts: row.counts,
+                kinds: row.kinds,
             })
             .collect()
     }
-
-    /// Per-registration acceptance in the shape a [`ProducerGate`]
-    /// reads: `Some(accepted)` where that slot produced a layout, `None`
-    /// where it produced nothing. `accepted` is `Some` iff the candidate
-    /// produced, so the row's own field IS the predicate.
-    fn prior_acceptance(&self) -> [Option<bool>; 7] {
-        std::array::from_fn(|i| self.0[i].accepted)
-    }
-
-    /// Whether v1 actually ran each slot's `produce()`. `NotRun` is the
-    /// one outcome that means the call-site gate excluded it; `Refused`
-    /// and `Panicked` both mean it ran and cost a layout pass.
-    fn v1_ran(&self) -> [bool; 7] {
-        std::array::from_fn(|i| {
-            self.0[i].outcome != crate::trace::SelectionCandidateOutcome::NotRun
-        })
-    }
-}
-
-/// RFC-070 Phase 2b (#689 OWNER GATE 2): run the v2 policy loop over the
-/// same scoreboard v1 just decided from, and emit the reverse comparison.
-///
-/// **Phase 2b reverse shadow**: this function returns nothing, mutates
-/// nothing, and compares the v1 answer against the v2 answer that now
-/// ships. The `v1_*` field names are retained by the trace schema; they
-/// identify the former shipped side, not the current direction of the
-/// comparison. A disagreement is DATA for the campaign's K70-2
-/// adjudication — never a panic, never a fix-it-so-it-passes signal.
-///
-/// Two things are compared, and they fail differently:
-///
-/// 1. **The decision** — `(winner, stage)` from `selection_policy::
-///    decide` over `board.v2_profiles()`, against v1's. This is the
-///    corpus's divergence-equivalence rule, live.
-/// 2. **The producer gates** — each registration's `ProducerGate`
-///    evaluated against this call's options and solve, against whether
-///    v1 actually ran that candidate. This is the half `policy_replay`
-///    structurally cannot see (it consumes already-produced profiles
-///    and evaluates zero gates), and a mis-transcribed eligibility
-///    clause moves the candidate SET rather than the ranking — so it
-///    would show up as a changed winner with no obvious cause. #698's
-///    standing hand-off note names this as the thing only the 2a shadow
-///    can check.
-///
-/// # Two boundary changes this wiring makes, stated because they are
-/// easy to miss in a diff
-///
-/// **`selection_policy`'s `debug_assert`s are now on the LIVE path in
-/// debug builds** (#703 review round 2). `decide`'s profile-length
-/// check, `prior_slot`'s registration-order bound and
-/// `incumbent_index`'s exactly-one check were written for a replay
-/// harness; every one of them now runs on every solve of every
-/// `cargo test` and CI job. That is the intended tripwire — those
-/// asserts guard policy-AUTHORING mistakes, which is precisely what
-/// Phase 2b will be doing — and it is why they are `debug_assert`s
-/// rather than `assert`s: release and WASM keep their documented
-/// degradation (`decide` refuses, gates fall back to the safe scan)
-/// and a browser solve cannot be panicked by a code-level slip. The
-/// consequence to be aware of: a future producer whose gate reads a
-/// slot at or after its own index will now fail the SUITE, not just
-/// the replay.
-///
-/// **The seven-slot arrays are a latent invariant.**
-/// `Scoreboard::prior_acceptance` and `v1_ran` return `[_; 7]` because
-/// the board is `[CandidateVerdict; 7]`. The alignment check below is
-/// what corrals a registration count that stops matching: an
-/// eight-producer policy fails it, the shadow skips, and the harnesses
-/// report a named missing comparison rather than indexing off the end.
-/// So a candidate-count change is caught, but by the corral, not by an
-/// assertion at the array.
-fn emit_selection_shadow(
-    board: &Scoreboard,
-    solver_result: &SolverResult,
-    opts: &LayoutOptions,
-    v1: Option<(usize, crate::trace::SelectionStage)>,
-) {
-    let policy = selection_policy::SelectionPolicy::current();
-    // The profile vector is keyed by REGISTRATION order and the board by
-    // CANDIDATE_ORDER; if those ever part company, every comparison
-    // below would rank one candidate's measurement under another's
-    // policy. Degrade to emitting NOTHING rather than to a plausible
-    // wrong verdict — and the harnesses assert the event is PRESENT for
-    // every decided cell, so a silent skip fails there rather than
-    // reading as agreement.
-    // NO `debug_assert` here, deliberately, and this is a correction
-    // (#703 review round 2, 3/3): the first draft had one, which made
-    // the guard below DEAD in every debug build — i.e. in every
-    // `cargo test` run and every CI job. A misalignment would then have
-    // aborted the shipped `select_best_decomposition` path with a panic,
-    // which is the exact opposite of what this function's doc promises
-    // and of what a shadow is for. Phase 2b reorders and extends the
-    // candidate set, so this is a state the campaign will actually
-    // visit.
-    //
-    // The failure is REPORTED instead of thrown, and by the right
-    // reader: skipping emits no `SelectionShadowCompared`, and both
-    // harnesses assert the event is PRESENT for every cell whose
-    // selection ran (`ShadowReport::missing` / the smoke tier's
-    // comparison count). A misalignment therefore surfaces as a named
-    // "missing comparison" on the cells it affects, not as a panicked
-    // solve.
-    let aligned = policy.producers.len() == CANDIDATE_ORDER.len()
-        && policy.producers.iter().zip(CANDIDATE_ORDER).all(|(p, n)| p.name == n);
-    if !aligned {
-        return;
-    }
-
-    let profiles = board.v2_profiles();
-    let v2 = selection_policy::decide(&profiles, &policy);
-
-    let prior = board.prior_acceptance();
-    let ran = board.v1_ran();
-    let incumbent = policy.incumbent_index();
-    let mut gate_disagreements = Vec::new();
-    for (i, reg) in policy.producers.iter().enumerate() {
-        let verdict = reg.gate.evaluate(&selection_policy::GateContext {
-            solver_result,
-            opts,
-            prior: &prior,
-            incumbent,
-            registration_index: i,
-        });
-        let eligible = verdict == selection_policy::GateVerdict::Eligible;
-        if eligible != ran[i] {
-            // One named entry per disagreeing producer, with both sides
-            // and (when v2 excluded it) WHICH clause did so — a count
-            // in a message cannot tell 1 from 7, and the clause name is
-            // the whole reason gaps (c) got closed.
-            gate_disagreements.push(format!(
-                "{}: v2 {} / v1 {}",
-                reg.name,
-                match verdict {
-                    selection_policy::GateVerdict::Eligible => "eligible".to_string(),
-                    selection_policy::GateVerdict::Excluded(c) => format!("excluded[{c}]"),
-                },
-                if ran[i] { "ran" } else { "not-run" }
-            ));
-        }
-    }
-
-    let agree = match (v1, v2) {
-        (Some((i, s)), Some(d)) => i == d.winner && s == d.stage,
-        (None, None) => true,
-        _ => false,
-    };
-    crate::trace::emit(crate::trace::TraceEvent::SelectionShadowCompared {
-        v1_winner: v1.map(|(i, _)| CANDIDATE_ORDER[i].to_string()),
-        v1_stage: v1.map(|(_, s)| s),
-        v2_winner: v2.map(|d| policy.producers[d.winner].name.to_string()),
-        v2_stage: v2.map(|d| d.stage),
-        agree,
-        gate_disagreements,
-    });
 }
 
 /// Validate the index contract before the shipping decision is allowed to
@@ -1479,20 +1252,9 @@ fn validate_shipping_alignment(
 
 /// Run candidates and pick the winner.
 ///
-/// The dispatch is **sequential, not parallel**: Native runs first; if
-/// its layout has zero `missing-balancer-template` warnings, the search
-/// stops there and Native wins. Only when Native produces an
-/// unstampable shape does the search fall through to `ModuleSizeSplit`.
-/// This avoids the runtime cost of laying out every candidate when
-/// Native is already clean (the common case across tier 1-3 and most
-/// stress tests).
-///
-/// Trade-off: gives up the "score every candidate, pick best by
-/// density" framing the RFC committed to. The motivation: budget. The
-/// stress test corpus busts the 600s timeout when partitioned cases
-/// run two full layouts. A predict-shape-before-layout guard would
-/// preserve the parallel framing but is harder to get right than this
-/// post-Native check (see decision log entry 2026-04-30 in the RFC).
+/// Candidate production is sequential and each run's trace is captured;
+/// the scoreboard retains the measurements, and [`selection_policy`]
+/// supplies the single decision over those profiles.
 pub fn select_best_decomposition(
     solver_result: &SolverResult,
     opts: LayoutOptions,
@@ -1600,9 +1362,11 @@ fn select_best_decomposition_with_policy(
     let k1_run = if try_k1_shape_fix {
         let native_layout = &native_run.outcome.as_ref().unwrap().0;
         let maybe_plan = build_k1_enrollment_plan(native_layout, solver_result, &opts);
-        run_candidate("k1-shape-fix", solver_result, |s| match maybe_plan.as_ref() {
-            Some(plan) => run_layout_with_explicit_plan(s, &opts, plan),
-            None => Err("no k1 enrollment".to_string()),
+        run_candidate("k1-shape-fix", solver_result, |s| {
+            match maybe_plan.as_ref() {
+                Some(plan) => run_layout_with_explicit_plan(s, &opts, plan),
+                None => Err("no k1 enrollment".to_string()),
+            }
         })
     } else {
         CandidateRun::skipped("k1-shape-fix")
@@ -1650,19 +1414,7 @@ fn select_best_decomposition_with_policy(
         CandidateRun::skipped("merge-tap")
     };
 
-    // Scoped Native-vs-merge-tap decision, resolved here while the sink is
-    // still detached. Metric: kind-weighted error quality (`ErrorKinds::
-    // quality_key`), not a flat count — a merge-tap layout with FEWER total
-    // errors than native can still lose if the difference is contamination
-    // (which propagates) traded for starvation (which stays local). Ties
-    // favour Native (`NATIVE_IDX`). This is deliberately *not* the accepted-
-    // by-score path below — an accepted merge-tap layout that is worse by kind
-    // than an unaccepted Native still loses. `classify_errors` runs
-    // `validate()`, which emits a `ValidationCompleted` event per call;
-    // peek/truncate drops both so they never reach the winner's replayed
-    // stream. `None` when merge-tap didn't run — the generic selection then
-    // applies unchanged (every non-Pooled and every Native-clean case).
-    // THE index-keyed list of runs. `tier_outcomes` and the RFC-070
+    // The index-keyed list of runs. `tier_outcomes` and the RFC-070
     // scoreboard are both derived from this one array, and
     // `Scoreboard::from_runs` checks each run's own name against
     // `CANDIDATE_ORDER`, so the three lists cannot drift apart silently
@@ -1678,11 +1430,13 @@ fn select_best_decomposition_with_policy(
     ];
 
     // RFC-070 Phase 0b scoreboard. Built here — after every candidate has
-    // run, before the first verdict mechanism fires — so the mechanism
-    // sites below can record into it as they compute.
+    // run — so the measurement sites below can record their projections.
     let mut board = Scoreboard::from_runs(run_refs);
 
-    let merge_tap_choice: Option<usize> = merge_tap_run.outcome.as_ref().map(|(mt_layout, _)| {
+    // Retain the quality-key measurement for the merge-tap profile. The
+    // policy owns the comparison; this call only classifies the validation
+    // errors and records the result used by that stage.
+    if let Some((mt_layout, _)) = merge_tap_run.outcome.as_ref() {
         let start = crate::trace::peek_events_len();
         let mergetap_kinds = classify_errors(mt_layout, solver_result);
         let native_kinds = native_run
@@ -1694,222 +1448,60 @@ fn select_best_decomposition_with_policy(
         if let Some(n) = native_kinds {
             board.record_kinds(NATIVE_IDX, n);
         }
-        match native_kinds {
-            Some(n) if mergetap_kinds.quality_key() < n.quality_key() => MERGE_TAP_IDX,
-            Some(_) => NATIVE_IDX,
-            // The gate above requires an unstampable *Native layout*, so this
-            // arm is unreachable in practice; if Native somehow produced
-            // nothing, merge-tap is the only layout we have.
-            None => MERGE_TAP_IDX,
-        }
-    });
+    }
 
-    // RFC-053: the DI-vs-native decision. Scoped and PAIRWISE, like
-    // `merge_tap_choice` above and deliberately NOT part of the generic
-    // score ranking below — see `DirectInsertionCandidate` for why the
-    // soft score cannot be trusted here.
-    //
-    // Two rules make this correct:
-    //
-    //   1. It returns `Some(DI_IDX)` only when DI WINS, and `None`
-    //      otherwise — never `Some(NATIVE_IDX)`. Returning native would
-    //      short-circuit the generic selection and could rob
-    //      `k1-shape-fix` or `cell-composed` of a legitimate win.
-    //      (`merge_tap_choice` may return `NATIVE_IDX` because its gate
-    //      already guarantees native is unaccepted; DI has no such gate
-    //      — it runs against perfectly healthy natives.)
-    //   2. Ties go to native, so any layout DI does not strictly improve
-    //      stays BIT-IDENTICAL. That is the whole safety argument.
-    //
-    // `count_issues` runs `validate()`, which emits a
-    // `ValidationCompleted` event; peek/truncate drops those so they
-    // never reach the winner's replayed stream (#396).
-    let di_choice: Option<usize> = di_run.outcome.as_ref().and_then(|(di_layout, di_score)| {
-        let Some((nat_layout, nat_score)) = native_run.outcome.as_ref() else {
-            // Native produced nothing (a hard bus refusal). DI does NOT
-            // short-circuit here: `cell-composed` also exists to resolve
-            // refusals, and auto-winning would preempt it without ever
-            // comparing the two. Fall through to the generic ranking,
-            // which admits DI in exactly this case (see `ranking_len`).
-            return None;
-        };
+    // Retain the pairwise issue-channel measurements. They feed the
+    // policy's component-wise floor; no comparison or winner is computed
+    // here. `validate()` emits a terminal event, so keep the established
+    // peek/truncate discipline.
+    if let (Some((di_layout, _)), Some((nat_layout, _))) =
+        (di_run.outcome.as_ref(), native_run.outcome.as_ref())
+    {
         let start = crate::trace::peek_events_len();
         let di_counts = count_issues(di_layout, solver_result);
         let nat_counts = count_issues(nat_layout, solver_result);
         crate::trace::truncate_events(start);
         board.record_counts(DI_IDX, di_counts, "di-vs-native");
         board.record_counts(NATIVE_IDX, nat_counts, "di-vs-native");
-        // Component-wise, NOT lexicographic — see `IssueCounts`.
-        let strictly_better_issues = di_counts.strictly_better_than(&nat_counts);
-        // Equal on every issue channel: DI must then be strictly denser
-        // /smaller to displace native. `score` already folds density,
-        // overproduction and entity count.
-        let equal_issues_and_denser =
-            di_counts == nat_counts && di_score.score > nat_score.score + 1e-9;
-        // `accepted` is a hard constraint the issue channels do not see:
-        // it carries the `missing-balancer-template` gate, whose warnings
-        // live in `layout.warnings` but which the ranking treats as
-        // disqualifying rather than merely worse. An unaccepted DI layout
-        // must never displace an accepted native.
-        (di_score.accepted && (strictly_better_issues || equal_issues_and_denser))
-            .then_some(DI_IDX)
-    });
+    }
 
-    // RFC-060: the horizontal-vs-native decision. Identical shape and
-    // rules to `di_choice` above: returns `Some(H_IDX)` only when
-    // horizontal WINS, never `Some(NATIVE_IDX)`; ties go to native so
-    // any layout horizontal does not strictly improve stays
-    // bit-identical; and `None` when native produced nothing, so the
-    // generic ranking (which admits horizontal exactly then, via
-    // `ranking_len`) weighs it against `cell-composed` and DI instead of
-    // it auto-winning a refusal.
-    let horizontal_choice: Option<usize> =
-        horizontal_run.outcome.as_ref().and_then(|(hs_layout, hs_score)| {
-            let (nat_layout, _nat_score) = native_run.outcome.as_ref()?;
-            let start = crate::trace::peek_events_len();
-            let hs_counts = count_issues(hs_layout, solver_result);
-            let nat_counts = count_issues(nat_layout, solver_result);
-            crate::trace::truncate_events(start);
-            board.record_counts(H_IDX, hs_counts, "horizontal-vs-native");
-            board.record_counts(NATIVE_IDX, nat_counts, "horizontal-vs-native");
-            let strictly_better_issues = hs_counts.strictly_better_than(&nat_counts);
-            // v1 deliberately has NO equal-issues-and-denser arm (unlike
-            // `di_choice`): measured on the first full-suite run, that
-            // arm's wins are ≤5% entity shaves on already-CLEAN layouts,
-            // and their cost was flipping ten pinned structural
-            // artifacts across two suites (stacking per-tile audits,
-            // cell registry hashes, EC fixtures). Horizontal displaces
-            // native only where native has issues to fix; clean layouts
-            // stay bit-identical. Revisit if a future packing workstream reopens (RFC-058 deleted 2026-08-20)
-            // (RFC-060 decision log, 2026-07-30).
-            (hs_score.accepted && strictly_better_issues).then_some(H_IDX)
-        });
-
-    // When BOTH scoped candidates beat native, resolve them pairwise
-    // with the same rule, ties → DI (the earlier candidate — consistent
-    // with the array's earliest-index preference). Deliberately not a
-    // 3-way generic score, for the same reason neither candidate rides
-    // the soft score against native (RFC-060 design note).
-    let scoped_choice: Option<usize> = match (di_choice, horizontal_choice) {
-        (Some(_), Some(_)) => {
-            let (di_layout, _) =
-                di_run.outcome.as_ref().expect("di_choice implies an outcome");
-            let (hs_layout, _) = horizontal_run
-                .outcome
-                .as_ref()
-                .expect("horizontal_choice implies an outcome");
-            let start = crate::trace::peek_events_len();
-            let di_counts = count_issues(di_layout, solver_result);
-            let hs_counts = count_issues(hs_layout, solver_result);
-            crate::trace::truncate_events(start);
-            // Consistent with horizontal_choice's strictly-better-only
-            // rule: no density tiebreak, ties → DI.
-            let hs_wins = hs_counts.strictly_better_than(&di_counts);
-            Some(if hs_wins { H_IDX } else { DI_IDX })
-        }
-        (d, h) => d.or(h),
-    };
-
-    // Validation-tiered selection (#392), part 1: the per-candidate
-    // clean flags. `validate()` emits a `ValidationCompleted` trace
-    // event per call, so this MUST run before the sink reattach below,
-    // with peek/truncate discarding the emissions — otherwise every
-    // examined candidate's validation (including the losers') leaks
-    // into the winner's replayed stream and the web timing log /
-    // snapshot debugger report the wrong layout's error counts (#396
-    // review, blocking finding; same pattern as merge_tap_choice's
-    // classify_errors above). Lazy: the single-layout common case and
-    // merge-tap-decided solves skip validation entirely.
-    // DI IS in this array at index 5, and `clean_flags[5]` IS populated
-    // whenever DI produced. It is kept out of the generic ranking by the
-    // `candidates[..ranking_len]` slice bound, NOT by any `None` pin — an
-    // earlier version of this comment claimed the latter and was wrong.
-    // Naming the real mechanism matters: `ranking_len` is the SINGLE
-    // enforcement point for "DI may not enter the generic ranking when
-    // native succeeded", which is the invariant defaulting DI on rests on.
-    // Removing it as redundant would silently re-admit the
-    // density-wins-over-warnings regression that ranking cannot see — the
-    // failure `tier2_electronic_circuit` hit before `ranking_len` existed.
-    // Derived from `run_refs`, whose order is checked against
-    // `CANDIDATE_ORDER` — one list, not a fourth hand-maintained copy.
-    let tier_outcomes = run_refs.map(|r| r.outcome.as_ref());
-    let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
-    let clean_flags: [Option<(bool, usize)>; 7] = if merge_tap_choice.is_none()
-        && scoped_choice.is_none()
-        && n_layouts > 1
+    if let (Some((horizontal_layout, _)), Some((nat_layout, _))) =
+        (horizontal_run.outcome.as_ref(), native_run.outcome.as_ref())
     {
         let start = crate::trace::peek_events_len();
-        // `from_fn` rather than `[T; N]::map` only so the RFC-070
-        // scoreboard can key the row it records by the same index the
-        // flag lands on; the traversal and its result are identical.
-        let flags: [Option<(bool, usize)>; 7] = std::array::from_fn(|idx| {
-            tier_outcomes[idx].map(|(l, score)| {
-                // (error-free, warning key). The key orders the
-                // error-free tier below: RFC-060 made the refusal path
-                // multi-candidate (cells, DI, horizontal), and a
-                // score-only order re-admits the density-over-warnings
-                // class THERE that `ranking_len` blocks on the success
-                // path — horizontal's denser 0-error/6-warning ec@15
-                // must not outrank DI's 0/0 resolution (pinned by
-                // `cell_candidate_resolves_ec15_refusal`).
-                match crate::validate::validate(
-                    l,
-                    Some(solver_result),
-                    ) {
-                    Ok(issues) => {
-                        let errors = issues
-                            .iter()
-                            .filter(|i| i.severity == crate::validate::Severity::Error)
-                            .count();
-                        // Selection-scoped count — see
-                        // `validate::selection_warning_count`.
-                        let warnings = crate::validate::selection_warning_count(&issues);
-                        board.record_counts(
-                            idx,
-                            IssueCounts {
-                                errors,
-                                warnings,
-                                layout_warnings: l.warnings.len(),
-                            },
-                            "clean-flags",
-                        );
-                        (
-                            score.accepted && errors == 0,
-                            warnings + l.warnings.len(),
-                        )
-                    }
-                    Err(e) => {
-                        // `validate()` returns `Err` CARRYING the issues, and
-                        // this arm is reached iff at least one is an Error.
-                        // The decision reads only "not clean" — but throwing
-                        // the counts away here would have the scoreboard
-                        // report a blank row for precisely the candidates
-                        // that failed hardest. Same issue list, same
-                        // predicates as the `Ok` arm; the source tag records
-                        // that the decision itself did not read them.
-                        board.record_counts(
-                            idx,
-                            IssueCounts {
-                                errors: e
-                                    .issues
-                                    .iter()
-                                    .filter(|i| i.severity == crate::validate::Severity::Error)
-                                    .count(),
-                                warnings: crate::validate::selection_warning_count(&e.issues),
-                                layout_warnings: l.warnings.len(),
-                            },
-                            "clean-flags(unclean)",
-                        );
-                        (false, usize::MAX)
-                    }
-                }
-            })
-        });
+        let horizontal_counts = count_issues(horizontal_layout, solver_result);
+        let nat_counts = count_issues(nat_layout, solver_result);
         crate::trace::truncate_events(start);
-        flags
-    } else {
-        [None; 7]
-    };
+        board.record_counts(H_IDX, horizontal_counts, "horizontal-vs-native");
+        board.record_counts(NATIVE_IDX, nat_counts, "horizontal-vs-native");
+    }
+
+    // Preserve the old error-free-tier measurement boundary: below two
+    // produced layouts no validation is needed for that tier. First let
+    // the policy inspect the measurements already recorded for its earlier
+    // stages; only if those stages have no answer does this retained site
+    // fill the error-free profiles. This removes the old clean-flags
+    // decision while keeping its validation cost and intentional gaps.
+    let policy = selection_policy::SelectionPolicy::current();
+    let preliminary = selection_policy::decide(&board.v2_profiles(), &policy);
+    let early_stage_decided = matches!(
+        preliminary.as_ref().map(|d| d.stage),
+        Some(
+            crate::trace::SelectionStage::MergeTap
+                | crate::trace::SelectionStage::ScopedPairwise
+        )
+    );
+    let tier_outcomes = run_refs.map(|r| r.outcome.as_ref());
+    let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
+    if n_layouts > 1 && !early_stage_decided {
+        let start = crate::trace::peek_events_len();
+        for (idx, outcome) in tier_outcomes.iter().enumerate() {
+            if let Some((layout, _)) = outcome {
+                board.record_counts(idx, count_issues(layout, solver_result), "clean-flags");
+            }
+        }
+        crate::trace::truncate_events(start);
+    }
 
     // Re-attach the sink before replaying the winner's events. Score
     // events for *every* candidate that actually ran are emitted (so
@@ -1932,60 +1524,39 @@ fn select_best_decomposition_with_policy(
         &horizontal_run.events,
     ] {
         for ev in events {
-            if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
+            if matches!(
+                ev,
+                crate::trace::TraceEvent::DecompositionCandidateScored { .. }
+            ) {
                 crate::trace::emit(ev.clone());
             }
         }
     }
 
-    // Compute the v1 answer in full. It remains live as the reverse shadow
-    // until Phase 2c deletes this chain; it no longer feeds the shipped
-    // layout or terminal selection events.
-    // Index order MUST match NATIVE_IDX (0) / MERGE_TAP_IDX (3) above.
     // Refusal reasons for the all-candidates-failed message, taken from
-    // the same checked list everything else is keyed by. This was a
-    // hand-typed 7-slot tuple zipped positionally against the candidate
-    // names — every element the same type, so a reorder compiled silently
-    // and glued the wrong reason to the wrong candidate, which is the
-    // misattribution class the rest of this function retired (#692 review
-    // round 3, 1/3). Cloned here, before `candidates` moves the runs.
+    // the same checked list everything else is keyed by. Cloned here,
+    // before `candidates` moves the runs.
     let refusal_reasons: [Option<String>; 7] = run_refs.map(|r| r.error.clone());
-    // Whether DI may enter the generic ranking at all. It may ONLY when
-    // native produced nothing: then there is no bit-identity to protect
-    // and DI competes fairly with `cell-composed` on the error-free tier.
-    // When native DID produce, DI is confined to `di_choice`, whose
-    // ties-to-native rule is the never-worse guarantee — letting it into
-    // a density-dominated ranking there would re-admit exactly the
-    // warning regressions that guarantee exists to block.
-    // (RFC-060: the same slice bound now confines BOTH scoped candidates
-    // — DI at 5 and horizontal-stack at 6 — to their pairwise choices
-    // when native succeeded; both enter the generic ranking only on a
-    // native refusal, where there is no bit-identity to protect.)
-    let ranking_len = if native_run.outcome.is_some() { DI_IDX } else { H_IDX + 1 };
-
-    // DI is LAST so that, when it does reach the generic ranking, the
-    // earliest-index tie-break still favours native.
-    //
-    // It reaches the ranking in exactly one case — native produced nothing,
-    // where `ranking_len` is `DI_IDX + 1` and DI competes with
-    // `cell-composed` on the merits. When native SUCCEEDED, `ranking_len`
-    // is `DI_IDX`, so every ranking query is sliced to exclude index 5 and
-    // `clean_flags[DI_IDX]` is simply never read. That slice is the whole
-    // mechanism; there is no `None` pin (`tier_outcomes` populates DI like
-    // any other candidate).
-    // Each entry's name comes from its own run, not from a literal, so
-    // the check below actually discriminates: swapping two runs here
-    // moves their names with them and trips the assert, where hardcoded
-    // labels would have silently mislabelled the winner (#692 review
-    // round 2, 3/3).
-    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 7] = [
+    let candidates: [(
+        Option<(LayoutResult, CandidateScore)>,
+        Vec<crate::trace::TraceEvent>,
+        &str,
+    ); 7] = [
         (native_run.outcome, native_run.events, native_run.name),
         (k1_run.outcome, k1_run.events, k1_run.name),
         (split_run.outcome, split_run.events, split_run.name),
-        (merge_tap_run.outcome, merge_tap_run.events, merge_tap_run.name),
+        (
+            merge_tap_run.outcome,
+            merge_tap_run.events,
+            merge_tap_run.name,
+        ),
         (cells_run.outcome, cells_run.events, cells_run.name),
         (di_run.outcome, di_run.events, di_run.name),
-        (horizontal_run.outcome, horizontal_run.events, horizontal_run.name),
+        (
+            horizontal_run.outcome,
+            horizontal_run.events,
+            horizontal_run.name,
+        ),
     ];
     for (i, (_, _, name)) in candidates.iter().enumerate() {
         debug_assert_eq!(
@@ -1996,146 +1567,12 @@ fn select_best_decomposition_with_policy(
         );
     }
 
-    // Find best accepted candidate (highest score). The candidates
-    // array is a PREFERENCE ranking (native first, cell-composed
-    // last), so exact score ties resolve to the EARLIEST index — a
-    // bare `max_by` keeps the last maximum, which would hand a tie to
-    // cell-composed and silently break the additive contract (#384
-    // review finding 4: additivity rested on an empirical score
-    // margin, with the tie-break pointing the wrong way).
-    let best_accepted_idx = candidates[..ranking_len]
-        .iter()
-        .enumerate()
-        .filter_map(|(i, (outcome, _, _))| {
-            outcome.as_ref().and_then(|(_, score)| {
-                if score.accepted {
-                    Some((i, score.score))
-                } else {
-                    None
-                }
-            })
-        })
-        .max_by(|(ia, a), (ib, b)| {
-            a.partial_cmp(b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(ib.cmp(ia))
-        })
-        .map(|(i, _)| i);
-
-    // Validation-tiered selection (#392), part 2: `accepted` never
-    // runs the full validator, so an error-laden native could outscore
-    // a CLEAN sibling on density and reach callers as a silently
-    // broken Ok (mil5-from-plates: native hard-fails validation while
-    // the composed candidate is 0/0). Prefer the best-scoring accepted
-    // candidate whose layout validated with ZERO errors (clean_flags,
-    // computed pre-reattach above); if none is clean, fall through to
-    // today's pick (still returns the error-laden best rather than
-    // refusing — callers see the errors, behavior unchanged).
-    // RFC-060 warnings-first ordering is SCOPED to the refusal path
-    // (native produced nothing) — the case it was built for: horizontal's
-    // 0-error/6-warning ec@15 resolution must not outrank DI's genuinely
-    // clean 0/0. When native produced a layout this tier keeps #392's
-    // original score-first order, so every success-path selection is
-    // bit-identical to pre-RFC-060 behavior. (PR #515 review finding:
-    // this comparator is also reached on the native-success path via the
-    // `.or()` chain below, so an unscoped reorder would have widened the
-    // change beyond the stated refusal-tier intent.)
-    let native_refused = candidates[NATIVE_IDX].0.is_none();
-    let best_error_free_idx = candidates[..ranking_len]
-        .iter()
-        .enumerate()
-        .filter_map(|(i, (outcome, _, _))| {
-            let (clean, warn_key) = clean_flags[i]?;
-            if !clean {
-                return None;
-            }
-            outcome.as_ref().map(|(_, score)| (i, warn_key, score.score))
-        })
-        // Refusal path: warnings (asc), then score (desc), then earliest
-        // index — within the error-free tier a quieter layout beats a
-        // denser one (see the clean_flags comment; RFC-060 decision log).
-        // Success path: score (desc), then earliest index — the original
-        // #392 order, unchanged.
-        .min_by(|(ia, wa, sa), (ib, wb, sb)| {
-            let score_ord = sb.partial_cmp(sa).unwrap_or(std::cmp::Ordering::Equal);
-            if native_refused {
-                wa.cmp(wb).then(score_ord).then(ia.cmp(ib))
-            } else {
-                score_ord.then(ia.cmp(ib))
-            }
-        })
-        .map(|(i, _, _)| i);
-
-    // The scoped Pooled merge-tap decision (error-count metric, ties → Native)
-    // overrides the generic accepted-by-score pick when it ran; then the
-    // error-free tier; then best-accepted; then the first candidate that
-    // produced a layout (Native preferred — earliest in the array). Same
-    // degraded behaviour as today's pipeline when shape-fix can't resolve
-    // a (n, m) trap.
-    // `merge_tap_choice` must not SHADOW `di_choice`, which a plain
-    // `.or()` chain did (review finding on #474).
-    //
-    // `merge_tap_choice` is built with `.map()`, so it is `Some` whenever
-    // merge-tap produced anything at all — including its `Some(NATIVE_IDX)`
-    // arm, which means "native beat merge-tap". Under `.or()` that `Some`
-    // short-circuits, so DI's already-computed, already-validated result was
-    // discarded unread even when DI was strictly better than native. The
-    // preconditions overlap by construction: `try_merge_tap` needs Pooled +
-    // native-produced-but-unaccepted, and `di_choice` needs only
-    // native-produced — the same state satisfies both. Measured live on
-    // `electronic-circuit@35/s` from ore (Pooled, yellow), which carries DI's
-    // flagship copper-cable coupling AND is documented by
-    // `layout_retry_is_trace_independent` as a fixture where native beats
-    // merge-tap: DI ran a full extra layout pass there and was guaranteed to
-    // be thrown away, which also contradicts the cost rationale for gating
-    // `try_di` at all.
-    //
-    // So the arms are distinguished rather than collapsed:
-    //   MERGE_TAP_IDX — merge-tap genuinely beat native on `quality_key`; it
-    //     wins. DI is NOT compared against it here, because `di_choice` only
-    //     ever compared DI against NATIVE; ranking DI against merge-tap is a
-    //     different question and is deliberately not answered by this change.
-    //   NATIVE_IDX — native beat merge-tap, so native is the incumbent, and
-    //     `di_choice` is exactly a DI-vs-native comparison. DI gets its say,
-    //     falling back to native when it does not win.
-    // (RFC-060: `di_choice` in the arms below became `scoped_choice` —
-    // the DI/horizontal pairwise resolution — so neither scoped
-    // candidate can shadow the other; the merge-tap non-shadowing
-    // structure is unchanged.)
-    //
-    // RFC-070 Phase 0b: each arm is TAGGED with the `SelectionStage` that
-    // produced it. The chain is unchanged — `Some(_) => scoped_choice
-    // .or(Some(NATIVE_IDX))` is spelled as a match on `scoped_choice`
-    // purely so the two answers get different stage tags (a scoped
-    // candidate displacing native is a different decision from native
-    // surviving merge-tap, and the oracle must not merge them).
-    use crate::trace::SelectionStage;
-    let v1_winner_idx: Option<(usize, SelectionStage)> = match merge_tap_choice {
-        Some(MERGE_TAP_IDX) => Some((MERGE_TAP_IDX, SelectionStage::MergeTap)),
-        Some(_) => match scoped_choice {
-            Some(i) => Some((i, SelectionStage::ScopedPairwise)),
-            None => Some((NATIVE_IDX, SelectionStage::MergeTap)),
-        },
-        None => scoped_choice.map(|i| (i, SelectionStage::ScopedPairwise)),
-    }
-    .or(best_error_free_idx.map(|i| (i, SelectionStage::BestErrorFree)))
-    .or(best_accepted_idx.map(|i| (i, SelectionStage::BestAccepted)))
-    // DI IS admitted here, deliberately: `di_choice` returns `None` when
-    // native produced nothing (see its guard), precisely so `cell-composed`
-    // and DI compete in this ranking rather than DI auto-winning a refusal.
-    // `ranking_len` is what excludes DI in the native-SUCCEEDED case.
-    .or_else(|| {
-        candidates[..ranking_len]
-            .iter()
-            .position(|(o, _, _)| o.is_some())
-            .map(|i| (i, SelectionStage::FirstProduced))
-    });
-
-    // Phase 2b: v2 is the shipped decision, unconditionally. It consumes
-    // the scoreboard projections of the measurements already computed by
-    // v1's mechanisms; it does not re-run validation or consult v1's
-    // answer. A policy no-winner is the refusal path below; if v1 had a
-    // winner, the error identifies it as a v2-declined case.
+    // Phase 2b/2c: v2 is the sole shipped decision. It consumes the
+    // scoreboard projections of the measurements already computed; it
+    // never re-validates and there is no second winner to consult. The
+    // shipping path refuses LOUDLY on policy/profile misalignment (#707
+    // review round 1) rather than indexing `candidates` with a slot that
+    // names a different producer than the policy believes it does.
     let profiles = board.v2_profiles();
     validate_shipping_alignment(&policy, profiles.len())?;
     let v2_winner = selection_policy::decide(&profiles, &policy);
@@ -2147,10 +1584,6 @@ fn select_best_decomposition_with_policy(
         // is exactly what a refusal investigation needs — but no
         // `SelectionDecided` follows it because there is no v2 winner.
         board.emit();
-        // The reverse shadow still runs on this path, including when v1
-        // and v2 both refuse, so the schema remains emitted for every
-        // selection call.
-        emit_selection_shadow(&board, solver_result, &opts, v1_winner_idx);
         // Both sides keyed by `CANDIDATE_ORDER`: the names from the list
         // itself and the reasons from `run_refs`, whose slots are checked
         // against it. Nothing here is positional against a separately
@@ -2159,12 +1592,16 @@ fn select_best_decomposition_with_policy(
         let details: Vec<String> = CANDIDATE_ORDER
             .iter()
             .zip(refusal_reasons.iter())
-            .map(|(name, err)| {
-                format!("{name}: {}", err.as_deref().unwrap_or("did not run"))
-            })
+            .map(|(name, err)| format!("{name}: {}", err.as_deref().unwrap_or("did not run")))
             .collect();
-        let reason = if v1_winner_idx.is_some() {
-            "selection policy declined a winner despite v1 producing a layout"
+        // Phase 2c: there is no v1 to compare against, so the split keys
+        // on the shipped path's own inputs — did ANY candidate produce?
+        // (The final TieredRank stage admits every produced candidate, so
+        // a policy `None` with a produced candidate is a v2-declined case,
+        // not an all-candidates refusal.)
+        let any_produced = candidates.iter().any(|(o, _, _)| o.is_some());
+        let reason = if any_produced {
+            "selection policy declined every produced candidate"
         } else {
             "no decomposition candidate produced a layout"
         };
@@ -2182,7 +1619,10 @@ fn select_best_decomposition_with_policy(
     let (layout, score) = outcome.expect("v2 winner index must point to Some outcome");
     for ev in events {
         // Skip Score events — already replayed for telemetry above.
-        if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
+        if matches!(
+            ev,
+            crate::trace::TraceEvent::DecompositionCandidateScored { .. }
+        ) {
             continue;
         }
         crate::trace::emit(ev);
@@ -2203,13 +1643,6 @@ fn select_best_decomposition_with_policy(
         winner: name.to_string(),
         stage,
     });
-    // RFC-070 Phase 2b (#689 OWNER GATE 2): the SHADOW is emitted
-    // immediately after the v2 terminal it reverses. Ordering matters to
-    // the readers: `parity_corpus`'s extractor pairs the last seven
-    // scoreboard rows with the last `SelectionDecided`, so the shadow
-    // must not sit between them. v2 has already chosen, replayed and
-    // returned the shipped winner; v1 is carried only in the comparison.
-    emit_selection_shadow(&board, solver_result, &opts, v1_winner_idx);
     Ok(layout)
 }
 
@@ -2256,7 +1689,9 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "assembling-machine-1".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            self_loop: vec![],
+            voider: false,
+            game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -2281,7 +1716,9 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "assembling-machine-1".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            self_loop: vec![],
+            voider: false,
+            game_modules: Vec::new(),
             count: 2.0, // 2 machines × 1/s = 2/s production
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -2298,7 +1735,10 @@ mod tests {
             module_id: 0,
         });
         let excess = compute_overproduction(&solver);
-        assert!((excess - 0.5).abs() < 1e-9, "expected 0.5/s excess, got {excess}");
+        assert!(
+            (excess - 0.5).abs() < 1e-9,
+            "expected 0.5/s excess, got {excess}"
+        );
     }
 
     #[test]
@@ -2310,7 +1750,9 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "electric-furnace".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            self_loop: vec![],
+            voider: false,
+            game_modules: Vec::new(),
             count: 5.0, // big internal item — not external, doesn't count
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -2322,40 +1764,6 @@ mod tests {
         });
         // No external_outputs entries → no overproduction reported.
         assert!((compute_overproduction(&solver)).abs() < 1e-9);
-    }
-
-    /// The DI never-worse comparison must be COMPONENT-WISE. A derived
-    /// `Ord` on `IssueCounts` is lexicographic and would accept a large
-    /// regression on a later channel in exchange for a one-unit gain on
-    /// an earlier one — the review finding on #474, which was live in
-    /// both `di_choice` and the e2e gate.
-    #[test]
-    fn issue_counts_compare_component_wise_not_lexicographically() {
-        let c = |errors, warnings, layout_warnings| IssueCounts {
-            errors,
-            warnings,
-            layout_warnings,
-        };
-        // THE REGRESSION CASE: one fewer validator warning, twelve more
-        // layout warnings. Lexicographic order calls this an improvement.
-        let native = c(0, 1, 0);
-        let di = c(0, 0, 12);
-        assert!(
-            !di.strictly_better_than(&native),
-            "trading 1 validator warning for 12 layout warnings is not an improvement"
-        );
-        assert!(!di.no_worse_than(&native), "the layout channel is a floor, not a tiebreaker");
-        // Same shape one channel over: fewer errors must not buy warnings.
-        assert!(!c(0, 9, 0).strictly_better_than(&c(1, 0, 0)));
-
-        // Genuine improvements still register, on each channel alone...
-        assert!(c(0, 0, 0).strictly_better_than(&c(1, 0, 0)));
-        assert!(c(0, 0, 0).strictly_better_than(&c(0, 1, 0)));
-        assert!(c(0, 0, 0).strictly_better_than(&c(0, 0, 1)));
-        // ...and equality is NOT "strictly better", which is what makes
-        // ties fall through to native and stay bit-identical.
-        assert!(!c(0, 1, 2).strictly_better_than(&c(0, 1, 2)));
-        assert!(c(0, 1, 2).no_worse_than(&c(0, 1, 2)));
     }
 
     #[test]
@@ -2409,81 +1817,5 @@ mod tests {
             out.is_err(),
             "merge-tap candidate must refuse non-Pooled strategies; got {out:?}"
         );
-    }
-
-    // ---- kind-weighted merge-tap-vs-native decision -------------------------
-    // These exercise the pure comparison (`ErrorKinds::quality_key`) with the
-    // real fixtures' measured kind splits as synthetic inputs, so they carry no
-    // slow layout work. The merge-tap winner gate is a strict `<` with ties to
-    // native, so "native selected" == `!(mergetap.quality_key() < native.…)`.
-
-    /// electronic-circuit@35/s-from-ore with STEP B: native is 4 starvation
-    /// dead-ends; merge-tap trades 2 of them for 1 contamination (copper-plate
-    /// sideloaded onto the iron trunk). Count picks merge-tap (3 < 4); kind
-    /// keeps native, because contamination propagates and dead-ends stay local.
-    #[test]
-    fn kind_keeps_ec35_native_despite_lower_count() {
-        let native = ErrorKinds { contamination: 0, starvation: 4, structural: 0 };
-        let mergetap = ErrorKinds { contamination: 1, starvation: 2, structural: 0 };
-        // Merge-tap is cheaper by flat count (1+2 = 3 < 4) — the old metric.
-        assert!(
-            mergetap.contamination + mergetap.starvation
-                < native.contamination + native.starvation
-        );
-        // …but worse by kind, so native must win.
-        assert!(
-            native.quality_key() < mergetap.quality_key(),
-            "native must win by kind (native {:?} vs merge-tap {:?})",
-            native.quality_key(),
-            mergetap.quality_key(),
-        );
-    }
-
-    /// utility-science-pack@10/s: native ~175 total errors, merge-tap 46
-    /// (8 contamination from the balancer/trunk interleave + 38 starvation).
-    /// Merge-tap wins under both count and kind — native's error mass dwarfs
-    /// the contamination penalty.
-    #[test]
-    fn kind_flips_utility_to_merge_tap() {
-        let native = ErrorKinds { contamination: 0, starvation: 175, structural: 0 };
-        let mergetap = ErrorKinds { contamination: 8, starvation: 38, structural: 0 };
-        assert!(
-            mergetap.quality_key() < native.quality_key(),
-            "merge-tap must win by kind (merge-tap {:?} vs native {:?})",
-            mergetap.quality_key(),
-            native.quality_key(),
-        );
-    }
-
-    /// A structural error (invalid, unimportable blueprint) loses to any number
-    /// of functional errors — the lexicographic structural term dominates.
-    #[test]
-    fn structural_dominates_functional() {
-        let importable = ErrorKinds { contamination: 50, starvation: 50, structural: 0 };
-        let unimportable = ErrorKinds { contamination: 0, starvation: 0, structural: 1 };
-        assert!(importable.quality_key() < unimportable.quality_key());
-    }
-
-    /// The contamination weight must land inside `[3, 17]`: below 3, EC@35s
-    /// stops being a strict native win (k=2 ties); at/above 18, utility flips
-    /// back to native. Both bounds are checked directly against the fixtures'
-    /// weighted functional totals.
-    #[test]
-    fn contamination_weight_window() {
-        let ec_native = ErrorKinds { contamination: 0, starvation: 4, structural: 0 };
-        let ec_mergetap = ErrorKinds { contamination: 1, starvation: 2, structural: 0 };
-        let util_native = ErrorKinds { contamination: 0, starvation: 175, structural: 0 };
-        let util_mergetap = ErrorKinds { contamination: 8, starvation: 38, structural: 0 };
-
-        // k=2: EC ties (both 4) → native only by the strict-`<` tiebreak.
-        assert_eq!(ec_native.weighted_functional(2), ec_mergetap.weighted_functional(2));
-        // k=3 (lower window bound): EC native strictly wins.
-        assert!(ec_native.weighted_functional(3) < ec_mergetap.weighted_functional(3));
-        // k=17 (upper window bound): utility still merge-tap (174 < 175)…
-        assert!(util_mergetap.weighted_functional(17) < util_native.weighted_functional(17));
-        // …k=18 flips it back to native (182 > 175), so 17 is the last good weight.
-        assert!(util_mergetap.weighted_functional(18) > util_native.weighted_functional(18));
-        // The production weight is inside the window.
-        assert!((3..=17).contains(&KIND_CONTAMINATION_WEIGHT));
     }
 }
