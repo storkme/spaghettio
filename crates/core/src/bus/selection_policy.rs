@@ -1,11 +1,10 @@
 //! RFC-070 Phase 1b (#689 track W2b): candidate selection expressed as
 //! **policy data** instead of open-coded mechanisms.
 //!
-//! Nothing here is wired into production. `select_best_decomposition`
-//! remains the only selection path; this module is the target
-//! architecture plus the proof that it reproduces the decisions the
-//! Phase-0 oracle recorded (`tests/parity_corpus.rs::policy_replay`).
-//! Phase 2a is what runs it against freshly produced layouts.
+//! Phase 2b wires `select_best_decomposition` to ship this decision over
+//! its scoreboard profiles. The v1 chain remains beside it as a reverse
+//! shadow until Phase 2c; the proof that this module reproduces the
+//! Phase-0 oracle is `tests/parity_corpus.rs::policy_replay`.
 //!
 //! # The reframe: one measurement, three comparators
 //!
