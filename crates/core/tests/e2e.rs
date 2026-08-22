@@ -483,7 +483,15 @@ fn harness_options_are_engine_defaults() {
 /// test's own pins, so adjudicate them the way this PR adjudicated the
 /// harness's. Either way, name the site in the commit that lowers the
 /// number, so a reader can tell a migration from a weakened tripwire.
-/// Raising a count means a new copy of a known trap — don't.
+///
+/// **Raising a count is allowed, but only on the record** (#699 review
+/// round 9, and the correction is fair — the earlier wording, "raising a
+/// count means a new copy of a known trap — don't", forbade a legitimate
+/// case). RFC-049's unresearched world IS a valid thing to test, and a
+/// new test whose subject is capacity 0 or cells off needs the literal.
+/// Raise the number, and say in the same commit which test and why the
+/// value is load-bearing. What the gauge is for is that a copy-paste
+/// arrives with a reason attached, not that the count never moves up.
 ///
 /// **This is a source-text gauge, not a behavioural one** (#699 review
 /// rounds 3-5 argued its reach; round 8 argued it was pointed at the

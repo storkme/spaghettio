@@ -1532,3 +1532,24 @@ fixtures / docs split per the churn norm).
     with `=` instead of `:`.
   * *(minor)* format fragility of the gauge — already documented, and
     narrowed rather than removed by the substring form.
+
+  **#699 review round 9** — five findings, four of them verbatim
+  restatements of residuals the code comments they quote already state
+  (the delivery-guard major for the sixth time, the vacuous corroboration,
+  the `#[ignore]`d exporter not running in CI, the gauge being textual not
+  semantic). One correction accepted: the gauge's doc said "raising a
+  count means a new copy of a known trap — don't", which forbids a
+  legitimate case — RFC-049's unresearched world is a valid subject, and a
+  test about it needs the literal. Rewritten: raising is allowed on the
+  record, naming the test and why the value is load-bearing. The point of
+  the gauge is that a copy-paste arrives with a reason attached, not that
+  the count only ever falls.
+
+  **Review rounds closed at 9.** Rounds 1, 5, 7 and 8 each found something
+  real (the missing meter anchor → #700; the stale W2a "zero production
+  callers" claim; two sweeps reading the nested winner; a self-counting
+  gauge). Round 9 produced one doc correction and four restatements, which
+  is the signal that the seam is worked out. The standing residuals — no
+  core-side delivery gate, a textual rather than semantic fossil gauge, an
+  opt-in meter tripwire — are recorded above with their reasons and are
+  not W2c's to close.
