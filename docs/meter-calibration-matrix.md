@@ -1,0 +1,60 @@
+# Meter calibration matrix
+
+Status: active measurement workflow. The matrix is the current 35-fixture
+generator regression corpus, exported once and then measured by headless
+Factorio. It is deliberately broader than the historical Job-2 and post-lift
+banks, which remain useful evidence but are incomplete snapshots of older
+generator configurations.
+
+## What it establishes
+
+Every row starts from the same source used by the e2e belt-detour differential:
+recipe, rate, machine tier, raw inputs, belt tier, exclusions, and the one
+declared layout variant. The exporter writes the exact blueprint and manifest
+that Factorio runs; the meter reads those same files. A row is therefore a
+meter-vs-game comparison of one concrete generated factory, not a comparison
+between separately reconstructed configurations.
+
+This is a representative current-production corpus, not an exhaustive Cartesian
+product of every recipe and every engine option. A newly added e2e fixture
+automatically appears as an unmeasured row in the next bank. Broader fuzzing is
+a separate robustness concern and should not be mistaken for calibrated physics
+coverage.
+
+## Create and measure a bank
+
+Use a new directory for each engine revision or deliberate fixture change:
+
+```text
+cargo run --release -p spaghettio_core --example calibration_matrix_export -- \
+  /path/to/calibration-bank-YYYY-MM-DD
+scripts/run-calibration-matrix.sh /path/to/calibration-bank-YYYY-MM-DD
+cargo run --release -p spaghettio_meter --example sweep_postlift -- \
+  /path/to/calibration-bank-YYYY-MM-DD /tmp/meter-vs-sim.csv
+```
+
+The exporter refuses a non-empty target directory. That is intentional: do not
+replace a blueprint beneath an old `report.json`, because a label match alone
+cannot prove that the report was made from the current file. `matrix.json`
+records the fixture declaration, geometry, validator summary, and SHA-256 of
+each exported blueprint. The runner resumes a stopped campaign by skipping
+existing reports; a changed factory always requires a new bank.
+
+Each Factorio run uses a 432,000-tick warmup at speed 32, matching the
+post-lift provenance bar. Runs remain sequential because the main purpose is
+reproducibility and the largest factories are CPU-bound. Parallel campaigns
+need an explicit resource budget and independent Factorio installs.
+
+## Reading coverage honestly
+
+`sweep_postlift` prints every fixture directory without a usable report as an
+exclusion, rather than silently shrinking the denominator. It compares solid
+targets on both produced and delivered rates, reports threshold classifications,
+and keeps fluid target rows visible but unjudged until a comparable fluid
+metric is established. Its output, plus the `matrix.json` fingerprint, is the
+calibration matrix record; neither a green e2e test nor a meter-only run is a
+substitute for a Factorio measurement.
+
+Historical context and the known divergence results live in
+[`meter-divergence.md`](meter-divergence.md). This document owns the workflow
+that prevents the next result from becoming another local-only, partial bank.

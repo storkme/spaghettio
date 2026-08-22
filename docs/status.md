@@ -220,6 +220,14 @@ cell-interface RFC.)
 
 ## Deferred tooling tasks
 
+- **Meter-vs-Factorio calibration matrix (active, 2026-08-22):** the current
+  35-fixture e2e corpus now has one shared definition, a tracked exporter, an
+  immutable Factorio-runner, and a meter reader that reports coverage as
+  `measured/expected` rather than silently narrowing its denominator. The
+  first full current-generation bank is being measured; its reports are not
+  yet a calibration result. Workflow and interpretation:
+  [`meter-calibration-matrix.md`](meter-calibration-matrix.md).
+
 Test-suite time recovery (audited 2026-07-19, pick-up notes per item in
 [`test-suite-followups.md`](test-suite-followups.md)): committed STRESSGOLD
 baseline goldens landed 2026-07-19 and were DELETED 2026-08-15 (#632 B7 —

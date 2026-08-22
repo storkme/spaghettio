@@ -10791,70 +10791,16 @@ fn rfc061_allocation_probe_ac5() {
 //   cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
 //       belt_detour_survey --exact --ignored --nocapture
 
-#[derive(Clone, Copy)]
-enum SurveyVariant {
-    Plain,
-    Strategy(spaghettio_core::bus::layout::LayoutStrategy),
-    Excluded,
-    ExcludedVoid,
-}
+use spaghettio_core::calibration_matrix::{
+    fixtures as calibration_fixtures, CalibrationFixture as SurveyFixture,
+    FixtureVariant as SurveyVariant,
+};
 
-struct SurveyFixture {
-    name: &'static str,
-    item: &'static str,
-    rate: f64,
-    machine: &'static str,
-    belt_tier: Option<&'static str>,
-    inputs: &'static [&'static str],
-    excluded: &'static [&'static str],
-    variant: SurveyVariant,
-}
-
+/// The belt-detour differential and the Factorio calibration exporter use the
+/// same current-generation fixture list. A new e2e shape is therefore
+/// automatically visible as an unmeasured calibration row until it is run.
 fn survey_fixtures() -> Vec<SurveyFixture> {
-    use spaghettio_core::bus::layout::LayoutStrategy;
-    use SurveyVariant::*;
-
-    vec![
-        SurveyFixture { name: "tier1_iron_gear_wheel", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-1", belt_tier: None, inputs: &["iron-plate"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier1_iron_gear_wheel_from_ore", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier1_iron_gear_wheel_20s", item: "iron-gear-wheel", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier2_electronic_circuit", item: "electronic-circuit", rate: 10.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 10.0, machine: "assembling-machine-1", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier3_plastic_bar", item: "plastic-bar", rate: 10.0, machine: "chemical-plant", belt_tier: None, inputs: &["petroleum-gas", "coal"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier3_plastic_bar_from_crude", item: "plastic-bar", rate: 10.0, machine: "chemical-plant", belt_tier: None, inputs: &["crude-oil", "coal"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier3_sulfuric_acid", item: "sulfuric-acid", rate: 5.0, machine: "chemical-plant", belt_tier: None, inputs: &["iron-plate", "sulfur", "water"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier3_heavy_oil_cracking", item: "light-oil", rate: 5.0, machine: "chemical-plant", belt_tier: None, inputs: &["water", "heavy-oil"], excluded: &["advanced-oil-processing", "coal-liquefaction"], variant: Excluded },
-        SurveyFixture { name: "tier3_advanced_oil_processing_multi_machine", item: "petroleum-gas", rate: 12.0, machine: "oil-refinery", belt_tier: None, inputs: &["water", "crude-oil"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation", item: "petroleum-gas", rate: 24.0, machine: "oil-refinery", belt_tier: None, inputs: &["water", "crude-oil"], excluded: &["basic-oil-processing", "coal-liquefaction"], variant: Excluded },
-        SurveyFixture { name: "tier4_advanced_circuit_from_plates", item: "advanced-circuit", rate: 1.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier4_advanced_circuit_partitioned", item: "advanced-circuit", rate: 1.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::PartitionedDecomposed) },
-        SurveyFixture { name: "tier4_advanced_circuit_from_ore_am2", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier5_processing_unit_from_ore_am3", item: "processing-unit", rate: 2.0, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier_kovarex_self_loop", item: "uranium-235", rate: 0.1, machine: "assembling-machine-3", belt_tier: None, inputs: &["uranium-238"], excluded: &["uranium-processing"], variant: Excluded },
-        SurveyFixture { name: "tier_uranium_processing_surplus_export", item: "uranium-235", rate: 0.05, machine: "assembling-machine-3", belt_tier: None, inputs: &["uranium-ore"], excluded: &["kovarex-enrichment-process"], variant: Excluded },
-        SurveyFixture { name: "tier_uranium_processing_voider", item: "uranium-235", rate: 0.05, machine: "assembling-machine-3", belt_tier: None, inputs: &["uranium-ore"], excluded: &["kovarex-enrichment-process"], variant: ExcludedVoid },
-        SurveyFixture { name: "tier_pentapod_egg_self_loop", item: "pentapod-egg", rate: 0.2, machine: "assembling-machine-3", belt_tier: None, inputs: &["nutrients", "water"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier_fish_breeding_self_loop", item: "raw-fish", rate: 0.15, machine: "assembling-machine-3", belt_tier: Some("fast-transport-belt"), inputs: &["nutrients", "water"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "tier_bacteria_self_loop_regression", item: "iron-bacteria", rate: 1.0, machine: "assembling-machine-3", belt_tier: None, inputs: &["bioflux"], excluded: &["iron-bacteria"], variant: Excluded },
-        SurveyFixture { name: "stress_electronic_circuit_30s_from_ore", item: "electronic-circuit", rate: 30.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "stress_advanced_circuit_45s_from_plates", item: "advanced-circuit", rate: 45.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "plastic-bar"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "stress_advanced_circuit_partitioned_5s_from_plates_pooled", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::Pooled) },
-        SurveyFixture { name: "stress_advanced_circuit_partitioned_5s_from_plates_partitioned", item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::PartitionedDecomposed) },
-        SurveyFixture { name: "stress_advanced_circuit_partitioned_4s_from_plates_pooled", item: "advanced-circuit", rate: 4.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::Pooled) },
-        SurveyFixture { name: "stress_advanced_circuit_partitioned_4s_from_plates_partitioned", item: "advanced-circuit", rate: 4.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"], excluded: &[], variant: Strategy(LayoutStrategy::PartitionedDecomposed) },
-        SurveyFixture { name: "stress_electronic_circuit_30s_decomposed_pooled", item: "electronic-circuit", rate: 30.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Strategy(LayoutStrategy::Pooled) },
-        SurveyFixture { name: "stress_electronic_circuit_30s_decomposed_partitioned", item: "electronic-circuit", rate: 30.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Strategy(LayoutStrategy::PartitionedDecomposed) },
-        // stress_processing_unit_20s_from_plates deliberately excluded: its
-        // balancer-shape SAT search ran >20 min without finishing (survey
-        // driver run, 2026-08-01) — far outside a corpus-survey budget.
-        // Noted as a gap in the survey report rather than silently dropped.
-        SurveyFixture { name: "stress_electronic_circuit_60s_red_from_ore", item: "electronic-circuit", rate: 60.0, machine: "assembling-machine-2", belt_tier: Some("fast-transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "stress_electronic_circuit_22s_from_ore", item: "electronic-circuit", rate: 22.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "stress_electronic_circuit_23s_from_ore", item: "electronic-circuit", rate: 23.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "stress_electronic_circuit_35s_from_ore", item: "electronic-circuit", rate: 35.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
-        SurveyFixture { name: "stress_electronic_circuit_40s_from_ore", item: "electronic-circuit", rate: 40.0, machine: "assembling-machine-2", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"], excluded: &[], variant: Plain },
-    ]
+    calibration_fixtures()
 }
 
 fn percentile(sorted_ascending: &[f64], p: f64) -> f64 {

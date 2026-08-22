@@ -185,6 +185,55 @@ fn main() {
         .filter(|p| p.is_dir())
         .collect();
     fixtures.sort();
+    // A bank created by `calibration_matrix_export` carries an explicit list
+    // of expected fixture labels. Validate it before measuring anything: a
+    // missing directory otherwise turns a 35-row matrix into a plausible
+    // 34-row one, which is exactly the silent coverage shrink this tool exists
+    // to expose. Older ad-hoc banks deliberately have no such contract and
+    // retain their directory-driven behavior.
+    let matrix_path = std::path::Path::new(&dir).join("matrix.json");
+    let matrix_fixture_count = if matrix_path.exists() {
+        let raw = std::fs::read_to_string(&matrix_path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", matrix_path.display()));
+        let matrix: serde_json::Value = serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("parse {}: {e}", matrix_path.display()));
+        let expected: std::collections::BTreeSet<String> = matrix["fixtures"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{} has no fixtures array", matrix_path.display()))
+            .iter()
+            .map(|v| {
+                v["label"]
+                    .as_str()
+                    .unwrap_or_else(|| {
+                        panic!("{} has fixture without label", matrix_path.display())
+                    })
+                    .to_string()
+            })
+            .collect();
+        let declared = matrix["fixture_count"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{} has no fixture_count", matrix_path.display()))
+            as usize;
+        assert_eq!(
+            expected.len(),
+            declared,
+            "{} declares {declared} fixtures but names {} unique labels",
+            matrix_path.display(),
+            expected.len()
+        );
+        let actual: std::collections::BTreeSet<String> = fixtures
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "matrix directory set differs from {}; regenerate a fresh bank rather than mixing artifacts",
+            matrix_path.display()
+        );
+        Some(declared)
+    } else {
+        None
+    };
 
     for fp in fixtures {
         let fixture = fp.file_name().unwrap().to_string_lossy().to_string();
@@ -475,6 +524,20 @@ fn main() {
 
     let f = |v: Option<f64>| v.map_or("n/a".into(), |x| format!("{x:.4}"));
     let p = |v: Option<f64>| v.map_or("n/a".into(), |x| format!("{x:.2}"));
+
+    if let Some(expected) = matrix_fixture_count {
+        let awaiting = excluded
+            .iter()
+            .filter(|(_, why)| why == "no sim report.json — nothing to compare")
+            .count();
+        println!("=== MATRIX COVERAGE ===");
+        println!(
+            "  {}/{} fixtures have a vetted sim report; {} awaiting measurement",
+            provenance.len(),
+            expected,
+            awaiting,
+        );
+    }
 
     // --- per-item table ---------------------------------------------------
     // `tgt` is a declared column, not a bare marker appended past the last
