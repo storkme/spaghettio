@@ -526,13 +526,67 @@ impl ShadowOutcome {
         };
         format!("v1 {} -> v2 {}{gates}", side(&self.v1), side(&self.v2))
     }
-    /// Agreement on BOTH surfaces the shadow compares. A gate
-    /// disagreement that happens not to move the winner on this
-    /// particular solve is still a mis-transcription, and letting it
-    /// ride on `agree` alone would hide exactly the class the gate
-    /// comparison exists to catch.
-    fn clean(&self) -> bool {
-        self.agree && self.gate_disagreements.is_empty()
+    /// Everything wrong with this comparison, or `None`.
+    ///
+    /// **Deliberately does NOT trust the engine's `agree` bit** (#703
+    /// review round 1, the 1/3-pass finding and the most useful one):
+    /// a harness that reads a boolean the thing under test computed is
+    /// asserting "it says it agrees", not "the two programs agree". The
+    /// event carries all four sides, so the comparison is redone here
+    /// from the data — and the engine's own bit is then checked against
+    /// that recomputation, which turns the self-referential read into a
+    /// second independent surface.
+    ///
+    /// Four surfaces, each failing separately:
+    ///
+    /// 1. **The recomputed verdict.** `(v1_winner, v1_stage)` vs
+    ///    `(v2_winner, v2_stage)`, compared here.
+    /// 2. **The engine's `agree` bit** against (1) — a stuck-true bit,
+    ///    or a comparison written against the wrong pair, shows up as a
+    ///    mismatch rather than as silence.
+    /// 3. **v1's side against the cell's OWN record**, which came from
+    ///    the independent `SelectionDecided` event. This catches a
+    ///    mis-indexed winner name (`CANDIDATE_ORDER[idx]` vs the name
+    ///    the winner replay actually used) and a shadow event paired
+    ///    with the wrong block.
+    /// 4. **The producer gates.** A gate disagreement that does not
+    ///    happen to move the winner on this solve is still a
+    ///    mis-transcription, and letting it ride on the verdict alone
+    ///    hides exactly the class the gate comparison exists to catch.
+    ///
+    /// What none of this can reach, stated so the coverage is not
+    /// overread: a policy error faithfully reproduced by BOTH the
+    /// registration and v1 — the shadow's gate half checks v2's clauses
+    /// against v1's actual dispatch, so a mis-transcription is caught
+    /// wherever the corpus exercises it, but a clause that is wrong and
+    /// behaviourally identical on all 160 cells is a coverage limit, not
+    /// something an assertion can close.
+    fn faults(&self, cell: &Cell) -> Vec<String> {
+        let mut out = Vec::new();
+        let recomputed = self.v1.0 == self.v2.0 && self.v1.1 == self.v2.1;
+        if !recomputed {
+            out.push("v1 and v2 named different verdicts".to_string());
+        }
+        if self.agree != recomputed {
+            out.push(format!(
+                "the engine's own `agree` bit says {} where the four recorded fields say \
+                 {recomputed} — the shadow's comparison disagrees with its own data",
+                self.agree
+            ));
+        }
+        let cell_side = (cell.winner.clone(), cell.stage.clone());
+        let shadow_side = (self.v1.0.clone(), self.v1.1.map(|s| stage_name(s).to_string()));
+        if cell_side != shadow_side {
+            out.push(format!(
+                "the shadow's v1 side {shadow_side:?} is not what `SelectionDecided` \
+                 recorded for this cell ({cell_side:?}) — the two events are from \
+                 different selections"
+            ));
+        }
+        if !self.gate_disagreements.is_empty() {
+            out.push(format!("gates: [{}]", self.gate_disagreements.join("; ")));
+        }
+        out
     }
 }
 
@@ -551,11 +605,27 @@ impl ShadowOutcome {
 /// one. That is what makes the smoke tier below runnable on every push
 /// (RFC-070 Verification plan item 2, whose promise the earlier
 /// refusals kept pointing at).
+///
+/// **Scoped precisely** (#703 review round 1): what is cache- and
+/// layout-independent is the VERDICT COMPARISON. The fixture list is
+/// still a list — a smoke cell that stops reaching the search has
+/// nothing to shadow and fails the count check below, which is a
+/// maintenance obligation like any hand-written fixture list. The claim
+/// is "no re-bless treadmill for the DECISION", not "no fixture can
+/// ever need replacing".
 #[derive(Default)]
 struct ShadowReport {
-    compared: usize,
+    /// Cells where BOTH programs named a winner and agreed.
+    agreed_decided: usize,
+    /// Cells where both programs named NO winner. Also an agreement,
+    /// and counted apart from the one above so the headline figure
+    /// cannot quietly mean something wider than "decided cells agree"
+    /// (#703 review round 1: today's corpus has zero of these, so the
+    /// two numbers coincide — the split is what keeps that checkable
+    /// rather than assumed).
+    agreed_no_winner: usize,
     disagreements: Vec<String>,
-    /// Cells that decided but emitted no shadow event at all. A missing
+    /// Cells whose selection RAN but emitted no shadow event. A missing
     /// comparison must never read as agreement — that is the "compared
     /// nothing reads as clean" shape (#693) this campaign has now closed
     /// in four places.
@@ -563,17 +633,39 @@ struct ShadowReport {
 }
 
 impl ShadowReport {
+    fn compared(&self) -> usize {
+        self.agreed_decided + self.agreed_no_winner + self.disagreements.len()
+    }
+
     fn absorb(&mut self, key: &str, run: &CellRun) {
         match (&run.shadow, run.cell.status.as_str()) {
             (Some(s), _) => {
-                self.compared += 1;
-                if !s.clean() {
-                    self.disagreements.push(format!("  {key}: {}", s.describe()));
+                let faults = s.faults(&run.cell);
+                if faults.is_empty() {
+                    if run.cell.winner.is_some() {
+                        self.agreed_decided += 1;
+                    } else {
+                        self.agreed_no_winner += 1;
+                    }
+                } else {
+                    self.disagreements
+                        .push(format!("  {key}: {}\n      {}", s.describe(), faults.join("\n      ")));
                 }
             }
-            // `no-solve` never reaches the search, so there is nothing
-            // to shadow. Every other status means the search ran.
-            (None, "no-solve") => {}
+            // The two statuses where there is genuinely nothing to
+            // shadow, because no selection ran at all: `no-solve` (the
+            // solver refused this fixture×machine pair) and
+            // `no-selection` (`build_bus_layout` refused BEFORE reaching
+            // the search — the cell emits no scoreboard rows either).
+            //
+            // `no-selection` was hard-failing here in the first draft,
+            // on a comment claiming "every other status means the search
+            // ran" that is simply false of it (#703 review round 1). It
+            // is latent today (zero such cells) but it would have turned
+            // a legitimately-refusing cell into a campaign-finding-style
+            // failure with no divergence — a criterion the baseline
+            // comparison never had and this gate has no business adding.
+            (None, "no-solve" | "no-selection") => {}
             (None, status) => self.missing.push(format!("  {key}: status {status}")),
         }
     }
@@ -581,8 +673,11 @@ impl ShadowReport {
     fn print(&self) {
         println!("\n=== RFC-070 Phase 2a shadow ===");
         println!(
-            "cells compared: {}  |  disagreements: {}  |  missing comparisons: {}",
-            self.compared,
+            "cells compared: {}  (agreed: {} decided + {} no-winner)  |  disagreements: {}  \
+             |  missing comparisons: {}",
+            self.compared(),
+            self.agreed_decided,
+            self.agreed_no_winner,
             self.disagreements.len(),
             self.missing.len()
         );
@@ -595,7 +690,7 @@ impl ShadowReport {
     /// empty tally.
     fn assert_clean(&self) {
         assert!(
-            self.compared > 0,
+            self.compared() > 0,
             "the shadow compared NOTHING across the whole sweep — the comparison is not \
              running, which is not the same fact as it agreeing"
         );
@@ -614,7 +709,7 @@ impl ShadowReport {
              may be fixed with receipts; a semantic one MUST be reported — do not tune \
              policy data until the numbers line up.\n{}",
             self.disagreements.len(),
-            self.compared,
+            self.compared(),
             self.disagreements.join("\n")
         );
     }
@@ -1541,12 +1636,16 @@ const SMOKE_CELLS: &[(&str, &str)] = &[
 /// full 160-cell sweep under `SPAGHETTIO_PARITY_CORPUS=check` remains
 /// the real gate for a phase boundary — this is the tripwire between
 /// them, sized so it can run unconditionally.
-/// Cost: ~15s local warm (16 threads, pinned cache), which puts it in
-/// the 5–20s band `.config/nextest.toml` sizes at a 300s ceiling. It
-/// also carries a `threads-required` override there, because six SAT-
-/// heavy solves in one test on a 4-thread runner is the shape that blew
+/// Cost: ~15s local warm (16 threads, pinned cache) and **30.9s
+/// measured on the CI runner** (PR #703 head `12b1ea87`, job
+/// 97039777698) — a 2x host penalty rather than the 8-18x the cold-cache
+/// note in `.config/nextest.toml` records, because the rust job pins
+/// `SPAGHETTIO_ZONE_CACHE_PATH`. The 300s ceiling is therefore a ~10x
+/// margin over an observed number, not an extrapolation. It also carries
+/// a `threads-required` override there, because six SAT-heavy solves in
+/// one test on a 4-thread runner is the shape that blew
 /// `tier4_..._belt_pipe_crossing`'s ceiling when parallelism was first
-/// tried. The ntest ceiling is the real hang detector; nextest's kill
+/// tried. The ntest ceiling is the real hang detector; nextest'''s kill
 /// sits above it.
 #[test]
 #[ntest::timeout(300_000)]
@@ -1574,16 +1673,32 @@ fn shadow_agrees_with_production_on_the_census_fixtures() {
              swept axis"
         );
         let run = run_cell(f, machine, "default", |_| {});
-        assert_eq!(
-            run.cell.status, "decided",
-            "smoke cell {label}[{machine}] did not decide (status {:?}) — the shadow gate \
-             needs a live selection to compare, so a fixture that stopped deciding must \
-             be replaced rather than silently skipped",
-            run.cell.status
-        );
         report.absorb(&format!("{label}[{machine}]"), &run);
     }
     report.print();
-    assert_eq!(report.compared, SMOKE_CELLS.len(), "one comparison per smoke cell");
+    // The ONLY fixture-shaped requirement: each smoke cell must reach
+    // the search, so there is something to compare. Nothing here pins
+    // WHICH winner, WHICH stage, or even that the build succeeded.
+    //
+    // The first draft asserted `status == "decided"` per cell, and that
+    // was the wrong pin (#703 review round 1, the major): the shadow's
+    // verdict comparison is layout-independent, but "decided" is not —
+    // a host whose zone cache differs can legitimately land a cell in
+    // `decided-then-refused` (the search picked a winner and a LATER
+    // build step refused, which `run_cell` distinguishes on purpose),
+    // and that would red the one always-on gate with no v1/v2
+    // divergence anywhere. The shadow is emitted on that path too, so
+    // the comparison is still available and still meaningful; only the
+    // over-tight assertion had to go.
+    assert_eq!(
+        report.compared(),
+        SMOKE_CELLS.len(),
+        "every smoke cell must reach the selection and emit a comparison; {} of {} did. \
+         A cell that stopped reaching the search has nothing to shadow, so this gate \
+         would be silently measuring less than it claims — replace the fixture rather \
+         than letting the count drift",
+        report.compared(),
+        SMOKE_CELLS.len()
+    );
     report.assert_clean();
 }

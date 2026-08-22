@@ -1985,7 +1985,12 @@ fixtures / docs split per the churn norm).
     shadow compares two dispatches on ONE solve. Whatever layout this
     host's cache produced, both programs saw the same scoreboard and
     must reach the same `(winner, stage)` — so there is no re-bless
-    treadmill and no pin to get wrong. Hence
+    treadmill and no pin to get wrong **for the VERDICT** (scoped after
+    #703 review round 1, which was right that the first wording claimed
+    more: the fixture LIST is still a list, and a smoke cell that stops
+    reaching the search fails a count check like any hand-written
+    fixture would. What is cache- and layout-independent is the
+    comparison, not fixture stability). Hence
     `shadow_agrees_with_production_on_the_census_fixtures`, NON-ignored
     (~15s local warm, six census fixtures at their #691 machine tiers,
     `threads-required = 2` and a 300s ntest ceiling for the 4-thread
@@ -2054,3 +2059,54 @@ fixtures / docs split per the churn norm).
     exactly the contiguous TAIL, which is what makes v1's
     `candidates[..ranking_len]` SLICE and v2's `scoped` FIELD filter
     the same rule.*
+- *2026-08-22 — **#703 review round 1 adjudicated** (1 major, 5 minors, 1
+  nit; 6 absorbed, 1 refuted with a receipt). **The round's real
+  contribution is the 1/3-pass finding, which is the one this campaign
+  should have caught itself**: the harness read the engine's own `agree`
+  bit, so it asserted "the shadow SAYS it agrees", not "the two programs
+  agree". A stuck-true bit, or a comparison written against the wrong
+  pair, passed. `ShadowOutcome::faults` now recomputes the verdict from
+  the four recorded fields, checks the engine's bit AGAINST that
+  recomputation, and cross-checks the shadow's v1 side against the
+  cell's own `SelectionDecided` record — three independent surfaces
+  where there was one trusted boolean. Discrimination executed on both
+  new ones: forcing `agree = true` under a real divergence still fails,
+  reporting BOTH "v1 and v2 named different verdicts" and "the engine's
+  own `agree` bit says true where the four recorded fields say false";
+  mis-indexing `v1_winner` by one slot fails all six smoke cells naming
+  the mismatch against `SelectionDecided`. Restored and re-verified
+  green. **The generalisation, and it is a sibling of the one #698's
+  close-out recorded: a harness that reads a value the thing under test
+  computed has not verified that value.** The campaign has now hit
+  "compared nothing reads as clean" four times and "compared the subject
+  to its own claim" once.*
+  - *The MAJOR was also right and was a pin I had no business making:
+    the smoke gate asserted `status == "decided"` per cell, which is
+    NOT layout-independent the way the verdict comparison is — a host
+    whose zone cache differs can legitimately land a cell in
+    `decided-then-refused` (the search picked a winner and a LATER build
+    step refused, a status `run_cell` distinguishes on purpose), reddening
+    the one always-on gate with no divergence anywhere. Dropped; the
+    comparison-count assertion carries the real requirement, which is
+    only that each cell REACHES the search. Same shape one path over:
+    `ShadowReport::absorb` hard-failed on `no-selection` under a comment
+    claiming "every other status means the search ran", which is false of
+    exactly that status — a cell whose build refuses before the search
+    has nothing to shadow and is now exempt alongside `no-solve`. Latent
+    (zero such cells today), and it would have added a failure criterion
+    the baseline comparison never had.*
+  - *Also absorbed: the tally now splits agreed-decided from
+    agreed-no-winner, so "140/140" cannot quietly widen (today the two
+    coincide, which is what the split keeps checkable); and the nextest
+    override's comment claimed `threads-required = 2` "keeps it off the
+    box alongside another heavy test", which overclaims — it is a slot
+    cost, not a reservation, so the file's own accurate frame ("limits
+    concurrency to two heavy tests at a time") replaces it.*
+  - *Refuted with a receipt: the nit extrapolated the ceiling risk from
+    this file's cold-cache note (`partition_strategy_scoreboard`, ~26s
+    local warm vs 200-480s CI) and recommended raising the 300s ntest
+    ceiling. That ratio does not apply — the rust job PINS
+    `SPAGHETTIO_ZONE_CACHE_PATH`, so the gate is not solving zones fresh.
+    **Measured on the PR's own head**: 30.9s in CI against 15s local warm,
+    a 2x host penalty, leaving a ~10x margin. The sizing is now stated
+    from that measurement rather than from a band, at both sites.*
