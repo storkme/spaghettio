@@ -1541,7 +1541,15 @@ const SMOKE_CELLS: &[(&str, &str)] = &[
 /// full 160-cell sweep under `SPAGHETTIO_PARITY_CORPUS=check` remains
 /// the real gate for a phase boundary — this is the tripwire between
 /// them, sized so it can run unconditionally.
+/// Cost: ~15s local warm (16 threads, pinned cache), which puts it in
+/// the 5–20s band `.config/nextest.toml` sizes at a 300s ceiling. It
+/// also carries a `threads-required` override there, because six SAT-
+/// heavy solves in one test on a 4-thread runner is the shape that blew
+/// `tier4_..._belt_pipe_crossing`'s ceiling when parallelism was first
+/// tried. The ntest ceiling is the real hang detector; nextest's kill
+/// sits above it.
 #[test]
+#[ntest::timeout(300_000)]
 fn shadow_agrees_with_production_on_the_census_fixtures() {
     // The third parallel candidate list, bound in CI (#698 rounds 9-10
     // carry-over (e) — the unit tier binds the other two). A shadow

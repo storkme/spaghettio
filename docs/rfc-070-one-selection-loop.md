@@ -1929,3 +1929,128 @@ fixtures / docs split per the churn norm).
     tier for the first three, the clause-by-clause gate tests for the
     fourth — and the 2a shadow, which runs both dispatches on the same
     solve, is the first instrument that can check them together.*
+- *2026-08-22 — **Phase 2a landed and K70-1 IS ADJUDICATED: it PASSES**
+  (#689 track W3a). The v2 policy loop now runs in SHADOW inside
+  `select_best_decomposition` on every solve, after v1 has chosen,
+  replayed and returned its winner, and emits
+  `SelectionShadowCompared`. v1 ships everywhere; nothing flipped. **On
+  the full named parity corpus: 140/140 decided cells agree on winner
+  AND deciding stage, zero disagreements, zero missing comparisons**,
+  with the baseline itself `check`-clean 160/160 and the stage
+  distribution unmoved (`best-error-free` 87, `scoped-pairwise` 26,
+  `merge-tap` 15, `best-accepted` 12). So the premise test's live
+  verdict matches its offline precursor's: **no
+  candidate-identity-conditioned logic was needed anywhere**, at
+  produce time or in the stage logic, and the K70-1 fence still holds
+  mechanically.*
+  - ***The design call, and it is the one Phase 2b inherits: the shadow
+    consumes the SCOREBOARD, it does not re-validate.***
+    `Scoreboard::v2_profiles` projects the rows each verdict mechanism
+    already computed. Re-running `validate()` would have been the
+    obvious wiring and it would have made every divergence
+    uninterpretable — a different answer could mean a different
+    PROGRAM or merely different INPUTS, and no diff can separate them
+    after the fact. Measuring once also carries v1's laziness across
+    for free: a candidate no mechanism examined has no counts in the
+    shadow either, which is exactly the gap `decide` skips on, so the
+    `MeasurementRule` question round 3 settled never re-opens on the
+    live path. The price is stated where it lives: this path does NOT
+    exercise `IssueProfile::measure`, so `refuse_on_error` and eager
+    measurement stay covered by the unit tier alone.*
+  - ***The gate half is a NEW instrument and it closes #698's standing
+    hand-off hole.*** Alongside the decision, the shadow evaluates every
+    registration's `ProducerGate` against this call's options and solve
+    and compares it to whether v1 actually ran that candidate. That is
+    the coverage `policy_replay` cannot have by construction (it
+    consumes already-produced profiles and evaluates zero gates), and
+    it is the failure mode that would have been hardest to read: a
+    mis-transcribed eligibility clause moves the candidate SET, so it
+    surfaces as a changed winner with no visible cause. **0 gate
+    disagreements across all 353 selections of the corpus sweep.**
+    Discrimination executed, not assumed: forcing horizontal-stack's
+    `solve-has-dual-input-row` clause true fails two smoke cells with
+    the WINNER UNCHANGED, naming `horizontal-stack: v2 eligible / v1
+    not-run` — i.e. the gate half catches precisely what the decision
+    half cannot see. Two other breaks were executed and restored:
+    `AdmissionRule::AdmitAll` fails naming the pu@2/am3 cell, and
+    suppressing the emission fails as "compared nothing", not as
+    agreement.*
+  - ***The shadow is CI-gateable, and that is a property of the
+    instrument rather than a change of posture.*** The
+    "why isn't the corpus CI-gated" finding was raised eight times
+    across #694/#698 and refused eight times, correctly: those
+    harnesses compare a live run against a COMMITTED, cache-relative
+    record, so every legitimate engine change falsifies them and a
+    host with a different zone cache produces a meaningless diff. The
+    shadow compares two dispatches on ONE solve. Whatever layout this
+    host's cache produced, both programs saw the same scoreboard and
+    must reach the same `(winner, stage)` — so there is no re-bless
+    treadmill and no pin to get wrong. Hence
+    `shadow_agrees_with_production_on_the_census_fixtures`, NON-ignored
+    (~15s local warm, six census fixtures at their #691 machine tiers,
+    `threads-required = 2` and a 300s ntest ceiling for the 4-thread
+    runner), running on every push — the first always-on assertion this
+    campaign has been able to make, and the thing Verification plan
+    item 2 was pointing at all along. The 160-cell sweep under
+    `SPAGHETTIO_PARITY_CORPUS=check` now asserts shadow agreement too,
+    BEFORE the baseline comparison: the two failures are independent,
+    and only the shadow one is interpretable under a mis-pinned cache.*
+  - ***K70-3: not close.*** Measured in-process, which is the only
+    reading this host can support: across 28 selections totalling
+    24.837 s of `select_best_decomposition` time, the shadow accounted
+    for **0.513 ms — 0.00207%**, at 18.3 µs mean and 83.9 µs max per
+    selection (debug build, so an upper bound on production cost). Over
+    the whole corpus sweep, 353 selections cost **4.94 ms** of shadow
+    against a ~5-minute run. **The wall-clock A/B the kill criterion
+    asks for is uninformative BY CONSTRUCTION and is reported as such
+    rather than dressed up**: three full corpus runs on this box came
+    in at 284.96 s (shadow on, check), 361.59 s (shadow on,
+    instrumented) and **525.40 s with the shadow COMPILED OUT** — the
+    slowest of the three. Run-to-run variance spans ±60% while the
+    thing being measured is 0.002%, so the A/B measures the host, and
+    the in-process ratio is the answer. No stress-corpus timeout is
+    approached: the shadow adds tens of microseconds to a selection, and
+    the one new CI test is 15 s local warm inside a 300 s ceiling.*
+  - ***What the shadow still does NOT see, recorded before anyone
+    quotes 140/140.*** (i) **Nested selections in LOSING candidates.**
+    The shadow event is emitted like any other, so `run_candidate`
+    truncates it out with the rest of that candidate's stream — Phase-0b
+    oracle gap (g) applies unchanged, and the corpus reads only the
+    OUTER comparison. A disagreement inside a losing candidate's own
+    search is invisible here. (ii) `IssueProfile::measure`, per the
+    design call above. (iii) The two comparator blind spots #698
+    measured — the corpus still cannot discriminate a lexicographic
+    floor or a shadowing stage 1, and the shadow inherits that, because
+    it agrees with v1 on the same cells v1 decides. The unit tier
+    remains the only cover for those, and the smoke tier now binds the
+    THIRD parallel candidate list (`parity_corpus`'s `EXPECTED_ORDER`)
+    against the registration vector in CI, where only the other two
+    were bound before.*
+  - *Carry-overs from #698 rounds 9-10, all six landed in the opening
+    commit; two touch behaviour on unreachable paths and are named
+    here because a future reader will meet them as unexplained diffs.
+    (a) `ranks_ahead`'s `WarningsAscThenScoreDesc` gap arm ABSTAINS on
+    a missing warning key instead of falling through to the score —
+    round 6 removed the sentinel and left the fall-through, which
+    promotes the SECONDARY criterion to primary for the candidates
+    least is known about. (f) `Policy::selection` is renamed
+    `Policy::selection_counts`: round 5 settled that its `pass` is
+    always `true` because it gates nothing, but left that in prose on a
+    method whose return type has a `pass` field that looks like an
+    answer — the most dangerous shape a wrong number takes, since it is
+    not wrong, it is answering a question nobody asked. Also: (b) a
+    stale test name in `measure`'s doc; (c) the `refuse_on_error` block
+    softened from load-bearing to defensive (the three producers
+    carrying the flag self-refuse inside `produce()`, so it does not
+    fire on the live path); (d) `a_strictly_better_horizontal_beats_a_
+    merely_denser_di`, the one overlap of the two scoped arms neither
+    the corpus nor the existing pairwise test reaches — v1 answers
+    horizontal, by arithmetic rather than precedence, because its
+    both-scoped-won arm compares the two by the floor ALONE and DI's
+    counts are the incumbent's; (e)
+    `the_candidate_order_is_bound_to_its_positional_semantics`, which
+    is what a coordinated permutation of all three name lists cannot
+    satisfy: the incumbent is slot 0 and the `scoped` registrations are
+    exactly the contiguous TAIL, which is what makes v1's
+    `candidates[..ranking_len]` SLICE and v2's `scoped` FIELD filter
+    the same rule.*
