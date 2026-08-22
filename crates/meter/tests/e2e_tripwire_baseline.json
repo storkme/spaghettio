@@ -18,9 +18,9 @@
     {
       "label": "ec30-am2-ore",
       "target": "electronic-circuit",
-      "entities": 1991,
-      "deficit_pct": -100.0,
-      "converged": false
+      "entities": 2071,
+      "deficit_pct": -16.666666666666664,
+      "converged": true
     },
     {
       "label": "plastic5-chem-crude",

@@ -278,7 +278,7 @@
       "status": "decided",
       "winner": "native",
       "stage": "best-error-free",
-      "outcomes": "produced,not-run,not-run,not-run,refused,produced,refused"
+      "outcomes": "produced,not-run,not-run,not-run,refused,produced,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
@@ -287,7 +287,7 @@
       "status": "decided",
       "winner": "native",
       "stage": "best-error-free",
-      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
@@ -296,7 +296,7 @@
       "status": "decided",
       "winner": "native",
       "stage": "best-error-free",
-      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
@@ -304,8 +304,8 @@
       "options": "di-off",
       "status": "decided",
       "winner": "native",
-      "stage": "best-accepted",
-      "outcomes": "produced,not-run,not-run,not-run,refused,not-run,refused"
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,refused,not-run,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
@@ -321,36 +321,36 @@
       "machine": "assembling-machine-2",
       "options": "default",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,refused,refused,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,refused,produced,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
       "machine": "assembling-machine-2",
       "options": "cells-off",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
       "machine": "assembling-machine-2",
       "options": "e2e-harness",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
       "machine": "assembling-machine-2",
       "options": "di-off",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,refused,not-run,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,refused,not-run,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
@@ -358,44 +358,44 @@
       "options": "hs-off",
       "status": "decided",
       "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,refused,refused,not-run"
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,refused,produced,not-run"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
       "machine": "assembling-machine-3",
       "options": "default",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,refused,refused,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,refused,produced,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
       "machine": "assembling-machine-3",
       "options": "cells-off",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
       "machine": "assembling-machine-3",
       "options": "e2e-harness",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
       "machine": "assembling-machine-3",
       "options": "di-off",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,refused,not-run,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,refused,not-run,produced"
     },
     {
       "fixture": "tier2_ec_am2_30_ore",
@@ -403,8 +403,8 @@
       "options": "hs-off",
       "status": "decided",
       "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,refused,refused,not-run"
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,refused,produced,not-run"
     },
     {
       "fixture": "tier3_plastic_cp_5",
@@ -863,7 +863,7 @@
       "status": "decided",
       "winner": "native",
       "stage": "best-error-free",
-      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "e2e_tier2_electronic_circuit_from_ore",
@@ -872,7 +872,7 @@
       "status": "decided",
       "winner": "native",
       "stage": "best-error-free",
-      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "e2e_tier2_electronic_circuit_from_ore",
@@ -881,7 +881,7 @@
       "status": "decided",
       "winner": "native",
       "stage": "best-error-free",
-      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,refused"
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "e2e_tier2_electronic_circuit_from_ore",
@@ -889,8 +889,8 @@
       "options": "di-off",
       "status": "decided",
       "winner": "native",
-      "stage": "best-accepted",
-      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,refused"
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,produced"
     },
     {
       "fixture": "e2e_tier2_electronic_circuit_from_ore",
@@ -951,36 +951,36 @@
       "machine": "assembling-machine-3",
       "options": "default",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "e2e_tier2_electronic_circuit_from_ore",
       "machine": "assembling-machine-3",
       "options": "cells-off",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "e2e_tier2_electronic_circuit_from_ore",
       "machine": "assembling-machine-3",
       "options": "e2e-harness",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,not-run,refused,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,produced"
     },
     {
       "fixture": "e2e_tier2_electronic_circuit_from_ore",
       "machine": "assembling-machine-3",
       "options": "di-off",
       "status": "decided",
-      "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,not-run,not-run,refused"
+      "winner": "horizontal-stack",
+      "stage": "scoped-pairwise",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,not-run,produced"
     },
     {
       "fixture": "e2e_tier2_electronic_circuit_from_ore",
@@ -988,8 +988,8 @@
       "options": "hs-off",
       "status": "decided",
       "winner": "native",
-      "stage": "merge-tap",
-      "outcomes": "produced,not-run,not-run,produced,not-run,refused,not-run"
+      "stage": "best-error-free",
+      "outcomes": "produced,not-run,not-run,not-run,not-run,produced,not-run"
     },
     {
       "fixture": "e2e_tier2_electronic_circuit_20s_from_ore",
