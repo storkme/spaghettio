@@ -25,6 +25,7 @@ use super::partitioner::{
     apply_cap_driven_split, apply_partition_plan, apply_size_split, plan_partitioning,
     ModuleAssignment, PartitionPlan,
 };
+use super::selection_policy;
 use super::shape_fix::{
     select_shape_fix, PadLanesStrategy, ShapeFix, ShapeFixStrategy, ShardStrategy,
 };
@@ -1009,7 +1010,7 @@ impl CandidateRun {
 /// unchanged; the blast radius is not (#692 review round 3, 1/3, which
 /// noted the unconditional form inverted the degradation philosophy used
 /// twenty lines away, where candidates run under `catch_unwind`).
-const CANDIDATE_ORDER: [&str; 7] = [
+pub(crate) const CANDIDATE_ORDER: [&str; 7] = [
     "native",
     "k1-shape-fix",
     "size-split-2",
@@ -1254,6 +1255,199 @@ impl Scoreboard {
             });
         }
     }
+
+    /// The v2 profile vector: one [`IssueProfile`] per candidate slot,
+    /// derived from the rows this board already holds.
+    ///
+    /// **Nothing is re-validated, and that is the discipline, not an
+    /// optimisation.** The rows record what each verdict mechanism
+    /// computed at its own site; a shadow that ran `validate()` again
+    /// could disagree with the number the v1 decision actually used, and
+    /// then a divergence would be uninterpretable — is the PROGRAM
+    /// different, or is it being fed different inputs? Measuring once
+    /// and projecting is also what makes v1's laziness carry across
+    /// unchanged: a candidate no mechanism examined has no counts here
+    /// either, which is exactly the gap [`decide`] skips on.
+    ///
+    /// Consequence, stated so the shadow's coverage is not overread:
+    /// this path does NOT exercise [`IssueProfile::measure`], so the
+    /// produce-time `refuse_on_error` gate and the eager-measurement
+    /// question are not under test here. They are covered by the unit
+    /// tier in `bus::selection_policy`.
+    fn v2_profiles(&self) -> Vec<selection_policy::IssueProfile> {
+        self.0
+            .iter()
+            .map(|row| selection_policy::IssueProfile {
+                outcome: Some(row.outcome),
+                refusal_reason: row.reason.clone(),
+                score: row.score,
+                accepted: row.accepted,
+                accepted_reason: row.accepted_reason.clone(),
+                counts: row.counts.map(|c| selection_policy::IssueCounts {
+                    errors: c.errors,
+                    selection_warnings: c.warnings,
+                    layout_warnings: c.layout_warnings,
+                }),
+                kinds: row.kinds.map(|k| selection_policy::ErrorKindCounts {
+                    contamination: k.contamination,
+                    starvation: k.starvation,
+                    structural: k.structural,
+                }),
+            })
+            .collect()
+    }
+
+    /// Per-registration acceptance in the shape a [`ProducerGate`]
+    /// reads: `Some(accepted)` where that slot produced a layout, `None`
+    /// where it produced nothing. `accepted` is `Some` iff the candidate
+    /// produced, so the row's own field IS the predicate.
+    fn prior_acceptance(&self) -> [Option<bool>; 7] {
+        std::array::from_fn(|i| self.0[i].accepted)
+    }
+
+    /// Whether v1 actually ran each slot's `produce()`. `NotRun` is the
+    /// one outcome that means the call-site gate excluded it; `Refused`
+    /// and `Panicked` both mean it ran and cost a layout pass.
+    fn v1_ran(&self) -> [bool; 7] {
+        std::array::from_fn(|i| {
+            self.0[i].outcome != crate::trace::SelectionCandidateOutcome::NotRun
+        })
+    }
+}
+
+/// RFC-070 Phase 2a (#689 W3a): run the v2 policy loop in SHADOW over
+/// the same scoreboard v1 just decided from, and emit the comparison.
+///
+/// **Zero behaviour change by construction**: this function returns
+/// nothing, mutates nothing, and is called after the winner has already
+/// been chosen and replayed. v1's answer ships regardless of what v2
+/// says. A disagreement is DATA for the campaign's K70-1 adjudication
+/// — never a panic, never a fix-it-so-it-passes signal.
+///
+/// Two things are compared, and they fail differently:
+///
+/// 1. **The decision** — `(winner, stage)` from `selection_policy::
+///    decide` over `board.v2_profiles()`, against v1's. This is the
+///    corpus's divergence-equivalence rule, live.
+/// 2. **The producer gates** — each registration's `ProducerGate`
+///    evaluated against this call's options and solve, against whether
+///    v1 actually ran that candidate. This is the half `policy_replay`
+///    structurally cannot see (it consumes already-produced profiles
+///    and evaluates zero gates), and a mis-transcribed eligibility
+///    clause moves the candidate SET rather than the ranking — so it
+///    would show up as a changed winner with no obvious cause. #698's
+///    standing hand-off note names this as the thing only the 2a shadow
+///    can check.
+///
+/// # Two boundary changes this wiring makes, stated because they are
+/// easy to miss in a diff
+///
+/// **`selection_policy`'s `debug_assert`s are now on the LIVE path in
+/// debug builds** (#703 review round 2). `decide`'s profile-length
+/// check, `prior_slot`'s registration-order bound and
+/// `incumbent_index`'s exactly-one check were written for a replay
+/// harness; every one of them now runs on every solve of every
+/// `cargo test` and CI job. That is the intended tripwire — those
+/// asserts guard policy-AUTHORING mistakes, which is precisely what
+/// Phase 2b will be doing — and it is why they are `debug_assert`s
+/// rather than `assert`s: release and WASM keep their documented
+/// degradation (`decide` refuses, gates fall back to the safe scan)
+/// and a browser solve cannot be panicked by a code-level slip. The
+/// consequence to be aware of: a future producer whose gate reads a
+/// slot at or after its own index will now fail the SUITE, not just
+/// the replay.
+///
+/// **The seven-slot arrays are a latent invariant.**
+/// `Scoreboard::prior_acceptance` and `v1_ran` return `[_; 7]` because
+/// the board is `[CandidateVerdict; 7]`. The alignment check below is
+/// what corrals a registration count that stops matching: an
+/// eight-producer policy fails it, the shadow skips, and the harnesses
+/// report a named missing comparison rather than indexing off the end.
+/// So a candidate-count change is caught, but by the corral, not by an
+/// assertion at the array.
+fn emit_selection_shadow(
+    board: &Scoreboard,
+    solver_result: &SolverResult,
+    opts: &LayoutOptions,
+    v1: Option<(usize, crate::trace::SelectionStage)>,
+) {
+    let policy = selection_policy::SelectionPolicy::current();
+    // The profile vector is keyed by REGISTRATION order and the board by
+    // CANDIDATE_ORDER; if those ever part company, every comparison
+    // below would rank one candidate's measurement under another's
+    // policy. Degrade to emitting NOTHING rather than to a plausible
+    // wrong verdict — and the harnesses assert the event is PRESENT for
+    // every decided cell, so a silent skip fails there rather than
+    // reading as agreement.
+    // NO `debug_assert` here, deliberately, and this is a correction
+    // (#703 review round 2, 3/3): the first draft had one, which made
+    // the guard below DEAD in every debug build — i.e. in every
+    // `cargo test` run and every CI job. A misalignment would then have
+    // aborted the shipped `select_best_decomposition` path with a panic,
+    // which is the exact opposite of what this function's doc promises
+    // and of what a shadow is for. Phase 2b reorders and extends the
+    // candidate set, so this is a state the campaign will actually
+    // visit.
+    //
+    // The failure is REPORTED instead of thrown, and by the right
+    // reader: skipping emits no `SelectionShadowCompared`, and both
+    // harnesses assert the event is PRESENT for every cell whose
+    // selection ran (`ShadowReport::missing` / the smoke tier's
+    // comparison count). A misalignment therefore surfaces as a named
+    // "missing comparison" on the cells it affects, not as a panicked
+    // solve.
+    let aligned = policy.producers.len() == CANDIDATE_ORDER.len()
+        && policy.producers.iter().zip(CANDIDATE_ORDER).all(|(p, n)| p.name == n);
+    if !aligned {
+        return;
+    }
+
+    let profiles = board.v2_profiles();
+    let v2 = selection_policy::decide(&profiles, &policy);
+
+    let prior = board.prior_acceptance();
+    let ran = board.v1_ran();
+    let incumbent = policy.incumbent_index();
+    let mut gate_disagreements = Vec::new();
+    for (i, reg) in policy.producers.iter().enumerate() {
+        let verdict = reg.gate.evaluate(&selection_policy::GateContext {
+            solver_result,
+            opts,
+            prior: &prior,
+            incumbent,
+            registration_index: i,
+        });
+        let eligible = verdict == selection_policy::GateVerdict::Eligible;
+        if eligible != ran[i] {
+            // One named entry per disagreeing producer, with both sides
+            // and (when v2 excluded it) WHICH clause did so — a count
+            // in a message cannot tell 1 from 7, and the clause name is
+            // the whole reason gaps (c) got closed.
+            gate_disagreements.push(format!(
+                "{}: v2 {} / v1 {}",
+                reg.name,
+                match verdict {
+                    selection_policy::GateVerdict::Eligible => "eligible".to_string(),
+                    selection_policy::GateVerdict::Excluded(c) => format!("excluded[{c}]"),
+                },
+                if ran[i] { "ran" } else { "not-run" }
+            ));
+        }
+    }
+
+    let agree = match (v1, v2) {
+        (Some((i, s)), Some(d)) => i == d.winner && s == d.stage,
+        (None, None) => true,
+        _ => false,
+    };
+    crate::trace::emit(crate::trace::TraceEvent::SelectionShadowCompared {
+        v1_winner: v1.map(|(i, _)| CANDIDATE_ORDER[i].to_string()),
+        v1_stage: v1.map(|(_, s)| s),
+        v2_winner: v2.map(|d| policy.producers[d.winner].name.to_string()),
+        v2_stage: v2.map(|d| d.stage),
+        agree,
+        gate_disagreements,
+    });
 }
 
 /// Run candidates and pick the winner.
@@ -1906,6 +2100,11 @@ pub fn select_best_decomposition(
         // because there is no winner and the stage enum is deliberately
         // closed over the five ways a winner CAN be picked.
         board.emit();
+        // RFC-070 Phase 2a: the shadow runs on this path too. "v2 named
+        // a winner where v1 refused everything" is a divergence worth
+        // seeing, and it is invisible if the comparison only happens
+        // where v1 succeeded.
+        emit_selection_shadow(&board, solver_result, &opts, None);
         // Both sides keyed by `CANDIDATE_ORDER`: the names from the list
         // itself and the reasons from `run_refs`, whose slots are checked
         // against it. Nothing here is positional against a separately
@@ -1953,6 +2152,13 @@ pub fn select_best_decomposition(
         winner: name.to_string(),
         stage,
     });
+    // RFC-070 Phase 2a (#689 W3a): the SHADOW, emitted immediately after
+    // the verdict it shadows and strictly after it. Ordering matters to
+    // the readers: `parity_corpus`'s extractor pairs the last seven
+    // scoreboard rows with the last `SelectionDecided`, so the shadow
+    // must not sit between them. Nothing above this line reads its
+    // result — v1 has already chosen, replayed and returned its winner.
+    emit_selection_shadow(&board, solver_result, &opts, Some((idx, stage)));
     Ok(layout)
 }
 

@@ -1929,3 +1929,265 @@ fixtures / docs split per the churn norm).
     tier for the first three, the clause-by-clause gate tests for the
     fourth — and the 2a shadow, which runs both dispatches on the same
     solve, is the first instrument that can check them together.*
+- *2026-08-22 — **Phase 2a landed and K70-1 IS ADJUDICATED: it PASSES**
+  (#689 track W3a). The v2 policy loop now runs in SHADOW inside
+  `select_best_decomposition` on every solve, after v1 has chosen,
+  replayed and returned its winner, and emits
+  `SelectionShadowCompared`. v1 ships everywhere; nothing flipped. **On
+  the full named parity corpus: 140/140 decided cells agree on winner
+  AND deciding stage, zero disagreements, zero missing comparisons**,
+  with the baseline itself `check`-clean 160/160 and the stage
+  distribution unmoved (`best-error-free` 87, `scoped-pairwise` 26,
+  `merge-tap` 15, `best-accepted` 12). So the premise test's live
+  verdict matches its offline precursor's: **no
+  candidate-identity-conditioned logic was needed anywhere**, at
+  produce time or in the stage logic, and the K70-1 fence still holds
+  mechanically.*
+  - ***The design call, and it is the one Phase 2b inherits: the shadow
+    consumes the SCOREBOARD, it does not re-validate.***
+    `Scoreboard::v2_profiles` projects the rows each verdict mechanism
+    already computed. Re-running `validate()` would have been the
+    obvious wiring and it would have made every divergence
+    uninterpretable — a different answer could mean a different
+    PROGRAM or merely different INPUTS, and no diff can separate them
+    after the fact. Measuring once also carries v1's laziness across
+    for free: a candidate no mechanism examined has no counts in the
+    shadow either, which is exactly the gap `decide` skips on, so the
+    `MeasurementRule` question round 3 settled never re-opens on the
+    live path. The price is stated where it lives: this path does NOT
+    exercise `IssueProfile::measure`, so `refuse_on_error` and eager
+    measurement stay covered by the unit tier alone.*
+  - ***The gate half is a NEW instrument and it closes #698's standing
+    hand-off hole.*** Alongside the decision, the shadow evaluates every
+    registration's `ProducerGate` against this call's options and solve
+    and compares it to whether v1 actually ran that candidate. That is
+    the coverage `policy_replay` cannot have by construction (it
+    consumes already-produced profiles and evaluates zero gates), and
+    it is the failure mode that would have been hardest to read: a
+    mis-transcribed eligibility clause moves the candidate SET, so it
+    surfaces as a changed winner with no visible cause. **0 gate
+    disagreements across all 353 selections of the corpus sweep.**
+    Discrimination executed, not assumed: forcing horizontal-stack's
+    `solve-has-dual-input-row` clause true fails two smoke cells with
+    the WINNER UNCHANGED, naming `horizontal-stack: v2 eligible / v1
+    not-run` — i.e. the gate half catches precisely what the decision
+    half cannot see. Two other breaks were executed and restored:
+    `AdmissionRule::AdmitAll` fails naming the pu@2/am3 cell, and
+    suppressing the emission fails as "compared nothing", not as
+    agreement.*
+  - ***The shadow is CI-gateable, and that is a property of the
+    instrument rather than a change of posture.*** The
+    "why isn't the corpus CI-gated" finding was raised eight times
+    across #694/#698 and refused eight times, correctly: those
+    harnesses compare a live run against a COMMITTED, cache-relative
+    record, so every legitimate engine change falsifies them and a
+    host with a different zone cache produces a meaningless diff. The
+    shadow compares two dispatches on ONE solve. Whatever layout this
+    host's cache produced, both programs saw the same scoreboard and
+    must reach the same `(winner, stage)` — so there is no re-bless
+    treadmill and no pin to get wrong **for the VERDICT** (scoped after
+    #703 review round 1, which was right that the first wording claimed
+    more: the fixture LIST is still a list, and a smoke cell that stops
+    reaching the search fails a count check like any hand-written
+    fixture would. What is cache- and layout-independent is the
+    comparison, not fixture stability). Hence
+    `shadow_agrees_with_production_on_the_census_fixtures`, NON-ignored
+    (~15s local warm, six census fixtures at their #691 machine tiers,
+    `threads-required = 2` and a 300s ntest ceiling for the 4-thread
+    runner), running on every push — the first always-on assertion this
+    campaign has been able to make, and the thing Verification plan
+    item 2 was pointing at all along. The 160-cell sweep under
+    `SPAGHETTIO_PARITY_CORPUS=check` now asserts shadow agreement too,
+    BEFORE the baseline comparison: the two failures are independent,
+    and only the shadow one is interpretable under a mis-pinned cache.*
+  - ***K70-3: not close.*** Measured in-process, which is the only
+    reading this host can support: across 28 selections totalling
+    24.837 s of `select_best_decomposition` time, the shadow accounted
+    for **0.513 ms — 0.00207%**, at 18.3 µs mean and 83.9 µs max per
+    selection (debug build, so an upper bound on production cost). Over
+    the whole corpus sweep, 353 selections cost **4.94 ms** of shadow
+    against a ~5-minute run. **The wall-clock A/B the kill criterion
+    asks for is uninformative BY CONSTRUCTION and is reported as such
+    rather than dressed up**: three full corpus runs on this box came
+    in at 284.96 s (shadow on, check), 361.59 s (shadow on,
+    instrumented) and **525.40 s with the shadow COMPILED OUT** — the
+    slowest of the three. Run-to-run variance spans ±60% while the
+    thing being measured is 0.002%, so the A/B measures the host, and
+    the in-process ratio is the answer. No stress-corpus timeout is
+    approached: the shadow adds tens of microseconds to a selection, and
+    the one new CI test is 15 s local warm inside a 300 s ceiling.*
+  - ***What the shadow still does NOT see, recorded before anyone
+    quotes 140/140.*** (i) **Nested selections in LOSING candidates.**
+    The shadow event is emitted like any other, so `run_candidate`
+    truncates it out with the rest of that candidate's stream — Phase-0b
+    oracle gap (g) applies unchanged, and the corpus reads only the
+    OUTER comparison. A disagreement inside a losing candidate's own
+    search is invisible here. (ii) `IssueProfile::measure`, per the
+    design call above. (iii) The two comparator blind spots #698
+    measured — the corpus still cannot discriminate a lexicographic
+    floor or a shadowing stage 1, and the shadow inherits that, because
+    it agrees with v1 on the same cells v1 decides. The unit tier
+    remains the only cover for those, and the smoke tier now binds the
+    THIRD parallel candidate list (`parity_corpus`'s `EXPECTED_ORDER`)
+    against the registration vector in CI, where only the other two
+    were bound before.*
+  - *Carry-overs from #698 rounds 9-10, all six landed in the opening
+    commit; two touch behaviour on unreachable paths and are named
+    here because a future reader will meet them as unexplained diffs.
+    (a) `ranks_ahead`'s `WarningsAscThenScoreDesc` gap arm ABSTAINS on
+    a missing warning key instead of falling through to the score —
+    round 6 removed the sentinel and left the fall-through, which
+    promotes the SECONDARY criterion to primary for the candidates
+    least is known about. (f) `Policy::selection` is renamed
+    `Policy::selection_counts`: round 5 settled that its `pass` is
+    always `true` because it gates nothing, but left that in prose on a
+    method whose return type has a `pass` field that looks like an
+    answer — the most dangerous shape a wrong number takes, since it is
+    not wrong, it is answering a question nobody asked. Also: (b) a
+    stale test name in `measure`'s doc; (c) the `refuse_on_error` block
+    softened from load-bearing to defensive (the three producers
+    carrying the flag self-refuse inside `produce()`, so it does not
+    fire on the live path); (d) `a_strictly_better_horizontal_beats_a_
+    merely_denser_di`, the one overlap of the two scoped arms neither
+    the corpus nor the existing pairwise test reaches — v1 answers
+    horizontal, by arithmetic rather than precedence, because its
+    both-scoped-won arm compares the two by the floor ALONE and DI's
+    counts are the incumbent's; (e)
+    `the_candidate_order_is_bound_to_its_positional_semantics`, which
+    is what a coordinated permutation of all three name lists cannot
+    satisfy: the incumbent is slot 0 and the `scoped` registrations are
+    exactly the contiguous TAIL, which is what makes v1's
+    `candidates[..ranking_len]` SLICE and v2's `scoped` FIELD filter
+    the same rule.*
+- *2026-08-22 — **#703 review round 1 adjudicated** (1 major, 5 minors, 1
+  nit; 6 absorbed, 1 refuted with a receipt). **The round's real
+  contribution is the 1/3-pass finding, which is the one this campaign
+  should have caught itself**: the harness read the engine's own `agree`
+  bit, so it asserted "the shadow SAYS it agrees", not "the two programs
+  agree". A stuck-true bit, or a comparison written against the wrong
+  pair, passed. `ShadowOutcome::faults` now recomputes the verdict from
+  the four recorded fields, checks the engine's bit AGAINST that
+  recomputation, and cross-checks the shadow's v1 side against the
+  cell's own `SelectionDecided` record — three independent surfaces
+  where there was one trusted boolean. Discrimination executed on both
+  new ones: forcing `agree = true` under a real divergence still fails,
+  reporting BOTH "v1 and v2 named different verdicts" and "the engine's
+  own `agree` bit says true where the four recorded fields say false";
+  mis-indexing `v1_winner` by one slot fails all six smoke cells naming
+  the mismatch against `SelectionDecided`. Restored and re-verified
+  green. **The generalisation, and it is a sibling of the one #698's
+  close-out recorded: a harness that reads a value the thing under test
+  computed has not verified that value.** The campaign has now hit
+  "compared nothing reads as clean" four times and "compared the subject
+  to its own claim" once.*
+  - *The MAJOR was also right and was a pin I had no business making:
+    the smoke gate asserted `status == "decided"` per cell, which is
+    NOT layout-independent the way the verdict comparison is — a host
+    whose zone cache differs can legitimately land a cell in
+    `decided-then-refused` (the search picked a winner and a LATER build
+    step refused, a status `run_cell` distinguishes on purpose), reddening
+    the one always-on gate with no divergence anywhere. Dropped; the
+    comparison-count assertion carries the real requirement, which is
+    only that each cell REACHES the search. Same shape one path over:
+    `ShadowReport::absorb` hard-failed on `no-selection` under a comment
+    claiming "every other status means the search ran", which is false of
+    exactly that status — a cell whose build refuses before the search
+    has nothing to shadow and is now exempt alongside `no-solve`. Latent
+    (zero such cells today), and it would have added a failure criterion
+    the baseline comparison never had.*
+  - *Also absorbed: the tally now splits agreed-decided from
+    agreed-no-winner, so "140/140" cannot quietly widen (today the two
+    coincide, which is what the split keeps checkable); and the nextest
+    override's comment claimed `threads-required = 2` "keeps it off the
+    box alongside another heavy test", which overclaims — it is a slot
+    cost, not a reservation, so the file's own accurate frame ("limits
+    concurrency to two heavy tests at a time") replaces it.*
+  - *Refuted with a receipt: the nit extrapolated the ceiling risk from
+    this file's cold-cache note (`partition_strategy_scoreboard`, ~26s
+    local warm vs 200-480s CI) and recommended raising the 300s ntest
+    ceiling. That ratio does not apply — the rust job PINS
+    `SPAGHETTIO_ZONE_CACHE_PATH`, so the gate is not solving zones fresh.
+    **Measured on the PR's own head**: 30.9s in CI against 15s local warm,
+    a 2x host penalty, leaving a ~10x margin. The sizing is now stated
+    from that measurement rather than from a band, at both sites.*
+- *2026-08-22 — **#703 review round 2 adjudicated and the review cycle
+  CLOSED** (no majors from the bot — six minors and two nits, plus one
+  **major-latent** from an independent read-only audit of the same head
+  that the bot missed; all absorbed, none refuted). **The audit finding
+  is the one to keep, and it is the fourth appearance of this campaign's
+  signature bug**: `outer_shadow` took the LAST `SelectionShadowCompared`
+  anywhere in the stream, on the (true) argument that a nested
+  selection's shadow is replayed before the outer board. True, and not
+  enough — if the OUTER emission is ever missing (suppressed, skipped by
+  the alignment guard, lost to a refactor), a winning nested candidate's
+  own shadow becomes the last one, and if its verdict matches the outer
+  `SelectionDecided` the cell reads as compared and agreed while the
+  missing-comparison guard stays silent. The gate would then be
+  measuring a different selection than the one it names. The outer event
+  is now identified POSITIVELY by adjacency to its own anchor — the
+  terminal on the success path, the last board row on the
+  all-candidates-failed path — which is verified at source as strictly
+  adjacent on both, and is the same discipline the scoreboard extractor
+  already uses. Discrimination executed: emitting the shadow where a
+  nested one would sit AND suppressing the outer emission fails all six
+  smoke cells as "missing comparison" (it passed under the old rule);
+  restored and re-verified green.*
+  - *Absorbed from the bot, and the 3/3 one was a real defect: the
+    `debug_assert!(aligned, …)` beside `emit_selection_shadow`'s guard
+    made that guard DEAD in every debug build, so a registration
+    misalignment would have panicked the shipped
+    `select_best_decomposition` path — the exact opposite of the
+    function's own doc and of what a shadow is for, on a state Phase 2b
+    will actually visit. Dropped; skipping emits no event and the
+    harnesses report a named missing comparison. Also: the smoke gate's
+    count check was satisfied by agreed-NO-WINNER cells, so all six
+    fixtures silently refusing everything would have read green — it now
+    requires `agreed_decided == 6`, a fixture-liveness pin that still
+    says nothing about which winner or stage; the disagreement assertion
+    runs FIRST so a count shortfall cannot bury the campaign-level
+    finding that caused it; and the "four independent surfaces" claim in
+    `ShadowOutcome::faults` was overstated, since two of them derive
+    from the same event. The doc now marks which two are ANCHORED
+    OUTSIDE it, and a fourth check was added that genuinely is: the
+    harness re-runs `decide()` over the cell's recorded rows and
+    compares to the event's v2 side. That also pins
+    `Scoreboard::v2_profiles` against `profile_from_row` — two
+    projections of the same scoreboard that nothing previously compared.
+    Discrimination executed: a v2 side faked to echo v1 passes while the
+    two agree (correctly — no false alarm) and FAILS the moment a real
+    divergence exists, naming both the anchor mismatch and the
+    inconsistent `agree` bit.*
+  - *Timing, absorbed: the 300s ntest ceiling was sized against the
+    MEASURED pinned-cache CI number (30.9s) and said nothing about an
+    unpinned host, where this file's own cold-cache note implies 8-18x
+    and a 120-270s run. **A hang detector that fires on a cold cache is
+    a false positive on the one gate that runs everywhere** — the same
+    class as the `status == "decided"` pin round 1 removed — so the
+    ceiling is 600s, which costs nothing in the pinned case. Setting the
+    pin from inside the test was rejected and the reason recorded at the
+    test: `zone_cache::lookup_table()` is a process-wide `OnceLock` and
+    `cargo test` runs the binary's tests as threads of one process, so a
+    test mutating the environment would race its siblings for a global.
+    It PRINTS the resolved cache instead, so a slow run is
+    self-diagnosing. A `profile.default` nextest override was added
+    alongside the `profile.ci` one; plain `cargo test` reads neither,
+    which is precisely why the ntest ceiling is the real guard.*
+  - *Documented rather than changed, both flagged at 1/3: `decide()`,
+    `prior_slot` and `incumbent_index`'s `debug_assert`s are now on the
+    LIVE path in debug builds — the intended tripwire, since they guard
+    policy-AUTHORING mistakes and Phase 2b is authoring policy, and they
+    stay `debug_assert`s so release and WASM keep their documented
+    degradation. The consequence to know: a future producer whose gate
+    reads a slot at or after its own index now fails the SUITE, not just
+    the replay. And the seven-slot arrays in
+    `Scoreboard::prior_acceptance` / `v1_ran` are a latent invariant
+    corralled by the alignment check rather than asserted at the array —
+    an eight-producer policy fails alignment, the shadow skips, and the
+    harnesses report a named missing comparison. Reply-only: the
+    positional `debug_assert`s in `select_best_decomposition` are
+    release-silent, but the shadow's surface-3 check compares NAMES
+    (`CANDIDATE_ORDER[idx]` against the string `SelectionDecided`
+    carries from the winner's own `CandidateRun::name`), not indices, so
+    a `run_refs`/`candidates` desync is caught in the environment the
+    oracle is designed for — debug and CI, per the #692 round-4
+    precedent.*

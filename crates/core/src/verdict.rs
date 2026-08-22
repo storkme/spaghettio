@@ -250,7 +250,7 @@ pub struct Policy {
     /// nothing, deliberately" and "never thought about it", and the
     /// selection accessors must not answer for the second — see
     /// [`Verdict::candidate_selection_warnings`]. Set by
-    /// [`Policy::selection`], [`Policy::with_live_selection_exclusions`]
+    /// [`Policy::selection_counts`], [`Policy::with_live_selection_exclusions`]
     /// and [`Policy::with_excluded_warning_category`].
     pub selection_scoped: bool,
 }
@@ -290,18 +290,26 @@ impl Policy {
         self
     }
 
-    /// The preset for selection-scoped comparisons: gate nothing, carry
-    /// the live exclusions, and declare the scope so
+    /// The preset for selection-scoped COUNTS: gate nothing, carry the
+    /// live exclusions, and declare the scope so
     /// [`Verdict::candidate_selection_warnings`] answers. Named so the
     /// correct setup is a thing you reach for rather than a step you
     /// remember (#698 review round 3).
     ///
-    /// **Its `pass` is always `true`**, because it gates nothing — this
-    /// preset supplies COUNTS, and the pass/fail bit is not one of its
-    /// outputs. Reading both from one verdict would read a gate that was
-    /// never asked to gate; add overrides if you want it to (#698 review
-    /// round 5).
-    pub fn selection() -> Self {
+    /// **`_counts` is in the name deliberately** (renamed from
+    /// `selection` in W3a, #698 rounds 9-10 carry-over (f)). Round 5 had
+    /// settled the semantics — `pass` is always `true` here because
+    /// nothing is gated — but left them stated only in prose, on a
+    /// method whose bare name reads like "the selection policy" and
+    /// whose return type carries a `pass` field that looks like an
+    /// answer. A caller reaching for `Policy::selection()` and then
+    /// reading `verdict.pass` gets `true` for every input, which is the
+    /// most dangerous shape a wrong number can take: it is not wrong, it
+    /// is answering a question nobody asked. The name now says which
+    /// output is the real one, and
+    /// `selection_counts_never_gates_so_its_pass_bit_is_not_an_answer`
+    /// pins it. Add overrides if you want it to gate.
+    pub fn selection_counts() -> Self {
         Self::new(GatePolicy::ReportOnly).with_live_selection_exclusions()
     }
 
@@ -456,7 +464,7 @@ impl Verdict {
     ///
     /// A gap, not a zero and not a plausible wrong number, per the rule
     /// this campaign's instruments run on. Declare the scope with
-    /// [`Policy::selection`] or
+    /// [`Policy::selection_counts`] or
     /// [`Policy::with_excluded_warning_category`] to get a value —
     /// including a deliberately empty exclusion set, which is a
     /// declaration too.
@@ -931,8 +939,47 @@ mod tests {
 
         // Declaring the scope — even with an empty set — is what makes
         // it answerable.
-        let declared = never_worse(&[], &candidate, &Policy::selection(), MatchTier::Count, None);
+        let declared = never_worse(&[], &candidate, &Policy::selection_counts(), MatchTier::Count, None);
         assert_eq!(declared.candidate_selection_warnings(), Some(0));
+    }
+
+    /// The property the `_counts` suffix promises: this preset's `pass`
+    /// bit is not one of its outputs. It is `true` for a clean
+    /// comparison AND for a comparison that regresses every category,
+    /// because nothing is gated — so a caller reading it is reading a
+    /// gate that was never asked to gate (#698 rounds 9-10 carry-over
+    /// (f); the semantics were settled in round 5, the name and this pin
+    /// are what make them unmistakable).
+    #[test]
+    fn selection_counts_never_gates_so_its_pass_bit_is_not_an_answer() {
+        let policy = Policy::selection_counts();
+        let clean = never_worse(&[], &[], &policy, MatchTier::Count, None);
+        assert!(clean.pass);
+        // Five new Errors in a category that IS gated under every other
+        // preset. Still `pass`.
+        let candidate: Vec<ValidationIssue> = (0..5)
+            .map(|i| {
+                ValidationIssue::with_pos(
+                    Severity::Error,
+                    "missing-balancer-template",
+                    "test error",
+                    i,
+                    i,
+                )
+            })
+            .collect();
+        let regressed = never_worse(&[], &candidate, &policy, MatchTier::Count, None);
+        assert!(
+            regressed.pass,
+            "`pass` under this preset is a constant, not a verdict — read the COUNTS"
+        );
+        assert!(
+            regressed.regressed_categories().next().is_none(),
+            "…and nothing is recorded as regressed either, because nothing is gated"
+        );
+        assert_eq!(regressed.candidate_errors(), 5, "the numbers are what it answers");
+        // The control: the same comparison under a gating preset fails.
+        assert!(!never_worse(&[], &candidate, &Policy::decomposition(), MatchTier::Count, None).pass);
     }
 
     // -----------------------------------------------------------------
