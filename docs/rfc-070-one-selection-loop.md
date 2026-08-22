@@ -1929,3 +1929,47 @@ fixtures / docs split per the churn norm).
     tier for the first three, the clause-by-clause gate tests for the
     fourth — and the 2a shadow, which runs both dispatches on the same
     solve, is the first instrument that can check them together.*
+
+- *2026-08-22 — **#701 (3,2) balancer restore parity adjudication.** The
+  validated Raynquist (3,2) family now stamps again. The pinned full-corpus
+  re-bless moved exactly these 17 cells (all remained `decided`; the arrows
+  show baseline → fresh verdict):*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-1` / `di-off`:
+    `native/best-accepted` → `native/best-error-free`. The restored family
+    makes the previously refused horizontal-stack candidate produce, so a
+    clean candidate exists for the error-free stage; the winner stays native.*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-2` / `default`, `cells-off`,
+    `e2e-harness`, and `di-off`: `native/merge-tap` →
+    `horizontal-stack/scoped-pairwise`. The (3,2) stamp restores native's
+    copper-cable feeders, so merge-tap no longer gates on the old native
+    result; the newly produced candidates are compared and horizontal-stack
+    wins through scoped-pairwise.*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-2` / `hs-off`:
+    `native/merge-tap` → `native/best-error-free`. Horizontal-stack is
+    unavailable by construction; the restored feeder geometry removes the
+    merge-tap gate and the clean native result is selected.*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-3` / `default`, `cells-off`,
+    `e2e-harness`, and `di-off`: `native/merge-tap` →
+    `horizontal-stack/scoped-pairwise`, by the same restored feeder,
+    merge-tap, and scoped-pairwise mechanism as the assembling-machine-2
+    cells above.*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-3` / `hs-off`:
+    `native/merge-tap` → `native/best-error-free`, because horizontal-stack
+    is unavailable and the restored native geometry is clean.*
+  - *`e2e_tier2_electronic_circuit_from_ore` / `assembling-machine-1` /
+    `di-off`: `native/best-accepted` → `native/best-error-free`, by the same
+    newly-producing horizontal-stack candidate mechanism as the tier2
+    am1/di-off cell; native remains the winner.*
+  - *`e2e_tier2_electronic_circuit_from_ore` / `assembling-machine-3` /
+    `default`, `cells-off`, `e2e-harness`, and `di-off`:
+    `native/merge-tap` → `horizontal-stack/scoped-pairwise`, by the same
+    restored copper-cable feeder and no-longer-gating merge-tap mechanism.*
+  - *`e2e_tier2_electronic_circuit_from_ore` / `assembling-machine-3` /
+    `hs-off`: `native/merge-tap` → `native/best-error-free`, because
+    horizontal-stack is unavailable and the restored native geometry is
+    clean.*
+  *This is the complete scope proof: **no cell outside the electronic-
+  circuit-from-ore family moved**. Every changed key is in exactly one of
+  the two named rows above; all other 143 cells are verdict-unchanged. The
+  parity baseline compares only `(status, winner, stage)`; associated
+  outcome-vector changes are retained for adjudication.*
