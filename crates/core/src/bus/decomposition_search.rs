@@ -1482,7 +1482,6 @@ fn select_best_decomposition_with_policy(
     // stages; only if those stages have no answer does this retained site
     // fill the error-free profiles. This removes the old clean-flags
     // decision while keeping its validation cost and intentional gaps.
-    let policy = selection_policy::SelectionPolicy::current();
     let preliminary = selection_policy::decide(&board.v2_profiles(), &policy);
     let early_stage_decided = matches!(
         preliminary.as_ref().map(|d| d.stage),
