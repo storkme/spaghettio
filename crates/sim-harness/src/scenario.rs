@@ -1990,7 +1990,12 @@ local function finalize(s, converged)
       end
     end
   end
-  dump_sim_state(s)
+  -- In fixed-window mode the first closed measurement window is END_TICK,
+  -- so its diagnostic snapshot is already the final snapshot. Reusing it
+  -- avoids a duplicate full belt/inserter scan and file write on that tick.
+  if not (FIXED_WINDOW and storage.fixed_window_state_dumped) then
+    dump_sim_state(s)
+  end
   local census = {}
   for _, m in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
     local st = m.status
@@ -2622,6 +2627,9 @@ mod tests {
         assert!(lua.contains("storage.fixed_window_state_dumped = false"));
         assert!(lua.contains("if FIXED_WINDOW and not storage.fixed_window_state_dumped then"));
         assert!(lua.contains("storage.fixed_window_state_dumped = true"));
+        assert!(lua.contains(
+            "if not (FIXED_WINDOW and storage.fixed_window_state_dumped) then"
+        ));
         assert!(lua.contains("storage.pickup_event_trace = {}"));
         assert!(lua.contains("local function sample_pickup_events(s, sample_tick)"));
         assert!(lua.contains("local function pickup_is_transport(entity)"));

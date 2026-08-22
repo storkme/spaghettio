@@ -555,9 +555,23 @@ impl BeltNetwork {
             let remembered = self.splitter_memory[sid][half_ix][lane_ix];
             self.splitter_stats[sid].attempts[lane_ix] += 1;
             self.splitter_stats[sid].half_attempts[half_ix][lane_ix] += 1;
-            let first = remembered
-                .map(|(output, _)| output)
-                .unwrap_or_else(|| usize::from(self.splitter_toggle[sid][lane_ix]));
+            let first = if let Some((output, _)) = remembered {
+                // Memory is intentionally half-local: it remembers the
+                // output index in this half's `outs` array.
+                output
+            } else {
+                // The shared round-robin state names a physical branch,
+                // while `outs` is half-local: index 0 is this half's branch
+                // and index 1 is its partner's. Translate the shared choice
+                // before probing so the two physical halves alternate across
+                // one branch pair.
+                let physical_first = usize::from(self.splitter_toggle[sid][lane_ix]);
+                if half_ix == 0 {
+                    physical_first
+                } else {
+                    1 - physical_first
+                }
+            };
             let mut placed = false;
             for probe in 0..2 {
                 let which = (first + probe) % 2;
@@ -618,7 +632,8 @@ impl BeltNetwork {
                             Some((first, 1));
                     }
                     if self.splitter_memory[sid][half_ix][lane_ix].is_none() {
-                        self.splitter_toggle[sid][lane_ix] = which == 0;
+                        let physical_which = if half_ix == 0 { which } else { 1 - which };
+                        self.splitter_toggle[sid][lane_ix] = physical_which == 0;
                     }
                     break;
                 }
@@ -1362,12 +1377,11 @@ mod tests {
         let first_half_ix = usize::from(first_half > second_half);
         let second_half_ix = 1 - first_half_ix;
 
-        // Seed only the first physical half. The shared round-robin toggle is
-        // deliberately set to the other output: a shared-memory
-        // implementation would route the second half to `second_output`,
-        // while the isolated half follows the toggle to `first_output`.
+        // Seed only the first physical half. Set the shared physical toggle
+        // so the second half prefers the first branch; its independent
+        // remembered output must not affect that choice.
         net.splitter_memory[sid][first_half_ix][0] = Some((0, 5));
-        net.splitter_toggle[sid][0] = true;
+        net.splitter_toggle[sid][0] = false;
         assert!(net.tiles[second_half].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
 
         net.step_splitter_exit(second_half, sid);
@@ -1376,6 +1390,61 @@ mod tests {
         assert_eq!(net.tiles[second_output].lanes[0].occupancy(), 0);
         assert_eq!(net.splitter_memory[sid][second_half_ix][0], None);
         assert_eq!(net.splitter_memory[sid][first_half_ix][0], Some((0, 5)));
+    }
+
+    #[test]
+    fn splitter_round_robin_toggle_alternates_physical_branches() {
+        let ents = vec![
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let first_half = net.tile_at((1, 0)).unwrap();
+        let second_half = net.tile_at((1, 1)).unwrap();
+        let first_output = net.tile_at((2, 0)).unwrap();
+        let second_output = net.tile_at((2, 1)).unwrap();
+        let sid = match net.tiles[first_half].kind {
+            TileKind::Splitter { id, .. } => id,
+            _ => panic!("expected splitter input half"),
+        };
+
+        assert!(net.tiles[first_half].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(first_half, sid);
+        assert!(net.tiles[second_half].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(second_half, sid);
+
+        assert_eq!(net.tiles[first_output].lanes[0].occupancy(), 1);
+        assert_eq!(net.tiles[second_output].lanes[0].occupancy(), 1);
+    }
+
+    #[test]
+    fn splitter_memory_output_index_stays_half_local() {
+        let ents = vec![
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let first_half = net.tile_at((1, 0)).unwrap();
+        let second_half = net.tile_at((1, 1)).unwrap();
+        let first_output = net.tile_at((2, 0)).unwrap();
+        let second_output = net.tile_at((2, 1)).unwrap();
+        let sid = match net.tiles[first_half].kind {
+            TileKind::Splitter { id, .. } => id,
+            _ => panic!("expected splitter input half"),
+        };
+        let second_half_ix = usize::from(second_half > first_half);
+
+        // Index 0 means second_output for this half, even though it means
+        // first_output for the other physical half.
+        net.splitter_memory[sid][second_half_ix][0] = Some((0, 1));
+        assert!(net.tiles[second_half].lanes[0].try_insert_at(0.75, 0.0, ItemId(1)));
+        net.step_splitter_exit(second_half, sid);
+
+        assert_eq!(net.tiles[first_output].lanes[0].occupancy(), 0);
+        assert_eq!(net.tiles[second_output].lanes[0].occupancy(), 1);
+        assert_eq!(net.splitter_memory[sid][second_half_ix][0], None);
     }
 
     #[test]
