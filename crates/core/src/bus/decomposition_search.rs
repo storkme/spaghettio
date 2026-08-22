@@ -1009,7 +1009,7 @@ impl CandidateRun {
 /// unchanged; the blast radius is not (#692 review round 3, 1/3, which
 /// noted the unconditional form inverted the degradation philosophy used
 /// twenty lines away, where candidates run under `catch_unwind`).
-const CANDIDATE_ORDER: [&str; 7] = [
+pub(crate) const CANDIDATE_ORDER: [&str; 7] = [
     "native",
     "k1-shape-fix",
     "size-split-2",
