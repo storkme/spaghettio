@@ -942,18 +942,17 @@ pub enum TraceEvent {
         leaked_tiles: Vec<(i32, i32)>,
     },
 
-    // Emitted by `try_bridge` in ghost_router.rs whenever a per-tile
-    // perpendicular template rejection happens. One event per failed
-    // bridge attempt, so a fully-rejected perpendicular crossing emits
-    // two (vertical-first, horizontal-fallback). Drives the
-    // diagnose_junctions step for correlating "unresolved" regions with
-    // their rejection cause.
-    JunctionTemplateRejected {
-        tile_x: i32,
-        tile_y: i32,
-        bridge_dir: String,
-        reason: String,
-    },
+    // `JunctionTemplateRejected` (emitted by the perpendicular-template
+    // rung's `try_bridge`/`bridge_belt_over_pipe`) was DELETED 2026-08-22
+    // (#689/#691) along with the rung itself: production-unreachable on
+    // both shapes it handled (belt×belt two-item crossings die on
+    // junction_solver's item-conflict gate before the rung's single-tile
+    // window; pipe×belt never seeds — `keys_at_tile` filters pipes out
+    // before the rung could see them), and #691's census hard-asserted
+    // 0 of 111 seeds matched its remaining hypothesis. See
+    // `docs/offpath-code-followups.md` G1 for the full evidence trail.
+    // Precedent: #632 A4 (`RouteFailure`/`BridgeDropped`) — a variant
+    // with zero emitters after a deletion is removed, not kept dark.
 
     // DIAGNOSTIC: fires once per `build_bus_layout` run, after row
     // placement + lane planning. Captures a compact fingerprint of the
@@ -1069,10 +1068,9 @@ pub enum TraceEvent {
 
     // Junction solver step-through instrumentation.
     // These fire alongside the coarser `JunctionSolved` /
-    // `JunctionGrowthCapped` / `JunctionTemplateRejected` /
-    // `RegionWalkerVeto` events to give a full per-iteration view of
-    // the growth loop and each strategy attempt. Designed for CLI
-    // replay + UI step-through.
+    // `JunctionGrowthCapped` / `RegionWalkerVeto` events to give a full
+    // per-iteration view of the growth loop and each strategy attempt.
+    // Designed for CLI replay + UI step-through.
 
     /// Emitted once per `solve_crossing` call, at entry (iteration 0
     /// not yet attempted). Reports the seed and the specs that will
