@@ -12,7 +12,11 @@
 //!    `ghost_astar`. Trunk tiles are passable so A* ghosts through them and
 //!    records crossing tiles for the junction resolver.
 //! 5. Negotiate lane conflicts iteratively; adopt best routing.
-//! 6. Resolve crossings: perpendicular template first, SAT fallback.
+//! 6. Resolve crossings via the pinned-tier core ladder: sat-surface,
+//!    sat-1ug-native, sat-2ug-native, sat-native (the perpendicular-
+//!    template rung that used to lead this ladder was deleted
+//!    2026-08-22, PR #702, as production-unreachable — see
+//!    `docs/offpath-code-followups.md` G1).
 //! 7. Merge output rows via the existing `merge_output_rows` helper.
 //!
 //! Returns a `GhostRouteResult` containing all placed entities, ghost crossing
@@ -28,11 +32,9 @@ use crate::bus::balancer::{
     underground_for_belt,
 };
 use crate::bus::eviction::EvictionStrategy;
-use crate::bus::junction::{BeltTier, Rect};
+use crate::bus::junction::BeltTier;
 use crate::bus::junction_sat_strategy::SatStrategy;
-use crate::bus::junction_solver::{
-    self, JunctionSolution, JunctionStrategy, JunctionStrategyContext,
-};
+use crate::bus::junction_solver::{self, JunctionStrategy};
 use crate::bus::lane_planner::{BusLane, LaneFamily};
 use crate::bus::output_merger::merge_output_rows;
 use crate::bus::placer::RowSpan;
@@ -2573,12 +2575,13 @@ pub fn route_bus_ghost(
 
     // Step 6a: Per-tile crossing resolution via the junction-solver
     // growth loop. The loop seeds a `GrowingRegion` from each remaining
-    // crossing tile, runs the registered strategies, and grows the
-    // region's participating-spec frontier when none succeed. Today
-    // the only strategy is `PerpendicularTemplateStrategy`, a wrapper
-    // around the existing per-tile template — so behaviour matches the
-    // old direct-call path for every crossing the old code solved.
-    // Growth-aware strategies land on top of this scaffold.
+    // crossing tile, runs the registered strategies (see
+    // `pinned_tier_core_strategies`: the SAT-surface / sat-1ug-native /
+    // sat-2ug-native / sat-native ladder — the perpendicular-template
+    // rung that used to lead this ladder was deleted 2026-08-22, #689/
+    // #691/#687: production-unreachable on both shapes it handled, see
+    // `docs/offpath-code-followups.md` G1), and grows the region's
+    // participating-spec frontier when none succeed.
 
     let mut spec_belt_tiers: FxHashMap<String, BeltTier> = specs
         .iter()
@@ -2781,15 +2784,16 @@ pub fn route_bus_ghost(
         .filter(|t| !fluid_reservations.contains(t) || pipe_tile_set.contains(t))
         .copied()
         .collect();
-    // Subset of `junction_hard` whose claims would panic if perp-template
-    // stamped over them. `release_for_pertile_template` clears trunks and
-    // tapoffs inside the footprint, and the post-place loop
+    // Subset of `junction_hard` whose claims would panic if a per-tile
+    // strategy stamped over them. `release_for_pertile_template` clears
+    // trunks and tapoffs inside the footprint, and the post-place loop
     // (ghost_router.rs:1356) benignly skips `Template` and `RowEntity`
     // collisions. What remains, and what panics, is `Permanent` claims
     // whose segment id is NOT trunk/tapoff/row — balancer belts,
     // corridor-perp re-adds, merger chains — plus hard obstacles.
-    // `PerpendicularTemplateStrategy` consults this narrower set so it
-    // returns `None` instead of producing a panicking solution.
+    // Junction strategies consult this narrower set via
+    // `JunctionStrategyContext::unreleasable_obstacles` so they return
+    // `None` instead of producing a panicking solution.
     let unreleasable_obstacles: FxHashSet<(i32, i32)> = entities
         .iter()
         .filter(|e| {
@@ -4734,19 +4738,6 @@ pub fn route_bus_ghost(
 // Cluster zone + per-tile template support (used by Step 6a templates)
 // ---------------------------------------------------------------------------
 
-/// Bounding box for a ghost cluster zone (padded by 1 tile on each side).
-#[derive(Clone, Copy)]
-struct ClusterZone {
-    /// Padded bbox left
-    x: i32,
-    /// Padded bbox top
-    y: i32,
-    /// Padded bbox width
-    w: u32,
-    /// Padded bbox height
-    h: u32,
-}
-
 /// Direction from a (dx, dy) step.
 fn step_direction(dx: i32, dy: i32) -> EntityDirection {
     if dx > 0 {
@@ -4763,8 +4754,6 @@ fn step_direction(dx: i32, dy: i32) -> EntityDirection {
 /// Classify a cluster's crossing pattern by examining which paths pass
 /// through its tiles and their directions.
 struct CrossingInfo {
-    /// The single crossing tile (only set for single-tile clusters).
-    tile: (i32, i32),
     /// The two specs that cross, with their direction at the crossing tile.
     spec_a: (String, EntityDirection), // (item, direction)
     spec_b: (String, EntityDirection),
@@ -4773,29 +4762,11 @@ struct CrossingInfo {
     /// don't get belt-family entities stamped.
     belt_a: &'static str,
     belt_b: &'static str,
-    /// Transport kind per spec. Belt×Belt crossings go through the
-    /// existing `try_bridge`; Belt×Pipe short-circuits to
-    /// `bridge_belt_over_pipe`, which never stamps over the pipe tile.
+    /// Transport kind per spec — carried through to the
+    /// `SpecCrossing`s `emit_unresolved_junctions` builds so the
+    /// long-term junction solver can distinguish belt from pipe.
     kind_a: crate::bus::junction::SpecKind,
     kind_b: crate::bus::junction::SpecKind,
-}
-
-/// Check if two directions are perpendicular.
-fn is_perpendicular(a: EntityDirection, b: EntityDirection) -> bool {
-    matches!(
-        (a, b),
-        (
-            EntityDirection::East | EntityDirection::West,
-            EntityDirection::North | EntityDirection::South
-        ) | (
-            EntityDirection::North | EntityDirection::South,
-            EntityDirection::East | EntityDirection::West
-        )
-    )
-}
-
-fn is_horizontal(d: EntityDirection) -> bool {
-    matches!(d, EntityDirection::East | EntityDirection::West)
 }
 
 /// Group crossing tiles into clusters. Two tiles belong to the same
@@ -4838,11 +4809,14 @@ fn cluster_adjacent_crossings(
         tiles.iter().enumerate().map(|(i, &t)| (t, i)).collect();
 
     // Tiles that sit on a pipe-kind spec's path. These are belt×pipe
-    // crossings and MUST stay as singleton clusters — the perpendicular
-    // template's `bridge_belt_over_pipe` handles the 2-spec case directly.
-    // Merging them with belt×belt neighbours produces multi-spec clusters
-    // that neither the template (requires exactly 2 specs) nor SAT (guards
-    // against pipe-kind specs per Phase 3 in the RFC) can solve.
+    // crossings and MUST stay as singleton clusters — SAT guards against
+    // pipe-kind specs per Phase 3 in the RFC, so merging them with
+    // belt×belt neighbours produces multi-spec clusters SAT can't solve
+    // either. (The perpendicular-template rung that used to handle the
+    // 2-spec belt×pipe case directly was deleted 2026-08-22, #689/#691:
+    // production dispatch filters pipe specs out of junction seeding
+    // before the rung could ever see them — see `docs/offpath-code-
+    // followups.md` G1.)
     let mut pipe_tiles: FxHashSet<usize> = FxHashSet::default();
     for (key, path) in routed_paths {
         if !matches!(spec_kinds.get(key.as_str()), Some(SpecKind::Pipe)) {
@@ -5177,7 +5151,6 @@ fn classify_crossing(
     let (ref item_b, belt_b, db, kb) = crossing_specs[1];
 
     Some(CrossingInfo {
-        tile,
         spec_a: (item_a.clone(), da),
         spec_b: (item_b.clone(), db),
         belt_a,
@@ -5266,42 +5239,6 @@ fn emit_unresolved_junctions(
     }
 
     out
-}
-
-fn ug_for_belt(belt: &str) -> &'static str {
-    match belt {
-        "fast-transport-belt" => "fast-underground-belt",
-        "express-transport-belt" => "express-underground-belt",
-        _ => "underground-belt",
-    }
-}
-
-/// Returns true if any spec in `routed_paths` has a turn (different incoming
-/// and outgoing directions) at the given tile. Used to reject per-tile UG
-/// templates: a UG-in/out can't sit on a tile where another spec is turning,
-/// because the turning spec would sideload onto the UG and items would be
-/// dropped (UG belts only accept items entering from behind in their
-/// facing direction, not from a sideload).
-fn any_spec_turns_at(tile: (i32, i32), routed_paths: &FxHashMap<String, Vec<(i32, i32)>>) -> bool {
-    for path in routed_paths.values() {
-        for (i, &t) in path.iter().enumerate() {
-            if t != tile {
-                continue;
-            }
-            if i == 0 || i + 1 >= path.len() {
-                break;
-            }
-            let dx_in = t.0 - path[i - 1].0;
-            let dy_in = t.1 - path[i - 1].1;
-            let dx_out = path[i + 1].0 - t.0;
-            let dy_out = path[i + 1].1 - t.1;
-            if (dx_in, dy_in) != (dx_out, dy_out) {
-                return true;
-            }
-            break;
-        }
-    }
-    false
 }
 
 /// #652 flow-compatible commit upgrade: is `wanted` (a crossing-zone
@@ -5495,677 +5432,6 @@ fn flow_compatible_ug_upgrade(
     true
 }
 
-/// Returns true if a UG-in/out at `tile` facing `bridge_dir` would receive
-/// a sideload from a perpendicular spec — either because the tile itself has
-/// a perpendicular spec passing through, or because an adjacent SIDE tile
-/// (perpendicular to the bridge axis) has a belt flowing INTO this tile.
-///
-/// In Factorio, sideloads onto UG-input belts only fill the far lane and
-/// can dump items wrong; we reject any template that would create one.
-///
-/// The check considers both (a) in-flight routed ghost specs and (b) already-
-/// placed physical entities (splitters, row belts, trunks placed in Step 2-3).
-/// Without (b), a splitter whose output drops straight into this tile from a
-/// perpendicular direction slips through — the splitter is stamped before
-/// ghost routing and never enters `routed_paths`.
-///
-/// Returns `None` if the tile is fine, or `Some(reason)` identifying the
-/// first conflict found. The caller tags the reason with the endpoint
-/// it was checking (UG-in vs UG-out).
-fn ug_endpoint_conflicts(
-    tile: (i32, i32),
-    bridge_dir: EntityDirection,
-    bridge_spec_key: &str,
-    routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
-    placed_entities: &[PlacedEntity],
-) -> Option<&'static str> {
-    let bridge_axis_vert = matches!(bridge_dir, EntityDirection::North | EntityDirection::South);
-
-    // 1. The tile itself: if any other spec has it in its path AND its axis
-    //    at the tile differs from the bridge axis, we'd have two
-    //    perpendicular belts at the same tile — conflict.
-    for (key, path) in routed_paths {
-        if key == bridge_spec_key {
-            continue;
-        }
-        for (i, &t) in path.iter().enumerate() {
-            if t != tile {
-                continue;
-            }
-            let last_idx = path.len() - 1;
-            let (_dx, dy) = if i < last_idx {
-                (path[i + 1].0 - t.0, path[i + 1].1 - t.1)
-            } else if i > 0 {
-                (t.0 - path[i - 1].0, t.1 - path[i - 1].1)
-            } else {
-                continue;
-            };
-            let spec_axis_vert = dy != 0;
-            if spec_axis_vert != bridge_axis_vert {
-                return Some("axis_conflict");
-            }
-            break;
-        }
-    }
-
-    // 2. Adjacent SIDE tiles flowing INTO this tile (sideload). For a
-    //    horizontal bridge, the sides are above/below. For a vertical
-    //    bridge, the sides are left/right.
-    let side_offsets: &[(i32, i32, EntityDirection)] = if bridge_axis_vert {
-        // Vertical bridge: sides are east/west; a sideload comes from
-        // (x-1, y) facing East, or (x+1, y) facing West.
-        &[
-            (-1, 0, EntityDirection::East),
-            (1, 0, EntityDirection::West),
-        ]
-    } else {
-        // Horizontal bridge: sides are north/south; a sideload comes from
-        // (x, y-1) facing South, or (x, y+1) facing North.
-        &[
-            (0, -1, EntityDirection::South),
-            (0, 1, EntityDirection::North),
-        ]
-    };
-    for &(dx, dy, expected_dir) in side_offsets {
-        let side = (tile.0 + dx, tile.1 + dy);
-        // 2a. Routed-path sideloads (original check).
-        for path in routed_paths.values() {
-            for (i, &t) in path.iter().enumerate() {
-                if t != side {
-                    continue;
-                }
-                // Compute the spec's direction at this side tile.
-                let last_idx = path.len() - 1;
-                let (sdx, sdy) = if i < last_idx {
-                    (path[i + 1].0 - t.0, path[i + 1].1 - t.1)
-                } else if i > 0 {
-                    (t.0 - path[i - 1].0, t.1 - path[i - 1].1)
-                } else {
-                    continue;
-                };
-                let spec_dir = step_direction(sdx, sdy);
-                if spec_dir == expected_dir {
-                    return Some("sideload");
-                }
-                break;
-            }
-        }
-        // 2b. Pre-routing splitters (Step 2-3) dropping items into the
-        //     UG endpoint tile from a perpendicular direction. Splitters
-        //     never enter `routed_paths` so 2a misses them. Splitters are
-        //     two tiles wide perpendicular to their facing direction, so
-        //     the `side` tile may be the right half of a splitter placed
-        //     one column west.
-        for ent in placed_entities {
-            let is_splitter = matches!(
-                ent.name.as_str(),
-                "splitter" | "fast-splitter" | "express-splitter"
-            );
-            if !is_splitter {
-                continue;
-            }
-            if ent.direction != expected_dir {
-                continue;
-            }
-            let second = match ent.direction {
-                EntityDirection::North | EntityDirection::South => (ent.x + 1, ent.y),
-                EntityDirection::East | EntityDirection::West => (ent.x, ent.y + 1),
-            };
-            if (ent.x, ent.y) == side || second == side {
-                return Some("splitter_sideload");
-            }
-        }
-    }
-
-    None
-}
-
-/// Solve a perpendicular crossing with a deterministic template.
-///
-/// One path stays on the surface, the other goes underground via a UG pair.
-/// Prefers bridging the vertical path so horizontal connections to row inputs
-/// stay on the surface.
-fn solve_perpendicular_template(
-    info: &CrossingInfo,
-    hard_obstacles: &FxHashSet<(i32, i32)>,
-    unreleasable_obstacles: &FxHashSet<(i32, i32)>,
-    routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
-    placed_entities: &[PlacedEntity],
-) -> Option<(Vec<PlacedEntity>, ClusterZone)> {
-    use crate::bus::junction::SpecKind;
-    // Pipe×belt short-circuit. The pipe is a fixed-surface entity that
-    // belongs to a fluid-trunk column; the belt must UG-bypass it
-    // without anything getting stamped on the pipe tile itself. See
-    // `docs/rfc-pipe-belt-junctions.md` for the full story.
-    match (info.kind_a, info.kind_b) {
-        (SpecKind::Pipe, SpecKind::Pipe) => return None,
-        (SpecKind::Pipe, SpecKind::Belt) => {
-            return bridge_belt_over_pipe(
-                info,
-                /* pipe_is_a = */ true,
-                hard_obstacles,
-                unreleasable_obstacles,
-                routed_paths,
-                placed_entities,
-            );
-        }
-        (SpecKind::Belt, SpecKind::Pipe) => {
-            return bridge_belt_over_pipe(
-                info,
-                /* pipe_is_a = */ false,
-                hard_obstacles,
-                unreleasable_obstacles,
-                routed_paths,
-                placed_entities,
-            );
-        }
-        (SpecKind::Belt, SpecKind::Belt) => {}
-    }
-
-    let perpendicular = is_perpendicular(info.spec_a.1, info.spec_b.1);
-    if !perpendicular {
-        // Same-direction crossings — single attempt, bridge spec_b arbitrarily.
-        return try_bridge(
-            info.tile,
-            (&info.spec_a.0, info.spec_a.1, info.belt_a),
-            (&info.spec_b.0, info.spec_b.1, info.belt_b),
-            hard_obstacles,
-            unreleasable_obstacles,
-            routed_paths,
-            placed_entities,
-        );
-    }
-
-    // Perpendicular: try BOTH bridge directions and pick the first that works.
-    // Prefer bridging the vertical first (keeps horizontal connections on the
-    // surface for row inputs), but fall back to bridging the horizontal if
-    // the vertical option is blocked or has UG-position turn conflicts.
-    let (h_spec, v_spec) = if is_horizontal(info.spec_a.1) {
-        (&info.spec_a, &info.spec_b)
-    } else {
-        (&info.spec_b, &info.spec_a)
-    };
-
-    let bridge_vertical_first = try_bridge(
-        info.tile,
-        (
-            &h_spec.0,
-            h_spec.1,
-            if std::ptr::eq(h_spec, &info.spec_a) {
-                info.belt_a
-            } else {
-                info.belt_b
-            },
-        ),
-        (
-            &v_spec.0,
-            v_spec.1,
-            if std::ptr::eq(v_spec, &info.spec_a) {
-                info.belt_a
-            } else {
-                info.belt_b
-            },
-        ),
-        hard_obstacles,
-        unreleasable_obstacles,
-        routed_paths,
-        placed_entities,
-    );
-    if bridge_vertical_first.is_some() {
-        return bridge_vertical_first;
-    }
-
-    // Fall back to bridging the horizontal (vertical stays on surface).
-    try_bridge(
-        info.tile,
-        (
-            &v_spec.0,
-            v_spec.1,
-            if std::ptr::eq(v_spec, &info.spec_a) {
-                info.belt_a
-            } else {
-                info.belt_b
-            },
-        ),
-        (
-            &h_spec.0,
-            h_spec.1,
-            if std::ptr::eq(h_spec, &info.spec_a) {
-                info.belt_a
-            } else {
-                info.belt_b
-            },
-        ),
-        hard_obstacles,
-        unreleasable_obstacles,
-        routed_paths,
-        placed_entities,
-    )
-}
-
-/// Try to place a UG bridge for the second `(item, dir, belt)` triple over
-/// the first one staying on the surface at `crossing`. Returns `None` if the
-/// UG positions are obstructed or would receive a sideload.
-fn try_bridge(
-    crossing: (i32, i32),
-    surface: (&String, EntityDirection, &'static str),
-    bridge: (&String, EntityDirection, &'static str),
-    hard_obstacles: &FxHashSet<(i32, i32)>,
-    unreleasable_obstacles: &FxHashSet<(i32, i32)>,
-    routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
-    placed_entities: &[PlacedEntity],
-) -> Option<(Vec<PlacedEntity>, ClusterZone)> {
-    let (cx, cy) = crossing;
-    let (surface_item, surface_dir, surface_belt) = surface;
-    let (bridge_item, bridge_dir, bridge_belt) = bridge;
-
-    let (dx, dy) = match bridge_dir {
-        EntityDirection::North => (0, -1),
-        EntityDirection::South => (0, 1),
-        EntityDirection::East => (1, 0),
-        EntityDirection::West => (-1, 0),
-    };
-    let ug_in = (cx - dx, cy - dy);
-    let ug_out = (cx + dx, cy + dy);
-
-    let bridge_axis_label: &'static str = match bridge_dir {
-        EntityDirection::North | EntityDirection::South => "vertical",
-        EntityDirection::East | EntityDirection::West => "horizontal",
-    };
-    let reject = |reason: &'static str| -> Option<(Vec<PlacedEntity>, ClusterZone)> {
-        trace::emit(trace::TraceEvent::JunctionTemplateRejected {
-            tile_x: cx,
-            tile_y: cy,
-            bridge_dir: bridge_axis_label.to_string(),
-            reason: reason.to_string(),
-        });
-        None
-    };
-
-    if hard_obstacles.contains(&ug_in) {
-        return reject("hard_obstacle_ug_in");
-    }
-    // `release_for_pertile_template` clears trunks/tapoffs inside the 3-tile
-    // footprint, so those don't block us. But it leaves Permanent claims with
-    // any other segment id — balancer belts, corridor-perp re-adds, row
-    // templates, prior stamped templates — alone. Stamping a UG endpoint OR
-    // the crossing-tile surface belt on top of one of those panics in
-    // `place`. Reject here so the growth loop in `solve_crossing` moves on
-    // to SatStrategy at the next iteration.
-    if unreleasable_obstacles.contains(&ug_in) {
-        return reject("unreleasable_obstacle_ug_in");
-    }
-    if unreleasable_obstacles.contains(&ug_out) {
-        return reject("unreleasable_obstacle_ug_out");
-    }
-    if unreleasable_obstacles.contains(&(cx, cy)) {
-        return reject("unreleasable_obstacle_crossing");
-    }
-    if hard_obstacles.contains(&ug_out) {
-        return reject("hard_obstacle_ug_out");
-    }
-
-    // Reject if any spec turns at the UG-in/out tile, or if a perpendicular
-    // belt would sideload into them. Sideloads onto UG belts only fill the
-    // far lane and dump items.
-    if any_spec_turns_at(ug_in, routed_paths) {
-        return reject("turn_at_ug_in");
-    }
-    if any_spec_turns_at(ug_out, routed_paths) {
-        return reject("turn_at_ug_out");
-    }
-    // Find a representative key for the bridged spec to exclude from the
-    // conflict check. Any path containing the crossing tile in the bridge
-    // direction at that tile counts as the bridged spec.
-    let bridge_key = routed_paths
-        .iter()
-        .find(|(_, path)| path.contains(&crossing))
-        .map(|(k, _)| k.as_str())
-        .unwrap_or("");
-    if let Some(sub) =
-        ug_endpoint_conflicts(ug_in, bridge_dir, bridge_key, routed_paths, placed_entities)
-    {
-        return reject(match sub {
-            "axis_conflict" => "ug_in_axis_conflict",
-            "sideload" => "ug_in_sideload",
-            _ => "ug_in_conflict",
-        });
-    }
-    if let Some(sub) = ug_endpoint_conflicts(
-        ug_out,
-        bridge_dir,
-        bridge_key,
-        routed_paths,
-        placed_entities,
-    ) {
-        return reject(match sub {
-            "axis_conflict" => "ug_out_axis_conflict",
-            "sideload" => "ug_out_sideload",
-            _ => "ug_out_conflict",
-        });
-    }
-
-    let ug_name = ug_for_belt(bridge_belt);
-    let seg = Some(format!("junction:{}:{},{}", bridge_item, cx, cy));
-
-    let entities = vec![
-        PlacedEntity {
-            name: surface_belt.to_string(),
-            x: cx,
-            y: cy,
-            direction: surface_dir,
-            carries: Some(surface_item.clone()),
-            segment_id: seg.clone(),
-            ..Default::default()
-        },
-        PlacedEntity {
-            name: ug_name.to_string(),
-            x: ug_in.0,
-            y: ug_in.1,
-            direction: bridge_dir,
-            io_type: Some("input".to_string()),
-            carries: Some(bridge_item.clone()),
-            segment_id: seg.clone(),
-            ..Default::default()
-        },
-        PlacedEntity {
-            name: ug_name.to_string(),
-            x: ug_out.0,
-            y: ug_out.1,
-            direction: bridge_dir,
-            io_type: Some("output".to_string()),
-            carries: Some(bridge_item.clone()),
-            segment_id: seg.clone(),
-            ..Default::default()
-        },
-    ];
-
-    let zone = ClusterZone {
-        x: cx.min(ug_in.0).min(ug_out.0),
-        y: cy.min(ug_in.1).min(ug_out.1),
-        w: ((cx - ug_in.0).abs().max((cx - ug_out.0).abs()) * 2 + 1) as u32,
-        h: ((cy - ug_in.1).abs().max((cy - ug_out.1).abs()) * 2 + 1) as u32,
-    };
-
-    Some((entities, zone))
-}
-
-/// UG-bridge a belt spec around a pipe spec at the crossing tile.
-///
-/// The pipe is a fixed-surface entity belonging to a fluid-trunk column —
-/// it stays put, and nothing gets stamped on `(cx, cy)`. The belt enters
-/// a UG-in on one side of the pipe and exits a UG-out on the other.
-/// Obstacle / turn / sideload checks on the UG endpoints mirror
-/// `try_bridge`'s belt-side handling.
-///
-/// `pipe_is_a` selects which entry in `CrossingInfo` is the pipe — the
-/// other is the belt we're bridging. Returns `None` if any belt-side UG
-/// endpoint is obstructed, turns, or receives a sideload; the caller
-/// falls through to the SAT strategies (which currently defer on
-/// pipe-kind specs via `SatStrategy`).
-fn bridge_belt_over_pipe(
-    info: &CrossingInfo,
-    pipe_is_a: bool,
-    hard_obstacles: &FxHashSet<(i32, i32)>,
-    unreleasable_obstacles: &FxHashSet<(i32, i32)>,
-    routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
-    placed_entities: &[PlacedEntity],
-) -> Option<(Vec<PlacedEntity>, ClusterZone)> {
-    let (cx, cy) = info.tile;
-    let (belt_item, belt_dir, belt_name) = if pipe_is_a {
-        (&info.spec_b.0, info.spec_b.1, info.belt_b)
-    } else {
-        (&info.spec_a.0, info.spec_a.1, info.belt_a)
-    };
-
-    let (dx, dy) = match belt_dir {
-        EntityDirection::North => (0, -1),
-        EntityDirection::South => (0, 1),
-        EntityDirection::East => (1, 0),
-        EntityDirection::West => (-1, 0),
-    };
-
-    let bridge_axis_label: &'static str = match belt_dir {
-        EntityDirection::North | EntityDirection::South => "vertical",
-        EntityDirection::East | EntityDirection::West => "horizontal",
-    };
-    let reject = |reason: &'static str| -> Option<(Vec<PlacedEntity>, ClusterZone)> {
-        trace::emit(trace::TraceEvent::JunctionTemplateRejected {
-            tile_x: cx,
-            tile_y: cy,
-            bridge_dir: bridge_axis_label.to_string(),
-            reason: reason.to_string(),
-        });
-        None
-    };
-
-    // Pipe-run discovery. The bridge must span every pipe touching the
-    // belt's axis at this row/column without surfacing between them, or
-    // a stranded pipe between two narrow bridges produces a dead-end.
-    // Adjacent fluid-trunk columns (crude-oil/water/petroleum-gas at
-    // x=26..28 in processing-unit @ 2/s) give the canonical multi-pipe
-    // case. Reservations and ghost belts BETWEEN pipes are swallowed
-    // into the run so the resulting UG tunnel passes beneath all of
-    // them; we only stop walking when no further pipe lies within
-    // `max_reach` tiles ahead.
-    let is_pipe_at = |t: (i32, i32)| -> bool {
-        placed_entities
-            .iter()
-            .any(|e| (e.x, e.y) == t && (e.name == "pipe" || e.name == "pipe-to-ground"))
-    };
-    // A tile is a "blocker" for UG-endpoint placement when it carries an
-    // unreleasable entity (machine, pole, row template, etc.) or a pipe.
-    // Releasable entities (ghost belts, trunks, tap-offs, prior junction
-    // outputs, simple balancers) at the tile are fine — they get released
-    // by the per-tile-template release pass before the new UG is stamped.
-    // Reservation-only tiles (in `hard` but with no actual entity) are
-    // allowed: nothing's actually there to conflict with.
-    let blocked_at = |t: (i32, i32)| -> bool {
-        placed_entities.iter().any(|e| {
-            if (e.x, e.y) != t {
-                return false;
-            }
-            if e.name == "pipe" || e.name == "pipe-to-ground" {
-                return true;
-            }
-            let seg = e.segment_id.as_deref().unwrap_or("");
-            !(seg.starts_with("ghost:")
-                || seg.starts_with("trunk:")
-                || seg.starts_with("tapoff:")
-                || seg.starts_with("junction:")
-                || seg.starts_with("corridor:")
-                || seg.starts_with("crossing:"))
-        })
-    };
-    // Non-pipe blocker check used by the walk: any unreleasable
-    // entity at the tile (machines, poles, row templates, splitters,
-    // multi-block balancers, etc.) that the bridge can NOT tunnel
-    // through. Pipes are NOT counted as blockers here — the walk
-    // EXTENDS through them, since the whole point of the bridge is to
-    // bury the belt under pipe runs. Releasable kinds (ghost belts,
-    // trunks, tap-offs, prior junctions) are also fine: they get
-    // released by the per-tile-template release pass.
-    let non_pipe_blocker_at = |t: (i32, i32)| -> bool {
-        placed_entities.iter().any(|e| {
-            if (e.x, e.y) != t {
-                return false;
-            }
-            if e.name == "pipe" || e.name == "pipe-to-ground" {
-                return false;
-            }
-            let seg = e.segment_id.as_deref().unwrap_or("");
-            !(seg.starts_with("ghost:")
-                || seg.starts_with("trunk:")
-                || seg.starts_with("tapoff:")
-                || seg.starts_with("junction:")
-                || seg.starts_with("corridor:")
-                || seg.starts_with("crossing:"))
-        })
-    };
-    let max_reach = ug_max_reach(belt_name) as i32;
-    // Walk along the axis from `start` in `(step_dx, step_dy)`, finding
-    // the FARTHEST pipe such that every gap between pipes can be
-    // jumped underground (i.e. no two pipes are more than `max_reach`
-    // tiles apart, and no blocker entity sits in the gap). Returns the
-    // last pipe in the run (or `start` if no pipes are reached).
-    let walk_run = |start: (i32, i32), step_dx: i32, step_dy: i32| -> (i32, i32) {
-        let mut last_pipe = start;
-        let mut cur = start;
-        loop {
-            // Lookahead: any pipe within `max_reach` tiles? Advance
-            // through pipes, ghost belts, reservations, and empty tiles.
-            // Stop on a non-pipe unreleasable entity — can't tunnel
-            // through it.
-            let mut found_pipe_ahead: Option<i32> = None;
-            for i in 1..=max_reach {
-                let probe = (cur.0 + step_dx * i, cur.1 + step_dy * i);
-                if is_pipe_at(probe) {
-                    found_pipe_ahead = Some(i);
-                    break;
-                }
-                if non_pipe_blocker_at(probe) {
-                    break;
-                }
-            }
-            match found_pipe_ahead {
-                Some(steps) => {
-                    cur = (cur.0 + step_dx * steps, cur.1 + step_dy * steps);
-                    last_pipe = cur;
-                }
-                None => return last_pipe,
-            }
-        }
-    };
-    // Backward = upstream (UG-IN side), forward = downstream (UG-OUT
-    // side). Walk in both directions so a pipe tile sandwiched between
-    // pipes is found regardless of which one was the seed.
-    let upstream_end = walk_run((cx, cy), -dx, -dy);
-    let downstream_end = walk_run((cx, cy), dx, dy);
-    let ug_in = (upstream_end.0 - dx, upstream_end.1 - dy);
-    let ug_out = (downstream_end.0 + dx, downstream_end.1 + dy);
-
-    // Underground span between UG-IN and UG-OUT: count of buried tiles.
-    // For a single-pipe bridge that's 1; for an N-pipe run it's the
-    // distance from upstream_end to downstream_end (inclusive of any
-    // ghost-belt/reservation gaps the walk swallowed). Reject if the
-    // span exceeds the belt tier's max reach.
-    let span = match belt_dir {
-        EntityDirection::North | EntityDirection::South => (ug_out.1 - ug_in.1).abs() - 1,
-        EntityDirection::East | EntityDirection::West => (ug_out.0 - ug_in.0).abs() - 1,
-    };
-    if span > max_reach {
-        return reject("pipe_run_exceeds_ug_reach");
-    }
-
-    // Belt-side endpoint checks. The pipe tiles inside the run are
-    // left alone — no stamp goes on them, so we don't consult the
-    // obstacle sets for tiles inside the run.
-    //
-    // We use `blocked_at` (which inspects actual entities at the tile)
-    // rather than `hard_obstacles` because the narrow `hard` set
-    // includes fluid-trunk reservations — column tiles reserved for
-    // future fluid placement but with no actual entity. UG-IN/OUT can
-    // sit on a reserved-but-empty tile because the perpendicular fluid
-    // UG buried beneath does not interfere (per F4/F7).
-    if blocked_at(ug_in) {
-        return reject("blocked_ug_in");
-    }
-    if blocked_at(ug_out) {
-        return reject("blocked_ug_out");
-    }
-    if any_spec_turns_at(ug_in, routed_paths) {
-        return reject("turn_at_ug_in");
-    }
-    if any_spec_turns_at(ug_out, routed_paths) {
-        return reject("turn_at_ug_out");
-    }
-    // The legacy `hard_obstacles` / `unreleasable_obstacles` params are
-    // retained on the signature for parity with `bridge_belt_over_pipe`'s
-    // siblings; the multi-pipe walk supersedes them by inspecting actual
-    // entities at each tile (`blocked_at`, `non_pipe_blocker_at`).
-    let _ = hard_obstacles;
-    let _ = unreleasable_obstacles;
-
-    // Exclude the belt's own path key from the conflict check. Match by
-    // item name in the key (e.g. `flow:iron-plate:21`, `tap:iron-plate:...`)
-    // — the pipe's synth key (`trunk:sulfuric-acid:21`) won't match.
-    let belt_item_str = belt_item.as_str();
-    let bridge_key = routed_paths
-        .iter()
-        .find(|(k, path)| path.contains(&info.tile) && k.contains(belt_item_str))
-        .map(|(k, _)| k.as_str())
-        .unwrap_or("");
-    if let Some(sub) =
-        ug_endpoint_conflicts(ug_in, belt_dir, bridge_key, routed_paths, placed_entities)
-    {
-        return reject(match sub {
-            "axis_conflict" => "ug_in_axis_conflict",
-            "sideload" => "ug_in_sideload",
-            _ => "ug_in_conflict",
-        });
-    }
-    if let Some(sub) =
-        ug_endpoint_conflicts(ug_out, belt_dir, bridge_key, routed_paths, placed_entities)
-    {
-        return reject(match sub {
-            "axis_conflict" => "ug_out_axis_conflict",
-            "sideload" => "ug_out_sideload",
-            _ => "ug_out_conflict",
-        });
-    }
-
-    let ug_name = ug_for_belt(belt_name);
-    let seg = Some(format!("junction:{}:{},{}", belt_item, cx, cy));
-
-    // Sanity: at least one pipe must actually exist at the seed tile,
-    // otherwise we have no business bridging here.
-    if !placed_entities.iter().any(|e| (e.x, e.y) == (cx, cy)) {
-        return reject("pipe_tile_missing");
-    }
-
-    // Pipes themselves are NOT re-emitted: their Permanent claims survive
-    // the release pass (`release_for_pertile_template` skips pipe entities
-    // — see `bus/ghost_occupancy.rs`), and trying to stamp a Template
-    // entity over an existing Permanent tile would panic in the post-place
-    // loop. We only emit the belt-side UG endpoints; the underground
-    // tunnel passes beneath every pipe in the run untouched (per F4/U4).
-    let entities = vec![
-        PlacedEntity {
-            name: ug_name.to_string(),
-            x: ug_in.0,
-            y: ug_in.1,
-            direction: belt_dir,
-            io_type: Some("input".to_string()),
-            carries: Some(belt_item.clone()),
-            segment_id: seg.clone(),
-            ..Default::default()
-        },
-        PlacedEntity {
-            name: ug_name.to_string(),
-            x: ug_out.0,
-            y: ug_out.1,
-            direction: belt_dir,
-            io_type: Some("output".to_string()),
-            carries: Some(belt_item.clone()),
-            segment_id: seg.clone(),
-            ..Default::default()
-        },
-    ];
-
-    // Zone covers the full UG-IN..UG-OUT span (inclusive). For the
-    // single-pipe legacy case this is 3×1 / 1×3; for an N-pipe run it's
-    // (N+2)×1 / 1×(N+2). Width is along the belt's axis.
-    let (min_x, max_x) = (ug_in.0.min(ug_out.0), ug_in.0.max(ug_out.0));
-    let (min_y, max_y) = (ug_in.1.min(ug_out.1), ug_in.1.max(ug_out.1));
-    let zone = ClusterZone {
-        x: min_x,
-        y: min_y,
-        w: (max_x - min_x + 1) as u32,
-        h: (max_y - min_y + 1) as u32,
-    };
-    Some((entities, zone))
-}
-
 /// Belt entity name for a junction-solver `BeltTier`. Matches the
 /// surface belt names that `BeltSpec::belt_name` holds.
 fn belt_name_for_tier(tier: BeltTier) -> &'static str {
@@ -6175,15 +5441,6 @@ fn belt_name_for_tier(tier: BeltTier) -> &'static str {
         BeltTier::Blue => "express-transport-belt",
     }
 }
-
-/// The first (and currently only) `JunctionStrategy` wired into the
-/// growth loop: a thin wrapper around the existing
-/// `solve_perpendicular_template`. Only activates when the junction
-/// has exactly two specs with perpendicular directions at the initial
-/// crossing tile. Ignores region growth entirely — the underlying
-/// template operates on a fixed 3-tile footprint. Real growth-aware
-/// strategies will land alongside this one.
-pub(crate) struct PerpendicularTemplateStrategy;
 
 /// The pinned-tier core of the production strategy ladder, in dispatch
 /// order. Single source of truth shared by production (`route_bus_ghost`,
@@ -6198,7 +5455,6 @@ pub(crate) fn pinned_tier_core_strategies(
 ) -> Vec<Box<dyn crate::bus::junction_solver::JunctionStrategy>> {
     use crate::bus::junction_sat_strategy::{SatConstraints, SatStrategy};
     vec![
-        Box::new(PerpendicularTemplateStrategy),
         Box::new(SatStrategy::surface_only()),
         Box::new(SatStrategy::with(
             "sat-1ug-native",
@@ -6213,61 +5469,6 @@ pub(crate) fn pinned_tier_core_strategies(
             SatConstraints::unrestricted_native(),
         )),
     ]
-}
-
-impl JunctionStrategy for PerpendicularTemplateStrategy {
-    fn name(&self) -> &'static str {
-        "perpendicular_template"
-    }
-
-    fn try_solve(&self, ctx: &JunctionStrategyContext) -> Option<JunctionSolution> {
-        // The underlying per-tile template operates on a fixed 3-tile
-        // footprint around the original crossing and has no concept of
-        // a grown region. If it fails on the initial 1×1 region, it
-        // will fail the same way on every grown iteration — skip
-        // subsequent attempts to avoid noisy duplicate trace events.
-        if ctx.region.tile_count() > 1 {
-            return None;
-        }
-        if ctx.junction.specs.len() != 2 {
-            return None;
-        }
-        let sa = &ctx.junction.specs[0];
-        let sb = &ctx.junction.specs[1];
-        let da = sa.entry.direction;
-        let db = sb.entry.direction;
-        if !is_perpendicular(da, db) {
-            return None;
-        }
-        let info = CrossingInfo {
-            tile: ctx.region.initial_tile,
-            spec_a: (sa.item.clone(), da),
-            spec_b: (sb.item.clone(), db),
-            belt_a: belt_name_for_tier(sa.belt_tier),
-            belt_b: belt_name_for_tier(sb.belt_tier),
-            kind_a: sa.kind,
-            kind_b: sb.kind,
-        };
-        let (entities, zone) = solve_perpendicular_template(
-            &info,
-            ctx.hard_obstacles,
-            ctx.unreleasable_obstacles,
-            ctx.routed_paths,
-            ctx.placed_entities,
-        )?;
-        Some(JunctionSolution {
-            entities,
-            footprint: Rect {
-                x: zone.x,
-                y: zone.y,
-                w: zone.w,
-                h: zone.h,
-            },
-            strategy_name: self.name(),
-            participating: ctx.region.participating.clone(),
-            sat_zone: None,
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -17,8 +17,13 @@ use crate::models::PlacedEntity;
 /// Axis-aligned tile rectangle. Width and height are in tiles; the rect
 /// covers `[x, x + w)` × `[y, y + h)`.
 ///
-/// Mirrors the shape of `ghost_router::ClusterZone` so that callers can
-/// pass either type once Step 6 unifies them.
+/// Shape-compatible with `crate::bus::junction::Rect` (both are plain
+/// `{x, y, w, h}` tile rects) — some call sites construct one from the
+/// other's fields. (Historical note: this doc comment used to also
+/// mention `ghost_router::ClusterZone` as a third shape to unify with;
+/// that type was deleted 2026-08-22, PR #702, along with the
+/// perpendicular-template rung it belonged to — see `docs/offpath-code-
+/// followups.md` G1.)
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Rect {
     pub x: i32,
@@ -445,10 +450,14 @@ impl Occupancy {
                         // junction-solver-aware replacement, so releasing
                         // them and letting a SAT solution stamp a belt
                         // over the tile silently destroys fluid networks.
-                        // The `bridge_belt_over_pipe` template tunnels
-                        // belts UNDER pipes via UG (per U4); any path
-                        // that reaches release time AND lands on a pipe
-                        // tile is a strategy bug, not a license to clobber.
+                        // Production dispatch filters pipe specs out of
+                        // junction seeding entirely (`keys_at_tile` —
+                        // pipes participate as forbidden tiles only, and
+                        // SAT bypasses them as obstacles per U4), so no
+                        // strategy should ever need to route a belt
+                        // through one; any path that reaches release
+                        // time AND lands on a pipe tile is a strategy
+                        // bug, not a license to clobber.
                         if entity.name == "pipe" || entity.name == "pipe-to-ground" {
                             return false;
                         }

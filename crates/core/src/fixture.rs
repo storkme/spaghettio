@@ -113,11 +113,20 @@ pub struct RegionFixture {
     pub spec_items: BTreeMap<String, String>,
     pub spec_exit_dirs: BTreeMap<String, EntityDirection>,
     /// Spec-kind overrides; `"Pipe"` is the only meaningful value, absent
-    /// keys default to Belt. Needed because the perpendicular-template
-    /// rung's only reachable path on a two-item single-tile crossing is
-    /// the pipe bridge (the item-conflict gate skips every strategy on
-    /// the sole single-tile iteration of a belt×belt crossing), so
-    /// pinning that rung requires a pipe-kind spec (offpath G1).
+    /// keys default to Belt. Feeds `solve_crossing`'s own `spec_kinds`
+    /// parameter, so it drives every pipe-aware code path in the region
+    /// solver: `classify_crossing`/`cluster_adjacent_crossings` (which
+    /// keep pipe×belt crossings singleton) and
+    /// `junction_solver::find_item_conflict` (which excludes pipe items
+    /// from the item-conflict fast-fail). Originally added (offpath G1,
+    /// #687) because it was also the only way to pin the now-deleted
+    /// perpendicular-template rung's pipe-bridge arm
+    /// (`perp_template_pipe_belt_bridge.json`, removed with the rung
+    /// 2026-08-22, PR #702) — production dispatch has never been able to
+    /// produce a pipe-kind `initial_specs` entry itself (`keys_at_tile`
+    /// filters pipes out before junction seeding), so a fixture wanting
+    /// to exercise ANY pipe-aware code path still has to set this by
+    /// hand, same as that one did.
     #[serde(default)]
     pub spec_kinds: BTreeMap<String, String>,
     #[serde(default)]
@@ -338,16 +347,6 @@ pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
                     "variant-chosen".to_string(),
                     variant.clone(),
                     format!("cost={cost} considered={considered:?}"),
-                ))
-            }
-            // The perp rung's inner `try_bridge` refusals carry the reason a
-            // template attempt came back Unsatisfiable — fold them in so an
-            // attribution mismatch is diagnosable without re-instrumenting.
-            TraceEvent::JunctionTemplateRejected { tile_x, tile_y, bridge_dir, reason } => {
-                Some((
-                    "perpendicular_template".to_string(),
-                    format!("Rejected[{bridge_dir}]"),
-                    format!("({tile_x},{tile_y}) {reason}"),
                 ))
             }
             _ => None,

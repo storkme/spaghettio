@@ -3,6 +3,15 @@
 **Status at end of session 2026-04-14.** Not a spec. Notes to pick up next
 session without having to re-investigate.
 
+> **2026-08-22 note:** `PerpendicularTemplateStrategy` and everything it
+> wraps (`solve_perpendicular_template`, `try_bridge`,
+> `bridge_belt_over_pipe`) — described throughout this doc as current,
+> just-landed code — were deleted in PR #702 as production-unreachable
+> (owner green-light on #689, census on #691). The strategy ladder today
+> is SAT-only: `sat-surface` → `sat-1ug-native` → `sat-2ug-native` →
+> `sat-native`. Everything below is the historical record of the
+> framework's first landing, not a description of current code.
+
 ## 2026-04-14 follow-up: P0 occupancy threading + orphan-extend bug
 
 P0 from the original "Next steps" is done. Two fixes landed together.
@@ -341,7 +350,7 @@ it.
 | How does the growth loop work? | `bus/junction_solver.rs::solve_crossing` |
 | How is a `Junction` built from a `GrowingRegion`? | `GrowingRegion::to_junction` |
 | Where does `forbidden` come from? | `GrowingRegion::refresh_forbidden` |
-| Where does the perp template plug in? | `bus/ghost_router.rs::PerpendicularTemplateStrategy` |
+| Where does the perp template plug in? | *(deleted 2026-08-22, PR #702 — see the note at the top of this doc)* |
 | Where does SAT plug in? | `bus/junction_sat_strategy.rs` |
 | Where does ghost_router call into the framework? | `bus/ghost_router.rs` — search for `junction_solver::solve_crossing` (Step 6a) |
 | How to see which strategy solved what? | `cargo run --release --example diagnose_junctions` — look for the `junction-solver success by strategy` line per tier |

@@ -97,11 +97,11 @@ Same semantics as `sat_fixtures/README.md`:
 
 Optional. When set, the harness asserts the **winning** strategy's name — from the terminal `JunctionSolved` trace event, i.e. the candidate the growth loop actually committed, not merely any rung that reported a walker-valid `Solved` attempt (speculative single-side variants run their own ladders, and losing candidates emit `Solved` attempts too). Use it when the fixture exists to pin a *specific rung* (added for offpath G1, #687): without it, a rung-specific regression is silently absorbed by the SAT fallbacks and the fixture stays green.
 
-On a `solved_by` mismatch the harness prints the winning solution's entities plus every strategy attempt as `(strategy, outcome, "i<iter>[<variant>] <detail>")` — including `try_bridge` rejection reasons and the `variant-chosen` cost comparison — so the failure is diagnosable from test output alone.
+On a `solved_by` mismatch the harness prints the winning solution's entities plus every strategy attempt as `(strategy, outcome, "i<iter>[<variant>] <detail>")` — including the `variant-chosen` cost comparison — so the failure is diagnosable from test output alone. (Prior to 2026-08-22 this also folded in the perpendicular-template rung's `try_bridge` rejection reasons via `JunctionTemplateRejected`; both the rung and that trace variant were deleted as production-unreachable — see `docs/offpath-code-followups.md` G1.)
 
 Scope of the pin: `solved_by` discriminates **which rung** answered, not which growth iteration or expansion variant its solution came from — a same-name win on a different iteration passes. Pin the solution's *shape* with `required_entities` and its *cost* with `max_cost`; the three pins are complementary, not redundant (a solver change that makes a fallback cheaper flips `solved_by` while `required_entities` may still pass, and vice versa).
 
-The replay's strategy ladder mirrors production's **pinned-tier core** (`perp`, `sat-surface`, `sat-1ug-native`, `sat-2ug-native`, `sat-native`); the auto-tier-only extras (eviction, AutoUpgrade rungs) are excluded because fixtures don't record the layout's belt-tier mode. Pin names from the core ladder only.
+The replay's strategy ladder mirrors production's **pinned-tier core** (`sat-surface`, `sat-1ug-native`, `sat-2ug-native`, `sat-native`); the auto-tier-only extras (eviction, AutoUpgrade rungs) are excluded because fixtures don't record the layout's belt-tier mode. Pin names from the core ladder only. (The `perpendicular_template` rung that used to lead this ladder was deleted 2026-08-22 as production-unreachable — see `docs/offpath-code-followups.md` G1 and #689/#691.)
 
 ---
 
@@ -109,7 +109,7 @@ The replay's strategy ladder mirrors production's **pinned-tier core** (`perp`, 
 
 The region solver's call site in `ghost_router.rs` has a debug-only dump path gated on an environment variable. Off by default.
 
-**Pipe caveat:** production dispatch filters pipe specs out of junction seeding (`keys_at_tile` — pipes participate as forbidden tiles only), so a capture can **never** emit a pipe entry in `initial_specs`. Pipe×belt fixtures must be hand-authored (see `perp_template_pipe_belt_bridge.json`); the `spec_kinds` field in the dump exists so captures stay faithful if dispatch ever re-admits pipe specs.
+**Pipe caveat:** production dispatch filters pipe specs out of junction seeding (`keys_at_tile` — pipes participate as forbidden tiles only), so a capture can **never** emit a pipe entry in `initial_specs`. Pipe×belt fixtures must be hand-authored; the `spec_kinds` field in the dump exists so captures stay faithful if dispatch ever re-admits pipe specs. (The corpus's one hand-authored example, `perp_template_pipe_belt_bridge.json`, pinned the perpendicular-template rung's internal pipe×belt logic and was deleted with the rung 2026-08-22 as a static unit pin of dead code — see `docs/offpath-code-followups.md` G1 and #689/#691. No pipe×belt fixture currently exists in the corpus.)
 
 ### Capture one specific junction
 
