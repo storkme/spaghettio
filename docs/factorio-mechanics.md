@@ -84,7 +84,7 @@ Wiki-verified 2026-07-21 ([Stack inserter](https://wiki.factorio.com/Stack_inser
 - **S8.** **Filter mode**: route a specific item type to one output, everything else to the other.
 - **S9.** **Tap-off from a running trunk**: to branch items off a belt that must continue flowing, a splitter is required. A belt turn or sideload redirects or copies items but does NOT split the flow — the trunk belt would terminate or starve downstream. The standard bus tap-off pattern: place a South-facing splitter on the trunk; one output continues South (trunk), the other output feeds East (tap-off to consumer row). The splitter occupies the trunk column and one adjacent column.
 - **S10.** The left and right splitter lanes make independent output decisions; one lane's round-robin history must not advance or reset the other lane's history.
-- **S11.** When one output is blocked and items are forced to the other output, the splitter retains bounded memory of up to five items for the blocked side before returning to ordinary balancing. This is the vanilla behavior documented in the [splitter history](https://wiki.factorio.com/Splitter#History); it is distinct from a user-configured output priority.
+- **S11.** When one output is blocked and items are forced to the other output, the splitter retains a fixed five-item episode budget for the blocked side before returning to ordinary balancing. This is the vanilla behavior documented in the [splitter history](https://wiki.factorio.com/Splitter#History); the meter models it as a cap, not as a counter that grows for every additional diverted item, and it is distinct from a user-configured output priority.
 
 ---
 

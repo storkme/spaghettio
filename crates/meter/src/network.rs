@@ -32,6 +32,7 @@
 //! as `TopologyNote`s on the built network rather than being silent.
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::Serialize;
 
 use crate::belt::{ItemId, Lane};
 use crate::blueprint_in::Dir;
@@ -139,7 +140,7 @@ pub enum TopologyNote {
 
 /// Report-only counters for splitter routing decisions. These are reset with
 /// the meter window and do not participate in movement decisions.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct SplitterStats {
     pub attempts: [u64; 2],
     pub first_blocked: [u64; 2],

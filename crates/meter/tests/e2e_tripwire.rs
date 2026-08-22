@@ -522,8 +522,8 @@ struct Measurement {
     label: &'static str,
     target: String,
     /// "produced" or "delivered" — selected by the target's `is_fluid`
-    /// flag (fluids never enter `produced_per_s`; matches
-    /// `sweep_corpus.rs`'s metric-matching rule).
+    /// flag. Fluid targets use delivery here to retain this tripwire's
+    /// historical calibration metric; the simulator gate uses production.
     metric: &'static str,
     /// True when the target is a fluid. Excluded from bless/check — see
     /// the module doc's "Fluid targets are excluded" section — but still

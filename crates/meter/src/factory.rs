@@ -31,7 +31,7 @@ use crate::fluid::{self, MachPort};
 use crate::inserter::Inserter;
 use crate::machine::{Machine, MachineState, DEFAULT_BUFFER_CRAFTS};
 use crate::manifest::Manifest;
-use crate::network::{BeltNetwork, NetworkBuilder, TopologyNote};
+use crate::network::{BeltNetwork, NetworkBuilder, SplitterStats, TopologyNote};
 use crate::world::ItemInterner;
 use spaghettio_core::recipe_db;
 
@@ -70,7 +70,9 @@ pub struct BoundaryFeed {
 pub struct MeterReport {
     pub label: String,
     pub ticks: u64,
-    /// Items crafted per second, measured over the trailing window.
+    /// Products emitted per second, measured over the trailing window. This
+    /// includes both solid products and fluid products, before transport
+    /// delivery.
     pub produced_per_s: std::collections::BTreeMap<String, f64>,
     /// Target items reaching the layout edge, per second.
     pub delivered_per_s: std::collections::BTreeMap<String, f64>,
@@ -83,6 +85,10 @@ pub struct MeterReport {
     /// meter/sim disagreement can be traced to a stage instead of guessed
     /// from the target rate alone.
     pub recipe_attribution: BTreeMap<String, RecipeAttribution>,
+    /// Window-scoped splitter routing evidence, in topology order. This is
+    /// diagnostic only, but makes branch-distribution measurements
+    /// reproducible from the saved report.
+    pub splitter_stats: Vec<SplitterStats>,
     pub converged: bool,
     /// Boundary feeds that could not push — a starved rig, not a starved
     /// factory. Surfaced so the two are never confused.
@@ -706,6 +712,9 @@ impl Factory {
             for (id, n) in &m.emitted_this_tick {
                 *self.crafted.entry(*id).or_insert(0) += *n as u64;
             }
+            for (id, n) in &m.fluid_emitted_this_tick {
+                *self.crafted.entry(*id).or_insert(0) += *n as u64;
+            }
         }
     }
 
@@ -829,6 +838,7 @@ impl Factory {
             planned_per_s: self.manifest.planned_rates.clone().into_iter().collect(),
             machine_census: self.census(),
             recipe_attribution: self.recipe_attribution(),
+            splitter_stats: self.net.splitter_stats.clone(),
             converged: self.detect_converged(),
             boundary_refusals: self.feeds.iter().map(|f| f.refused).sum(),
             notes: self.notes.clone(),
@@ -1013,6 +1023,38 @@ mod note_tests {
                 .any(|n| n.contains("burner-inserter") && n.contains("not modelled")),
             "an inserter variant the meter cannot model must be noted, got {:?}",
             f.notes
+        );
+    }
+
+    #[test]
+    fn fluid_emission_is_reported_before_pipe_delivery() {
+        let entity = RawEntity {
+            name: "chemical-plant".into(),
+            x: 0,
+            y: 0,
+            direction: Dir::North,
+            recipe: Some("sulfuric-acid".into()),
+            io_type: None,
+            mirror: false,
+        };
+        let mut f = Factory::from_entities(&[entity], Manifest::default()).expect("builds");
+        let iron = f.items.intern("iron-plate");
+        let sulfur = f.items.intern("sulfur");
+        let water = f.items.intern("water");
+        f.machines[0].insert(iron, 100);
+        f.machines[0].insert(sulfur, 100);
+        f.machines[0].insert_fluid(water, 100);
+
+        f.run_for(1_200);
+        let report = f.report();
+        assert!(
+            report
+                .produced_per_s
+                .get("sulfuric-acid")
+                .copied()
+                .unwrap_or(0.0)
+                > 0.0,
+            "fluid production must be present even when delivery is a separate pipe concern"
         );
     }
 }

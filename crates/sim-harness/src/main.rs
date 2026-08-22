@@ -231,6 +231,16 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
         let window = params.window_ticks;
         params = params.with_fixed_window(window);
     }
+    if has_flag(args, "--fixed-window") {
+        if let Some(requested_ticks) = ticks {
+            if requested_ticks != params.end_tick {
+                eprintln!(
+                    "warning: --fixed-window uses an exact ceiling of warmup + window ({} ticks); ignoring --ticks {}",
+                    params.end_tick, requested_ticks
+                );
+            }
+        }
+    }
     // Live per-window telemetry: stream the machine/item time-series to
     // script-output/timeseries.csv as the run progresses (not just into the
     // JSON at finalize), so a long/grinding run can be watched and scored in
@@ -353,7 +363,7 @@ fn print_meter_probe(meter: &meter_probe::MeterProbe, manifest: &manifest::Manif
             .unwrap_or(0.0);
         // Match the sim harness's own target verdict: solid targets are
         // judged on delivered output, while fluid targets are judged on
-        // production because the boundary drain is not meaningful there.
+        // machine production because the boundary drain is not meaningful.
         let gate_rate = if target.is_fluid { produced } else { delivered };
         let delta = if planned > 0.0 {
             (gate_rate / planned - 1.0) * 100.0

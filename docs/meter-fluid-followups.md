@@ -40,7 +40,8 @@ against −13.6% observed. Full divergence log:
 ## Goal / success criteria
 
 - AC, PU, advanced-oil-processing, plastic-from-crude, uranium layouts produce a
-  **non-zero** `produced_per_s` (currently hard 0).
+  **non-zero** `produced_per_s`; fluid products are now credited at machine
+  emission, before pipe delivery.
 - Meter within **±10pp of the measured sim** on those families (KC1), verified by
   re-running the corpus meter sweep (`crates/meter/examples/sweep_corpus.rs`).
 - Solid chains do **not regress** (the ~25/70 that already agree must stay put).
@@ -48,8 +49,9 @@ against −13.6% observed. Full divergence log:
 ## Where it stands in the code (current, post Phase A + B)
 
 - `machine.rs`: fluid-aware — fluid ingredient buffers (`fluid_input`/`fluid_needs`),
-  fluid products→`fluid_output`, `MachineState::FluidIngredientShortage`, and a
-  craft gate that consumes solids and fluids together.
+  fluid products→`fluid_output` plus per-tick emission telemetry,
+  `MachineState::FluidIngredientShortage`, and a craft gate that consumes
+  solids and fluids together.
 - `fluid.rs`: the pipe network — connected components of `pipe`/`pipe-to-ground`/
   `pump` + machine fluid ports + boundary feeds, honoring F4/F5/F5a topology.
 - `factory.rs: tick_fluids`: per-component, per-fluid pipe-fast routing from

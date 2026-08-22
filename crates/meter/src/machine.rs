@@ -103,6 +103,10 @@ pub struct Machine {
     /// throughput, two halves of one report, silently disagreed. Reading
     /// the emitted units means there is only one accumulator.
     pub emitted_this_tick: Vec<(u16, u32)>,
+    /// Whole fluid units emitted into `fluid_output` by the most recent
+    /// `tick`. This is the fluid counterpart to `emitted_this_tick`; keeping
+    /// it explicit lets the factory report production before pipe delivery.
+    pub fluid_emitted_this_tick: Vec<(u16, u32)>,
     /// Finished products awaiting an output inserter.
     pub output: FxHashMap<u16, u32>,
     /// Per-ingredient buffer ceiling.
@@ -238,6 +242,7 @@ impl Machine {
             products,
             product_debt: FxHashMap::default(),
             emitted_this_tick: Vec::new(),
+            fluid_emitted_this_tick: Vec::new(),
             input: FxHashMap::default(),
             output: FxHashMap::default(),
             buffer_cap,
@@ -313,6 +318,7 @@ impl Machine {
         self.fluid_supplied.clear();
         self.fluid_consumed.clear();
         self.emitted_this_tick.clear();
+        self.fluid_emitted_this_tick.clear();
     }
 
     /// Remove up to `max` finished products of any kind.
@@ -379,6 +385,7 @@ impl Machine {
     /// Advance one tick.
     pub fn tick(&mut self) {
         self.emitted_this_tick.clear();
+        self.fluid_emitted_this_tick.clear();
         if self.total_output() >= self.output_cap {
             self.state = MachineState::FullOutput;
             self.output_blocked_ticks += 1;
@@ -439,6 +446,7 @@ impl Machine {
                 if whole >= 1.0 {
                     *debt -= whole;
                     *self.fluid_output.entry(*id).or_insert(0) += whole as u32;
+                    self.fluid_emitted_this_tick.push((*id, whole as u32));
                 }
             }
             self.crafts += 1;
@@ -469,6 +477,7 @@ mod tests {
             products: vec![(id, 0.25)],
             product_debt: FxHashMap::default(),
             emitted_this_tick: Vec::new(),
+            fluid_emitted_this_tick: Vec::new(),
             input: FxHashMap::default(),
             output: FxHashMap::default(),
             buffer_cap: FxHashMap::default(),

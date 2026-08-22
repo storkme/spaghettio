@@ -1617,6 +1617,23 @@ local function sample_pickup_events(s, sample_tick)
     if held > 0 then rec.held_ticks = rec.held_ticks + 1 end
     local picked = previous ~= nil and held > previous and held - previous or 0
     local delivered = previous ~= nil and previous > held and previous - held or 0
+    local event_item = picked > 0 and held_item or previous_item
+    local item_rec = nil
+    if event_item ~= nil and (picked > 0 or delivered > 0) then
+      item_rec = rec.items[event_item]
+      if item_rec == nil then
+        item_rec = {picked_items = 0, delivered_items = 0}
+        rec.items[event_item] = item_rec
+      end
+      -- Establish the item baseline before this sample is added, just like
+      -- the record-level baseline above. Initialising it after the update
+      -- and subtracting only this transfer made the first post-warmup item
+      -- disagree with the aggregate by one event.
+      if sample_tick >= WARMUP_TICKS and item_rec.measurement_start_picked == nil then
+        item_rec.measurement_start_picked = item_rec.picked_items
+        item_rec.measurement_start_delivered = item_rec.delivered_items
+      end
+    end
     if picked > 0 then
       rec.picked_items = rec.picked_items + picked
       rec.pickup_events = rec.pickup_events + 1
@@ -1629,19 +1646,9 @@ local function sample_pickup_events(s, sample_tick)
       rec.measurement_picked_items = rec.picked_items - rec.measurement_start_picked
       rec.measurement_delivered_items = rec.delivered_items - rec.measurement_start_delivered
     end
-    local event_item = picked > 0 and held_item or previous_item
-    if event_item ~= nil and (picked > 0 or delivered > 0) then
-      local item_rec = rec.items[event_item]
-      if item_rec == nil then
-        item_rec = {picked_items = 0, delivered_items = 0}
-        rec.items[event_item] = item_rec
-      end
+    if item_rec ~= nil then
       item_rec.picked_items = item_rec.picked_items + picked
       item_rec.delivered_items = item_rec.delivered_items + delivered
-      if sample_tick >= WARMUP_TICKS and item_rec.measurement_start_picked == nil then
-        item_rec.measurement_start_picked = item_rec.picked_items - picked
-        item_rec.measurement_start_delivered = item_rec.delivered_items - delivered
-      end
       if item_rec.measurement_start_picked ~= nil then
         item_rec.measurement_picked_items = item_rec.picked_items - item_rec.measurement_start_picked
         item_rec.measurement_delivered_items = item_rec.delivered_items - item_rec.measurement_start_delivered
@@ -1699,6 +1706,8 @@ local function dump_sim_state(s)
           local positions = {}
           for _, entry in pairs(detailed) do
             local item_map_ok, item_map = pcall(function()
+              -- LuaTransportLine exposes this one-argument form; the
+              -- entity form below is the one that also needs a line index.
               return tl.get_line_item_position(entry.position)
             end)
             local item_map_position = nil
@@ -2605,6 +2614,8 @@ mod tests {
         assert!(lua.contains("pickup_event_trace = trace_values(storage.pickup_event_trace)"));
         assert!(lua.contains("storage.pickup_event_previous_item = {}"));
         assert!(lua.contains("item_rec.delivered_items = item_rec.delivered_items + delivered"));
+        assert!(lua.contains("item_rec.measurement_start_picked = item_rec.picked_items"));
+        assert!(!lua.contains("item_rec.measurement_start_picked = item_rec.picked_items - picked"));
         assert!(lua.contains("measurement_delivered_items = 0"));
         assert!(lua.contains("sample_tick >= WARMUP_TICKS"));
         assert!(lua.contains("if DROP_TRACE then sample_drop_events(s) end"));

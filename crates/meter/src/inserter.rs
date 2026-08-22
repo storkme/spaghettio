@@ -88,9 +88,9 @@ pub struct Inserter {
     pub delivered: u64,
     /// Completed swings, whether or not the hand was full.
     pub swings: u64,
-    /// Measurement-window ticks where a carried hand could not fully deposit.
-    /// A zero/partial deposit is the inserter-side form of output
-    /// backpressure; it is distinct from an empty pickup swing.
+    /// Measurement-window ticks where a carried hand made zero progress at
+    /// the destination. This matches the simulator's blocked-inserter
+    /// telemetry: a partial deposit is movement, not a blocked tick.
     pub deposit_blocked_ticks: u64,
     /// Items that could have been carried but were not, because the belt
     /// did not have a full hand's worth under the pickup tile. This is the
@@ -220,7 +220,7 @@ impl Inserter {
                 hand: &mut self.hand,
             });
             self.delivered += moved as u64;
-            if !self.hand.is_empty() {
+            if moved == 0 {
                 self.deposit_blocked_ticks += 1;
             }
             if self.hand.is_empty() {
@@ -348,6 +348,42 @@ mod tests {
             ins.short_hand_items > 0,
             "the shortfall must be observable, not absorbed"
         );
+    }
+
+    /// A destination that accepts part of a hand is backpressured, but it is
+    /// not blocked: the engine's blocked telemetry counts only zero-movement
+    /// destination waits.
+    #[test]
+    fn partial_deposit_is_not_a_blocked_tick() {
+        let mut ins = Inserter::new(
+            InserterKind::Stack,
+            PickupTarget::BeltTile { run: 0, tile: 0 },
+            DropTarget::Chest(0),
+            0,
+        );
+        let mut partial = true;
+        for _ in 0..200 {
+            ins.tick(|io| match io {
+                Io::Grab { want, hand } => {
+                    for _ in 0..want {
+                        hand.push(IRON);
+                    }
+                    0
+                }
+                Io::Deposit { hand } => {
+                    if partial {
+                        partial = false;
+                        hand.pop();
+                        1
+                    } else {
+                        let n = hand.len();
+                        hand.clear();
+                        n
+                    }
+                }
+            });
+        }
+        assert_eq!(ins.deposit_blocked_ticks, 0);
     }
 
     /// An empty source produces lost swings, not a slower cycle.

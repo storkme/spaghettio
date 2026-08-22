@@ -5,6 +5,7 @@
 //! or low reading must never change the sim verdict.
 
 use spaghettio_meter::{Factory, MeterReport};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 pub const DEFAULT_WARMUP_TICKS: u64 = 108_000;
 pub const DEFAULT_WINDOW_TICKS: u64 = 216_000;
@@ -21,27 +22,43 @@ pub struct MeterProbe {
 
 impl MeterProbe {
     pub fn run(bp: &str, manifest_json: &str, warmup_ticks: u64, window_ticks: u64) -> Self {
-        let result = (|| {
-            let manifest = spaghettio_meter::Manifest::from_json(manifest_json)?;
-            let mut factory = Factory::build(bp, manifest)?;
-            Ok::<_, String>(factory.measure(warmup_ticks, window_ticks))
-        })();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            (|| {
+                let manifest = spaghettio_meter::Manifest::from_json(manifest_json)?;
+                let mut factory = Factory::build(bp, manifest)?;
+                Ok::<_, String>(factory.measure(warmup_ticks, window_ticks))
+            })()
+        }));
 
         match result {
-            Ok(report) => Self {
+            Ok(Ok(report)) => Self {
                 warmup_ticks,
                 window_ticks,
                 report: Some(report),
                 error: None,
             },
-            Err(error) => Self {
+            Ok(Err(error)) => Self {
                 warmup_ticks,
                 window_ticks,
                 report: None,
                 error: Some(error),
             },
+            Err(payload) => Self {
+                warmup_ticks,
+                window_ticks,
+                report: None,
+                error: Some(format!("meter panicked: {}", panic_text(&*payload))),
+            },
         }
     }
+}
+
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_string())
 }
 
 #[cfg(test)]

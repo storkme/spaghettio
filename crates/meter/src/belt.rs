@@ -511,16 +511,12 @@ impl Lane {
         // 1. The exit slot: eject if the run end accepts, else it stays put
         //    and everything behind it backs up.
         if self.slots[last].is_some() && end == RunEnd::Sink {
-            self.slots[last] = None;
+            self.take_exit_with_offset();
             self.exited += 1;
         }
 
         // 2. Shift the rest forward into any free slot ahead.
-        for idx in (1..=last).rev() {
-            if self.slots[idx].is_none() {
-                self.slots[idx] = self.slots[idx - 1].take();
-            }
-        }
+        self.shift_forward();
     }
 }
 
@@ -815,5 +811,24 @@ mod tests {
         lane.shift_forward();
         assert!(lane.slots[2].is_some());
         assert!((lane.offsets[2] - residual).abs() < 1e-9);
+    }
+
+    #[test]
+    fn whole_step_clears_exit_offset_and_moves_residual() {
+        let mut lane = Lane::new(SLOTS_PER_TILE);
+        lane.slots[0] = Some(IRON);
+        lane.offsets[0] = 0.25;
+        lane.step(RunEnd::DeadEnd);
+        assert_eq!(lane.slots[1], Some(IRON));
+        assert!((lane.offsets[1] - 0.25).abs() < 1e-9);
+        assert_eq!(lane.offsets[0], 0.0);
+
+        let last = lane.slots.len() - 1;
+        lane.slots[last] = Some(ItemId(2));
+        lane.offsets[last] = -0.125;
+        lane.step(RunEnd::Sink);
+        assert_eq!(lane.exited, 1);
+        assert_eq!(lane.slots[last], None);
+        assert_eq!(lane.offsets[last], 0.0);
     }
 }

@@ -71,10 +71,11 @@ fn main() {
             let m_prod = rep.produced_per_s.get(&target).copied().unwrap_or(0.0);
             let m_del = rep.delivered_per_s.get(&target).copied().unwrap_or(0.0);
             // Compare the metric that matches how the target is measured:
-            // solid targets report produced_per_s; fluid targets report
-            // delivered_per_s (fluids never enter the produced map).
+            // solid targets report delivered output; fluid targets report
+            // machine production because their boundary drain is not a
+            // meaningful delivery metric.
             let is_fluid = manifest.targets.first().map(|t| t.is_fluid).unwrap_or(false);
-            let metric = if is_fluid { "delivered" } else { "produced" };
+            let metric = if is_fluid { "produced" } else { "delivered" };
             let delta = if metric == "produced" {
                 match sim_prod {
                     Some(sp) if sp > 0.0 => { compared += 1; (m_prod - sp) / sp * 100.0 }
