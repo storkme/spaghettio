@@ -159,6 +159,7 @@ RFC's own decision log. Index, verdict phrases quoted from the entries:
 
 | Close-out | Date | Verdict (as recorded) |
 |---|---|---|
+| RFC-070 one selection loop (Phases 0–2c) | 2026-08-22 | COMPLETE — v2 `SelectionPolicy` ships production selection (#707), generation-1 loop deleted (#708, −2,055 lines); K70-1 PASSED live at the shadow gate (140/140 winner+stage); zero divergences; 16 PRs; en route: two e2e harness fossils fixed (#699), ec30 0/s jam root-caused and fixed via the (3,2) balancer restore (#701/#706, sim 29.09/30), gear@20 75%-of-plan diagnosed (#700, primary fix queued); Phase-3 calibration + RFC-068 P1 open |
 | RFC-065 connectivity-IR Phase 2 | 2026-08-05 | killed by measurement — premise falsified on both paths; RFC stays Active (Phase 1 slices) |
 | RFC-062 multi-target outputs | 2026-08-01 | PARTIAL — engine correctness lands; the final gate's two measurement kill criteria both FAIL as measured |
 | RFC-063 compaction primitives | 2026-08-01 | CONCLUDED — all three phases adjudicated (Phase A killed at A0; Phase C cleared its escalated bar without funding production wiring) |
