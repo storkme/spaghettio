@@ -274,9 +274,16 @@ fn run_case(label: &str, recipe: &str, rate: f64, machine: &str, inputs: &[&str]
             "    {:20?}  {:20}  ×{:3}  {} err-touching regions ({} total errors)",
             kind, class.label(), regs.len(), err_touch, err_total
         );
-        // Drill into the specific anomaly: unresolved regions that the
-        // classifier calls perpendicular. Print the tile-level rejection
-        // reasons so we can categorise why the template matcher bailed.
+        // Drill into unresolved regions the classifier calls perpendicular
+        // (2-item, 1-in/1-out-each, perpendicular axes shape). `rejections`
+        // is permanently empty now (see its declaration above) — the
+        // perpendicular-template rung it used to source from is deleted,
+        // and the SAT-only ladder doesn't emit per-tile template rejection
+        // reasons — so every region here now hits the `!any_shown` arm
+        // below. That's the EXPECTED state post-deletion, not a signal to
+        // investigate; a genuinely worth-investigating unresolved region
+        // would need a different instrument (e.g. `JunctionGrowthCapped`
+        // trace events) than this now-dead rejection-reason lookup.
         if *kind == RegionKind::Unresolved && *class == Class::Perpendicular {
             for r in regs {
                 // Unresolved regions are 1×1 per-tile in today's pipeline;
@@ -301,7 +308,9 @@ fn run_case(label: &str, recipe: &str, rate: f64, machine: &str, inputs: &[&str]
                 }
                 if !any_shown {
                     println!(
-                        "      ({},{}) {}×{}  (no trace events — investigate)",
+                        "      ({},{}) {}×{}  (no rejection-reason trace events — \
+                         expected: the perpendicular-template rung this lookup \
+                         sourced from is deleted, PR #702)",
                         r.x, r.y, r.width, r.height
                     );
                 }

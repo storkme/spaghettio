@@ -467,7 +467,11 @@ needed to look at the result, not a UI feature.
     junction/crossing solver tries every strategy at the collision seed
     (`(5,1)`: `perpendicular_template`, `sat-surface`, `sat-1ug-native`,
     `sat-2ug-native`, `sat-native`, `eviction`, `sat-1ug-upgrade`,
-    `sat-2ug-upgrade`, `sat`, across 4 seed-variant directions) — every
+    `sat-2ug-upgrade`, `sat`, across 4 seed-variant directions) —
+    [as observed 2026-07-31; `perpendicular_template` was deleted
+    2026-08-22, PR #702, as production-unreachable — see
+    `docs/offpath-code-followups.md` G1 — so a re-run today would try one
+    fewer strategy] every
     one comes back `Unsatisfiable`. It gives up
     (`JunctionGrowthCapped { region_tiles: 81, reason: "tile_cap" }`),
     leaving the "ret" tap an orphaned ghost stub with no real source.

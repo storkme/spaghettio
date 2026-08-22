@@ -1,5 +1,13 @@
 # RFC: Pipe-vs-belt junctions
 
+> **[CLOSED 2026-08-22 — see Decision log below.]** Phase 2 of this RFC
+> (`solve_perpendicular_template` / `bridge_belt_over_pipe`) was deleted
+> in PR #702 as production-unreachable. Everything below this note,
+> including every reference to `solve_perpendicular_template`,
+> `PerpendicularTemplateStrategy`, and `JunctionTemplateRejected`, is the
+> historical design record of code that no longer exists — not a
+> description of current behavior.
+
 ## Summary
 
 Teach the junction-solver pipeline to treat fluid-trunk tiles as

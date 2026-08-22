@@ -12,7 +12,11 @@
 //!    `ghost_astar`. Trunk tiles are passable so A* ghosts through them and
 //!    records crossing tiles for the junction resolver.
 //! 5. Negotiate lane conflicts iteratively; adopt best routing.
-//! 6. Resolve crossings: perpendicular template first, SAT fallback.
+//! 6. Resolve crossings via the pinned-tier core ladder: sat-surface,
+//!    sat-1ug-native, sat-2ug-native, sat-native (the perpendicular-
+//!    template rung that used to lead this ladder was deleted
+//!    2026-08-22, PR #702, as production-unreachable — see
+//!    `docs/offpath-code-followups.md` G1).
 //! 7. Merge output rows via the existing `merge_output_rows` helper.
 //!
 //! Returns a `GhostRouteResult` containing all placed entities, ghost crossing

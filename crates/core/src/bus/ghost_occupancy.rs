@@ -17,8 +17,13 @@ use crate::models::PlacedEntity;
 /// Axis-aligned tile rectangle. Width and height are in tiles; the rect
 /// covers `[x, x + w)` × `[y, y + h)`.
 ///
-/// Mirrors the shape of `ghost_router::ClusterZone` so that callers can
-/// pass either type once Step 6 unifies them.
+/// Shape-compatible with `crate::bus::junction::Rect` (both are plain
+/// `{x, y, w, h}` tile rects) — some call sites construct one from the
+/// other's fields. (Historical note: this doc comment used to also
+/// mention `ghost_router::ClusterZone` as a third shape to unify with;
+/// that type was deleted 2026-08-22, PR #702, along with the
+/// perpendicular-template rung it belonged to — see `docs/offpath-code-
+/// followups.md` G1.)
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Rect {
     pub x: i32,

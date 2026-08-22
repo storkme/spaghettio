@@ -593,14 +593,23 @@ fn junction_seed_census() {
     // so it only runs when someone deliberately re-executes the
     // evidence behind a deletion or reachability decision — exactly the
     // moment a changed conclusion should be loud, not a silently-updated
-    // number in a printed line nobody re-reads. If this ever fires, DO
-    // NOT proceed with any deletion of the perpendicular-template rung
-    // (ghost_router.rs, `solve_perpendicular_template`/`try_bridge`/
-    // `bridge_belt_over_pipe`) on the strength of this census — the
-    // reachability conclusion has changed, and `docs/offpath-code-
-    // followups.md`'s G1 entry must be updated with the new finding
-    // before anyone trusts a deletion call built on the old "zero"
-    // result.
+    // number in a printed line nobody re-reads.
+    //
+    // UPDATE 2026-08-22 (PR #702): the perpendicular-template rung this
+    // census was built to adjudicate (`solve_perpendicular_template`/
+    // `try_bridge`/`bridge_belt_over_pipe` in `ghost_router.rs`) is now
+    // DELETED — the owner-reviewed call this test's original zero result
+    // supported has already been made and executed. If this assert ever
+    // fires on a future re-run, it is no longer "don't delete the rung
+    // on this evidence" (there is no rung left to delete) — it means the
+    // corpus's crossing shapes have changed in a way that produces a
+    // same-item single-tile crossing where none existed before, which is
+    // worth investigating in its own right (it bears on whether a FUTURE
+    // cheap per-tile strategy would be worth reintroducing, and is a
+    // reachability-corpus regression regardless). This test now serves
+    // as a post-deletion regression check on the SAT-only path's crossing
+    // shapes, not a pre-deletion sentinel. See `docs/offpath-code-
+    // followups.md`'s G1 entry for the full history.
     //
     // The message says "re-examine", not "the rung is reachable" (round
     // 6 review, #691). The bucket is a NECESSARY superset, not the
