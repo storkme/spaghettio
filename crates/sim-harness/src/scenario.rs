@@ -351,9 +351,12 @@ impl RunParams {
     /// `converged: false` regardless of the factory (#454).
     pub fn with_warmup(mut self, warmup: u32) -> RunParams {
         self.warmup_ticks = round_up_60(warmup);
-        self.end_tick = self
-            .end_tick
-            .max(viable_end_tick(self.warmup_ticks, self.window_ticks));
+        self.end_tick = if self.fixed_window {
+            self.warmup_ticks.saturating_add(self.window_ticks)
+        } else {
+            self.end_tick
+                .max(viable_end_tick(self.warmup_ticks, self.window_ticks))
+        };
         self
     }
 
@@ -363,9 +366,12 @@ impl RunParams {
     pub fn with_fixed_window(mut self, window: u32) -> RunParams {
         self.window_ticks = round_up_60(window.max(MIN_WINDOW_TICKS));
         self.fixed_window = true;
-        self.end_tick = self
-            .end_tick
-            .max(self.warmup_ticks.saturating_add(self.window_ticks));
+        // Fixed-window mode intentionally has no convergence phase: its
+        // complete budget is exactly warmup plus one requested window. Do
+        // not retain the ordinary run's viability ceiling here, or a
+        // diagnostic run continues for many extra windows after it has
+        // already emitted its measurement.
+        self.end_tick = self.warmup_ticks.saturating_add(self.window_ticks);
         self
     }
 }
@@ -1699,9 +1705,17 @@ local function dump_sim_state(s)
             if item_map_ok then
               item_map_position = {x = item_map.x, y = item_map.y}
             end
+            local name, count = nil, nil
+            local stack_ok, stack = pcall(function() return entry.stack end)
+            if stack_ok and stack ~= nil then
+              local name_ok, stack_name = pcall(function() return stack.name end)
+              local count_ok, stack_count = pcall(function() return stack.count end)
+              if name_ok then name = stack_name end
+              if count_ok then count = stack_count end
+            end
             table.insert(positions, {
-              name = entry.name,
-              count = entry.count,
+              name = name,
+              count = count,
               position = entry.position,
               map_position = item_map_position
             })
@@ -2609,6 +2623,36 @@ mod tests {
         assert!(!lua.contains("return line.can_insert_at(position_sample)"));
         let drop_trace_lua = build_control_lua(&m, "0eNBPFAKE", &params.with_drop_trace());
         assert!(drop_trace_lua.contains("local DROP_TRACE = true"));
+    }
+
+    #[test]
+    fn fixed_window_caps_an_ordinary_derived_ceiling_to_one_window() {
+        let m = fixture();
+        let params =
+            RunParams::defaults_for(&m, "fixed-cap".into(), 32, None).with_fixed_window(600);
+        assert!(params.fixed_window);
+        assert_eq!(params.window_ticks, 600);
+        assert_eq!(params.end_tick, params.warmup_ticks + params.window_ticks);
+
+        let reordered = RunParams::defaults_for(&m, "fixed-cap".into(), 32, None)
+            .with_fixed_window(600)
+            .with_warmup(108_001);
+        assert_eq!(
+            reordered.end_tick,
+            reordered.warmup_ticks + reordered.window_ticks
+        );
+    }
+
+    #[test]
+    fn belt_position_trace_reads_the_nested_detailed_stack() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "belt-trace".into(), 16, Some(18_000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(lua.contains("local stack_ok, stack = pcall(function() return entry.stack end)"));
+        assert!(lua.contains("if name_ok then name = stack_name end"));
+        assert!(lua.contains("if count_ok then count = stack_count end"));
+        assert!(!lua.contains("name = entry.name"));
+        assert!(!lua.contains("count = entry.count"));
     }
 
     /// An inspected world must keep being fed after it finalizes.

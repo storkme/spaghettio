@@ -425,22 +425,13 @@ impl BeltNetwork {
     }
 
     fn downstream_edges(&self, id: usize) -> Vec<Downstream> {
-        let mut edges = Vec::new();
-        if let Some(downstream) = self.tiles[id].downstream {
-            edges.push(downstream);
-        }
-        if let TileKind::Splitter {
-            partner: Some(partner),
-            ..
-        } = self.tiles[id].kind
-        {
-            if let Some(downstream) = self.tiles[partner].downstream {
-                if !edges.iter().any(|edge| edge.tile == downstream.tile) {
-                    edges.push(downstream);
-                }
-            }
-        }
-        edges
+        // A splitter's partner output is an alternate runtime route, not a
+        // continuation of this lane's transport line. The splitter stepper
+        // probes both outputs when it actually routes an item; the
+        // pre-insertion collision walk must stay on the branch represented by
+        // this physical half or an item on the sibling branch can reject a
+        // drop on an otherwise free line.
+        self.tiles[id].downstream.into_iter().collect()
     }
 
     fn step_plain_exit(&mut self, id: usize, downstream: Option<Downstream>) {
@@ -496,15 +487,16 @@ impl BeltNetwork {
                 let local_position =
                     sideload_position(target.dir, target.pos, self.tiles[source].pos);
                 let progress = self.progress[tier_ix(target.tier)];
-                if turn_merge && source_lane == 0 {
-                    self.tiles[downstream.tile].lanes[target_lane].try_insert_at_turn_merge(
+                let inner_lane = turn_inner_lane(self.tiles[source].dir, target.dir);
+                if turn_merge && inner_lane == Some(source_lane) {
+                    self.tiles[downstream.tile].lanes[target_lane].try_insert_at_inner_turn_merge(
                         local_position,
                         progress,
                         0.0,
                         item,
                     )
                 } else if turn_merge {
-                    self.tiles[downstream.tile].lanes[target_lane].try_insert_at_inner_turn_merge(
+                    self.tiles[downstream.tile].lanes[target_lane].try_insert_at_turn_merge(
                         local_position,
                         progress,
                         0.0,
@@ -1315,6 +1307,26 @@ mod tests {
         assert_eq!(net.splitter_memory[sid][first_half_ix][0], Some((0, 5)));
     }
 
+    #[test]
+    fn downstream_line_stays_on_the_splitter_half_branch() {
+        let ents = vec![
+            belt("transport-belt", 0, 0, Dir::East),
+            splitter(1, 0, Dir::East),
+            belt("transport-belt", 2, 0, Dir::East),
+            belt("transport-belt", 2, 1, Dir::East),
+        ];
+        let net = NetworkBuilder::build(&ents);
+        let input = net.tile_at((0, 0)).unwrap();
+        let own_half = net.tile_at((1, 0)).unwrap();
+        let own_output = net.tile_at((2, 0)).unwrap();
+        let sibling_output = net.tile_at((2, 1)).unwrap();
+
+        let path = net.downstream_line_nodes(input, 0);
+        assert!(path.contains(&(own_half, 0)));
+        assert!(path.contains(&(own_output, 0)));
+        assert!(!path.contains(&(sibling_output, 0)));
+    }
+
     /// **I5**: an inserter drops on the FAR lane — the one on the opposite
     /// side from where it stands. Asserted at reach 1 *and* reach 2,
     /// because the reach-2 case is where this was wrong: exact-tile
@@ -1692,6 +1704,41 @@ mod tests {
         assert_eq!(net.tiles[target].lanes[0].occupancy(), 4);
         assert_eq!(net.tiles[target].lanes[1].occupancy(), 3);
         assert_eq!(net.tiles[curve].lanes[1].occupancy(), 1);
+    }
+
+    #[test]
+    fn left_turn_merge_uses_the_orientation_aware_inner_lane() {
+        let ents = vec![
+            belt("express-transport-belt", 0, 0, Dir::East),
+            belt("express-transport-belt", 1, 0, Dir::North),
+            belt("express-transport-belt", 1, -1, Dir::West),
+            belt("express-transport-belt", 2, -1, Dir::West),
+        ];
+        let mut net = NetworkBuilder::build(&ents);
+        let source = net.tile_at((0, 0)).unwrap();
+        let curve = net.tile_at((1, 0)).unwrap();
+        let back = net.tile_at((2, -1)).unwrap();
+        let target = net.tile_at((1, -1)).unwrap();
+
+        // East -> North is the opposite chirality from the existing
+        // East -> South fixture, so lane 0 is the inner lane here.
+        assert_eq!(net.tiles[curve].lanes[0].slots_debug().len(), 1);
+        assert_eq!(
+            net.tiles[curve].lanes[1].slots_debug().len(),
+            SLOTS_PER_TILE
+        );
+        for _ in 0..4 {
+            assert!(net.tiles[source].lanes[0].try_insert_anywhere(ItemId(1)));
+            assert!(net.tiles[back].lanes[1].try_insert_anywhere(ItemId(2)));
+        }
+
+        for _ in 0..30 {
+            net.tick();
+        }
+
+        assert_eq!(net.tiles[target].lanes[1].occupancy(), 4);
+        assert_eq!(net.tiles[target].lanes[0].occupancy(), 1);
+        assert_eq!(net.tiles[curve].lanes[0].occupancy(), 1);
     }
 
     #[test]
