@@ -1593,18 +1593,11 @@ fn select_best_decomposition_with_policy(
             .zip(refusal_reasons.iter())
             .map(|(name, err)| format!("{name}: {}", err.as_deref().unwrap_or("did not run")))
             .collect();
-        // Phase 2c: there is no v1 to compare against, so the split keys
-        // on the shipped path's own inputs — did ANY candidate produce?
-        // (The final TieredRank stage admits every produced candidate, so
-        // a policy `None` with a produced candidate is a v2-declined case,
-        // not an all-candidates refusal.)
-        let any_produced = candidates.iter().any(|(o, _, _)| o.is_some());
-        let reason = if any_produced {
-            "selection policy declined every produced candidate"
-        } else {
-            "no decomposition candidate produced a layout"
-        };
-        return Err(format!("{reason} — {}", details.join("; ")));
+        // Phase 2c invariant: `decide` returns `None` iff no candidate produced a layout.
+        return Err(format!(
+            "selection policy declined every produced candidate — {}",
+            details.join("; ")
+        ));
     };
 
     let idx = v2_decision.winner;

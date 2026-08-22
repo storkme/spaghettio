@@ -49,7 +49,7 @@ threads-required = 2
 filter = "test(stress_advanced_circuit_partitioned_7s_from_plates)"
 slow-timeout = { period = "60s", terminate-after = 10 }
 
-# RFC-070 Phase 2a (#689 W3a): the shadow parity gate runs six SAT-heavy
+# RFC-070 Phase 2c: the shipped-path smoke gate runs six SAT-heavy
 # fixtures in ONE non-ignored test — the shape that blew a ceiling the
 # first time parallelism was tried on this 4-thread runner.
 # `threads-required = 2` limits concurrency to two heavy tests at a time,
@@ -69,7 +69,7 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # fires on a cold cache is a false positive on the one gate that runs
 # everywhere — #703 review round 2). Nextest uses the same 720s cap.
 [[profile.ci.overrides]]
-filter = "test(shadow_agrees_with_production_on_the_census_fixtures)"
+filter = "test(shipped_path_matches_baseline_on_the_census_fixtures)"
 slow-timeout = { period = "60s", terminate-after = 12 }
 threads-required = 2
 
@@ -78,7 +78,7 @@ threads-required = 2
 # `cargo test` reads none of this file, which is why the ntest ceiling —
 # not this entry — is the real guard (#703 review round 2).
 [[profile.default.overrides]]
-filter = "test(shadow_agrees_with_production_on_the_census_fixtures)"
+filter = "test(shipped_path_matches_baseline_on_the_census_fixtures)"
 slow-timeout = { period = "60s", terminate-after = 12 }
 threads-required = 2
 
