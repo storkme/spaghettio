@@ -1388,7 +1388,7 @@ fixtures / docs split per the churn norm).
     receipt)* "How does the same layout score `layout_warnings: 1` at
     selection and 0 at validation?" No contradiction — different fields
     (`LayoutResult.warnings` is the producer's own list; `validate()`'s
-    issues are the 39 functional checks, which is what the warning golden
+    issues are the 37 functional checks, which is what the warning golden
     counts). **But the one entry is the story**: decoded from the
     snapshot, gear@20's winning cell-composed candidate carries
     `"cell-composed: geometry NOT sim-verified (hash c5c5f88087df894c) —

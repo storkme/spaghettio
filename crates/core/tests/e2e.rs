@@ -489,8 +489,9 @@ fn harness_options_are_engine_defaults() {
 /// rounds 3, 4 and 5), and its reach is exactly that: it counts TEXTUAL
 /// copies of two exact trimmed lines. It does not see a fossil written
 /// on one line, a re-spelled or reformatted literal, one inside dead
-/// code, or — the sharpest miss, and the one `bus::layout`'s own field
-/// legend names as reachable — the GROUP-level partial,
+/// code, a spelled-out `cell_composition: CellComposition::Off`, or —
+/// the sharpest miss, and the one `bus::layout`'s own field legend names
+/// as reachable — the GROUP-level partial,
 /// `SearchAxes { cell_composition: Default::default(), ..SearchAxes::default() }`,
 /// which resolves to `Off` exactly like the flat form and matches
 /// neither pattern here. Conversely a trailing comment or a rustfmt
@@ -898,6 +899,13 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // density and the same ZERO validation issues. #694's corpus does
     // not cover gear@20/s — see the W2c finding in the RFC decision log.
     //
+    // "Same 12.3%" is `density::score_density(_, (1,1))`, printed by the
+    // harness on both arms (`260 filled / 2116` and `169 filled / 1369`),
+    // not entities/(w*h) — the score normalises to a 1:1 SQUARE bounding
+    // box and counts filled TILES, so the two are 12.3% each while a
+    // naive entity ratio would read 39% vs 20% (#699 review round 7 asked;
+    // the receipt is in the `Layout: ...` lines of any --nocapture run).
+    //
     // **THE NEW WINNER UNDER-DELIVERS — see #700.** This hash pins a
     // layout the meter reads at 15.0/s against a 20.0/s plan (75%), where
     // both native arms read 21.0/s. The re-bless still stands, because a
@@ -945,6 +953,16 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // negative control on this whole re-bless: they did NOT move under
     // either fossil kill, and they are the only two golden-pinned
     // fixtures that didn't.
+    //
+    // The asymmetry is UNEXPLAINED, deliberately (#699 review round 7
+    // noticed it): `tier3_sulfuric_acid`'s iron-plate side is
+    // ladder-sized too, per its own note below, yet it is
+    // capacity-invariant while this fixture's coal side moved. A
+    // plausible story is that sulfuric-acid's side already sits at the
+    // bottom rung, where a bigger hand changes nothing — but that was
+    // not measured, so it is not written as though it were. Do not
+    // "fix" either hash on the strength of the asymmetry; both were
+    // captured from clean runs, twice.
     ("tier3_plastic_bar", "847a0cf0ba7c7d8d54bd3a6f1630b1d8e7ac5efad78978f86435387e070d5758"),
     // RFC rfc-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (iron-plate) is now ladder-sized — this fixture (sulfuric-acid:
@@ -1489,7 +1507,7 @@ fn tier1_iron_gear_wheel_20s() {
     // `layout_warnings: 1` at selection and 0 at validation; decoded from
     // the snapshot, and there is no contradiction — they are different
     // fields). `LayoutResult.warnings` is the producer's own list;
-    // `validate()`'s issues are the 39 functional checks, and
+    // `validate()`'s issues are the 37 functional checks, and
     // `assert_warnings_golden` counts the latter. The one entry reads:
     //
     //   "cell-composed: geometry NOT sim-verified (hash c5c5f88087df894c)
@@ -3227,11 +3245,13 @@ fn tier5_processing_unit_from_ore_am3() {
     // (ratio >= 2.0 AND excess >= 8), not evidence that this particular
     // belt is newly pathological.
     //
-    // ACCEPTED: errors stay 0, input-rate-delivery is unchanged at 13,
-    // and the check is diagnostic-only by construction (never promotes
-    // to Error). A SECOND detour appearing here would mean the width
-    // grew again — re-trace with the same instrument rather than
-    // re-blessing.
+    // ACCEPTED: errors stay 0, input-rate-delivery was unchanged at 13
+    // AS OF THAT DATE (it is 10 now — see the 2026-08-21 block below;
+    // this sentence read as a present-tense claim until #699's review
+    // round 7 caught it sitting next to its own correction), and the
+    // check is diagnostic-only by construction (never promotes to
+    // Error). A SECOND detour appearing here would mean the width grew
+    // again — re-trace with the same instrument rather than re-blessing.
     //
     // 2026-08-21 (RFC-070 W2c, #689) — ADJUDICATION for
     // `input-rate-delivery 13 -> 10`. This is the ONLY warning pin in the
@@ -3861,11 +3881,20 @@ fn scoreboard_strategy_sweep() {
                     let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
                     let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
                     let density_score = density::score_density(&r.layout, (1, 1));
-                    // Decomposition-search winner. Phase 0: always
-                    // "native". Future-proofs the column for later
-                    // phases when non-Native candidates can win. See
-                    // `docs/rfc-decomposition-search.md`.
-                    let chosen = r.trace_events.iter().find_map(|e| match e {
+                    // Decomposition-search winner. `.rev()` is load-bearing
+                    // (#699 review round 7): a winning candidate that runs
+                    // its own nested selection replays the inner events
+                    // FIRST, so `find_map` from the front reports the
+                    // NESTED winner. That was harmless while `run_e2e`
+                    // pinned `cell_composition: Off` and nothing nested;
+                    // RFC-070 W2c restored the cell-composed candidate, so
+                    // from-the-front would print "native" for exactly the
+                    // fixtures where cell-composed wins. Same rule as
+                    // `tests/parity_corpus.rs` and the re-pinned
+                    // decomposition tests: the OUTER terminal is the last.
+                    // (The comment here used to say "Phase 0: always
+                    // native" — stale since RFC-051/053.)
+                    let chosen = r.trace_events.iter().rev().find_map(|e| match e {
                         TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
                         _ => None,
                     }).unwrap_or_else(|| "?".to_string());
@@ -9369,7 +9398,13 @@ fn full_knob_sweep() {
                 Ok(r) => {
                     let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
                     let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
-                    let candidate = r.trace_events.iter().find_map(|e| match e {
+                    // `.rev()`: the OUTER selection's terminal is the LAST
+                    // one — see the sibling comment in
+                    // `scoreboard_strategy_sweep`. Reading from the front
+                    // reports a nested winner's inner pick, which since
+                    // RFC-070 W2c is reachable on any fixture the
+                    // cell-composed candidate wins (#699 review round 7).
+                    let candidate = r.trace_events.iter().rev().find_map(|e| match e {
                         TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
                         _ => None,
                     }).unwrap_or_else(|| "?".to_string());
@@ -9584,13 +9619,13 @@ fn w2c_gear20_meter_export() {
     let solved = solver::solve("iron-gear-wheel", 20.0, &inputs, "assembling-machine-2")
         .expect("gear20 solve");
 
-    for (arm, cells, capacity) in [
-        ("cells-on", CellComposition::Candidate, 2u8),
-        ("cells-off", CellComposition::Off, 2u8),
+    for (arm, cells, capacity, expect_entities) in [
+        ("cells-on", CellComposition::Candidate, 2u8, 105usize),
+        ("cells-off", CellComposition::Off, 2u8, 148),
         // The exact pre-W2c golden: both fossils in place. Kept as an arm
         // so the "the capacity fossil is not what moved this" claim is
         // re-measurable, not just asserted.
-        ("old-golden", CellComposition::Off, 0u8),
+        ("old-golden", CellComposition::Off, 0u8, 148),
     ] {
         let opts = layout::LayoutOptions::from_groups(
             layout::UserConstraints { inserter_capacity: capacity, ..Default::default() },
@@ -9619,6 +9654,21 @@ fn w2c_gear20_meter_export() {
             lay.height,
             issues.len(),
         );
+        // Asserted, not just printed (#699 review round 7): the table in
+        // this fn's doc pairs each arm's entity count with its meter
+        // reading, so an arm that silently changes shape would leave a
+        // committed meter number attached to a different layout — the
+        // exact 105-vs-148 confusion this exporter exists to make
+        // visible. If one of these fires, the meter numbers in the doc
+        // (and in #700) are stale, not this assertion.
+        assert_eq!(
+            lay.entities.len(),
+            expect_entities,
+            "{arm}: entity count moved; the meter readings recorded in this \
+             function's doc table and in #700 describe the OLD layout. Re-meter \
+             all three arms before updating either.",
+        );
+        assert!(issues.is_empty(), "{arm}: expected 0 validation issues, got {}", issues.len());
     }
 }
 
