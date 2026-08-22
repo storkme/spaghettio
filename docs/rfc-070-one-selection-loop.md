@@ -2354,3 +2354,18 @@ fixtures / docs split per the churn norm).
   `SelectionCandidateEvaluated`, the firing census, and snapshot/debug traces.
   Old local snapshots containing the deleted shadow event must be regenerated;
   committed snapshots were clean.*
+- *2026-08-22 — **Campaign close-out (registry → Complete).** The arc
+  executed under owner goal "complete the full campaign": #688 RFC · #690
+  deletion-cadence rule · #691 seed census · #692 scoreboard oracle ·
+  #693 meter tripwire · #694 parity corpus · #695 Phase-1b spec · #696
+  `LayoutOptions` split · #698 `SelectionPolicy` + `policy_replay`
+  (140/140) · #699 e2e de-fossilization · #702 perp-rung deletion (972
+  deleted) · #703 shadow + parity gate (**K70-1 PASSED live**: 140/140
+  winner+stage, 0 disagreements across 353 selections; K70-3 0.002%) ·
+  #707 the flip (K70-2: zero divergences) · #706 the (3,2) restore (ec30
+  sim-anchored at 97%) · #708 generation-1 deletion (2,101 deleted /
+  1,223 added, net −878) — sixteen PRs, tracking #689. Open after
+  close-out: Phase-3 calibration as policy-table changes adjudicated
+  against the parity baseline (ErrorKinds reclassification, #701;
+  severity-aware ranking, #700), RFC-068 P1 (producer registration,
+  deferred post-flip), and the post-merge hygiene items on #689.*
