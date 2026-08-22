@@ -3,6 +3,11 @@
 //! headless-Factorio sim value. Calibration of "how close is the meter" —
 //! the whole point of the meter's KC1 (±10pp).
 //!
+//! This is a calibration report, not the CLI gate: solid rows compare machine
+//! production to the sim's produced rate, while the harness gate mirrors the
+//! sim verdict on delivered output. Keeping both rates visible avoids turning
+//! that deliberate decision boundary into an unlabeled metric mismatch.
+//!
 //! Usage:
 //!   cargo run --release --manifest-path crates/meter/Cargo.toml \
 //!     --example sweep_corpus -- <corpus-date-dir> <out.csv>
@@ -65,26 +70,28 @@ fn main() {
             // target item = the manifest's declared target (NOT the first
             // planned item — planned_per_s is alphabetically sorted, so for a
             // multi-item layout that would wrongly pick e.g. copper-cable).
-            let target = manifest.targets.first().map(|t| t.item.clone());
-            let Some(target) = target else { continue };
+            let Some(target_spec) = manifest.targets.first() else { continue };
+            let target = target_spec.item.clone();
+            let is_fluid = target_spec.is_fluid;
             let planned = rep.planned_per_s.get(&target).copied().unwrap_or(0.0);
             let m_prod = rep.produced_per_s.get(&target).copied().unwrap_or(0.0);
             let m_del = rep.delivered_per_s.get(&target).copied().unwrap_or(0.0);
-            // Compare the metric that matches how the target is measured:
-            // solid targets report produced_per_s; fluid targets report
-            // delivered_per_s (fluids never enter the produced map).
-            let is_fluid = manifest.targets.first().map(|t| t.is_fluid).unwrap_or(false);
-            let metric = if is_fluid { "delivered" } else { "produced" };
-            let delta = if metric == "produced" {
-                match sim_prod {
-                    Some(sp) if sp > 0.0 => { compared += 1; (m_prod - sp) / sp * 100.0 }
-                    _ => f64::NAN,
-                }
+            // Fluid rows remain visible in the CSV, but are excluded from
+            // calibration until a real Factorio fluid baseline is trusted.
+            // Their production number is useful diagnostic output; treating
+            // it as a judged sim comparison would silently reintroduce the
+            // uncalibrated-fluid verdict gap that the tripwire avoids.
+            let (metric, delta) = if is_fluid {
+                ("excluded-fluid", f64::NAN)
             } else {
-                match sim_del {
-                    Some(sd) if sd > 0.0 => { compared += 1; (m_del - sd) / sd * 100.0 }
+                let delta = match sim_prod {
+                    Some(sp) if sp > 0.0 => {
+                        compared += 1;
+                        (m_prod - sp) / sp * 100.0
+                    }
                     _ => f64::NAN,
-                }
+                };
+                ("produced", delta)
             };
             let sp = sim_prod.map(|v| format!("{v:.3}")).unwrap_or_else(|| "NA".into());
             let sd = sim_del.map(|v| format!("{v:.3}")).unwrap_or_else(|| "NA".into());

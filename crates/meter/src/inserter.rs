@@ -88,6 +88,10 @@ pub struct Inserter {
     pub delivered: u64,
     /// Completed swings, whether or not the hand was full.
     pub swings: u64,
+    /// Measurement-window ticks where a carried hand made zero progress at
+    /// the destination. This matches the simulator's blocked-inserter
+    /// telemetry: a partial deposit is movement, not a blocked tick.
+    pub deposit_blocked_ticks: u64,
     /// Items that could have been carried but were not, because the belt
     /// did not have a full hand's worth under the pickup tile. This is the
     /// density penalty, made countable.
@@ -113,6 +117,7 @@ impl Inserter {
             starved_ticks: 0,
             delivered: 0,
             swings: 0,
+            deposit_blocked_ticks: 0,
             short_hand_items: 0,
         }
     }
@@ -211,9 +216,13 @@ impl Inserter {
         // The drop happens at the halfway crossing (pickup → drop is half
         // a turn), the return over the remaining half.
         if !self.dropped && self.cycle_timer <= self.cycle_ticks() / 2.0 {
-            self.delivered += io(Io::Deposit {
+            let moved = io(Io::Deposit {
                 hand: &mut self.hand,
-            }) as u64;
+            });
+            self.delivered += moved as u64;
+            if moved == 0 {
+                self.deposit_blocked_ticks += 1;
+            }
             if self.hand.is_empty() {
                 self.swings += 1;
                 self.dropped = true;
@@ -341,6 +350,42 @@ mod tests {
         );
     }
 
+    /// A destination that accepts part of a hand is backpressured, but it is
+    /// not blocked: the engine's blocked telemetry counts only zero-movement
+    /// destination waits.
+    #[test]
+    fn partial_deposit_is_not_a_blocked_tick() {
+        let mut ins = Inserter::new(
+            InserterKind::Stack,
+            PickupTarget::BeltTile { run: 0, tile: 0 },
+            DropTarget::Chest(0),
+            0,
+        );
+        let mut partial = true;
+        for _ in 0..200 {
+            ins.tick(|io| match io {
+                Io::Grab { want, hand } => {
+                    for _ in 0..want {
+                        hand.push(IRON);
+                    }
+                    0
+                }
+                Io::Deposit { hand } => {
+                    if partial {
+                        partial = false;
+                        hand.pop();
+                        1
+                    } else {
+                        let n = hand.len();
+                        hand.clear();
+                        n
+                    }
+                }
+            });
+        }
+        assert_eq!(ins.deposit_blocked_ticks, 0);
+    }
+
     /// An empty source produces lost swings, not a slower cycle.
     #[test]
     fn empty_source_starves_rather_than_slowing() {
@@ -382,7 +427,10 @@ mod tests {
         // bulk chain: +1 at L1-4, +2 at L5-7
         assert_eq!(ladder(InserterKind::Bulk), vec![2, 3, 4, 5, 6, 8, 10, 12]);
         // stack = bulk + 4 built-in
-        assert_eq!(ladder(InserterKind::Stack), vec![6, 7, 8, 9, 10, 12, 14, 16]);
+        assert_eq!(
+            ladder(InserterKind::Stack),
+            vec![6, 7, 8, 9, 10, 12, 14, 16]
+        );
         // non-bulk: +1 at L2 and L7 only
         for k in [
             InserterKind::Regular,

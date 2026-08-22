@@ -111,8 +111,8 @@ pub fn generate(m: u32, n: u32) -> Option<OwnedTemplate> {
     // NOTE the asymmetry with the LIBRARY path, which is the primary one:
     // `balancer.rs` never calls `classify` at all, so `Direct` and
     // `Decomposed` stamps select on shape alone and this gate does not
-    // apply to them. The registry holds exactly one throughput-limited
-    // shape today, (5,8). Pre-existing, not introduced here, but #662 is
+    // apply to them. The registry holds two throughput-limited shapes today,
+    // (3,2) and (5,8). Both are pre-existing, not introduced here, but #662 is
     // what made it visible — tracked in #669.
     //
     // Gate on BOTH axes (#662 round 6, 3/3). Gating on `class` alone

@@ -37,10 +37,13 @@
 //! terminal event; the winner is one of its own block's rows; the
 //! deciding stage is the one this fixture reaches) so that a broken stage
 //! tag or a row that stops being emitted fails CI instead of quietly
-//! printing wrong output to a human who may never run it. One fixture
-//! each for `best-error-free`, `merge-tap` and `scoped-pairwise`, because
-//! a contract pinned on ONE stage cannot tell a broken stage tag from a
-//! stage that never fires (W1c, #689).
+//! printing wrong output to a human who may never run it. The three fixtures
+//! pin `best-error-free` once and `scoped-pairwise` twice; none pins
+//! `merge-tap`. Merge-tap is now corpus-unexercised after the #701 restore;
+//! its quality-key stage is pinned by hand-built unit profiles in
+//! `selection_policy.rs`, and the live corpus follow-up is tracked on #701.
+//! A contract pinned on ONE stage cannot tell a broken stage tag from a stage
+//! that never fires (W1c, #689).
 //!
 //! Of the two diagnostics: `check_firing_census` (this one) approximates
 //! the candidate field from OUTSIDE via option toggles and reports
@@ -922,13 +925,13 @@ impl ScoreboardFacts {
 /// that decided — so each caller only has to state the fact that is
 /// specific to its own fixture.
 ///
-/// The three callers below cover three different deciding stages
-/// (`best-error-free`, `merge-tap`, `scoped-pairwise`) because a contract
-/// pinned on one stage cannot tell a broken stage TAG from a stage that
-/// simply never fires: #692 landed with only the error-free tier
-/// asserted, and the RFC-070 W1c corpus then measured four of the five
-/// stages live. Mis-tagging `merge-tap` as `scoped-pairwise` would have
-/// been invisible to a single-fixture pin.
+/// The three callers below pin `best-error-free` once and
+/// `scoped-pairwise` twice. None is a corpus pin for `merge-tap`: the #701
+/// restore removed the live merge-tap fixture, so that stage is now
+/// corpus-unexercised and its quality-key behavior is covered by the
+/// hand-built unit profiles in `selection_policy.rs`. The live-corpus
+/// follow-up is tracked on #701. A contract pinned on one stage cannot tell
+/// a broken stage TAG from a stage that simply never fires.
 ///
 /// The expected candidate order is written out longhand rather than
 /// imported from `CANDIDATE_ORDER`: a test that reads the same constant
@@ -1133,32 +1136,16 @@ fn selection_scoreboard_contract() {
     );
 }
 
-/// Second deciding stage: `merge-tap`, the `ErrorKinds` lexicographic
-/// policy stage — the only one that computes a quality KEY
-/// rather than counts. Added W1c (#689) because #692 shipped with only
-/// `best-error-free` pinned, and a stage tag is exactly the kind of
-/// label that can be wrong everywhere except the one fixture a test
-/// looks at.
-///
-/// The winner here is `native`, not `merge-tap` — that is the interesting
-/// half. The merge-tap policy stage is the ONE stage allowed to answer
-/// `NATIVE_IDX`, because its own gate already guarantees native is
-/// unaccepted, so "native won" and "merge-tap decided" are compatible
-/// facts and the pair must not be collapsed into one column.
-///
-/// **This fixture is the corpus's known-broken one, and this pin is
-/// EXPECTED to flip when it is fixed** (#694 review round 3). `ec@30/am2`
-/// at production defaults ships 3 `belt-dead-end` errors and sims at
-/// 0.00/s — `docs/status.md` carries the receipt. Selection reaching
-/// `merge-tap`/`native` here is a record of the miscalibration RFC-070
-/// exists to fix, not a property worth preserving. So a red here after a
-/// jam fix is the SUCCESS path: re-take the parity baseline
-/// (`SPAGHETTIO_PARITY_CORPUS=bless`) and update these expectations.
-/// Both assertions say so, because a test that goes red without telling
-/// you it was supposed to costs somebody an afternoon.
+/// Deciding stage: `scoped-pairwise`, the component-wise
+/// `IssueCounts` floor. This is the production-default ec@30/am2 receipt
+/// that was deliberately expected to flip when the belt jam was fixed
+/// (#694 review round 3). The validated (3,2) restore makes the native
+/// copper-cable feeders stampable; merge-tap no longer gates, and the
+/// clean horizontal-stack candidate wins through scoped-pairwise. The
+/// matching parity cells are re-blessed in `parity_corpus_baseline.json`.
 #[test]
 #[ntest::timeout(180_000)]
-fn selection_scoreboard_contract_merge_tap_stage() {
+fn selection_scoreboard_contract_ec30_scoped_pairwise_stage() {
     use spaghettio_core::trace::SelectionStage;
 
     let facts = assert_scoreboard_contract(
@@ -1168,32 +1155,27 @@ fn selection_scoreboard_contract_merge_tap_stage() {
         &["iron-ore", "copper-ore"],
     );
     assert_eq!(
-        facts.winner, "native",
-        "merge-tap's verdict names native on this fixture (`ErrorKinds::quality_key` \
-         ties/loses to native); got {}. If you are here because you FIXED the ec@30 jam \
-         (3 belt-dead-end errors, 0.00/s — docs/status.md), this red is the expected \
-         outcome, not a regression: re-take the parity baseline with \
-         SPAGHETTIO_PARITY_CORPUS=bless and update this expectation to whatever selection \
-         now picks",
+        facts.winner, "horizontal-stack",
+        "the fixed ec@30/am2 fixture should select horizontal-stack through \
+         scoped-pairwise; got {}",
         facts.winner
     );
     assert_eq!(
         facts.stage,
-        SelectionStage::MergeTap,
-        "expected the merge-tap decision to decide ec@30/am2. TWO readings: (1) the \
-         stage TAGGING broke — fix here; (2) the ENGINE changed which mechanism \
-         answers first, e.g. native is now accepted so `try_merge_tap`'s gate no \
-         longer holds, in which case the RFC-070 parity corpus needs re-taking (this \
-         fixture is `tier2_ec_am2_30_ore` there). `parity_corpus_baseline.json` \
-         records what it was: native/merge-tap under all five option sets"
+        SelectionStage::ScopedPairwise,
+        "expected scoped-pairwise to decide the fixed ec@30/am2 fixture; got {:?}. \
+         If this moves again, compare it with the pinned tier2_ec_am2_30_ore \
+         parity row before changing the contract",
+        facts.stage
     );
 }
 
-/// Third deciding stage: `scoped-pairwise`, the component-wise
+/// Deciding stage: `scoped-pairwise`, the component-wise
 /// `IssueCounts` floor — the mechanism that is deliberately NOT
 /// lexicographic. Here horizontal-stack displaces native, so this also
-/// pins that a scoped pairwise CAN name a non-native winner, which the
-/// merge-tap fixture above cannot show.
+/// pins that a scoped pairwise CAN name a non-native winner. A merge-tap
+/// fixture is no longer present in this corpus; its stage is
+/// pinned by the selection-policy unit tests instead.
 #[test]
 #[ntest::timeout(180_000)]
 fn selection_scoreboard_contract_scoped_pairwise_stage() {
