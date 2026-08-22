@@ -732,7 +732,7 @@ fixtures / docs split per the churn norm).
     retires `status.md`'s "AC is bit-identical declared-or-not". The
     undeclared run measured identically on every solid stage and differed
     only on petroleum (−8.9% vs −0.6%), which is the axis mismatch itself.
-  - ***`ec30-am2` (merge-tap, winner `native`): FAIL, and it is REAL.***
+  - ***`ec30-am2` (pre-#701 merge-tap, winner `native`): FAIL, and it was REAL.***
     **0.00/s at every stage, −100.0%**, 4 checkpoints at a 2-game-hour
     warmup; kit-clean, fluid-clean, 1991/1991 ghosts revived; census 150
     `full_output` + 20 `item_ingredient_shortage` — a jam, not a starve.
@@ -741,7 +741,10 @@ fixtures / docs split per the churn norm).
     fixture-confusion it clears up (the "#644-era ec30 ≈99.4%" anchor is a
     different fixture AND a different artifact) in `docs/status.md`. **This
     is a Phase-0 finding, not a Phase-0 fix**: nothing here changes the
-    layout.
+    layout. This is the pre-restore artifact, not the current layout receipt:
+    after #701, meter evidence removes the 0/s jam but reads **25.0/s against
+    30 planned**, a below-plan result that must be believed rather than used
+    to clear the layout; a fresh sim anchor is still required.
   - *Structural consequence for Phase 2a, recorded now: the corpus's
     `default` cells are not all directly sim-anchorable. Any fixture whose
     chain contains a force-boosted recipe (plastic-bar, processing-unit)
@@ -2206,3 +2209,106 @@ fixtures / docs split per the churn norm).
   Phase-2a entry; the stale 300s comment and former 600s attribute were
   reconciled to that value. K70-3's separate stress-corpus timeout remains
   600s.*
+
+- *2026-08-22 — **#701 (3,2) balancer restore parity adjudication.** The
+  validated Raynquist (3,2) family now stamps again. The pinned full-corpus
+  re-bless moved exactly these 17 cells (all remained `decided`; the arrows
+  show baseline → fresh verdict):*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-1` / `di-off`:
+    `native/best-accepted` → `native/best-error-free`. The restored family
+    makes the previously refused horizontal-stack candidate produce, so a
+    clean candidate exists for the error-free stage; the winner stays native.*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-2` / `default`, `cells-off`,
+    `e2e-harness`, and `di-off`: `native/merge-tap` →
+    `horizontal-stack/scoped-pairwise`. The (3,2) stamp restores native's
+    copper-cable feeders, so merge-tap no longer gates on the old native
+    result; the newly produced candidates are compared and horizontal-stack
+    wins through scoped-pairwise.*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-2` / `hs-off`:
+    `native/merge-tap` → `native/best-error-free`. Horizontal-stack is
+    unavailable by construction; the restored feeder geometry removes the
+    merge-tap gate and the clean native result is selected.*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-3` / `default`, `cells-off`,
+    `e2e-harness`, and `di-off`: `native/merge-tap` →
+    `horizontal-stack/scoped-pairwise`, by the same restored feeder,
+    merge-tap, and scoped-pairwise mechanism as the assembling-machine-2
+    cells above.*
+  - *`tier2_ec_am2_30_ore` / `assembling-machine-3` / `hs-off`:
+    `native/merge-tap` → `native/best-error-free`, because horizontal-stack
+    is unavailable and the restored native geometry is clean.*
+  - *`e2e_tier2_electronic_circuit_from_ore` / `assembling-machine-1` /
+    `di-off`: `native/best-accepted` → `native/best-error-free`, by the same
+    newly-producing horizontal-stack candidate mechanism as the tier2
+    am1/di-off cell; native remains the winner.*
+  - *`e2e_tier2_electronic_circuit_from_ore` / `assembling-machine-3` /
+    `default`, `cells-off`, `e2e-harness`, and `di-off`:
+    `native/merge-tap` → `horizontal-stack/scoped-pairwise`, by the same
+    restored copper-cable feeder and no-longer-gating merge-tap mechanism.*
+  - *`e2e_tier2_electronic_circuit_from_ore` / `assembling-machine-3` /
+    `hs-off`: `native/merge-tap` → `native/best-error-free`, because
+    horizontal-stack is unavailable and the restored native geometry is
+    clean.*
+  *This is the complete scope proof: **no cell outside the electronic-
+  circuit-from-ore family moved**. Every changed key is in exactly one of
+  the two named rows above; all other 143 cells are verdict-unchanged. The
+  parity baseline compares only `(status, winner, stage)`; associated
+  outcome-vector changes are retained for adjudication. The candidate order
+  is `native`, `k1-shape-fix`, `size-split-2`, `merge-tap`, `cell-composed`,
+  `direct-insertion`, `horizontal-stack`. The parent/blob diff for the
+  committed baseline (`49cf4298` versus its parent) has 23 outcome-vector
+  changes, all in these two EC families: the 17 verdict-changing cells above
+  carry the same restored-feeder explanation, while these six
+  verdict-unchanged cells only flip candidate 7, `horizontal-stack`, from
+  `refused` to `produced`: `tier2_ec_am2_30_ore` / `assembling-machine-1` /
+  `default`, `cells-off`, `e2e-harness`, and
+  `e2e_tier2_electronic_circuit_from_ore` / `assembling-machine-1` /
+  `default`, `cells-off`, `e2e-harness`. The winner and stage stay native /
+  `best-error-free` in all six, so these are candidate-set effects, not
+  additional verdict cells. The flipped slot is candidate 7,
+  `horizontal-stack`: on the restored branch, a direct trace of the same
+  ec30/am1 solve with the horizontal arm selected emits the `copper-cable`
+  `(3,2)` balancer with `template_found=true`, and the arm produces. That is
+  the concrete `(3,2)` dependency: three copper-cable producer rows feed two
+  horizontal-stack consumer lanes. The parent baseline records only the
+  outcome string, not the old refusal reason, so the exact historical refusal
+  text is not recoverable from committed evidence; the source/trace evidence
+  establishes the restored-template availability and the current flip without
+  inventing an older reason. No non-EC outcome vector changed in that
+  evidence diff: `tier3_plastic_cp_5` is unchanged, so there is no candidate
+  flip there to explain; if a different baseline was intended, it is not
+  present in this branch's committed parent/blob pair.*
+
+  *Classifier reconciliation for the restored template: before the round-3
+  downgrade, `classify((3,2))` returned `BalancerClass::Balanced` and
+  `ThroughputTier::Unlimited`, while `check_throughput_unlimited` warned at the
+  documented **10/15** and **20/30** partial-input cases. That pre-reconciliation
+  result exposed a classifier↔walker semantic gap: the classifier's predicate
+  was uniform MX3 composition plus belt-level Menger max-flow over recovered
+  splitter edges (including sideloads), whereas the lane walker stamped active
+  input subsets and observed physical lane/dead-end routing. The `(3,2)`
+  provenance therefore remained deliberately non-TU-advertised; no classifier
+  TU claim was added.*
+
+- *2026-08-22 — **#701 review round 3 classification correction.** Round 3
+  changed the shipped `(3,2)` result to
+  `BalancerClass::ThroughputLimited` / `ThroughputTier::Limited`: the lane
+  walker's warnings at **10/15** and **20/30** are authoritative for this
+  pinned shape because the walker owns lane-level partial-input behaviour,
+  while the Menger classifier is belt-level. The report now records both
+  views. The preceding paragraph is retained as the pre-downgrade record; its
+  `Balanced` / `Unlimited` values are not the shipped result.*
+
+- *2026-08-22 — **#701 ec30-am2-ore sim anchor landed.** The restored
+  production-default layout is **sim-anchored at 97% of plan, not claimed
+  fixed**: the meter's **25.0/s vs
+  30 planned** was pessimistic for this question, while the Factorio headless
+  anchor with `--warmup 432000 --speed 32` delivered **29.09/s vs 30.00/s
+  planned (−3.0%)** and produced **28.91/s (−3.6%)**, converged with **+0.6%
+  drift**. The export revived **2,071/2,071 ghosts**; the census was **161
+  working / 6 full-output / 3 ingredient-shortage**. Validator warnings
+  carried were **input-rate-delivery×7, belt-detour×1,
+  row-input-belt-margin×1**, so OVERALL is WARN and this is a measurement of
+  a warned layout. The residual is **3%, not 16.7%**, and is in the
+  validator-warned `input-rate-delivery` class, not evidence of the balancer's
+  partial-input behaviour. The sim removes the old 0/s failure mode without
+  proving the path fixed. Receipt: [`ec30-am2-ore-32-sim-receipt.json`](../artifacts/ec30-am2-ore-32-sim-receipt.json).*

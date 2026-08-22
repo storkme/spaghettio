@@ -229,9 +229,11 @@ fn synthesize_entities(template: BalancerTemplateRef<'_>) -> Vec<PlacedEntity> {
 /// may converge to 0 rate — these cases are flagged as "inconclusive" rather
 /// than a definitive TU failure. The max-flow-based
 /// [`BalancerClass`](crate::bus::balancer_classify::BalancerClass) check
-/// in `balancer_classify` is more reliable for detecting TU structurally;
-/// this check is complementary in that it tests the *lane-level* behaviour
-/// under partial loading.
+/// in `balancer_classify` remains a belt-level structural audit, but it does
+/// not model this check's *lane-level* behaviour under partial loading.
+/// `classify_ref` pins known physical templates to this walker when the two
+/// surfaces disagree; this check remains the owner of the partial-input
+/// evidence.
 ///
 /// Mergers (n > m, e.g. (4,1)) that lack splitter priority annotations will
 /// inherently fail this check under partial input — standard 50/50 splitters
@@ -506,6 +508,21 @@ mod tests {
         assert!(
             errors.is_empty(),
             "(1, 2) should have no lane errors, got: {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn book_three_to_two_passes_lane_validation() {
+        let templates = balancer_templates();
+        let t = &templates[&(3, 2)];
+        let issues = validate_template_lanes(t.into());
+        let blocking: Vec<_> = issues
+            .iter()
+            .filter(|i| matches!(i.severity, Severity::Error | Severity::Warning))
+            .collect();
+        assert!(
+            blocking.is_empty(),
+            "(3, 2) book template should pass the lane gate, got: {blocking:#?}"
         );
     }
 

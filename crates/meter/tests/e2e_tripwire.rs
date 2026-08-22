@@ -168,6 +168,10 @@
 //! them explicitly (`STANDING BELOW-PLAN`, reported, never failed) so
 //! "clean" never reads as "nothing here is wrong."
 //!
+//! The blessed value is the instrument's zero by design (a ratchet baseline),
+//! while the shipped-default `ec30-am2-ore` is now sim-anchored at 97% of plan;
+//! see `artifacts/ec30-am2-ore-32-sim-receipt.json` for that receipt.
+//!
 //! # bless/check protocol (mirrors `SPAGHETTIO_STRESS_GOLDEN`'s shape,
 //! but see the note below on why this one is NOT the same design)
 //!

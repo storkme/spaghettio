@@ -1425,6 +1425,37 @@ mod tests {
         assert_eq!(hist, (1, 0, 18, 2), "decoded direction histogram (N,E,S,W) changed");
     }
 
+    /// Decode the hand-pasted `(3,2)` source blueprint from the library and
+    /// compare the complete normalized entity stream with its 24 static
+    /// entities. This catches a stale/corrupted source string as well as a
+    /// decode, rotation, or normalization drift.
+    #[test]
+    fn restored_3_2_source_blueprint_round_trips_to_library_entities() {
+        let expected = spaghettio_core::bus::balancer_library::balancer_templates()
+            .get(&(3, 2))
+            .expect("(3,2) template missing");
+        let imported = validate_and_build(expected.source_blueprint)
+            .expect("the restored (3,2) source blueprint must decode");
+
+        assert_eq!((imported.n_inputs, imported.n_outputs), (3, 2));
+        assert_eq!((imported.width, imported.height), (4, 8));
+        assert_eq!(imported.input_tiles, expected.input_tiles);
+        assert_eq!(imported.output_tiles, expected.output_tiles);
+        assert_eq!(imported.entities.len(), 24);
+        assert_eq!(imported.entities.len(), expected.entities.len());
+
+        for (actual, expected) in imported.entities.iter().zip(expected.entities) {
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(
+                (actual.x, actual.y, actual.direction),
+                (expected.x, expected.y, expected.direction)
+            );
+            assert_eq!(actual.io_type.as_deref(), expected.io_type);
+            assert_eq!(actual.input_priority.as_deref(), expected.input_priority);
+            assert_eq!(actual.output_priority.as_deref(), expected.output_priority);
+        }
+    }
+
     /// Factorio 0.x versions have a major of 0 LEGITIMATELY, and must
     /// decode as 8-way rather than being refused.
     ///

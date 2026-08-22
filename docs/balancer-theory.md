@@ -53,7 +53,7 @@ explicitly rather than smoothing it over.
 
 | File | Role |
 |------|------|
-| `crates/core/src/bus/balancer_library.rs` | 64 baked templates keyed `(n_inputs, n_outputs)` (count at `51fea377`, the merge-base of this document; it was 77 at `39a587f2`, before the #632 A3 defective-template cull); `template_provenance()` |
+| `crates/core/src/bus/balancer_library.rs` | 65 baked templates keyed `(n_inputs, n_outputs)` (64 at `51fea377`, the merge-base of this document; it was 77 at `39a587f2`, before the #632 A3 defective-template cull); `template_provenance()` |
 | `crates/core/src/bus/balancer_generate.rs` | `generate(n, m)` runtime generator; `merge_tree(n)` |
 | `crates/core/src/bus/balancer_topology.rs` | `SplitterGraph` combinators: `parallel`, `series_permuted`, `clos_interleave` |
 | `crates/core/src/bus/balancer_classify.rs` | `classify_ref()` → the MX class lattice |

@@ -14,6 +14,13 @@
 //! emits one edge per upstream flow source, and the linear-system
 //! composition handles multi-feeder splitter inputs via flow conservation.
 //! Lane-level semantics are an MX5 concern, separate from MX1/MX2/MX3.
+//!
+//! The generic belt-level Menger-cut classifier is not sufficient on its own
+//! for merger templates: its recovered edges model aggregate capacity, not
+//! lane-level partial-input routing, so it can miss flow sent to dead-end
+//! splitter outputs. `check_throughput_unlimited` owns that lane-walker
+//! behaviour; known templates where it finds this failure are pinned below
+//! and downgraded by `classify_ref`.
 
 use crate::bus::balancer_library::{BalancerTemplate, BalancerTemplateEntity};
 use rustc_hash::FxHashMap;
@@ -77,7 +84,7 @@ pub enum BalancerClass {
 /// Menger subset checks ever run, and can never be labelled TU no matter
 /// how good it is.
 ///
-/// That is not a hypothetical: before this split, across the 64 registered
+/// That is not a hypothetical: before this split, across the 65 registered
 /// templates the registry contained **zero** certified
 /// `ThroughputUnlimited` — including every shape whose provenance
 /// advertises "Raynquist (TU)". Not a fact about the library: the balanced
@@ -87,6 +94,9 @@ pub enum BalancerClass {
 /// every input into every output in equal proportion (MX3) and still fail
 /// to reroute around a blocked output subset (not MX2b). This enum reports
 /// the throughput axis on its own.
+///
+/// The standalone TU audit is env-gated and non-enforced: its partial-input
+/// warnings are advisory and do not reject a family stamp.
 ///
 /// It is computed for every graph within the subset-enumeration bound and
 /// reports [`ThroughputTier::Unknown`] outside it — see that variant.
@@ -147,6 +157,14 @@ pub enum ThroughputTier {
 /// bound exists for arbitrary imported graphs.
 pub const SUBSET_ENUM_MAX: usize = 16;
 
+/// Library shapes whose lane-walker result is authoritative over the generic
+/// belt-level Menger result. The `(3, 2)` entry is measured at 10/15 with
+/// one of three inputs active and 20/30 with two of three active; both deliver
+/// 67% of the expected flow and lose 33% to dead ends under the walker's
+/// partial-input probe.
+/// `(5, 8)` is the pre-existing accepted MX1 pin.
+pub const KNOWN_THROUGHPUT_LIMITED: [(u32, u32); 2] = [(3, 2), (5, 8)];
+
 /// The throughput tier of a graph, computed without reference to its
 /// composition matrix — so it is available even for templates whose
 /// composition solve is [`ClassifyError::Singular`].
@@ -166,7 +184,7 @@ pub fn throughput_tier(graph: &SplitterGraph) -> ThroughputTier {
     // "Costs nothing" is true here and was WRONG when this comment's twin
     // claimed it for `classify_graph` (#662 review). There the checks moved
     // in front of an MX3 early-return that used to skip them for every
-    // balanced template, which is 62 of the registry's 64. Measured over the
+    // balanced template, which is 63 of the registry's 65. Measured over the
     // registry, 20 passes each: 11.3us -> 198.2us per template, a 17.6x
     // slowdown. Kept anyway — the throughput axis cannot be computed without
     // running them, which is the entire point of the change — and the
@@ -311,7 +329,19 @@ pub fn classify(template: &BalancerTemplate) -> Result<ClassificationReport, Cla
 /// runtime template generator to verify newly-built layouts.
 pub fn classify_ref(template: BalancerTemplateRef<'_>) -> Result<ClassificationReport, ClassifyError> {
     let graph = recover_graph(template)?;
-    classify_graph(&graph)
+    let mut report = classify_graph(&graph)?;
+
+    // This downgrade is keyed on the walker's partial-input warnings by
+    // design: the walker is the lane-level authority and Menger is belt-level;
+    // the report fields reflect both views.
+    if KNOWN_THROUGHPUT_LIMITED.contains(&(template.n_inputs, template.n_outputs))
+        && !crate::bus::template_validate::check_throughput_unlimited(template).is_empty()
+    {
+        report.class = BalancerClass::ThroughputLimited;
+        report.throughput = ThroughputTier::Limited;
+    }
+
+    Ok(report)
 }
 
 /// Extract the logical splitter graph from a balancer template — strips
@@ -1629,10 +1659,127 @@ mod tests {
         );
     }
 
+    /// `(3,2)` is composition-balanced and passes the generic belt-level
+    /// Menger audit, but the lane walker finds partial-input loss. The
+    /// physical-template classifier must therefore downgrade both verdicts;
+    /// keep the two measured partial-input scenarios structural here.
+    #[test]
+    fn restored_3_2_reconciles_balanced_class_with_lane_walker_gap() {
+        let t = balancer_templates()
+            .get(&(3, 2))
+            .expect("(3,2) template missing");
+        let report = classify(t).expect("(3,2) should classify structurally");
+
+        assert_eq!(report.class, BalancerClass::ThroughputLimited);
+        assert_eq!(report.throughput, ThroughputTier::Limited);
+        assert!(report.mx2_counterexample.is_none());
+
+        let walker_issues =
+            crate::bus::template_validate::check_throughput_unlimited(BalancerTemplateRef::from(t));
+        let partial_input_warnings: Vec<_> = walker_issues
+            .iter()
+            .filter(|issue| {
+                issue.category == "throughput-unlimited"
+                    && issue.message.contains("inputs active")
+            })
+            .collect();
+        assert_eq!(partial_input_warnings.len(), 2);
+
+        let mut measured: Vec<_> = partial_input_warnings
+            .iter()
+            .map(|issue| parse_partial_input_warning(&issue.message))
+            .collect();
+        measured.sort_by_key(|warning| warning.active_inputs);
+        let expected = vec![
+            PartialInputWarning {
+                shape: (3, 2),
+                active_inputs: 1,
+                total_inputs: 3,
+                actual_output: 10.0,
+                expected_output: 15.0,
+            },
+            PartialInputWarning {
+                shape: (3, 2),
+                active_inputs: 2,
+                total_inputs: 3,
+                actual_output: 20.0,
+                expected_output: 30.0,
+            },
+        ];
+        assert_eq!(measured.len(), expected.len());
+        for (actual, expected) in measured.iter().zip(expected.iter()) {
+            assert_eq!(actual.shape, expected.shape);
+            assert_eq!(actual.active_inputs, expected.active_inputs);
+            assert_eq!(actual.total_inputs, expected.total_inputs);
+            assert!(
+                (actual.actual_output - expected.actual_output).abs() < 1e-9,
+                "actual output drifted: got {}, expected {}",
+                actual.actual_output,
+                expected.actual_output
+            );
+            assert!(
+                (actual.expected_output - expected.expected_output).abs() < 1e-9,
+                "expected output drifted: got {}, expected {}",
+                actual.expected_output,
+                expected.expected_output
+            );
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct PartialInputWarning {
+        shape: (u32, u32),
+        active_inputs: usize,
+        total_inputs: usize,
+        actual_output: f64,
+        expected_output: f64,
+    }
+
+    fn first_number_after(message: &str, marker: &str) -> f64 {
+        message
+            .split_once(marker)
+            .unwrap_or_else(|| panic!("{marker:?} missing from {message:?}"))
+            .1
+            .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+            .find(|part| !part.is_empty())
+            .unwrap_or_else(|| panic!("number after {marker:?} missing from {message:?}"))
+            .parse()
+            .unwrap_or_else(|e| panic!("invalid number after {marker:?}: {e}"))
+    }
+
+    fn parse_partial_input_warning(message: &str) -> PartialInputWarning {
+        let shape = message
+            .strip_prefix('(')
+            .and_then(|tail| tail.split_once(") balancer"))
+            .map(|(shape, _)| {
+                let (inputs, outputs) = shape
+                    .split_once(',')
+                    .unwrap_or_else(|| panic!("malformed shape in {message:?}"));
+                (
+                    inputs.trim().parse().expect("input shape number"),
+                    outputs.trim().parse().expect("output shape number"),
+                )
+            })
+            .unwrap_or_else(|| panic!("shape missing from {message:?}"));
+        let active_inputs = first_number_after(message, "with ") as usize;
+        let total_inputs = message
+            .split_once("with ")
+            .and_then(|(_, tail)| tail.split_once(" inputs active"))
+            .and_then(|(counts, _)| counts.split_once('/'))
+            .and_then(|(_, total)| total.parse().ok())
+            .unwrap_or_else(|| panic!("input count missing from {message:?}"));
+
+        PartialInputWarning {
+            shape,
+            active_inputs,
+            total_inputs,
+            actual_output: first_number_after(message, "total output "),
+            expected_output: first_number_after(message, "< expected "),
+        }
+    }
+
     #[test]
     fn known_throughput_limited_shapes_are_pinned() {
-        const KNOWN_THROUGHPUT_LIMITED: [(u32, u32); 1] = [(5, 8)];
-
         let mut unexpected: Vec<(u32, u32)> = Vec::new();
         let mut still_limited: Vec<(u32, u32)> = Vec::new();
         for ((m, n), t) in balancer_templates() {
