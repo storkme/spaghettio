@@ -160,8 +160,10 @@ coordinate for comparison and must not be interpreted as a local belt-slot
 probe. `belt_positions` carries the continuous positions from the game's
 detailed transport-line view. These detailed channels are emitted for focused
 diagnostic modes (`--pickup-trace-only`, `--drop-trace`, or `--fixed-window`);
-ordinary runs keep the legacy compressed state and the cheaper drop probe but
-do not scan detailed belt positions or inserter admission traces.
+ordinary runs keep the legacy compressed state and do not scan detailed belt
+positions or inserter admission traces. The periodic `drop_probes` channel is
+also diagnostic-only; enable `--drop-trace` or `--fixed-window` when that
+evidence is needed.
 
 `drop_event_trace` is the tick-synchronised transition channel: accepted and
 blocked events include the immediately preceding and following inserter state.
@@ -187,8 +189,8 @@ ordinary runs do not collect this pickup channel.
 On large layouts, `run --pickup-trace-only` keeps this pickup channel while
 skipping the unrelated drop forensics. The expensive tick-synchronised
 drop-event channel is separately opt-in with `run --drop-trace`; ordinary runs
-retain only the cheaper 60-tick `drop_probes` sample. These are
-performance-only diagnostic switches: they do not alter the imported world,
+do not collect `drop_probes` either. These are performance-only diagnostic
+switches: they do not alter the imported world,
 simulation state, measurement counters, or verdict logic. Use the trace flags
 only when a focused engine-vs-meter comparison justifies their wall-clock
 cost.

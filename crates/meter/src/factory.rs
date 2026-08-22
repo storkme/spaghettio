@@ -104,6 +104,10 @@ pub struct RecipeAttribution {
     pub crafts: u64,
     pub working_ticks: u64,
     pub output_blocked_ticks: u64,
+    /// Sum of blocked ticks across output inserters for this recipe. This is
+    /// intentionally per-inserter-tick, not normalized to machine ticks;
+    /// recipes with multiple output inserters can therefore exceed the
+    /// machine-level `output_blocked_ticks` value.
     pub output_inserter_blocked_ticks: u64,
     pub item_shortage_ticks: u64,
     pub fluid_shortage_ticks: u64,

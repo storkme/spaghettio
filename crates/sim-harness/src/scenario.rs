@@ -949,6 +949,8 @@ script.on_init(function()
   storage.pickup_event_previous_held = {}
   storage.pickup_event_previous_item = {}
   storage.pickup_event_inserters = nil
+  storage.pickup_event_inserter_seen = {}
+  storage.pickup_event_warmup_refresh = false
   storage.drop_physics_probe = {}
   storage.curve_sideload_probe = nil
   storage.fixed_window_state_dumped = false
@@ -1562,20 +1564,27 @@ local function sample_pickup_events(s, sample_tick)
   -- Keep the population as LuaEntity references, just as drop_event_trace
   -- does; validity is checked below so blueprint cleanup remains safe.
   -- Blueprint revival can leave pickup targets unresolved during the first
-  -- tick. Do not permanently cache that transient empty population; retry
-  -- until the engine has attached the inserter targets.
-  if storage.pickup_event_inserters == nil or #storage.pickup_event_inserters == 0 then
-    storage.pickup_event_inserters = {}
+  -- tick. Build the initial population once, then refresh it at the warmup
+  -- boundary so late-attached machine targets are included without paying a
+  -- surface-wide query on every pickup sample.
+  local warmup_refresh = sample_tick >= WARMUP_TICKS
+      and not storage.pickup_event_warmup_refresh
+  if storage.pickup_event_inserters == nil or warmup_refresh then
+    storage.pickup_event_inserters = storage.pickup_event_inserters or {}
+    storage.pickup_event_inserter_seen = storage.pickup_event_inserter_seen or {}
     for _, candidate in pairs(s.find_entities_filtered{type = "inserter"}) do
       local pickup_target = candidate.pickup_target
       local drop_target = candidate.drop_target
       if pickup_target ~= nil and pickup_target.valid
           and drop_target ~= nil and drop_target.valid
           and pickup_is_transport(pickup_target)
-          and pickup_is_machine(drop_target) then
+          and pickup_is_machine(drop_target)
+          and not storage.pickup_event_inserter_seen[candidate.unit_number] then
         table.insert(storage.pickup_event_inserters, candidate)
+        storage.pickup_event_inserter_seen[candidate.unit_number] = true
       end
     end
+    if warmup_refresh then storage.pickup_event_warmup_refresh = true end
   end
   for _, i in pairs(storage.pickup_event_inserters) do
     if not i.valid then goto continue end
@@ -2619,7 +2628,9 @@ mod tests {
         assert!(lua.contains("return entity.type == \"assembling-machine\" or entity.type == \"furnace\""));
         assert!(lua.contains("pickup_event_inserter_count = storage.pickup_event_inserters"));
         assert!(lua.contains("storage.pickup_event_inserters = nil"));
-        assert!(lua.contains("if storage.pickup_event_inserters == nil or #storage.pickup_event_inserters == 0 then"));
+        assert!(lua.contains("local warmup_refresh = sample_tick >= WARMUP_TICKS"));
+        assert!(lua.contains("storage.pickup_event_inserter_seen[candidate.unit_number]"));
+        assert!(lua.contains("storage.pickup_event_warmup_refresh = false"));
         assert!(lua.contains("local function trace_values(trace)"));
         assert!(lua.contains("drop_probes = trace_values(storage.drop_probes)"));
         assert!(lua.contains("drop_event_trace = trace_values(storage.drop_event_trace)"));

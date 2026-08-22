@@ -255,6 +255,18 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     if has_flag(args, "--drop-trace") {
         params = params.with_drop_trace();
     }
+    if has_flag(args, "--meter")
+        && (meter_warmup != u64::from(params.warmup_ticks)
+            || meter_window != u64::from(params.window_ticks))
+    {
+        eprintln!(
+            "warning: report-only meter uses warmup/window {} / {} ticks, while the sim uses {} / {}; compare rates only as diagnostic evidence",
+            meter_warmup,
+            meter_window,
+            params.warmup_ticks,
+            params.window_ticks
+        );
+    }
     let meter = has_flag(args, "--meter").then(|| {
         println!(
             "Running report-only meter (warmup={} window={} ticks; it cannot alter the sim verdict)...",
@@ -392,6 +404,9 @@ fn print_meter_probe(meter: &meter_probe::MeterProbe, manifest: &manifest::Manif
     }
     println!(
         "meter: report-only; gate metric is delivered for solid targets and produced for fluids; an at-plan reading is not clearance"
+    );
+    println!(
+        "meter: inserter_blocked is summed per output-inserter tick, so it can exceed machine-level output_blocked"
     );
 }
 

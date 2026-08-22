@@ -3,6 +3,11 @@
 //! headless-Factorio sim value. Calibration of "how close is the meter" —
 //! the whole point of the meter's KC1 (±10pp).
 //!
+//! This is a calibration report, not the CLI gate: solid rows compare machine
+//! production to the sim's produced rate, while the harness gate mirrors the
+//! sim verdict on delivered output. Keeping both rates visible avoids turning
+//! that deliberate decision boundary into an unlabeled metric mismatch.
+//!
 //! Usage:
 //!   cargo run --release --manifest-path crates/meter/Cargo.toml \
 //!     --example sweep_corpus -- <corpus-date-dir> <out.csv>
