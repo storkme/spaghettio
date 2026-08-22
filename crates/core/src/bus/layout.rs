@@ -157,16 +157,25 @@ pub enum SurplusPolicy {
 /// remove the trap's shape from the language (#696 review, absorbed). What
 /// it actually buys: a genuinely correct atomic default new call sites can
 /// reach for INSTEAD of hand-assembling a group, and it removes the trap
-/// for whoever takes it. **What this does not prevent, at all**: the ~80
-/// existing flat struct-literal call sites (including both known `run_e2e`
-/// fossils) are unchanged and exactly as fossil-prone as before — fixing
-/// those is #689 track W2c, sequenced after this one — and nothing stops
-/// new code from writing a flat (or group-level partial) literal instead of
-/// calling `from_groups`. **Zero production callers as of this PR**:
-/// `from_groups`/`constraints`/`axes`/`engine_tuning` are exercised only by
-/// this module's own unit tests below — they are scaffolding for Phase 1b
-/// and #689 track W2c to adopt, not yet wired into any call site that
-/// builds a real layout.
+/// for whoever takes it. **What this does not prevent, at all**: nothing
+/// stops new code from writing a flat (or group-level partial) literal
+/// instead of calling `from_groups`, and most existing flat struct-literal
+/// call sites are unchanged and exactly as fossil-prone as before.
+///
+/// **Adoption status** (this paragraph said "zero production callers as of
+/// this PR" until #689 track W2c landed and made that false — the exact
+/// records-outlive-their-state shape the rest of this legend is about;
+/// caught by #699's review round 5):
+/// - `tests/e2e.rs`'s `run_e2e_inner` is the **first** caller, via its
+///   `harness_options` helper. Both known `run_e2e` fossils
+///   (`cell_composition`, `inserter_capacity`) died in that move, and the
+///   harness is guarded by a non-ignored `harness_options_are_engine_defaults`.
+/// - `rfc060_sim_export` and `w2c_gear20_meter_export` in the same file
+///   call it too.
+/// - **Still open**: 15 other tests in `tests/e2e.rs` keep the old flat
+///   literal, pinned (not fixed) by `residual_fossil_literals_are_pinned`
+///   so the count cannot grow silently; and Phase 1b has not adopted
+///   `from_groups` yet.
 #[derive(Clone, Debug)]
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,

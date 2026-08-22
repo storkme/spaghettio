@@ -296,6 +296,10 @@ Distinguishes our snapshots from arbitrary base64 on the clipboard. Lets us add 
 
 Provenance. "This snapshot was captured at commit X" is essential for understanding whether a regression is your fault or inherited. Cheap to include.
 
+### What happens when a `TraceEvent` variant is deleted?
+
+`TraceEvent` is `#[serde(tag = "phase", content = "data")]` with no `#[serde(other)]` catch-all, so deserializing a `.fls` blob whose events include a variant that no longer exists in the enum fails outright rather than silently dropping it — deliberately: a typo'd tag or a genuinely unrecognized event failing loudly is a feature, not a bug to paper over with a catch-all. Concrete instance: PR #702 deleted `TraceEvent::JunctionTemplateRejected` along with the production-unreachable perpendicular-template rung whose `try_bridge`/`bridge_belt_over_pipe` were its only emitters. All 10 committed `snapshots/*.fls` files were checked directly (decode + grep) and are clean — this variant never made it into any of them. Any *local, uncommitted* `.fls` captured before this PR that happens to contain the event will fail to parse after upgrading; per the "Long-term storage" non-goal above, that's expected — regenerate it (`SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ...`), don't try to load it across the deletion. This differs in kind from the #632 A4 precedent (`RouteFailure`/`BridgeDropped`, declared but never emitted by anything): `JunctionTemplateRejected` had real call sites wired into production's strategy ladder, so it's not provable that no historical snapshot anywhere ever captured it — only that the ones actually committed to this repo didn't, and that #691's reachability census found no evidence the rung's admission gate was ever satisfied in its 12-fixture corpus.
+
 ## Open questions
 
 1. **Where do `.fls` files land in CI?** Probably uploaded as artifacts on failure via `actions/upload-artifact`. Needs a CI workflow change.

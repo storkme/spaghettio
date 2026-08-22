@@ -124,9 +124,6 @@ fn junction_seed(ev: &TraceEvent) -> Option<(i32, i32)> {
         | TraceEvent::JunctionGrowthCapped {
             tile_x, tile_y, ..
         }
-        | TraceEvent::JunctionTemplateRejected {
-            tile_x, tile_y, ..
-        }
         | TraceEvent::RegionWalkerVeto {
             tile_x, tile_y, ..
         } => Some((*tile_x, *tile_y)),
@@ -303,11 +300,6 @@ fn print_cluster(sx: i32, sy: i32, events: &[&TraceEvent]) {
                 println!(
                     "\n  ✗ GROWTH CAPPED after {iters} iter(s), region_tiles={region_tiles}, reason={reason}"
                 );
-            }
-            TraceEvent::JunctionTemplateRejected {
-                bridge_dir, reason, ..
-            } => {
-                println!("      (template rejected: {bridge_dir} / {reason})");
             }
             TraceEvent::RegionWalkerVeto {
                 strategy,

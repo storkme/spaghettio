@@ -353,7 +353,16 @@ pub enum RegionKind {
     CrossingZone,
     /// Ghost-router corridor template (one horizontal spec crossing N trunks).
     CorridorTemplate,
-    /// Ghost-router per-tile perpendicular crossing template.
+    /// Ghost-router junction-solver output whose winning strategy did not
+    /// produce a `sat_zone` snapshot (`ghost_router.rs`'s `sol.sat_zone ==
+    /// None` fallback arm). Named for the perpendicular-template rung that
+    /// used to be the only such strategy; that rung was deleted 2026-08-22
+    /// (PR #702, production-unreachable — see `docs/offpath-code-
+    /// followups.md` G1). Every remaining `JunctionStrategy` impl
+    /// (`SatStrategy`, `EvictionStrategy`) always sets `sat_zone: Some(..)`,
+    /// so this variant is not currently produced by any live strategy —
+    /// kept as the defensive fallback arm for a future non-SAT strategy,
+    /// not renamed/removed since nothing currently forces the question.
     JunctionTemplate,
     /// Ghost-router crossing left for the junction solver to pick up.
     Unresolved,

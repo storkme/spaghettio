@@ -1044,6 +1044,515 @@ fixtures / docs split per the churn norm).
   spaghettio_core -- -D warnings` clean, all PR CI checks (`rust`,
   `rust-clippy`, `web`, `second-opinion`, `deploy-preview`,
   `workflow-guard`) green on the prior commit.
+- *2026-08-21 — **W2c: both `run_e2e` fossils killed; the `run_e2e*`
+  HARNESS now runs production defaults.** Scoped deliberately (#699 review
+  round 6 flagged the first wording, "the suite now runs production
+  defaults", as overstating what the body itself measures): 15 other tests
+  in `tests/e2e.rs` still build their own `LayoutOptions` with
+  `cell_composition: Off` / `inserter_capacity: 0` and are pinned, not
+  migrated. Every fixture routed through `run_e2e*` — which is every tier
+  and stress fixture — does run production defaults.
+  `run_e2e_inner` builds its `LayoutOptions` through
+  `LayoutOptions::from_groups` (the #696 scaffolding's first production
+  caller) via a new `harness_options(HarnessOptions { .. })` helper, so
+  every field the harness does not deliberately override is the engine's
+  own default. `cell_composition` `Off` → `Candidate`; `inserter_capacity`
+  `0` → `DEFAULT_INSERTER_CAPACITY` (2). `rfc060_sim_export`'s hand-copied
+  "mirror run_e2e_inner exactly" literal — which had ALREADY drifted, keeping
+  `inserter_capacity: 0` but not the cells fossil, so it matched neither the
+  harness nor production — now calls the same helper.
+
+  **Blast radius, measured by A/B rather than assumed.** Three full
+  `--test e2e` runs under the pinned CI zone cache: cells-fossil-killed
+  only, capacity-fossil-killed only, and both. The two effects are exactly
+  additive (the cap-only and both-fossils fingerprints differ in one
+  fixture, the one cells moves).
+  * **Capacity `0` → `2`** moves 6 of 8 golden hashes and 8 of 8 stress
+    hashes — every fixture with an inserter-fed row — while changing no
+    winner and no deciding stage **on any (fixture, machine) pair the
+    suite runs**. That scoping is load-bearing and the first draft of
+    this entry dropped it (#699 review round 4): the corpus DOES record
+    two capacity-attributable winner changes, both at am3, on fixtures
+    the suite invokes at am1/am2. "Additive" likewise means the two
+    fossils' effects on the SUITE compose without interacting, not that
+    either is inert. The two fluid-target goldens
+    (`tier3_sulfuric_acid`, `tier3_heavy_oil_cracking`) are the negative
+    control: byte-identical under both arms.
+  * **Cells `Off` → `Candidate`** moves exactly ONE layout in the whole
+    suite: `tier1_iron_gear_wheel_20s`, where `cell-composed` now wins the
+    outer selection (`SelectionDecided { winner: cell-composed, stage:
+    best-error-free }`, score 0.1129 vs native's 0.1081) — 148 entities /
+    47×8 → 105 / 38×14, same 12.3 % density, zero validation issues on
+    both. Everywhere else the cell-composed candidate runs, is scored, and
+    loses, exactly as RFC-051's "strictly additive" flip claimed.
+
+  **Adjudication against #694.** The corpus's `e2e-harness` → `default`
+  delta is 7 verdict-differing rows of 32: two winner changes
+  (`e2e_tier2_electronic_circuit_20s_from_ore`/am3 and
+  `tier2_ec_am1_10_ore`/am3, both native → direct-insertion, both
+  capacity-attributable — they also differ `cells-off` vs `e2e-harness`)
+  and five stage-only changes (`best-accepted` → `best-error-free`, winner
+  `native` throughout: `tier1_gear_am1` ×3 tiers, `tier3_plastic_cp_5`,
+  `e2e_tier3_plastic_bar_from_crude`), which are the cell-composed
+  candidate giving the `best-error-free` stage something to decide on
+  instead of falling through. **Both winner changes are at am3, a tier the
+  suite never invokes for those fixtures**, so the corpus predicts zero
+  winner changes among the (fixture, machine) pairs `e2e.rs` actually runs
+  — and zero materialized. 6 golden re-blesses, 1 warning-pin re-bless, 2
+  test re-pins; every one traced to the prediction or to the corpus hole
+  below. Prediction-match rate on corpus-covered fixtures: 5/5 (the four
+  golden-pinned fixtures with an exact corpus row, plus tier5's pin).
+
+  **FINDING — corpus hole.** The one winner change the flip produces,
+  `tier1_iron_gear_wheel_20s` (gear @ 20/s, am2, from iron-plate), has NO
+  row in the #694 corpus: the corpus carries gear @ 10/s (`tier1_gear_am1`,
+  `e2e_tier1_iron_gear_wheel_from_ore`) and nothing at 20/s. Its nearest
+  covered neighbours all predict `native`, so the corpus is not falsified
+  — it is silent, and the one cell where the campaign's headline flip
+  changes a shipped artifact is the cell it does not cover. Recommendation
+  for W3a: add gear@20/am2 to the corpus before the shadow loop gates on
+  it.
+
+  **FINDING — and the corpus hole was hiding a real defect (#700).** The
+  first version of this entry adjudicated that re-bless on validator
+  evidence alone: both arms error- and warning-free, the winner smaller
+  and denser. #699's review round 1 refused that reasoning — correctly,
+  per the verification protocol: the validator cannot CLEAR a layout. So
+  the layout was metered. Three arms, `measure(108_000, 216_000)`, no
+  notes:
+
+  | arm | cells | capacity | entities | validator | meter |
+  |---|---|---|---|---|---|
+  | production today | `Candidate` | 2 | 105, 38×14 | 0 issues | **15.0 / 20.0 — 75 %** |
+  | cells disabled | `Off` | 2 | 148, 47×8 | 0 issues | 21.0 / 20.0 |
+  | pre-W2c golden | `Off` | 0 | 148, 47×8 | 0 issues | 21.0 / 20.0 |
+
+  The cell-composed winner **under-delivers by 25 %**, validator-clean,
+  and production has shipped it since RFC-051 Phase B flipped
+  `cell_composition` on 2026-07-22.
+
+  **CORRECTION, and it makes the finding better rather than worse
+  (#699 review round 4 prompted the check).** The first draft of this
+  entry presented the deficit as newly discovered. It was not: **W1a
+  found it on day one.** #693's own table reports `gear20-am2-plate` at
+  20.000 planned / 15.000 produced / **−25.0 % BELOW PLAN**, and the
+  committed tripwire baseline
+  (`crates/meter/tests/e2e_tripwire_baseline.json`) carries the row ARMED
+  at `entities: 105, deficit_pct: -25.0, converged: true`. The reading
+  above reproduces that baseline exactly, which is corroboration, not
+  novelty. There is therefore no "prose-only guard" gap either: `check`
+  fails on that row worsening, today, without this PR.
+
+  **What W2c actually adds is the attribution, and it is the sharper
+  fact.** The tripwire's row says 105 entities. The e2e suite's
+  `tier1_iron_gear_wheel_20s` golden, before this PR, pinned 148. *Same
+  item, same rate, same machine, same inputs — two different layouts,
+  under two instruments, neither able to see the other.* The tripwire
+  built `LayoutOptions::default()` (production: cell-composed, −25 %);
+  the e2e fixture built the fossil's options (native, +5 %). Nobody
+  joined "the meter says gear@20 is 25 % down" to "the regression suite
+  says gear@20 is fine" because they were not talking about the same
+  artifact. **That** is what the fossil cost, and it is exactly the class
+  of thing a campaign about one selection loop exists to remove. Filed as
+  #700; a `#[ignore]`d exporter (`w2c_gear20_meter_export`) is committed
+  so the three arms are re-measurable side by side, which is what makes
+  the divergence checkable rather than narrated.
+
+  The golden re-bless stands — a golden records what the engine produces,
+  and this is what it produces — but the fixture's comment now says so,
+  including that its `assert_produces(…, 20.0)` passes on a 15/s layout
+  because it reads a static estimate, and names all five coupled
+  artifacts a #700 fix has to move (the tripwire row among them).
+
+  **SECOND FINDING — the stage-5 policy this exposes.** On
+  `tier1_iron_gear_wheel_20s` the outer board records native with
+  `layout_warnings: 0` and cell-composed with `layout_warnings: 1`, and
+  `best-error-free` picks cell-composed anyway, on score. The stage
+  discriminates on ERRORS and then ranks on score; warnings do not
+  participate. That is a real property of today's precedence, surfaced
+  (not introduced) by this PR, and it is squarely W2b/`SelectionPolicy`
+  territory — recorded here rather than acted on.
+
+  **Two tests re-pinned, not overridden.** No test got a deliberate
+  old-behaviour override — the two that failed were asserting the fossil
+  itself, and pinning them to `cells-off` would have preserved the fossil
+  in precisely the two tests that describe the candidate set.
+  `decomposition_search_native_candidate_fires_trace_events` asserted
+  "exactly one `DecompositionCandidateScored` under Phase 0"; production
+  has run more than one candidate since RFC-051 Phase B / RFC-053, so the
+  assertion was true only of the fossilized set. It now pins the set #694
+  records for this exact fixture — `native` accepted, `cell-composed`
+  present, `native` winning the outer selection — which makes it a
+  behavioural tripwire on re-fossilization as well as a smoke test.
+  `decomposition_search_picks_native_on_clean_partitioned_case` asserted
+  native was the ONLY candidate scored, reasoning "sequential dispatch,
+  search exits early once native is accepted"; that reasoning describes a
+  candidate set nothing ships. Its K-DS1-1 content — native wins the clean
+  case, `size-split-2` is not paid for on it — survives verbatim.
+
+  **New non-ignored guard**: `harness_options_are_engine_defaults` compares
+  all three group views against the engine's own defaults and names both
+  fossils individually. Discrimination check EXECUTED twice: re-spelling
+  `cell_composition: Default::default()` inside the `SearchAxes` literal
+  fails it (`cell_composition: Off` vs `Candidate`), and the capacity-arm
+  A/B run failed it on `inserter_capacity: 0` vs `2` without being asked
+  to. Both reverted and re-verified green.
+
+  **tier5's warning pin (`input-rate-delivery 13 → 10`)** is the suite's
+  only pin movement, and it is NOT a check going quiet: both issue lists
+  were decoded from snapshots and diffed instance by instance. Ten rows
+  reading "across 2 inserters" at capacity 0 read "across 1 inserter" at
+  capacity 2 (one L2 hand replaces two L0 hands, so the row places fewer,
+  fatter inserters); seven equivalent warnings re-appear at shifted
+  coordinates. Every survivor still carries its own position and its own
+  delivered-vs-needed pair. The fixture's known deficits are untouched, as
+  is the meter's open #644 reading. Stress scoreboards moved the same
+  direction (warnings fell on 3 of 8, entity counts fell on all 8, errors
+  stayed 0; no category went to zero) — the baselines are `≤` ceilings, so
+  none required a re-bless and none were loosened.
+
+  **Corpus baseline NOT re-blessed, verified at source** (the W2c brief
+  asked for this check explicitly): `parity_corpus.rs` builds its option
+  sets as closures over `LayoutOptions::default()` in `OPTION_SETS`, never
+  through `run_e2e`, so no cell can move when the harness changes. The
+  `e2e-harness` column is now a HISTORICAL record rather than a live
+  configuration; kept, not deleted, because it is the only record of what
+  the fossilized suite decided — the file's doc comments were updated to
+  say so instead of continuing to claim a present-tense fossil.
+
+  **Pre-existing flake, made marginally worse, now fixed for the three
+  fixtures that showed it.** `tier2_electronic_circuit_20s_from_ore`
+  carried `#[ntest::timeout(10000)]` and tripped it at 10003 ms on the
+  BASELINE (pre-change) parallel run and again at 10001 ms on a later
+  post-change run, while passing SOLO in 0.63 s. `ntest::timeout` is
+  wall-clock, so on a loaded box the budget, not the work, is binding —
+  and restoring the cell-composed candidate adds a layout pass to every
+  fixture. Raised to 60 s here, and 10 s → 30 s / 30 s → 60 s on the two
+  re-pinned decomposition tests (#699 review round 2 predicted exactly
+  this). **Residual, not fixed**: 60-odd other tests in the file carry the
+  same 10 s wall-clock budget and are subject to the same hazard; a
+  blanket raise is housekeeping for its own change, not a rider here.
+
+  **#699 review round 1 absorbed** (7 findings, 1 union-major + 6 minor,
+  all absorbed, none refuted — the major paid out immediately):
+  * *"the re-bless rests on validator evidence and the docs say the
+    validator cannot clear a layout; no meter/sim reading is recorded"* —
+    correct, and the meter run it forced produced #700 above. The fix is
+    the measurement plus a committed exporter, not prose.
+  * *"the fossil PATTERN survives at ~a dozen other call sites in the same
+    file, so 'both fossils killed' overstates coverage"* (3/3 passes) —
+    correct and verified: **14 `cell_composition: Default::default()` and
+    14 `inserter_capacity: 0` literals remain, across 15 distinct tests**
+    (the horizontal-stack tier4/tier5 trio, the four `quality_*`, the six
+    `stacking_*`, `research_l7_thins_output_inserters_s4`,
+    `rfc061_allocation_probe_ac5`). None documents its value as
+    deliberate; every one is a copy of `run_e2e_inner`'s old literal.
+    Not migrated here — each carries its own pins, so flipping them is a
+    second adjudication of this PR's size, not a rider on it. Instead the
+    residual is now PINNED by a non-ignored test
+    (`residual_fossil_literals_are_pinned`) that reads its own source and
+    fails if either count moves, with the reduction direction spelled out.
+    The claim itself is scoped to the `run_e2e` path everywhere it appears.
+  * *"`chosen.last()` is an ordering-dependent oracle"* (2/3) — true. The
+    ordering IS a stated contract (`trace.rs`'s
+    `SelectionCandidateEvaluated` doc: terminals emitted adjacently at the
+    very end, nested selections replayed inside the winner's events) and
+    the #694 census reads the corpus by the same rule, but "stated" is not
+    "checked". Both tests now corroborate across the two INDEPENDENT
+    terminal emitters (`DecompositionChosen` and `SelectionDecided`) and
+    the first also pins the deciding STAGE against #694's row, so a
+    reordering has to break both emitters identically to slip through.
+  * *"`harness_options_are_engine_defaults` is self-referential"* — partly:
+    it compared against the group `Default` impls, a second hand-written
+    copy of the engine defaults. Now compares against
+    `LayoutOptions::default()`'s own views, which is the value the engine
+    ships. (Group-vs-`LayoutOptions` agreement stays #696's
+    `layout_options_group_defaults_match_facade`'s job.)
+  * *"`rfc060_sim_export`'s artifacts silently change with no pin"* — true
+    and worth a warning rather than a pin: the recorded K60-3 numbers were
+    measured on capacity-0 artifacts, so post-2026-08-21 exports are not
+    comparable to them. Stated in the exporter's doc.
+  * The nit *"tier2's warning pin didn't move while its hash did"* is
+    expected, not unexplained: warning pins record a per-category TALLY,
+    and a geometry change that leaves the tally alone leaves the pin alone.
+    Only tier5's tally moved.
+
+  **#699 review round 2 absorbed** (8 findings: 2 major, 6 minor; 6
+  absorbed with code, 2 refuted with receipts):
+  * *(major, 3/3)* **"the suite now permanently endorses a known-broken
+    artifact with no in-suite tripwire — the only guard is prose and an
+    external issue number."** Correct, and the fix is an assertion, not
+    more prose: `tier1_iron_gear_wheel_20s` now PINS its outer selection
+    (`cell-composed` at `best-error-free`) with a message naming #700 and
+    telling whoever moves it — including whoever FIXES #700 — to re-take
+    the meter reading rather than re-bless on greenness. Neither existing
+    assertion could say that: the golden hash's message asks whether the
+    change was intentional, and `assert_produces` reads a static estimate
+    the meter contradicts. Discrimination check executed: restoring the
+    cells fossil fails it with `Some(("native", BestAccepted))` vs
+    `Some(("cell-composed", BestErrorFree))`.
+  * *(major, 2/3)* *"this cements a new baseline that should be treated as
+    provisional until #700 lands"* — agreed, and now literally true: the
+    pin above is what makes it provisional rather than silent.
+  * *(minor, 1/3)* *"`harness_options_are_engine_defaults` only exercises
+    the default path; the four fields the wrappers pass explicitly could
+    go stale unseen."* **The best finding of the round** — the guard did
+    have that hole. Two of the four are HARD LITERALS in every wrapper
+    (`LayoutStrategy::Pooled`, `true`), which is the same fossil shape one
+    level out; the guard now asserts the engine defaults still equal them.
+    The other two (`row_layout`, `surplus_policy`) are passed as
+    `::default()` and follow a flip on their own — stated, so the absence
+    is not read as an oversight.
+  * *(minor, 2/3)* *"the residual pin counts deliberate test vectors as
+    fossils, and its 'lower the number' policy would push someone to
+    convert a deliberate low-capacity behaviour test."* The specific
+    example is shaky (`stacking_refuses_low_inserter_cap`'s refusal
+    predicate names `max_inserter_tier`, not the capacity) but the hazard
+    is real and unaudited. The doc now claims only what was checked — none
+    carries a COMMENT explaining its value, no per-site audit was done —
+    and the guidance is rewritten: decide per site whether the value is
+    load-bearing, document it and lower the count if so, migrate if not,
+    and name the site in the commit either way.
+  * *(minor, 1/3)* *"both re-pinned tests gained a full extra layout pass
+    under wall-clock timeouts on a box this PR itself records flaking at
+    10003 ms."* Correct and cheap: 10 s → 30 s and 30 s → 60 s. Both run
+    in ~0.02 s, so the raised budgets still catch a ~1000x regression.
+  * *(minor, 1/3)* *"`run_e2e_pure_combo` silently breaks its 'pure'
+    contract."* Half right. "Pure" is documented as *the horizontal-stack
+    candidate off*, which is still exactly what it does; `cell-composed`
+    was never part of that contract and was absent by fossil, from the
+    baseline columns AND the `default` column alike. Disabling it in the
+    pure columns only would break the apples-to-apples comparison the
+    sweep exists for, so no override — but the doc now says precisely what
+    "pure" means and warns that `full_knob_sweep` tables from before
+    2026-08-21 are not comparable to ones after.
+  * *(minor, 1/3, REFUTED with an acknowledged residual)* *"a consistent
+    reversal of both terminal emitters sails through the corroboration."*
+    True, and already stated in the test's own comment. Corroboration
+    narrows a failure mode, it does not remove it, and it cannot be
+    removed from a test: the fix is a structural nesting marker in the
+    trace contract, which is Phase 1b/2a's to own. Strengthened as far as
+    a test can go — the STAGE is pinned too, so "read the nested board
+    instead" shows up as a stage mismatch (gear@20's nested board decides
+    at `best-accepted`, the outer at `best-error-free`).
+  * *(nit, REFUTED)* *"nothing re-derives tier5's 10; the answer lives
+    only in the RFC."* The committed warning pin
+    (`tests/goldens/warnings/tier5_processing_unit_from_ore_am3.txt`) is
+    re-derived and asserted on every suite run — that is what
+    `assert_warnings_golden` does. The RFC carries the ADJUDICATION, which
+    is a different artifact from the value.
+  * *(nit, REFUTED)* *"the corpus's `e2e-harness` column keeps generating
+    a baseline for a candidate set nothing ships."* Deliberate and
+    documented: it is the historical record the W2c re-blesses were
+    adjudicated against, and deleting it would re-take 32 cells and
+    destroy the only evidence of what the fossilized suite decided.
+
+  **#699 review rounds 3 and 4 absorbed** (4 + 5 findings; the reviewer
+  states none blocks merge). Three produced real corrections:
+  * *(round 3, minor — a defect this PR introduced)* `parity_corpus.rs`'s
+    `OPTION_SETS` docblock said both things at once: round 1 appended the
+    "both fossils are dead, this column is historical" correction AFTER
+    the pre-W2c hand-verification receipt, leaving two mutually exclusive
+    descriptions of the same label with no way to tell which was current.
+    Restructured — live statement leads, receipt kept behind an explicit
+    SUPERSEDED heading as provenance for the committed cells.
+  * *(round 4, minor, 3/3 — correct, and measured)* The two re-pinned
+    decomposition tests' "two independent terminal emitters corroborate"
+    claim is **vacuous on those fixtures**: both emit exactly ONE
+    `DecompositionChosen` and ONE `SelectionDecided`, because `native`
+    wins and nests nothing — the cell-composed candidate runs and loses,
+    and `run_candidate` truncates a loser's nested block (oracle gap
+    (g)). Verified from a decoded snapshot. The check is kept as a guard
+    that arms itself if a nesting candidate ever wins those fixtures, and
+    the comments now say plainly that today's weight is carried by the
+    STAGE pin and the cell-composed-presence assertion; the fixture where
+    the ordering IS exercised is `tier1_iron_gear_wheel_20s`.
+  * *(round 4, docs-only, 1/3)* The capacity-arm claim "changes no winner
+    and no deciding stage anywhere" was over-broad — corrected above to
+    scope it to the (fixture, machine) pairs the suite runs, since the
+    corpus records two capacity-attributable winner changes at am3.
+  Absorbed as scoping rather than mechanism: the residual-literal guard's
+  reach is now stated as "a textual copy of these two lines cannot be
+  added silently" (not "the fossil cannot come back"), with the
+  `include_str!` binary cost noted; `run_e2e_pure_combo`'s note now
+  covers the inserter ladder as well as the candidate set; the gear@20
+  pin's failure message enumerates all five coupled artifacts. The
+  restated ordering residual and the restated in-suite-tripwire major are
+  answered by the correction above — the armed guard is W1a's tripwire
+  row, which predates this PR.
+
+  **#699 review rounds 5 and 6 absorbed** (6 + 6 findings). Four produced
+  real changes, and one produced the best single detail in the whole
+  campaign so far:
+  * *(round 6, minor, 2/2 — asked as a question, answered with a
+    receipt)* "How does the same layout score `layout_warnings: 1` at
+    selection and 0 at validation?" No contradiction — different fields
+    (`LayoutResult.warnings` is the producer's own list; `validate()`'s
+    issues are the 37 functional checks, which is what the warning golden
+    counts). **But the one entry is the story**: decoded from the
+    snapshot, gear@20's winning cell-composed candidate carries
+    `"cell-composed: geometry NOT sim-verified (hash c5c5f88087df894c) —
+    run spaghettio-sim and add the entry to cell-sim-registry.json"`.
+    RFC-051's own machinery flagged this exact geometry as unverified;
+    `best-error-free` filters on errors and ranks on score with warnings
+    taking no part; and the thing it was not verified for is precisely
+    what the meter measured. That is the sharpest available argument for
+    W2b's severity-aware verdict, and it was sitting in the trace the
+    whole time.
+  * *(round 5, minor, 1/3 — correct, and my own bug class in W2a's file)*
+    `bus/layout.rs`'s legend said "**Zero production callers as of this
+    PR**" about `from_groups`. This PR makes `e2e.rs` the first caller, so
+    the sentence became false in the same diff that falsified it.
+    Replaced with an adoption-status list naming the caller, the two
+    exporters, and what is still open.
+  * *(round 5, major, 3/3, fourth restatement — answered with code, and
+    then that answer's claim was corrected in round 8)*
+    `assert_produces(…, 20.0)` was deleted from
+    `tier1_iron_gear_wheel_20s`. It reads `analysis.throughput_estimates`
+    — a static estimate from the machine count — and asserted "produces
+    20/s" about a layout the meter reads at 15/s: a green assertion
+    saying the opposite of the measurement. Replaced by an inline check of
+    the same number under a message that names it a PLAN check, states the
+    measured 15.0/s and the tripwire row, and says not to read the test
+    passing as delivery. Rejected alternative recorded at the call site:
+    metering in-suite would close a dev-dependency cycle
+    (`spaghettio_meter` → `spaghettio_core`) to duplicate a guard that
+    already exists armed. **Round-8 correction, accepted**: the first
+    wording of this bullet said the false delivery signal was "killed at
+    the call site". It was not — the assertion is still GREEN on the 15/s
+    layout, and nothing in `crates/core`'s suite can fail on delivery
+    because nothing in it measures delivery. What changed is that the
+    suite no longer ASSERTS something false. The honest claim is "the
+    suite no longer says this layout produces 20/s", and it is now written
+    that way both here and at the call site.
+  * *(round 6, minor, 1/2 — correct, and fixed structurally rather than
+    by assertion)* Round 2 had added two guard assertions pinning
+    `LayoutStrategy::Pooled` and `horizontal_candidate == true`, because
+    every `run_e2e*` wrapper spelled those as hard literals. Round 6
+    pointed out that an assertion re-spelling an engine default is itself
+    a second copy of it. So the wrappers were fixed instead: `run_e2e_inner`
+    now takes one `HarnessOptions`, and every wrapper spells only what it
+    deliberately varies (`run_e2e_pure_combo`'s `horizontal_candidate:
+    false` is the sole non-default in any of them), leaving the rest to
+    `HarnessOptions::default()`, which reads the engine's group defaults
+    at runtime. The two assertions were deleted as redundant. **Verified
+    behaviour-neutral**: a full golden+STRESSGOLD fingerprint run before
+    and after the refactor is byte-identical on all 8 + 8 hashes. The
+    stale `#[allow(clippy::too_many_arguments)]` went with the four
+    dropped params.
+  * *(round 5, major, 1/3)* `full_knob_sweep`'s markdown now stamps an
+    "Option-set epoch: post-RFC-070-W2c" banner into the ARTIFACT — these
+    tables get pasted into issues, where a doc comment on
+    `run_e2e_pure_combo` is invisible.
+  * *(round 6, major, 2/2, fifth restatement — REFUTED with a receipt)*
+    "the pin monitors who wins, not whether it delivers, and the meter
+    tripwire never runs under `cargo test -p spaghettio_core`." Both true.
+    The tripwire being opt-in is a **standing project decision with its
+    own recorded reasoning**, not an oversight of this track:
+    `e2e_tripwire.rs`'s "Why report-only stays the default, and this is
+    NOT wired into CI as a gate" — gating a host-cache-relative instrument
+    with no track record repeats #632 B7's mistake, and promoting `check`
+    is named there as future work. Overturning it is not W2c's to do. The
+    residual is real and recorded: a further regression from 15.0 to, say,
+    13.5 would pass every core-suite check. That is an argument for
+    promoting the tripwire, which belongs with whoever owns the gate.
+  * *(round 6, minor, 1/2, REFUTED)* "no fixture-level ancestry is
+    recorded for the non-golden-pinned fixtures." The per-fixture stress
+    deltas ARE recorded above (ec22 5→4, ec23 7→6, ec40 283→235, entity
+    counts on all 8), measured under the new config, with the direction
+    stated and the alarm condition (a category reaching zero) checked and
+    absent.
+
+  **#699 review round 7 absorbed** (7 findings; three were checkable
+  facts and all three checked out — the round paid for itself):
+  * *(major, 1/3 — a defect THIS change introduced)*
+    `scoreboard_strategy_sweep` and `full_knob_sweep` read their
+    `candidate` column with `find_map` from the FRONT of the event
+    stream. A winning candidate that nests replays its inner events
+    first, so from-the-front reports the NESTED winner. Harmless while
+    `run_e2e` pinned `cell_composition: Off` and nothing nested —
+    restoring the candidate makes both sweeps print "native" for exactly
+    the fixtures where cell-composed wins, i.e. the one thing this track
+    is about. Both switched to `.rev().find_map(…)`, matching
+    `parity_corpus.rs` and the re-pinned tests. A stale "Phase 0: always
+    native" comment above one of them went too. **Worth noting as a
+    pattern**: this is the third place in the campaign where the
+    nested-replay ordering has bitten a reader of the event stream
+    (oracle gap (g), the census's last-seven rule, and now these two
+    columns). A structural nesting marker in the trace contract would
+    retire the whole class; Phase 1b/2a owns it.
+  * *(major, 1/3)* "39 functional checks" was stale in two comments this
+    PR added — it is **37**. Verified twice: `CLAUDE.md` says 37 in three
+    places, `validate/mod.rs` dispatches 37 `Box::new` closures.
+  * *(minor, 1/3)* `tier5`'s 2026-08-17 ACCEPTED block still read
+    "input-rate-delivery is unchanged at 13" immediately above the new
+    "13 → 10" adjudication. Rewritten as of-its-date with a pointer — a
+    grep landing on the stale sentence would have read it as current.
+  * *(minor, 1/3, REFUTED with the receipt, and the receipt written
+    down)* "same 12.3 % density is unverified; naive entities/(w·h) gives
+    39 % vs 20 %." `density::score_density(_, (1,1))` normalises to a 1:1
+    SQUARE bounding box and counts filled TILES: `260 filled / 2116` and
+    `169 filled / 1369`, both 12.3 %, printed by the harness on both arms.
+    Now stated at the call site.
+  * *(nit)* `w2c_gear20_meter_export` now ASSERTS 105/148/148 entities and
+    zero issues per arm rather than printing them: its doc table pairs
+    each arm's entity count with a meter reading, so a silently reshaped
+    arm would leave a committed number attached to a different artifact —
+    the exact 105-vs-148 confusion the exporter exists to expose.
+  * *(minor)* The residual guard's blind-spot list gained a spelled-out
+    `CellComposition::Off`; the negative-control asymmetry
+    (`tier3_sulfuric_acid` capacity-invariant while `tier3_plastic_bar`
+    moved) is now marked explicitly UNEXPLAINED, with the plausible
+    bottom-rung story labelled unmeasured and a note not to "fix" either
+    hash on the strength of it.
+
+  **#699 review round 8 absorbed** (single pass; verdict "unusually
+  well-vetted change… no crash or contract violation found", with an
+  explicit verified-clean list covering the wrapper refactor, the
+  `from_groups` field mapping, the re-blesses and the residual counts).
+  Three findings, two of them real:
+  * *(major)* "the false delivery signal was renamed, not killed."
+    **Correct** — the corrected wording is recorded above and at the call
+    site. Nothing in `crates/core`'s suite can fail on delivery; the
+    assertion was relabelled so it stops asserting something false.
+  * *(minor, and the most useful of the round)* the residual gauge was
+    pointed at the wrong shape. It matched exact TRIMMED LINES, so the
+    group-level partial
+    `SearchAxes { cell_composition: Default::default(), ..SearchAxes::default() }`
+    — which `from_groups`, now the *recommended* constructor, makes the
+    likeliest way the fossil returns — slipped through unless rustfmt
+    happened to break it across lines. Rewritten to match non-comment
+    lines CONTAINING either pattern. **Discrimination check executed**: a
+    single-line group partial takes the count 14 → 15. Two second-order
+    fixes fell out of that, and the first is the interesting one: the
+    substring gauge initially read 16/15 because it was **counting its own
+    assertion messages and a provenance banner** — a self-counting gauge
+    is worse than none, since it is wrong in the "looks fine" direction.
+    Needles are now assembled at runtime and the prose spells the fields
+    with `=` instead of `:`.
+  * *(minor)* format fragility of the gauge — already documented, and
+    narrowed rather than removed by the substring form.
+
+  **#699 review round 9** — five findings, four of them verbatim
+  restatements of residuals the code comments they quote already state
+  (the delivery-guard major for the sixth time, the vacuous corroboration,
+  the `#[ignore]`d exporter not running in CI, the gauge being textual not
+  semantic). One correction accepted: the gauge's doc said "raising a
+  count means a new copy of a known trap — don't", which forbids a
+  legitimate case — RFC-049's unresearched world is a valid subject, and a
+  test about it needs the literal. Rewritten: raising is allowed on the
+  record, naming the test and why the value is load-bearing. The point of
+  the gauge is that a copy-paste arrives with a reason attached, not that
+  the count only ever falls.
+
+  **Review rounds closed at 9.** Rounds 1, 5, 7 and 8 each found something
+  real (the missing meter anchor → #700; the stale W2a "zero production
+  callers" claim; two sweeps reading the nested winner; a self-counting
+  gauge). Round 9 produced one doc correction and four restatements, which
+  is the signal that the seam is worked out. The standing residuals — no
+  core-side delivery gate, a textual rather than semantic fossil gauge, an
+  opt-in meter tripwire — are recorded above with their reasons and are
+  not W2c's to close.
 - *2026-08-21 — **Phase 1b built** (#689 track W2b), additively:
   `bus/selection_policy.rs` plus the severity channels on `verdict.rs`.
   Nothing is wired; `select_best_decomposition` is unchanged apart from

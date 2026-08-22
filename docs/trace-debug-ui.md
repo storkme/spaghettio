@@ -82,7 +82,7 @@ doesn't attempt to fully resolve.
 >   `InterRowBand`, `JunctionBlamedSpec`, `JunctionCandidateSolved`,
 >   `JunctionCommitted`, `JunctionGrowthCapped`, `JunctionGrowthIteration`,
 >   `JunctionGrowthStarted`, `JunctionSolved`, `JunctionStrategyAttempt`,
->   `JunctionTemplateRejected`, `JunctionVariantChosen`, `K1ItemEnrolled`,
+>   `JunctionVariantChosen`, `K1ItemEnrolled`,
 >   `LaneConsolidated`, `LaneOrderOptimized`, `LaneRouted`, `LaneSplit`,
 >   `LayoutRetried`, `LumpyShardTap`, `MergeTapFallback`,
 >   `ModuleCapSplitApplied`, `ModulePartitioned`, `ModuleSizeSplitApplied`,
@@ -101,6 +101,21 @@ doesn't attempt to fully resolve.
 >   `grep -oE '^    [A-Z][A-Za-z0-9_]* \{' crates/core/src/trace.rs | sed 's/ {$//' | sort`
 >   — the trailing ` \{` is load-bearing; without it this over-matches
 >   doc-comment text and other 4-space-indented identifiers (107, not 93).
+>
+> **Amendment 2026-08-22 (issue #689/#691, PR #702):** `JunctionTemplateRejected`
+> (listed above at the time, 2026-08-14) is now ABSENT too, for the same
+> reason as `RouteFailure`/`BridgeDropped`: its only emitters
+> (`try_bridge`/`bridge_belt_over_pipe` in the perpendicular-template rung)
+> were deleted as production-unreachable (#687 found it dead on both shapes
+> it handled; #691's census hard-asserted 0 of 111 seeds matched its
+> remaining hypothesis; owner green-lit the deletion on #689) — see
+> `docs/offpath-code-followups.md` G1 for the full evidence trail. The
+> variant itself was deleted per the same #632 A4 precedent this doc already
+> cites, rather than kept declared-but-dark. This subtracts 1 from both the
+> "93 total" and "80 not visualized" counts above; those counts were
+> already independently stale by this point (96 total measured 2026-08-22,
+> not 93 — a separate, older drift this PR does not attempt to fully
+> resolve, same as the table-row drift flagged above).
 
 **Existing UI entry points:**
 - Debug checkbox (`main.ts`) — enables `buildLayoutTraced()` + shows overlay
