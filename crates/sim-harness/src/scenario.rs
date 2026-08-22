@@ -1102,7 +1102,8 @@ script.on_init(function()
   -- engine-side fixture rather than a deduction from the production layout:
   -- force_insert_at gives us known item positions, and can_insert_at tells
   -- us exactly which gaps the game considers admissible for a new item.
-  do
+  if DROP_TRACE or FIXED_WINDOW then
+    do
     local probe_position = {x = storage.offx + DIMS_X + 8,
                             y = storage.offy + DIMS_Y + 8}
     local probe = s.create_entity{name = "express-transport-belt",
@@ -1160,6 +1161,7 @@ script.on_init(function()
       end
       probe.destroy()
     end
+    end
   end
 "#,
     );
@@ -1170,7 +1172,8 @@ script.on_init(function()
   -- the topology in which the production meter still has a lane-phase
   -- mismatch. Keep it outside the pasted layout and destroy it after a few
   -- belt phases; it must never participate in factory measurement.
-  do
+  if DROP_TRACE or FIXED_WINDOW then
+    do
     local px = storage.offx + DIMS_X + 16
     local py = storage.offy + DIMS_Y + 16
     local probe_entities = {}
@@ -1200,6 +1203,7 @@ script.on_init(function()
       }
     else
       for _, b in pairs(probe_entities) do if b.valid then b.destroy() end end
+    end
     end
   end
 "#,
@@ -1541,6 +1545,11 @@ end
 local function pickup_is_machine(entity)
   if entity == nil or not entity.valid then return false end
   local name = entity.name or ""
+  -- Chemical plants, oil refineries, centrifuges, and the other recipe
+  -- buildings all expose the Factorio prototype type
+  -- "assembling-machine". Match that type rather than enumerating names;
+  -- the name fallbacks preserve compatibility with modded prototypes that
+  -- expose a more specific runtime type.
   return entity.type == "assembling-machine" or entity.type == "furnace"
       or string.find(name, "assembling-machine", 1, true) ~= nil
       or string.find(name, "furnace", 1, true) ~= nil
@@ -2150,6 +2159,7 @@ end
 -- measurement run it must stop, because the report's numbers were sampled
 -- at the checkpoints and the kit must not keep mutating the world past the
 -- moment it was measured.
+if TRACE_FORENSICS then
 script.on_nth_tick(1, function(ev)
   if storage.finalized == true then return end
   local s = game.get_surface("lab")
@@ -2199,6 +2209,7 @@ script.on_nth_tick(1, function(ev)
     if PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end
   end
 end)
+end
 
 script.on_nth_tick(60, function(ev)
   if storage.finalized and not KEEP_ALIVE then return end
@@ -2246,7 +2257,7 @@ script.on_nth_tick(60, function(ev)
   if storage.finalized then return end
 
   local s = game.get_surface("lab")
-  if not PICKUP_TRACE_ONLY then sample_drop_probes(s) end
+  if DROP_TRACE or FIXED_WINDOW then sample_drop_probes(s) end
   local stats = game.forces.player.get_item_production_statistics(s)
   local fstats = game.forces.player.get_fluid_production_statistics(s)
   -- Fluid intermediates (mega-cells, RFC-052) live in the fluid
@@ -2605,6 +2616,7 @@ mod tests {
         assert!(lua.contains("storage.pickup_event_trace = {}"));
         assert!(lua.contains("local function sample_pickup_events(s, sample_tick)"));
         assert!(lua.contains("local function pickup_is_transport(entity)"));
+        assert!(lua.contains("return entity.type == \"assembling-machine\" or entity.type == \"furnace\""));
         assert!(lua.contains("pickup_event_inserter_count = storage.pickup_event_inserters"));
         assert!(lua.contains("storage.pickup_event_inserters = nil"));
         assert!(lua.contains("if storage.pickup_event_inserters == nil or #storage.pickup_event_inserters == 0 then"));
@@ -2629,6 +2641,9 @@ mod tests {
         assert!(lua.contains(
             "local TRACE_FORENSICS = PICKUP_TRACE_ONLY or DROP_TRACE or FIXED_WINDOW"
         ));
+        assert!(lua.contains("if DROP_TRACE or FIXED_WINDOW then"));
+        assert!(lua.contains("if TRACE_FORENSICS then\nscript.on_nth_tick(1, function(ev)"));
+        assert!(lua.contains("if DROP_TRACE or FIXED_WINDOW then sample_drop_probes(s) end"));
         assert!(lua.contains("local_position = line_local_position(spec_position)"));
         assert!(lua.contains("return line.can_insert_at(local_position)"));
         assert!(!lua.contains("return line.can_insert_at(position_sample)"));
@@ -2664,6 +2679,18 @@ mod tests {
         assert!(lua.contains("if count_ok then count = stack_count end"));
         assert!(!lua.contains("name = entry.name"));
         assert!(!lua.contains("count = entry.count"));
+    }
+
+    #[test]
+    fn ordinary_runs_do_not_register_forensic_tick_work() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "ordinary".into(), 16, Some(18_000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(lua.contains("local TRACE_FORENSICS = PICKUP_TRACE_ONLY or DROP_TRACE or FIXED_WINDOW"));
+        assert!(lua.contains("local PICKUP_TRACE_ONLY = false"));
+        assert!(lua.contains("local DROP_TRACE = false"));
+        assert!(lua.contains("if TRACE_FORENSICS then\nscript.on_nth_tick(1, function(ev)"));
+        assert!(lua.contains("if DROP_TRACE or FIXED_WINDOW then sample_drop_probes(s) end"));
     }
 
     /// An inspected world must keep being fed after it finalizes.
