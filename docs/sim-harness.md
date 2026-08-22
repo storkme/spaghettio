@@ -173,9 +173,9 @@ factory measurement.
 per-inserter counters for items picked from a belt and delivered into the
 machine, along with the transferred item name, resolved machine recipe, and
 positions. Its transition list is capped for forensic size, but the aggregate
-per-item counters are complete. Both trace channels are emitted as arrays
-sorted by inserter unit number in `sim-state.json`; the live Lua tables remain
-unit-number keyed so sampling stays O(1). Each pickup record also includes
+per-item counters are complete. The trace channels and `drop_probes` are
+emitted as arrays sorted by inserter unit number in `sim-state.json`; the live
+Lua tables remain unit-number keyed so sampling stays O(1). Each pickup record also includes
 `measurement_picked_items` and `measurement_delivered_items`, with matching
 per-item fields, reset at the configured warmup boundary so fixed-window runs
 can be compared directly with meter rates. In `--pickup-trace-only` mode the
@@ -183,11 +183,13 @@ channel samples every tick so fast inserter hand cycles are not skipped;
 ordinary runs retain the lower-cost 60-tick sampling cadence.
 
 On large layouts, `run --pickup-trace-only` keeps this pickup channel while
-skipping the unrelated per-tick drop probes. It is a performance-only
-diagnostic switch: it does not alter the imported world, simulation state,
-measurement counters, or verdict logic. Use it when a long engine-vs-meter
-pickup comparison would otherwise spend its wall-clock budget on drop
-forensics.
+skipping the unrelated drop forensics. The expensive tick-synchronised
+drop-event channel is separately opt-in with `run --drop-trace`; ordinary runs
+retain only the cheaper 60-tick `drop_probes` sample. These are
+performance-only diagnostic switches: they do not alter the imported world,
+simulation state, measurement counters, or verdict logic. Use the trace flags
+only when a focused engine-vs-meter comparison justifies their wall-clock
+cost.
 
 In `--fixed-window` diagnostic mode, the harness also writes the rich
 `sim-state.json` snapshot at the first closed measurement window, before the

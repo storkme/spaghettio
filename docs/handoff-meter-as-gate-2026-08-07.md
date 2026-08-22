@@ -1316,3 +1316,34 @@ The report-only `meter_probe` remains part of the reviewable harness change.
 The branch-specific red probes remain local investigation artifacts and are
 not part of the PR scope; their results are captured above rather than used as
 runtime behavior.
+
+## 44. 2026-08-22 critical PR-feedback fixes
+
+The PR review pass identified three costly or lossy details and they are now
+addressed. Sparse `drop_probes` are materialized through `trace_values` before
+they are written to `sim-state.json`, so numeric inserter keys survive JSON
+serialization as a sorted array. The tick-synchronised drop-event sampler is
+now opt-in via `run --drop-trace`; ordinary runs retain only the cheaper
+60-tick drop probe, while `--pickup-trace-only` remains focused on pickup
+transitions.
+
+The meter also computes turn-feeder flags and forward downstream line paths
+once while building the network. Runtime item handoffs read those cached
+topology results instead of scanning all tiles or allocating a path for every
+drop collision check. This preserves the existing routing behavior while
+removing the avoidable per-item work.
+
+Validation for this pass:
+
+```text
+CARGO_TARGET_DIR=/tmp/fucktorio-meter-clippy cargo clippy --workspace -- -D warnings
+CARGO_TARGET_DIR=/tmp/fucktorio-meter-followup cargo test -q -p spaghettio_meter
+CARGO_TARGET_DIR=/tmp/fucktorio-meter-followup cargo test -q -p spaghettio_sim_harness
+CARGO_TARGET_DIR=/tmp/fucktorio-meter-followup cargo check -q -p spaghettio_meter --examples
+git diff --check
+```
+
+All pass. The remaining advisory nits (turn-lane geometry, exposing splitter
+stats in the top-level report, fixed-window checkpoint edge cases, and serve
+probe cleanup) are separate follow-up candidates rather than blockers for
+these critical fixes.

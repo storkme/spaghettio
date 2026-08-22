@@ -42,6 +42,10 @@ use crate::entity_data::{
 
 const SPLITTER_BLOCK_MEMORY_ITEMS: u8 = 5;
 
+type SplitterMemory = [[Option<(usize, u8)>; 2]; 2];
+type LanePath = Vec<(usize, usize)>;
+type DownstreamLines = [LanePath; 2];
+
 /// Rotate a facing 90° counter-clockwise — the "left" side of a belt
 /// (`factorio-mechanics.md` **B3**: a north-facing belt's left lane is on
 /// its west side).
@@ -165,12 +169,17 @@ pub struct BeltNetwork {
     /// a straight belt keeps its two transport lines independent.
     lane_bases: Vec<[f64; 2]>,
     lane_components: Vec<[usize; 2]>,
+    /// Precomputed forward line paths used by inserter collision checks.
+    downstream_lines: Vec<DownstreamLines>,
+    /// Whether a tile has an orthogonal straight feeder, i.e. is the curved
+    /// leg of a turn-to-sideload merge. This is fixed by topology.
+    turn_feeder: Vec<bool>,
     /// Independent round-robin state for each splitter input lane.
     splitter_toggle: Vec<[bool; 2]>,
     /// Per-half, per-input-lane memory of an output that was blocked. Factorio keeps
     /// up to five items for that side so a transiently blocked output catches
     /// up when it becomes available again (splitter mechanics, 0.3.0).
-    splitter_memory: Vec<[[Option<(usize, u8)>; 2]; 2]>,
+    splitter_memory: Vec<SplitterMemory>,
     /// Report-only routing counters, one record per splitter.
     pub splitter_stats: Vec<SplitterStats>,
     /// Items that left the network at a tile with no downstream, since the
@@ -291,8 +300,8 @@ impl BeltNetwork {
         // colliding with a drop before the merge.  The target tile itself is
         // still handled by the slot projection below, preserving its proven
         // midpoint admission rule.
-        for (downstream_tile, downstream_lane) in
-            self.downstream_line_nodes(tile, far).into_iter().skip(1)
+        for &(downstream_tile, downstream_lane) in
+            self.downstream_line_nodes(tile, far).iter().skip(1)
         {
             let downstream_ref = &self.tiles[downstream_tile];
             let downstream_base = self.lane_bases[downstream_tile][downstream_lane];
@@ -372,11 +381,20 @@ impl BeltNetwork {
         }
     }
 
-    /// Return the forward transport-line nodes reachable from one lane. A
+    /// Return the precomputed forward transport-line nodes reachable from one lane.
+    fn downstream_line_nodes(&self, tile: usize, lane: usize) -> &[(usize, usize)] {
+        self.downstream_lines
+            .get(tile)
+            .and_then(|lanes| lanes.get(lane))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Compute forward transport-line nodes for every tile lane. A
     /// merge intentionally appears only after the two feeder paths converge;
     /// walking backwards through the weak component would incorrectly make
     /// the feeders share a line before that point.
-    fn downstream_line_nodes(&self, tile: usize, lane: usize) -> Vec<(usize, usize)> {
+    fn collect_downstream_line_nodes(&self, tile: usize, lane: usize) -> LanePath {
         let mut out = Vec::new();
         let mut seen: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut stack = vec![(tile, lane)];
@@ -394,6 +412,16 @@ impl BeltNetwork {
             }
         }
         out
+    }
+
+    fn compute_downstream_lines(net: &mut BeltNetwork) {
+        let mut lines = vec![[Vec::new(), Vec::new()]; net.tiles.len()];
+        for (tile, tile_lines) in lines.iter_mut().enumerate() {
+            for (lane, path) in tile_lines.iter_mut().enumerate() {
+                *path = net.collect_downstream_line_nodes(tile, lane);
+            }
+        }
+        net.downstream_lines = lines;
     }
 
     fn downstream_edges(&self, id: usize) -> Vec<Downstream> {
@@ -432,12 +460,12 @@ impl BeltNetwork {
                 // Interior dead end: hold. The lane backs up, which is what
                 // lets it re-compress.
                 None => {}
-                Some(d) => {
-                    if self.try_insert_downstream(id, lane_ix, d, item, offset) {
-                        self.tiles[id].lanes[lane_ix].take_exit_with_offset();
-                    }
-                    // else: downstream full — back up, which is the whole
-                    // mechanism behind re-compression.
+                Some(d) if self.try_insert_downstream(id, lane_ix, d, item, offset) => {
+                    self.tiles[id].lanes[lane_ix].take_exit_with_offset();
+                }
+                Some(_) => {
+                    // Downstream full — back up, which is the whole mechanism
+                    // behind re-compression.
                 }
             }
         }
@@ -463,7 +491,7 @@ impl BeltNetwork {
             LaneMap::Straight => self.tiles[downstream.tile].lanes[target_lane]
                 .try_insert_entry_with_offset(item, offset),
             LaneMap::OntoLane(_) => {
-                let turn_merge = self.has_turn_feeder(source);
+                let turn_merge = self.turn_feeder.get(source).copied().unwrap_or(false);
                 let target = &self.tiles[downstream.tile];
                 let local_position =
                     sideload_position(target.dir, target.pos, self.tiles[source].pos);
@@ -493,15 +521,19 @@ impl BeltNetwork {
         }
     }
 
-    fn has_turn_feeder(&self, tile: usize) -> bool {
-        self.tiles.iter().any(|candidate| {
-            let Some(downstream) = candidate.downstream else {
-                return false;
+    fn compute_turn_feeders(net: &mut BeltNetwork) {
+        let mut turn_feeder = vec![false; net.tiles.len()];
+        for candidate in 0..net.tiles.len() {
+            let Some(downstream) = net.tiles[candidate].downstream else {
+                continue;
             };
-            downstream.tile == tile
-                && matches!(downstream.lanes, LaneMap::Straight)
-                && candidate.dir != self.tiles[tile].dir
-        })
+            if matches!(downstream.lanes, LaneMap::Straight)
+                && net.tiles[candidate].dir != net.tiles[downstream.tile].dir
+            {
+                turn_feeder[downstream.tile] = true;
+            }
+        }
+        net.turn_feeder = turn_feeder;
     }
 
     /// Splitters distribute each input lane independently, preserving lanes
@@ -544,11 +576,11 @@ impl BeltNetwork {
                         placed = true;
                     }
                     None => {}
-                    Some(d) => {
-                        if self.try_insert_downstream(id, lane_ix, d, item, offset) {
-                            self.tiles[id].lanes[lane_ix].take_exit_with_offset();
-                            placed = true;
-                        }
+                    Some(d) if self.try_insert_downstream(id, lane_ix, d, item, offset) => {
+                        self.tiles[id].lanes[lane_ix].take_exit_with_offset();
+                        placed = true;
+                    }
+                    Some(_) => {
                     }
                 }
                 if !placed && probe == 0 {
@@ -721,6 +753,8 @@ impl NetworkBuilder {
 
         // --- 3. Downstream links -------------------------------------------
         Self::link_downstream(&mut net);
+        BeltNetwork::compute_turn_feeders(&mut net);
+        BeltNetwork::compute_downstream_lines(&mut net);
         Self::configure_inner_turn_merge_lanes(&mut net);
 
         // --- 4. Update order ------------------------------------------------

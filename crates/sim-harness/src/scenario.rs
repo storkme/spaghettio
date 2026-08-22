@@ -227,6 +227,11 @@ pub struct RunParams {
     /// long engine-vs-meter pickup comparison on large layouts; it changes
     /// no simulation state or measurement counters.
     pub pickup_trace_only: bool,
+    /// Diagnostic mode: enable the expensive tick-synchronised belt-drop
+    /// transition trace. Ordinary runs keep the cheaper 60-tick drop probe;
+    /// this channel is opt-in because it queries every transport inserter on
+    /// every game tick.
+    pub drop_trace: bool,
     /// `serve` only: keep the boundary kit ALIVE after the scenario
     /// finalizes, so an inspected world keeps running instead of dying
     /// under the operator.
@@ -293,6 +298,7 @@ impl RunParams {
             operator_qol: false,
             write_timeseries: false,
             pickup_trace_only: false,
+            drop_trace: false,
             keep_alive: false,
         }
     }
@@ -314,6 +320,13 @@ impl RunParams {
     /// [`RunParams::pickup_trace_only`].
     pub fn with_pickup_trace_only(mut self) -> RunParams {
         self.pickup_trace_only = true;
+        self
+    }
+
+    /// Enable the tick-synchronised belt-drop transition trace. See
+    /// [`RunParams::drop_trace`].
+    pub fn with_drop_trace(mut self) -> RunParams {
+        self.drop_trace = true;
         self
     }
 
@@ -778,6 +791,7 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     );
     let _ = writeln!(out, "local KEEP_ALIVE = {}", params.keep_alive);
     let _ = writeln!(out, "local PICKUP_TRACE_ONLY = {}", params.pickup_trace_only);
+    let _ = writeln!(out, "local DROP_TRACE = {}", params.drop_trace);
     let _ = writeln!(out, "local STABILITY_TOL = {STABILITY_TOLERANCE}");
     let _ = writeln!(out, "local STABILITY_WINDOWS = {STABILITY_WINDOWS}");
     let _ = writeln!(
@@ -1886,7 +1900,7 @@ local function dump_sim_state(s)
     offx = storage.offx, offy = storage.offy, fed = storage.fed_total,
     belts = belts, belt_positions = belt_positions,
     machines = machines, inserters = inserters,
-    inserter_trace = inserter_trace, drop_probes = storage.drop_probes,
+    inserter_trace = inserter_trace, drop_probes = trace_values(storage.drop_probes),
     drop_event_inserter_count = storage.drop_event_inserters and #storage.drop_event_inserters or 0,
     pickup_event_inserter_count = storage.pickup_event_inserters and #storage.pickup_event_inserters or 0,
     drop_event_trace = trace_values(storage.drop_event_trace),
@@ -2136,7 +2150,7 @@ script.on_nth_tick(1, function(ev)
         storage.curve_sideload_probe = nil
       end
     end
-    if not PICKUP_TRACE_ONLY then sample_drop_events(s) end
+    if DROP_TRACE then sample_drop_events(s) end
     -- Pickup-only runs pay for this channel at tick resolution so a fast
     -- inserter cannot complete a whole hand cycle between samples. Ordinary
     -- runs keep the cheaper 60-tick sampling below.
@@ -2454,6 +2468,7 @@ mod tests {
             operator_qol: false,
             write_timeseries: false,
             pickup_trace_only: false,
+            drop_trace: false,
             keep_alive: false,
         }
         .with_warmup(216_001);
@@ -2553,15 +2568,20 @@ mod tests {
         assert!(lua.contains("storage.pickup_event_inserters = nil"));
         assert!(lua.contains("if storage.pickup_event_inserters == nil or #storage.pickup_event_inserters == 0 then"));
         assert!(lua.contains("local function trace_values(trace)"));
+        assert!(lua.contains("drop_probes = trace_values(storage.drop_probes)"));
         assert!(lua.contains("drop_event_trace = trace_values(storage.drop_event_trace)"));
         assert!(lua.contains("pickup_event_trace = trace_values(storage.pickup_event_trace)"));
         assert!(lua.contains("storage.pickup_event_previous_item = {}"));
         assert!(lua.contains("item_rec.delivered_items = item_rec.delivered_items + delivered"));
         assert!(lua.contains("measurement_delivered_items = 0"));
         assert!(lua.contains("sample_tick >= WARMUP_TICKS"));
+        assert!(lua.contains("if DROP_TRACE then sample_drop_events(s) end"));
         assert!(lua.contains("if PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end"));
         assert!(lua.contains("if not PICKUP_TRACE_ONLY then sample_pickup_events(s, ev.tick) end"));
         assert!(lua.contains("local PICKUP_TRACE_ONLY = false"));
+        assert!(lua.contains("local DROP_TRACE = false"));
+        let drop_trace_lua = build_control_lua(&m, "0eNBPFAKE", &params.with_drop_trace());
+        assert!(drop_trace_lua.contains("local DROP_TRACE = true"));
     }
 
     /// An inspected world must keep being fed after it finalizes.

@@ -53,7 +53,7 @@ USAGE:
                       [--warmup N] [--window N] [--fixed-window]
                       [--out report.json] [--timeout-secs N]
                       [--meter [--meter-warmup N] [--meter-window N]]
-                      [--pickup-trace-only]
+                      [--pickup-trace-only] [--drop-trace]
   spaghettio-sim serve --bp <file> --manifest <file> [--port 34197] [--speed 1]
                         [--warmup N]
   spaghettio-sim check-data
@@ -241,6 +241,9 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     }
     if has_flag(args, "--pickup-trace-only") {
         params = params.with_pickup_trace_only();
+    }
+    if has_flag(args, "--drop-trace") {
+        params = params.with_drop_trace();
     }
     let meter = has_flag(args, "--meter").then(|| {
         println!(
