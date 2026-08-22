@@ -256,3 +256,18 @@ Follows CLAUDE.md's
   avoidance so pipes don't land on belt feeder corner tiles.
   Tracked via the `#[ignore]`'d
   `pipe_belt_processing_unit_1s_routes` regression test.*
+- *2026-08-22 — CLOSED (deletion). Phase 2's `solve_perpendicular_template`
+  + `bridge_belt_over_pipe` shipped and ran for a time, but the offpath
+  audit campaign (#675/#687/#691) later found production dispatch had
+  since moved to filtering pipe specs out of junction seeding entirely
+  (`keys_at_tile` — pipes participate as forbidden tiles only, and SAT
+  bypasses them as obstacles), so a live pipe×belt crossing never again
+  reached this RFC's code as a two-spec case; the 2-spec admission
+  predicate this design relied on could no longer be satisfied from
+  production. #691's census confirmed zero reachable instances across a
+  12-fixture corpus. Owner green-lit removal on #689; deleted in PR #702
+  (parity-baseline byte-identity across 160 cells confirms the removal
+  changed no shipped output). Full trail: `docs/offpath-code-followups.md`
+  G1. This RFC's design is no longer live code — kept here as the
+  historical record of why it was built and how it later stopped being
+  reachable, not as a description of current behavior.*
