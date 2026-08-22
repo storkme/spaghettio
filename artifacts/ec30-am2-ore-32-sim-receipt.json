@@ -1,0 +1,42 @@
+{
+  "label": "ec30-am2-ore-32",
+  "game_version": "2.0.77",
+  "command": "cargo run -p spaghettio_sim_harness -- run --bp bp.txt --manifest manifest-real.json --warmup 432000 --speed 32",
+  "source_export": {
+    "blueprint_sha256": "2611ffca1d140c8a2a677f8f7434edede584e3d3bfd7135c797eca20be9d1900",
+    "manifest_sha256": "cbd470cd28047bec226c75e906043380dd33abacfb46cfceea5ef672238d312e"
+  },
+  "full_report_sha256": "52b261adf4a73673d88bedf18e7b702f6c2b8fa14a3a7e334be2a542f4c23a19",
+  "run": {
+    "warmup_ticks": 432000,
+    "speed": 32,
+    "final_tick": 433980,
+    "converged": true,
+    "drift_pct": 0.6309148264984283
+  },
+  "layout": {
+    "entities": 2071,
+    "ghosts_revived": 2071,
+    "machine_census": {
+      "working": 161,
+      "full_output": 6,
+      "ingredient_shortage": 3
+    },
+    "validator_warnings": {
+      "input-rate-delivery": 7,
+      "belt-detour": 1,
+      "row-input-belt-margin": 1
+    },
+    "overall_verdict": "WARN"
+  },
+  "target": {
+    "item": "electronic-circuit",
+    "planned_per_second": 30.0,
+    "produced_per_second": 28.90909090909091,
+    "delivered_per_second": 29.09090909090909,
+    "produced_delta_pct": -3.6363636363636336,
+    "delivered_delta_pct": -3.0303030303030334,
+    "sim_anchored_fraction_of_plan": 0.9696969696969697
+  },
+  "note": "The report is a measurement of a layout carrying validator warnings; it does not claim the balancer or shipped-default path is fixed."
+}
