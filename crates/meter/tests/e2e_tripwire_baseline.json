@@ -26,22 +26,22 @@
       "label": "plastic5-chem-crude",
       "target": "plastic-bar",
       "entities": 153,
-      "deficit_pct": 0.8888888888885615,
-      "converged": false
+      "deficit_pct": -3.219646771412954e-13,
+      "converged": true
     },
     {
       "label": "ac5-am2-ore",
       "target": "advanced-circuit",
       "entities": 2134,
-      "deficit_pct": -0.22222222222222365,
+      "deficit_pct": 0.22222222222221255,
       "converged": true
     },
     {
       "label": "pu2-am3-ore",
       "target": "processing-unit",
       "entities": 5531,
-      "deficit_pct": -8.05555555555556,
-      "converged": true
+      "deficit_pct": -6.666666666666665,
+      "converged": false
     },
     {
       "label": "gear10-am2-ore",
@@ -54,7 +54,7 @@
       "label": "gear20-am2-plate",
       "target": "iron-gear-wheel",
       "entities": 105,
-      "deficit_pct": -25.0,
+      "deficit_pct": 0.0,
       "converged": true
     },
     {
@@ -68,7 +68,7 @@
       "label": "ec20-am2-ore",
       "target": "electronic-circuit",
       "entities": 1372,
-      "deficit_pct": 0.0,
+      "deficit_pct": -0.38888888888889417,
       "converged": true
     },
     {

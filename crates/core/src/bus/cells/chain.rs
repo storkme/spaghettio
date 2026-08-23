@@ -855,6 +855,11 @@ pub fn compose_chain_with_capacity(
     }
 
     let mut entities: Vec<PlacedEntity> = Vec::new();
+    // Producer warnings the composed result carries (#715 review round 3:
+    // a ceiling recorded only in a comment is invisible to selection and
+    // to the web app; a warning is countable by the layout-warnings floor
+    // and readable by a user).
+    let mut chain_warnings: Vec<String> = Vec::new();
     let mut b_in: Vec<BoundaryRecord> = Vec::new();
     let mut b_out: Vec<BoundaryRecord> = Vec::new();
     let mut surplus_exits: Vec<(String, i32, i32)> = Vec::new();
@@ -1318,16 +1323,23 @@ pub fn compose_chain_with_capacity(
                     // path — a b_out mid-layout leaves a dead-end belt
                     // (the exemption is bounds-based) and puts the sim
                     // rig at a nonuniform depth (#363).
+                    //
+                    // Express, matching the corridor convention: this
+                    // mega-output's own rate is not in scope here, and a
+                    // hardcoded yellow is the same 15/s ceiling that
+                    // capped gear@20 at 75% on the final-product path
+                    // (#700). Over-tiering an export drain costs
+                    // nothing; under-tiering silently caps the chain.
                     let seg = format!("out:{}", p.seg);
                     router.vcol(&mut entities, dx0, dy0 + 1, drain_row, &d_item,
-                        "transport-belt", "underground-belt", &seg);
+                        "express-transport-belt", "express-underground-belt", &seg);
                     b_out.push(BoundaryRecord {
                         item: d_item.clone(),
                         x: dx0,
                         y: drain_row,
                         direction: EntityDirection::South,
                         is_fluid: false,
-                        entity: "transport-belt".into(),
+                        entity: "express-transport-belt".into(),
                     });
                     continue;
                 };
@@ -1379,28 +1391,74 @@ pub fn compose_chain_with_capacity(
         let outs: Vec<&Port> = p.cell.ports.iter().filter(|q| !q.inbound).collect();
         if consumers.is_empty() {
             // Final product: corner south past the band, drain record.
+            //
+            // The drain tier is chosen FOR THE PLANNED RATE, not hardcoded.
+            // A hardcoded "transport-belt" here capped the whole chain at
+            // 15/s regardless of plan — gear@20's shipped 75% (#700) was
+            // six yellow exit tiles on a 20/s product, meter-verified
+            // (patching exactly those tiles to fast measures 20.0/20.0,
+            // all 8 machines working).
+            //
+            // Rate semantics (#715 review round 2 corrected the wording):
+            // `outputs[0].rate * count` with NO `scale` factor is the FULL
+            // chain rate (the per-copy share is `* scale` — see the cell
+            // build above). Drains are PER-COPY and disjoint, so at K>1
+            // each copy's drain is over-tiered by up to K× — deliberately:
+            // over-tiering costs a belt tier, under-tiering caps the
+            // chain. Anyone optimizing this to `* scale` must prove the
+            // kq used here matches the placed copies. Known ceiling, out
+            // of scope here: `belt_entity_for_rate` tops out at express,
+            // so a single-column drain caps at 45/s and a plan above that
+            // would under-deliver at the exit — no corpus fixture ships a
+            // >45/s single solid product today, and no K>1 fixture has an
+            // exit above 15/s, so both arms are recorded follow-ups
+            // rather than tested behaviour (RFC-071 decision log).
+            let spec = &specs[pi % n];
+            let drain_rate = spec.outputs[0].rate * spec.count as f64;
+            let drain_belt = crate::common::belt_entity_for_rate(drain_rate, None);
+            // The tier ladder tops out at express: a single-column drain
+            // caps at 45/s, and a plan above that would under-deliver at
+            // the exit — the same class this fix kills at 15/s, one tier
+            // up, and reachable from the web app with an arbitrary rate.
+            // Loud, not silent (#715 review round 3, 3/3): the warning
+            // rides LayoutResult.warnings, where selection's
+            // layout-warnings floor counts it and a user can read it.
+            let drain_cap = crate::common::belt_throughput(drain_belt);
+            if drain_rate > drain_cap {
+                chain_warnings.push(format!(
+                    "cell chain exit for {} carries {drain_rate:.1}/s on a single {} \
+                     column capped at {drain_cap:.0}/s — the drain under-delivers; \
+                     no single-belt tier can carry this plan",
+                    out_item, drain_belt
+                ));
+            }
+            let drain_ug = match drain_belt {
+                "express-transport-belt" => "express-underground-belt",
+                "fast-transport-belt" => "fast-underground-belt",
+                _ => "underground-belt",
+            };
             let o1 = outs.first().ok_or_else(|| format!("cells: {} has no out port", p.recipe))?;
             let (ox, oy) = port_abs(o1, p.x, p.y_off);
             let drain_x = ox + 2;
             let seg = format!("out:{}", p.seg);
             router.hrow(&mut entities, oy, ox + 1, drain_x - 1, &out_item,
-                "transport-belt", "underground-belt", &seg);
+                drain_belt, drain_ug, &seg);
             router.occ.insert((drain_x, oy));
             entities.push(PlacedEntity {
-                name: "transport-belt".into(), x: drain_x, y: oy,
+                name: drain_belt.into(), x: drain_x, y: oy,
                 direction: EntityDirection::South,
                 carries: Some(out_item.clone()),
                 segment_id: Some(seg.clone()), ..Default::default()
             });
             router.vcol(&mut entities, drain_x, oy + 1, drain_row, &out_item,
-                "transport-belt", "underground-belt", &seg);
+                drain_belt, drain_ug, &seg);
             b_out.push(BoundaryRecord {
                 item: out_item.clone(),
                 x: drain_x,
                 y: drain_row,
                 direction: EntityDirection::South,
                 is_fluid: false,
-                entity: "transport-belt".into(),
+                entity: drain_belt.into(),
             });
             continue;
         }
@@ -1648,6 +1706,7 @@ pub fn compose_chain_with_capacity(
         entities,
         width,
         height,
+        warnings: chain_warnings,
         stacking: 1,
         // Declared axes travel with the rebuilt result (a rebuilt
         // LayoutResult must re-declare stacking/productivity/capacity).

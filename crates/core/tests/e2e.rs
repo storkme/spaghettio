@@ -948,7 +948,12 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // contradicts. Do not read this fixture's greenness as delivery.
     // Reproduce with the `w2c_gear20_meter_export` exporter at the bottom
     // of this file.
-    ("tier1_iron_gear_wheel_20s", "8ab74dc08c91cd8d13faf0a376c0c3eabe9b21df3a80f3b5a3768f89371d794c"),
+    // 2026-08-23 (#715): re-blessed for the chain-drain re-tier — six exit
+    // tiles renamed transport-belt -> fast-transport-belt on the shipped
+    // cell-composed winner (the fix that takes gear@20 from 75% to plan;
+    // sim PASS 20.0/20.0). Intentional layout change; geometry otherwise
+    // identical (verified by decoded-bp diff).
+    ("tier1_iron_gear_wheel_20s", "8566f53f1722973129e6947f098acb3e926e3fa6a59570f88758c9a1dd7c5c0b"),
     // Updated when `(m, m)` family balancers became passthroughs
     // (issue #268) — splitter blocks replaced by a single south-facing
     // belt per output column.
@@ -1566,30 +1571,31 @@ fn tier1_iron_gear_wheel_20s() {
     assert_eq!(
         outer.as_ref().map(|(w, s)| (w.as_str(), *s)),
         Some(("cell-composed", spaghettio_core::trace::SelectionStage::BestErrorFree)),
-        "tier1_iron_gear_wheel_20s pins a KNOWN UNDER-DELIVERING winner (#700): \
-         `cell-composed` at `best-error-free`, metered at 15.0/s against a 20.0/s \
-         plan while both native arms meter 21.0/s. If this assertion just failed, \
-         the selection moved — if that is #700 being fixed: (1) re-take the meter \
-         reading with `w2c_gear20_meter_export` at the bottom of this file, \
-         (2) update #700 with it, (3) update THIS pin, (4) re-bless the fixture's \
-         GOLDEN HASH (and its warning pin, if the tally moved), and (5) re-bless \
-         the meter tripwire's `gear20-am2-plate` row, which is the ARMED guard \
-         on the deficit (crates/meter/tests/e2e_tripwire_baseline.json, currently \
-         entities 105 / -25.0%). Those five are the coupled artifacts; nothing \
-         else is. Do NOT re-bless on validator greenness alone: that is exactly \
-         what hid this for a month. got {outer:?}",
+        "tier1_iron_gear_wheel_20s pins the FIXED #700 winner (2026-08-23, #715): \
+         `cell-composed` at `best-error-free`, which shipped at 75% of plan for a \
+         month (six yellow chain-drain exit tiles capping a 20/s product at 15/s) \
+         and now measures AT PLAN — meter 20.0/20.0 and Factorio sim PASS \
+         20.0/20.0 produced AND delivered, converged, kit-clean. If this \
+         assertion just failed, the selection moved again; the coupled artifacts \
+         are the same five as the original #700 re-bless: (1) the meter reading \
+         via `w2c_gear20_meter_export` at the bottom of this file, (2) #700, \
+         (3) THIS pin, (4) the fixture's GOLDEN HASH (+ warning pin if the tally \
+         moved), and (5) the meter tripwire's `gear20-am2-plate` row \
+         (crates/meter/tests/e2e_tripwire_baseline.json, currently entities 105 \
+         / 0.0% since the #715 re-bless). Do NOT re-bless on validator greenness \
+         alone: this fixture also demonstrated a 313-error layout outdelivering \
+         a 4-error one — the meter and sim are the arbiters here. got {outer:?}",
     );
     assert_warnings_golden(&result, "tier1_iron_gear_wheel_20s");
 
     // NOT `assert_produces` (#699 review round 5, 3/3). That helper reads
     // `analysis.throughput_estimates` — a static estimate derived from the
-    // machine count, not a measurement — and on THIS fixture it says 20/s
-    // about a layout the meter reads at 15/s. Calling it here would leave
-    // a green "produces 20/s" assertion standing next to a known 25%
-    // deficit, which is the exact "the suite is green so the engine
-    // delivers" inference this PR exists to break. So the estimate is
-    // still checked (it is the plan, and a plan regression is worth
-    // catching) but under a name and a message that say what it is.
+    // machine count, not a measurement — and on this fixture it spent a
+    // month saying 20/s about a layout the meter read at 15/s (fixed
+    // 2026-08-23, #715: the meter and sim now agree with the estimate at
+    // 20.0/20.0). The estimate-vs-measurement distinction stands: the
+    // estimate is still checked (it is the plan, and a plan regression is
+    // worth catching) but under a name and a message that say what it is.
     //
     // **Be precise about what that bought** (#699 round 8, and it was
     // right to press): this assertion is still GREEN on the 15/s layout.
@@ -1607,9 +1613,10 @@ fn tier1_iron_gear_wheel_20s() {
     // metering in-suite. `spaghettio_meter` depends on `spaghettio_core`,
     // so a dev-dependency back would close a cycle and drag the meter into
     // every `cargo test -p spaghettio_core`; and the meter's own tripwire
-    // ALREADY carries this fixture armed (`gear20-am2-plate`, -25.0%,
-    // entities 105). Duplicating it here would add a second, weaker copy
-    // of a guard that exists, not a new guard.
+    // ALREADY carries this fixture armed (`gear20-am2-plate` — 0.0% since
+    // the #715 re-bless; it spent a month armed at -25.0%). Duplicating it
+    // here would add a second, weaker copy of a guard that exists, not a
+    // new guard.
     let estimated = result
         .analysis
         .throughput_estimates
@@ -1619,10 +1626,11 @@ fn tier1_iron_gear_wheel_20s() {
     assert!(
         estimated >= 20.0 * 0.99,
         "PLAN check only — this is `analysis.throughput_estimates`, not delivery. \
-         Expected the plan to still be >=20/s, got {estimated:.1}/s. The MEASURED \
-         rate for this fixture is 15.0/s (meter tripwire `gear20-am2-plate`, \
-         -25.0%, #700); do not read this assertion, or this test passing, as \
-         evidence that the layout delivers 20/s.",
+         Expected the plan to still be >=20/s, got {estimated:.1}/s. The measured \
+         rate is tracked by the meter tripwire (`gear20-am2-plate`: 20.0/20.0, \
+         0.0% since the #715 drain fix; it read 15.0/s, -25.0%, for the month \
+         #700 was open); this assertion is still only the plan, never delivery \
+         evidence.",
     );
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_20s");

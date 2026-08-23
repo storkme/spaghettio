@@ -114,6 +114,13 @@ pub fn compose_plastic_calibrated() -> (crate::models::SolverResult, LayoutResul
     b_in.push(BoundaryRecord { item: "petroleum-gas".into(), x: pt_x, y: 0,
         direction: EntityDirection::South, is_fluid: true, entity: "pipe".into() });
     // Output: corner South to the bottom edge.
+    //
+    // Hardcoded yellow — the SAME class as the chain drain #715 fixed
+    // (a 15/s ceiling under whatever the plan needs), but this path is a
+    // calibration-fixture composer only (never production-shipped), and
+    // its fixtures plan ≤ 15/s solids today, so yellow is currently
+    // exact. Recorded rather than silently left: rate-tier this like
+    // `chain.rs`'s final drain before any fixture here plans past 15/s.
     let out = cell.ports.iter().find(|p| !p.inbound).unwrap();
     let (ox, oy) = (cx + out.x + 1, cy + out.y);
     let bottom = oy + 4;
