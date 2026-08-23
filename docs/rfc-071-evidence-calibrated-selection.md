@@ -146,3 +146,38 @@ its own PR(s) under the ~400-line norm.
   windows; ac45/ec40 accepted as measured-broken data): the owner delegated
   the call ("follow your judgement"); revisit only if B1 shows the four are
   not actually cheap.*
+- *2026-08-23 — A1 implemented, hardened (only pure-productivity techs are
+  un-researched; a tech carrying any other effect is refused loudly) and
+  sim-anchored twice on live-bank blueprints: tier3_plastic_bar shows the
+  pin working (kit_errors [], realized plastic productivity 0 vs the
+  campaign run's 0.1 + parity error — its own 0/s non-convergence is
+  byte-identical pre/post-pin: a pre-existing validator-clean defect, held
+  for post-A2 triage) and tier4_advanced_circuit_from_plates shows a
+  healthy fixture unperturbed (converged, kit-clean, PASS, 100.3%/101.7%).
+  PR #714.*
+- *2026-08-23 — B1 landed as PR #713 (probe + joiner + first table, 33/35
+  reports at join time; 35/35 rebuilt-blueprint hashes matched the bank).
+  K71-1 direction positive on the draft table: route-severing categories
+  (belt-dead-end, belt-flow-path, belt-flow-reachability,
+  orphan-belt-segment, unresolved-junction) appear ONLY on broken rows;
+  input-rate-delivery and row-input-belt-margin straddle shortfall and
+  at-plan rows (the weighting targets). Headline: tier1_iron_gear_wheel_20s
+  sims at 76.0% delivered with a fully clean validator sheet — the Factorio
+  confirmation of #700's meter 75%. Formal K71-1 adjudication waits for the
+  post-A2 regeneration.*
+- *2026-08-23 — B4 attempt 1 (Codex, stopped at its stop condition, recorded
+  on #700): removing the filler yields a true B11 curve but single-lane
+  starves the output run (~11.4/s vs 7.5/s lane cap); the bridge is the
+  template's only lane-rebalance for I5 far-lane drops. Meter unchanged
+  15.0/20.0 on both attempts; nothing committed. Reclassified from bounded
+  fix to lead design work on the output-run lane loading.*
+- *2026-08-23 — A2 launched: bank forked to
+  /tmp/calibration-matrix-2026-08-23-pinned (blueprints hash-identical to
+  the engine at 0c7bc637, receipt on #710), the 9 parity-contaminated
+  reports replaced — 2 by the A1 anchors, 7 re-measuring under the frozen
+  pinned harness binary (7da4d90d). Uranium rows arrive from the owner's
+  still-running campaign.*
+- *2026-08-23 — process note: #711/#712/#713/#714 all have their required
+  second-opinion review failing on an OpenRouter 402 (key credit
+  exhaustion); merges queue on the owner's key/balance fix, then the failed
+  workflow runs get re-run. No unrequire without the owner's word.*
