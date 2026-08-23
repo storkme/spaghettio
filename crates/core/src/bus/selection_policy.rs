@@ -202,11 +202,15 @@ pub struct IssueProfile {
     pub counts: Option<IssueCounts>,
     pub kinds: Option<ErrorKindCounts>,
     /// RFC-071 B3: the produced layout's own warnings carry the RFC-051
-    /// registry's never-verified note
-    /// ([`SelectionPolicy::unverified_geometry_substring`]). Measured on
-    /// the shipping path for every produced candidate; `false` for
-    /// non-produced profiles and for layouts whose geometry is verified
-    /// in any declared world.
+    /// registry's NEVER-VERIFIED note
+    /// ([`SelectionPolicy::unverified_geometry_substring`]). Precision
+    /// (#717 review round 2): `true` means exactly "carries the
+    /// never-verified note" — nothing more. Only cell-composed layouts
+    /// carry verification notes at all, so every other candidate reads
+    /// `false` by default; `false` therefore means "not flagged", NOT
+    /// "sim-verified". The ordering this feeds is deliberately
+    /// one-sided: it demotes flagged candidates, it does not certify
+    /// unflagged ones.
     pub unverified_geometry: bool,
 }
 

@@ -1463,6 +1463,14 @@ pub enum TraceEvent {
         /// which is truthful: nothing measured the class then.
         #[serde(default)]
         route_severed_errors: Option<usize>,
+        /// RFC-071 B3 (#717 review round 2): the verification standing
+        /// the best-error-free ordering ranks on — a decision-serving
+        /// projection like every other field here; a row-replay that
+        /// defaulted it to false would reconstruct the OPPOSITE of the
+        /// shipped #700 rule. `serde(default)` keeps pre-B3 snapshots
+        /// decoding (absent = false = the pre-B3 world, truthfully).
+        #[serde(default)]
+        unverified_geometry: bool,
     },
     SelectionDecided {
         winner: String,

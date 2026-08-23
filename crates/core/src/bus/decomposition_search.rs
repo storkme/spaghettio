@@ -1232,10 +1232,11 @@ impl Scoreboard {
     /// the registry's never-verified note. Recorded from the shipping
     /// loop (the policy's substring is in scope there), like the kind
     /// classes — a policy field only the measure path read would be the
-    /// decorative-table class again. Set-once via `|=`: one site records
-    /// it today, and a bool has no `None` to guard, so sticky-true is
-    /// the first-write-wins analogue (a later site cannot quietly clear
-    /// an observed flag).
+    /// decorative-table class again. `|=` so a later caller cannot
+    /// quietly CLEAR an observed flag; one site calls this today, so the
+    /// discipline is aspiration, not exercised behaviour (#717 round 2)
+    /// — a second measuring site must decide sticky-vs-refresh
+    /// deliberately when it appears.
     fn record_unverified(&mut self, idx: usize, unverified: bool) {
         self.0[idx].unverified |= unverified;
     }
@@ -1293,6 +1294,7 @@ impl Scoreboard {
                 route_severed_errors: row.kinds.map(|k| k.route_severed),
                 starvation_errors: row.kinds.map(|k| k.starvation),
                 structural_errors: row.kinds.map(|k| k.structural),
+                unverified_geometry: row.unverified,
             });
         }
     }
@@ -2114,7 +2116,61 @@ mod tests {
         );
         assert!(
             profiles[1..].iter().all(|p| !p.unverified_geometry),
-            "non-produced rows stay verified-standing by default"
+            "non-produced rows stay unflagged by default"
+        );
+    }
+
+    /// The verified direction (#717 round 2): a produced layout whose
+    /// note is one of the VERIFIED tiers must map to
+    /// `unverified_geometry: false` — the gear@20-keeps-its-win half of
+    /// the rule, otherwise guarded only by the full e2e fixture.
+    #[test]
+    fn verified_note_maps_to_unflagged_profile() {
+        let mut layout = empty_layout();
+        // Labelled transcription of `verification_note`'s full-match arm
+        // (the real arm needs a registry-hash collision to render).
+        layout.warnings.push(
+            "cell-composed: geometry SIM-VERIFIED at plan (spaghettio-sim gear20 cells-on — \
+             PASS produced 20.00/s at declared capacity 2, 2026-08-23)"
+                .into(),
+        );
+        let produced_run = CandidateRun {
+            name: CANDIDATE_ORDER[0],
+            outcome: Some((
+                layout,
+                CandidateScore {
+                    score: 1.0,
+                    density: 0.1,
+                    entity_count: 1,
+                    overproduction: 0.0,
+                    accepted: true,
+                    accepted_reason: None,
+                },
+            )),
+            events: Vec::new(),
+            error: None,
+            panicked: false,
+        };
+        let rest: Vec<CandidateRun> = CANDIDATE_ORDER
+            .iter()
+            .skip(1)
+            .map(|n| CandidateRun::skipped(n))
+            .collect();
+        let runs: [&CandidateRun; 7] = [
+            &produced_run,
+            &rest[0],
+            &rest[1],
+            &rest[2],
+            &rest[3],
+            &rest[4],
+            &rest[5],
+        ];
+        let mut board = Scoreboard::from_runs(runs);
+        let policy = selection_policy::SelectionPolicy::current();
+        board.record_geometry_verification(&runs, policy.unverified_geometry_substring);
+        assert!(
+            !board.v2_profiles()[0].unverified_geometry,
+            "a verified-tier note must not flag the profile"
         );
     }
 }
