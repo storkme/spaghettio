@@ -2,7 +2,7 @@
 
 Source bank: `/tmp/calibration-matrix-2026-08-23-pinned`. Validator probe: `crates/core/target/calibration-issue-breakdown-2026-08-23.json`.
 
-Status preserves campaign state: `awaiting-measurement` has no `report.json`; `non-converged` and `kit-error` retain their measured values but are excluded from the clean-row findings; `excluded` is a rebuilt-blueprint SHA-256 mismatch.
+Status preserves campaign state: `awaiting-measurement` has no `report.json`; `non-converged` and `kit-error` retain their measured values but are excluded from the clean-row findings; `excluded` covers every probe-side determinism refusal — the probe's `exclusion_reason` names which: `blueprint-sha256-mismatch`, `validator-totals-mismatch`, or `build-failed`.
 
 ## Table
 
@@ -46,7 +46,7 @@ Status preserves campaign state: `awaiting-measurement` has no `report.json`; `n
 
 ## Findings
 
-Clean-row comparison uses a 95% threshold. A converged, kit-clean row is a shortfall if either available target rate is below it; it is at plan only if both target rates are available and at or above it. Rows with missing target metrics are not classified.
+Clean-row comparison uses a 95% threshold. A converged, kit-clean row is a shortfall if either available target rate is below it; it is at plan only if both target rates are available and at or above it. Rows with missing target metrics are not classified — note the structural asymmetry this creates: fluid targets carry no delivered rate (RFC-050 fluid boundaries are uncalibrated), so fluid rows can never classify as at-plan and are barred from the false-alarm section by construction; overproduction rows (the two oil fixtures measure ~150% produced) classify as at-plan only when both metrics exist and are otherwise unremarked here.
 
 ### Validator categories co-occurring with clean-row shortfall
 
@@ -54,7 +54,8 @@ Clean-row comparison uses a 95% threshold. A converged, kit-clean row is a short
 - `input-rate-delivery`: `tier2_electronic_circuit_from_ore`, `tier5_processing_unit_from_ore_am3`, `stress_electronic_circuit_30s_from_ore`, `stress_electronic_circuit_30s_decomposed_pooled`, `stress_electronic_circuit_60s_red_from_ore`
 - `row-input-belt-margin`: `tier2_electronic_circuit_from_ore`, `stress_electronic_circuit_30s_from_ore`, `stress_electronic_circuit_30s_decomposed_pooled`, `stress_electronic_circuit_60s_red_from_ore`
 
-### Categories appearing only on broken or excluded rows
+### Categories never seen on a clean measured row
+(fires only on rows outside the converged, kit-clean set — non-converged, kit-errored, awaiting, or excluded)
 
 - `belt-dead-end`: `stress_advanced_circuit_45s_from_plates`, `stress_electronic_circuit_35s_from_ore`, `stress_electronic_circuit_40s_from_ore`
 - `belt-flow-path`: `stress_advanced_circuit_45s_from_plates`, `stress_electronic_circuit_40s_from_ore`

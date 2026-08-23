@@ -309,7 +309,7 @@ def write_markdown(path: Path, rows: list[Row], categories: list[str], bank: Pat
         "",
         "Status preserves campaign state: `awaiting-measurement` has no `report.json`; "
         "`non-converged` and `kit-error` retain their measured values but are excluded from the clean-row findings; "
-        "`excluded` is a rebuilt-blueprint SHA-256 mismatch.",
+        "`excluded` covers every probe-side determinism refusal — the probe's `exclusion_reason` names which: `blueprint-sha256-mismatch`, `validator-totals-mismatch`, or `build-failed`.",
         "",
         "## Table",
         "",
@@ -317,13 +317,14 @@ def write_markdown(path: Path, rows: list[Row], categories: list[str], bank: Pat
         "",
         "## Findings",
         "",
-        f"Clean-row comparison uses a {SHORTFALL_THRESHOLD_PCT:.0f}% threshold. A converged, kit-clean row is a shortfall if either available target rate is below it; it is at plan only if both target rates are available and at or above it. Rows with missing target metrics are not classified.",
+        f"Clean-row comparison uses a {SHORTFALL_THRESHOLD_PCT:.0f}% threshold. A converged, kit-clean row is a shortfall if either available target rate is below it; it is at plan only if both target rates are available and at or above it. Rows with missing target metrics are not classified — note the structural asymmetry this creates: fluid targets carry no delivered rate (RFC-050 fluid boundaries are uncalibrated), so fluid rows can never classify as at-plan and are barred from the false-alarm section by construction; overproduction rows (the two oil fixtures measure ~150% produced) classify as at-plan only when both metrics exist and are otherwise unremarked here.",
         "",
         "### Validator categories co-occurring with clean-row shortfall",
         "",
         *bullet_categories(category_labels(rows, lambda row: row.shortfall())),
         "",
-        "### Categories appearing only on broken or excluded rows",
+        "### Categories never seen on a clean measured row",
+        "(fires only on rows outside the converged, kit-clean set — non-converged, kit-errored, awaiting, or excluded)",
         "",
     ]
     all_categories = category_labels(rows, lambda row: True)

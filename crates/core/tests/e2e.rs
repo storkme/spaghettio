@@ -11026,7 +11026,7 @@ fn belt_detour_survey() {
 //
 //   cp crates/core/data/sat-zones-ci.bin /tmp/sat-zones-calibration-evidence.bin
 //   SPAGHETTIO_ZONE_CACHE_PATH=/tmp/sat-zones-calibration-evidence.bin \
-//   SPAGHETTIO_CALIBRATION_BANK=/tmp/calibration-matrix-2026-08-22 \
+//   SPAGHETTIO_CALIBRATION_BANK=/tmp/calibration-matrix-2026-08-23-pinned \
 //   SPAGHETTIO_CALIBRATION_ISSUES_PATH=$(pwd)/target/calibration-issue-breakdown.json \
 //   cargo test --manifest-path crates/core/Cargo.toml --test e2e \
 //     selection_policy_calibration_issue_breakdown -- --exact --ignored --nocapture
@@ -11124,12 +11124,28 @@ fn selection_policy_calibration_issue_breakdown() {
         }
         let errors: usize = categories.values().map(|(errors, _)| errors).sum();
         let warnings: usize = categories.values().map(|(_, warnings)| warnings).sum();
-        assert_eq!(
-            (errors, warnings),
-            (matrix_row.validator.errors, matrix_row.validator.warnings),
-            "{}: current validator totals differ from the bank matrix",
-            fixture.name
-        );
+        // A totals mismatch is the SAME drift class as a blueprint-hash
+        // mismatch and gets the same treatment: exclude the row, keep the
+        // run (an assert here aborted mid-loop and cost every row's
+        // evidence — one mechanism, not two disagreeing ones).
+        if (errors, warnings) != (matrix_row.validator.errors, matrix_row.validator.warnings) {
+            eprintln!(
+                "EXCLUDED {}: validator totals ({errors} E / {warnings} W) differ from the bank                  matrix ({} E / {} W)",
+                fixture.name, matrix_row.validator.errors, matrix_row.validator.warnings
+            );
+            fixture_json.insert(fixture.name.to_string(), serde_json::json!({}));
+            determinism_json.insert(
+                fixture.name.to_string(),
+                serde_json::json!({
+                    "expected_blueprint_sha256": matrix_row.blueprint_sha256,
+                    "actual_blueprint_sha256": null,
+                    "matches": false,
+                    "exclusion_reason": "validator-totals-mismatch",
+                }),
+            );
+            mismatches.push(fixture.name.to_string());
+            continue;
+        }
         fixture_json.insert(
             fixture.name.to_string(),
             serde_json::Value::Object(
