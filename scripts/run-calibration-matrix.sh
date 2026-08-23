@@ -5,14 +5,21 @@
 # resumes safely after interruption by leaving existing report.json files
 # alone; regenerate into a new directory after changing the engine.
 #
-# One fixture's failure (harness timeout, Factorio crash, pre-flight error) is
-# logged and the campaign moves on.  Letting `set -e` abort on the harness
-# call would end the whole run at the first such fixture and, on resume, end
-# it at the same fixture again — a campaign that can never complete.  The
-# script exits non-zero at the end if anything failed; re-run it to retry
-# (a failed fixture has no report.json, so it is not skipped).  The harness
-# writes --out only after a completed run, so an absent report is the whole
-# failure signature.
+# What "resume" means here: one completed Factorio run per fixture.  A run
+# that completed but did not converge, or that reported kit errors, still
+# wrote a report.json — that IS its result (deterministic; re-running it
+# reproduces it), and the sweep reports the row as excluded with the reason.
+# To re-measure such a row deliberately, delete its report.json first.
+#
+# Two things are NOT results and are retried on the next invocation:
+#   - a harness failure (timeout, crash, pre-flight error): no report is
+#     written, the failure is logged, the loop continues, and the script
+#     exits non-zero at the end.  Letting `set -e` abort on the harness call
+#     would end the campaign at the first such fixture and, on resume, end
+#     it at the same fixture again.
+#   - a report.json that does not parse (a kill or a full disk mid-write):
+#     treated as absent and re-measured, since the harness writes it with
+#     one non-atomic write.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -23,6 +30,10 @@ fi
 bank_dir=$1
 if [ ! -f "$bank_dir/matrix.json" ]; then
   echo "missing $bank_dir/matrix.json; run calibration_matrix_export first" >&2
+  exit 2
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required (used to recognise a partially written report.json)" >&2
   exit 2
 fi
 
@@ -37,8 +48,11 @@ for fixture_dir in "$bank_dir"/*; do
     continue
   fi
   if [ -f "$report" ]; then
-    echo "skip $(basename "$fixture_dir"): report.json already exists"
-    continue
+    if jq -e . "$report" >/dev/null 2>&1; then
+      echo "skip $(basename "$fixture_dir"): report.json already exists"
+      continue
+    fi
+    echo "re-measure $(basename "$fixture_dir"): report.json exists but does not parse (partial write?)" >&2
   fi
   echo "measure $(basename "$fixture_dir")"
   if ! cargo run --release -p spaghettio_sim_harness -- run \

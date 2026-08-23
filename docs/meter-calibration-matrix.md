@@ -49,11 +49,21 @@ not vetted. A fixture that fails to build at export is recorded under
 `build_failures` in `matrix.json` and the export continues (exiting non-zero):
 an engine regression is exactly when the other rows' measurements are wanted.
 
-The runner resumes a stopped campaign by skipping existing reports; a changed
-factory always requires a new bank. A fixture whose Factorio run fails
-(harness timeout, crash) is logged and the campaign moves on; the script exits
-non-zero at the end and the next invocation retries it, since no report was
-written.
+The runner resumes a stopped campaign by skipping existing reports — one
+completed Factorio run per fixture; a changed factory always requires a new
+bank. A run that completed but did not converge, or reported kit errors, still
+wrote its report: that **is** the row's result (deterministic — re-running it
+reproduces it), and the sweep lists the row as excluded with the reason. To
+re-measure such a row deliberately, delete its `report.json` first. Two things
+are not results and are retried on the next invocation: a harness failure
+(timeout, crash, pre-flight — no report is written, the failure is logged, the
+script exits non-zero at the end) and a `report.json` that does not parse (a
+kill or full disk mid-write — treated as absent).
+
+`matrix.json` carries `schema_version` 2: per-row `blueprint_sha256` **and**
+`manifest_sha256` (the immutable pair, both checked by the sweep),
+`corpus_size`, and `build_failures`. The sweep still reads a version-1 bank
+(blueprint hash only, no failure record) and says which branch it took.
 
 Each Factorio run uses a 432,000-tick warmup at speed 32, matching the
 post-lift provenance bar. Runs remain sequential because the main purpose is

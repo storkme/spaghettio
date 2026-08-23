@@ -17,11 +17,18 @@
 //! `matrix.json` and the export continues: an engine regression is exactly
 //! when the other rows' measurements are wanted, so one broken fixture must
 //! not cost the bank.  The process still exits non-zero so a script notices.
+//!
+//! `matrix.json` schema versions (the sweep reads both):
+//!   1 — first revision: `fixture_count`, `fixtures[]` with `blueprint_sha256`.
+//!   2 — adds `corpus_size`, `build_failures[]`, and `manifest_sha256` per
+//!       row, so the immutable bp.txt/manifest-real.json PAIR is fingerprinted.
 
 use sha2::{Digest, Sha256};
 use spaghettio_core::blueprint;
 use spaghettio_core::calibration_matrix::{build, fixtures, CalibrationFixture, FixtureVariant};
 use spaghettio_core::validate::Severity;
+
+const SCHEMA_VERSION: u64 = 2;
 
 fn usage() -> ! {
     eprintln!("usage: calibration_matrix_export <new-or-empty-bank-dir>");
@@ -40,10 +47,15 @@ fn variant_name(variant: FixtureVariant) -> String {
     }
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 fn entry(
     fixture: &CalibrationFixture,
     built: &spaghettio_core::calibration_matrix::BuiltFixture,
     bp: &str,
+    manifest_json: &str,
 ) -> serde_json::Value {
     let errors = built
         .issues
@@ -55,7 +67,6 @@ fn entry(
         .iter()
         .filter(|i| i.severity == Severity::Warning)
         .count();
-    let hash = format!("{:x}", Sha256::digest(bp.as_bytes()));
     serde_json::json!({
         "label": fixture.name,
         "target": fixture.item,
@@ -65,7 +76,8 @@ fn entry(
         "inputs": fixture.inputs,
         "excluded_recipes": fixture.excluded,
         "variant": variant_name(fixture.variant),
-        "blueprint_sha256": hash,
+        "blueprint_sha256": sha256_hex(bp.as_bytes()),
+        "manifest_sha256": sha256_hex(manifest_json.as_bytes()),
         "entities": built.layout.entities.len(),
         "dimensions": [built.layout.width, built.layout.height],
         "validator": { "errors": errors, "warnings": warnings },
@@ -111,15 +123,15 @@ fn main() {
             fixture.name,
             &built.issues,
         );
+        // Hashed from the same string that is written, so a reader hashing
+        // the file bytes reproduces it exactly.
+        let manifest_json = serde_json::to_string_pretty(&manifest).expect("manifest serializes");
         let dir = root.join(fixture.name);
         std::fs::create_dir(&dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
         std::fs::write(dir.join("bp.txt"), &bp)
             .unwrap_or_else(|e| panic!("write {}: {e}", dir.join("bp.txt").display()));
-        std::fs::write(
-            dir.join("manifest-real.json"),
-            serde_json::to_string_pretty(&manifest).expect("manifest serializes"),
-        )
-        .unwrap_or_else(|e| panic!("write {}: {e}", dir.join("manifest-real.json").display()));
+        std::fs::write(dir.join("manifest-real.json"), &manifest_json)
+            .unwrap_or_else(|e| panic!("write {}: {e}", dir.join("manifest-real.json").display()));
         println!(
             "{:<62} {:>5} entities {:>4}x{:<4}",
             fixture.name,
@@ -127,7 +139,7 @@ fn main() {
             built.layout.width,
             built.layout.height,
         );
-        entries.push(entry(fixture, &built, &bp));
+        entries.push(entry(fixture, &built, &bp, &manifest_json));
     }
     let exported = entries.len();
     let failed = failures.len();
@@ -135,7 +147,7 @@ fn main() {
     // the directory set against); `corpus_size` is what the corpus declares.
     // They differ by exactly `build_failures.len()`.
     let index = serde_json::json!({
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "purpose": "current-generation meter-vs-Factorio calibration matrix",
         "corpus_size": corpus.len(),
         "fixture_count": exported,
@@ -181,5 +193,12 @@ mod tests {
             variant_name(FixtureVariant::Strategy(LayoutStrategy::PartitionedDecomposed)),
             "strategy:PartitionedDecomposed"
         );
+    }
+
+    /// The sweep's reader keys its compat branch on this number; bumping it
+    /// without teaching the reader is the failure this pin makes visible.
+    #[test]
+    fn schema_version_is_the_one_the_sweep_reads() {
+        assert_eq!(SCHEMA_VERSION, 2);
     }
 }

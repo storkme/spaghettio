@@ -167,9 +167,21 @@ impl Row {
 
 use sha2::{Digest, Sha256};
 
+/// The exclusion reason the coverage line counts as "awaiting measurement".
+/// One definition for the push site and the count, so a wording change
+/// cannot silently empty the bucket into "other".
+const AWAITING: &str = "no sim report.json — nothing to compare";
+
+/// The `matrix.json` schema versions this reader understands. 1 = the first
+/// exporter revision (blueprint hash only; declared exactly what it
+/// exported). 2 adds `manifest_sha256` per row, `corpus_size`, and
+/// `build_failures`. The branch taken is printed, not inferred by absence.
+const KNOWN_SCHEMA_VERSIONS: [u64; 2] = [1, 2];
+
 /// What a `calibration_matrix_export` bank declares about itself, read from
 /// its `matrix.json`. Absent for the older ad-hoc banks.
 struct MatrixIndex {
+    schema_version: u64,
     /// Fixtures the corpus DECLARES — exported rows plus any that failed to
     /// build at export. The honest coverage denominator.
     corpus_size: usize,
@@ -177,7 +189,13 @@ struct MatrixIndex {
     /// they have no directory and can never be measured from this bank.
     build_failures: usize,
     /// `label → blueprint_sha256` for every exported row.
-    hashes: std::collections::BTreeMap<String, String>,
+    blueprint_hashes: std::collections::BTreeMap<String, String>,
+    /// `label → manifest_sha256` for every exported row; empty for schema 1.
+    manifest_hashes: std::collections::BTreeMap<String, String>,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn main() {
@@ -212,7 +230,17 @@ fn main() {
             .unwrap_or_else(|e| panic!("read {}: {e}", matrix_path.display()));
         let matrix: serde_json::Value = serde_json::from_str(&raw)
             .unwrap_or_else(|e| panic!("parse {}: {e}", matrix_path.display()));
-        let mut hashes = std::collections::BTreeMap::new();
+        let schema_version = matrix["schema_version"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{} has no schema_version", matrix_path.display()));
+        assert!(
+            KNOWN_SCHEMA_VERSIONS.contains(&schema_version),
+            "{} schema_version {schema_version} is not one this reader understands {:?}",
+            matrix_path.display(),
+            KNOWN_SCHEMA_VERSIONS
+        );
+        let mut blueprint_hashes = std::collections::BTreeMap::new();
+        let mut manifest_hashes = std::collections::BTreeMap::new();
         for v in matrix["fixtures"]
             .as_array()
             .unwrap_or_else(|| panic!("{} has no fixtures array", matrix_path.display()))
@@ -223,11 +251,18 @@ fn main() {
             let hash = v["blueprint_sha256"].as_str().unwrap_or_else(|| {
                 panic!("{} row {label} has no blueprint_sha256", matrix_path.display())
             });
-            if hashes.insert(label.to_string(), hash.to_string()).is_some() {
+            if blueprint_hashes.insert(label.to_string(), hash.to_string()).is_some() {
                 panic!("{} names {label} twice", matrix_path.display());
             }
+            if schema_version >= 2 {
+                let mh = v["manifest_sha256"].as_str().unwrap_or_else(|| {
+                    panic!("{} row {label} has no manifest_sha256 (schema 2)", matrix_path.display())
+                });
+                manifest_hashes.insert(label.to_string(), mh.to_string());
+            }
         }
-        let expected: std::collections::BTreeSet<String> = hashes.keys().cloned().collect();
+        let expected: std::collections::BTreeSet<String> =
+            blueprint_hashes.keys().cloned().collect();
         let declared = matrix["fixture_count"]
             .as_u64()
             .unwrap_or_else(|| panic!("{} has no fixture_count", matrix_path.display()))
@@ -248,19 +283,45 @@ fn main() {
             "matrix directory set differs from {}; regenerate a fresh bank rather than mixing artifacts",
             matrix_path.display()
         );
-        // Additive fields (second exporter revision): a bank from the first
-        // revision has neither and declared exactly what it exported.
-        let build_failures = matrix["build_failures"].as_array().map_or(0, Vec::len);
-        let corpus_size = matrix["corpus_size"]
-            .as_u64()
-            .map_or(declared + build_failures, |n| n as usize);
-        assert_eq!(
-            corpus_size,
-            declared + build_failures,
-            "{} corpus_size must equal fixture_count + build_failures",
-            matrix_path.display()
+        let (corpus_size, build_failures) = if schema_version >= 2 {
+            let build_failures = matrix["build_failures"]
+                .as_array()
+                .unwrap_or_else(|| {
+                    panic!("{} has no build_failures (schema 2)", matrix_path.display())
+                })
+                .len();
+            let corpus_size = matrix["corpus_size"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{} has no corpus_size (schema 2)", matrix_path.display()))
+                as usize;
+            assert_eq!(
+                corpus_size,
+                declared + build_failures,
+                "{} corpus_size must equal fixture_count + build_failures",
+                matrix_path.display()
+            );
+            (corpus_size, build_failures)
+        } else {
+            // Schema 1 declared exactly what it exported and recorded no
+            // failures; the corpus it was cut from is not knowable from it.
+            (declared, 0)
+        };
+        println!(
+            "matrix.json schema_version {schema_version}: {declared} exported rows, \
+             {build_failures} build failures, corpus {corpus_size}{}",
+            if schema_version < 2 {
+                " (schema 1: blueprint hash only — manifests unverified, no failure record)"
+            } else {
+                ""
+            }
         );
-        Some(MatrixIndex { corpus_size, build_failures, hashes })
+        Some(MatrixIndex {
+            schema_version,
+            corpus_size,
+            build_failures,
+            blueprint_hashes,
+            manifest_hashes,
+        })
     } else {
         None
     };
@@ -274,41 +335,39 @@ fn main() {
             excluded.push((fixture, "no bp.txt / manifest-real.json".into()));
             continue;
         }
-        // Bank integrity before any report gate. The matrix fingerprint is
-        // the only thing that binds report.json to THIS bp.txt — the label
-        // matches whether or not someone re-exported underneath the report —
-        // and a blueprint that no longer matches is a corrupted bank whatever
-        // else is true of the row, so it is reported as that and not as the
-        // first report gate it happens to fail. A fingerprint recorded but
-        // never read lets a stale report through as vetted (#710 review).
+        // Bank integrity before any report gate. The matrix fingerprints are
+        // the only thing that binds report.json to THIS bp.txt/manifest pair
+        // — the label matches whether or not someone re-exported underneath
+        // the report — and a file that no longer matches is a corrupted bank
+        // whatever else is true of the row, so it is reported as that and not
+        // as the first report gate it happens to fail. A fingerprint recorded
+        // but never read lets a stale report through as vetted (#710 review).
         if let Some(index) = &matrix {
-            let bytes = match std::fs::read(&bp_path) {
-                Ok(b) => b,
-                Err(e) => {
-                    excluded.push((fixture, format!("bp.txt unreadable: {e}")));
-                    continue;
+            let check = |path: &std::path::Path, what: &str, recorded: Option<&String>| {
+                let bytes = std::fs::read(path).map_err(|e| format!("{what} unreadable: {e}"))?;
+                match recorded {
+                    Some(r) if *r == sha256_hex(&bytes) => Ok(()),
+                    Some(_) => Err(format!(
+                        "{what} sha256 differs from matrix.json — report.json cannot be bound \
+                         to this {what}; regenerate a fresh bank"
+                    )),
+                    None => Err(format!("label absent from matrix.json ({what} fingerprint)")),
                 }
             };
-            let actual = format!("{:x}", Sha256::digest(&bytes));
-            match index.hashes.get(&fixture) {
-                Some(recorded) if *recorded == actual => {}
-                Some(_) => {
-                    excluded.push((
-                        fixture,
-                        "bp.txt sha256 differs from matrix.json — report.json cannot be bound \
-                         to this blueprint; regenerate a fresh bank"
-                            .into(),
-                    ));
-                    continue;
-                }
-                None => {
-                    excluded.push((fixture, "label absent from matrix.json fixtures".into()));
-                    continue;
-                }
+            let mut checks = vec![("bp.txt", &bp_path, index.blueprint_hashes.get(&fixture))];
+            if index.schema_version >= 2 {
+                checks.push(("manifest-real.json", &mf_path, index.manifest_hashes.get(&fixture)));
+            }
+            if let Some(why) = checks
+                .into_iter()
+                .find_map(|(what, path, recorded)| check(path, what, recorded).err())
+            {
+                excluded.push((fixture, why));
+                continue;
             }
         }
         if !rp_path.exists() {
-            excluded.push((fixture, "no sim report.json — nothing to compare".into()));
+            excluded.push((fixture, AWAITING.into()));
             continue;
         }
 
@@ -596,7 +655,7 @@ fn main() {
         // not dropped from the denominator.
         let awaiting = excluded
             .iter()
-            .filter(|(_, why)| why == "no sim report.json — nothing to compare")
+            .filter(|(_, why)| why == AWAITING)
             .count();
         let other = excluded.len() - awaiting;
         let vetted = provenance.len();
