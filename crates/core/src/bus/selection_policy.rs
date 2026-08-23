@@ -799,6 +799,18 @@ pub struct RankSpec {
     /// refusal: an unverified candidate that is the ONLY member of its
     /// tier still wins (the rescue class — cells fixing an error-laden
     /// native — which a produce-time refusal demonstrably re-broke).
+    ///
+    /// Two recorded consequences (#717 review): (1) the override is
+    /// ABSOLUTE within the tier — no floor bounds how much score,
+    /// density or warning-count a verified rival may sacrifice; if the
+    /// corpus ever shows that shelter too aggressive, that adjudication
+    /// re-opens here. (2) A geometry verified only under a DIFFERENT
+    /// declared world (the registry's "do NOT transfer across worlds"
+    /// tier) counts as verified-standing for this ordering: the same
+    /// geometry was measured somewhere, the #383 caveat rides the note,
+    /// and the #700 incident was the never-verified tier. Tightening
+    /// scoped-tier standing is a recorded follow-up question, not an
+    /// oversight.
     pub verified_geometry_first: bool,
 }
 

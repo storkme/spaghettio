@@ -1228,17 +1228,42 @@ impl Scoreboard {
         }
     }
 
-    /// Record the error-kind measurement. First write wins, for the same
-    /// reason as `record_counts`.
     /// RFC-071 B3: record whether a produced layout's own warnings carry
     /// the registry's never-verified note. Recorded from the shipping
     /// loop (the policy's substring is in scope there), like the kind
     /// classes — a policy field only the measure path read would be the
-    /// decorative-table class again.
+    /// decorative-table class again. Set-once via `|=`: one site records
+    /// it today, and a bool has no `None` to guard, so sticky-true is
+    /// the first-write-wins analogue (a later site cannot quietly clear
+    /// an observed flag).
     fn record_unverified(&mut self, idx: usize, unverified: bool) {
-        self.0[idx].unverified = unverified;
+        self.0[idx].unverified |= unverified;
     }
 
+    /// RFC-071 B3: record every produced layout's geometry-verification
+    /// standing (its own warnings vs the policy's never-verified
+    /// substring). Extracted from the shipping loop so the mapping is
+    /// unit-testable — the #717 review's point that with the loop inline,
+    /// deleting it silently no-ops the whole #700 fix (every profile
+    /// defaults to `unverified_geometry: false`) with all tests green.
+    fn record_geometry_verification(
+        &mut self,
+        runs: &[&CandidateRun; 7],
+        unverified_substring: &str,
+    ) {
+        for (idx, run) in runs.iter().enumerate() {
+            if let Some((layout, _)) = run.outcome.as_ref() {
+                let unverified = layout
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains(unverified_substring));
+                self.record_unverified(idx, unverified);
+            }
+        }
+    }
+
+    /// Record the error-kind measurement. First write wins, for the same
+    /// reason as `record_counts`.
     fn record_kinds(&mut self, idx: usize, kinds: selection_policy::ErrorKindCounts) {
         let row = &mut self.0[idx];
         if row.kinds.is_none() {
@@ -1518,15 +1543,7 @@ fn select_best_decomposition_with_policy(
     // RFC-071 B3: record each produced layout's geometry-verification
     // standing (its own warnings vs the policy's never-verified
     // substring), which `verified_geometry_first` ranks on.
-    for (idx, run) in run_refs.iter().enumerate() {
-        if let Some((layout, _)) = run.outcome.as_ref() {
-            let unverified = layout
-                .warnings
-                .iter()
-                .any(|w| w.contains(policy.unverified_geometry_substring));
-            board.record_unverified(idx, unverified);
-        }
-    }
+    board.record_geometry_verification(&run_refs, policy.unverified_geometry_substring);
 
     // Retain the quality-key measurement for the merge-tap profile. The
     // policy owns the comparison; this call only classifies the validation
@@ -2008,6 +2025,25 @@ mod tests {
     fn unverified_substring_matches_only_the_never_verified_tier() {
         let p = selection_policy::SelectionPolicy::current();
         let matches = |w: &str| w.contains(p.unverified_geometry_substring);
+        // The LOAD-BEARING arm uses the REAL producer, not a transcription
+        // (#717 review, 3/3): a rewording of the never-verified note in
+        // `cells::registry::verification_note` must fail HERE, not
+        // silently stop matching in production. No registry entry exists
+        // for this target/rate, so the real no-match note is rendered.
+        let real_note = crate::bus::cells::registry::verification_note(
+            "no-such-target-for-this-test",
+            999.25,
+            &empty_layout(),
+        );
+        assert!(
+            matches(&real_note),
+            "the policy substring must match the REAL never-verified note; \
+             producer says: {real_note:?}"
+        );
+        // The other two tiers need registry-hash collisions to render via
+        // the real producer, so they stay pinned as labelled
+        // transcriptions of `verification_note`'s other arms — update
+        // them WITH that function.
         assert!(
             !matches(
                 "cell-composed: geometry sim-verified at plan ONLY under declared capacity 1 / \
@@ -2020,12 +2056,65 @@ mod tests {
             !matches("cell-composed: geometry SIM-VERIFIED at plan (…)"),
             "verified tier must not read as unverified"
         );
+    }
+
+    /// RFC-071 B3, end-to-end over the shipping mapping (#717 review,
+    /// 2/3): a produced run whose layout carries the REAL never-verified
+    /// note must surface `unverified_geometry: true` in the v2 profile —
+    /// through `Scoreboard::from_runs` + `record_geometry_verification` +
+    /// `v2_profiles`, the exact pieces the shipping loop composes. If the
+    /// recording call is deleted or its condition inverted, this fails.
+    #[test]
+    fn shipping_path_records_unverified_geometry_into_profiles() {
+        let mut layout = empty_layout();
+        let note = crate::bus::cells::registry::verification_note(
+            "no-such-target-for-this-test",
+            999.25,
+            &layout,
+        );
+        layout.warnings.push(note);
+        let produced_run = CandidateRun {
+            name: CANDIDATE_ORDER[0],
+            outcome: Some((
+                layout,
+                CandidateScore {
+                    score: 1.0,
+                    density: 0.1,
+                    entity_count: 1,
+                    overproduction: 0.0,
+                    accepted: true,
+                    accepted_reason: None,
+                },
+            )),
+            events: Vec::new(),
+            error: None,
+            panicked: false,
+        };
+        let rest: Vec<CandidateRun> = CANDIDATE_ORDER
+            .iter()
+            .skip(1)
+            .map(|n| CandidateRun::skipped(n))
+            .collect();
+        let runs: [&CandidateRun; 7] = [
+            &produced_run,
+            &rest[0],
+            &rest[1],
+            &rest[2],
+            &rest[3],
+            &rest[4],
+            &rest[5],
+        ];
+        let mut board = Scoreboard::from_runs(runs);
+        let policy = selection_policy::SelectionPolicy::current();
+        board.record_geometry_verification(&runs, policy.unverified_geometry_substring);
+        let profiles = board.v2_profiles();
         assert!(
-            matches(
-                "cell-composed: geometry NOT sim-verified (hash bf44f2261fb871ca) — run \
-                 spaghettio-sim and add the entry to cell-sim-registry.json"
-            ),
-            "the never-verified tier must read as unverified"
+            profiles[0].unverified_geometry,
+            "the produced run's real note must map into the profile"
+        );
+        assert!(
+            profiles[1..].iter().all(|p| !p.unverified_geometry),
+            "non-produced rows stay verified-standing by default"
         );
     }
 }
