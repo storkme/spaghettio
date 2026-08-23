@@ -465,6 +465,25 @@ const SIM_FIXTURES: &[SimFixture] = &[
         levels: &[1, 2, 3, 5, 7],
     },
     SimFixture {
+        // RFC-071 B3: the shipped gear@20/am2 cell-composed winner — the
+        // only production cell win — earning its registry entry after
+        // #715 fixed its drain and the sim measured it AT PLAN
+        // (20.0/20.0 produced and delivered, converged, kit-clean).
+        // geo_cap 2 = the post-#431 engine default the production
+        // candidate composes at; the e2e golden
+        // (tier1_iron_gear_wheel_20s, 105 entities) is the proof this
+        // row reproduces the shipped geometry — if it ever stops
+        // matching, the verification gate refuses the candidate and
+        // that golden fails loudly.
+        label: "chain-gear20",
+        target: "iron-gear-wheel",
+        rate: 20.0,
+        inputs: &["iron-plate"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
+    SimFixture {
         label: "chain-mil5ore",
         target: "military-science-pack",
         rate: 5.0,
@@ -1575,6 +1594,10 @@ fn cell_registry_hashes_current() {
             "chain",
             2,
         ),
+        // RFC-071 B3 (2026-08-23): the shipped gear@20 production cell
+        // win, registered at plan after #715 — blessed at the L2 default
+        // like chem5.
+        ("iron-gear-wheel", 20.0, &["iron-plate"], "chain", 2),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {
