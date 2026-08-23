@@ -1455,6 +1455,11 @@ pub enum TraceEvent {
         contamination_errors: Option<usize>,
         starvation_errors: Option<usize>,
         structural_errors: Option<usize>,
+        /// RFC-071 B2: the class that DOMINATES the quality key must be
+        /// visible in the stream — a walker replaying a shipped
+        /// selection would otherwise see a winner flip with no visible
+        /// cause (#716 review round 1).
+        route_severed_errors: Option<usize>,
     },
     SelectionDecided {
         winner: String,

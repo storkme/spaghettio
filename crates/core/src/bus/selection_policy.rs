@@ -1862,6 +1862,29 @@ mod tests {
         assert_eq!(p.kind_of("lane-throughput"), IssueKind::Starvation);
     }
 
+    /// The three const lists are the table's SOURCE; a category in two
+    /// lists would make classification depend on `current()`'s insert
+    /// order, silently (#716 review nit — cheap to pin, expensive to
+    /// debug).
+    #[test]
+    fn the_three_category_lists_are_pairwise_disjoint() {
+        use super::super::decomposition_search::{
+            CONTAMINATION_CATEGORIES, ROUTE_SEVERING_CATEGORIES, STRUCTURAL_CATEGORIES,
+        };
+        let all: Vec<&str> = CONTAMINATION_CATEGORIES
+            .iter()
+            .chain(STRUCTURAL_CATEGORIES.iter())
+            .chain(ROUTE_SEVERING_CATEGORIES.iter())
+            .copied()
+            .collect();
+        let set: BTreeSet<&str> = all.iter().copied().collect();
+        assert_eq!(
+            set.len(),
+            all.len(),
+            "a category appears in more than one kind list: {all:?}"
+        );
+    }
+
     /// The deleted v1 test's two measured profiles pin the `[3, 17]`
     /// robustness window. This exercises the v2 stage, not just the
     /// arithmetic helper: every weight in the window returns the same

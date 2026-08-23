@@ -788,7 +788,11 @@ pub(crate) const STRUCTURAL_CATEGORIES: [&str; 2] = ["entity-overlap", "pipe-to-
 /// (`docs/selection-policy-calibration-evidence.md`, 2026-08-23, 20/35
 /// rows Factorio-vetted) these five appear exclusively on rows the sim
 /// measures as broken (ac45, ec35, ec40 — 0/s, non-converged) and never
-/// once on a working factory. The class ranks lexicographically above
+/// once on an AT-PLAN factory. Precision (#716 review): the claim is
+/// "never on a working factory", NOT "any member implies exactly 0/s" —
+/// the B2 flip itself ships an ec35 winner carrying two route-severed
+/// errors at quarter rate, chosen because FEWER severed routes measured
+/// strictly better than more. The class ranks lexicographically above
 /// the weighted functional total in `ErrorKindCounts::quality_key`, so
 /// 3 total-stops can no longer lose to 65 throttles — the exact ec30
 /// shipping mechanism (#701, bisected).
@@ -1240,6 +1244,7 @@ impl Scoreboard {
                 layout_warnings: row.counts.map(|c| c.layout_warnings),
                 counts_source: row.counts_source.map(str::to_string),
                 contamination_errors: row.kinds.map(|k| k.contamination),
+                route_severed_errors: row.kinds.map(|k| k.route_severed),
                 starvation_errors: row.kinds.map(|k| k.starvation),
                 structural_errors: row.kinds.map(|k| k.structural),
             });
