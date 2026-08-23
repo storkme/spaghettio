@@ -99,6 +99,18 @@
     "date": "2026-08-23"
   },
   {
+    "target": "iron-gear-wheel",
+    "rate": 20.0,
+    "geometry_hash": "bf44f2261fb871ca",
+    "declared_inserter_capacity": 2,
+    "declared_stacking": 1,
+    "harness_world": "nb=1 bulk=3, S=1 (declared L2 — the post-#431 engine default)",
+    "verdict": "PASS",
+    "produced_per_s": 20.0,
+    "scenario": "spaghettio-sim gear20 cells-on (Factorio 2.0.77, 432k-tick warmup at speed 32, converged, kit-clean, produced 20.00/20.00 and delivered 20.00/20.00 EXACT at plan; 2026-08-23 anchor for the #715 drain-tier fix). RFC-071 B3 graduation: this is the shipped gear@20/am2 production cell win — the geometry the #700 warning flagged as NOT sim-verified while it shipped at 75%; measured at plan once #715 re-tiered its chain drain",
+    "date": "2026-08-23"
+  },
+  {
     "target": "chemical-science-pack",
     "rate": 5.0,
     "geometry_hash": "b4bf67f82e324b51",

@@ -201,6 +201,13 @@ pub struct IssueProfile {
     pub accepted_reason: Option<String>,
     pub counts: Option<IssueCounts>,
     pub kinds: Option<ErrorKindCounts>,
+    /// RFC-071 B3: the produced layout's own warnings carry the RFC-051
+    /// registry's never-verified note
+    /// ([`SelectionPolicy::unverified_geometry_substring`]). Measured on
+    /// the shipping path for every produced candidate; `false` for
+    /// non-produced profiles and for layouts whose geometry is verified
+    /// in any declared world.
+    pub unverified_geometry: bool,
 }
 
 impl IssueProfile {
@@ -392,6 +399,10 @@ impl IssueProfile {
                     layout_warnings: layout.warnings.len(),
                 }),
                 kinds: Some(kinds),
+                unverified_geometry: layout
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains(policy.unverified_geometry_substring)),
             };
         }
 
@@ -407,6 +418,10 @@ impl IssueProfile {
                 layout_warnings: layout.warnings.len(),
             }),
             kinds: Some(kinds),
+            unverified_geometry: layout
+                .warnings
+                .iter()
+                .any(|w| w.contains(policy.unverified_geometry_substring)),
         }
     }
 }
@@ -775,6 +790,16 @@ pub struct RankSpec {
     /// warnings-first order to this path so every success-path selection
     /// stayed bit-identical to pre-RFC-060 behavior.
     pub refusal_order: RankOrder,
+    /// RFC-071 B3 (#700): when true, a sim-verified geometry outranks an
+    /// unverified one REGARDLESS of the configured order — the order
+    /// only breaks ties within the same verification standing. gear@20's
+    /// winner declared "geometry NOT sim-verified" in its own warnings
+    /// and `best-error-free` ranked past it on score, shipping 75% of
+    /// plan for a month. Deliberately an ordering rule and not a
+    /// refusal: an unverified candidate that is the ONLY member of its
+    /// tier still wins (the rescue class — cells fixing an error-laden
+    /// native — which a produce-time refusal demonstrably re-broke).
+    pub verified_geometry_first: bool,
 }
 
 /// One stage of the program: its trace tag, its comparator, and its
@@ -852,6 +877,13 @@ pub struct SelectionPolicy {
     /// `classify_errors`.
     pub error_kind_classes: BTreeMap<String, IssueKind>,
     pub acceptance_gates: Vec<AcceptanceGate>,
+    /// RFC-071 B3: the substring of the RFC-051 registry's no-match
+    /// verification note. The shipping loop measures each produced
+    /// layout's warnings against it into
+    /// [`IssueProfile::unverified_geometry`], which
+    /// [`RankSpec::verified_geometry_first`] consumes. See the long
+    /// note at the `current()` value.
+    pub unverified_geometry_substring: &'static str,
     pub contamination_weight: usize,
     pub firewalls: Vec<Firewall>,
     pub program: SelectionProgram,
@@ -919,6 +951,21 @@ impl SelectionPolicy {
                 name: "missing-balancer-template",
                 layout_warning_substring: "balancer template",
             }],
+            // RFC-071 B3 (#700): the substring of the RFC-051 registry's
+            // no-match verification note. A produced layout whose
+            // warnings carry it is measured `unverified_geometry`, and
+            // the best-error-free tier ranks verified geometries ahead
+            // of unverified ones regardless of score
+            // (`RankSpec::verified_geometry_first`) — gear@20 shipped at
+            // 75% for a month with this exact flag present and no stage
+            // able to read it. Deliberately NOT an acceptance gate:
+            // refusal re-ships a broken native in the rescue class
+            // (cells fixing an error-laden incumbent), which the suite
+            // demonstrated — an unverified rescue still wins when it is
+            // the only error-free candidate. Matches ONLY the
+            // never-verified tier; a world-mismatch note ("do NOT
+            // transfer across worlds") stays rankable as verified.
+            unverified_geometry_substring: "geometry NOT sim-verified",
             // Sourced from the constant the live mechanism reads, not
             // re-typed beside it: a second definition is the
             // "two values that disagree" class, and a unit test pinning
@@ -976,6 +1023,9 @@ fn current_program() -> SelectionProgram {
                     require_error_free: true,
                     success_order: RankOrder::ScoreDesc,
                     refusal_order: RankOrder::WarningsAscThenScoreDesc,
+                    // RFC-071 B3: within the error-free tier, verified
+                    // geometry outranks score (#700).
+                    verified_geometry_first: true,
                 }),
                 on_incumbent_win: ChainBehavior::Terminate,
             },
@@ -986,6 +1036,7 @@ fn current_program() -> SelectionProgram {
                     require_error_free: false,
                     success_order: RankOrder::ScoreDesc,
                     refusal_order: RankOrder::ScoreDesc,
+                    verified_geometry_first: false,
                 }),
                 on_incumbent_win: ChainBehavior::Terminate,
             },
@@ -1001,6 +1052,7 @@ fn current_program() -> SelectionProgram {
                     require_error_free: false,
                     success_order: RankOrder::RegistrationOrder,
                     refusal_order: RankOrder::RegistrationOrder,
+                    verified_geometry_first: false,
                 }),
                 on_incumbent_win: ChainBehavior::Terminate,
             },
@@ -1453,6 +1505,22 @@ fn tiered_rank_stage(
         }
         best = Some(match best {
             None => i,
+            // RFC-071 B3: verification standing outranks the configured
+            // order when the spec asks for it — a sim-verified geometry
+            // beats an unverified one regardless of score, and the order
+            // below only decides WITHIN a standing (#700: the gear@20
+            // winner carried its own "NOT sim-verified" flag and the
+            // score ranked past it).
+            Some(b)
+                if spec.verified_geometry_first
+                    && profiles[i].unverified_geometry != profiles[b].unverified_geometry =>
+            {
+                if profiles[b].unverified_geometry {
+                    i
+                } else {
+                    b
+                }
+            }
             // Strictly-better-only, so an exact tie keeps the EARLIER
             // registration: the list is a preference order.
             Some(b) if ranks_ahead(profiles, i, b, order) => i,
@@ -1606,6 +1674,54 @@ mod tests {
         let names: Vec<&str> = p.producers.iter().map(|r| r.name).collect();
         assert_eq!(names, EXPECTED_ORDER);
         assert_eq!(p.incumbent_index(), Some(NATIVE));
+    }
+
+    /// RFC-071 B3 (#700): within the error-free tier, a sim-verified
+    /// geometry outranks an unverified one regardless of score. The
+    /// gear@20 mechanism: an unverified cells layout with the BETTER
+    /// score must lose to a verified error-free rival.
+    #[test]
+    fn verified_geometry_outranks_score_in_the_error_free_tier() {
+        let mut ps = blank();
+        // Incumbent native: error-free, verified (no flag), lower score.
+        ps[NATIVE] = produced(0.5, true);
+        ps[NATIVE].counts = Some(counts(0, 0, 0));
+        // Cells: error-free, HIGHER score, but its geometry is
+        // unverified.
+        ps[CELLS] = produced(2.0, true);
+        ps[CELLS].counts = Some(counts(0, 0, 1));
+        ps[CELLS].unverified_geometry = true;
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d.winner, NATIVE,
+            "an unverified geometry must not displace a verified error-free rival on score"
+        );
+    }
+
+    /// The rescue class stays intact: an unverified geometry that is the
+    /// ONLY error-free candidate still wins its tier — the rule is an
+    /// ordering, not a refusal (a produce-time refusal demonstrably
+    /// re-shipped a broken native in `cell_candidate_wins_mil5_plates_
+    /// over_broken_native` while this design was being built).
+    #[test]
+    fn unverified_geometry_alone_still_wins_the_error_free_tier() {
+        let mut ps = blank();
+        // Incumbent native produced WITH errors — the broken incumbent.
+        ps[NATIVE] = produced(0.5, true);
+        ps[NATIVE].counts = Some(counts(3, 0, 0));
+        // Cells: the only error-free candidate, unverified.
+        ps[CELLS] = produced(2.0, true);
+        ps[CELLS].counts = Some(counts(0, 0, 1));
+        ps[CELLS].unverified_geometry = true;
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d,
+            Decision {
+                winner: CELLS,
+                stage: SelectionStage::BestErrorFree
+            },
+            "the unverified rescue must still win when it is the only error-free candidate"
+        );
     }
 
     /// Carry-over (e) of #698 rounds 9-10: bind the THREE parallel
@@ -2248,6 +2364,7 @@ mod tests {
                 require_error_free: false,
                 success_order: RankOrder::WarningsAscThenScoreDesc,
                 refusal_order: RankOrder::WarningsAscThenScoreDesc,
+                verified_geometry_first: false,
             }),
             on_incumbent_win: ChainBehavior::Terminate,
         }];

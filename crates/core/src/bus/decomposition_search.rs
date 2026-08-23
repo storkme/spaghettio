@@ -1151,6 +1151,10 @@ struct CandidateVerdict {
     counts: Option<selection_policy::IssueCounts>,
     counts_source: Option<&'static str>,
     kinds: Option<selection_policy::ErrorKindCounts>,
+    /// RFC-071 B3: the produced layout's warnings carry the RFC-051
+    /// registry's never-verified note. Recorded by the shipping loop
+    /// (which has the policy's substring); false until recorded.
+    unverified: bool,
 }
 
 impl CandidateVerdict {
@@ -1179,6 +1183,7 @@ impl CandidateVerdict {
             counts: None,
             counts_source: None,
             kinds: None,
+            unverified: false,
         }
     }
 }
@@ -1225,6 +1230,15 @@ impl Scoreboard {
 
     /// Record the error-kind measurement. First write wins, for the same
     /// reason as `record_counts`.
+    /// RFC-071 B3: record whether a produced layout's own warnings carry
+    /// the registry's never-verified note. Recorded from the shipping
+    /// loop (the policy's substring is in scope there), like the kind
+    /// classes — a policy field only the measure path read would be the
+    /// decorative-table class again.
+    fn record_unverified(&mut self, idx: usize, unverified: bool) {
+        self.0[idx].unverified = unverified;
+    }
+
     fn record_kinds(&mut self, idx: usize, kinds: selection_policy::ErrorKindCounts) {
         let row = &mut self.0[idx];
         if row.kinds.is_none() {
@@ -1286,6 +1300,7 @@ impl Scoreboard {
                 accepted_reason: row.accepted_reason.clone(),
                 counts: row.counts,
                 kinds: row.kinds,
+                unverified_geometry: row.unverified,
             })
             .collect()
     }
@@ -1499,6 +1514,19 @@ fn select_best_decomposition_with_policy(
     // RFC-070 Phase 0b scoreboard. Built here — after every candidate has
     // run — so the measurement sites below can record their projections.
     let mut board = Scoreboard::from_runs(run_refs);
+
+    // RFC-071 B3: record each produced layout's geometry-verification
+    // standing (its own warnings vs the policy's never-verified
+    // substring), which `verified_geometry_first` ranks on.
+    for (idx, run) in run_refs.iter().enumerate() {
+        if let Some((layout, _)) = run.outcome.as_ref() {
+            let unverified = layout
+                .warnings
+                .iter()
+                .any(|w| w.contains(policy.unverified_geometry_substring));
+            board.record_unverified(idx, unverified);
+        }
+    }
 
     // Retain the quality-key measurement for the merge-tap profile. The
     // policy owns the comparison; this call only classifies the validation
@@ -1965,5 +1993,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// RFC-071 B3: the policy's never-verified substring matches the
+    /// registry note's NO-MATCH tier only. A geometry sim-verified under
+    /// a different declared world renders the "do NOT transfer across
+    /// worlds" note — verified somewhere, shippable, visible — and must
+    /// not read as unverified; the never-verified tier must. This pins
+    /// the substring against BOTH real note shapes from
+    /// `cells::registry::verification_note`, so a rewording of either
+    /// note fails here instead of silently blinding (or over-triggering)
+    /// the verified-first ordering.
+    #[test]
+    fn unverified_substring_matches_only_the_never_verified_tier() {
+        let p = selection_policy::SelectionPolicy::current();
+        let matches = |w: &str| w.contains(p.unverified_geometry_substring);
+        assert!(
+            !matches(
+                "cell-composed: geometry sim-verified at plan ONLY under declared capacity 1 / \
+                 stacking 1 (PASS produced 2.00/s, 2026-07-23); this layout declares capacity 2 \
+                 / stacking 1 — measurements do NOT transfer across worlds (#383)"
+            ),
+            "world-mismatch tier must not read as unverified"
+        );
+        assert!(
+            !matches("cell-composed: geometry SIM-VERIFIED at plan (…)"),
+            "verified tier must not read as unverified"
+        );
+        assert!(
+            matches(
+                "cell-composed: geometry NOT sim-verified (hash bf44f2261fb871ca) — run \
+                 spaghettio-sim and add the entry to cell-sim-registry.json"
+            ),
+            "the never-verified tier must read as unverified"
+        );
     }
 }
