@@ -11014,6 +11014,191 @@ fn belt_detour_survey() {
 }
 
 // ---------------------------------------------------------------------------
+// Selection-policy calibration evidence (2026-08-23)
+// ---------------------------------------------------------------------------
+//
+// A one-shot corpus driver for joining current validator findings to the
+// immutable Factorio calibration bank. It intentionally builds through
+// `calibration_matrix::build`, not this file's test helpers: that is the exact
+// path used by `calibration_matrix_export` to produce the bank.
+//
+// Run against a COPY of the committed zone cache, never the committed file:
+//
+//   cp crates/core/data/sat-zones-ci.bin /tmp/sat-zones-calibration-evidence.bin
+//   SPAGHETTIO_ZONE_CACHE_PATH=/tmp/sat-zones-calibration-evidence.bin \
+//   SPAGHETTIO_CALIBRATION_BANK=/tmp/calibration-matrix-2026-08-22 \
+//   SPAGHETTIO_CALIBRATION_ISSUES_PATH=$(pwd)/target/calibration-issue-breakdown.json \
+//   cargo test --manifest-path crates/core/Cargo.toml --test e2e \
+//     selection_policy_calibration_issue_breakdown -- --exact --ignored --nocapture
+//
+// The JSON has two top-level maps:
+// - `fixtures`: label -> category -> { errors, warnings }
+// - `determinism`: label -> hash comparison for the layout exported in this
+//   run. A mismatch is written, printed, and makes this test fail so the
+//   evidence script can mark that row excluded rather than mix generations.
+
+#[test]
+#[ignore]
+fn selection_policy_calibration_issue_breakdown() {
+    use sha2::{Digest, Sha256};
+    use spaghettio_core::blueprint;
+    use spaghettio_core::calibration_matrix;
+    use spaghettio_core::validate::Severity;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[derive(serde::Deserialize)]
+    struct Matrix {
+        fixtures: Vec<MatrixFixture>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct MatrixFixture {
+        label: String,
+        blueprint_sha256: String,
+        validator: MatrixValidator,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct MatrixValidator {
+        errors: usize,
+        warnings: usize,
+    }
+
+    let bank = std::env::var("SPAGHETTIO_CALIBRATION_BANK")
+        .expect("set SPAGHETTIO_CALIBRATION_BANK to the read-only calibration bank");
+    let matrix_path = std::path::Path::new(&bank).join("matrix.json");
+    let matrix: Matrix = serde_json::from_str(
+        &std::fs::read_to_string(&matrix_path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", matrix_path.display())),
+    )
+    .unwrap_or_else(|e| panic!("parse {}: {e}", matrix_path.display()));
+    let expected: BTreeMap<_, _> = matrix
+        .fixtures
+        .into_iter()
+        .map(|f| (f.label.clone(), f))
+        .collect();
+    assert_eq!(
+        expected.len(),
+        calibration_matrix::fixtures().len(),
+        "bank fixture set differs from the current calibration corpus"
+    );
+
+    let mut fixture_json = serde_json::Map::new();
+    let mut determinism_json = serde_json::Map::new();
+    let mut mismatches = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for fixture in calibration_matrix::fixtures() {
+        let matrix_row = expected
+            .get(fixture.name)
+            .unwrap_or_else(|| panic!("{} missing from {}", fixture.name, matrix_path.display()));
+        seen.insert(fixture.name);
+
+        let built = match calibration_matrix::build(&fixture) {
+            Ok(built) => built,
+            Err(error) => {
+                eprintln!("EXCLUDED {}: build failed: {error}", fixture.name);
+                fixture_json.insert(fixture.name.to_string(), serde_json::json!({}));
+                determinism_json.insert(
+                    fixture.name.to_string(),
+                    serde_json::json!({
+                        "expected_blueprint_sha256": matrix_row.blueprint_sha256,
+                        "actual_blueprint_sha256": null,
+                        "matches": false,
+                        "exclusion_reason": "build-failed",
+                        "build_error": error,
+                    }),
+                );
+                mismatches.push(fixture.name.to_string());
+                continue;
+            }
+        };
+
+        let mut categories: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        for issue in &built.issues {
+            let entry = categories.entry(issue.category.clone()).or_default();
+            match issue.severity {
+                Severity::Error => entry.0 += 1,
+                Severity::Warning => entry.1 += 1,
+            }
+        }
+        let errors: usize = categories.values().map(|(errors, _)| errors).sum();
+        let warnings: usize = categories.values().map(|(_, warnings)| warnings).sum();
+        assert_eq!(
+            (errors, warnings),
+            (matrix_row.validator.errors, matrix_row.validator.warnings),
+            "{}: current validator totals differ from the bank matrix",
+            fixture.name
+        );
+        fixture_json.insert(
+            fixture.name.to_string(),
+            serde_json::Value::Object(
+                categories
+                    .into_iter()
+                    .map(|(category, (errors, warnings))| {
+                        (category, serde_json::json!({ "errors": errors, "warnings": warnings }))
+                    })
+                    .collect(),
+            ),
+        );
+
+        let (bp, _) = blueprint::export_with_manifest_validated(
+            &built.layout,
+            &built.solver_result,
+            fixture.name,
+            &built.issues,
+        );
+        let actual = format!("{:x}", Sha256::digest(bp.as_bytes()));
+        let matches = actual == matrix_row.blueprint_sha256;
+        if !matches {
+            eprintln!(
+                "EXCLUDED {}: blueprint SHA-256 mismatch (bank {}, rebuilt {})",
+                fixture.name, matrix_row.blueprint_sha256, actual
+            );
+            mismatches.push(fixture.name.to_string());
+        }
+        determinism_json.insert(
+            fixture.name.to_string(),
+            serde_json::json!({
+                "expected_blueprint_sha256": matrix_row.blueprint_sha256,
+                "actual_blueprint_sha256": actual,
+                "matches": matches,
+                "exclusion_reason": if matches { serde_json::Value::Null } else { serde_json::json!("blueprint-sha256-mismatch") },
+            }),
+        );
+    }
+
+    assert_eq!(
+        seen.len(),
+        expected.len(),
+        "the bank has fixture labels absent from the current calibration corpus"
+    );
+    let output = serde_json::json!({
+        "fixtures": fixture_json,
+        "determinism": determinism_json,
+    });
+    let output_path = std::env::var("SPAGHETTIO_CALIBRATION_ISSUES_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("target/calibration-issue-breakdown.json"));
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|e| panic!("create {}: {e}", parent.display()));
+    }
+    std::fs::write(
+        &output_path,
+        serde_json::to_string_pretty(&output).expect("issue breakdown serializes") + "\n",
+    )
+    .unwrap_or_else(|e| panic!("write {}: {e}", output_path.display()));
+    eprintln!("wrote {}", output_path.display());
+    assert!(
+        mismatches.is_empty(),
+        "excluded {} fixture(s) due to deterministic-build mismatch: {}",
+        mismatches.len(),
+        mismatches.join(", ")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // RFC-065 Phase 1 slice 2 (2026-08-06): graph-derived `measure_belt_runs`
 // vs the retained tile-walk oracle (`belt_detour::reference`).
 //
