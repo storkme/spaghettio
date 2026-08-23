@@ -1392,9 +1392,22 @@ pub fn compose_chain_with_capacity(
             // 15/s regardless of plan — gear@20's shipped 75% (#700) was
             // six yellow exit tiles on a 20/s product, meter-verified
             // (patching exactly those tiles to fast measures 20.0/20.0,
-            // all 8 machines working). The spec rate is the FULL chain
-            // rate: at K>1 each copy's drain carries 1/K of it, so this
-            // over-tiers a shared drain rather than ever under-tiering.
+            // all 8 machines working).
+            //
+            // Rate semantics (#715 review round 2 corrected the wording):
+            // `outputs[0].rate * count` with NO `scale` factor is the FULL
+            // chain rate (the per-copy share is `* scale` — see the cell
+            // build above). Drains are PER-COPY and disjoint, so at K>1
+            // each copy's drain is over-tiered by up to K× — deliberately:
+            // over-tiering costs a belt tier, under-tiering caps the
+            // chain. Anyone optimizing this to `* scale` must prove the
+            // kq used here matches the placed copies. Known ceiling, out
+            // of scope here: `belt_entity_for_rate` tops out at express,
+            // so a single-column drain caps at 45/s and a plan above that
+            // would under-deliver at the exit — no corpus fixture ships a
+            // >45/s single solid product today, and no K>1 fixture has an
+            // exit above 15/s, so both arms are recorded follow-ups
+            // rather than tested behaviour (RFC-071 decision log).
             let spec = &specs[pi % n];
             let drain_rate = spec.outputs[0].rate * spec.count as f64;
             let drain_belt = crate::common::belt_entity_for_rate(drain_rate, None);

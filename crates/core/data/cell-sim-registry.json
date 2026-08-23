@@ -94,7 +94,7 @@
     "harness_world": "nb=0 bulk=2, S=1",
     "verdict": "WARN",
     "produced_per_s": 27.7,
-    "known_residual": "produced -7.6% vs plan (27.73/30.00): same EC-row output ceiling + declared-L1 input bound as chain-ec15 (K=2 copies of the same row class) \u2014 #383 attribution. Re-measured IDENTICAL after the 2026-08-23 #700 drain re-tier (yellow\u2192express on the two final drains): the drains sat exactly at yellow's 15/s and were not the binding constraint here; the residual is the row-internal ceiling + input bound, not the chain exit",
+    "known_residual": "produced -7.6% vs plan (27.73/30.00): same EC-row output ceiling + declared-L1 input bound as chain-ec15 (K=2 copies of the same row class) \u2014 #383 attribution. Re-measured IDENTICAL after the 2026-08-23 #700 drain re-tier (yellow\u2192fast on the final drains \u2014 belt_entity_for_rate(30) = fast, 30 <= 30; review round 2 corrected an 'express' misattribution here): the drains sat exactly at yellow's 15/s and were not the binding constraint here; the residual is the row-internal ceiling + input bound, not the chain exit",
     "scenario": "spaghettio-sim chain-ec30-d1 (Factorio 2.0.77, converged, kit-clean, produced 27.73/30.00, delivered 28.0; 2026-08-23 re-bless for the #700 drain-tier fix \u2014 fresh geometry, same measured rate)",
     "date": "2026-08-23"
   },
