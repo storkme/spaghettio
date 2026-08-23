@@ -181,3 +181,26 @@ its own PR(s) under the ~400-line norm.
   second-opinion review failing on an OpenRouter 402 (key credit
   exhaustion); merges queue on the owner's key/balance fix, then the failed
   workflow runs get re-run. No unrequire without the owner's word.*
+- *2026-08-23 — B4 landed as PR #715 with the root cause CORRECTED: not the
+  bridge — the chain's final drain hardcoded yellow (15/s) under a 20/s
+  product. Discrimination (patch six tiles → meter 15→20), fix (rate-based
+  drain tier; meter 20.0/20.0), sim anchor (converged, kit-clean, PASS
+  20.0/20.0), parity 160/160 no drift, ec30 registry re-blessed off a real
+  re-measurement (27.73/30, identical — its drains were never binding),
+  tripwire −25→0 with a plain-main attribution run proving the other rows'
+  sub-tolerance wiggles pre-exist the change. #700 updated; the bridge's
+  filler/B8 subtlety survives only as the report-only detector follow-up.*
+- *2026-08-23 — A2 complete: 7/7 rows re-measured under the pinned harness,
+  0 failures; surplus_export arrived from the owner campaign (non-converged
+  at 95.7% — U235's probabilistic recipe at 0.05/s does not stabilize);
+  voider queued. Coverage: 20 measured / 1 awaiting / 1 kit-error / 13
+  non-converged.*
+- *2026-08-23 — **K71-3 MET** (20/35 ≥ 20) and **K71-1 PASSES**: on the
+  full-strength table the five route-severing categories (belt-dead-end,
+  belt-flow-path, belt-flow-reachability, orphan-belt-segment,
+  unresolved-junction) appear ONLY on broken rows — zero occurrences on
+  all 20 working factories — while ird/row-input-belt-margin straddle both
+  sides (5-vs-6, 4-vs-1: weights territory, too weak to retune) and
+  belt-detour leans false-alarm. **B2 proceeds** with exactly that shape:
+  elevate the route-severing kinds into a class above the local-throttle
+  classes; change no weights. B3 remains next after B2.*
