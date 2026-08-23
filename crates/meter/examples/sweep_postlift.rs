@@ -306,6 +306,7 @@ fn main() {
             // failures; the corpus it was cut from is not knowable from it.
             (declared, 0)
         };
+        let corpus_sha256 = matrix["corpus_sha256"].as_str().map(str::to_owned);
         println!(
             "matrix.json schema_version {schema_version}: {declared} exported rows, \
              {build_failures} build failures, corpus {corpus_size}{}",
@@ -315,6 +316,9 @@ fn main() {
                 ""
             }
         );
+        if let Some(hash) = &corpus_sha256 {
+            println!("  corpus_sha256: {hash}");
+        }
         Some(MatrixIndex {
             schema_version,
             corpus_size,
@@ -588,12 +592,17 @@ fn main() {
                 serde_json::Value::Null => false,
                 serde_json::Value::Bool(b) => *b,
                 other => {
-                    excluded.push((
-                        fixture.clone(),
-                        format!("item {name:?} has non-bool `is_target`: {other}"),
-                    ));
+                    // Keep one fixture-level reason so the coverage buckets
+                    // remain one-per-fixture, but continue scanning the item
+                    // rows before the bad-schema rollback below.
+                    if !bad_schema {
+                        excluded.push((
+                            fixture.clone(),
+                            format!("item {name:?} has non-bool `is_target`: {other}"),
+                        ));
+                    }
                     bad_schema = true;
-                    break;
+                    continue;
                 }
             };
             // A bare `continue` here would let a fixture whose TARGET lacks a
