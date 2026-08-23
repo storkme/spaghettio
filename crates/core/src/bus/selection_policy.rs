@@ -124,6 +124,15 @@ impl ErrorKindCounts {
     /// is worse than any functional defect), then route-severed (a tier
     /// with no route delivers nothing however clean the rest looks —
     /// RFC-071 B2), then the weighted functional total breaks ties.
+    ///
+    /// License boundary (#716 round 2): route-severed sitting ABOVE the
+    /// functional total also places it above weighted CONTAMINATION,
+    /// and that relative order is a design choice, not
+    /// evidence-differentiated — both classes are absent from every
+    /// working factory on the calibration table, and no current corpus
+    /// or fixture decision hinges on route-vs-contamination. If one
+    /// ever does, adjudicate it with measurements before trusting this
+    /// ordering.
     pub fn quality_key(&self, contamination_weight: usize) -> (usize, usize, usize) {
         (
             self.structural,

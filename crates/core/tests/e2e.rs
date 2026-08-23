@@ -5638,6 +5638,23 @@ fn stress_electronic_circuit_35s_from_ore() {
             ].into_iter().collect(),
         },
     );
+    // The B2 winner pin (#716 round 2: the ceilings above also pass the
+    // OLD dead winner, so a precedence regression would go QUIET — this
+    // does not). The RouteSevered flip's live effect on this fixture is
+    // merge-tap winning at the merge-tap stage; the old native (4
+    // dead-ends, meter AND sim 0/35) must not silently return.
+    let decided = result.trace_events.iter().rev().find_map(|e| match e {
+        TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
+        _ => None,
+    });
+    assert_eq!(
+        decided.as_ref().map(|(w, s)| (w.as_str(), *s)),
+        Some(("merge-tap", spaghettio_core::trace::SelectionStage::MergeTap)),
+        "stress_electronic_circuit_35s_from_ore pins the RouteSevered flip (RFC-071 B2): \
+         merge-tap at the merge-tap stage, meter 8.0/35 vs the old native's 0/35 (sim \
+         8.0/35 converged). If this moved, adjudicate with the meter before re-blessing \
+         — got {decided:?}",
+    );
 }
 
 /// Package #3 regression: the layout retry must fire the same way whether or
@@ -5796,6 +5813,20 @@ fn stress_electronic_circuit_40s_from_ore() {
                 ("lane-throughput".to_string(), 631),
             ].into_iter().collect(),
         },
+    );
+    // The B2 winner pin — same rationale as ec35's above: the ceilings
+    // pass the old dead winner too; this does not.
+    let decided = result.trace_events.iter().rev().find_map(|e| match e {
+        TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
+        _ => None,
+    });
+    assert_eq!(
+        decided.as_ref().map(|(w, s)| (w.as_str(), *s)),
+        Some(("merge-tap", spaghettio_core::trace::SelectionStage::MergeTap)),
+        "stress_electronic_circuit_40s_from_ore pins the RouteSevered flip (RFC-071 B2): \
+         merge-tap at the merge-tap stage, meter 6.75/40 vs the old native's 0/40 (sim \
+         7.5/40 converged kit-clean). If this moved, adjudicate with the meter before \
+         re-blessing — got {decided:?}",
     );
 }
 

@@ -796,6 +796,13 @@ pub(crate) const STRUCTURAL_CATEGORIES: [&str; 2] = ["entity-overlap", "pipe-to-
 /// the weighted functional total in `ErrorKindCounts::quality_key`, so
 /// 3 total-stops can no longer lose to 65 throttles — the exact ec30
 /// shipping mechanism (#701, bisected).
+///
+/// Membership is observational, deliberately: semantically-similar
+/// categories that have never fired on a calibration row
+/// (`belt-connectivity` is the named example, #716 round 2) stay in
+/// their default class until the table shows them — classifying on
+/// meaning instead of measurement is the exact practice B2 replaces.
+/// When one first fires, classify it THEN, with its row as the receipt.
 pub(crate) const ROUTE_SEVERING_CATEGORIES: [&str; 5] = [
     "belt-dead-end",
     "belt-flow-path",

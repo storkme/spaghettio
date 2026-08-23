@@ -1458,7 +1458,10 @@ pub enum TraceEvent {
         /// RFC-071 B2: the class that DOMINATES the quality key must be
         /// visible in the stream — a walker replaying a shipped
         /// selection would otherwise see a winner flip with no visible
-        /// cause (#716 review round 1).
+        /// cause (#716 review round 1). `serde(default)` so pre-B2 `.fls`
+        /// snapshots keep decoding (round 2) — absent reads as None,
+        /// which is truthful: nothing measured the class then.
+        #[serde(default)]
         route_severed_errors: Option<usize>,
     },
     SelectionDecided {
