@@ -165,6 +165,21 @@ impl Row {
     }
 }
 
+use sha2::{Digest, Sha256};
+
+/// What a `calibration_matrix_export` bank declares about itself, read from
+/// its `matrix.json`. Absent for the older ad-hoc banks.
+struct MatrixIndex {
+    /// Fixtures the corpus DECLARES — exported rows plus any that failed to
+    /// build at export. The honest coverage denominator.
+    corpus_size: usize,
+    /// Rows recorded under `build_failures`: declared, never exported, so
+    /// they have no directory and can never be measured from this bank.
+    build_failures: usize,
+    /// `label → blueprint_sha256` for every exported row.
+    hashes: std::collections::BTreeMap<String, String>,
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let dir = args.get(1).cloned().unwrap_or_else(|| {
@@ -192,24 +207,27 @@ fn main() {
     // to expose. Older ad-hoc banks deliberately have no such contract and
     // retain their directory-driven behavior.
     let matrix_path = std::path::Path::new(&dir).join("matrix.json");
-    let matrix_fixture_count = if matrix_path.exists() {
+    let matrix = if matrix_path.exists() {
         let raw = std::fs::read_to_string(&matrix_path)
             .unwrap_or_else(|e| panic!("read {}: {e}", matrix_path.display()));
         let matrix: serde_json::Value = serde_json::from_str(&raw)
             .unwrap_or_else(|e| panic!("parse {}: {e}", matrix_path.display()));
-        let expected: std::collections::BTreeSet<String> = matrix["fixtures"]
+        let mut hashes = std::collections::BTreeMap::new();
+        for v in matrix["fixtures"]
             .as_array()
             .unwrap_or_else(|| panic!("{} has no fixtures array", matrix_path.display()))
-            .iter()
-            .map(|v| {
-                v["label"]
-                    .as_str()
-                    .unwrap_or_else(|| {
-                        panic!("{} has fixture without label", matrix_path.display())
-                    })
-                    .to_string()
-            })
-            .collect();
+        {
+            let label = v["label"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{} has fixture without label", matrix_path.display()));
+            let hash = v["blueprint_sha256"].as_str().unwrap_or_else(|| {
+                panic!("{} row {label} has no blueprint_sha256", matrix_path.display())
+            });
+            if hashes.insert(label.to_string(), hash.to_string()).is_some() {
+                panic!("{} names {label} twice", matrix_path.display());
+            }
+        }
+        let expected: std::collections::BTreeSet<String> = hashes.keys().cloned().collect();
         let declared = matrix["fixture_count"]
             .as_u64()
             .unwrap_or_else(|| panic!("{} has no fixture_count", matrix_path.display()))
@@ -230,7 +248,19 @@ fn main() {
             "matrix directory set differs from {}; regenerate a fresh bank rather than mixing artifacts",
             matrix_path.display()
         );
-        Some(declared)
+        // Additive fields (second exporter revision): a bank from the first
+        // revision has neither and declared exactly what it exported.
+        let build_failures = matrix["build_failures"].as_array().map_or(0, Vec::len);
+        let corpus_size = matrix["corpus_size"]
+            .as_u64()
+            .map_or(declared + build_failures, |n| n as usize);
+        assert_eq!(
+            corpus_size,
+            declared + build_failures,
+            "{} corpus_size must equal fixture_count + build_failures",
+            matrix_path.display()
+        );
+        Some(MatrixIndex { corpus_size, build_failures, hashes })
     } else {
         None
     };
@@ -243,6 +273,39 @@ fn main() {
         if !bp_path.exists() || !mf_path.exists() {
             excluded.push((fixture, "no bp.txt / manifest-real.json".into()));
             continue;
+        }
+        // Bank integrity before any report gate. The matrix fingerprint is
+        // the only thing that binds report.json to THIS bp.txt — the label
+        // matches whether or not someone re-exported underneath the report —
+        // and a blueprint that no longer matches is a corrupted bank whatever
+        // else is true of the row, so it is reported as that and not as the
+        // first report gate it happens to fail. A fingerprint recorded but
+        // never read lets a stale report through as vetted (#710 review).
+        if let Some(index) = &matrix {
+            let bytes = match std::fs::read(&bp_path) {
+                Ok(b) => b,
+                Err(e) => {
+                    excluded.push((fixture, format!("bp.txt unreadable: {e}")));
+                    continue;
+                }
+            };
+            let actual = format!("{:x}", Sha256::digest(&bytes));
+            match index.hashes.get(&fixture) {
+                Some(recorded) if *recorded == actual => {}
+                Some(_) => {
+                    excluded.push((
+                        fixture,
+                        "bp.txt sha256 differs from matrix.json — report.json cannot be bound \
+                         to this blueprint; regenerate a fresh bank"
+                            .into(),
+                    ));
+                    continue;
+                }
+                None => {
+                    excluded.push((fixture, "label absent from matrix.json fixtures".into()));
+                    continue;
+                }
+            }
         }
         if !rp_path.exists() {
             excluded.push((fixture, "no sim report.json — nothing to compare".into()));
@@ -525,18 +588,32 @@ fn main() {
     let f = |v: Option<f64>| v.map_or("n/a".into(), |x| format!("{x:.4}"));
     let p = |v: Option<f64>| v.map_or("n/a".into(), |x| format!("{x:.2}"));
 
-    if let Some(expected) = matrix_fixture_count {
+    if let Some(index) = &matrix {
+        // Four buckets that sum to the corpus the bank declares. A fixture
+        // excluded for any reason other than "not measured yet" (kit errors,
+        // non-convergence, short warmup, a hash mismatch above) is a coverage
+        // shortfall and is counted as one — not folded into "awaiting", and
+        // not dropped from the denominator.
         let awaiting = excluded
             .iter()
             .filter(|(_, why)| why == "no sim report.json — nothing to compare")
             .count();
+        let other = excluded.len() - awaiting;
+        let vetted = provenance.len();
         println!("=== MATRIX COVERAGE ===");
         println!(
-            "  {}/{} fixtures have a vetted sim report; {} awaiting measurement",
-            provenance.len(),
-            expected,
-            awaiting,
+            "  {vetted}/{} fixtures have a vetted sim report; {awaiting} awaiting measurement; \
+             {other} excluded for another reason (see EXCLUDED); {} failed to build at export",
+            index.corpus_size, index.build_failures,
         );
+        let accounted = vetted + awaiting + other + index.build_failures;
+        if accounted != index.corpus_size {
+            println!(
+                "  WARNING: buckets sum to {accounted}, corpus declares {} — a fixture was \
+                 neither vetted nor excluded (a fixture directory that yielded no row?)",
+                index.corpus_size
+            );
+        }
     }
 
     // --- per-item table ---------------------------------------------------

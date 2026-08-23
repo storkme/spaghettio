@@ -350,6 +350,13 @@ pub fn fixtures() -> Vec<CalibrationFixture> {
             excluded: &[],
             variant: Strategy(LayoutStrategy::PartitionedDecomposed),
         },
+        // `stress_processing_unit_20s_from_plates` (processing-unit at 20/s,
+        // AM3) is deliberately NOT a row: its balancer-shape SAT search ran
+        // >20 min without finishing (belt-detour survey driver run,
+        // 2026-08-01), far outside any corpus budget. Its e2e test is
+        // `#[ignore]` for the same reason. Listed here so the omission reads
+        // as a decision rather than an oversight; add it back only with a
+        // measured build time.
         CalibrationFixture {
             name: "stress_electronic_circuit_60s_red_from_ore",
             item: "electronic-circuit",

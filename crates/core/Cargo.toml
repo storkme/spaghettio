@@ -21,7 +21,6 @@ rayon = "1.10"
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
 thiserror = "2"
 varisat = "0.2"
 tsify-next = { version = "0.5", features = ["js"], optional = true }
@@ -32,6 +31,10 @@ web-time = "1"
 
 [dev-dependencies]
 ntest = "0.9"
+# Hashing only in test/example targets: `parity_corpus`'s committed-prefix
+# cache pin, `e2e`, and the calibration-matrix exporter. Keep it out of
+# `[dependencies]` — the library never hashes, and WASM would carry it.
+sha2 = "0.10"
 
 # sim_export is the tracked fixture generator; its label logic decides the
 # OUTPUT DIRECTORY, so a regression there silently re-collides A/B fixtures

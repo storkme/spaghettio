@@ -10792,15 +10792,49 @@ fn rfc061_allocation_probe_ac5() {
 //       belt_detour_survey --exact --ignored --nocapture
 
 use spaghettio_core::calibration_matrix::{
-    fixtures as calibration_fixtures, CalibrationFixture as SurveyFixture,
-    FixtureVariant as SurveyVariant,
+    self, CalibrationFixture as SurveyFixture, FixtureVariant as SurveyVariant,
 };
 
 /// The belt-detour differential and the Factorio calibration exporter use the
 /// same current-generation fixture list. A new e2e shape is therefore
 /// automatically visible as an unmeasured calibration row until it is run.
+/// The three drivers below still build through this file's `run_e2e*`
+/// helpers (the always-on differential chunks among them); the option-builder
+/// pin right after this keeps that path and the exporter's from diverging.
 fn survey_fixtures() -> Vec<SurveyFixture> {
-    calibration_fixtures()
+    calibration_matrix::fixtures()
+}
+
+/// The pin between the two option builders in play: [`harness_options`] is
+/// what every `run_e2e*` fixture in this file runs under, and
+/// `calibration_matrix::layout_options` is what the Factorio bank is exported
+/// under. Each is pinned to `LayoutOptions::default()` on its own
+/// (`harness_options_are_engine_defaults`, `plain_fixture_uses_shipped_defaults`),
+/// but that only proves each is right with NOTHING overridden — the RFC-070
+/// W2c fossils were overrides. This asserts the two agree on every declared
+/// variant in the corpus, so an axis added to one builder and not the other
+/// fails here instead of producing a bank the e2e suite never ran. Free: no
+/// solve, no layout.
+#[test]
+fn calibration_matrix_options_match_harness_options() {
+    for f in calibration_matrix::fixtures() {
+        let mut h = HarnessOptions { belt_tier: f.belt_tier, ..HarnessOptions::default() };
+        match f.variant {
+            SurveyVariant::Plain | SurveyVariant::Excluded => {}
+            SurveyVariant::Strategy(s) => h.strategy = s,
+            SurveyVariant::ExcludedVoid => h.surplus_policy = layout::SurplusPolicy::Void,
+        }
+        let harness = harness_options(h);
+        let bank = calibration_matrix::layout_options(&f);
+        assert_eq!(harness.constraints(), bank.constraints(), "{}: user-pinned group drifted", f.name);
+        assert_eq!(harness.axes(), bank.axes(), "{}: search-axis group drifted", f.name);
+        assert_eq!(
+            harness.engine_tuning(),
+            bank.engine_tuning(),
+            "{}: engine-tuning group drifted",
+            f.name
+        );
+    }
 }
 
 fn percentile(sorted_ascending: &[f64], p: f64) -> f64 {

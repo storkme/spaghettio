@@ -32,3 +32,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 flate2 = "1"
+
+[dev-dependencies]
+# `examples/sweep_postlift` re-hashes each bank's bp.txt against the
+# `blueprint_sha256` that `calibration_matrix_export` recorded — the only
+# thing that binds a report.json to the blueprint it was measured from.
+# Examples see dev-dependencies; the meter library itself does not hash.
+sha2 = "0.10"

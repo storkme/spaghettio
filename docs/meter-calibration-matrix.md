@@ -10,10 +10,16 @@ generator configurations.
 
 Every row starts from the same source used by the e2e belt-detour differential:
 recipe, rate, machine tier, raw inputs, belt tier, exclusions, and the one
-declared layout variant. The exporter writes the exact blueprint and manifest
-that Factorio runs; the meter reads those same files. A row is therefore a
-meter-vs-game comparison of one concrete generated factory, not a comparison
-between separately reconstructed configurations.
+declared layout variant. The e2e drivers build through the suite's own
+`run_e2e*` helpers and the exporter through `calibration_matrix::build`; the
+two option builders are pinned to each other on every declared variant by
+`calibration_matrix_options_match_harness_options` in `e2e.rs`, so an axis
+added to one and not the other fails a free test rather than producing a bank
+the suite never ran (the RFC-070 W2c fossil class).
+The exporter writes the exact blueprint and manifest that Factorio runs; the
+meter reads those same files. A row is therefore a meter-vs-game comparison of
+one concrete generated factory, not a comparison between separately
+reconstructed configurations.
 
 This is a representative current-production corpus, not an exhaustive Cartesian
 product of every recipe and every engine option. A newly added e2e fixture
@@ -37,8 +43,17 @@ The exporter refuses a non-empty target directory. That is intentional: do not
 replace a blueprint beneath an old `report.json`, because a label match alone
 cannot prove that the report was made from the current file. `matrix.json`
 records the fixture declaration, geometry, validator summary, and SHA-256 of
-each exported blueprint. The runner resumes a stopped campaign by skipping
-existing reports; a changed factory always requires a new bank.
+each exported blueprint, and `sweep_postlift` re-hashes every `bp.txt` it
+reads against that entry — a row whose blueprint no longer matches is excluded,
+not vetted. A fixture that fails to build at export is recorded under
+`build_failures` in `matrix.json` and the export continues (exiting non-zero):
+an engine regression is exactly when the other rows' measurements are wanted.
+
+The runner resumes a stopped campaign by skipping existing reports; a changed
+factory always requires a new bank. A fixture whose Factorio run fails
+(harness timeout, crash) is logged and the campaign moves on; the script exits
+non-zero at the end and the next invocation retries it, since no report was
+written.
 
 Each Factorio run uses a 432,000-tick warmup at speed 32, matching the
 post-lift provenance bar. Runs remain sequential because the main purpose is
@@ -48,12 +63,16 @@ need an explicit resource budget and independent Factorio installs.
 ## Reading coverage honestly
 
 `sweep_postlift` prints every fixture directory without a usable report as an
-exclusion, rather than silently shrinking the denominator. It compares solid
-targets on both produced and delivered rates, reports threshold classifications,
-and keeps fluid target rows visible but unjudged until a comparable fluid
-metric is established. Its output, plus the `matrix.json` fingerprint, is the
-calibration matrix record; neither a green e2e test nor a meter-only run is a
-substitute for a Factorio measurement.
+exclusion, rather than silently shrinking the denominator. Its
+`MATRIX COVERAGE` line reconciles to the corpus the bank declares: vetted +
+awaiting measurement + excluded for another reason + failed to build = corpus
+size, so a shortfall in any bucket is visible as a shortfall rather than
+absorbed into a smaller denominator. It compares solid targets on both produced
+and delivered rates, reports threshold classifications, and keeps fluid target
+rows visible but unjudged until a comparable fluid metric is established. Its
+output, plus the `matrix.json` fingerprint, is the calibration matrix record;
+neither a green e2e test nor a meter-only run is a substitute for a Factorio
+measurement.
 
 Historical context and the known divergence results live in
 [`meter-divergence.md`](meter-divergence.md). This document owns the workflow

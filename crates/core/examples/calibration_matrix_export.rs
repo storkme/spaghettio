@@ -12,6 +12,11 @@
 //! means anything when its Factorio result belongs to the same blueprint, so
 //! this exporter refuses to overwrite an existing bank.  Generate a new bank
 //! after an engine change; do not replace `bp.txt` underneath an old report.
+//!
+//! A fixture that fails to build is recorded under `build_failures` in
+//! `matrix.json` and the export continues: an engine regression is exactly
+//! when the other rows' measurements are wanted, so one broken fixture must
+//! not cost the bank.  The process still exits non-zero so a script notices.
 
 use sha2::{Digest, Sha256};
 use spaghettio_core::blueprint;
@@ -23,12 +28,15 @@ fn usage() -> ! {
     std::process::exit(2);
 }
 
-fn variant_name(variant: FixtureVariant) -> &'static str {
+/// Machine-readable variant tag. A strategy row carries its discriminant —
+/// the pooled/partitioned A/B pairs in the corpus are otherwise identical
+/// rows distinguishable only by label.
+fn variant_name(variant: FixtureVariant) -> String {
     match variant {
-        FixtureVariant::Plain => "plain",
-        FixtureVariant::Strategy(_) => "strategy",
-        FixtureVariant::Excluded => "excluded",
-        FixtureVariant::ExcludedVoid => "excluded-void",
+        FixtureVariant::Plain => "plain".into(),
+        FixtureVariant::Strategy(s) => format!("strategy:{s:?}"),
+        FixtureVariant::Excluded => "excluded".into(),
+        FixtureVariant::ExcludedVoid => "excluded-void".into(),
     }
 }
 
@@ -85,9 +93,18 @@ fn main() {
         std::fs::create_dir_all(root).unwrap_or_else(|e| panic!("create {}: {e}", root.display()));
     }
 
+    let corpus = fixtures();
     let mut entries = Vec::new();
-    for fixture in fixtures() {
-        let built = build(&fixture).unwrap_or_else(|e| panic!("{}: {e}", fixture.name));
+    let mut failures = Vec::new();
+    for fixture in &corpus {
+        let built = match build(fixture) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("{:<62} FAILED: {e}", fixture.name);
+                failures.push(serde_json::json!({ "label": fixture.name, "error": e }));
+                continue;
+            }
+        };
         let (bp, manifest) = blueprint::export_with_manifest_validated(
             &built.layout,
             &built.solver_result,
@@ -110,13 +127,20 @@ fn main() {
             built.layout.width,
             built.layout.height,
         );
-        entries.push(entry(&fixture, &built, &bp));
+        entries.push(entry(fixture, &built, &bp));
     }
+    let exported = entries.len();
+    let failed = failures.len();
+    // `fixture_count` is the number of exported rows (what the sweep checks
+    // the directory set against); `corpus_size` is what the corpus declares.
+    // They differ by exactly `build_failures.len()`.
     let index = serde_json::json!({
         "schema_version": 1,
         "purpose": "current-generation meter-vs-Factorio calibration matrix",
-        "fixture_count": entries.len(),
+        "corpus_size": corpus.len(),
+        "fixture_count": exported,
         "fixtures": entries,
+        "build_failures": failures,
     });
     let index_path = root.join("matrix.json");
     std::fs::write(
@@ -125,20 +149,37 @@ fn main() {
     )
     .unwrap_or_else(|e| panic!("write {}: {e}", index_path.display()));
     println!(
-        "wrote {} fixtures and {}",
-        fixtures().len(),
+        "wrote {exported} of {} fixtures ({failed} failed to build) and {}",
+        corpus.len(),
         index_path.display()
     );
+    if failed > 0 {
+        eprintln!(
+            "{failed} fixture(s) failed to build; the bank is usable but incomplete — \
+             see `build_failures` in {}",
+            index_path.display()
+        );
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spaghettio_core::bus::layout::LayoutStrategy;
 
     #[test]
     fn variants_have_stable_machine_readable_names() {
         assert_eq!(variant_name(FixtureVariant::Plain), "plain");
         assert_eq!(variant_name(FixtureVariant::Excluded), "excluded");
         assert_eq!(variant_name(FixtureVariant::ExcludedVoid), "excluded-void");
+        assert_eq!(
+            variant_name(FixtureVariant::Strategy(LayoutStrategy::Pooled)),
+            "strategy:Pooled"
+        );
+        assert_eq!(
+            variant_name(FixtureVariant::Strategy(LayoutStrategy::PartitionedDecomposed)),
+            "strategy:PartitionedDecomposed"
+        );
     }
 }
