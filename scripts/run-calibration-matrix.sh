@@ -2,8 +2,8 @@
 # Run Factorio over every not-yet-measured fixture in a freshly exported bank.
 #
 # The exporter creates immutable bp.txt/manifest-real.json pairs.  This script
-# resumes safely after interruption by leaving existing report.json files
-# alone; regenerate into a new directory after changing the engine.
+# resumes safely after interruption by leaving complete existing report.json
+# files alone; regenerate into a new directory after changing the engine.
 #
 # What "resume" means here: one completed Factorio run per fixture.  A run
 # that completed but did not converge, or that reported kit errors, still
@@ -17,9 +17,10 @@
 #     exits non-zero at the end.  Letting `set -e` abort on the harness call
 #     would end the campaign at the first such fixture and, on resume, end
 #     it at the same fixture again.
-#   - a report.json that does not parse (a kill or a full disk mid-write):
-#     treated as absent and re-measured, since the harness writes it with
-#     one non-atomic write.
+#   - a report.json that does not parse, or lacks the top-level `report` and
+#     `raw_result` fields (a kill, a full disk mid-write, or a stub object):
+#     treated as absent and re-measured, since the harness writes it with one
+#     non-atomic write.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -48,7 +49,7 @@ for fixture_dir in "$bank_dir"/*; do
     continue
   fi
   if [ -f "$report" ]; then
-    if jq -e . "$report" >/dev/null 2>&1; then
+    if jq -e '.report and .raw_result' "$report" >/dev/null 2>&1; then
       echo "skip $(basename "$fixture_dir"): report.json already exists"
       continue
     fi

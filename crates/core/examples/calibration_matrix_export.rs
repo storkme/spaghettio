@@ -21,7 +21,8 @@
 //! `matrix.json` schema versions (the sweep reads both):
 //!   1 — first revision: `fixture_count`, `fixtures[]` with `blueprint_sha256`.
 //!   2 — adds `corpus_size`, `build_failures[]`, and `manifest_sha256` per
-//!       row, so the immutable bp.txt/manifest-real.json PAIR is fingerprinted.
+//!       row, so the immutable bp.txt/manifest-real.json PAIR is fingerprinted;
+//!       `corpus_sha256` fingerprints the ordered fixture definitions.
 
 use sha2::{Digest, Sha256};
 use spaghettio_core::blueprint;
@@ -49,6 +50,27 @@ fn variant_name(variant: FixtureVariant) -> String {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Hash the ordered corpus definition, independent of any generated layout.
+/// Each fixture contributes these fields in order, each on its own line:
+/// name, item, rate, machine, belt tier, inputs, exclusions, and variant tag.
+/// Inputs and exclusions are comma-joined; a missing belt tier is empty.
+fn corpus_sha256(corpus: &[CalibrationFixture]) -> String {
+    let mut fields = Vec::with_capacity(corpus.len() * 8);
+    for fixture in corpus {
+        fields.extend([
+            fixture.name.to_owned(),
+            fixture.item.to_owned(),
+            fixture.rate.to_string(),
+            fixture.machine.to_owned(),
+            fixture.belt_tier.unwrap_or_default().to_owned(),
+            fixture.inputs.join(","),
+            fixture.excluded.join(","),
+            variant_name(fixture.variant),
+        ]);
+    }
+    sha256_hex(fields.join("\n").as_bytes())
 }
 
 fn entry(
@@ -143,6 +165,7 @@ fn main() {
     }
     let exported = entries.len();
     let failed = failures.len();
+    let corpus_sha256 = corpus_sha256(&corpus);
     // `fixture_count` is the number of exported rows (what the sweep checks
     // the directory set against); `corpus_size` is what the corpus declares.
     // They differ by exactly `build_failures.len()`.
@@ -150,6 +173,7 @@ fn main() {
         "schema_version": SCHEMA_VERSION,
         "purpose": "current-generation meter-vs-Factorio calibration matrix",
         "corpus_size": corpus.len(),
+        "corpus_sha256": corpus_sha256,
         "fixture_count": exported,
         "fixtures": entries,
         "build_failures": failures,
