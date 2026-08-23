@@ -948,7 +948,12 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // contradicts. Do not read this fixture's greenness as delivery.
     // Reproduce with the `w2c_gear20_meter_export` exporter at the bottom
     // of this file.
-    ("tier1_iron_gear_wheel_20s", "8ab74dc08c91cd8d13faf0a376c0c3eabe9b21df3a80f3b5a3768f89371d794c"),
+    // 2026-08-23 (#715): re-blessed for the chain-drain re-tier — six exit
+    // tiles renamed transport-belt -> fast-transport-belt on the shipped
+    // cell-composed winner (the fix that takes gear@20 from 75% to plan;
+    // sim PASS 20.0/20.0). Intentional layout change; geometry otherwise
+    // identical (verified by decoded-bp diff).
+    ("tier1_iron_gear_wheel_20s", "8566f53f1722973129e6947f098acb3e926e3fa6a59570f88758c9a1dd7c5c0b"),
     // Updated when `(m, m)` family balancers became passthroughs
     // (issue #268) — splitter blocks replaced by a single south-facing
     // belt per output column.
