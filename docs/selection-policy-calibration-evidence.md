@@ -1,6 +1,6 @@
 # Selection-policy calibration evidence
 
-Source bank: `/tmp/calibration-matrix-2026-08-22`. Validator probe: `crates/core/target/calibration-issue-breakdown-2026-08-23.json`.
+Source bank: `/tmp/calibration-matrix-2026-08-23-pinned`. Validator probe: `crates/core/target/calibration-issue-breakdown-2026-08-23.json`.
 
 Status preserves campaign state: `awaiting-measurement` has no `report.json`; `non-converged` and `kit-error` retain their measured values but are excluded from the clean-row findings; `excluded` is a rebuilt-blueprint SHA-256 mismatch.
 
@@ -14,28 +14,28 @@ Status preserves campaign state: `awaiting-measurement` has no `report.json`; `n
 | tier2_electronic_circuit | measured | true |  | 100.645 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier2_electronic_circuit_from_ore | measured | true |  | 92.121 | 93.333 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 1 | 0 |
 | tier2_electronic_circuit_20s_from_ore | measured | true |  | 102.500 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
-| tier3_plastic_bar | non-converged | false | research-productivity parity | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| tier3_plastic_bar_from_crude | kit-error | true | research-productivity parity | 111.429 | 110.714 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| tier3_plastic_bar | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| tier3_plastic_bar_from_crude | measured | true |  | 98.667 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier3_sulfuric_acid | non-converged | false |  |  | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier3_heavy_oil_cracking | non-converged | false |  |  | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier3_advanced_oil_processing_multi_machine | measured | true |  |  | 150.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation | non-converged | false |  |  | 158.333 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| tier4_advanced_circuit_from_plates | kit-error | true | research-productivity parity | 101.672 | 100.334 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| tier4_advanced_circuit_from_plates | measured | true |  | 101.672 | 100.334 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier4_advanced_circuit_partitioned | kit-error | true | research-productivity parity | 98.997 | 100.669 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 1 | 0 | 0 | 0 |
-| tier4_advanced_circuit_from_ore_am2 | kit-error | true | research-productivity parity | 100.645 | 98.065 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 0 | 0 |
-| tier5_processing_unit_from_ore_am3 | kit-error | true | research-productivity parity | 93.671 | 96.203 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 10 | 0 | 0 | 0 |
+| tier4_advanced_circuit_from_ore_am2 | measured | true |  | 100.645 | 98.065 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 0 | 0 |
+| tier5_processing_unit_from_ore_am3 | measured | true |  | 86.550 | 87.719 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 10 | 0 | 0 | 0 |
 | tier_kovarex_self_loop | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
-| tier_uranium_processing_surplus_export | awaiting-measurement |  |  |  |  |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| tier_uranium_processing_surplus_export | non-converged | false |  | 0.000 | 95.709 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier_uranium_processing_voider | awaiting-measurement |  |  |  |  |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier_pentapod_egg_self_loop | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier_fish_breeding_self_loop | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier_bacteria_self_loop_regression | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | stress_electronic_circuit_30s_from_ore | measured | true |  | 92.121 | 90.909 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 5 | 0 |
 | stress_advanced_circuit_45s_from_plates | non-converged | false |  | 0.000 | 0.000 |  | 12 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 13 | 553 | 480 | 1 | 10 | 0 |
-| stress_advanced_circuit_partitioned_5s_from_plates_pooled | kit-error | true | research-productivity parity | 99.672 | 100.656 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
-| stress_advanced_circuit_partitioned_5s_from_plates_partitioned | kit-error | true | research-productivity parity | 99.672 | 100.656 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 1 | 0 | 0 | 0 |
-| stress_advanced_circuit_partitioned_4s_from_plates_pooled | kit-error | true | research-productivity parity | 98.667 | 100.333 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
-| stress_advanced_circuit_partitioned_4s_from_plates_partitioned | kit-error | true | research-productivity parity | 96.000 | 100.333 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 1 | 0 | 0 | 0 |
+| stress_advanced_circuit_partitioned_5s_from_plates_pooled | non-converged | false |  | 100.339 | 101.695 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| stress_advanced_circuit_partitioned_5s_from_plates_partitioned | measured | true |  | 98.667 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 1 | 0 | 0 | 0 |
+| stress_advanced_circuit_partitioned_4s_from_plates_pooled | measured | true |  | 101.333 | 100.333 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| stress_advanced_circuit_partitioned_4s_from_plates_partitioned | measured | true |  | 100.000 | 100.329 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 1 | 0 | 0 | 0 |
 | stress_electronic_circuit_30s_decomposed_pooled | measured | true |  | 92.121 | 90.909 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 5 | 0 |
 | stress_electronic_circuit_30s_decomposed_partitioned | measured | true |  | 99.394 | 99.394 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 5 | 0 |
 | stress_electronic_circuit_60s_red_from_ore | measured | true |  | 90.667 | 89.833 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 5 | 0 |
@@ -50,7 +50,8 @@ Clean-row comparison uses a 95% threshold. A converged, kit-clean row is a short
 
 ### Validator categories co-occurring with clean-row shortfall
 
-- `input-rate-delivery`: `tier2_electronic_circuit_from_ore`, `stress_electronic_circuit_30s_from_ore`, `stress_electronic_circuit_30s_decomposed_pooled`, `stress_electronic_circuit_60s_red_from_ore`
+- `belt-detour`: `tier5_processing_unit_from_ore_am3`
+- `input-rate-delivery`: `tier2_electronic_circuit_from_ore`, `tier5_processing_unit_from_ore_am3`, `stress_electronic_circuit_30s_from_ore`, `stress_electronic_circuit_30s_decomposed_pooled`, `stress_electronic_circuit_60s_red_from_ore`
 - `row-input-belt-margin`: `tier2_electronic_circuit_from_ore`, `stress_electronic_circuit_30s_from_ore`, `stress_electronic_circuit_30s_decomposed_pooled`, `stress_electronic_circuit_60s_red_from_ore`
 
 ### Categories appearing only on broken or excluded rows
@@ -63,12 +64,12 @@ Clean-row comparison uses a 95% threshold. A converged, kit-clean row is a short
 
 ### Categories firing on clean rows at plan (false-alarm candidates)
 
-- `belt-detour`: `tier2_electronic_circuit_20s_from_ore`
-- `input-rate-delivery`: `stress_electronic_circuit_30s_decomposed_partitioned`, `stress_electronic_circuit_22s_from_ore`, `stress_electronic_circuit_23s_from_ore`
+- `belt-detour`: `tier2_electronic_circuit_20s_from_ore`, `tier4_advanced_circuit_from_plates`, `stress_advanced_circuit_partitioned_5s_from_plates_partitioned`, `stress_advanced_circuit_partitioned_4s_from_plates_pooled`, `stress_advanced_circuit_partitioned_4s_from_plates_partitioned`
+- `input-rate-delivery`: `tier4_advanced_circuit_from_ore_am2`, `stress_advanced_circuit_partitioned_5s_from_plates_partitioned`, `stress_advanced_circuit_partitioned_4s_from_plates_partitioned`, `stress_electronic_circuit_30s_decomposed_partitioned`, `stress_electronic_circuit_22s_from_ore`, `stress_electronic_circuit_23s_from_ore`
 - `row-input-belt-margin`: `stress_electronic_circuit_30s_decomposed_partitioned`
 
 These are candidates, not adjudicated false positives: this table establishes co-occurrence, not causal attribution.
 
 ## Coverage
 
-awaiting-measurement: 2, kit-error: 9, measured: 13, non-converged: 11.
+awaiting-measurement: 1, kit-error: 1, measured: 20, non-converged: 13.
