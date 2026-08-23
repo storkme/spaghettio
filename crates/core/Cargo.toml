@@ -31,6 +31,9 @@ web-time = "1"
 
 [dev-dependencies]
 ntest = "0.9"
+# Hashing only in test/example targets: `parity_corpus`'s committed-prefix
+# cache pin, `e2e`, and the calibration-matrix exporter. Keep it out of
+# `[dependencies]` — the library never hashes, and WASM would carry it.
 sha2 = "0.10"
 
 # sim_export is the tracked fixture generator; its label logic decides the
@@ -48,4 +51,9 @@ sha2 = "0.10"
 [[example]]
 name = "sim_export"
 path = "examples/sim_export.rs"
+test = true
+
+[[example]]
+name = "calibration_matrix_export"
+path = "examples/calibration_matrix_export.rs"
 test = true
