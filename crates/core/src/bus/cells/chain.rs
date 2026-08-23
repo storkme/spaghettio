@@ -1318,16 +1318,23 @@ pub fn compose_chain_with_capacity(
                     // path — a b_out mid-layout leaves a dead-end belt
                     // (the exemption is bounds-based) and puts the sim
                     // rig at a nonuniform depth (#363).
+                    //
+                    // Express, matching the corridor convention: this
+                    // mega-output's own rate is not in scope here, and a
+                    // hardcoded yellow is the same 15/s ceiling that
+                    // capped gear@20 at 75% on the final-product path
+                    // (#700). Over-tiering an export drain costs
+                    // nothing; under-tiering silently caps the chain.
                     let seg = format!("out:{}", p.seg);
                     router.vcol(&mut entities, dx0, dy0 + 1, drain_row, &d_item,
-                        "transport-belt", "underground-belt", &seg);
+                        "express-transport-belt", "express-underground-belt", &seg);
                     b_out.push(BoundaryRecord {
                         item: d_item.clone(),
                         x: dx0,
                         y: drain_row,
                         direction: EntityDirection::South,
                         is_fluid: false,
-                        entity: "transport-belt".into(),
+                        entity: "express-transport-belt".into(),
                     });
                     continue;
                 };
@@ -1379,28 +1386,45 @@ pub fn compose_chain_with_capacity(
         let outs: Vec<&Port> = p.cell.ports.iter().filter(|q| !q.inbound).collect();
         if consumers.is_empty() {
             // Final product: corner south past the band, drain record.
+            //
+            // The drain tier is chosen FOR THE PLANNED RATE, not hardcoded.
+            // A hardcoded "transport-belt" here capped the whole chain at
+            // 15/s regardless of plan — gear@20's shipped 75% (#700) was
+            // six yellow exit tiles on a 20/s product, meter-verified
+            // (patching exactly those tiles to fast measures 20.0/20.0,
+            // all 8 machines working). The spec rate is the FULL chain
+            // rate: at K>1 each copy's drain carries 1/K of it, so this
+            // over-tiers a shared drain rather than ever under-tiering.
+            let spec = &specs[pi % n];
+            let drain_rate = spec.outputs[0].rate * spec.count as f64;
+            let drain_belt = crate::common::belt_entity_for_rate(drain_rate, None);
+            let drain_ug = match drain_belt {
+                "express-transport-belt" => "express-underground-belt",
+                "fast-transport-belt" => "fast-underground-belt",
+                _ => "underground-belt",
+            };
             let o1 = outs.first().ok_or_else(|| format!("cells: {} has no out port", p.recipe))?;
             let (ox, oy) = port_abs(o1, p.x, p.y_off);
             let drain_x = ox + 2;
             let seg = format!("out:{}", p.seg);
             router.hrow(&mut entities, oy, ox + 1, drain_x - 1, &out_item,
-                "transport-belt", "underground-belt", &seg);
+                drain_belt, drain_ug, &seg);
             router.occ.insert((drain_x, oy));
             entities.push(PlacedEntity {
-                name: "transport-belt".into(), x: drain_x, y: oy,
+                name: drain_belt.into(), x: drain_x, y: oy,
                 direction: EntityDirection::South,
                 carries: Some(out_item.clone()),
                 segment_id: Some(seg.clone()), ..Default::default()
             });
             router.vcol(&mut entities, drain_x, oy + 1, drain_row, &out_item,
-                "transport-belt", "underground-belt", &seg);
+                drain_belt, drain_ug, &seg);
             b_out.push(BoundaryRecord {
                 item: out_item.clone(),
                 x: drain_x,
                 y: drain_row,
                 direction: EntityDirection::South,
                 is_fluid: false,
-                entity: "transport-belt".into(),
+                entity: drain_belt.into(),
             });
             continue;
         }
