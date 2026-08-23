@@ -22,18 +22,22 @@ Three concrete, reproducible cases:
   `gear20-am2-plate`, armed since #693). The cell-composed winner's own
   producer warning said `geometry NOT sim-verified` at selection time; the
   `best-error-free` stage filters on errors and ranks on score, so the flag
-  could not participate. Root cause of the deficit itself is a template
-  geometry defect (bridge filler tile turns a B11 curve into a B8 sideload —
-  one red lane = 15/s), diagnosed and guard-rejected on the issue.
+  could not participate. The deficit's root cause was believed at opening to
+  be a template geometry defect (the bridge-filler B8 story on the issue);
+  execution FALSIFIED that — the real cause was the cell chain's final drain
+  hardcoding yellow belt, and the decision log's #715 entry carries the
+  correction with receipts (one red lane and a full yellow belt are both
+  15/s, which is why the tile-level story looked confirmed).
 - **ec30 shipped 0.00/s against a 30/s plan** (#701; sim-verified) because
   `ErrorKinds` classed `belt-dead-end` (a total stop with chain-wide
   back-pressure) and `lane-throughput` (a local throttle) at the same weight,
   so 3 total-stops beat 65 throttles. #706 removed the trigger (the (3,2)
   balancer hole); the taxonomy hole remains.
-- **The first calibration campaign vetted only 13/35 rows** — 9 excluded on
-  research-productivity parity (world ≠ declared axes; harness-side), 8
-  non-converged, 1 kit-chest overlap. The instrument exists but is not yet at
-  strength.
+- **The first calibration campaign vetted only 13/35 rows** — the sweep's
+  buckets: 13 measured, 9 kit-errored on research-productivity parity
+  (world ≠ declared axes; harness-side), 11 non-converged (including the
+  kit-chest-overlap row), 2 awaiting measurement — 13+9+11+2 = 35. The
+  instrument exists but is not yet at strength.
 
 Precedent for the stakes: #520 ("never worse means never worse *by the
 validator*" — a validator-clean, denser layout that simmed at 0/s).
@@ -80,11 +84,13 @@ candidate names; anything needing new stage semantics is out of scope here).
   candidate cannot beat a verified rival on score alone within the same
   stage). Policy-expressible via registration fields + stage predicate data;
   if it is not, K71-4 trips.
-- **B4 — the gear@20 geometry fix** (independent of policy): a true B11
-  merge in `templates::sideload_bridge`/`single_input_row` (no filler
-  predecessor), plus the rejected guard's predicate as a **report-only**
-  validator check so the phantom-feeder class is visible. Golden and parity
-  drift adjudicated, never blessed blind.
+- **B4 — the gear@20 fix** (independent of policy). As opened, this named
+  a bridge-geometry redesign; execution falsified that diagnosis (decision
+  log, #715): the deficit was the cell chain's final drain hardcoding
+  yellow belt, fixed by tiering the drain for its planned rate. The
+  rejected guard's predicate as a **report-only** validator check (the
+  phantom-feeder class stays real as a *pattern*) remains a follow-up.
+  Golden and parity drift adjudicated, never blessed blind.
 
 Trade-offs considered: fixing #700 with a throughput term in the scorer
 (rejected — reintroduces a hand-calibrated model where a measured flag
@@ -233,3 +239,14 @@ its own PR(s) under the ~400-line norm.
   belt-detour leans false-alarm. **B2 proceeds** with exactly that shape:
   elevate the route-severing kinds into a class above the local-throttle
   classes; change no weights. B3 remains next after B2.*
+- *2026-08-23 — CLOSING STATUS (supersedes the stale present-tense wording
+  in earlier entries): every phase is landed as a PR — A1 #714, A2 done
+  in-bank, A3 decided, A4 #712, B1 #713, B2 #716, B3 #717, B4 #715 — with
+  K71-1 PASS, K71-2 receipts on every flip, K71-3 MET (20/35), K71-4 held.
+  Remaining is process only: bot-round absorption, the merge queue
+  (#711/#712/#714/#713/#716 → #715 → retarget #717), and the registry row
+  flip to Complete at close-out. Open follow-ups (out of scope, recorded):
+  ird/row-input-belt-margin weights (evidence straddles both sides), the
+  phantom-feeder report-only check, the >45/s single-drain ceiling and K>1
+  drain coverage (#715 review), RouteSevered trace observability (#716
+  review, absorbed there), RFC-068 P1 (owner-gated).*
