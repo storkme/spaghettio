@@ -7,7 +7,7 @@
     "quality",
     "elevated-rails"
   ],
-  "tech_state": "research_all_technologies;inserter_capacity<=L0;belt_stacking<=S1",
+  "tech_state": "research_all_technologies;inserter_capacity<=L0;belt_stacking<=S1;recipe_productivity=none",
   "entities": 805,
   "produced": {
     "copper-cable": 15.25,

@@ -1003,6 +1003,83 @@ script.on_init(function()
     table.insert(storage.kit_errors, "belt-stacking parity assignment did not take: bonus="
       .. force.belt_stack_size_bonus .. " for declared S=" .. STACKING)
   end
+  -- Recipe-productivity parity (RFC-064 item 7, pinned 2026-08-23):
+  -- research_all above also grants the per-recipe productivity
+  -- technologies (+10%/level: plastic bar, processing unit, ...), while
+  -- the engine plans and the meter measures at the DECLARED value -- 0
+  -- for every undeclared recipe. The measurement-time check detected
+  -- exactly this and excluded 9/35 rows of the first calibration
+  -- campaign (every plastic-bearing fixture). The bonus itself is
+  -- derived, not settable, but the TECHS are settable: un-research every
+  -- technology whose productivity effects all target undeclared recipes,
+  -- pinning realized to declared -- the same world-matches-declared-axes
+  -- principle as the two assignments above (#370/#385 option A). A tech
+  -- mixing declared and undeclared recipes cannot satisfy both and is
+  -- recorded as a kit error rather than silently half-pinned (none exist
+  -- in vanilla or Space Age, where these techs are single-recipe).
+  -- Declared-nonzero recipes keep their techs; the measurement-time
+  -- check still verifies their realized value independently.
+  local pinned_recipes = {}
+  for _, tech in pairs(force.technologies) do
+    local okp, effects = pcall(function() return tech.prototype.effects end)
+    if okp and effects ~= nil then
+      local undeclared, hits_declared, other_effects = {}, false, false
+      for _, eff in pairs(effects) do
+        if eff.type == "change-recipe-productivity" then
+          if (DECLARED_PRODUCTIVITY[eff.recipe] or 0) ~= 0 then
+            hits_declared = true
+          else
+            table.insert(undeclared, eff.recipe)
+          end
+        else
+          -- ANY other effect (a recipe unlock, a force bonus) makes the
+          -- tech unsafe to un-research: pinning productivity must never
+          -- lock a recipe or strip an unrelated bonus. Vanilla and Space
+          -- Age productivity techs are pure, so this arm firing at all is
+          -- itself reportable.
+          other_effects = true
+        end
+      end
+      if #undeclared > 0 then
+        if hits_declared or other_effects then
+          table.insert(storage.kit_errors,
+            "recipe-productivity parity: tech '" .. tech.name
+            .. "' cannot be pinned ("
+            .. (hits_declared and "mixes declared and undeclared productivity recipes"
+                or "carries non-productivity effects; un-researching would strip them")
+            .. ")")
+        else
+          local okw = pcall(function() tech.researched = false end)
+          if not okw then
+            table.insert(storage.kit_errors,
+              "recipe-productivity parity: could not un-research '" .. tech.name .. "'")
+          end
+          -- Belt-and-braces for multi-level techs, in its OWN pcall
+          -- (#714 review): a level-assignment fault must not be reported
+          -- as an un-research failure — the read-back below and the
+          -- measurement-time check catch any residual bonus either way.
+          pcall(function() tech.level = tech.prototype.level end)
+          for _, r in pairs(undeclared) do pinned_recipes[r] = true end
+        end
+      end
+    end
+  end
+  -- Same self-audit as the two parity assignments above (#376 review
+  -- finding: a verification channel nobody checks is not one): read the
+  -- realized bonus back rather than trusting the write. The
+  -- measurement-time parity check remains as the independent verifier,
+  -- scoped to what the layout actually crafts.
+  for name, _ in pairs(pinned_recipes) do
+    local recipe = force.recipes[name]
+    if recipe ~= nil then
+      local okb, realized = pcall(function() return recipe.productivity_bonus end)
+      if okb and realized ~= nil and math.abs(realized) > 1e-6 then
+        table.insert(storage.kit_errors,
+          "recipe-productivity parity pin did not take: '" .. name
+          .. "' realized " .. realized .. " after un-research")
+      end
+    end
+  end
   local s = game.create_surface("lab")
   s.generate_with_lab_tiles = true
   -- The paste is CENTERED on {0,0}, so generated chunks must cover
@@ -2003,10 +2080,12 @@ local function finalize(s, converged)
       if v == st then census[k] = (census[k] or 0) + 1 end
     end
   end
-  -- Research-productivity parity (RFC-064 Phase 2 item 7). CHECKED, not
-  -- assigned: a recipe's productivity is derived from researched technologies
-  -- rather than a settable force field, so unlike the two axes above this
-  -- cannot be pinned -- only detected. Detecting is the point. The engine
+  -- Research-productivity parity (RFC-064 Phase 2 item 7). Since
+  -- 2026-08-23 the init path PINS this axis (the bonus is derived, but
+  -- the productivity TECHS are settable -- see the un-research loop next
+  -- to the #370/#385 assignments); this block stays as the independent
+  -- measurement-time verifier of that pin, and of any declared-nonzero
+  -- value the pin deliberately leaves researched. The engine
   -- plans and the meter measures at the DECLARED value; if the sim's world
   -- disagrees, every rate comparison in this run is against a plan built for a
   -- different world, and that is what item 7 turned out to be: the sim carried
@@ -2045,7 +2124,8 @@ local function finalize(s, converged)
   -- deliberately takes nothing from module_policy and not
   -- effective_crafting_speed), while this scenario calls
   -- research_all_technologies() above and its tech-state parity block corrects
-  -- only inserter capacity (#370) and belt stacking (#385). If the sim carries
+  -- inserter capacity (#370), belt stacking (#385) and, since 2026-08-23,
+  -- undeclared recipe productivity (the item-7 pin). If the sim carries
   -- a productivity bonus the meter cannot see, the PU-from-ore -13% residual
   -- may reduce to that parity gap rather than any layout or belt defect.
   --
@@ -3489,6 +3569,47 @@ mod tests {
         assert!(
             lua.contains("crafted[r.name] = true"),
             "the check must be scoped to recipes the layout actually crafts"
+        );
+    }
+
+    /// The item-7 PIN (2026-08-23): the init path un-researches the
+    /// per-recipe productivity techs for undeclared recipes, so the world
+    /// realizes the declared value instead of research_all's +10%/level.
+    /// This pins the three pieces that make the pin trustworthy: the effect
+    /// filter, the read-back self-audit, and the mixed-tech refusal.
+    #[test]
+    fn research_productivity_pin_is_emitted() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "test-prod-pin".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+
+        assert!(
+            lua.contains("change-recipe-productivity"),
+            "the pin must select techs by their productivity effect, not by name"
+        );
+        assert!(
+            lua.contains("recipe-productivity parity pin did not take:"),
+            "the pin must read the realized bonus back — a write nobody verifies \
+             is the #376 finding again"
+        );
+        assert!(
+            lua.contains("mixes declared and undeclared productivity recipes"),
+            "a tech spanning declared and undeclared recipes must refuse loudly, \
+             not half-pin"
+        );
+        // The pin must run BEFORE the blueprint is stamped so machines are
+        // never crafted-into under the wrong bonus: it lives in the init
+        // path next to the #370/#385 assignments, which precede surface
+        // creation.
+        let pin_at = lua
+            .find("change-recipe-productivity")
+            .expect("pin present");
+        let surface_at = lua
+            .find("game.create_surface(\"lab\")")
+            .expect("surface creation present");
+        assert!(
+            pin_at < surface_at,
+            "the pin must precede surface creation / blueprint stamping"
         );
     }
 
