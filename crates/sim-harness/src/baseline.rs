@@ -87,9 +87,19 @@ pub fn baseline_from_report(report: &serde_json::Value) -> Result<Baseline, Stri
     // making them mismatch pinned-world baselines loudly — the same
     // stale-artifact failure mode as the capacity field above).
     let productivity_digest = {
-        let mut entries: Vec<String> = r
-            .get("productivity_force")
-            .and_then(|v| v.as_object())
+        let probe = r.get("productivity_force").and_then(|v| v.as_object());
+        // A non-numeric probe value (FIELD_ABSENT under API drift, a
+        // fault sentinel) must NOT digest as a clean world — that would
+        // hand a free pass to exactly the divergence this key exists to
+        // catch (#714 review round 2). It keys as FAULT, which mismatches
+        // every baseline loudly. Coverage note (same round, 3/3): the
+        // probe reads a FIXED recipe list; a declared recipe outside it
+        // does not key here — extend the probe list with the first
+        // fixture that declares one (recorded follow-up).
+        let faulted = probe
+            .map(|m| m.values().any(|v| !v.is_number()))
+            .unwrap_or(false);
+        let mut entries: Vec<String> = probe
             .into_iter()
             .flatten()
             .filter_map(|(k, v)| {
@@ -99,7 +109,9 @@ pub fn baseline_from_report(report: &serde_json::Value) -> Result<Baseline, Stri
             })
             .collect();
         entries.sort();
-        if entries.is_empty() {
+        if faulted {
+            "FAULT".to_string()
+        } else if entries.is_empty() {
             "none".to_string()
         } else {
             entries.join(",")
