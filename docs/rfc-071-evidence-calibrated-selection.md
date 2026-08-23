@@ -195,6 +195,19 @@ its own PR(s) under the ~400-line norm.
   at 95.7% — U235's probabilistic recipe at 0.05/s does not stabilize);
   voider queued. Coverage: 20 measured / 1 awaiting / 1 kit-error / 13
   non-converged.*
+- *2026-08-23 — B2 landed as PR #716: `IssueKind::RouteSevered`, ranked
+  lexicographically between Structural and the weighted functional total;
+  membership = the five evidence-exclusive categories (three latent while
+  Warning-severity). The #701 mechanism is pinned as a unit test. K71-2
+  adjudicated on the only two flips (ec35, ec40 — both previously
+  measured-dead): meters 0→8.0/35 and 0→6.75/40, sims 0→8.0 converged and
+  0→7.5 converged kit-clean. Parity corpus 160/160 zero drift. ird/margin
+  weights deliberately untouched (evidence straddles). DISCOVERY along the
+  way, fixed in the same PR: the shipping path classified through the
+  category consts and the policy's `error_kind_classes` table was
+  decorative — a policy-table edit did not steer shipped selection.
+  `classify_errors` now reads the table; K71-4's premise (policy edits are
+  data edits) is true only as of this PR.*
 - *2026-08-23 — **K71-3 MET** (20/35 ≥ 20) and **K71-1 PASSES**: on the
   full-strength table the five route-severing categories (belt-dead-end,
   belt-flow-path, belt-flow-reachability, orphan-belt-segment,
