@@ -1023,7 +1023,7 @@ script.on_init(function()
   for _, tech in pairs(force.technologies) do
     local okp, effects = pcall(function() return tech.prototype.effects end)
     if okp and effects ~= nil then
-      local undeclared, hits_declared = {}, false
+      local undeclared, hits_declared, other_effects = {}, false, false
       for _, eff in pairs(effects) do
         if eff.type == "change-recipe-productivity" then
           if (DECLARED_PRODUCTIVITY[eff.recipe] or 0) ~= 0 then
@@ -1031,13 +1031,23 @@ script.on_init(function()
           else
             table.insert(undeclared, eff.recipe)
           end
+        else
+          -- ANY other effect (a recipe unlock, a force bonus) makes the
+          -- tech unsafe to un-research: pinning productivity must never
+          -- lock a recipe or strip an unrelated bonus. Vanilla and Space
+          -- Age productivity techs are pure, so this arm firing at all is
+          -- itself reportable.
+          other_effects = true
         end
       end
       if #undeclared > 0 then
-        if hits_declared then
+        if hits_declared or other_effects then
           table.insert(storage.kit_errors,
             "recipe-productivity parity: tech '" .. tech.name
-            .. "' mixes declared and undeclared productivity recipes; cannot pin")
+            .. "' cannot be pinned ("
+            .. (hits_declared and "mixes declared and undeclared productivity recipes"
+                or "carries non-productivity effects; un-researching would strip them")
+            .. ")")
         else
           local okw = pcall(function()
             tech.researched = false
