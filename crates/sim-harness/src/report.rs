@@ -175,9 +175,11 @@ pub struct Report {
     pub inserter_stack_size_bonus: f64,
     pub bulk_inserter_capacity_bonus: f64,
     /// RFC-064 item 7 productivity-parity probe (2026-08-06). The scenario
-    /// calls `research_all_technologies()` while the tech-state parity block
-    /// corrects only inserter capacity (#370) and belt stacking (#385) —
-    /// nothing corrects productivity. The fast meter models no productivity
+    /// calls `research_all_technologies()`; its tech-state parity block
+    /// corrects inserter capacity (#370), belt stacking (#385) and — since
+    /// 2026-08-23 (RFC-071 A1) — undeclared recipe productivity, which is
+    /// pinned to the declared axis by un-researching the pure-productivity
+    /// techs. The fast meter models no productivity
     /// at all, so any bonus here is a divergence between instrument and
     /// reference rather than a layout property. Three channels because a
     /// research source and a module source imply different fixes; carried as

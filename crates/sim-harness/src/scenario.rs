@@ -1049,14 +1049,16 @@ script.on_init(function()
                 or "carries non-productivity effects; un-researching would strip them")
             .. ")")
         else
-          local okw = pcall(function()
-            tech.researched = false
-            tech.level = tech.prototype.level
-          end)
+          local okw = pcall(function() tech.researched = false end)
           if not okw then
             table.insert(storage.kit_errors,
               "recipe-productivity parity: could not un-research '" .. tech.name .. "'")
           end
+          -- Belt-and-braces for multi-level techs, in its OWN pcall
+          -- (#714 review): a level-assignment fault must not be reported
+          -- as an un-research failure — the read-back below and the
+          -- measurement-time check catch any residual bonus either way.
+          pcall(function() tech.level = tech.prototype.level end)
           for _, r in pairs(undeclared) do pinned_recipes[r] = true end
         end
       end

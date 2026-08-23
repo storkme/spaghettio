@@ -76,11 +76,42 @@ pub fn baseline_from_report(report: &serde_json::Value) -> Result<Baseline, Stri
     // want for stale artifacts.
     let capacity = r.get("inserter_capacity").and_then(|v| v.as_u64()).unwrap_or(0);
     let stacking = r.get("stacking").and_then(|v| v.as_u64()).unwrap_or(1);
+    // Recipe-productivity parity (RFC-071 A1): the pin makes the realized
+    // per-recipe bonuses part of the measured world exactly like the two
+    // axes above, so the blessing key encodes them — a fixture re-run
+    // under different realized productivity must reject as a tech-state
+    // mismatch, never read as plain rate drift (#714 review; the #378
+    // verdict-flip class). Digest = the report's own realized
+    // `productivity_force` map, nonzero entries only, sorted; `none` when
+    // absent or all-zero (which is also what pre-pin reports key as,
+    // making them mismatch pinned-world baselines loudly — the same
+    // stale-artifact failure mode as the capacity field above).
+    let productivity_digest = {
+        let mut entries: Vec<String> = r
+            .get("productivity_force")
+            .and_then(|v| v.as_object())
+            .into_iter()
+            .flatten()
+            .filter_map(|(k, v)| {
+                v.as_f64()
+                    .filter(|b| *b != 0.0)
+                    .map(|b| format!("{k}={b}"))
+            })
+            .collect();
+        entries.sort();
+        if entries.is_empty() {
+            "none".to_string()
+        } else {
+            entries.join(",")
+        }
+    };
     Ok(Baseline {
         label,
         game_version,
         mods: HARNESS_MODS.iter().map(|s| s.to_string()).collect(),
-        tech_state: format!("{HARNESS_TECH_STATE};inserter_capacity<=L{capacity};belt_stacking<=S{stacking}"),
+        tech_state: format!(
+            "{HARNESS_TECH_STATE};inserter_capacity<=L{capacity};belt_stacking<=S{stacking};recipe_productivity={productivity_digest}"
+        ),
         entities: r.get("entities").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
         produced,
         delivered,
@@ -204,6 +235,34 @@ mod tests {
         assert!(drifts[0].contains("tech state"));
     }
 
+    /// RFC-071 A1 (#714 review): the recipe-productivity pin changes the
+    /// measured world the way #370/#385 did, so it must key the blessing
+    /// the same way — a pre-pin report (realized +10% plastic) checked
+    /// against a pinned-world baseline is a TECH-STATE rejection, never a
+    /// plain rate drift toward a stale blessing.
+    #[test]
+    fn realized_productivity_mismatch_is_flagged_via_tech_state() {
+        let pinned = report("gear", 10.0, 10.13, "2.0.76");
+        let mut prepin = report("gear", 10.0, 10.13, "2.0.76");
+        prepin["report"]["productivity_force"] =
+            serde_json::json!({"plastic-bar": 0.1, "iron-plate": 0.0});
+        let blessed = baseline_from_report(&pinned).unwrap();
+        assert!(
+            blessed.tech_state.contains("recipe_productivity=none"),
+            "{}",
+            blessed.tech_state
+        );
+        let foreign = baseline_from_report(&prepin).unwrap();
+        assert!(
+            foreign.tech_state.contains("recipe_productivity=plastic-bar=0.1"),
+            "nonzero realized bonuses key the digest (zero entries dropped): {}",
+            foreign.tech_state
+        );
+        let drifts = check_against(&blessed, &prepin, 0.02);
+        assert_eq!(drifts.len(), 1, "{drifts:?}");
+        assert!(drifts[0].contains("tech state"));
+    }
+
     #[test]
     fn stacking_mismatch_is_flagged_via_tech_state() {
         let mut s1 = report("gear", 10.0, 10.13, "2.0.76");
@@ -211,7 +270,7 @@ mod tests {
         let mut s4 = report("gear", 10.0, 10.13, "2.0.76");
         s4["report"]["stacking"] = serde_json::json!(4);
         let blessed = baseline_from_report(&s1).unwrap();
-        assert!(blessed.tech_state.ends_with("belt_stacking<=S1"));
+        assert!(blessed.tech_state.contains("belt_stacking<=S1"));
         let drifts = check_against(&blessed, &s4, 0.02);
         assert_eq!(drifts.len(), 1, "{drifts:?}");
         assert!(drifts[0].contains("tech state"));
