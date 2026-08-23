@@ -208,6 +208,22 @@ its own PR(s) under the ~400-line norm.
   decorative — a policy-table edit did not steer shipped selection.
   `classify_errors` now reads the table; K71-4's premise (policy edits are
   data edits) is true only as of this PR.*
+- *2026-08-23 — B3 landed as PR #717 (stacked on #715), with a measured
+  design pivot recorded: the first draft was a produce-time acceptance
+  gate on the "geometry NOT sim-verified" note, and the suite refuted it —
+  refusing unverified cells re-shipped broken natives in the rescue class
+  (four cells tests red). Shipped shape: an ORDERING —
+  `RankSpec::verified_geometry_first` on BestErrorFree, over the measured
+  `IssueProfile.unverified_geometry` bit — verified outranks score,
+  unverified-but-only still wins. gear@20's cell geometry graduated into
+  cell-sim-registry off the #715 sim anchor (20.0/20.0, PASS), with
+  re-derivable fixture rows in both registry gates; discrimination
+  executed (corrupt the entry → the fixture flips to native, restored).
+  Parity 160/160 zero drift; the rule bites future contests only. Along
+  the way #715 absorbed two record corrections found by B3's checks: the
+  gear20 K0-1 golden re-bless my earlier failure-grep missed (the PR's
+  verification claim was corrected in a comment), and the fixture's
+  stale "KNOWN UNDER-DELIVERING" pin prose.*
 - *2026-08-23 — **K71-3 MET** (20/35 ≥ 20) and **K71-1 PASSES**: on the
   full-strength table the five route-severing categories (belt-dead-end,
   belt-flow-path, belt-flow-reachability, orphan-belt-segment,
