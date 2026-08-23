@@ -724,12 +724,23 @@ fn compute_overproduction(solver_result: &SolverResult) -> f64 {
 /// merge-tap for any weight `< 18`.
 pub(crate) const KIND_CONTAMINATION_WEIGHT: usize = 3;
 
-/// Classify a candidate layout's `Severity::Error` issues into the three
-/// policy projections. This measurement is retained for the scoreboard's
-/// `IssueProfile`; `selection_policy::decide` owns the comparison.
+/// Classify a candidate layout's `Severity::Error` issues into the
+/// policy's kind projections. This measurement is retained for the
+/// scoreboard's `IssueProfile`; `selection_policy::decide` owns the
+/// comparison.
+///
+/// Classification reads the POLICY's `error_kind_classes` table — not the
+/// category consts directly (RFC-071 B2). Before this, the shipping path
+/// classified through the consts while the policy carried a table nothing
+/// on the shipping path consulted, so a "policy-table edit" did not
+/// actually steer shipped selection — the exact policy-as-data promise
+/// RFC-070 migrated for. The consts remain the SOURCE the table is built
+/// from in `SelectionPolicy::current()`; this function makes the table
+/// the single authority the shipping path reads.
 fn classify_errors(
     layout: &LayoutResult,
     solver_result: &SolverResult,
+    policy: &selection_policy::SelectionPolicy,
 ) -> selection_policy::ErrorKindCounts {
     let issues = match crate::validate::validate(layout, Some(solver_result)) {
         Ok(issues) => issues,
@@ -740,13 +751,11 @@ fn classify_errors(
         .iter()
         .filter(|i| i.severity == crate::validate::Severity::Error)
     {
-        let cat = i.category.as_str();
-        if CONTAMINATION_CATEGORIES.contains(&cat) {
-            kinds.contamination += 1;
-        } else if STRUCTURAL_CATEGORIES.contains(&cat) {
-            kinds.structural += 1;
-        } else {
-            kinds.starvation += 1;
+        match policy.kind_of(&i.category) {
+            selection_policy::IssueKind::Contamination => kinds.contamination += 1,
+            selection_policy::IssueKind::Structural => kinds.structural += 1,
+            selection_policy::IssueKind::RouteSevered => kinds.route_severed += 1,
+            selection_policy::IssueKind::Starvation => kinds.starvation += 1,
         }
     }
     kinds
@@ -768,9 +777,28 @@ pub(crate) const CONTAMINATION_CATEGORIES: [&str; 5] = [
 ];
 
 /// The Error categories that classify as STRUCTURAL — the blueprint does
-/// not import at all. Everything not in either list is STARVATION (the
+/// not import at all. Everything not in any list is STARVATION (the
 /// `_` arm above).
 pub(crate) const STRUCTURAL_CATEGORIES: [&str; 2] = ["entity-overlap", "pipe-to-ground"];
+
+/// The Error categories that classify as ROUTE-SEVERED — a product tier
+/// with no route to its consumer, a total stop rather than a throttle
+/// (RFC-071 B2, #701). Membership is EVIDENCE, not intuition: on the
+/// calibration matrix's full-strength table
+/// (`docs/selection-policy-calibration-evidence.md`, 2026-08-23, 20/35
+/// rows Factorio-vetted) these five appear exclusively on rows the sim
+/// measures as broken (ac45, ec35, ec40 — 0/s, non-converged) and never
+/// once on a working factory. The class ranks lexicographically above
+/// the weighted functional total in `ErrorKindCounts::quality_key`, so
+/// 3 total-stops can no longer lose to 65 throttles — the exact ec30
+/// shipping mechanism (#701, bisected).
+pub(crate) const ROUTE_SEVERING_CATEGORIES: [&str; 5] = [
+    "belt-dead-end",
+    "belt-flow-path",
+    "belt-flow-reachability",
+    "orphan-belt-segment",
+    "unresolved-junction",
+];
 
 /// Issue counts for the selection profile: validator errors,
 /// validator warnings, and the SECOND issue channel
@@ -1465,11 +1493,11 @@ fn select_best_decomposition_with_policy(
     // errors and records the result used by that stage.
     if let Some((mt_layout, _)) = merge_tap_run.outcome.as_ref() {
         let start = crate::trace::peek_events_len();
-        let mergetap_kinds = classify_errors(mt_layout, solver_result);
+        let mergetap_kinds = classify_errors(mt_layout, solver_result, &policy);
         let native_kinds = native_run
             .outcome
             .as_ref()
-            .map(|(l, _)| classify_errors(l, solver_result));
+            .map(|(l, _)| classify_errors(l, solver_result, &policy));
         crate::trace::truncate_events(start);
         board.record_kinds(MERGE_TAP_IDX, mergetap_kinds);
         if let Some(n) = native_kinds {
@@ -1835,5 +1863,95 @@ mod tests {
             out.is_err(),
             "merge-tap candidate must refuse non-Pooled strategies; got {out:?}"
         );
+    }
+
+    /// RFC-071 B2 receipts producer (K71-2): for the shipped fixtures the
+    /// RouteSevered class flips (ec35, ec40 — the only route-severed
+    /// carriers on the calibration evidence table), select under the OLD
+    /// policy (route-severing categories classed Starvation) and the NEW
+    /// one, and export both winners for the meter/sim to judge. The flip
+    /// ships only if every new winner measures ≥ its old winner.
+    ///
+    ///   B2_RECEIPTS_OUT=/tmp/b2-receipts \
+    ///   SPAGHETTIO_ZONE_CACHE_PATH=<copy of the committed cache> \
+    ///   cargo test --manifest-path crates/core/Cargo.toml --lib -- \
+    ///     bus::decomposition_search::tests::b2_route_severed_flip_receipts \
+    ///     --exact --ignored --nocapture
+    #[test]
+    #[ignore = "artifact producer — K71-2 receipts for the RouteSevered flip"]
+    fn b2_route_severed_flip_receipts() {
+        use rustc_hash::FxHashSet;
+
+        let out_root = std::path::PathBuf::from(
+            std::env::var("B2_RECEIPTS_OUT").expect("set B2_RECEIPTS_OUT to an output dir"),
+        );
+        for (tag, rate) in [("ec35", 35.0), ("ec40", 40.0)] {
+            for policy_name in ["old", "new"] {
+                // Not Clone (deliberately — one policy instance per
+                // selection), so build each variant fresh.
+                let mut policy = selection_policy::SelectionPolicy::current();
+                if policy_name == "old" {
+                    for c in ROUTE_SEVERING_CATEGORIES {
+                        policy
+                            .error_kind_classes
+                            .insert(c.to_string(), selection_policy::IssueKind::Starvation);
+                    }
+                }
+                let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                let sr = crate::solver::solve_with_exclusions(
+                    "electronic-circuit",
+                    rate,
+                    &inputs,
+                    "assembling-machine-2",
+                    &FxHashSet::default(),
+                )
+                .expect("solve");
+                let opts = LayoutOptions::from_groups(
+                    crate::bus::layout::UserConstraints {
+                        max_belt_tier: Some("transport-belt".into()),
+                        ..Default::default()
+                    },
+                    crate::bus::layout::SearchAxes::default(),
+                    crate::bus::layout::EngineTuning::default(),
+                );
+                let layout =
+                    select_best_decomposition_with_policy(&sr, opts, policy).expect("select");
+                let issues = crate::validate::validate(&layout, Some(&sr))
+                    .unwrap_or_else(|e| e.issues);
+                let errors = issues
+                    .iter()
+                    .filter(|i| i.severity == crate::validate::Severity::Error)
+                    .count();
+                let warnings = issues.len() - errors;
+                let mut by_cat: std::collections::BTreeMap<&str, usize> = Default::default();
+                for i in issues
+                    .iter()
+                    .filter(|i| i.severity == crate::validate::Severity::Error)
+                {
+                    *by_cat.entry(i.category.as_str()).or_default() += 1;
+                }
+                let label = format!("{tag}-{policy_name}");
+                eprintln!("{label} warnings={warnings} errors by category: {by_cat:?}");
+                let (bp, manifest) = crate::blueprint::export_with_manifest_validated(
+                    &layout, &sr, &label, &issues,
+                );
+                let dir = out_root.join(&label);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("bp.txt"), &bp).unwrap();
+                std::fs::write(
+                    dir.join("manifest-real.json"),
+                    serde_json::to_string_pretty(&manifest).unwrap(),
+                )
+                .unwrap();
+                eprintln!(
+                    "{label:<10} entities={:<6} errors={errors:<5} -> {}",
+                    layout.entities.len(),
+                    dir.display()
+                );
+            }
+        }
     }
 }

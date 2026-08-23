@@ -90,6 +90,16 @@ pub enum IssueKind {
     Starvation,
     /// The blueprint does not import. Dominates lexicographically.
     Structural,
+    /// A product tier has no route to its consumer: a total stop with
+    /// chain-wide back-pressure, not a throttle. RFC-071 B2 (#701): the
+    /// ec30 0/s regression shipped because 3 `belt-dead-end` total-stops
+    /// were classed Starvation and lost to 65 `lane-throughput`
+    /// throttles at equal weight. The calibration matrix's evidence
+    /// table licenses the class: every route-severing category appears
+    /// ONLY on rows Factorio measures as broken — zero occurrences
+    /// across all 20 working factories — so any nonzero count dominates
+    /// any quantity of functional throttles, below only Structural.
+    RouteSevered,
 }
 
 /// Per-kind Error counts plus the lexicographic quality key the
@@ -99,21 +109,25 @@ pub struct ErrorKindCounts {
     pub contamination: usize,
     pub starvation: usize,
     pub structural: usize,
+    pub route_severed: usize,
 }
 
 impl ErrorKindCounts {
-    /// Weighted functional total; structural is excluded because
-    /// [`Self::quality_key`] handles it lexicographically.
+    /// Weighted functional total; structural and route-severed are
+    /// excluded because [`Self::quality_key`] handles them
+    /// lexicographically.
     pub fn weighted_functional(&self, contamination_weight: usize) -> usize {
         contamination_weight * self.contamination + self.starvation
     }
 
     /// Lower is better: structural dominates (an unimportable blueprint
-    /// is worse than any functional defect), then the weighted
-    /// functional total breaks ties within equal structural.
-    pub fn quality_key(&self, contamination_weight: usize) -> (usize, usize) {
+    /// is worse than any functional defect), then route-severed (a tier
+    /// with no route delivers nothing however clean the rest looks —
+    /// RFC-071 B2), then the weighted functional total breaks ties.
+    pub fn quality_key(&self, contamination_weight: usize) -> (usize, usize, usize) {
         (
             self.structural,
+            self.route_severed,
             self.weighted_functional(contamination_weight),
         )
     }
@@ -276,6 +290,7 @@ impl IssueProfile {
                         IssueKind::Contamination => kinds.contamination += 1,
                         IssueKind::Structural => kinds.structural += 1,
                         IssueKind::Starvation => kinds.starvation += 1,
+                        IssueKind::RouteSevered => kinds.route_severed += 1,
                     }
                 }
                 crate::validate::Severity::Warning => {
@@ -883,6 +898,9 @@ impl SelectionPolicy {
         }
         for c in super::decomposition_search::STRUCTURAL_CATEGORIES {
             error_kind_classes.insert(c.to_string(), IssueKind::Structural);
+        }
+        for c in super::decomposition_search::ROUTE_SEVERING_CATEGORIES {
+            error_kind_classes.insert(c.to_string(), IssueKind::RouteSevered);
         }
 
         Self {
@@ -1536,6 +1554,7 @@ mod tests {
             contamination,
             starvation,
             structural,
+            route_severed: 0,
         }
     }
 
@@ -1783,6 +1802,64 @@ mod tests {
         ps[MERGE_TAP].kinds = Some(kinds(1, 2, 0));
         let d = decide(&ps, &SelectionPolicy::current()).unwrap();
         assert_eq!(d.winner, NATIVE);
+    }
+
+    /// RFC-071 B2 (#701): the ec30 shipping mechanism, pinned. Three
+    /// route-severing total-stops must not beat sixty-five functional
+    /// throttles — the shipped native delivered 0.00/s while the
+    /// rejected merge-tap produced 17.5/s (meter receipts on #701;
+    /// trigger removed by #706, taxonomy hole closed here). Before the
+    /// RouteSevered class both sides classed as starvation and
+    /// (0, 3) < (0, 65) held the dead layout.
+    #[test]
+    fn route_severed_dominates_any_functional_total() {
+        let mut ps = blank();
+        ps[NATIVE] = produced(1.0, false);
+        ps[NATIVE].kinds = Some(ErrorKindCounts {
+            route_severed: 3,
+            ..Default::default()
+        });
+        ps[MERGE_TAP] = produced(1.0, true);
+        ps[MERGE_TAP].kinds = Some(ErrorKindCounts {
+            starvation: 65,
+            ..Default::default()
+        });
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d,
+            Decision {
+                winner: MERGE_TAP,
+                stage: SelectionStage::MergeTap
+            },
+            "a tier with no route must lose to any quantity of throttles"
+        );
+        // And structural still dominates route-severed: an unimportable
+        // blueprint outranks even a severed route.
+        assert!(
+            ErrorKindCounts {
+                structural: 1,
+                ..Default::default()
+            }
+            .quality_key(3)
+                > ErrorKindCounts {
+                    route_severed: 9,
+                    ..Default::default()
+                }
+                .quality_key(3)
+        );
+    }
+
+    /// The table half of B2: every route-severing category maps to the
+    /// class in the SHIPPED policy (built from the same
+    /// `ROUTE_SEVERING_CATEGORIES` list the classifier reads), and a
+    /// representative throttle stays Starvation.
+    #[test]
+    fn route_severing_categories_map_to_the_class() {
+        let p = SelectionPolicy::current();
+        for c in super::super::decomposition_search::ROUTE_SEVERING_CATEGORIES {
+            assert_eq!(p.kind_of(c), IssueKind::RouteSevered, "{c}");
+        }
+        assert_eq!(p.kind_of("lane-throughput"), IssueKind::Starvation);
     }
 
     /// The deleted v1 test's two measured profiles pin the `[3, 17]`

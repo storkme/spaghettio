@@ -5617,12 +5617,24 @@ fn stress_electronic_circuit_35s_from_ore() {
             // `validate()` until #298; the underlying issues have been
             // present at this scoreboard for a long time. Tighten when
             // the upstream layout-pipeline bugs (e.g. #297) get fixed.
-            max_errors: 4,
-            // RFC rfc-lane-demand-flow.md Phase 1: was 123 (88 belt-flow-reachability + 35 input-rate-delivery); now +118 inserter-throughput = 241.
-            // RFC rfc-inserter-sizing.md Phase 2: +72 inserter-item-throughput (new per-item companion check) = 243.
-            max_warnings: 243,
+            // 2026-08-23 (RFC-071 B2, #701): the RouteSevered class flips
+            // this fixture's winner. The old native carried 4 belt-dead-end
+            // total-stops and MEASURED ZERO — meter 0/35, Factorio sim
+            // non-converged 0.0/s (calibration bank row) — while this
+            // winner (2 route-severed vs the old 4) delivers 8.0/35 on the
+            // meter. 313 errors is uglier ON PAPER than 4; the instruments
+            // say the 4-error sheet was a dead factory and this one is a
+            // quarter-rate one (#520's lesson, both directions). Receipts
+            // on PR: b2_route_severed_flip_receipts + sim anchor. Tighten
+            // when the lane-throughput mass gets engineering attention.
+            max_errors: 313,
+            // Warnings IMPROVE with the flip: 243 ceiling -> 55 measured.
+            max_warnings: 55,
             max_errors_by_category: [
-                ("belt-dead-end".to_string(), 4),
+                ("belt-dead-end".to_string(), 1),
+                ("belt-item-isolation".to_string(), 1),
+                ("lane-throughput".to_string(), 310),
+                ("unresolved-junction".to_string(), 1),
             ].into_iter().collect(),
         },
     );
@@ -5768,16 +5780,20 @@ fn stress_electronic_circuit_40s_from_ore() {
             // — the 188 lane errors were phantom-UG-source artifacts
             // (see the 30s baseline comment); the 13 belt-dead-end are
             // unchanged and stay adjudicated.
-            max_errors: 13,
-            // RFC rfc-lane-demand-flow.md Phase 1: was 195; now +inserter-throughput = 329 (belt-flow-reachability + input-rate-delivery unchanged).
-            // RFC rfc-inserter-sizing.md Phase 2: +81 inserter-item-throughput (new per-item companion check) = 330.
-            // 2026-08-15 (#644 walker fix): 330 -> 283 measured (25
-            // belt-flow-path + 167 belt-flow-reachability + 87
-            // input-rate-delivery + 4 row-input-belt-margin).
-            max_warnings: 283,
+            // 2026-08-23 (RFC-071 B2, #701): the RouteSevered class flips
+            // this fixture's winner. The old native carried 13
+            // belt-dead-end total-stops and MEASURED ZERO — meter 0/40,
+            // Factorio sim non-converged 0.0/s (calibration bank row) —
+            // while this winner is a pure-throttle layout (zero
+            // route-severed) delivering 6.75/40 on the meter. Receipts on
+            // PR: b2_route_severed_flip_receipts + sim anchor. Tighten
+            // when the lane-throughput mass gets engineering attention.
+            max_errors: 631,
+            // Warnings IMPROVE with the flip: 283 ceiling -> 70 measured.
+            max_warnings: 70,
             max_errors_by_category: [
-                ("belt-dead-end".to_string(), 13),
-                ("lane-throughput".to_string(), 0),
+                ("belt-dead-end".to_string(), 0),
+                ("lane-throughput".to_string(), 631),
             ].into_iter().collect(),
         },
     );
