@@ -250,3 +250,10 @@ its own PR(s) under the ~400-line norm.
   phantom-feeder report-only check, the >45/s single-drain ceiling and K>1
   drain coverage (#715 review), RouteSevered trace observability (#716
   review, absorbed there), RFC-068 P1 (owner-gated).*
+- *2026-08-24 — COMPLETE. The merge queue landed in the recorded order
+  (#712, #711, #713, #714, #716, #715, #717-retargeted); 19 bot review
+  rounds adjudicated across the seven PRs, every absorb and refutation
+  receipted in the PR threads. Registry row flipped to Complete;
+  status ledger updated. #700 and #701 closed with their primary
+  subjects fixed and sim-anchored; residual follow-ups live in this
+  log's closing-status entry and the issues' final comments.*
