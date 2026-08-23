@@ -855,6 +855,11 @@ pub fn compose_chain_with_capacity(
     }
 
     let mut entities: Vec<PlacedEntity> = Vec::new();
+    // Producer warnings the composed result carries (#715 review round 3:
+    // a ceiling recorded only in a comment is invisible to selection and
+    // to the web app; a warning is countable by the layout-warnings floor
+    // and readable by a user).
+    let mut chain_warnings: Vec<String> = Vec::new();
     let mut b_in: Vec<BoundaryRecord> = Vec::new();
     let mut b_out: Vec<BoundaryRecord> = Vec::new();
     let mut surplus_exits: Vec<(String, i32, i32)> = Vec::new();
@@ -1411,6 +1416,22 @@ pub fn compose_chain_with_capacity(
             let spec = &specs[pi % n];
             let drain_rate = spec.outputs[0].rate * spec.count as f64;
             let drain_belt = crate::common::belt_entity_for_rate(drain_rate, None);
+            // The tier ladder tops out at express: a single-column drain
+            // caps at 45/s, and a plan above that would under-deliver at
+            // the exit — the same class this fix kills at 15/s, one tier
+            // up, and reachable from the web app with an arbitrary rate.
+            // Loud, not silent (#715 review round 3, 3/3): the warning
+            // rides LayoutResult.warnings, where selection's
+            // layout-warnings floor counts it and a user can read it.
+            let drain_cap = crate::common::belt_throughput(drain_belt);
+            if drain_rate > drain_cap {
+                chain_warnings.push(format!(
+                    "cell chain exit for {} carries {drain_rate:.1}/s on a single {} \
+                     column capped at {drain_cap:.0}/s — the drain under-delivers; \
+                     no single-belt tier can carry this plan",
+                    out_item, drain_belt
+                ));
+            }
             let drain_ug = match drain_belt {
                 "express-transport-belt" => "express-underground-belt",
                 "fast-transport-belt" => "fast-underground-belt",
@@ -1685,6 +1706,7 @@ pub fn compose_chain_with_capacity(
         entities,
         width,
         height,
+        warnings: chain_warnings,
         stacking: 1,
         // Declared axes travel with the rebuilt result (a rebuilt
         // LayoutResult must re-declare stacking/productivity/capacity).

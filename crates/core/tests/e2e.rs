@@ -1613,9 +1613,10 @@ fn tier1_iron_gear_wheel_20s() {
     // metering in-suite. `spaghettio_meter` depends on `spaghettio_core`,
     // so a dev-dependency back would close a cycle and drag the meter into
     // every `cargo test -p spaghettio_core`; and the meter's own tripwire
-    // ALREADY carries this fixture armed (`gear20-am2-plate`, -25.0%,
-    // entities 105). Duplicating it here would add a second, weaker copy
-    // of a guard that exists, not a new guard.
+    // ALREADY carries this fixture armed (`gear20-am2-plate` — 0.0% since
+    // the #715 re-bless; it spent a month armed at -25.0%). Duplicating it
+    // here would add a second, weaker copy of a guard that exists, not a
+    // new guard.
     let estimated = result
         .analysis
         .throughput_estimates
@@ -1625,10 +1626,11 @@ fn tier1_iron_gear_wheel_20s() {
     assert!(
         estimated >= 20.0 * 0.99,
         "PLAN check only — this is `analysis.throughput_estimates`, not delivery. \
-         Expected the plan to still be >=20/s, got {estimated:.1}/s. The MEASURED \
-         rate for this fixture is 15.0/s (meter tripwire `gear20-am2-plate`, \
-         -25.0%, #700); do not read this assertion, or this test passing, as \
-         evidence that the layout delivers 20/s.",
+         Expected the plan to still be >=20/s, got {estimated:.1}/s. The measured \
+         rate is tracked by the meter tripwire (`gear20-am2-plate`: 20.0/20.0, \
+         0.0% since the #715 drain fix; it read 15.0/s, -25.0%, for the month \
+         #700 was open); this assertion is still only the plan, never delivery \
+         evidence.",
     );
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_20s");
