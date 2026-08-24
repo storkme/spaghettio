@@ -1,6 +1,7 @@
 # RFC-069: Achievable-duty provisioning for the zero-headroom family
 
-**Status**: Draft
+**Status**: Active (resumed 2026-08-24 as the trunk/tap-provisioning
+campaign — Phases R/A/B/C below; the 2026-08-15 phase results stand)
 **Tracking**: #644 (the deficit family this closes)
 **Registry**: [`rfcs.md`](rfcs.md)
 
@@ -163,7 +164,134 @@ goes to the owner before merge.
   (below-plan ⇒ believe); walker = regression guard only
   (lane-throughput must stay 0 — pins from #648).
 
+## Resumption plan (2026-08-24): the trunk/tap-provisioning campaign
+
+The RFC-071 evidence table left ec35/ec40 as the corpus's worst measured
+rows (22.9% / 18.5% delivered, sim-anchored) — shipped as merge-tap
+fallbacks carrying 313/631 lane-throughput errors. The resumption
+diagnosis (decision log, 2026-08-24) found their root cause is NOT
+headroom arithmetic but **rescue reachability**: the Pooled native hits
+the copper-plate **(4,9) coprime balancer trap** (no template, gcd
+indivisible — the producer rows genuinely dead-end), and the
+`k1-shape-fix` candidate built for exactly that trap is unreachable on
+the shipped path behind three stacked, individually era-correct
+blockers (its `PartitionedDecomposed` strategy gate; the early-decide
+measurement skip; the MergeTap stage terminating the program before
+`BestErrorFree` can rank a measured rescue).
+
+Phases (each lands as its own PR set; sim anchors gate anything that
+changes shipped geometry):
+
+- **Phase R (re-verification + diagnosis — measurement only, complete)**:
+  duty-0.6 receipts reproduce under v2 selection (ec30 4,934 entities /
+  meter 96.4%; ec60-red 6,361 / 99.4%); ec35/ec40 root-caused as above;
+  the candidate arms measured (table in the decision log).
+- **Phase A (make the rescue reachable / fix the family)**: two tracks,
+  both carried until measurement picks the shipping shape. **A1
+  (selection reachability, the class fix)**: un-gate `k1-shape-fix` on
+  Pooled, measure its counts, and amend the stage program so a measured
+  error-free candidate outranks the merge-tap pairwise short-circuit —
+  policy-table edits with receipts, K70-1-style winner-flip adjudication
+  on the full bank (the RFC-071 fingerprint gate makes every flip loud).
+  **A2 (family depth)**: close the (4,9) library hole (balancer-gen /
+  Clos composition per `balancer-theory.md`) so the native itself
+  stamps — the native composes with duty (measured on ec30) where the
+  k1 artifact is currently duty-blind (measured, decision log), so A2
+  may reach the at-plan end state more directly; A1 remains the class
+  fix for coprime shapes the library will never enumerate.
+- **Phase B (the default flip — the 2026-08-15 owner call's end state)**:
+  duty ships ON by default in the threshold form Phase 2's measurements
+  pick (fraction vs block bound); density-term re-weigh so selection
+  stops punishing the correct shape; corpus pins/goldens/scoreboards +
+  calibration bank + evidence table re-recorded against sim receipts.
+  Precondition: Phase A landed — the tier5 re-diagnosis (decision log,
+  2026-08-24) dissolved the other one: its "router block" is this same
+  coprime-trap class, so Phase A covers it and no junction-solver
+  campaign gates the flip.
+- **Phase C (typed refusal — the original Phase 3)**: unchanged.
+
 ## Decision log
+
+- *2026-08-24 — tier5's "router block" RE-DIAGNOSED: same class, not a
+  junction-solver problem.* The stamp-site probe on current main (duty
+  0.6, 175×255 / 7,057 entities — the direct-path shape the 2026-08-17
+  entry left open) shows three `BalancerStamped { template_found: false }`
+  families — copper-cable **(6,11)**, electronic-circuit **(10,3)**,
+  iron-plate **(2,11)** — ALL coprime, all genuinely unstampable, and
+  the 18 belt-dead-end errors are those families' disconnected producer
+  rows. The 2026-08-15 "known engineering class (junction solver)"
+  attribution is RETRACTED; the flip's tier5 precondition folds into
+  Phase A (no router campaign needed). Selection footnote: tier5 ships
+  its BROKEN native because native's 18 route-severed beat merge-tap's
+  27 in the pairwise — k1-shape-fix NotRun (the same Pooled gate), so
+  the best broken layout wins a field the purpose-built rescue never
+  enters. The coprime-trap ledger is now four shapes across three
+  fixtures — (4,9), (6,11), (10,3), (2,11) — which settles A1
+  (reachability) as the primary track: the class enumerates faster than
+  a library can chase it. Whether `build_k1_enrollment_plan` covers
+  multi-family enrollment (tier5 needs three at once) is Phase A's
+  first execution question.*
+- *2026-08-24 — resumption diagnosis: ec35/ec40's deficit is rescue
+  REACHABILITY, not headroom.* Probes on merged main (v2 selection,
+  post-RFC-071): the duty knob alone does not move either fixture — both
+  build byte-identical artifacts at duty 1.0 and 0.6 (the shipped
+  merge-tap winners, 6,311/6,400 entities, 313E/631E). The selection
+  scoreboard (trace) shows why: the Pooled native Produces but is
+  hard-gated ("1 missing-balancer-template warning"), and the site probe
+  names the family — **copper-plate (4,9), merge_tap=false** — the exact
+  "(4,9) coprime trap" `try_k1_shape_fix`'s own comment cites, absent
+  from the library ((4,1)..(4,8) exist; gcd(4,9)=1), with no
+  `BalancerStamped` event fired for it, so the native's 4 route-severed
+  errors are the dead-ended producer rows the warning describes. The
+  warning is genuine, not the phantom (1,1) class. Three stacked
+  blockers then keep the purpose-built rescue off the field: (1)
+  `try_k1_shape_fix` requires `PartitionedDecomposed` — ec35/ec40 ship
+  Pooled; (2) with the gate removed, k1 Produces and is accepted but the
+  early MergeTap preliminary decision skips the clean-flags measurement,
+  so its counts stay `None` (the v1-laziness bijection predates a
+  Pooled rescue); (3) with counts measured (k1: **0 errors** / 10
+  selection warnings vs merge-tap's 313), the MergeTap pairwise stage
+  still terminates the program before `BestErrorFree` ranks it. Each
+  blocker was correct in the world it shipped in; jointly they ship a
+  313-error layout over an available 0-error one. Experiment stack
+  banked (scratch diff, 66 lines, all three levers): with stage order
+  BestErrorFree-first, `k1-shape-fix` wins and exports end-to-end.*
+- *2026-08-24 — PD+duty sim anchors LANDED: the class attains plan.*
+  `ec40-pd-duty06` (432k warmup, speed 32): **PASS, converged,
+  kit-clean, 39.2/40 = 98.0% delivered** — from the shipped 18.5%.
+  `ec35-pd-duty06`: converged at **36.0/35 delivered (+2.9%)** — at
+  plan, but 14 overlapping-drain kit errors (the same rig-geometry
+  class as this fixture's bank row) make it labelled evidence, not a
+  clean clear; the meter's 99.2% corroborates. These anchor the
+  EXISTENCE proof (structure + headroom compose to plan on this
+  family); the shipping artifact after Phase A is the k1 shape, which
+  gets its own anchors before any bank row is re-recorded.*
+- *2026-08-24 — the candidate-arm evidence table (meter unless noted;
+  sim anchors per the entry above):*
+
+  | ec35 arm | validator | delivered % |
+  |---|---|---|
+  | shipped Pooled merge-tap | 313 E | **22.9 (sim)** |
+  | PD native, duty 1.0 | 0 E | 90.7 |
+  | **PD native, duty 0.6** | 0 E | **99.2** |
+  | k1 on Pooled, duty 1.0 ≡ 0.6 | 0 E | 95.7 |
+
+  *ec40: shipped 631 E / 18.5 (sim); PD native duty 0.6 = 0 E / 97.3
+  meter. Two reach findings ride along: (a) under PD strategy the
+  NATIVE builds clean (partitioning never produces the coprime shape),
+  k1 not needed there; (b) the k1 artifact is **duty-blind** (byte-
+  identical at 1.0/0.6) — its enrollment plan never consults the block
+  cap, the third instance of the reach class (ec60-red's candidate
+  path, and now this). Phase A's track choice weighs A2's composability
+  (native + template responds to duty like ec30) against A1's class
+  coverage; the measured PD+duty arms are the at-plan existence proof
+  either way.*
+- *2026-08-24 — Phase R re-verification: the 2026-08-15 receipts stand
+  under v2 selection.* ec30 duty 0.6 → 4,934 entities (the receipted
+  gate-clearing artifact's dims/entities; meter 96.4 vs the receipt's
+  96.6 whose sim delivered 99.4); ec60-red duty 0.6 → 6,361 entities,
+  meter **99.4** (receipt: 96.5 metered, sim 100.0 at plan). The duty-1.0
+  baselines reproduce the banked winners exactly (ec30: 3,369 / 96×140).*
 
 - *2026-08-17 — the tier5 router-block receipt is NOT reproducible on
   the direct path, and one of its two blockers was a balancer defect.*

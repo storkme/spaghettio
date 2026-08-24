@@ -1461,12 +1461,23 @@ fn select_best_decomposition_with_policy(
     // copper-plate), enroll those items in the partition plan with a
     // padded `lane_count` and re-run. Surgical to the actual unstampable
     // shape — no producer-rate split, no machine-count multiplication.
-    // Skipped on `Pooled` and when Native is already accepted.
-    let try_k1_shape_fix = matches!(opts.strategy, LayoutStrategy::PartitionedDecomposed)
-        && native_run
-            .outcome
-            .as_ref()
-            .is_some_and(|(_, score)| !score.accepted);
+    // Skipped when Native is already accepted — which keeps every
+    // blessed clean-corpus fixture inert (their natives are accepted, so
+    // this candidate is never built there).
+    //
+    // The `PartitionedDecomposed`-only strategy gate was REMOVED
+    // 2026-08-24 (RFC-069 Phase A1): the coprime traps this candidate
+    // was built for bite hardest on the POOLED default path — ec35/ec40
+    // dead-end on copper-plate (4,9) and tier5-PU on three coprime
+    // shapes at once, shipping 313/631-error merge-taps at 22.9%/18.5%
+    // of plan while the rescue sat gated off the field. On Pooled the
+    // enrollment plan builds from `plan_partitioning` over the same
+    // solver result and produces a measured 0-error ec35 (RFC-069
+    // decision log, 2026-08-24, receipts).
+    let try_k1_shape_fix = native_run
+        .outcome
+        .as_ref()
+        .is_some_and(|(_, score)| !score.accepted);
 
     let k1_run = if try_k1_shape_fix {
         let native_layout = &native_run.outcome.as_ref().unwrap().0;
@@ -1607,7 +1618,21 @@ fn select_best_decomposition_with_policy(
     );
     let tier_outcomes = run_refs.map(|r| r.outcome.as_ref());
     let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
-    if n_layouts > 1 && !early_stage_decided {
+    // The old bijection ("early MergeTap/ScopedPairwise decision means
+    // clean-flags is not needed") predates a Pooled `k1-shape-fix`: it
+    // was true when an early decision implied every produced candidate
+    // already carried counts or kinds from the pairwise sites. With the
+    // rescue on the Pooled field (RFC-069 Phase A1), an early MergeTap
+    // decision can coexist with a produced-but-unmeasured candidate that
+    // `BestErrorFree` is entitled to rank — measuring exactly the
+    // unmeasured ones preserves the K70-3 laziness where it was valid
+    // (≤1 produced, or everyone measured) and closes the gap where it
+    // was not.
+    let any_produced_unmeasured = tier_outcomes
+        .iter()
+        .enumerate()
+        .any(|(idx, o)| o.is_some() && profiles[idx].counts.is_none());
+    if n_layouts > 1 && (!early_stage_decided || any_produced_unmeasured) {
         let start = crate::trace::peek_events_len();
         for (idx, outcome) in tier_outcomes.iter().enumerate() {
             if let Some((layout, _)) = outcome {

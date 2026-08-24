@@ -5625,43 +5625,36 @@ fn stress_electronic_circuit_35s_from_ore() {
             // `validate()` until #298; the underlying issues have been
             // present at this scoreboard for a long time. Tighten when
             // the upstream layout-pipeline bugs (e.g. #297) get fixed.
-            // 2026-08-23 (RFC-071 B2, #701): the RouteSevered class flips
-            // this fixture's winner. The old native carried 4 belt-dead-end
-            // total-stops and MEASURED ZERO — meter 0/35, Factorio sim
-            // non-converged 0.0/s (calibration bank row) — while this
-            // winner (2 route-severed vs the old 4) delivers 8.0/35 on the
-            // meter. 313 errors is uglier ON PAPER than 4; the instruments
-            // say the 4-error sheet was a dead factory and this one is a
-            // quarter-rate one (#520's lesson, both directions). Receipts
-            // on PR: b2_route_severed_flip_receipts + sim anchor. Tighten
-            // when the lane-throughput mass gets engineering attention.
-            max_errors: 313,
-            // Warnings IMPROVE with the flip: 243 ceiling -> 55 measured.
-            max_warnings: 55,
-            max_errors_by_category: [
-                ("belt-dead-end".to_string(), 1),
-                ("belt-item-isolation".to_string(), 1),
-                ("lane-throughput".to_string(), 310),
-                ("unresolved-junction".to_string(), 1),
-            ].into_iter().collect(),
+            // 2026-08-23 (RFC-071 B2, #701): the RouteSevered class flipped
+            // this fixture's winner to the 313-error merge-tap (meter/sim
+            // 8.0/35) over the old dead native (4 dead-ends, 0/35).
+            // 2026-08-24 (RFC-069 Phase A1): the winner flips AGAIN, to
+            // `k1-shape-fix` — the rescue built for exactly this fixture's
+            // copper-plate (4,9) coprime trap, previously unreachable on
+            // the Pooled path behind three stacked gates (strategy gate,
+            // measurement skip, MergeTap stage precedence — decision log).
+            // The k1 layout measures 0 errors / 10 warnings and meters
+            // 33.49/35 = 95.7% delivered vs the merge-tap's 8.0/35;
+            // sim anchor on the PR.
+            max_errors: 0,
+            max_warnings: 10,
+            max_errors_by_category: std::collections::BTreeMap::new(),
         },
     );
-    // The B2 winner pin (#716 round 2: the ceilings above also pass the
-    // OLD dead winner, so a precedence regression would go QUIET — this
-    // does not). The RouteSevered flip's live effect on this fixture is
-    // merge-tap winning at the merge-tap stage; the old native (4
-    // dead-ends, meter AND sim 0/35) must not silently return.
+    // The Phase A1 winner pin (same rationale as the B2 pin it replaces:
+    // ceilings alone would pass a silently-returned worse winner — this
+    // does not). The 313-error merge-tap (8.0/35) and the 4-dead-end
+    // native (0/35) must not silently return.
     let decided = result.trace_events.iter().rev().find_map(|e| match e {
         TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
         _ => None,
     });
     assert_eq!(
         decided.as_ref().map(|(w, s)| (w.as_str(), *s)),
-        Some(("merge-tap", spaghettio_core::trace::SelectionStage::MergeTap)),
-        "stress_electronic_circuit_35s_from_ore pins the RouteSevered flip (RFC-071 B2): \
-         merge-tap at the merge-tap stage, meter 8.0/35 vs the old native's 0/35 (sim \
-         8.0/35 converged). If this moved, adjudicate with the meter before re-blessing \
-         — got {decided:?}",
+        Some(("k1-shape-fix", spaghettio_core::trace::SelectionStage::BestErrorFree)),
+        "stress_electronic_circuit_35s_from_ore pins the Phase A1 rescue (RFC-069): \
+         k1-shape-fix at BestErrorFree, meter 33.49/35 vs the merge-tap's 8.0/35. If \
+         this moved, adjudicate with the meter before re-blessing — got {decided:?}",
     );
 }
 

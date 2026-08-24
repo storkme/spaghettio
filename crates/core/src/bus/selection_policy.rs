@@ -746,6 +746,30 @@ pub enum ChainBehavior {
     DeferToRemainingPairwiseStages,
 }
 
+/// How a stage's answer interacts with the chain when the comparison
+/// names a CHALLENGER. `Terminate` is the v1-faithful behavior
+/// everywhere; `DeferToRankedStages` is RFC-069 Phase A1's
+/// rescue-reachability semantic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChallengerBehavior {
+    /// The challenger wins here and the chain stops.
+    Terminate,
+    /// The challenger's win is HELD while the rest of the program runs.
+    /// A later stage naming a DIFFERENT winner takes the decision under
+    /// its own tag; a later stage naming the SAME winner — or the
+    /// program exhausting with no other winner — returns the held
+    /// decision with THIS stage's tag. A field with no measured rescue
+    /// is therefore bit-identical to `Terminate` (same winner, same
+    /// stage tag, same trace row); the behavior differs only where a
+    /// ranked stage can outrank the held challenger. Measured
+    /// motivation: ec35/ec40/tier5's Pooled fields, where the MergeTap
+    /// pairwise terminated the program before `BestErrorFree` could
+    /// rank the measured 0-error `k1-shape-fix` layout, shipping 313-
+    /// and 631-error merge-taps at 22.9%/18.5% of plan (RFC-069
+    /// decision log, 2026-08-24).
+    DeferToRankedStages,
+}
+
 /// Which comparator a stage runs. These are RFC-070's three, and the
 /// tiered rank covers three of the five stages by configuration.
 pub enum StageKind {
@@ -824,6 +848,7 @@ pub struct StageSpec {
     pub tag: SelectionStage,
     pub kind: StageKind,
     pub on_incumbent_win: ChainBehavior,
+    pub on_challenger_win: ChallengerBehavior,
 }
 
 impl StageSpec {
@@ -1021,6 +1046,13 @@ fn current_program() -> SelectionProgram {
                 tag: SelectionStage::MergeTap,
                 kind: StageKind::QualityKeyPairwise,
                 on_incumbent_win: ChainBehavior::DeferToRemainingPairwiseStages,
+                // RFC-069 Phase A1: merge-tap's pairwise win over a
+                // hard-gated native no longer terminates the program —
+                // it is held so `BestErrorFree` can rank a measured
+                // 0-error rescue (`k1-shape-fix`) above it. Fields with
+                // no such rescue are bit-identical to the old Terminate
+                // (see `ChallengerBehavior::DeferToRankedStages`).
+                on_challenger_win: ChallengerBehavior::DeferToRankedStages,
             },
             StageSpec {
                 tag: SelectionStage::ScopedPairwise,
@@ -1031,6 +1063,7 @@ fn current_program() -> SelectionProgram {
                 // incumbent would short-circuit the ranked stages and
                 // rob k1-shape-fix or cell-composed of a legitimate win.
                 on_incumbent_win: ChainBehavior::Terminate,
+                on_challenger_win: ChallengerBehavior::Terminate,
             },
             StageSpec {
                 tag: SelectionStage::BestErrorFree,
@@ -1044,6 +1077,7 @@ fn current_program() -> SelectionProgram {
                     verified_geometry_first: true,
                 }),
                 on_incumbent_win: ChainBehavior::Terminate,
+                on_challenger_win: ChallengerBehavior::Terminate,
             },
             StageSpec {
                 tag: SelectionStage::BestAccepted,
@@ -1055,6 +1089,7 @@ fn current_program() -> SelectionProgram {
                     verified_geometry_first: false,
                 }),
                 on_incumbent_win: ChainBehavior::Terminate,
+                on_challenger_win: ChallengerBehavior::Terminate,
             },
             StageSpec {
                 // The degraded fallback, and the pre-#701 `ec30` trap #694
@@ -1071,6 +1106,7 @@ fn current_program() -> SelectionProgram {
                     verified_geometry_first: false,
                 }),
                 on_incumbent_win: ChainBehavior::Terminate,
+                on_challenger_win: ChallengerBehavior::Terminate,
             },
         ],
     }
@@ -1314,6 +1350,12 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
         .collect();
 
     let mut held: Option<Decision> = None;
+    // A challenger win deferred by `ChallengerBehavior::DeferToRankedStages`.
+    // Unlike `held` (which returns at the first ranked stage), this survives
+    // the whole program: it is the answer of last resort, displaced only by
+    // a stage naming a DIFFERENT winner, and re-tagged to itself when a
+    // later stage merely confirms the same winner.
+    let mut held_challenger: Option<Decision> = None;
     for stage in &policy.program.stages {
         // A held incumbent answer waits only on the remaining PAIRWISE
         // stages; reaching a ranked one means nothing displaced it, so
@@ -1338,10 +1380,29 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
         };
         match outcome {
             StageOutcome::Winner(i) => {
-                return Some(Decision {
-                    winner: i,
-                    stage: stage.tag,
-                })
+                // A held challenger absorbs a later stage's confirmation
+                // of the SAME winner: the decision keeps the pairwise
+                // stage's tag, so fields where nothing outranks the held
+                // challenger stay bit-identical to the Terminate world.
+                if let Some(hc) = held_challenger {
+                    if hc.winner == i {
+                        return Some(hc);
+                    }
+                }
+                match stage.on_challenger_win {
+                    ChallengerBehavior::Terminate => {
+                        return Some(Decision {
+                            winner: i,
+                            stage: stage.tag,
+                        })
+                    }
+                    ChallengerBehavior::DeferToRankedStages => {
+                        held_challenger = Some(Decision {
+                            winner: i,
+                            stage: stage.tag,
+                        });
+                    }
+                }
             }
             StageOutcome::HeldIncumbent(i) => match stage.on_incumbent_win {
                 ChainBehavior::Terminate => {
@@ -1364,13 +1425,15 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
             StageOutcome::NoOpinion => {}
         }
     }
-    // Program exhausted. UNREACHABLE under today's program, whose last
-    // stage is ranked, not pairwise — so a held answer has already
-    // returned at the loop head. It is `held` rather than `None` because
-    // a program ending in a pairwise stage should still honour a
-    // deferral, not discard it (#698 review round 6: the prose used to
-    // imply this line does work today).
-    held
+    // Program exhausted. The held-incumbent half is UNREACHABLE under
+    // today's program, whose last stage is ranked, not pairwise — so a
+    // held answer has already returned at the loop head. It is `held`
+    // rather than `None` because a program ending in a pairwise stage
+    // should still honour a deferral, not discard it (#698 review round
+    // 6). The held CHALLENGER half is live: a deferred challenger that
+    // no ranked stage displaced or confirmed stands here with its
+    // original stage tag.
+    held.or(held_challenger)
 }
 
 /// The quality-key lexicograph: the `quality_key_rival` registration
@@ -1990,6 +2053,84 @@ mod tests {
         );
     }
 
+    /// RFC-069 Phase A1: merge-tap's pairwise win over a hard-gated
+    /// native no longer terminates the program — a measured 0-error
+    /// rescue outranks it at `BestErrorFree`. The ec35 shipping
+    /// mechanism, pinned: the 313-error merge-tap (sim 22.9% of plan)
+    /// shipped while a 0-error `k1-shape-fix` layout sat unranked
+    /// (decision log, 2026-08-24).
+    #[test]
+    fn a_measured_error_free_rescue_outranks_the_merge_tap_win() {
+        let mut ps = blank();
+        ps[NATIVE] = produced(-0.50, false);
+        ps[NATIVE].kinds = Some(ErrorKindCounts {
+            route_severed: 4,
+            ..Default::default()
+        });
+        ps[MERGE_TAP] = produced(-0.51, true);
+        ps[MERGE_TAP].kinds = Some(ErrorKindCounts {
+            route_severed: 2,
+            starvation: 311,
+            ..Default::default()
+        });
+        ps[MERGE_TAP].counts = Some(IssueCounts {
+            errors: 313,
+            selection_warnings: 55,
+            layout_warnings: 1,
+        });
+        ps[K1] = produced(-0.53, true);
+        ps[K1].counts = Some(IssueCounts {
+            errors: 0,
+            selection_warnings: 10,
+            layout_warnings: 0,
+        });
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d,
+            Decision {
+                winner: K1,
+                stage: SelectionStage::BestErrorFree
+            },
+            "the error-free rescue must outrank the deferred merge-tap win"
+        );
+    }
+
+    /// The other half of `ChallengerBehavior::DeferToRankedStages`'s
+    /// contract: a field with NO measured error-free rescue is
+    /// bit-identical to the old Terminate — same winner, same MergeTap
+    /// stage tag (not the confirming ranked stage's), so every
+    /// unaffected fixture's `SelectionDecided` row survives the Phase A1
+    /// semantic unchanged.
+    #[test]
+    fn a_deferred_merge_tap_win_stands_under_its_own_tag_without_a_rescue() {
+        let mut ps = blank();
+        ps[NATIVE] = produced(-0.50, false);
+        ps[NATIVE].kinds = Some(ErrorKindCounts {
+            route_severed: 4,
+            ..Default::default()
+        });
+        ps[MERGE_TAP] = produced(-0.51, true);
+        ps[MERGE_TAP].kinds = Some(ErrorKindCounts {
+            route_severed: 2,
+            starvation: 311,
+            ..Default::default()
+        });
+        ps[MERGE_TAP].counts = Some(IssueCounts {
+            errors: 313,
+            selection_warnings: 55,
+            layout_warnings: 1,
+        });
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d,
+            Decision {
+                winner: MERGE_TAP,
+                stage: SelectionStage::MergeTap
+            },
+            "without a rescue the held merge-tap win keeps its pairwise tag"
+        );
+    }
+
     /// The table half of B2: every route-severing category maps to the
     /// class in the SHIPPED policy (built from the same
     /// `ROUTE_SEVERING_CATEGORIES` list the classifier reads), and a
@@ -2383,6 +2524,7 @@ mod tests {
                 verified_geometry_first: false,
             }),
             on_incumbent_win: ChainBehavior::Terminate,
+            on_challenger_win: ChallengerBehavior::Terminate,
         }];
 
         let mut ps = blank();
