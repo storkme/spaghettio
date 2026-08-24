@@ -1461,8 +1461,24 @@ fn select_best_decomposition_with_policy(
     // copper-plate), enroll those items in the partition plan with a
     // padded `lane_count` and re-run. Surgical to the actual unstampable
     // shape — no producer-rate split, no machine-count multiplication.
-    // Skipped on `Pooled` and when Native is already accepted.
-    let try_k1_shape_fix = matches!(opts.strategy, LayoutStrategy::PartitionedDecomposed)
+    // Skipped when Native is already accepted — which keeps every
+    // blessed clean-corpus fixture inert (their natives are accepted, so
+    // this candidate is never built there).
+    //
+    // The `PartitionedDecomposed`-only strategy gate was REMOVED
+    // 2026-08-24 (RFC-069 Phase A1): the coprime traps this candidate
+    // was built for bite hardest on the POOLED default path — ec35/ec40
+    // dead-end on copper-plate (4,9) and tier5-PU on three coprime
+    // shapes at once, shipping 313/631-error merge-taps at 22.9%/18.5%
+    // of plan while the rescue sat gated off the field. On Pooled the
+    // enrollment plan builds from `plan_partitioning` over the same
+    // solver result and produces a measured 0-error ec35 (RFC-069
+    // decision log, 2026-08-24, receipts).
+    // The Forced-DI stand-down mirrors the registration's clause (the
+    // three-lists rule): an explicit topology request must not be
+    // displaced by the rescue. Moot while k1 was PD-only; newly
+    // reachable on Pooled (#720 review round 4).
+    let try_k1_shape_fix = opts.direct_insertion != crate::bus::di_cell::DirectInsertion::Forced
         && native_run
             .outcome
             .as_ref()
@@ -1607,9 +1623,44 @@ fn select_best_decomposition_with_policy(
     );
     let tier_outcomes = run_refs.map(|r| r.outcome.as_ref());
     let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
-    if n_layouts > 1 && !early_stage_decided {
+    // The old bijection ("early MergeTap/ScopedPairwise decision means
+    // clean-flags is not needed") predates a Pooled `k1-shape-fix`: it
+    // was true when an early decision implied every produced candidate
+    // already carried counts from the pairwise sites. With the rescue on
+    // the Pooled field (RFC-069 Phase A1), an early MergeTap decision
+    // can coexist with a produced-but-unmeasured candidate that
+    // `BestErrorFree` is entitled to rank. The widened condition is
+    // honest about its population (#720 review round 1): merge-tap's
+    // pre-decide site records KINDS, not counts, so every Pooled
+    // unaccepted-native field measures here now — not only rescue-
+    // bearing ones — and any candidate that measures error-free may
+    // displace the held merge-tap, which is `BestErrorFree`'s job, not
+    // a k1 special case. The loop skips rows that already carry counts,
+    // so the K70-3 laziness survives everywhere it was valid (≤1
+    // produced, or everyone measured) and each remaining validate()
+    // runs once, on a field that is already mid-rescue and slow.
+    // Scoped to candidates OUTSIDE the early decision's own pair (#720
+    // review round 3): when only the incumbent and the quality-key rival
+    // are unmeasured, no ranked stage can produce a different outcome —
+    // an unaccepted incumbent cannot enter the accepted tiers, and the
+    // rival's win is absorbed back to its pairwise tag whether or not it
+    // carries counts — so measuring them buys nothing and the pre-A1
+    // laziness stands on rescue-less broken fields (tier5/ac45-class,
+    // the corpus's largest layouts). A produced third party (k1, split,
+    // cells, DI, HS) is what the ranked stages are entitled to rank, and
+    // is what triggers the measurement.
+    let any_produced_unmeasured = tier_outcomes.iter().enumerate().any(|(idx, o)| {
+        idx != NATIVE_IDX
+            && idx != MERGE_TAP_IDX
+            && o.is_some()
+            && profiles[idx].counts.is_none()
+    });
+    if n_layouts > 1 && (!early_stage_decided || any_produced_unmeasured) {
         let start = crate::trace::peek_events_len();
         for (idx, outcome) in tier_outcomes.iter().enumerate() {
+            if profiles[idx].counts.is_some() {
+                continue; // first-write-wins anyway; skip the re-validate
+            }
             if let Some((layout, _)) = outcome {
                 let (counts, source) = count_issues_with_source(layout, solver_result);
                 board.record_counts(idx, counts, source);

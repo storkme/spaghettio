@@ -1110,9 +1110,9 @@ fn selection_scoreboard_contract() {
     assert_eq!(
         facts.outcome_of("k1-shape-fix"),
         SelectionCandidateOutcome::NotRun,
-        "k1-shape-fix is gated on PartitionedDecomposed + an unaccepted native, \
-         neither true here — `not-run` and `refused` are different facts and must \
-         not collapse"
+        "k1-shape-fix is gated on an unaccepted native (the PD-only clause was \
+         removed by RFC-069 Phase A1), not true here — `not-run` and `refused` \
+         are different facts and must not collapse"
     );
 
     // --- the deciding stage ---

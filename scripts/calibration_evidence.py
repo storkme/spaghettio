@@ -303,8 +303,11 @@ def write_markdown(path: Path, rows: list[Row], categories: list[str], bank: Pat
     for row in rows:
         statuses[row.status] = statuses.get(row.status, 0) + 1
     corpus_note = (
-        f" Corpus fingerprint: `{corpus_sha256}` — must match the committed "
-        "`crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine."
+        f" Corpus-definition fingerprint (`corpus_sha256` — the ordered fixture declarations, "
+        f"deliberately independent of any generated layout): `{corpus_sha256}` — must match the "
+        "same field in the committed `crates/core/data/calibration-bank/matrix.json` for these "
+        "rows to describe the shipped engine's corpus; per-row geometry binds via each row's "
+        "`blueprint_sha256`/`manifest_sha256`, which the CI probe checks."
         if corpus_sha256
         else ""
     )

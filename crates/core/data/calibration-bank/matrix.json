@@ -831,12 +831,12 @@
     },
     {
       "belt_tier": "transport-belt",
-      "blueprint_sha256": "4b6ab880c58c00cb46f951fd122323aa59782e6c35915069cdc98b5a68af2740",
+      "blueprint_sha256": "88aa5f12e3ee46edf4561b761cec300d03cd451d4716a9175da36780849c6c1a",
       "dimensions": [
-        99,
-        254
+        105,
+        253
       ],
-      "entities": 6311,
+      "entities": 6530,
       "excluded_recipes": [],
       "inputs": [
         "iron-ore",
@@ -844,12 +844,12 @@
       ],
       "label": "stress_electronic_circuit_35s_from_ore",
       "machine": "assembling-machine-2",
-      "manifest_sha256": "122944c142e58ae08265d6f06be1dc75b2a09f54810bbbeaacddf214e4ebb8d2",
+      "manifest_sha256": "daa66c8e4bb1af678e5ce698e320437dd700367a4cfa7c1b66bbb7a3fbbdcaf7",
       "rate": 35.0,
       "target": "electronic-circuit",
       "validator": {
-        "errors": 313,
-        "warnings": 55
+        "errors": 0,
+        "warnings": 10
       },
       "variant": "plain"
     },
