@@ -82,6 +82,20 @@ filter = "test(shipped_path_matches_baseline_on_the_census_fixtures)"
 slow-timeout = { period = "60s", terminate-after = 12 }
 threads-required = 2
 
+# The calibration fingerprint probe (ci.yml `rust` job) rebuilds the whole
+# 35-fixture corpus in one #[ignore]d test, invoked under the DEFAULT
+# profile — deliberately not --profile ci, whose junit path the summary
+# step reads (a 1-test probe run would clobber the suite's junit.xml).
+# nextest's built-in default has NO terminate cap, so without this entry a
+# genuine hang runs to the 6h job limit; the hazard is unbounded, not
+# hard-killed (#719 review round 2 feared the ci profile's 300s default
+# kill, which never applies here). Measured 132-186s local dev warm-cache;
+# the pinned-cache CI penalty is ~2x (shipped_path entry above), so 1200s
+# stays far above worst case while still finite.
+[[profile.default.overrides]]
+filter = "test(selection_policy_calibration_issue_breakdown)"
+slow-timeout = { period = "60s", terminate-after = 20 }
+
 [profile.ci.junit]
 path = "junit.xml"
 store-success-output = true

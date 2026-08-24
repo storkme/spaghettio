@@ -111,19 +111,32 @@ jobs:
       # new matrix.json here, re-measure the changed rows, and regenerate
       # docs/selection-policy-calibration-evidence.md. Deterministic in CI
       # because the corpus solves entirely from the committed zone cache
-      # (verified 2026-08-24: a full export leaves the cache byte-identical).
-      # The probe runs against a scratch COPY of that cache, per the test's
-      # own instruction: the core-suite step above shares this job and may
-      # append to whatever path the env var resolves, and a fresh solve is
-      # wall-clock-budget shaped — the probe must observe the committed
-      # snapshot, not the previous step's leavings. --no-tests=fail so a
-      # filter typo can never pass as a zero-test green.
+      # (verified 2026-08-24: a full export leaves the cache byte-identical)
+      # — and that property is ENFORCED per-run below, not just claimed: the
+      # probe's scratch cache is sourced from `git show HEAD:` (the
+      # committed bytes — the core-suite step above points its env var at
+      # the worktree file and may have appended to it, so the worktree copy
+      # is not a pristine source; #719 review round 2), and after the run
+      # the scratch copy is compared back. Growth means a corpus fixture
+      # needed an uncached zone, i.e. its rebuilt geometry was
+      # wall-clock-budget shaped — the step fails with the refresh
+      # instruction instead of leaving a hash mismatch to be misread as
+      # intentional drift. --no-tests=fail so a filter typo can never pass
+      # as a zero-test green (verified locally: zero matches exits 4).
       - name: Calibration-bank fingerprint probe
         run: |
-          cp crates/core/data/sat-zones-ci.bin "$RUNNER_TEMP/sat-zones-probe.bin"
+          git show HEAD:crates/core/data/sat-zones-ci.bin > "$RUNNER_TEMP/sat-zones-probe.bin"
+          set +e
           cargo nextest run -p spaghettio_core --no-tests=fail \
             --run-ignored ignored-only \
             -E 'test(selection_policy_calibration_issue_breakdown)'
+          rc=$?
+          set -e
+          if ! git show HEAD:crates/core/data/sat-zones-ci.bin | cmp -s - "$RUNNER_TEMP/sat-zones-probe.bin"; then
+            echo "::error::calibration fingerprint probe grew its zone cache: a corpus fixture needs a zone absent from crates/core/data/sat-zones-ci.bin, so its rebuilt geometry is runner-speed-shaped and the fingerprint comparison is unreliable in BOTH directions. Refresh the committed zone cache (protocol in the comment above the core-suite step), re-export the calibration bank, and re-record crates/core/data/calibration-bank/matrix.json."
+            exit 1
+          fi
+          exit $rc
         env:
           SPAGHETTIO_ZONE_CACHE_PATH: ${{ runner.temp }}/sat-zones-probe.bin
           SPAGHETTIO_CALIBRATION_BANK: ${{ github.workspace }}/crates/core/data/calibration-bank

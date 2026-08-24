@@ -11105,6 +11105,12 @@ fn selection_policy_calibration_issue_breakdown() {
     #[derive(serde::Deserialize)]
     struct Matrix {
         fixtures: Vec<MatrixFixture>,
+        // Schema 2: SHA-256 of the ordered corpus DEFINITION (the library's
+        // `corpus_fingerprint_fields`), independent of any generated layout.
+        // Catches declaration drift that moves no bytes in bp/manifest —
+        // e.g. corpus reordering — which the per-row checks cannot see.
+        #[serde(default)]
+        corpus_sha256: Option<String>,
     }
 
     #[derive(serde::Deserialize)]
@@ -11134,6 +11140,22 @@ fn selection_policy_calibration_issue_breakdown() {
             .unwrap_or_else(|e| panic!("read {}: {e}", matrix_path.display())),
     )
     .unwrap_or_else(|e| panic!("parse {}: {e}", matrix_path.display()));
+    if let Some(expected_corpus) = &matrix.corpus_sha256 {
+        let actual_corpus = format!(
+            "{:x}",
+            Sha256::digest(
+                calibration_matrix::corpus_fingerprint_fields(&calibration_matrix::fixtures())
+                    .as_bytes()
+            )
+        );
+        assert_eq!(
+            &actual_corpus, expected_corpus,
+            "the corpus DEFINITION drifted from the bank's corpus_sha256 — the committed \
+             fingerprint no longer describes the declared corpus even if every per-row hash \
+             still matches; re-export the bank and refresh \
+             crates/core/data/calibration-bank/matrix.json"
+        );
+    }
     let expected: BTreeMap<_, _> = matrix
         .fixtures
         .into_iter()

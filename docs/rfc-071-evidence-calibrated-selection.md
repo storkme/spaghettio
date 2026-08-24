@@ -264,8 +264,9 @@ its own PR(s) under the ~400-line norm.
   pairs byte-verified and their reports carried (voider's overnight report
   included, closing the last awaiting row). Re-measured: gear@20 100.0/100.0
   PASS; ec40 clean-measured 18.5% (corroborates the B2 receipt); ec35 22.9%
-  but kit-errored (overlapping drain chests) — labelled evidence, not a clean
-  row. First full 35/35 coverage: measured 21, kit-error 2, non-converged 12.
+  but kit-errored ("overlapping kit chests" — drain-side overlaps, the
+  evidence table's exact `kit_error_class` string) — labelled evidence, not a
+  clean row. First full 35/35 coverage: measured 21, kit-error 2, non-converged 12.
   The bank's `matrix.json` is committed at `crates/core/data/calibration-bank/`
   and CI's rust job runs the issue-breakdown probe against it (verbatim-command
   pass + corrupt-one-hash fail both executed locally; the committed zone cache
