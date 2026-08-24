@@ -754,14 +754,21 @@ pub enum ChainBehavior {
 pub enum ChallengerBehavior {
     /// The challenger wins here and the chain stops.
     Terminate,
-    /// The challenger's win is HELD while the rest of the program runs.
-    /// A later stage naming a DIFFERENT winner takes the decision under
-    /// its own tag; a later stage naming the SAME winner — or the
-    /// program exhausting with no other winner — returns the held
-    /// decision with THIS stage's tag. A field with no measured rescue
-    /// is therefore bit-identical to `Terminate` (same winner, same
-    /// stage tag, same trace row); the behavior differs only where a
-    /// ranked stage can outrank the held challenger. Measured
+    /// The challenger's win is HELD while the RANKED stages run; the
+    /// remaining pairwise stages are suspended (their comparisons never
+    /// include the held candidate — #720 round 2). Displacement rules,
+    /// each a comparison that actually weighed the held candidate:
+    /// a quality-requiring ranked stage naming a DIFFERENT winner takes
+    /// the decision under its own tag — `BestErrorFree` (whose tier the
+    /// held candidate enters when measured error-free) or `BestAccepted`
+    /// (whose tier includes the held candidate whenever it is accepted;
+    /// a held UNACCEPTED candidate losing to an accepted one is the
+    /// acceptance hard-gate ranking them, deliberately). A stage naming
+    /// the SAME winner, the unconditional fallback (no quality verdict —
+    /// `StageSpec::imposes_quality`), or program exhaustion returns the
+    /// held decision with THIS stage's tag. A field where nothing
+    /// displaces the held win is therefore bit-identical to `Terminate`
+    /// (same winner, same stage tag, same trace row). Measured
     /// motivation: ec35/ec40/tier5's Pooled fields, where the MergeTap
     /// pairwise terminated the program before `BestErrorFree` could
     /// rank the measured 0-error `k1-shape-fix` layout, shipping 313-
@@ -1405,6 +1412,18 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
         // it stands and the chain stops here.
         if held.is_some() && !stage.is_pairwise() {
             return held;
+        }
+        // The mirror rule for a held CHALLENGER: it waits only on the
+        // RANKED stages, whose tiers include it. The remaining pairwise
+        // stages are suspended — their comparisons never weigh the held
+        // candidate (the floor measures a scoped candidate against the
+        // INCUMBENT only), so a pairwise winner here would displace the
+        // held quality-key win without ever being compared to it
+        // (#720 review round 2, 3/3). This also reproduces the old
+        // Terminate world exactly: those stages never ran on these
+        // fields before the deferral existed.
+        if held_challenger.is_some() && stage.is_pairwise() {
+            continue;
         }
         let outcome = match &stage.kind {
             StageKind::QualityKeyPairwise => quality_key_stage(profiles, policy, incumbent),
@@ -2207,6 +2226,59 @@ mod tests {
                 stage: SelectionStage::MergeTap
             },
             "the dead native must not return via FirstProduced's registration order"
+        );
+    }
+
+    /// #720 review round 2 (3/3), pinned: the ScopedPairwise floor
+    /// weighs a scoped candidate against the INCUMBENT only — it never
+    /// compares against a held merge-tap, so a floor-dominant DI must
+    /// not unseat it. With the pairwise stages suspended under a held
+    /// challenger, the field falls through to `BestAccepted`, whose tier
+    /// DOES include the merge-tap — and merge-tap outscoring DI there
+    /// stands under its original pairwise tag. Deleting the pairwise
+    /// suspension makes the floor terminate with DI before that
+    /// comparison can happen, which this assertion catches.
+    #[test]
+    fn a_floor_dominant_di_cannot_unseat_a_held_challenger_uncompared() {
+        let mut ps = blank();
+        ps[NATIVE] = produced(-0.50, false);
+        ps[NATIVE].kinds = Some(ErrorKindCounts {
+            route_severed: 4,
+            ..Default::default()
+        });
+        ps[NATIVE].counts = Some(IssueCounts {
+            errors: 4,
+            selection_warnings: 129,
+            layout_warnings: 1,
+        });
+        ps[MERGE_TAP] = produced(-0.51, true);
+        ps[MERGE_TAP].kinds = Some(ErrorKindCounts {
+            route_severed: 2,
+            starvation: 311,
+            ..Default::default()
+        });
+        ps[MERGE_TAP].counts = Some(IssueCounts {
+            errors: 313,
+            selection_warnings: 55,
+            layout_warnings: 1,
+        });
+        // DI: accepted, strictly better than native on every component
+        // (the floor's predicate), NOT error-free, and outscored by the
+        // held merge-tap at BestAccepted.
+        ps[DI] = produced(-0.60, true);
+        ps[DI].counts = Some(IssueCounts {
+            errors: 2,
+            selection_warnings: 50,
+            layout_warnings: 0,
+        });
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d,
+            Decision {
+                winner: MERGE_TAP,
+                stage: SelectionStage::MergeTap
+            },
+            "a floor winner never compared against the held merge-tap must not displace it"
         );
     }
 

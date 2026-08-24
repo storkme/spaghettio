@@ -212,6 +212,25 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-24 — #720 round 2 absorbed: the deferral's displacement rule
+  completed.* The round's 3/3 major was right — `imposes_quality` still
+  let the ScopedPairwise floor displace a held merge-tap with a DI
+  winner weighed only against the NATIVE, never against the merge it
+  unseats. The rule is now symmetric with the incumbent-deferral: a
+  held challenger suspends the remaining PAIRWISE stages and waits on
+  the RANKED ones, whose tiers include it (this also reproduces the old
+  Terminate world exactly — those stages never ran on these fields).
+  Pinned by a fourth policy test whose discrimination was executed
+  (suspension disabled → FAIL, restored → 47/47). The BestAccepted
+  major was half-refuted: that tier INCLUDES the merge-tap whenever it
+  is accepted, so its displacement IS a comparison; the unaccepted-mt
+  edge (accepted candidate beats a hard-gated hold) is the acceptance
+  gate ranking them — kept deliberately, now documented in the
+  ChallengerBehavior contract. The three data minors (empty kit class,
+  a typo, stale findings prose) were refuted by direct inspection —
+  the row reads "overlapping kit chests", the word is spelled once and
+  correctly, and the findings sections regenerate in the same joiner
+  run by construction.*
 - *2026-08-24 — #720 round 1 absorbed (three real catches, two of them
   majors).* (1) The policy TABLE's k1 registration still declared the
   `partitioned` gate the shipping predicate dropped — the #692
