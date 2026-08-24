@@ -97,10 +97,19 @@ When the drift is intended, refresh in the same PR:
    via `scripts/calibration_evidence.py`. If measurement must lag the merge,
    say so in the PR body — the fingerprint keeps the record honest either way.
 
-The probe run is deterministic in CI because the corpus solves entirely from
-the committed zone cache (verified 2026-08-24: a full export left a copy of
-the cache byte-identical). If a new fixture introduces uncached zones, the
-zone-cache refresh protocol in `.github/workflows/ci.yml` applies first.
+The determinism model, measured rather than assumed (#719 round 3): a
+healthy probe run **does** solve zones fresh — ~1,000 records per run, from
+candidate exploration whose zones the winning layout never uses — so zone
+cache growth is normal and is **not** a failure signal. What is
+deterministic is the shipped geometry: all 35 blueprint hashes reproduce
+across hosts, opt levels, and repeated runs. The hash comparison is
+therefore the detector; the CI step prints the fresh-solve byte count as a
+diagnostic (both the probe and the exporter `zone_cache::flush()` before
+finishing — the cache-file write is an explicit contract, not a side effect
+of solving, so without those calls the growth would be invisible). When a
+probe goes red alongside a large jump in that count, suspect budget-shaped
+fresh solves reaching a winner and refresh the committed zone cache before
+adjudicating the mismatch as intentional drift.
 
 ## Reading coverage honestly
 

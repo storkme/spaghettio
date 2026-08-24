@@ -109,33 +109,35 @@ jobs:
       # the next calibration round. Legitimate drift is handled golden-
       # style: re-export the bank (calibration_matrix_export), commit the
       # new matrix.json here, re-measure the changed rows, and regenerate
-      # docs/selection-policy-calibration-evidence.md. Deterministic in CI
-      # because the corpus solves entirely from the committed zone cache
-      # (verified 2026-08-24: a full export leaves the cache byte-identical)
-      # — and that property is ENFORCED per-run below, not just claimed: the
-      # probe's scratch cache is sourced from `git show HEAD:` (the
-      # committed bytes — the core-suite step above points its env var at
-      # the worktree file and may have appended to it, so the worktree copy
-      # is not a pristine source; #719 review round 2), and after the run
-      # the scratch copy is compared back. Growth means a corpus fixture
-      # needed an uncached zone, i.e. its rebuilt geometry was
-      # wall-clock-budget shaped — the step fails with the refresh
-      # instruction instead of leaving a hash mismatch to be misread as
-      # intentional drift. --no-tests=fail so a filter typo can never pass
-      # as a zero-test green (verified locally: zero matches exits 4).
+      # docs/selection-policy-calibration-evidence.md.
+      #
+      # Determinism model (corrected #719 round 3 — measured, not assumed):
+      # the probe DOES solve zones fresh on a healthy run (~1,000 records —
+      # candidate exploration solves zones the winning layout never uses),
+      # so cache growth is normal and must not gate. What is deterministic
+      # is the SHIPPED geometry: all 35 hashes reproduce across hosts, opt
+      # levels, and repeated runs. The hash comparison itself is therefore
+      # the detector — if fresh solving ever turns budget-shaped in a way
+      # that reaches a winner, the probe goes red on those rows. The growth
+      # byte-count is printed as a diagnostic for whoever investigates such
+      # a red (large jumps in it say "look at the zone cache first").
+      # The scratch cache is sourced from `git show HEAD:` because the
+      # core-suite step above points its env var at the worktree file and
+      # may append to it — the worktree copy is not a pristine baseline.
+      # --no-tests=fail so a filter typo can never pass as a zero-test
+      # green (verified locally: zero matches exits 4).
       - name: Calibration-bank fingerprint probe
         run: |
           git show HEAD:crates/core/data/sat-zones-ci.bin > "$RUNNER_TEMP/sat-zones-probe.bin"
+          committed_bytes=$(stat -c%s "$RUNNER_TEMP/sat-zones-probe.bin")
           set +e
           cargo nextest run -p spaghettio_core --no-tests=fail \
             --run-ignored ignored-only \
             -E 'test(selection_policy_calibration_issue_breakdown)'
           rc=$?
           set -e
-          if ! git show HEAD:crates/core/data/sat-zones-ci.bin | cmp -s - "$RUNNER_TEMP/sat-zones-probe.bin"; then
-            echo "::error::calibration fingerprint probe grew its zone cache: a corpus fixture needs a zone absent from crates/core/data/sat-zones-ci.bin, so its rebuilt geometry is runner-speed-shaped and the fingerprint comparison is unreliable in BOTH directions. Refresh the committed zone cache (protocol in the comment above the core-suite step), re-export the calibration bank, and re-record crates/core/data/calibration-bank/matrix.json."
-            exit 1
-          fi
+          after_bytes=$(stat -c%s "$RUNNER_TEMP/sat-zones-probe.bin")
+          echo "::notice::calibration probe fresh-solve records: $((after_bytes - committed_bytes)) bytes appended to the scratch zone cache (committed $committed_bytes). Nonzero is NORMAL (candidate exploration); on a red probe, a large jump here says budget-shaped fresh solves may have reached a winner — refresh the committed zone cache before adjudicating the hash mismatch as intentional drift."
           exit $rc
         env:
           SPAGHETTIO_ZONE_CACHE_PATH: ${{ runner.temp }}/sat-zones-probe.bin

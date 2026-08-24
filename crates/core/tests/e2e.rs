@@ -11305,6 +11305,12 @@ fn selection_policy_calibration_issue_breakdown() {
         expected.len(),
         "the bank has fixture labels absent from the current calibration corpus"
     );
+    // Persist any fresh-solve records buffered during the rebuilds. CI's
+    // growth tripwire compares the scratch cache file after this test;
+    // without this flush a fresh solve stays in the in-memory buffer and
+    // the tripwire can never fire (#719 review round 3 — the file write is
+    // an explicit contract, not a side effect of solving).
+    spaghettio_core::zone_cache::flush();
     let output = serde_json::json!({
         "fixtures": fixture_json,
         "determinism": determinism_json,

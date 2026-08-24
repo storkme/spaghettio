@@ -155,6 +155,12 @@ fn main() {
         "fixtures": entries,
         "build_failures": failures,
     });
+    // Persist any fresh-solve records buffered during the builds, so the
+    // refresh protocol's "did the scratch cache grow?" comparison actually
+    // observes them — the cache file write is an explicit contract, and
+    // without it an export that solved zones fresh (wall-clock-budget
+    // shaped) would leave the file byte-identical and read as full-coverage.
+    spaghettio_core::zone_cache::flush();
     let index_path = root.join("matrix.json");
     std::fs::write(
         &index_path,
