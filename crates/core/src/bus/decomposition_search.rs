@@ -1621,13 +1621,19 @@ fn select_best_decomposition_with_policy(
     // The old bijection ("early MergeTap/ScopedPairwise decision means
     // clean-flags is not needed") predates a Pooled `k1-shape-fix`: it
     // was true when an early decision implied every produced candidate
-    // already carried counts or kinds from the pairwise sites. With the
-    // rescue on the Pooled field (RFC-069 Phase A1), an early MergeTap
-    // decision can coexist with a produced-but-unmeasured candidate that
-    // `BestErrorFree` is entitled to rank — measuring exactly the
-    // unmeasured ones preserves the K70-3 laziness where it was valid
-    // (≤1 produced, or everyone measured) and closes the gap where it
-    // was not.
+    // already carried counts from the pairwise sites. With the rescue on
+    // the Pooled field (RFC-069 Phase A1), an early MergeTap decision
+    // can coexist with a produced-but-unmeasured candidate that
+    // `BestErrorFree` is entitled to rank. The widened condition is
+    // honest about its population (#720 review round 1): merge-tap's
+    // pre-decide site records KINDS, not counts, so every Pooled
+    // unaccepted-native field measures here now — not only rescue-
+    // bearing ones — and any candidate that measures error-free may
+    // displace the held merge-tap, which is `BestErrorFree`'s job, not
+    // a k1 special case. The loop skips rows that already carry counts,
+    // so the K70-3 laziness survives everywhere it was valid (≤1
+    // produced, or everyone measured) and each remaining validate()
+    // runs once, on a field that is already mid-rescue and slow.
     let any_produced_unmeasured = tier_outcomes
         .iter()
         .enumerate()
@@ -1635,6 +1641,9 @@ fn select_best_decomposition_with_policy(
     if n_layouts > 1 && (!early_stage_decided || any_produced_unmeasured) {
         let start = crate::trace::peek_events_len();
         for (idx, outcome) in tier_outcomes.iter().enumerate() {
+            if profiles[idx].counts.is_some() {
+                continue; // first-write-wins anyway; skip the re-validate
+            }
             if let Some((layout, _)) = outcome {
                 let (counts, source) = count_issues_with_source(layout, solver_result);
                 board.record_counts(idx, counts, source);

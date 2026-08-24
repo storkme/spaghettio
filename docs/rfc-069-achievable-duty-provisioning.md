@@ -212,6 +212,29 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-24 — #720 round 1 absorbed (three real catches, two of them
+  majors).* (1) The policy TABLE's k1 registration still declared the
+  `partitioned` gate the shipping predicate dropped — the #692
+  three-lists drift class, caught 3/3; registration + gate test
+  re-pinned to the loosened conjunction. (2) A reachable hole in the
+  deferral: with merge-tap produced but itself UNACCEPTED, the held
+  challenger fell through to `FirstProduced`, which names the
+  first-registered produced candidate — the dead native — strictly
+  worse than the old Terminate. Fixed as a principled rule
+  (`StageSpec::imposes_quality`): the unconditional fallback's
+  registration-order pick is not a quality verdict and may not displace
+  a held quality-key win; pinned by a third policy test. (3) The
+  measurement widening stated honestly: merge-tap's pre-decide site
+  records kinds, not counts, so EVERY Pooled unaccepted-native field
+  measures now (not only rescue-bearing ones) and any error-free
+  candidate may displace the held merge-tap — which is `BestErrorFree`'s
+  job, not a k1 special case; the loop now skips already-counted rows
+  (first-write-wins verified in code), so the cost is one validate()
+  per uncounted candidate on already-slow broken fields. Also absorbed:
+  the challenger-deferral count debug_assert (mirroring #698 round 7's
+  incumbent guard) and the evidence header's corpus-fingerprint wording
+  (definition-hash, layout-independent — a reviewer read it as a file
+  hash).*
 - *2026-08-24 — **Phase A1 LANDED** (the reachability fix, this PR): the
   three blockers removed — `try_k1_shape_fix` un-gated from PD (still
   native-unaccepted-only, so clean fixtures never build it), the

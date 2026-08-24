@@ -1,6 +1,6 @@
 # Selection-policy calibration evidence
 
-Source bank: `/tmp/calibration-matrix-2026-08-24-a1`. Validator probe: `/tmp/calibration-matrix-2026-08-24-a1/calibration-issue-breakdown.json`. Corpus fingerprint: `88c59075b90b4b22fdc0a4711b1b43c7aa47ab676488b4d93e19754fb5004617` — must match the committed `crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine.
+Source bank: `/tmp/calibration-matrix-2026-08-24-a1`. Validator probe: `/tmp/calibration-matrix-2026-08-24-a1/calibration-issue-breakdown.json`. Corpus-definition fingerprint (`corpus_sha256` — the ordered fixture declarations, deliberately independent of any generated layout): `88c59075b90b4b22fdc0a4711b1b43c7aa47ab676488b4d93e19754fb5004617` — must match the same field in the committed `crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine's corpus; per-row geometry binds via each row's `blueprint_sha256`/`manifest_sha256`, which the CI probe checks.
 
 Status preserves campaign state: `awaiting-measurement` has no `report.json`; `non-converged` and `kit-error` retain their measured values but are excluded from the clean-row findings; `excluded` covers every probe-side determinism refusal — the probe's `exclusion_reason` names which: `blueprint-sha256-mismatch`, `manifest-sha256-mismatch`, `validator-totals-mismatch`, or `build-failed`.
 
