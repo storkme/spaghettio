@@ -4511,8 +4511,14 @@ fn stress_advanced_circuit_45s_from_plates() {
             // The held-incumbent migration surfaced a produced
             // ERROR-FREE cell-composed layout (0E/30W) that the broken
             // 14-route-severed native (bank sim 0.0/s, non-converged)
-            // had been shadowing at the ranked boundary. Meter 44.0/45
-            // = 97.8%; sim anchor on the PR.
+            // had been shadowing at the ranked boundary. Delivery,
+            // stated honestly (#721 round 1): the sim measures this
+            // winner NON-CONVERGED at 63.7% (432k) / 66.7% (864k) — a
+            // real ~2/3-of-plan ceiling, and the METER'S 97.8% model is
+            // wrong on this cell-chain shape (post-lift divergence
+            // class). These ceilings are a CLEANLINESS pin, not a
+            // delivery claim; delivery lives in the bank row
+            // (non-converged evidence) and the RFC-069 log.
             max_errors: 0,
             max_warnings: 30,
             max_errors_by_category: Default::default(),
@@ -4529,8 +4535,9 @@ fn stress_advanced_circuit_45s_from_plates() {
         decided.as_ref().map(|(w, s)| (w.as_str(), *s)),
         Some(("cell-composed", spaghettio_core::trace::SelectionStage::BestErrorFree)),
         "stress_advanced_circuit_45s_from_plates pins the Phase A2 rescue (RFC-069): \
-         cell-composed at BestErrorFree, meter 44.0/45 vs the old native's sim 0.0/45. \
-         If this moved, adjudicate with the meter before re-blessing — got {decided:?}",
+         cell-composed at BestErrorFree, sim 63.7-66.7% non-converged vs the old \
+         native's sim 0.0/45 dead. If this moved, adjudicate with the SIM (the meter \
+         is measured-wrong on this shape) before re-blessing — got {decided:?}",
     );
 }
 

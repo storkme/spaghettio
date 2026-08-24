@@ -591,7 +591,12 @@ fn parse_unstampable_warnings(layout: &LayoutResult) -> Vec<(String, u32, u32)> 
 /// Consumer recipes of `item` with their total consumption rates, or
 /// `None` when any consumption is fluid (pipes merge freely; belt
 /// enrollment does not apply). Shared by the K=1 and multi-consumer
-/// enrollment arms of `build_k1_enrollment_plan`.
+/// enrollment arms of `build_k1_enrollment_plan`. Note the guard is
+/// item-wide: one fluid consumer stands the WHOLE item down, dropping
+/// its solid consumers too — inherited from the K=1 predecessor,
+/// stronger than strictly needed, recorded as latent hardening in the
+/// RFC-069 log (#721 round 1; no live fixture mixes belt and pipe
+/// consumption of one item).
 fn consumers_by_recipe(
     item: &str,
     solver_result: &SolverResult,

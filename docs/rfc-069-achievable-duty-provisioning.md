@@ -212,6 +212,34 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-24 — #721 round 1 adjudicated: one comment-honesty absorb,
+  ledger duty paid, three latent design notes recorded.* Absorbed: the
+  ac45 test comment claimed a "sim anchor" and steered re-blessing to
+  the METER — the instrument the log itself declares measured-wrong on
+  the cell-chain shape; it now states the non-converged sim numbers and
+  steers to the sim. status.md brought current (A2, the ac45 flip, the
+  router-class wall). Trace/doc drift fixed (`K1ItemEnrolled` fires
+  from both arms; `n_producers` is the pooled family's count). Latent
+  notes, no code: (1) a 0-error-but-UNACCEPTED rescue cannot displace a
+  migrated incumbent (`BestErrorFree` requires acceptance) — coherent
+  today (an unstampable "rescue" is not a rescue), revisit if a real
+  field produces one; (2) `consumers_by_recipe`'s fluid guard is
+  item-wide (one pipe consumer stands the whole item down — inherited,
+  stronger than needed, commented at the site); (3) the multi-consumer
+  arm emits `K1ItemEnrolled` and sets `enrolled_any` even when
+  `apply_shape_fixes` left a module unfixed — benign (the candidate
+  loses on its own warnings) but a skip-guard is cheap hardening.
+  Refuted with receipts: "other unaccepted-incumbent fields ship
+  silently un-instrumented" — the fingerprint probe covers ALL 35 rows
+  and drifted on exactly ac45; a silent winner flip elsewhere would be
+  a hash drift by construction. "The pin blesses an underdelivering
+  layout" — pins are cleanliness instruments by the RFC-071 framework's
+  own doctrine; delivery lives in the bank row and only the sim clears.
+  "The BestAccepted-guard test never exercises its dispute" — it does:
+  BestErrorFree yields NoOpinion on that field (merge-tap has 27E), the
+  flow reaches BestAccepted where merge-tap WINS the ranking and is
+  refused displacement; swapping `requires_error_free` for
+  `imposes_quality` flips the test red.*
 - *2026-08-24 — Phase A2 (the tier5 twin blockers) IMPLEMENTED; the
   campaign's remaining engineering unifies into ONE router item.* Two
   mechanisms, both pinned: (1) **multi-consumer enrollment** — the k1
