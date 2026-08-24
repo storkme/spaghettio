@@ -578,12 +578,12 @@
     },
     {
       "belt_tier": null,
-      "blueprint_sha256": "499fcc4c0b777939d98b665560653f1f30320fc9b75c40af757b84ad1c826fda",
+      "blueprint_sha256": "c52fb7c5c0d6d1a98e503bc23a6489975673ae4ce90c73d01e0c961abb33a2d5",
       "dimensions": [
-        312,
-        186
+        1470,
+        22
       ],
-      "entities": 11763,
+      "entities": 7674,
       "excluded_recipes": [],
       "inputs": [
         "iron-plate",
@@ -592,12 +592,12 @@
       ],
       "label": "stress_advanced_circuit_45s_from_plates",
       "machine": "assembling-machine-2",
-      "manifest_sha256": "29368bd98979e084085f2b53464c2f2c46bee1f3468097517ce876ccd064f9c8",
+      "manifest_sha256": "d55d67766d151f5babc3b470c329811eb4160c6d422768ae4865e4cb7ead0cce",
       "rate": 45.0,
       "target": "advanced-circuit",
       "validator": {
-        "errors": 14,
-        "warnings": 1057
+        "errors": 0,
+        "warnings": 30
       },
       "variant": "plain"
     },

@@ -884,6 +884,21 @@ impl StageSpec {
             StageKind::TieredRank(spec) => spec.require_accepted || spec.require_error_free,
         }
     }
+
+    /// The strictest displacement bar: only the error-free tier clears
+    /// it. A held UNACCEPTED INCUMBENT (RFC-069 tier5 blocker 2) is
+    /// displaceable only here — it already WON the quality-key pairwise
+    /// on error kinds, so letting `BestAccepted`'s score ranking unseat
+    /// it would put the acceptance gate above the better-calibrated
+    /// kinds verdict (the 27-route-severed merge-tap displacing the
+    /// 18-severed native that just beat it). An error-free layout, by
+    /// the RFC-071 evidence, outranks any severed one unambiguously.
+    fn requires_error_free(&self) -> bool {
+        match &self.kind {
+            StageKind::TieredRank(spec) => spec.require_error_free,
+            _ => false,
+        }
+    }
 }
 
 /// When the error-free tier is measured at all — v1's `clean_flags`
@@ -1407,18 +1422,39 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
         .collect();
 
     let mut held: Option<Decision> = None;
-    // A challenger win deferred by `ChallengerBehavior::DeferToRankedStages`.
-    // Unlike `held` (which returns at the first ranked stage), this survives
-    // the whole program: it is the answer of last resort, displaced only by
-    // a stage naming a DIFFERENT winner, and re-tagged to itself when a
-    // later stage merely confirms the same winner.
-    let mut held_challenger: Option<Decision> = None;
+    // A held answer that survives into the ranked stages. Two kinds share
+    // the slot: a challenger win deferred by
+    // `ChallengerBehavior::DeferToRankedStages`, displaceable by any
+    // quality-imposing stage naming a different winner; and an UNACCEPTED
+    // held incumbent migrated at the ranked boundary (RFC-069 tier5
+    // blocker 2), displaceable only by the error-free tier — it already
+    // won the quality-key pairwise on kinds, and no weaker verdict may
+    // override that (see `StageSpec::requires_error_free`). Either kind
+    // is the answer of last resort: re-tagged to itself on mere
+    // confirmation, returned at program end if nothing displaced it.
+    #[derive(Clone, Copy, PartialEq)]
+    enum HeldKind {
+        Challenger,
+        UnacceptedIncumbent,
+    }
+    let mut held_challenger: Option<(Decision, HeldKind)> = None;
     for stage in &policy.program.stages {
-        // A held incumbent answer waits only on the remaining PAIRWISE
-        // stages; reaching a ranked one means nothing displaced it, so
-        // it stands and the chain stops here.
-        if held.is_some() && !stage.is_pairwise() {
-            return held;
+        // A held incumbent answer waits on the remaining PAIRWISE stages.
+        // At the ranked boundary an ACCEPTED incumbent stands (#474's
+        // non-shadowing rule, unchanged); an UNACCEPTED one has no
+        // quality claim to stand on and migrates into the held-answer
+        // slot, displaceable only by the error-free tier (RFC-069 tier5
+        // blocker 2 — #720 round-4's critical: the held-incumbent
+        // short-circuit made a produced 0-error rescue unreachable on
+        // fields where the broken native wins the pairwise).
+        if let Some(h) = held {
+            if !stage.is_pairwise() {
+                if profiles[h.winner].is_accepted() {
+                    return held;
+                }
+                held_challenger = Some((h, HeldKind::UnacceptedIncumbent));
+                held = None;
+            }
         }
         // The mirror rule for a held CHALLENGER: it waits only on the
         // RANKED stages, whose tiers include it. The remaining pairwise
@@ -1449,16 +1485,21 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
         };
         match outcome {
             StageOutcome::Winner(i) => {
-                // A held challenger absorbs a later stage's confirmation
-                // of the SAME winner (the decision keeps the pairwise
+                // A held answer absorbs a later stage's confirmation of
+                // the SAME winner (the decision keeps the original
                 // stage's tag, so fields where nothing outranks the held
-                // challenger stay bit-identical to the Terminate world),
-                // and it may be displaced only by a stage that imposes a
-                // QUALITY requirement — the unconditional fallback's
-                // registration-order pick is not a quality verdict and
-                // returns the held answer instead (`imposes_quality`).
-                if let Some(hc) = held_challenger {
-                    if hc.winner == i || !stage.imposes_quality() {
+                // answer stay bit-identical to the Terminate world), and
+                // is displaced only past its kind's bar: a held
+                // CHALLENGER by any quality-imposing stage
+                // (`imposes_quality`); a held UNACCEPTED INCUMBENT only
+                // by the error-free tier (`requires_error_free`) — its
+                // quality-key pairwise win outranks every weaker verdict.
+                if let Some((hc, kind)) = held_challenger {
+                    let displaceable = match kind {
+                        HeldKind::Challenger => stage.imposes_quality(),
+                        HeldKind::UnacceptedIncumbent => stage.requires_error_free(),
+                    };
+                    if hc.winner == i || !displaceable {
                         return Some(hc);
                     }
                 }
@@ -1470,10 +1511,13 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
                         })
                     }
                     ChallengerBehavior::DeferToRankedStages => {
-                        held_challenger = Some(Decision {
-                            winner: i,
-                            stage: stage.tag,
-                        });
+                        held_challenger = Some((
+                            Decision {
+                                winner: i,
+                                stage: stage.tag,
+                            },
+                            HeldKind::Challenger,
+                        ));
                     }
                 }
             }
@@ -1500,13 +1544,13 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
     }
     // Program exhausted. The held-incumbent half is UNREACHABLE under
     // today's program, whose last stage is ranked, not pairwise — so a
-    // held answer has already returned at the loop head. It is `held`
-    // rather than `None` because a program ending in a pairwise stage
-    // should still honour a deferral, not discard it (#698 review round
-    // 6). The held CHALLENGER half is live: a deferred challenger that
-    // no ranked stage displaced or confirmed stands here with its
-    // original stage tag.
-    held.or(held_challenger)
+    // held answer has already returned or migrated at the loop head. It
+    // is `held` rather than `None` because a program ending in a
+    // pairwise stage should still honour a deferral, not discard it
+    // (#698 review round 6). The held-answer half is live: a deferred
+    // challenger or migrated unaccepted incumbent that no ranked stage
+    // displaced or confirmed stands here with its original stage tag.
+    held.or(held_challenger.map(|(d, _)| d))
 }
 
 /// The quality-key lexicograph: the `quality_key_rival` registration
@@ -2286,6 +2330,82 @@ mod tests {
                 stage: SelectionStage::MergeTap
             },
             "a floor winner never compared against the held merge-tap must not displace it"
+        );
+    }
+
+    /// RFC-069 tier5 blocker 2 (#720 round-4 critical), pinned: on a
+    /// field where the BROKEN native WINS the quality-key pairwise
+    /// (tier5's shape — native 18 route-severed vs merge-tap's 27), the
+    /// held incumbent no longer short-circuits the ranked stages: being
+    /// unaccepted, it migrates to the held-answer slot and a measured
+    /// 0-error rescue displaces it at `BestErrorFree`.
+    #[test]
+    fn an_error_free_rescue_displaces_an_unaccepted_held_incumbent() {
+        let mut ps = blank();
+        ps[NATIVE] = produced(-0.55, false);
+        ps[NATIVE].kinds = Some(ErrorKindCounts {
+            route_severed: 18,
+            ..Default::default()
+        });
+        ps[MERGE_TAP] = produced(-0.57, true);
+        ps[MERGE_TAP].kinds = Some(ErrorKindCounts {
+            route_severed: 27,
+            ..Default::default()
+        });
+        ps[MERGE_TAP].counts = Some(IssueCounts {
+            errors: 27,
+            selection_warnings: 40,
+            layout_warnings: 1,
+        });
+        ps[K1] = produced(-0.60, true);
+        ps[K1].counts = Some(IssueCounts {
+            errors: 0,
+            selection_warnings: 12,
+            layout_warnings: 0,
+        });
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d,
+            Decision {
+                winner: K1,
+                stage: SelectionStage::BestErrorFree
+            },
+            "the rescue must reach past a pairwise-winning broken native"
+        );
+    }
+
+    /// The migrated incumbent's guard: WITHOUT an error-free rescue,
+    /// nothing weaker may override its quality-key pairwise win — in
+    /// particular `BestAccepted`'s score ranking must not let the
+    /// 27-route-severed merge-tap displace the 18-severed native that
+    /// just beat it on kinds. The old Terminate world shipped native
+    /// here; so does this.
+    #[test]
+    fn best_accepted_cannot_displace_an_unaccepted_held_incumbent() {
+        let mut ps = blank();
+        ps[NATIVE] = produced(-0.55, false);
+        ps[NATIVE].kinds = Some(ErrorKindCounts {
+            route_severed: 18,
+            ..Default::default()
+        });
+        ps[MERGE_TAP] = produced(-0.50, true); // better score, worse kinds
+        ps[MERGE_TAP].kinds = Some(ErrorKindCounts {
+            route_severed: 27,
+            ..Default::default()
+        });
+        ps[MERGE_TAP].counts = Some(IssueCounts {
+            errors: 27,
+            selection_warnings: 40,
+            layout_warnings: 1,
+        });
+        let d = decide(&ps, &SelectionPolicy::current()).unwrap();
+        assert_eq!(
+            d,
+            Decision {
+                winner: NATIVE,
+                stage: SelectionStage::MergeTap
+            },
+            "score at BestAccepted must not override the quality-key pairwise verdict"
         );
     }
 

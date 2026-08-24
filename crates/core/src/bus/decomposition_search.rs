@@ -588,27 +588,26 @@ fn parse_unstampable_warnings(layout: &LayoutResult) -> Vec<(String, u32, u32)> 
     out
 }
 
-/// Find the single consumer recipe for a K=1 item. Returns the recipe
-/// name and total consumption rate, or `None` if `item` is consumed by
-/// zero or 2+ recipes (in which case enrollment doesn't make sense —
-/// K=1 path doesn't apply).
-fn k1_consumer_for_item(item: &str, solver_result: &SolverResult) -> Option<(String, f64)> {
+/// Consumer recipes of `item` with their total consumption rates, or
+/// `None` when any consumption is fluid (pipes merge freely; belt
+/// enrollment does not apply). Shared by the K=1 and multi-consumer
+/// enrollment arms of `build_k1_enrollment_plan`.
+fn consumers_by_recipe(
+    item: &str,
+    solver_result: &SolverResult,
+) -> Option<rustc_hash::FxHashMap<String, f64>> {
     let mut by_recipe: rustc_hash::FxHashMap<String, f64> = rustc_hash::FxHashMap::default();
-    let mut found_fluid = false;
     for m in &solver_result.machines {
         for inp in &m.inputs {
             if inp.item == item {
                 if inp.is_fluid {
-                    found_fluid = true;
+                    return None;
                 }
                 *by_recipe.entry(m.recipe.clone()).or_insert(0.0) += inp.rate * m.count;
             }
         }
     }
-    if found_fluid || by_recipe.len() != 1 {
-        return None;
-    }
-    by_recipe.into_iter().next()
+    Some(by_recipe)
 }
 
 /// Build a partition plan that overlays K=1 enrollments onto the
@@ -642,8 +641,9 @@ pub(crate) fn build_k1_enrollment_plan(
     let cap = super::partitioner::lane_capacity(max_belt_tier);
     let utilization_cap = cap * super::partitioner::UTILIZATION_CEILING;
 
-    // Base plan first; if `item` already has a module here it is K≥2 and
-    // out of scope for this pass.
+    // Base plan first; on PD it may already own a module for `item`
+    // (then the shape-aware pass there is the authority and this pass
+    // stands down). On Pooled the base plan is empty by construction.
     let mut plan =
         crate::trace::with_muted(|| plan_partitioning(solver_result, opts.strategy, max_belt_tier));
 
@@ -654,36 +654,83 @@ pub(crate) fn build_k1_enrollment_plan(
     let mut enrolled_any = false;
     for (item, n, m) in warnings {
         if plan.modules.iter().any(|x| x.item == item) {
-            continue; // K≥2; not our case
+            continue; // the base plan owns this item's modules
         }
-        let Some((recipe, rate)) = k1_consumer_for_item(&item, solver_result) else {
-            continue;
+        let Some(by_recipe) = consumers_by_recipe(&item, solver_result) else {
+            continue; // fluid consumption: pipes merge freely, out of scope
         };
-        let new_m = match select_shape_fix(n, m, strategies) {
-            Some(ShapeFix::PadLanes { new_m }) => new_m,
-            // Native shouldn't reach here (the family wouldn't have
-            // dropped if it were stampable), but bail safely.
-            Some(ShapeFix::Native) => continue,
-            // Shard for K=1 needs producer-rate splitting; leave for
-            // a follow-up. Pad already covers the (4, 9) motivating case.
-            Some(ShapeFix::Shard { .. }) | None => continue,
-        };
-        let per_lane_rate = rate / new_m as f64;
-        crate::trace::emit(crate::trace::TraceEvent::K1ItemEnrolled {
-            item: item.clone(),
-            consumer_recipe: recipe.clone(),
-            n_producers: n,
-            lane_count: new_m,
-        });
-        plan.modules.push(ModuleAssignment {
-            item,
-            module_id: 0,
-            consumer_recipe: recipe,
-            rate,
-            lane_count: new_m,
-            utilization: per_lane_rate / utilization_cap.max(f64::EPSILON),
-        });
-        enrolled_any = true;
+        if by_recipe.len() == 1 {
+            // K=1: pad from the warning's own (n, m). Kept exactly as
+            // shipped by RFC-069 Phase A1 (#720) — the ec35 artifact and
+            // its bank row are byte-stable against this arm.
+            let (recipe, rate) = by_recipe.into_iter().next().expect("len checked");
+            let new_m = match select_shape_fix(n, m, strategies) {
+                Some(ShapeFix::PadLanes { new_m }) => new_m,
+                // Native shouldn't reach here (the family wouldn't have
+                // dropped if it were stampable), but bail safely.
+                Some(ShapeFix::Native) => continue,
+                // Shard for K=1 needs producer-rate splitting; leave for
+                // a follow-up. Pad already covers the (4, 9) motivating case.
+                Some(ShapeFix::Shard { .. }) | None => continue,
+            };
+            let per_lane_rate = rate / new_m as f64;
+            crate::trace::emit(crate::trace::TraceEvent::K1ItemEnrolled {
+                item: item.clone(),
+                consumer_recipe: recipe.clone(),
+                n_producers: n,
+                lane_count: new_m,
+            });
+            plan.modules.push(ModuleAssignment {
+                item,
+                module_id: 0,
+                consumer_recipe: recipe,
+                rate,
+                lane_count: new_m,
+                utilization: per_lane_rate / utilization_cap.max(f64::EPSILON),
+            });
+            enrolled_any = true;
+        } else if by_recipe.len() >= 2 {
+            // Multi-consumer (RFC-069's tier5 blocker): the item's one
+            // pooled family produced an unstampable (n, m), so enroll it
+            // the way `plan_partitioning` would under PD — one module
+            // per consumer recipe, lane_count = ceil(rate / cap) — and
+            // run the partitioner's own shape-fix pass over JUST these
+            // new modules so an unstampable per-consumer shape gets the
+            // same pad/shard treatment (single source; no second
+            // implementation of the decision). tier5's three trapped
+            // items (cable EC+AC, iron-plate EC+sulfuric-acid, EC
+            // PU+AC) are this arm's motivating cases.
+            let mut recipes: Vec<(String, f64)> = by_recipe.into_iter().collect();
+            recipes.sort_by(|a, b| a.0.cmp(&b.0));
+            let new_modules: Vec<ModuleAssignment> = recipes
+                .into_iter()
+                .enumerate()
+                .map(|(module_id, (recipe, rate))| {
+                    let lane_count = (rate / cap).ceil().max(1.0) as u32;
+                    let per_lane_rate = rate / lane_count as f64;
+                    ModuleAssignment {
+                        item: item.clone(),
+                        module_id: module_id as u32,
+                        consumer_recipe: recipe,
+                        rate,
+                        lane_count,
+                        utilization: per_lane_rate / utilization_cap.max(f64::EPSILON),
+                    }
+                })
+                .collect();
+            let fixed =
+                super::partitioner::apply_shape_fixes(new_modules, solver_result, cap);
+            for mo in &fixed {
+                crate::trace::emit(crate::trace::TraceEvent::K1ItemEnrolled {
+                    item: mo.item.clone(),
+                    consumer_recipe: mo.consumer_recipe.clone(),
+                    n_producers: n,
+                    lane_count: mo.lane_count,
+                });
+            }
+            plan.modules.extend(fixed);
+            enrolled_any = true;
+        }
     }
     if enrolled_any {
         Some(plan)

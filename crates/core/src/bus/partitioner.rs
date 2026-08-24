@@ -487,7 +487,12 @@ fn estimate_producer_count(solver: &SolverResult, item: &str) -> u32 {
 ///
 /// Returns the transformed module list. Module IDs are reassigned dense
 /// per item so downstream code (apply_partition_plan) sees contiguous IDs.
-fn apply_shape_fixes(
+///
+/// `pub(crate)` since RFC-069's tier5 blocker fix: the k1 enrollment's
+/// multi-consumer arm (`build_k1_enrollment_plan`) reuses this exact pass
+/// over its newly-constructed modules rather than reimplementing the
+/// pad/shard decision — the single source for shape-fixing.
+pub(crate) fn apply_shape_fixes(
     modules: Vec<ModuleAssignment>,
     solver_result: &SolverResult,
     cap: f64,

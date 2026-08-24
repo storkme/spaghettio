@@ -4507,10 +4507,30 @@ fn stress_advanced_circuit_45s_from_plates() {
         "stress_advanced_circuit_45s_from_plates",
         &result,
         StressBaseline {
-            max_errors: usize::MAX,
-            max_warnings: usize::MAX,
+            // 2026-08-24 (RFC-069 Phase A2): tightened from unbounded.
+            // The held-incumbent migration surfaced a produced
+            // ERROR-FREE cell-composed layout (0E/30W) that the broken
+            // 14-route-severed native (bank sim 0.0/s, non-converged)
+            // had been shadowing at the ranked boundary. Meter 44.0/45
+            // = 97.8%; sim anchor on the PR.
+            max_errors: 0,
+            max_warnings: 30,
             max_errors_by_category: Default::default(),
         },
+    );
+    // Winner pin, same rationale as ec35's: ceilings alone would pass a
+    // silently-returned worse winner. The dead native and the 878-error
+    // merge-tap must not return.
+    let decided = result.trace_events.iter().rev().find_map(|e| match e {
+        TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
+        _ => None,
+    });
+    assert_eq!(
+        decided.as_ref().map(|(w, s)| (w.as_str(), *s)),
+        Some(("cell-composed", spaghettio_core::trace::SelectionStage::BestErrorFree)),
+        "stress_advanced_circuit_45s_from_plates pins the Phase A2 rescue (RFC-069): \
+         cell-composed at BestErrorFree, meter 44.0/45 vs the old native's sim 0.0/45. \
+         If this moved, adjudicate with the meter before re-blessing — got {decided:?}",
     );
 }
 
