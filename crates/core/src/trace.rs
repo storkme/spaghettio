@@ -402,12 +402,20 @@ pub enum TraceEvent {
         new_total_lanes: u32,
     },
 
-    // K=1 item with an unstampable (n, m) shape was enrolled in
-    // `plan.modules` with `module_id=0` so `apply_shape_fixes` can
-    // pad/shard it. Fires from `enroll_unstampable_k1_items` in
-    // `bus/partitioner.rs`. Without this enrollment, K=1 coprime-trap
-    // shapes (e.g. (4, 9) for copper-plate on PU@3/s ore-red) silently
-    // dead-end at balancer stamp time.
+    // An item with an unstampable (n, m) shape was enrolled in
+    // `plan.modules` by `build_k1_enrollment_plan`
+    // (`bus/decomposition_search.rs`). Since RFC-069 Phase A2 the event
+    // fires from BOTH arms: the K=1 arm (one module, `module_id=0`,
+    // lane_count = the warning-shape pad) and the multi-consumer arm
+    // (one event per enrolled per-consumer module, lane counts as
+    // `apply_shape_fixes` left them). `n_producers` is the pooled
+    // producer count THE EMITTING ARM'S shape decision used — the K=1
+    // arm reports the warning's family `n`; the multi arm reports
+    // `producer_count_estimate` (the raw machine count its shape-fix
+    // pass consulted). Never a per-consumer split (#721 rounds 2-3).
+    // Without this enrollment, coprime-trap shapes
+    // (e.g. (4, 9) for copper-plate on ec35/PU) silently dead-end at
+    // balancer stamp time.
     K1ItemEnrolled {
         item: String,
         consumer_recipe: String,

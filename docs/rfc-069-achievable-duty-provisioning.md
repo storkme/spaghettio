@@ -212,6 +212,105 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-24 — #721 round 2: the arm-asymmetry critical adjudicated BY
+  EXPERIMENT — the demanded guard is measured-harmful; parity absorbed
+  instead.* The round's 3/3 critical demanded the multi-consumer arm
+  bail on unfixable shapes like its K=1 sibling. The guard was
+  IMPLEMENTED and measured: `select_shape_fix`-based post-fix vetoing
+  flips tier5's k1 from Produced+accepted back to Refused — the model
+  (direct+gcd+pad+shard) is strictly narrower than the stamp path
+  (runtime generator, passthrough rules), so "unfixable per the model"
+  does not mean "won't stamp", and the premise "a rescue pass that
+  cannot succeed" is falsified by the very fixture the arm exists for.
+  The asymmetry is now documented at the site as deliberate (the K=1
+  arm's bail is sound because its module's shape IS the warned shape);
+  the acceptance gate on the produced layout stays the adjudicator.
+  Absorbed from the same round: the multi arm now mirrors
+  `plan_partitioning`'s full construction order (Phase-2
+  `decompose_oversized_modules` before `apply_shape_fixes`), carries
+  the utilization-violation accounting (`PartitionRejectedByUtilization`
+  + `plan.utilization_violations`, no silent downgrade), and its
+  `K1ItemEnrolled` rows report the `n` the shape-fix decision actually
+  used (`producer_count_estimate`) instead of the warning's pooled
+  count. All behavior-neutral on tier5/ac45 (probes identical). The
+  delivery-blind-migration major recycles the framework's core doctrine
+  (0-error-over-dead IS the evidence-calibrated rule; future fields are
+  named by the fingerprint gate at PR time, which is how ac45 itself
+  was caught); the pairwise-skip future-program minor got its comment;
+  the columns minor is at its fourth telling.*
+- *2026-08-24 — #721 round 1 adjudicated: one comment-honesty absorb,
+  ledger duty paid, three latent design notes recorded.* Absorbed: the
+  ac45 test comment claimed a "sim anchor" and steered re-blessing to
+  the METER — the instrument the log itself declares measured-wrong on
+  the cell-chain shape; it now states the non-converged sim numbers and
+  steers to the sim. status.md brought current (A2, the ac45 flip, the
+  router-class wall). Trace/doc drift fixed (`K1ItemEnrolled` fires
+  from both arms; `n_producers` is the pooled family's count). Latent
+  notes, no code: (1) a 0-error-but-UNACCEPTED rescue cannot displace a
+  migrated incumbent (`BestErrorFree` requires acceptance) — coherent
+  today (an unstampable "rescue" is not a rescue), revisit if a real
+  field produces one; (2) `consumers_by_recipe`'s fluid guard is
+  item-wide (one pipe consumer stands the whole item down — inherited,
+  stronger than needed, commented at the site); (3) the multi-consumer
+  arm emits `K1ItemEnrolled` and sets `enrolled_any` even when
+  `apply_shape_fixes` left a module unfixed — benign (the candidate
+  loses on its own warnings) but a skip-guard is cheap hardening.
+  Refuted with receipts: "other unaccepted-incumbent fields ship
+  silently un-instrumented" — the fingerprint probe covers ALL 35 rows
+  and drifted on exactly ac45; a silent winner flip elsewhere would be
+  a hash drift by construction. "The pin blesses an underdelivering
+  layout" — pins are cleanliness instruments by the RFC-071 framework's
+  own doctrine; delivery lives in the bank row and only the sim clears.
+  "The BestAccepted-guard test never exercises its dispute" — it does:
+  BestErrorFree yields NoOpinion on that field (merge-tap has 27E), the
+  flow reaches BestAccepted where merge-tap WINS the ranking and is
+  refused displacement; swapping `requires_error_free` for
+  `imposes_quality` flips the test red.*
+- *2026-08-24 — Phase A2 (the tier5 twin blockers) IMPLEMENTED; the
+  campaign's remaining engineering unifies into ONE router item.* Two
+  mechanisms, both pinned: (1) **multi-consumer enrollment** — the k1
+  refusal was `k1_consumer_for_item`'s single-consumer requirement (the
+  Pooled base plan has ZERO modules — the "K≥2 items have modules"
+  reading was wrong, measured via plan dump); the new arm enrolls a
+  warned multi-consumer item as one module per consumer recipe (the
+  same per-item construction `plan_partitioning` performs under PD) and
+  runs the partitioner's own `apply_shape_fixes` over just the new
+  modules (single source for pad/shard; the K=1 arm untouched, keeping
+  ec35's shipped artifact byte-stable). (2) **the held-incumbent
+  migration** (#720 round-4 critical): at the ranked boundary an
+  ACCEPTED held incumbent stands (#474 unchanged); an UNACCEPTED one
+  migrates into the held-answer slot displaceable ONLY by the
+  error-free tier — NOT by `BestAccepted`'s score, which would let the
+  27-route-severed merge-tap unseat the 18-severed native that just
+  beat it on kinds (the acceptance gate must not override the
+  better-calibrated quality-key verdict). Measured on tier5@0.6: k1
+  goes Refused("no k1 enrollment") → **Produced, accepted, 12 errors**
+  — and the decision correctly still ships native@MergeTap (12E is not
+  error-free; nothing weaker may displace). **The fingerprint probe
+  then falsified this PR's first "inert on every shipped decision"
+  claim, in the right direction: ac45 flips** — its broken native (14
+  route-severed, unaccepted, bank sim 0.0/s non-converged) had been
+  shadowing a produced **error-free cell-composed layout** (0E/30W,
+  7,674 entities, 1470×22 — the RFC-067/068 machinery, also trapped
+  behind the held-incumbent short-circuit); with the migration,
+  cell-composed wins at BestErrorFree, and the refresh protocol ran
+  for ac45's row: meter models 97.8% (44.0/45), but the sim says the
+  meter is wrong on this shape (the post-lift divergence class) — 432k:
+  non-converged 63.7% kit-clean; 864k A/B arm: non-converged 66.7%, so
+  doubling warmup bought +3pp, not the +34pp a ramp would show. The
+  cell-chain layout has a REAL throughput ceiling ≈ 2/3 of plan. The
+  flip still ships on unambiguous grounds (0-error, 63.7–66.7% vs the
+  old winner's sim-measured 0.0/s dead), the bank row records the
+  protocol run as non-converged evidence, and the residual joins the
+  cell-drain ledger (RFC-071's >45/s single-drain + K>1 follow-up —
+  a 45/s AC chain at 1470 tiles is squarely that territory). The
+  remaining wall for ec40 (k1 10E), tier5 (k1 12E), and therefore the
+  Phase-B flip is one shared class: **the tap-bridge/crossing-zone
+  router failures on enrolled multi-lane plans** (ec40 receipts: `TapBridgeUnbridgeable`
+  copper-cable spans 6/5/4/3 vs yellow UG reach 4, then
+  `CrossingZoneSkipped` ×4 "flow_imbalance: ch1 1in/0out" at (15,113);
+  10 cable producer rows y=45..108 dead-end at x=48 with their
+  balancer at y≈110). Next unit: that router class.*
 - *2026-08-24 — #720 round 4 adjudicated at the stop point; one forward
   blocker recorded, three small absorbs, the rest recycled or refuted
   with receipts.* The round's [critical] is REAL but NOT LIVE: on a
