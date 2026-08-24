@@ -43,6 +43,43 @@ pub struct CalibrationFixture {
     pub variant: FixtureVariant,
 }
 
+/// Machine-readable variant tag.  A strategy row carries its discriminant —
+/// the pooled/partitioned A/B pairs in the corpus are otherwise identical
+/// rows distinguishable only by label.
+pub fn variant_name(variant: FixtureVariant) -> String {
+    match variant {
+        FixtureVariant::Plain => "plain".into(),
+        FixtureVariant::Strategy(s) => format!("strategy:{s:?}"),
+        FixtureVariant::Excluded => "excluded".into(),
+        FixtureVariant::ExcludedVoid => "excluded-void".into(),
+    }
+}
+
+/// The ordered corpus-definition fields whose SHA-256 is a schema-2
+/// `matrix.json`'s `corpus_sha256`.  Each fixture contributes these fields
+/// in order, each on its own line: name, item, rate, machine, belt tier,
+/// inputs, exclusions, and variant tag; inputs and exclusions are
+/// comma-joined and a missing belt tier is empty.  This lives in the
+/// library so the exporter and the CI fingerprint probe serialize the SAME
+/// fields; the hashing stays in the callers because `sha2` is deliberately
+/// a dev-dependency (the library never hashes, and WASM would carry it).
+pub fn corpus_fingerprint_fields(corpus: &[CalibrationFixture]) -> String {
+    let mut fields = Vec::with_capacity(corpus.len() * 8);
+    for fixture in corpus {
+        fields.extend([
+            fixture.name.to_owned(),
+            fixture.item.to_owned(),
+            fixture.rate.to_string(),
+            fixture.machine.to_owned(),
+            fixture.belt_tier.unwrap_or_default().to_owned(),
+            fixture.inputs.join(","),
+            fixture.excluded.join(","),
+            variant_name(fixture.variant),
+        ]);
+    }
+    fields.join("\n")
+}
+
 /// The shared current-generation corpus.  Add a fixture here when adding a
 /// materially new generator shape; the e2e differential and calibration
 /// exporter then gain it together.

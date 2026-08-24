@@ -257,3 +257,34 @@ its own PR(s) under the ~400-line norm.
   status ledger updated. #700 and #701 closed with their primary
   subjects fixed and sim-anchored; residual follow-ups live in this
   log's closing-status entry and the issues' final comments.*
+- *2026-08-24 (post-close) — the bank-regeneration and CI-wiring follow-ups
+  executed. A fresh export from merged main diffs against the pinned bank at
+  exactly the campaign's three geometry changes (gear@20 drain, ec35/ec40
+  merge-tap flips) — nothing else drifted; the 32 unchanged rows' bp+manifest
+  pairs byte-verified and their reports carried (voider's overnight report
+  included, closing the last awaiting row). Re-measured: gear@20 100.0/100.0
+  PASS; ec40 clean-measured 18.5% (corroborates the B2 receipt); ec35 22.9%
+  but kit-errored ("overlapping kit chests" — drain-side overlaps, the
+  evidence table's exact `kit_error_class` string) — labelled evidence, not a
+  clean row. First full 35/35 coverage: measured 21, kit-error 2, non-converged 12.
+  The bank's `matrix.json` is committed at `crates/core/data/calibration-bank/`
+  and CI's rust job runs the issue-breakdown probe against it (verbatim-command
+  pass + corrupt-one-hash fail both executed locally; the committed zone cache
+  is byte-identical after a full export, so the gate is deterministic in CI).
+  New next-round signal recorded, no policy change made: belt-flow-reachability
+  (Warning, latent RouteSevered) and lane-throughput's 631 E now co-occur with
+  ec40's measured deficit — evidence for the ird/margin-weights follow-up and
+  the reachability severity-promotion question in validator-trust.md.*
+- *2026-08-24 (post-close, correction) — the previous entry's "committed zone
+  cache is byte-identical after a full export, so the gate is deterministic"
+  receipt was VACUOUS: nothing on the export/probe path called
+  `zone_cache::flush()`, so fresh-solve records never reached the file being
+  compared (#719 round 3's nit — the fourth decorative-consumer instance in
+  this campaign arc). With flush wired, a healthy run measurably appends
+  ~1,000 records (~230 KB): candidate exploration solves zones the winner
+  never uses, so growth is NORMAL and the round-2 growth-fails-the-job
+  tripwire was built on a false premise and demoted to a diagnostic notice.
+  The actual determinism evidence for the gate is hash stability — all 35
+  blueprint hashes reproduce across two hosts, both opt levels, and seven
+  runs — and the hash comparison itself is the detector. Docs corrected in
+  the same commit (meter-calibration-matrix.md §fingerprint).*

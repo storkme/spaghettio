@@ -26,7 +26,9 @@
 
 use sha2::{Digest, Sha256};
 use spaghettio_core::blueprint;
-use spaghettio_core::calibration_matrix::{build, fixtures, CalibrationFixture, FixtureVariant};
+use spaghettio_core::calibration_matrix::{
+    build, corpus_fingerprint_fields, fixtures, variant_name, CalibrationFixture,
+};
 use spaghettio_core::validate::Severity;
 
 const SCHEMA_VERSION: u64 = 2;
@@ -36,41 +38,16 @@ fn usage() -> ! {
     std::process::exit(2);
 }
 
-/// Machine-readable variant tag. A strategy row carries its discriminant —
-/// the pooled/partitioned A/B pairs in the corpus are otherwise identical
-/// rows distinguishable only by label.
-fn variant_name(variant: FixtureVariant) -> String {
-    match variant {
-        FixtureVariant::Plain => "plain".into(),
-        FixtureVariant::Strategy(s) => format!("strategy:{s:?}"),
-        FixtureVariant::Excluded => "excluded".into(),
-        FixtureVariant::ExcludedVoid => "excluded-void".into(),
-    }
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
 /// Hash the ordered corpus definition, independent of any generated layout.
-/// Each fixture contributes these fields in order, each on its own line:
-/// name, item, rate, machine, belt tier, inputs, exclusions, and variant tag.
-/// Inputs and exclusions are comma-joined; a missing belt tier is empty.
+/// The field serialization is the library's `corpus_fingerprint_fields` —
+/// shared with the CI fingerprint probe so the two cannot drift; only the
+/// hashing lives here (`sha2` is a dev-dependency by design).
 fn corpus_sha256(corpus: &[CalibrationFixture]) -> String {
-    let mut fields = Vec::with_capacity(corpus.len() * 8);
-    for fixture in corpus {
-        fields.extend([
-            fixture.name.to_owned(),
-            fixture.item.to_owned(),
-            fixture.rate.to_string(),
-            fixture.machine.to_owned(),
-            fixture.belt_tier.unwrap_or_default().to_owned(),
-            fixture.inputs.join(","),
-            fixture.excluded.join(","),
-            variant_name(fixture.variant),
-        ]);
-    }
-    sha256_hex(fields.join("\n").as_bytes())
+    sha256_hex(corpus_fingerprint_fields(corpus).as_bytes())
 }
 
 fn entry(
@@ -178,6 +155,12 @@ fn main() {
         "fixtures": entries,
         "build_failures": failures,
     });
+    // Persist any fresh-solve records buffered during the builds, so the
+    // refresh protocol's "did the scratch cache grow?" comparison actually
+    // observes them — the cache file write is an explicit contract, and
+    // without it an export that solved zones fresh (wall-clock-budget
+    // shaped) would leave the file byte-identical and read as full-coverage.
+    spaghettio_core::zone_cache::flush();
     let index_path = root.join("matrix.json");
     std::fs::write(
         &index_path,
@@ -203,6 +186,7 @@ fn main() {
 mod tests {
     use super::*;
     use spaghettio_core::bus::layout::LayoutStrategy;
+    use spaghettio_core::calibration_matrix::FixtureVariant;
 
     #[test]
     fn variants_have_stable_machine_readable_names() {
