@@ -212,6 +212,24 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-24 — #720 round 3 absorbed: the measurement trigger scoped to
+  third parties.* The recycled cost minor (3/3 this round) earned its
+  absorption at the third telling: the trigger now fires only for a
+  produced-but-unmeasured candidate OUTSIDE the early decision's own
+  pair — an unaccepted incumbent cannot enter the accepted tiers and the
+  rival's win is absorbed back to its pairwise tag with or without
+  counts, so measuring just those two buys nothing, and the pre-A1
+  laziness stands on rescue-less broken fields (tier5/ac45-class, the
+  corpus's largest layouts). status.md brought current in the same
+  round (a fair process hit — the ledger duty). The round's major was
+  refuted on the enum: `LayoutStrategy` has exactly two variants, so
+  "all strategies" is {Pooled, PD}, both pinned (the gate test asserts
+  both eligibilities; ec35's e2e is the live Pooled behavior pin). The
+  combined-invariant minor was refuted by pointing at the fourth policy
+  test, whose field exercises the suspension and the scoped-admission
+  exclusion jointly; the shrinking-columns minor is the joiner's
+  occurring-categories design — the probe JSON underneath remains
+  category-complete by construction.*
 - *2026-08-24 — #720 round 2 absorbed: the deferral's displacement rule
   completed.* The round's 3/3 major was right — `imposes_quality` still
   let the ScopedPairwise floor displace a held merge-tap with a DI

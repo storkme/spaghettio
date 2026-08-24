@@ -1634,10 +1634,22 @@ fn select_best_decomposition_with_policy(
     // so the K70-3 laziness survives everywhere it was valid (≤1
     // produced, or everyone measured) and each remaining validate()
     // runs once, on a field that is already mid-rescue and slow.
-    let any_produced_unmeasured = tier_outcomes
-        .iter()
-        .enumerate()
-        .any(|(idx, o)| o.is_some() && profiles[idx].counts.is_none());
+    // Scoped to candidates OUTSIDE the early decision's own pair (#720
+    // review round 3): when only the incumbent and the quality-key rival
+    // are unmeasured, no ranked stage can produce a different outcome —
+    // an unaccepted incumbent cannot enter the accepted tiers, and the
+    // rival's win is absorbed back to its pairwise tag whether or not it
+    // carries counts — so measuring them buys nothing and the pre-A1
+    // laziness stands on rescue-less broken fields (tier5/ac45-class,
+    // the corpus's largest layouts). A produced third party (k1, split,
+    // cells, DI, HS) is what the ranked stages are entitled to rank, and
+    // is what triggers the measurement.
+    let any_produced_unmeasured = tier_outcomes.iter().enumerate().any(|(idx, o)| {
+        idx != NATIVE_IDX
+            && idx != MERGE_TAP_IDX
+            && o.is_some()
+            && profiles[idx].counts.is_none()
+    });
     if n_layouts > 1 && (!early_stage_decided || any_produced_unmeasured) {
         let start = crate::trace::peek_events_len();
         for (idx, outcome) in tier_outcomes.iter().enumerate() {
