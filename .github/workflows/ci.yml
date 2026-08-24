@@ -99,6 +99,39 @@ jobs:
       # core run above (ci profile, zone-cache pin, junit path) is
       # untouched; these are fast and need no zone cache.
       - run: cargo nextest run -p spaghettio_sim_harness -p spaghettio_mining
+      # Calibration-bank fingerprint (RFC-071 follow-up). The committed
+      # crates/core/data/calibration-bank/matrix.json records the blueprint
+      # SHA-256 of every calibration-corpus fixture as measured in the live
+      # Factorio bank. This probe rebuilds all 35 fixtures and fails on any
+      # hash or validator-total drift — i.e. a change that alters shipped
+      # geometry for a calibrated row makes that row's sim measurement
+      # stale, and this step makes that explicit at PR time instead of at
+      # the next calibration round. Legitimate drift is handled golden-
+      # style: re-export the bank (calibration_matrix_export), commit the
+      # new matrix.json here, re-measure the changed rows, and regenerate
+      # docs/selection-policy-calibration-evidence.md. Deterministic in CI
+      # because the corpus solves entirely from the committed zone cache
+      # (verified 2026-08-24: a full export leaves the cache byte-identical).
+      - name: Calibration-bank fingerprint probe
+        run: >-
+          cargo nextest run -p spaghettio_core
+          --run-ignored ignored-only
+          -E 'test(selection_policy_calibration_issue_breakdown)'
+        env:
+          SPAGHETTIO_ZONE_CACHE_PATH: ${{ github.workspace }}/crates/core/data/sat-zones-ci.bin
+          SPAGHETTIO_CALIBRATION_BANK: ${{ github.workspace }}/crates/core/data/calibration-bank
+          SPAGHETTIO_CALIBRATION_ISSUES_PATH: ${{ github.workspace }}/target/calibration-issue-breakdown.json
+      # Joiner contract liveness: the bank's sim reports live outside the
+      # repo, so every row reads awaiting-measurement here — the point is
+      # that the probe JSON and matrix schema still satisfy the joiner's
+      # declared contract, not the table content.
+      - name: Calibration evidence joiner smoke
+        run: >-
+          python3 scripts/calibration_evidence.py
+          crates/core/data/calibration-bank
+          target/calibration-issue-breakdown.json
+          --csv target/calibration-evidence-smoke.csv
+          --markdown target/calibration-evidence-smoke.md
       - name: Generate test summary
         if: always()
         run: |

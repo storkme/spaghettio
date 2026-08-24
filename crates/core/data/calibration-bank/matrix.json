@@ -1,0 +1,883 @@
+{
+  "build_failures": [],
+  "corpus_sha256": "88c59075b90b4b22fdc0a4711b1b43c7aa47ab676488b4d93e19754fb5004617",
+  "corpus_size": 35,
+  "fixture_count": 35,
+  "fixtures": [
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "bf97b4bd27e8785b2bf960ef35d7281b5ceafa688c07a642655d3f114430acaf",
+      "dimensions": [
+        35,
+        8
+      ],
+      "entities": 108,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate"
+      ],
+      "label": "tier1_iron_gear_wheel",
+      "machine": "assembling-machine-1",
+      "manifest_sha256": "07f50cdf19b1ae55e8b7c1e04947821bca6185e59ada289acdcb318db29fc896",
+      "rate": 10.0,
+      "target": "iron-gear-wheel",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "2624da39a79483c50ea9d420ad2e32c80cd71ba6222f3f5b23e0f6b970fc730d",
+      "dimensions": [
+        99,
+        17
+      ],
+      "entities": 406,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore"
+      ],
+      "label": "tier1_iron_gear_wheel_from_ore",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "277f5e7dd6620fcaf61837809811921137f4ccb4611ea4c05fe750e2a96b829e",
+      "rate": 10.0,
+      "target": "iron-gear-wheel",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "018a449779986cb5605bf41097adcdc6a38b2fb217bdea3a73e0e496fb67a778",
+      "dimensions": [
+        38,
+        14
+      ],
+      "entities": 105,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate"
+      ],
+      "label": "tier1_iron_gear_wheel_20s",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "9ef4a9066bb31568615d90a5db9e307e9affa28c2a9f8ebbad1cbdf069dfdd97",
+      "rate": 20.0,
+      "target": "iron-gear-wheel",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "69bd7e2166c673a49b9f68644de22e445c38c0e26bc3f2e940cb96bef3f6f76c",
+      "dimensions": [
+        34,
+        18
+      ],
+      "entities": 229,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate",
+        "copper-plate"
+      ],
+      "label": "tier2_electronic_circuit",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "3db9355483aafb68925bdbd2d2b6b5aa89bdd7e36094854a616d9cde3e5de52d",
+      "rate": 10.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": "transport-belt",
+      "blueprint_sha256": "46192faeac973a7dad71469c66c45f57ad40b74f30b504cbaa5650cff7545557",
+      "dimensions": [
+        84,
+        90
+      ],
+      "entities": 1110,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "tier2_electronic_circuit_from_ore",
+      "machine": "assembling-machine-1",
+      "manifest_sha256": "5087a27ef70d10d60c44437c28dab5be22ab0aeb3bf0d5719d57f5d1681ec880",
+      "rate": 10.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 4
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "cb27146ddbaaa54a7a7eeaa10eca8f44150bee4cecf366c6f4567d6931a239e1",
+      "dimensions": [
+        153,
+        54
+      ],
+      "entities": 1372,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "tier2_electronic_circuit_20s_from_ore",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "ad75e30f3201c3f4f3bed940853517df79452bb14e721bb82c47c2c6c39ee643",
+      "rate": 20.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 1
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "1650e88ae14e918859c9eeeeb298ce40415ebd1bddd0a0a47922fa5eb0b02a97",
+      "dimensions": [
+        21,
+        10
+      ],
+      "entities": 89,
+      "excluded_recipes": [],
+      "inputs": [
+        "petroleum-gas",
+        "coal"
+      ],
+      "label": "tier3_plastic_bar",
+      "machine": "chemical-plant",
+      "manifest_sha256": "582e1cf538dd6a0ef2b345025db35237ebe4387b52419b53e222c04504dc9649",
+      "rate": 10.0,
+      "target": "plastic-bar",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "be90d3909a6d5245336155633573a3be2404f7d4d0e6442beb02e7b35ab00bd0",
+      "dimensions": [
+        65,
+        21
+      ],
+      "entities": 258,
+      "excluded_recipes": [],
+      "inputs": [
+        "crude-oil",
+        "coal"
+      ],
+      "label": "tier3_plastic_bar_from_crude",
+      "machine": "chemical-plant",
+      "manifest_sha256": "9c854c22f579fb89c0f34846b21ad4be0f455addd9617d07f7386035aee56d3d",
+      "rate": 10.0,
+      "target": "plastic-bar",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "744fb1d1ade0198234420b80e0fa725b974e77fae4534cf565858600986bbd56",
+      "dimensions": [
+        10,
+        11
+      ],
+      "entities": 43,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate",
+        "sulfur",
+        "water"
+      ],
+      "label": "tier3_sulfuric_acid",
+      "machine": "chemical-plant",
+      "manifest_sha256": "cf709c3cdd4650b66163dbe7dd143915db70153f18dad978cc76c706b99b245c",
+      "rate": 5.0,
+      "target": "sulfuric-acid",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "e9f3aca2e4912a629c2260d209e9a6fedab8930811f5744dbf080d54d30957ef",
+      "dimensions": [
+        9,
+        10
+      ],
+      "entities": 29,
+      "excluded_recipes": [
+        "advanced-oil-processing",
+        "coal-liquefaction"
+      ],
+      "inputs": [
+        "water",
+        "heavy-oil"
+      ],
+      "label": "tier3_heavy_oil_cracking",
+      "machine": "chemical-plant",
+      "manifest_sha256": "aa7d84c61bcdd34725e5b96b9ee19346182b3a8cdd7736de7e9c4876149c33b2",
+      "rate": 5.0,
+      "target": "light-oil",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "excluded"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "6d71b07922791f0adc1a252fa732d51831d3d61df9aede713e9c9fdd8876cb8e",
+      "dimensions": [
+        15,
+        10
+      ],
+      "entities": 34,
+      "excluded_recipes": [],
+      "inputs": [
+        "water",
+        "crude-oil"
+      ],
+      "label": "tier3_advanced_oil_processing_multi_machine",
+      "machine": "oil-refinery",
+      "manifest_sha256": "cbd3818b305749c82585b335bb89e730825738af47ebf48aff2f858177a301c6",
+      "rate": 12.0,
+      "target": "petroleum-gas",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "6713e96011e49f78b80d6a477eeca0727c9cce9977a991bf23a52af89e410cf4",
+      "dimensions": [
+        20,
+        37
+      ],
+      "entities": 161,
+      "excluded_recipes": [
+        "basic-oil-processing",
+        "coal-liquefaction"
+      ],
+      "inputs": [
+        "water",
+        "crude-oil"
+      ],
+      "label": "tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation",
+      "machine": "oil-refinery",
+      "manifest_sha256": "6630875b4ac57a5b9083dcf881f1d39ce64f7599c077e1ceabfbc783d666351c",
+      "rate": 24.0,
+      "target": "petroleum-gas",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "excluded"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "7754a1037542f7f3c32fee1e274f7f9d4082f3dc07d872e17769431a38cb6ff6",
+      "dimensions": [
+        38,
+        51
+      ],
+      "entities": 460,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate",
+        "copper-plate",
+        "coal",
+        "crude-oil",
+        "water"
+      ],
+      "label": "tier4_advanced_circuit_from_plates",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "cf4f6a7dc6b4a15020c19b4873df0a1ccce5f3c2ba48a682f4146c4d90b92bc5",
+      "rate": 1.0,
+      "target": "advanced-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 1
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "9da0f785a3f154c3d3a9a0cbc24accb793f03c78829af3f3178f1a3e0bca91b6",
+      "dimensions": [
+        38,
+        60
+      ],
+      "entities": 521,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate",
+        "copper-plate",
+        "coal",
+        "crude-oil",
+        "water"
+      ],
+      "label": "tier4_advanced_circuit_partitioned",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "897f111ab9e09b3b12975de58c4f9e03a7f72e4a77f9ba0f11eb10badc690b86",
+      "rate": 1.0,
+      "target": "advanced-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 3
+      },
+      "variant": "strategy:PartitionedDecomposed"
+    },
+    {
+      "belt_tier": "transport-belt",
+      "blueprint_sha256": "2b291288406eec323974718656c29553bdd3f38c2a96ce036142fb826ff3e35d",
+      "dimensions": [
+        94,
+        173
+      ],
+      "entities": 3419,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore",
+        "coal",
+        "water",
+        "crude-oil"
+      ],
+      "label": "tier4_advanced_circuit_from_ore_am2",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "230ee3a5b5a91747d160718c8637f6518dbb4d624d118eb2fd465cdff32cab70",
+      "rate": 5.0,
+      "target": "advanced-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 6
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": "fast-transport-belt",
+      "blueprint_sha256": "b1188d2b812faaac9a94e3b6cd37da9b793968b0aad237e599a8d7afb5268ce8",
+      "dimensions": [
+        169,
+        240
+      ],
+      "entities": 6554,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore",
+        "coal",
+        "water",
+        "crude-oil"
+      ],
+      "label": "tier5_processing_unit_from_ore_am3",
+      "machine": "assembling-machine-3",
+      "manifest_sha256": "122b0ef86ab4fb824f7acccbee7d66b134734afa39e118ea16787b9e3a212069",
+      "rate": 2.0,
+      "target": "processing-unit",
+      "validator": {
+        "errors": 0,
+        "warnings": 11
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "c84c3abf93aeaed1563a651febb1bb104ff66f01c08c4e15140333d693e712ce",
+      "dimensions": [
+        29,
+        17
+      ],
+      "entities": 234,
+      "excluded_recipes": [
+        "uranium-processing"
+      ],
+      "inputs": [
+        "uranium-238"
+      ],
+      "label": "tier_kovarex_self_loop",
+      "machine": "assembling-machine-3",
+      "manifest_sha256": "362540b8e9ef0904cafe65546739c243265cd801de7f97f9c1413f774ef300a4",
+      "rate": 0.1,
+      "target": "uranium-235",
+      "validator": {
+        "errors": 0,
+        "warnings": 1
+      },
+      "variant": "excluded"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "d763b8d20b5d324e23b67fb8b012e2ff775db57d93b828a4e22b6c99e9b46cac",
+      "dimensions": [
+        139,
+        21
+      ],
+      "entities": 1259,
+      "excluded_recipes": [
+        "kovarex-enrichment-process"
+      ],
+      "inputs": [
+        "uranium-ore"
+      ],
+      "label": "tier_uranium_processing_surplus_export",
+      "machine": "assembling-machine-3",
+      "manifest_sha256": "dda810ac66cedd2268f793a5cd10edae7722fb92312f33e0520b71af5a1fe927",
+      "rate": 0.05,
+      "target": "uranium-235",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "excluded"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "1554cb69ce04964fe4f8f978c5e9c3225885a9d1aebf1b8119eef432d8ffbdb9",
+      "dimensions": [
+        139,
+        33
+      ],
+      "entities": 1462,
+      "excluded_recipes": [
+        "kovarex-enrichment-process"
+      ],
+      "inputs": [
+        "uranium-ore"
+      ],
+      "label": "tier_uranium_processing_voider",
+      "machine": "assembling-machine-3",
+      "manifest_sha256": "7f4889ba164100c4b7192f1fe24eecbcb09de6fad031b444e7b6bb232e120b2e",
+      "rate": 0.05,
+      "target": "uranium-235",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "excluded-void"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "6b90b6d560fee6cf253046409eca516a211c70f15f9f84da43158c766e26a26e",
+      "dimensions": [
+        18,
+        13
+      ],
+      "entities": 79,
+      "excluded_recipes": [],
+      "inputs": [
+        "nutrients",
+        "water"
+      ],
+      "label": "tier_pentapod_egg_self_loop",
+      "machine": "assembling-machine-3",
+      "manifest_sha256": "dbe0ed93dd260569f836e0b4a6ac9d56aacb3e31dcfa0984a1b236dcd2d23e4e",
+      "rate": 0.2,
+      "target": "pentapod-egg",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": "fast-transport-belt",
+      "blueprint_sha256": "f8731e3b0c87220bf306a9bda3e07a1692d1f22a3ab79a975b3c1f9e2aa6e5a8",
+      "dimensions": [
+        15,
+        13
+      ],
+      "entities": 61,
+      "excluded_recipes": [],
+      "inputs": [
+        "nutrients",
+        "water"
+      ],
+      "label": "tier_fish_breeding_self_loop",
+      "machine": "assembling-machine-3",
+      "manifest_sha256": "588c58502571831498dc2cbe16c0823a605a746a0238741c6b5574b8e04065d8",
+      "rate": 0.15,
+      "target": "raw-fish",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "cb8d363963b2e66d960a13040dfaed7e51abaf31c31b1495c1fea010c62e4a67",
+      "dimensions": [
+        14,
+        12
+      ],
+      "entities": 50,
+      "excluded_recipes": [
+        "iron-bacteria"
+      ],
+      "inputs": [
+        "bioflux"
+      ],
+      "label": "tier_bacteria_self_loop_regression",
+      "machine": "assembling-machine-3",
+      "manifest_sha256": "dbf552e0f451e0f02dbd02383c605e586a4bf61f06c7927572518ab07ea6cf99",
+      "rate": 1.0,
+      "target": "iron-bacteria",
+      "validator": {
+        "errors": 0,
+        "warnings": 0
+      },
+      "variant": "excluded"
+    },
+    {
+      "belt_tier": "transport-belt",
+      "blueprint_sha256": "99786fcf081ca592733fbc9385b3845a376182e72f7fd80496f59b204d2008df",
+      "dimensions": [
+        96,
+        140
+      ],
+      "entities": 3369,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "stress_electronic_circuit_30s_from_ore",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "b482c5d114ac5a283c85aec764e47c4ce37449c42493beedeceedb2e7e0589c3",
+      "rate": 30.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 13
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "499fcc4c0b777939d98b665560653f1f30320fc9b75c40af757b84ad1c826fda",
+      "dimensions": [
+        312,
+        186
+      ],
+      "entities": 11763,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate",
+        "copper-plate",
+        "plastic-bar"
+      ],
+      "label": "stress_advanced_circuit_45s_from_plates",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "29368bd98979e084085f2b53464c2f2c46bee1f3468097517ce876ccd064f9c8",
+      "rate": 45.0,
+      "target": "advanced-circuit",
+      "validator": {
+        "errors": 14,
+        "warnings": 1057
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "2a9d79ff21dcb8edf5e64c34d6372f3b24e0f475c33202e9c95c13b773724aac",
+      "dimensions": [
+        135,
+        60
+      ],
+      "entities": 1499,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate",
+        "copper-plate",
+        "coal",
+        "crude-oil",
+        "water"
+      ],
+      "label": "stress_advanced_circuit_partitioned_5s_from_plates_pooled",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "e93aee0076184a0f8d8d33e6b8f9915839fb06be17e881ac959dc4a3aa2c5783",
+      "rate": 5.0,
+      "target": "advanced-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 1
+      },
+      "variant": "strategy:Pooled"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "f14b04f43a355939c15a5d783ad405087a158e6f52a4a3d55fd6c61cb694bad2",
+      "dimensions": [
+        135,
+        60
+      ],
+      "entities": 1504,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate",
+        "copper-plate",
+        "coal",
+        "crude-oil",
+        "water"
+      ],
+      "label": "stress_advanced_circuit_partitioned_5s_from_plates_partitioned",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "585e0b00f6410f29c5dedfdb2fe8097c9ed7b629704b7709689d9c8e1e06cf55",
+      "rate": 5.0,
+      "target": "advanced-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 3
+      },
+      "variant": "strategy:PartitionedDecomposed"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "a1170c9fb387eb15c533dc27cfc308c1df4ca20754f797f5dd10d7744fbcc30a",
+      "dimensions": [
+        110,
+        51
+      ],
+      "entities": 1171,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate",
+        "copper-plate",
+        "coal",
+        "crude-oil",
+        "water"
+      ],
+      "label": "stress_advanced_circuit_partitioned_4s_from_plates_pooled",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "5c665d2e8a1915d40b38d68290f26e6eed8b66ec159a763f0055890a01edb690",
+      "rate": 4.0,
+      "target": "advanced-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 1
+      },
+      "variant": "strategy:Pooled"
+    },
+    {
+      "belt_tier": null,
+      "blueprint_sha256": "9d4a2986e4b411c985acdb82787d6a556d564950f1486ce955d05e96ad296de5",
+      "dimensions": [
+        110,
+        60
+      ],
+      "entities": 1230,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-plate",
+        "copper-plate",
+        "coal",
+        "crude-oil",
+        "water"
+      ],
+      "label": "stress_advanced_circuit_partitioned_4s_from_plates_partitioned",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "9a9624e231c63835b92d176a07488835ce93b4af8f8291476104c10d13a95836",
+      "rate": 4.0,
+      "target": "advanced-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 3
+      },
+      "variant": "strategy:PartitionedDecomposed"
+    },
+    {
+      "belt_tier": "transport-belt",
+      "blueprint_sha256": "ccb65828cfa403fec108d0025aa9941917bad410850d432a821b02c547fd6695",
+      "dimensions": [
+        96,
+        140
+      ],
+      "entities": 3369,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "stress_electronic_circuit_30s_decomposed_pooled",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "0e81da277994785521d1f432dbe0af1440e9d08a1d4d4d9fc0f53919eb3707f5",
+      "rate": 30.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 13
+      },
+      "variant": "strategy:Pooled"
+    },
+    {
+      "belt_tier": "transport-belt",
+      "blueprint_sha256": "d8bca38411852158783cfa1a57802a23fb20f44a7cff528ae1baa80c54a671c2",
+      "dimensions": [
+        106,
+        241
+      ],
+      "entities": 5155,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "stress_electronic_circuit_30s_decomposed_partitioned",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "e35b3a9c9f1ba3591074336ef6b836755d865b65081f43e3201813e967781787",
+      "rate": 30.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 11
+      },
+      "variant": "strategy:PartitionedDecomposed"
+    },
+    {
+      "belt_tier": "fast-transport-belt",
+      "blueprint_sha256": "e3638799c2082bc8e0cb1a169b58552ba0c4be7f0e744e5f01c042941b5ca317",
+      "dimensions": [
+        166,
+        129
+      ],
+      "entities": 4967,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "stress_electronic_circuit_60s_red_from_ore",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "25d6ea7fb139103ea29516b235cbd5c5b38a619073756d6e3150e5113a501d6f",
+      "rate": 60.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 9
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": "transport-belt",
+      "blueprint_sha256": "d41001e51e780f52b517ca342b6a8c018c5c30ba4c522840b8a82665a5e4ee38",
+      "dimensions": [
+        74,
+        127
+      ],
+      "entities": 2441,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "stress_electronic_circuit_22s_from_ore",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "6ac97b0706a37bcdc4d0c275128402fe78bdaa2fa6d4a99ec50601372d7bd494",
+      "rate": 22.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 4
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": "transport-belt",
+      "blueprint_sha256": "58be66fef24fe9dee4ec571b01202d52a3e8836dce72fd9eb2ee81808fcbcd40",
+      "dimensions": [
+        77,
+        127
+      ],
+      "entities": 2500,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "stress_electronic_circuit_23s_from_ore",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "6b035a0bda7c18ece4913447663a86ac4173514a6142f3f937527af7466aa3ac",
+      "rate": 23.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 0,
+        "warnings": 6
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": "transport-belt",
+      "blueprint_sha256": "4b6ab880c58c00cb46f951fd122323aa59782e6c35915069cdc98b5a68af2740",
+      "dimensions": [
+        99,
+        254
+      ],
+      "entities": 6311,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "stress_electronic_circuit_35s_from_ore",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "122944c142e58ae08265d6f06be1dc75b2a09f54810bbbeaacddf214e4ebb8d2",
+      "rate": 35.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 313,
+        "warnings": 55
+      },
+      "variant": "plain"
+    },
+    {
+      "belt_tier": "transport-belt",
+      "blueprint_sha256": "315ddeac99750335fd0d9ff7e7b186bbd2f97a91f2bb1b1713ad763698bab19e",
+      "dimensions": [
+        103,
+        270
+      ],
+      "entities": 6400,
+      "excluded_recipes": [],
+      "inputs": [
+        "iron-ore",
+        "copper-ore"
+      ],
+      "label": "stress_electronic_circuit_40s_from_ore",
+      "machine": "assembling-machine-2",
+      "manifest_sha256": "5b065c7ebc93fc55f80a36a2d250f9087639ab6f0c0f26729868d842e7fe64c9",
+      "rate": 40.0,
+      "target": "electronic-circuit",
+      "validator": {
+        "errors": 631,
+        "warnings": 70
+      },
+      "variant": "plain"
+    }
+  ],
+  "purpose": "current-generation meter-vs-Factorio calibration matrix",
+  "schema_version": 2
+}

@@ -70,6 +70,35 @@ post-lift provenance bar. Runs remain sequential because the main purpose is
 reproducibility and the largest factories are CPU-bound. Parallel campaigns
 need an explicit resource budget and independent Factorio installs.
 
+## The committed fingerprint and the CI probe
+
+`crates/core/data/calibration-bank/matrix.json` is a committed copy of the
+current bank's `matrix.json` — the corpus fingerprint the engine on `main` is
+expected to reproduce. CI's `rust` job runs the ignored
+`selection_policy_calibration_issue_breakdown` driver against it (with the
+committed zone-cache pin) and fails on any blueprint-hash or validator-total
+drift. That is the golden discipline applied to calibration: a PR that changes
+shipped geometry for a calibrated row has made that row's Factorio measurement
+stale, and the failure surfaces it at PR time instead of at the next
+calibration round.
+
+When the drift is intended, refresh in the same PR:
+
+1. Re-export a fresh bank (command above) and diff `blueprint_sha256` per
+   label against the previous bank — the diff names exactly which rows'
+   measurements went stale.
+2. Copy the new `matrix.json` over the committed one.
+3. Carry unchanged rows' reports into the new bank (byte-verify `bp.txt` and
+   `manifest-real.json` first), re-measure the changed rows, and regenerate
+   [`selection-policy-calibration-evidence.md`](selection-policy-calibration-evidence.md)
+   via `scripts/calibration_evidence.py`. If measurement must lag the merge,
+   say so in the PR body — the fingerprint keeps the record honest either way.
+
+The probe run is deterministic in CI because the corpus solves entirely from
+the committed zone cache (verified 2026-08-24: a full export left a copy of
+the cache byte-identical). If a new fixture introduces uncached zones, the
+zone-cache refresh protocol in `.github/workflows/ci.yml` applies first.
+
 ## Reading coverage honestly
 
 `sweep_postlift` prints every fixture directory without a usable report as an
