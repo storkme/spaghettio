@@ -212,6 +212,32 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-24 — #721 round 2: the arm-asymmetry critical adjudicated BY
+  EXPERIMENT — the demanded guard is measured-harmful; parity absorbed
+  instead.* The round's 3/3 critical demanded the multi-consumer arm
+  bail on unfixable shapes like its K=1 sibling. The guard was
+  IMPLEMENTED and measured: `select_shape_fix`-based post-fix vetoing
+  flips tier5's k1 from Produced+accepted back to Refused — the model
+  (direct+gcd+pad+shard) is strictly narrower than the stamp path
+  (runtime generator, passthrough rules), so "unfixable per the model"
+  does not mean "won't stamp", and the premise "a rescue pass that
+  cannot succeed" is falsified by the very fixture the arm exists for.
+  The asymmetry is now documented at the site as deliberate (the K=1
+  arm's bail is sound because its module's shape IS the warned shape);
+  the acceptance gate on the produced layout stays the adjudicator.
+  Absorbed from the same round: the multi arm now mirrors
+  `plan_partitioning`'s full construction order (Phase-2
+  `decompose_oversized_modules` before `apply_shape_fixes`), carries
+  the utilization-violation accounting (`PartitionRejectedByUtilization`
+  + `plan.utilization_violations`, no silent downgrade), and its
+  `K1ItemEnrolled` rows report the `n` the shape-fix decision actually
+  used (`producer_count_estimate`) instead of the warning's pooled
+  count. All behavior-neutral on tier5/ac45 (probes identical). The
+  delivery-blind-migration major recycles the framework's core doctrine
+  (0-error-over-dead IS the evidence-calibrated rule; future fields are
+  named by the fingerprint gate at PR time, which is how ac45 itself
+  was caught); the pairwise-skip future-program minor got its comment;
+  the columns minor is at its fourth telling.*
 - *2026-08-24 — #721 round 1 adjudicated: one comment-honesty absorb,
   ledger duty paid, three latent design notes recorded.* Absorbed: the
   ac45 test comment claimed a "sim anchor" and steered re-blessing to

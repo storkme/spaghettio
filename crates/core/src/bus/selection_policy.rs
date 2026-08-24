@@ -1456,15 +1456,21 @@ pub fn decide(profiles: &[IssueProfile], policy: &SelectionPolicy) -> Option<Dec
                 held = None;
             }
         }
-        // The mirror rule for a held CHALLENGER: it waits only on the
-        // RANKED stages, whose tiers include it. The remaining pairwise
-        // stages are suspended — their comparisons never weigh the held
-        // candidate (the floor measures a scoped candidate against the
-        // INCUMBENT only), so a pairwise winner here would displace the
-        // held quality-key win without ever being compared to it
-        // (#720 review round 2, 3/3). This also reproduces the old
-        // Terminate world exactly: those stages never ran on these
-        // fields before the deferral existed.
+        // The mirror rule for ANY held answer in the ranked-wait slot
+        // (a deferred challenger, or a migrated unaccepted incumbent):
+        // it waits only on the RANKED stages, whose tiers include it.
+        // The remaining pairwise stages are suspended — their
+        // comparisons never weigh the held candidate (the floor
+        // measures a scoped candidate against the INCUMBENT only), so a
+        // pairwise winner here would displace the held quality-key win
+        // without ever being compared to it (#720 review round 2, 3/3).
+        // This also reproduces the old Terminate world exactly: those
+        // stages never ran on these fields before the deferral existed.
+        // (Under today's program the migration happens at the first
+        // ranked stage, after every pairwise stage — this skip becomes
+        // load-bearing for the migrated kind only if a future program
+        // interleaves a pairwise stage after a ranked one, and then
+        // suspending it is exactly the contract; #721 round 2.)
         if held_challenger.is_some() && stage.is_pairwise() {
             continue;
         }

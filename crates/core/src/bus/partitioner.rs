@@ -306,7 +306,11 @@ const MAX_SHARDS_PER_MODULE: u32 = 3;
 /// Phase 2 sub-pass: replace modules with `lane_count > SHARD_THRESHOLD_LANES`
 /// with N proportional shards. Module IDs are reassigned dense per
 /// item (0..N across all modules combined). Emits `ShardSplit` traces.
-fn decompose_oversized_modules(
+/// `pub(crate)` since #721 round 2: the k1 enrollment's multi-consumer
+/// arm chains this before `apply_shape_fixes`, mirroring
+/// `plan_partitioning`'s Phase 2 → Phase 3 order for the identical
+/// construction.
+pub(crate) fn decompose_oversized_modules(
     modules: Vec<ModuleAssignment>,
     cap: f64,
 ) -> Vec<ModuleAssignment> {
@@ -492,6 +496,13 @@ fn estimate_producer_count(solver: &SolverResult, item: &str) -> u32 {
 /// multi-consumer arm (`build_k1_enrollment_plan`) reuses this exact pass
 /// over its newly-constructed modules rather than reimplementing the
 /// pad/shard decision — the single source for shape-fixing.
+/// The pooled producer-row estimate for `item` — `pub(crate)` so the
+/// k1 enrollment's trace rows report the same `n` the shape-fix
+/// decision actually used (#721 round 2).
+pub(crate) fn producer_count_estimate(solver_result: &SolverResult, item: &str) -> u32 {
+    estimate_producer_count(solver_result, item)
+}
+
 pub(crate) fn apply_shape_fixes(
     modules: Vec<ModuleAssignment>,
     solver_result: &SolverResult,

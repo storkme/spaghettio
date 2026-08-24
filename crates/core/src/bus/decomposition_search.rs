@@ -723,13 +723,51 @@ pub(crate) fn build_k1_enrollment_plan(
                     }
                 })
                 .collect();
+            // Mirror plan_partitioning's Phase 2 → Phase 3 order for the
+            // identical construction (#721 round 2): sub-shard oversized
+            // modules first, then the shape-fix pass.
+            let new_modules =
+                super::partitioner::decompose_oversized_modules(new_modules, cap);
             let fixed =
                 super::partitioner::apply_shape_fixes(new_modules, solver_result, cap);
+            // DELIBERATELY no bail-out on shapes `select_shape_fix` has
+            // no answer for — the asymmetry with the K=1 arm is
+            // measured, not an oversight (#721 round 2 adjudication).
+            // The K=1 arm's bail is sound for its arm: its enrolled
+            // module's shape IS the warned shape, padded or nothing.
+            // Here the per-consumer split changes every shape, and the
+            // stamp path's capabilities (runtime generator, passthrough
+            // rules) exceed `select_shape_fix`'s direct+gcd+pad+shard
+            // model: a post-fix guard using that model was implemented
+            // and VETOED tier5's working rescue (k1 flips Produced+
+            // accepted → Refused with the guard in place). The
+            // acceptance gate on the produced layout is the adjudicator
+            // with ground truth; a model-based veto here is strictly
+            // worse.
+            // Utilization accounting, same as plan_partitioning's
+            // construction: an over-committed module is enrolled (no
+            // silent downgrade) but flagged.
+            let n_estimate = super::partitioner::producer_count_estimate(solver_result, &item);
             for mo in &fixed {
+                if mo.utilization > 1.0 {
+                    crate::trace::emit(
+                        crate::trace::TraceEvent::PartitionRejectedByUtilization {
+                            item: mo.item.clone(),
+                            module_id: mo.module_id,
+                            lane_util: mo.utilization,
+                            belt_tier: max_belt_tier
+                                .unwrap_or("express-transport-belt")
+                                .to_string(),
+                        },
+                    );
+                    plan.utilization_violations.push(mo.clone());
+                }
                 crate::trace::emit(crate::trace::TraceEvent::K1ItemEnrolled {
                     item: mo.item.clone(),
                     consumer_recipe: mo.consumer_recipe.clone(),
-                    n_producers: n,
+                    // The same `n` the shape-fix decision used — not the
+                    // warning's pooled count (#721 round 2).
+                    n_producers: n_estimate,
                     lane_count: mo.lane_count,
                 });
             }
