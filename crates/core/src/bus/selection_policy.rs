@@ -1171,7 +1171,14 @@ fn current_producers() -> Vec<ProducerRegistration> {
         "k1-shape-fix",
         ProducerBinding::Plan(Box::new(K1ShapeFixProducer)),
     )
-    .gated(vec![incumbent_unaccepted]);
+    .gated(vec![
+        incumbent_unaccepted,
+        // Same stand-down cells and horizontal-stack carry: Forced DI is
+        // an explicit topology request (the A/B debug control) and the
+        // rescue must not displace it. Moot while k1 was PD-only; newly
+        // reachable on Pooled (#720 review round 4 nit).
+        di_not_forced,
+    ]);
 
     let split = ProducerRegistration::new(
         "size-split-2",
@@ -3146,6 +3153,18 @@ mod tests {
             verdict(K1, &partitioned, &prior),
             GateVerdict::Eligible,
             "the PD path keeps its eligibility unchanged"
+        );
+        assert_eq!(
+            verdict(
+                K1,
+                &LayoutOptions {
+                    direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
+                    ..Default::default()
+                },
+                &prior
+            ),
+            GateVerdict::Excluded("direct-insertion-not-forced"),
+            "Forced DI is an explicit topology request; the rescue stands down (#720 round 4)"
         );
 
         // cell-composed: Candidate mode, DI not Forced, belt tier

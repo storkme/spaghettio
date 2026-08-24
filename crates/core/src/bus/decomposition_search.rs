@@ -1474,10 +1474,15 @@ fn select_best_decomposition_with_policy(
     // enrollment plan builds from `plan_partitioning` over the same
     // solver result and produces a measured 0-error ec35 (RFC-069
     // decision log, 2026-08-24, receipts).
-    let try_k1_shape_fix = native_run
-        .outcome
-        .as_ref()
-        .is_some_and(|(_, score)| !score.accepted);
+    // The Forced-DI stand-down mirrors the registration's clause (the
+    // three-lists rule): an explicit topology request must not be
+    // displaced by the rescue. Moot while k1 was PD-only; newly
+    // reachable on Pooled (#720 review round 4).
+    let try_k1_shape_fix = opts.direct_insertion != crate::bus::di_cell::DirectInsertion::Forced
+        && native_run
+            .outcome
+            .as_ref()
+            .is_some_and(|(_, score)| !score.accepted);
 
     let k1_run = if try_k1_shape_fix {
         let native_layout = &native_run.outcome.as_ref().unwrap().0;

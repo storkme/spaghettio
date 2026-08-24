@@ -212,6 +212,33 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-24 — #720 round 4 adjudicated at the stop point; one forward
+  blocker recorded, three small absorbs, the rest recycled or refuted
+  with receipts.* The round's [critical] is REAL but NOT LIVE: on a
+  field where the broken native WINS the quality-key pairwise (tier5's
+  shape — native rs=18 vs merge-tap rs=27), the held-INCUMBENT
+  short-circuit returns native before `BestErrorFree` runs, so a
+  produced 0-error rescue would be unreachable there. No shipped field
+  has that combination (ec35/ec40: merge-tap wins the pairwise; tier5:
+  k1 refuses at enrollment), so nothing behaves wrongly today — but it
+  means **tier5 has TWO blockers, not one**: the K≥2 enrollment
+  extension AND opening the held-incumbent path to ranked displacement.
+  Both belong to the tier5 PR, where the semantics change has a live
+  field to be measured against (changing the v1-faithful held-incumbent
+  behavior blind, in round 5 of this PR, would be exploration past the
+  evidence). Absorbed now: the validator-trust lane-throughput row's
+  ec35 half marked superseded (its own same-PR rule); the firing-census
+  message that still named the removed PD gate; and the Forced-DI
+  stand-down on k1 (registration + call site + gate test, the
+  three-lists rule — moot while PD-only, newly reachable on Pooled).
+  Refuted with receipts: "ec40's pin breaks if k1 is accepted" — k1 IS
+  accepted on ec40 today (probe: acc=true, err=10) and the pin holds by
+  ScoreDesc through four green batteries; the "bit-identical by
+  accident" major recycles rounds 1–2's adjudicated BestAccepted
+  semantics; the fingerprint-flake minor mistakes the recorded
+  CROSS-PATH byte variance for within-path nondeterminism — the probe
+  rebuilds via one path and has reproduced ec35's hash on every run,
+  local and CI; the evidence-columns minor recycles round 3.*
 - *2026-08-24 — #720 round 3 absorbed: the measurement trigger scoped to
   third parties.* The recycled cost minor (3/3 this round) earned its
   absorption at the third telling: the trigger now fires only for a
