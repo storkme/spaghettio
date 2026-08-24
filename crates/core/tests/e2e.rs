@@ -11088,9 +11088,10 @@ fn belt_detour_survey() {
 //
 // The JSON has two top-level maps:
 // - `fixtures`: label -> category -> { errors, warnings }
-// - `determinism`: label -> hash comparison for the layout exported in this
-//   run. A mismatch is written, printed, and makes this test fail so the
-//   evidence script can mark that row excluded rather than mix generations.
+// - `determinism`: label -> hash comparison for the bp/manifest pair exported
+//   in this run (the manifest half only against a schema-2 bank). A mismatch
+//   is written, printed, and makes this test fail so the evidence script can
+//   mark that row excluded rather than mix generations.
 
 #[test]
 #[ignore]
@@ -11110,6 +11111,12 @@ fn selection_policy_calibration_issue_breakdown() {
     struct MatrixFixture {
         label: String,
         blueprint_sha256: String,
+        // Schema 2 fingerprints the immutable bp/manifest PAIR; a version-1
+        // bank has no manifest hash and that half of the check is skipped.
+        // The manifest carries the planned rates the calibration compares
+        // against, so rate-only drift (geometry identical) must also fail.
+        #[serde(default)]
+        manifest_sha256: Option<String>,
         validator: MatrixValidator,
     }
 
@@ -11213,19 +11220,43 @@ fn selection_policy_calibration_issue_breakdown() {
             ),
         );
 
-        let (bp, _) = blueprint::export_with_manifest_validated(
+        let (bp, manifest) = blueprint::export_with_manifest_validated(
             &built.layout,
             &built.solver_result,
             fixture.name,
             &built.issues,
         );
         let actual = format!("{:x}", Sha256::digest(bp.as_bytes()));
-        let matches = actual == matrix_row.blueprint_sha256;
-        if !matches {
+        let bp_matches = actual == matrix_row.blueprint_sha256;
+        if !bp_matches {
             eprintln!(
                 "EXCLUDED {}: blueprint SHA-256 mismatch (bank {}, rebuilt {})",
                 fixture.name, matrix_row.blueprint_sha256, actual
             );
+        }
+        // Same bytes the exporter hashes: to_string_pretty of the manifest
+        // Value is what lands in manifest-real.json.
+        let manifest_json =
+            serde_json::to_string_pretty(&manifest).expect("manifest serializes");
+        let actual_manifest = format!("{:x}", Sha256::digest(manifest_json.as_bytes()));
+        let manifest_matches = match &matrix_row.manifest_sha256 {
+            Some(expected) => {
+                let ok = &actual_manifest == expected;
+                if ok || !bp_matches {
+                    // A bp mismatch already excludes the row; reporting a
+                    // manifest delta of a *different* layout adds noise.
+                } else {
+                    eprintln!(
+                        "EXCLUDED {}: manifest SHA-256 mismatch (bank {expected}, rebuilt {actual_manifest}) — geometry identical, declared plan drifted",
+                        fixture.name
+                    );
+                }
+                ok
+            }
+            None => true, // version-1 bank: no manifest half to check
+        };
+        let matches = bp_matches && manifest_matches;
+        if !matches {
             mismatches.push(fixture.name.to_string());
         }
         determinism_json.insert(
@@ -11233,8 +11264,16 @@ fn selection_policy_calibration_issue_breakdown() {
             serde_json::json!({
                 "expected_blueprint_sha256": matrix_row.blueprint_sha256,
                 "actual_blueprint_sha256": actual,
+                "expected_manifest_sha256": matrix_row.manifest_sha256,
+                "actual_manifest_sha256": actual_manifest,
                 "matches": matches,
-                "exclusion_reason": if matches { serde_json::Value::Null } else { serde_json::json!("blueprint-sha256-mismatch") },
+                "exclusion_reason": if matches {
+                    serde_json::Value::Null
+                } else if !bp_matches {
+                    serde_json::json!("blueprint-sha256-mismatch")
+                } else {
+                    serde_json::json!("manifest-sha256-mismatch")
+                },
             }),
         );
     }

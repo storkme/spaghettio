@@ -112,13 +112,20 @@ jobs:
       # docs/selection-policy-calibration-evidence.md. Deterministic in CI
       # because the corpus solves entirely from the committed zone cache
       # (verified 2026-08-24: a full export leaves the cache byte-identical).
+      # The probe runs against a scratch COPY of that cache, per the test's
+      # own instruction: the core-suite step above shares this job and may
+      # append to whatever path the env var resolves, and a fresh solve is
+      # wall-clock-budget shaped — the probe must observe the committed
+      # snapshot, not the previous step's leavings. --no-tests=fail so a
+      # filter typo can never pass as a zero-test green.
       - name: Calibration-bank fingerprint probe
-        run: >-
-          cargo nextest run -p spaghettio_core
-          --run-ignored ignored-only
-          -E 'test(selection_policy_calibration_issue_breakdown)'
+        run: |
+          cp crates/core/data/sat-zones-ci.bin "$RUNNER_TEMP/sat-zones-probe.bin"
+          cargo nextest run -p spaghettio_core --no-tests=fail \
+            --run-ignored ignored-only \
+            -E 'test(selection_policy_calibration_issue_breakdown)'
         env:
-          SPAGHETTIO_ZONE_CACHE_PATH: ${{ github.workspace }}/crates/core/data/sat-zones-ci.bin
+          SPAGHETTIO_ZONE_CACHE_PATH: ${{ runner.temp }}/sat-zones-probe.bin
           SPAGHETTIO_CALIBRATION_BANK: ${{ github.workspace }}/crates/core/data/calibration-bank
           SPAGHETTIO_CALIBRATION_ISSUES_PATH: ${{ github.workspace }}/target/calibration-issue-breakdown.json
       # Joiner contract liveness: the bank's sim reports live outside the

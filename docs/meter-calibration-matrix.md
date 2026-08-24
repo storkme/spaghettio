@@ -75,10 +75,13 @@ need an explicit resource budget and independent Factorio installs.
 `crates/core/data/calibration-bank/matrix.json` is a committed copy of the
 current bank's `matrix.json` — the corpus fingerprint the engine on `main` is
 expected to reproduce. CI's `rust` job runs the ignored
-`selection_policy_calibration_issue_breakdown` driver against it (with the
-committed zone-cache pin) and fails on any blueprint-hash or validator-total
-drift. That is the golden discipline applied to calibration: a PR that changes
-shipped geometry for a calibrated row has made that row's Factorio measurement
+`selection_policy_calibration_issue_breakdown` driver against it (with
+a scratch copy of the committed zone cache) and fails on any blueprint-hash,
+manifest-hash, or validator-total drift — the manifest half matters because it
+carries the planned rates the calibration compares against, so a rate-only
+change with identical geometry also makes a row's measurement stale. That is
+the golden discipline applied to calibration: a PR that changes what a
+calibrated row ships or claims has made that row's Factorio measurement
 stale, and the failure surfaces it at PR time instead of at the next
 calibration round.
 

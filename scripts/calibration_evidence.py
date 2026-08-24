@@ -298,18 +298,25 @@ def bullet_categories(categories: dict[str, list[str]]) -> list[str]:
     return [f"- `{category}`: {', '.join(f'`{label}`' for label in labels)}" for category, labels in sorted(categories.items())]
 
 
-def write_markdown(path: Path, rows: list[Row], categories: list[str], bank: Path, probe: Path) -> None:
+def write_markdown(path: Path, rows: list[Row], categories: list[str], bank: Path, probe: Path, corpus_sha256: str | None) -> None:
     statuses: dict[str, int] = {}
     for row in rows:
         statuses[row.status] = statuses.get(row.status, 0) + 1
+    corpus_note = (
+        f" Corpus fingerprint: `{corpus_sha256}` — must match the committed "
+        "`crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine."
+        if corpus_sha256
+        else ""
+    )
     content = [
         "# Selection-policy calibration evidence",
         "",
-        f"Source bank: `{bank}`. Validator probe: `{probe}`.",
+        f"Source bank: `{bank}`. Validator probe: `{probe}`.{corpus_note}",
         "",
         "Status preserves campaign state: `awaiting-measurement` has no `report.json`; "
         "`non-converged` and `kit-error` retain their measured values but are excluded from the clean-row findings; "
-        "`excluded` covers every probe-side determinism refusal — the probe's `exclusion_reason` names which: `blueprint-sha256-mismatch`, `validator-totals-mismatch`, or `build-failed`.",
+        "`excluded` covers every probe-side determinism refusal — the probe's `exclusion_reason` names which: "
+        "`blueprint-sha256-mismatch`, `manifest-sha256-mismatch`, `validator-totals-mismatch`, or `build-failed`.",
         "",
         "## Table",
         "",
@@ -361,7 +368,11 @@ def main() -> int:
         args.csv.parent.mkdir(parents=True, exist_ok=True)
         args.markdown.parent.mkdir(parents=True, exist_ok=True)
         write_csv(args.csv, rows, categories)
-        write_markdown(args.markdown, rows, categories, args.bank, args.probe)
+        matrix = require_object(load_json(args.bank / "matrix.json"), str(args.bank / "matrix.json"))
+        corpus_sha256 = matrix.get("corpus_sha256")
+        if corpus_sha256 is not None and not isinstance(corpus_sha256, str):
+            fail("matrix.json corpus_sha256 must be a string when present")
+        write_markdown(args.markdown, rows, categories, args.bank, args.probe, corpus_sha256)
     except SchemaError as error:
         print(f"calibration evidence schema mismatch: {error}", file=sys.stderr)
         return 2
