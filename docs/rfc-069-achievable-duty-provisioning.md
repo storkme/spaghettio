@@ -212,6 +212,28 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-24 — **Phase A1 LANDED** (the reachability fix, this PR): the
+  three blockers removed — `try_k1_shape_fix` un-gated from PD (still
+  native-unaccepted-only, so clean fixtures never build it), the
+  clean-flags laziness measures any produced-but-unmeasured candidate,
+  and the MergeTap stage's challenger win defers to the ranked stages
+  (`ChallengerBehavior::DeferToRankedStages` — held, re-tagged to itself
+  on mere confirmation, so no-rescue fields are bit-identical). Blast
+  radius measured three ways: policy suite 45/45 with both defer
+  semantics pinned; full core suite 1,249/1,249; the calibration
+  fingerprint probe drifts on EXACTLY one of 35 rows (ec35). The new
+  ec35 winner (k1, 6,530 entities, 0E/10W): meter 33.49/35 = 95.7%; sim
+  **32.8/35 = 93.7% delivered, converged** — kit-flagged (the fixture's
+  recurring overlapping-drain rig class, 14 errors) and measured
+  IDENTICALLY on two byte-variant builds of the same structure (the
+  recorded router-micro-swap nondeterminism class), from the shipped
+  22.9%. Bank re-recorded (fingerprint + evidence table; 34 rows
+  carried byte-verified). Open follow-ons, Phase A's tail: ec40's k1
+  layout carries 10 errors of its own (merge-tap correctly still ships
+  there — diagnose next); tier5's three trapped items are K≥2 so
+  `build_k1_enrollment_plan` refuses ("no k1 enrollment") — needs the
+  K≥2 enrollment extension; the k1 artifact is duty-blind (the ~6%
+  residual is its zero-headroom, Phase B's business).*
 - *2026-08-24 — tier5's "router block" RE-DIAGNOSED: same class, not a
   junction-solver problem.* The stamp-site probe on current main (duty
   0.6, 175×255 / 7,057 entities — the direct-path shape the 2026-08-17
