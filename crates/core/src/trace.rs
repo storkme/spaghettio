@@ -408,9 +408,12 @@ pub enum TraceEvent {
     // fires from BOTH arms: the K=1 arm (one module, `module_id=0`,
     // lane_count = the warning-shape pad) and the multi-consumer arm
     // (one event per enrolled per-consumer module, lane counts as
-    // `apply_shape_fixes` left them). `n_producers` is the POOLED
-    // family's producer count from the warning in both arms — not a
-    // per-consumer split. Without this enrollment, coprime-trap shapes
+    // `apply_shape_fixes` left them). `n_producers` is the pooled
+    // producer count THE EMITTING ARM'S shape decision used — the K=1
+    // arm reports the warning's family `n`; the multi arm reports
+    // `producer_count_estimate` (the raw machine count its shape-fix
+    // pass consulted). Never a per-consumer split (#721 rounds 2-3).
+    // Without this enrollment, coprime-trap shapes
     // (e.g. (4, 9) for copper-plate on ec35/PU) silently dead-end at
     // balancer stamp time.
     K1ItemEnrolled {
