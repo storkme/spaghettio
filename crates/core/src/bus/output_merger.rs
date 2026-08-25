@@ -67,10 +67,44 @@ pub(crate) fn merge_output_rows(
     // for every under-cap fixture -> byte-identical to the pre-#567 path.
     // Stack-aware via the same per-item stack `ctx.for_item` the pick uses.
     let single_cap = belt_throughput_stacked(belt_name, ctx.for_item(item));
+    // #727/RFC-072 Phase 1 unit 2: the group partition below is
+    // CONTIGUOUS, so the belt count must come from a contiguous
+    // capacity packing, not from ceil(total/cap) alone — 3 rows x 30/s
+    // into ceil(90/45)=2 count-based groups put 60/s on a 45/s tail
+    // (sim-anchored: cable-90 delivered 74.4/90 with the deficit equal
+    // to the over-subscription). Greedy first-fit over contiguous
+    // per-column rates is optimal for the minimum group count.
+    let column_rate = |&ri: &usize| -> f64 {
+        if ri >= row_spans.len() {
+            0.0
+        } else {
+            row_spans[ri]
+                .spec
+                .outputs
+                .iter()
+                .filter(|o| o.item == item)
+                .map(|o| o.rate * row_spans[ri].machine_count as f64)
+                .sum::<f64>()
+        }
+    };
+    let col_rates: Vec<f64> = output_rows.iter().map(column_rate).collect();
     let n_output = if single_cap >= total_rate {
         1
     } else {
-        (total_rate / single_cap).ceil().max(1.0) as usize
+        let mut groups = 1usize;
+        let mut acc = 0.0_f64;
+        for &r in &col_rates {
+            if acc > 0.0 && acc + r > single_cap + 1e-9 {
+                groups += 1;
+                acc = r;
+            } else {
+                acc += r;
+            }
+        }
+        // A single column above cap is the row's own output ceiling
+        // (per-row caps live in the placer); the fold still gives it
+        // its own tail — the best a whole-row partition can do.
+        groups.max((total_rate / single_cap).ceil().max(1.0) as usize)
     };
     // Hops may need more reach than the rate-picked tier offers
     // (alternating blocked columns with 1-tile gaps are unhoppable
@@ -357,13 +391,28 @@ pub(crate) fn merge_output_rows(
     // columns and saturates, the rest idle) — the measured half-empty belts.
     // Per-group folds keep each output belt fed by exactly its own columns.
     let m = n_output.max(1);
-    let base = n / m;
-    let extra = n % m;
+    // Assign columns to groups by the same capacity-aware first-fit
+    // that sized `n_output` (count-based assignment re-creates the
+    // over-subscription the count fixes): fill a group until the next
+    // column would push it past cap AND enough columns remain to keep
+    // every later group non-empty.
     let mut group_of: Vec<usize> = Vec::with_capacity(n);
-    for g in 0..m {
-        let count = base + if g < extra { 1 } else { 0 };
-        for _ in 0..count {
-            group_of.push(g);
+    {
+        let mut g = 0usize;
+        let mut acc = 0.0_f64;
+        for (idx, &r) in col_rates.iter().enumerate() {
+            // Advancing places column idx into group g+1; the n-idx
+            // columns from idx onward must cover the m-(g+1) groups
+            // from g+1 onward, one each at minimum.
+            let can_advance = g + 1 < m && (n - idx) >= (m - (g + 1));
+            let must_advance = acc > 0.0 && acc + r > single_cap + 1e-9 && can_advance;
+            if must_advance {
+                g += 1;
+                acc = r;
+            } else {
+                acc += r;
+            }
+            group_of.push(g.min(m - 1));
         }
     }
     let mut surviving: Vec<i32> = all_x.clone(); // columns not yet merged away
@@ -432,6 +481,28 @@ pub(crate) fn merge_output_rows(
         y_cursor += 1;
 
         // Continuation belts below the splitter for all surviving columns.
+        for &ax in &surviving {
+            entities.push(PlacedEntity {
+                name: belt_name.to_string(),
+                x: ax,
+                y: y_cursor,
+                direction: EntityDirection::South,
+                carries: Some(item.to_string()),
+                segment_id: merger_seg_id.clone(),
+                rate: Some(total_rate),
+                ..Default::default()
+            });
+        }
+        y_cursor += 1;
+    }
+
+    // Zero-fold case (#727 unit 2): when every group is a single column
+    // the loop never runs and y_cursor still sits at merge_start_y — the
+    // tails would land INSIDE the row region and never register as
+    // boundary sinks. Emit one row of continuation belts so each column
+    // gets a real southbound tail. (Reachable pre-unit-2 only when the
+    // count-based n_output equaled n; no fixture did.)
+    if y_cursor == merge_start_y && n_output > 1 {
         for &ax in &surviving {
             entities.push(PlacedEntity {
                 name: belt_name.to_string(),

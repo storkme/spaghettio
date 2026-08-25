@@ -474,3 +474,28 @@ the snapshot debugger sees them.
   skip the repair entirely — mt taps use PRIORITY-splitter machinery
   the splitter-tile model does not describe (the mt yellow-cap
   fixture read as phantom collisions). Suite green at 1265.*
+- *2026-08-26 — Phase 1 unit 2 SHIPPED AND SIM-VERIFIED AT PLAN: the
+  capacity-aware merger partition.* `merge_output_rows` now sizes
+  `n_output` by greedy first-fit over contiguous per-column rates
+  (optimal for minimum contiguous groups) and assigns columns by the
+  same packing — the count-based `base = n/m` split was the
+  rate-blind partition that put 60/s on a 45/s tail. Two bugs found
+  and fixed during implementation by the unit's own instruments:
+  (1) my first assignment guard compared the wrong remaining-columns
+  quantity and collapsed every column into group 0 — caught by unit
+  1's three-tails pin failing with ONE tail, root-caused through the
+  merger's committed geometry (two folds where zero belonged);
+  (2) the zero-fold case (every group a single column) placed tails
+  inside the row region — a pre-existing hole unreachable under
+  count partitioning, fixed and scoped to `n_output > 1` so the
+  single-tail corpus norm stays byte-identical (the unscoped fix
+  tripped three cell-registry hash pins, whose own message demands
+  sim re-verification — reverted to the scoped form instead).
+  Verification: full suite 1265/0; the Phase-0 specimen delivers
+  **90.00/90.00 produced (+0.0%), −0.4% delivered, sim PASS, all 18
+  machines working** — the complete arc 44.8 (silent wreck) → 74.4
+  (unit 1) → 90.0 (units 1+2). The choice of first-fit over the
+  stamp-oracle balancer is a recorded sizing deviation from the log's
+  preference order: the oracle-backed (rows→tails) merge IS Phase 2's
+  composer primitive and supersedes this fold there; the fold is the
+  correctness fix at unit scale.*
