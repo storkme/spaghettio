@@ -323,3 +323,22 @@ the snapshot debugger sees them.
   measurement with no defect to fix, and the RFC's substance is
   Phase 2 (above-the-wall composition, whose motivating wall is
   validator-real) plus the boundary contract.*
+- *2026-08-25 — **Phase 1 CLOSED BY MEASUREMENT**: the zero-margin
+  ec30-comp fixture also sims at plan.* Verdict (288k warmup,
+  converged, drift +0.0%, PASS): electronic-circuit produced
+  30.00/30.00 (+0.0%), delivered +1.3% — which requires the full
+  90/s of internally produced cable to flow. The meter's 81.6% was
+  artifact, so the ENTIRE seam-cost story (16.5 points at zero
+  margin, 5.4 at full margin) is instrument error and there is no
+  embedded-stage defect to fix. The artifact is GEOMETRY-CORRELATED:
+  the one straight-line fixture (ec15-comp, single 65×11 row, no
+  trunk turns) metered 99.7% while every turn-path fixture under-read
+  by 5–18 points — the root-cause hint for the meter follow-up (the
+  turn-path lane model, not a global capacity mismatch, since a
+  global cause would have hit ec15 too). Remaining meter-only claims
+  under sim adjudication before the RFC's motivation is rewritten:
+  the uncapped frontier percentages (fp-ec90 dispatched, 432k
+  warmup — deep chain) and the output-side half-plan specimen
+  (seam-cable90 dispatched). The 120/s wall needs no sim: 18
+  lane-throughput errors are plan arithmetic (planned lane rates
+  above the 22.5/s physical cap).*
