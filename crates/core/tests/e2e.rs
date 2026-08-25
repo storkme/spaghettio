@@ -5839,7 +5839,12 @@ fn stress_electronic_circuit_40s_from_ore() {
             // recorded follow-up). Instruments, labeled: METER
             // 37.46/40 = 93.7%; SIM 36.8/40 = 92.0% converged
             // kit-clean (the bank row); shipped predecessor: merge-tap
-            // SIM 18.5%. Tighten to 0 errors when the stub terminates.
+            // SIM 18.5%. The 8% residual is UNDECOMPOSED between
+            // zero-headroom (the ec30 precedent) and the stub's
+            // dilution (#722 round 2) — the duty knob measures
+            // byte-identical on this shape, so a stub-less arm is the
+            // recorded decomposition path. Tighten to 0 errors when
+            // the stub terminates.
             max_errors: 1,
             max_warnings: 28,
             max_errors_by_category: [

@@ -1070,10 +1070,13 @@ fn layout_pass(
     });
     let actual_bw = bus_width_for_lanes(&lanes_1, &families_1);
     let balancer_gaps = compute_extra_gaps(&families_1);
-    // The balancer gaps the FINAL placement will actually have consumed —
-    // the fast path's condition requires `balancer_gaps.is_empty()`, so
-    // this clone is correct for both branches. Consumed below by the
-    // gap-convergence check (RFC-069).
+    // The BALANCER COMPONENT of the gaps the final placement consumed
+    // (retry slack is orthogonal and excluded from BOTH sides of the
+    // convergence comparison — `needed_gaps` below is likewise pure
+    // balancer needs, so retry gaps can never trigger a spurious pass 3;
+    // #722 round 2 wording fix). The fast path's condition requires
+    // `balancer_gaps.is_empty()`, so this clone is correct for both
+    // branches. Consumed below by the gap-convergence check (RFC-069).
     let applied_balancer_gaps = balancer_gaps.clone();
 
     // Pass 2: re-place rows with the real bus width + any balancer
@@ -2811,6 +2814,53 @@ fn make_substation(x: i32, y: i32) -> PlacedEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #722 round 2: `compute_extra_gaps` deliberately keeps its parallel
+    /// direct+gcd height loop (unifying it onto the oracle is measured to
+    /// reshape 8+ sim-anchored bank rows — a recorded follow-up with its
+    /// own re-bless cycle). This pin bounds the kept divergence where it
+    /// matters NOW: on the shapes the resolvability pad actually emits,
+    /// the loop's height must agree with the stamp oracle's, so a pad
+    /// output can never get a wrong-sized band while the follow-up waits.
+    #[test]
+    fn extra_gap_heights_agree_with_the_oracle_on_pad_shapes() {
+        use crate::bus::balancer::{stamp_plan_for_shape, FamilyStampPlan};
+        for (n, m) in [(4usize, 10usize), (10, 15), (6, 12), (2, 12), (10, 20)] {
+            let plan_height = match stamp_plan_for_shape(n as u32, m as u32, false) {
+                FamilyStampPlan::Passthrough => 1,
+                FamilyStampPlan::Direct(t) => t.height as i32,
+                FamilyStampPlan::Decomposed { sub, .. } => sub.height as i32,
+                FamilyStampPlan::Generated(t) => t.height as i32,
+                FamilyStampPlan::Unresolvable => {
+                    panic!("({n},{m}) is a pad OUTPUT and must be resolvable")
+                }
+            };
+            let fam = crate::bus::lane_planner::LaneFamily {
+                item: "test-item".to_string(),
+                module_id: 0,
+                shape: (n, m),
+                producer_rows: (0..n).collect(),
+                lane_xs: (10..10 + m as i32).collect(),
+                balancer_y_start: 100,
+                balancer_y_end: 150,
+                total_rate: 30.0,
+                merge_tap: false,
+                demand_skewed: false,
+            };
+            let gaps = compute_extra_gaps(std::slice::from_ref(&fam));
+            let expected_needed = if n == 1 {
+                (plan_height - 3).max(0)
+            } else {
+                (plan_height - 2).max(0)
+            };
+            let got = gaps.get(&(n - 1)).copied().unwrap_or(0);
+            assert_eq!(
+                got, expected_needed,
+                "({n},{m}): compute_extra_gaps' parallel height loop diverged from the \
+                 stamp oracle on a pad-emitted shape"
+            );
+        }
+    }
 
     /// RFC-070 Phase 1a (#689 W2a): `UserConstraints`/`SearchAxes`/
     /// `EngineTuning` each carry their own manual `Default` impl (deliberately

@@ -212,6 +212,28 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-25 — #722 round 2 adjudicated: pins added, the residual
+  honestly undecomposed, the "structural loss" critical bounded by the
+  sim.* The round demanded oracle unit pins — added:
+  `stamp_plan_pins_the_campaign_shapes` ((10,14) Unresolvable /
+  (10,15) Decomposed / the (4,9)-(4,10) pair) and
+  `extra_gap_heights_agree_with_the_oracle_on_pad_shapes` (bounds the
+  deliberately-kept `compute_extra_gaps` parallel loop exactly where
+  the pad can reach it). The "property test now vacuous" claim is
+  REFUTED: `shape_is_stampable_matches_stamping` compares the
+  predicate against ACTUAL STAMPING over the 10×10 grid, so the
+  delegation strengthens it. The "critical structural throughput loss"
+  is bounded by physics and the receipts: a dead-ended balancer output
+  back-pressures and the splitter redistributes (splitter overflow),
+  and the shipped artifact SIMS 92.0% converged kit-clean; the demanded
+  rate-bookkeeping change is declined in favor of the honest
+  attribution fix — the 8% residual is now recorded as UNDECOMPOSED
+  between zero-headroom (ec30-family precedent) and the stub's
+  dilution, because the decisive experiment came back null: duty 0.6
+  on the padded ec40 is BYTE-IDENTICAL (the cap does not reach these
+  rows), so a stub-less arm is the recorded decomposition path. The
+  `applied_balancer_gaps` comment now states the retry-orthogonality
+  precisely (pure-needs compared on both sides — no spurious pass 3).*
 - *2026-08-25 — #722 round 1 absorbed: the single-oracle thesis
   completed, the probe shape corrected, the residual attributed.* Both
   3/3 majors were right: (1) the pad probed `min(effective, consumers)`

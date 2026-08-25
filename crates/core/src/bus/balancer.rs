@@ -750,6 +750,42 @@ mod tests {
         }
     }
 
+    /// RFC-069 Phase A3 pins (#722 round 2): the oracle's verdicts on
+    /// the campaign's exhibiting shapes. (10,14) is ec40's trap — the
+    /// gcd sub (5,7) exists but fails the width guard; (10,15) is the
+    /// pad's resolution (g=5 → (2,3)); (4,9)/(4,10) are ec35's pair.
+    #[test]
+    fn stamp_plan_pins_the_campaign_shapes() {
+        assert!(
+            matches!(
+                stamp_plan_for_shape(10, 14, false),
+                FamilyStampPlan::Unresolvable
+            ),
+            "(10,14) must be Unresolvable — the ec40 trap"
+        );
+        assert!(
+            matches!(
+                stamp_plan_for_shape(10, 15, false),
+                FamilyStampPlan::Decomposed { .. }
+            ),
+            "(10,15) must resolve by decomposition — the pad's target"
+        );
+        assert!(
+            matches!(
+                stamp_plan_for_shape(4, 9, false),
+                FamilyStampPlan::Unresolvable
+            ),
+            "(4,9) must be Unresolvable — the ec35 coprime trap"
+        );
+        assert!(
+            !matches!(
+                stamp_plan_for_shape(4, 10, false),
+                FamilyStampPlan::Unresolvable
+            ),
+            "(4,10) must resolve — ec35's pad"
+        );
+    }
+
     /// Coprime / asymmetric gaps that remain unstampable.
     /// Originally 17 (issue #136 / PR #257: `(1..=8, 9)` and `(9, 1..=9)`).
     /// Phase-2.0 generator closes `(3, 9)` (3 × library `(1, 3)`),
