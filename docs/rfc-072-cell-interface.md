@@ -269,3 +269,29 @@ the snapshot debugger sees them.
   ec20 draws 30/s of copper plate, the export manifest's boundary
   line). Probes-doc header reclassified from "absorb when written" to
   the RFC's retained measurement record.*
+- *2026-08-25 — Phase 1 forensics complete: the mechanism is drop-point
+  contention (head-loading vs mid-loading), one suspect withdrawn.* New
+  instrument `crates/meter/examples/lane_heatmap.rs` (whole-map
+  per-lane occupancy + splitter routing counters + RECT path dump —
+  the questions trace_belt's boundary-feed walker cannot answer for
+  internal items). Chain on the K72-1 fixture: (1) the family
+  balancer is EXONERATED — the cable path has no splitter at all (two
+  producer rows cross-feed two consumer rows via turn-taps; trunks run
+  at 50–75% occupancy, flowing); (2) the one blocked splitter (iron
+  tap, input lane 1 at 1350/1350 both_blocked) is saturation
+  backpressure on a 45/s boundary trunk against 20/s demand — zero
+  iron starvation, a saturated input behaving saturated, suspect
+  withdrawn per the instrument-before-finding rule; (3) the loss is at
+  the producer DROP POINTS: the row's output belt is mid-loaded —
+  each output inserter needs a far-lane gap under which upstream
+  machines' items already stream, so the last machines in line face
+  60–80% local lane occupancy and stall in bursts (the attribution's
+  27% output_inserter_blocked), netting exactly the 5.4%. The
+  sideload bridge itself works as designed (both lanes fill west of
+  the merge). An external boundary belt is HEAD-loaded — compression
+  arrives pre-formed, no mid-run gap-hunting — which is why the
+  boundary leg measures 100.0% at identical average rates. Phase 1's
+  fix direction is therefore drop-point headroom on embedded rows'
+  output collectors (split collectors / more parallel output belts
+  per row — the output-side cousin of RFC-069's trunk provisioning),
+  NOT merge-shape work.*
