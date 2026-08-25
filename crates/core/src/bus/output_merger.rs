@@ -13,6 +13,36 @@ use crate::bus::placer::RowSpan;
 use crate::bus::stacking_ctx::StackingCtx;
 use crate::models::{EntityDirection, PlacedEntity};
 
+/// Capacity-aware contiguous partition of merger columns (#727 unit 2,
+/// #728 round 1): greedy first-fit over per-column rates — optimal for
+/// the minimum contiguous group count (codex-verified) — sizing and
+/// assignment from ONE walk so the two can never disagree. A column
+/// above `single_cap` gets its own group (the per-row output ceiling is
+/// the placer's domain). Returns `(n_output, group_of)` with `group_of`
+/// non-decreasing and every group `0..n_output` non-empty.
+pub(crate) fn partition_columns(
+    col_rates: &[f64],
+    single_cap: f64,
+    total_rate: f64,
+) -> (usize, Vec<usize>) {
+    if single_cap >= total_rate || col_rates.is_empty() {
+        return (1, vec![0; col_rates.len()]);
+    }
+    let mut group_of: Vec<usize> = Vec::with_capacity(col_rates.len());
+    let mut g = 0usize;
+    let mut acc = 0.0_f64;
+    for &r in col_rates {
+        if acc > 0.0 && acc + r > single_cap + 1e-9 {
+            g += 1;
+            acc = r;
+        } else {
+            acc += r;
+        }
+        group_of.push(g);
+    }
+    (g + 1, group_of)
+}
+
 pub(crate) fn merge_output_rows(
     output_rows: &[usize],
     output_ys: &[i32],
@@ -95,31 +125,13 @@ pub(crate) fn merge_output_rows(
                 .sum::<f64>()
         }
     };
-    let col_rates: Vec<f64> = output_rows.iter().map(column_rate).collect();
-    let n_output = if single_cap >= total_rate {
-        1
-    } else {
-        let mut groups = 1usize;
-        let mut acc = 0.0_f64;
-        for &r in &col_rates {
-            if acc > 0.0 && acc + r > single_cap + 1e-9 {
-                groups += 1;
-                acc = r;
-            } else {
-                acc += r;
-            }
-        }
-        // Greedy first-fit is the authority (contiguous first-fit is
-        // optimal; codex review verified). A ceil(total/cap) floor was
-        // briefly layered on top and REMOVED (codex HIGH): with the
-        // greedy test epsiloned and ceil not, the floor can exceed the
-        // greedy count, and the assignment's coverage arithmetic then
-        // empty-groups and ships ONE overloaded tail. A single column
-        // above cap gets its own tail — the best a whole-row partition
-        // can do (the per-row output ceiling is the placer's domain,
-        // recorded in the RFC log).
-        groups
-    };
+    // COLUMN ORDER: the east extensions place row 0 at the RIGHTMOST
+    // column (x = merge_x + n-1) and row n-1 at merge_x — the committed
+    // geometry is the receipt (#728 round 1: the un-reversed form read
+    // the wrong row's rate per column; symmetric specimen rates masked
+    // it). col_rates[i] is the rate of the column at merge_x + i.
+    let col_rates: Vec<f64> = output_rows.iter().rev().map(column_rate).collect();
+    let (n_output, group_of) = partition_columns(&col_rates, single_cap, total_rate);
     // Hops may need more reach than the rate-picked tier offers
     // (alternating blocked columns with 1-tile gaps are unhoppable
     // at yellow reach and split into exit-abuts-next-entrance
@@ -404,31 +416,7 @@ pub(crate) fn merge_output_rows(
     // it dumps the whole tail onto the leftmost survivors (one gets ~all the
     // columns and saturates, the rest idle) — the measured half-empty belts.
     // Per-group folds keep each output belt fed by exactly its own columns.
-    let m = n_output.max(1);
-    // Assign columns to groups by the same capacity-aware first-fit
-    // that sized `n_output` (count-based assignment re-creates the
-    // over-subscription the count fixes): fill a group until the next
-    // column would push it past cap AND enough columns remain to keep
-    // every later group non-empty.
-    let mut group_of: Vec<usize> = Vec::with_capacity(n);
-    {
-        let mut g = 0usize;
-        let mut acc = 0.0_f64;
-        for (idx, &r) in col_rates.iter().enumerate() {
-            // Advancing places column idx into group g+1; the n-idx
-            // columns from idx onward must cover the m-(g+1) groups
-            // from g+1 onward, one each at minimum.
-            let can_advance = g + 1 < m && (n - idx) >= (m - (g + 1));
-            let must_advance = acc > 0.0 && acc + r > single_cap + 1e-9 && can_advance;
-            if must_advance {
-                g += 1;
-                acc = r;
-            } else {
-                acc += r;
-            }
-            group_of.push(g.min(m - 1));
-        }
-    }
+
     let mut surviving: Vec<i32> = all_x.clone(); // columns not yet merged away
 
     // Fold right-to-left WITHIN each group. At every step merge the rightmost
@@ -555,6 +543,48 @@ pub(crate) fn merge_output_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #728 round 1: the partition's own unit pins — sizing and
+    /// assignment from one walk, asymmetric rates included (the
+    /// symmetric specimen masked the column-order reversal).
+    #[test]
+    fn partition_symmetric_three_rows_one_tail_each() {
+        let (n, groups) = partition_columns(&[30.0, 30.0, 30.0], 45.0, 90.0);
+        assert_eq!((n, groups), (3, vec![0, 1, 2]));
+    }
+
+    #[test]
+    fn partition_asymmetric_pairs_the_light_column() {
+        // Column order [3, 40, 40] (rates already reversed to columns):
+        // 3+40 = 43 fits one 45/s tail; the last 40 gets its own.
+        let (n, groups) = partition_columns(&[3.0, 40.0, 40.0], 45.0, 83.0);
+        assert_eq!((n, groups.clone()), (2, vec![0, 0, 1]));
+        // No group over cap.
+        for g in 0..n {
+            let d: f64 = [3.0, 40.0, 40.0]
+                .iter()
+                .zip(&groups)
+                .filter(|(_, &gg)| gg == g)
+                .map(|(r, _)| r)
+                .sum();
+            assert!(d <= 45.0 + 1e-9, "group {g} over cap: {d}");
+        }
+    }
+
+    #[test]
+    fn partition_over_cap_column_gets_its_own_tail() {
+        // The codex-HIGH counterexample: [60, 60] at 45 — no feasible
+        // capacity partition exists; each column gets its own tail and
+        // nothing empty-groups.
+        let (n, groups) = partition_columns(&[60.0, 60.0], 45.0, 120.0);
+        assert_eq!((n, groups), (2, vec![0, 1]));
+    }
+
+    #[test]
+    fn partition_under_cap_is_single_group() {
+        let (n, groups) = partition_columns(&[10.0, 10.0, 10.0], 45.0, 30.0);
+        assert_eq!((n, groups), (1, vec![0, 0, 0]));
+    }
     use crate::models::{ItemFlow, MachineSpec};
 
     fn make_test_row_span(
