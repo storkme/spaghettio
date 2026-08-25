@@ -581,8 +581,17 @@ pub fn build_bus_layout(
     // instead. Per-machine input₀ is one belt in EVERY row shape
     // including HorizontalStack (its K trunks raise per-ROW capacity;
     // each machine still picks from the single current-feed belt).
-    // DI-coupled inputs are skipped: direct insertion delivers the
-    // item machine-to-machine with no belt in the path.
+    // DI-coupled inputs are skipped UNLESS direct insertion is Off
+    // (#723 round 3): the gate runs before `select_best_decomposition`,
+    // so an Err here aborts every candidate including the DI variant
+    // that feeds the coupled input beltlessly — refusing would over-fire
+    // on a config the engine can build. The skip is optimistic: when DI
+    // is proposed but not ultimately placed (bridge infeasible, variant
+    // loses selection), the belt-fed fallback's deficiency is
+    // validator-visible (lane-throughput + input-rate checks) and
+    // selection prefers error-free — degraded to the pre-Phase-C status
+    // quo, never silent. Under `Off` no DI variant exists, so the skip
+    // has no justification and the refusal fires.
     {
         // Unknown/absent cap resolves to the top tier (express) — the
         // same fallback `belt_entity_for_rate` uses, so gate and
@@ -612,10 +621,11 @@ pub fn build_bus_layout(
                 if inp.is_fluid || draw <= full_belt + 1e-9 {
                     continue;
                 }
-                if solver_result
-                    .di_couplings
-                    .iter()
-                    .any(|c| c.consumer_recipe == m.recipe && c.item == inp.item)
+                if opts.direct_insertion != crate::bus::di_cell::DirectInsertion::Off
+                    && solver_result
+                        .di_couplings
+                        .iter()
+                        .any(|c| c.consumer_recipe == m.recipe && c.item == inp.item)
                 {
                     continue;
                 }
@@ -3101,6 +3111,46 @@ mod tests {
                 && err.contains("15.00/s"),
             "the exempt item must be judged at the UNSTACKED ceiling — got: {err}"
         );
+    }
+
+    /// #723 round 3 (major 3/3): the DI skip is mode-guarded. A solver
+    /// coupling is only a PROPOSAL — under `DirectInsertion::Off` no DI
+    /// variant can ever place, so the skip has no justification and the
+    /// coupled high-draw input must refuse; under `Candidate` (default)
+    /// the gate must stand down or its Err would abort the DI variant
+    /// that feeds the input beltlessly.
+    #[test]
+    fn the_di_skip_is_mode_guarded() {
+        let mut sr = unreachable_solver_result();
+        sr.machines[0].inputs[0].rate = 100.0; // > express's full 45/s
+        sr.di_couplings.push(crate::models::DICoupling {
+            producer_recipe: "synthetic-producer".to_string(),
+            consumer_recipe: "synthetic-hungry-recipe".to_string(),
+            item: "iron-plate".to_string(),
+            producer_count: 1.0,
+            consumer_count: 1.0,
+        });
+        let off = LayoutOptions {
+            max_belt_tier: None,
+            direct_insertion: crate::bus::di_cell::DirectInsertion::Off,
+            ..Default::default()
+        };
+        let err = build_bus_layout(&sr, off).expect_err("must refuse under Off");
+        assert!(
+            err.contains("unreachable at belt tier"),
+            "with DI Off the coupling cannot rescue the input — got: {err}"
+        );
+        let candidate = LayoutOptions {
+            max_belt_tier: None,
+            direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
+            ..Default::default()
+        };
+        if let Err(e) = build_bus_layout(&sr, candidate) {
+            assert!(
+                !e.contains("unreachable at belt tier"),
+                "under Candidate the refusal would abort the DI variant — got: {e}"
+            );
+        }
     }
 
     /// #723 round 2 (major 3/3): the draw is duty-scaled by

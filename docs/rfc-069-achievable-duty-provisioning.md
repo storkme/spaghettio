@@ -243,6 +243,36 @@ changes shipped geometry):
   calibration work and is this RFC's remaining substance. Until then
   `planning_duty` ships opt-in exactly as today, with its ec30/ec60-red
   gate receipts standing.*
+- *2026-08-25 — #723 round 3 adjudicated: the DI-skip major accepted
+  as a mode guard; the inserter-ceiling, duty-mismatch, and
+  test-triviality items refuted with receipts.* The 3/3 major was
+  half-right: `di_couplings` is a solver-side PROPOSAL populated
+  unconditionally, so under `DirectInsertion::Off` — where no DI
+  variant can ever place — the skip under-fired with no
+  justification; fixed with a mode guard (skip only when DI ≠ Off) and
+  a discriminating pin (Off refuses the coupled high-draw input,
+  Candidate stands down). The reviewer's stronger fix (skip only when
+  the PLACED RowSpan carries the input) is structurally impossible at
+  this gate: it runs before `select_best_decomposition`, so an Err
+  aborts every candidate including the DI variant that would feed the
+  input — under Candidate/Forced the optimistic skip is mandatory to
+  avoid over-firing, and when DI is proposed-but-not-placed the
+  belt-fed fallback's deficiency is validator-visible
+  (lane-throughput + input-rate checks) and selection prefers
+  error-free: degraded to the pre-Phase-C status quo, never silent.
+  **Refuted**: the 1/3 inserter-throughput ceiling (inserters per
+  machine-input are sized by the count ladder,
+  `docs/rfc-inserter-sizing.md` — not a fixed per-machine bound like
+  the one-belt geometry invariant; residuals are instrumented
+  downstream); the 2/3 duty-mismatch (`utilization_for` is THE
+  single-source formula shared by placement and validation per its own
+  docstring — ceil-rounding IS the formula; pinning the gate's duty
+  against the placer's would compare the formula with itself); the
+  2/3 "needs a real cargo test run" (the full suite ran green on
+  every round head — 30 suites, 1262 tests — and the landfill
+  behavior change is round 1's own accepted 2/3 major); the 1/3
+  max_lane-boundary pin (inserters pick BOTH lanes, rule I6 — the
+  per-machine per-item bound is the full belt, not a lane).*
 - *2026-08-25 — #723 round 2 adjudicated: the major's two accepted
   halves fixed, its row-cap corollary scoped, the HS sub-claim
   refuted.* The 3/3 major was right twice more: (1) the ceiling used
