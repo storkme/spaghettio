@@ -212,6 +212,45 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-25 — **Phase A3: the coprime-trap class dissolved at the
+  root — the resolvability pad.** Six instrument-falsified hypotheses
+  led here (lane-registry drops, span-metadata defaults,
+  prune_dangling, zone replacement, bus-occupancy, A*-cost steering —
+  each killed by a dedicated probe; plus the mt spacer, measured
+  meter-harmful 18.5%→3.75% and reverted). The receipt chain that
+  ended it: a forced-winner replay exposed k1's own build emitting
+  `STAMP copper-cable (10,14) y=109..109 found=false` +
+  `FEEDER-SKIP rows=10` — a ZERO-HEIGHT balancer band because
+  `family_stamp_plan` returns Unresolvable for (10,14): the gcd
+  decomposition (5,7) exists in the library but fails the stamp's
+  width guard, which the warning-checker's parallel direct+gcd
+  prediction ignores — so ten producer rows shipped silent dead-ends
+  on an ACCEPTED layout. Three coordinated fixes: (1) **the
+  resolvability pad** — the lane split consults the stamper's own
+  oracle (`stamp_plan_for_shape`, factored from `family_stamp_plan` as
+  the single source) and pads an unresolvable trunk count to the
+  nearest resolvable `m`, budget = next multiple of n (guaranteed:
+  g=n → n stacked (1, m/n) stamps; cost ≤ n−1 empty pad columns,
+  priced by the correctness-over-footprint owner call); applies on the
+  consumer-clamped arm too; scoped OFF merge-tap (its fallback owns
+  unstampable shapes). (2) **the ground-truth warning** — the
+  missing-balancer check now consults the same oracle instead of its
+  parallel prediction (both disagreement directions closed). (3) **the
+  gap-convergence pass** — the #652 residual's third placement pass,
+  run when pass-2's re-planned families need different balancer gaps
+  than the placement consumed (its own measured improvement: ec40's
+  native 14E/1057W → 13E/235W before the pad landed). CORPUS OUTCOME:
+  the NATIVE reclaims the class — ec40 builds accepted at 1E/28W,
+  meter **37.46/40 = 93.7%** (winner native@BestAccepted, from the
+  631E merge-tap's 18.5%); ec35's native builds the exact rescue
+  artifact itself (bank hash unchanged, winner label k1→native at the
+  same bytes); tier5@0.6 sheds all three trap families (accepted,
+  184×262); ac45 unchanged. Fingerprint drift: EXACTLY ec40. Full
+  suite: 2 pins re-blessed (ec35 label, ec40 baseline 631E→1E), 1,208
+  others green. The k1 candidate is largely superseded on this class
+  (native accepted ⇒ k1 not built) and retained for residual edges.
+  ec40's one leftover belt-dead-end is adjudicated by its row's sim
+  anchor; tighten to 0 when it falls.*
 - *2026-08-24 — #721 round 2: the arm-asymmetry critical adjudicated BY
   EXPERIMENT — the demanded guard is measured-harmful; parity absorbed
   instead.* The round's 3/3 critical demanded the multi-consumer arm

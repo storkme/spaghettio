@@ -5678,10 +5678,12 @@ fn stress_electronic_circuit_35s_from_ore() {
     });
     assert_eq!(
         decided.as_ref().map(|(w, s)| (w.as_str(), *s)),
-        Some(("k1-shape-fix", spaghettio_core::trace::SelectionStage::BestErrorFree)),
-        "stress_electronic_circuit_35s_from_ore pins the Phase A1 rescue (RFC-069): \
-         k1-shape-fix at BestErrorFree, meter 33.49/35 vs the merge-tap's 8.0/35. If \
-         this moved, adjudicate with the meter before re-blessing — got {decided:?}",
+        Some(("native", spaghettio_core::trace::SelectionStage::BestErrorFree)),
+        "stress_electronic_circuit_35s_from_ore pins the RFC-069 rescue, now NATIVE: \
+         the resolvability pad (2026-08-25) makes the native build the exact rescue \
+         shape itself (bank hash unchanged from the k1 winner — same artifact, new \
+         producer label), 0 errors, meter 33.49/35 vs the old merge-tap's 8.0/35. If \
+         this moved, adjudicate with the SIM before re-blessing — got {decided:?}",
     );
 }
 
@@ -5825,36 +5827,38 @@ fn stress_electronic_circuit_40s_from_ore() {
             // — the 188 lane errors were phantom-UG-source artifacts
             // (see the 30s baseline comment); the 13 belt-dead-end are
             // unchanged and stay adjudicated.
-            // 2026-08-23 (RFC-071 B2, #701): the RouteSevered class flips
-            // this fixture's winner. The old native carried 13
-            // belt-dead-end total-stops and MEASURED ZERO — meter 0/40,
-            // Factorio sim non-converged 0.0/s (calibration bank row) —
-            // while this winner is a pure-throttle layout (zero
-            // route-severed) delivering 6.75/40 on the meter. Receipts on
-            // PR: b2_route_severed_flip_receipts + sim anchor. Tighten
-            // when the lane-throughput mass gets engineering attention.
-            max_errors: 631,
-            // Warnings IMPROVE with the flip: 283 ceiling -> 70 measured.
-            max_warnings: 70,
+            // 2026-08-23 (RFC-071 B2, #701): the RouteSevered class flipped
+            // this fixture's winner to the 631-error merge-tap (sim
+            // 7.5/40) over the dead 13-dead-end native.
+            // 2026-08-25 (RFC-069 resolvability pad): the winner flips
+            // AGAIN, back to a NATIVE that finally stamps — the lane
+            // split now consults the stamp oracle and pads the (10,14)
+            // cable family to a resolvable shape, so the native builds
+            // accepted with ONE residual belt-dead-end and meters
+            // 37.46/40 = 93.7% (from the merge-tap's 18.5% sim). The
+            // residual dead-end is adjudicated by the row's sim anchor;
+            // tighten to 0 when it falls.
+            max_errors: 1,
+            max_warnings: 28,
             max_errors_by_category: [
-                ("belt-dead-end".to_string(), 0),
-                ("lane-throughput".to_string(), 631),
+                ("belt-dead-end".to_string(), 1),
+                ("lane-throughput".to_string(), 0),
             ].into_iter().collect(),
         },
     );
-    // The B2 winner pin — same rationale as ec35's above: the ceilings
-    // pass the old dead winner too; this does not.
+    // The winner pin — same rationale as ec35's above: the ceilings
+    // pass older winners too; this does not.
     let decided = result.trace_events.iter().rev().find_map(|e| match e {
         TraceEvent::SelectionDecided { winner, stage } => Some((winner.clone(), *stage)),
         _ => None,
     });
     assert_eq!(
         decided.as_ref().map(|(w, s)| (w.as_str(), *s)),
-        Some(("merge-tap", spaghettio_core::trace::SelectionStage::MergeTap)),
-        "stress_electronic_circuit_40s_from_ore pins the RouteSevered flip (RFC-071 B2): \
-         merge-tap at the merge-tap stage, meter 6.75/40 vs the old native's 0/40 (sim \
-         7.5/40 converged kit-clean). If this moved, adjudicate with the meter before \
-         re-blessing — got {decided:?}",
+        Some(("native", spaghettio_core::trace::SelectionStage::BestAccepted)),
+        "stress_electronic_circuit_40s_from_ore pins the RFC-069 resolvability-pad \
+         winner: the stamping native at BestAccepted, meter 37.46/40 vs the merge-tap's \
+         8.0-ish/40. If this moved, adjudicate with the SIM before re-blessing — got \
+         {decided:?}",
     );
 }
 

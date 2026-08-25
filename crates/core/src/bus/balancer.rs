@@ -159,8 +159,20 @@ pub(crate) enum FamilyStampPlan {
 pub(crate) fn family_stamp_plan(
     fam: &crate::bus::lane_planner::LaneFamily,
 ) -> FamilyStampPlan {
-    let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
-    if is_passthrough_shape(n, m) && !fam.demand_skewed {
+    stamp_plan_for_shape(fam.shape.0 as u32, fam.shape.1 as u32, fam.demand_skewed)
+}
+
+/// The shape-only body of [`family_stamp_plan`] — the single
+/// resolvability oracle, factored so PLANNING sites can consult it
+/// before a family exists (RFC-069, 2026-08-25): the ec40-k1 class is
+/// a (10,14) family whose gcd decomposition (5,7) exists in the
+/// library but fails the width guard, nothing else serves the shape,
+/// and the family shipped a zero-height band + `FeederSpecsSkipped` +
+/// ten silent belt-dead-ends. The lane split now pads an unresolvable
+/// lane count to the nearest resolvable one via this oracle, and the
+/// missing-balancer warning consults it as ground truth.
+pub(crate) fn stamp_plan_for_shape(n: u32, m: u32, demand_skewed: bool) -> FamilyStampPlan {
+    if is_passthrough_shape(n, m) && !demand_skewed {
         return FamilyStampPlan::Passthrough;
     }
     let templates = crate::bus::balancer_library::balancer_templates();
@@ -168,7 +180,7 @@ pub(crate) fn family_stamp_plan(
         return FamilyStampPlan::Direct(t);
     }
     for g in (1..=n).rev() {
-        if g == 0 || n % g != 0 || m % g != 0 {
+        if g == 0 || !n.is_multiple_of(g) || !m.is_multiple_of(g) {
             continue;
         }
         let (sub_n, sub_m) = (n / g, m / g);
