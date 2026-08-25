@@ -1677,10 +1677,19 @@ fn repair_tap_splitter_collisions(
         consumers.dedup();
         consumers.sort_by_key(|&ri| row_spans[ri].y_start);
         if consumers.len() < members.len() {
-            // An equal-count partition would hand some sibling an empty
-            // block — a tapless lane the occupancy predicate treats as
-            // unbounded. Leave the group for the loudness follow-up.
-            continue;
+            // A partition would hand some sibling an empty block — a
+            // tapless lane the occupancy predicate treats as unbounded.
+            // Per the unit's repair-or-refuse contract this cannot ship
+            // silent either (#727 r6).
+            crate::trace::emit(crate::trace::TraceEvent::TapAssignmentUnrepairable {
+                item: item.clone(),
+                module_id,
+            });
+            return Err(format!(
+                "tap assignment unrepairable for {item}: the colliding \
+                 sibling group has fewer consumer rows than lanes and no \
+                 permutation exists"
+            ));
         }
         // Snapshot the original assignment: the repair must be no-worse.
         // A collision against a FOREIGN column (not a sibling) may not
