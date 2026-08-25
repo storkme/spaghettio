@@ -243,6 +243,35 @@ changes shipped geometry):
   calibration work and is this RFC's remaining substance. Until then
   `planning_duty` ships opt-in exactly as today, with its ec30/ec60-red
   gate receipts standing.*
+- *2026-08-25 — #723 round 4 adjudicated: the real-recipe pin taken;
+  the lane-split, coupling-key, tier-fallback, and corpus-claim items
+  refuted with receipts.* The 2/3 "vacuous tests" major was
+  half-right in a useful way: the synthetic pins discriminate every
+  gate branch (four firing pins fail if the gate is deleted — the
+  stands-down pins are one-sided BY DESIGN, they exist to catch
+  over-firing, which is the campaign's cardinal sin), but none of
+  them guards against `MachineSpec.inputs` rate-semantics drift (the
+  repo's recurring `e.rate` bug class). Added
+  `a_real_high_draw_recipe_refuses_end_to_end`: the solver's own
+  landfill output (75 stone/s per AM2 machine, real `recipes.json`)
+  trips the gate uncapped — eight pins total. **Refuted**: the 2/3
+  lane-split MED (the gate is an upper bound over feed shapes by
+  construction — "no arrangement can feed it" refuses only
+  impossibility; a specific shape delivering a single lane is the
+  lane-rate/input-rate validators' jurisdiction, and firing on it
+  would over-fire on configs a full-belt shape serves — comment now
+  says "UPPER BOUND" explicitly); the 2/3 coupling-key minor (at this
+  gate's input the solver emits one MachineSpec per recipe —
+  partition families are created by decomposition, downstream — so
+  `(consumer_recipe, item)` is exactly the key `detect_di_couplings`
+  emits); the 1/3 tier-fallback minor (a future `BELT_TIERS` turbo
+  row is matched by the same `.find` that resolves the ceiling, so
+  the gate follows the table, never a stale constant; the
+  silent-degrade UX is `belt_entity_for_rate`'s pre-existing
+  engine-wide semantics); the 1/3 corpus-claim minor (the corpus e2e
+  tests run the full pipeline through `build_bus_layout` — a gate
+  firing on any fixture fails its test, so the green suite IS the
+  measured run, on every round head).*
 - *2026-08-25 — #723 round 3 adjudicated: the DI-skip major accepted
   as a mode guard; the inserter-ceiling, duty-mismatch, and
   test-triviality items refuted with receipts.* The 3/3 major was

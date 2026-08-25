@@ -559,7 +559,11 @@ pub fn build_bus_layout(
     // so `max_machines_for_belt`'s floor would clamp to a 1-machine row
     // that ships silently deficient at ANY target rate (per-machine
     // draw is recipe+machine-bound, not rate-bound). Refuse by name at
-    // plan time. Belt tier is a hard user constraint (never
+    // plan time. The ceiling is the UPPER BOUND over feed shapes — the
+    // gate refuses only what no arrangement can feed; a specific shape
+    // delivering less than a full belt (e.g. a sideloaded single lane)
+    // is the lane-rate and input-rate validators' jurisdiction, not a
+    // reason to refuse configs a full-belt shape can serve. Belt tier is a hard user constraint (never
     // auto-escalate); with no cap the ceiling is still finite — express
     // is the top of `BELT_TIERS` — so the check runs unconditionally
     // against the effective tier (#723 round 1: real recipes like
@@ -3151,6 +3155,28 @@ mod tests {
                 "under Candidate the refusal would abort the DI variant — got: {e}"
             );
         }
+    }
+
+    /// #723 round 4: the real-recipe end-to-end pin. Landfill is 50
+    /// stone per 0.5s craft — 75 stone/s per assembling-machine-2
+    /// (speed 0.75), above express's full 45/s — so the SOLVER's own
+    /// output for a real `recipes.json` recipe must trip the gate.
+    /// Unlike the synthetic pins this also guards the gate against
+    /// `MachineSpec.inputs` rate-semantics drift (per-machine nominal
+    /// is what the solver emits and what the gate assumes).
+    #[test]
+    fn a_real_high_draw_recipe_refuses_end_to_end() {
+        let mut inputs = rustc_hash::FxHashSet::default();
+        inputs.insert("stone".to_string());
+        // rate 3.0 → exactly 2 machines at duty 1.0 (1.5 landfill/s each)
+        let sr = crate::solver::solve("landfill", 3.0, &inputs, "assembling-machine-2")
+            .expect("landfill solves");
+        let opts = LayoutOptions { max_belt_tier: None, ..Default::default() };
+        let err = build_bus_layout(&sr, opts).expect_err("must refuse");
+        assert!(
+            err.contains("unreachable at belt tier") && err.contains("stone"),
+            "the real landfill chain must trip the named refusal — got: {err}"
+        );
     }
 
     /// #723 round 2 (major 3/3): the draw is duty-scaled by
