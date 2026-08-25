@@ -1669,12 +1669,13 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
         // Contiguous blocks with DEMAND-AWARE boundaries (#727 round 1:
         // equal-count blocks can hand one lane more draw than its belt).
         // Per-row demand for this item ≈ spec input rate × machines.
-        let demand = |ri: usize| -> f64 {
+        let group_item = lanes[members[0]].item.clone();
+        let demand = move |ri: usize| -> f64 {
             let rs = &row_spans[ri];
             rs.spec
                 .inputs
                 .iter()
-                .find(|f| !f.is_fluid && f.item == lanes[members[0]].item)
+                .find(|f| !f.is_fluid && f.item == group_item)
                 .map(|f| f.rate * rs.machine_count as f64)
                 .unwrap_or(0.0)
         };
@@ -1721,6 +1722,13 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
             cursor += take;
             lanes[i].consumer_rows = block.clone();
             lanes[i].tap_off_ys = find_tap_off_ys(&lanes[i], row_spans);
+            // Grow the lane's planning rate to its assigned block demand
+            // so downstream belt-tier selection can only strengthen
+            // (#727 round 2: the split rate predates the reassignment;
+            // round-robin already diverged demand from it, but the
+            // repair should not inherit that looseness).
+            let block_demand: f64 = block.iter().map(|&ri| demand(ri)).sum();
+            lanes[i].rate = lanes[i].rate.max(block_demand);
             reassigned.push((lanes[i].x, block));
         }
         if collides(lanes) {
@@ -1728,6 +1736,10 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
                 lanes[i].consumer_rows = rows;
                 lanes[i].tap_off_ys = taps;
             }
+            crate::trace::emit(crate::trace::TraceEvent::TapAssignmentUnrepairable {
+                item,
+                module_id,
+            });
             continue;
         }
         crate::trace::emit(crate::trace::TraceEvent::TapAssignmentRepaired {

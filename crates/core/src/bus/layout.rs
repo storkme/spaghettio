@@ -3180,12 +3180,22 @@ mod tests {
         let _guard = crate::trace::start_trace();
         let layout = build_bus_layout(&sr, LayoutOptions::default()).expect("layout");
         let events = crate::trace::drain_events();
+        let repaired = events.iter().find_map(|e| match e {
+            crate::trace::TraceEvent::TapAssignmentRepaired { item, reassigned, .. }
+                if item == "copper-plate" =>
+            {
+                Some(reassigned.clone())
+            }
+            _ => None,
+        });
+        let reassigned = repaired.expect("the repair must fire on the specimen config");
+        // The topmost consumer row (index 0) must land on the RIGHTMOST
+        // sibling — the geometric core of the fix (#727 round 2 asked
+        // the pin to assert placement, not just the event).
+        let rightmost = reassigned.iter().max_by_key(|(x, _)| *x).expect("nonempty");
         assert!(
-            events.iter().any(|e| matches!(
-                e,
-                crate::trace::TraceEvent::TapAssignmentRepaired { item, .. } if item == "copper-plate"
-            )),
-            "the repair must fire on the specimen config"
+            rightmost.1.contains(&0),
+            "the topmost row must ride the rightmost lane — got {reassigned:?}"
         );
         let issues = match crate::validate::validate(&layout, Some(&sr)) {
             Ok(i) => i,

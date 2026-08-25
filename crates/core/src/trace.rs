@@ -1513,6 +1513,16 @@ pub enum TraceEvent {
         reassigned: Vec<(i32, Vec<usize>)>,
     },
 
+    // The repair detected a collision it could NOT clear (foreign
+    // occupant, or every sibling permutation re-collides) and restored
+    // the original assignment. The layout ships with the collision —
+    // this event is the loud hook for the router-loudness follow-up
+    // recorded in RFC-072's decision log (#727 round 2).
+    TapAssignmentUnrepairable {
+        item: String,
+        module_id: u32,
+    },
+
     // `ModuleSizeSplit` candidate (see `docs/rfc-decomposition-search.md`)
     // applied a k-way split to one module of the partition plan. Fires
     // once per split module per `produce()` call. With Phase 1's k=2,
