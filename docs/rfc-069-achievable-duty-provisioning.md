@@ -243,6 +243,37 @@ changes shipped geometry):
   calibration work and is this RFC's remaining substance. Until then
   `planning_duty` ships opt-in exactly as today, with its ec30/ec60-red
   gate receipts standing.*
+- *2026-08-25 — #723 round 2 adjudicated: the major's two accepted
+  halves fixed, its row-cap corollary scoped, the HS sub-claim
+  refuted.* The 3/3 major was right twice more: (1) the ceiling used
+  layout-global `opts.stacking` where `StackingCtx::for_item` is the
+  engine's per-item authority — an exempt item (recycler outputs,
+  second+ solids, self-loops, voider inputs) plans unstacked, so at
+  ×4 the gate credited 60/s to a belt carrying 15/s and under-fired
+  on exactly the silently-deficient class Phase C targets; (2) the
+  gate compared the NOMINAL draw where the placer and validator both
+  size by `utilization_for` (the shared single-source duty formula) —
+  a fractional-count row (landfill at 0.4 machines draws 40/s, which
+  express carries) was refused despite being feedable, an over-fire.
+  Fixed: `StackingCtx::derive` + `for_item` per input, draw scaled by
+  `utilization_for`, message reworded (the duty-scaled draw is what's
+  named; "target rate does not matter" dropped — rate now matters
+  through count). Also fixed the 1/3 unknown-tier minor: an
+  unrecognized cap resolves to express, the same fallback
+  `belt_entity_for_rate` uses. **Refuted**: the HorizontalStack
+  sub-claim ("a single machine whose input₀ exceeds one belt is
+  HS-feedable") — the HS template's K trunks raise per-ROW capacity;
+  every machine's input₀ inserters pick from the single per-block
+  current-feed belt at `y+K+1`, so the one-belt-per-machine bound
+  stands in every row shape. **Scoped**: the 3/3 row-cap corollary
+  (`max_machines_for_belt*` input caps are stacking-blind) is the
+  placer's RECORDED deliberate limit (placer.rs "KNOWN LIMITS",
+  RFC-047 Leg B) — it splits rows conservatively, costing footprint
+  not delivery, and rewiring it is Leg-B work with its own
+  measurement cycle, not this gate's business. Two discriminating
+  pins added (exempt item refuses at ×4 where the stackable one
+  stands down; fractional duty stands down uncapped) — six total;
+  full suite green.*
 - *2026-08-25 — #723 round 1 adjudicated: both majors accepted and
   fixed; two minors scoped, one refuted.* The round's 3/3-pass major
   was right on both counts against the shipped Phase C: (1) the

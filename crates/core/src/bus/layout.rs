@@ -564,27 +564,52 @@ pub fn build_bus_layout(
     // is the top of `BELT_TIERS` — so the check runs unconditionally
     // against the effective tier (#723 round 1: real recipes like
     // landfill draw 100/s per machine and previously sailed through).
-    // The ceiling is stacking-aware (#723 round 1): input belts carry
-    // stacks when the upstream row stacks them, and the placer's own
-    // in-belt sizing uses `lane_capacity_stacked` — `opts.stacking` is
-    // the optimistic per-item factor (a stacking-EXEMPT item's real
-    // ceiling is lower, so there the check under-fires rather than
-    // refusing a feedable config; a refusal gate must never over-fire).
-    // DI-coupled inputs are skipped for the same reason: direct
-    // insertion delivers the item machine-to-machine with no belt in
-    // the path, so the belt ceiling is not the operative bound there.
+    // The ceiling is stacking-aware PER ITEM (#723 rounds 1-2):
+    // `StackingCtx::for_item` is the engine's single authority on which
+    // belts plan stacked (the placer's cell-level in-belt sizing
+    // consumes the same context), so an exempt item (recycler outputs,
+    // second+ solids, self-loops, voider inputs) gets the unstacked
+    // ceiling and a stackable one gets ×S. The draw is duty-scaled by
+    // `utilization_for` — THE shared placement/validation formula — so
+    // a fractional-count row is judged at the rate its machines
+    // actually run, never refused for a nominal draw no machine
+    // sustains (a refusal gate must never over-fire). NOTE the row-cap
+    // helpers (`max_machines_for_belt*`, placer.rs) are deliberately
+    // stacking-blind on the INPUT side (recorded known limit, RFC-047
+    // Leg B) — they split rows conservatively, which costs footprint,
+    // not delivery; this gate follows the physical per-item model
+    // instead. Per-machine input₀ is one belt in EVERY row shape
+    // including HorizontalStack (its K trunks raise per-ROW capacity;
+    // each machine still picks from the single current-feed belt).
+    // DI-coupled inputs are skipped: direct insertion delivers the
+    // item machine-to-machine with no belt in the path.
     {
-        let tier = opts.max_belt_tier.as_deref().unwrap_or(
-            crate::common::BELT_TIERS
-                .last()
-                .expect("BELT_TIERS is non-empty")
-                .0,
-        );
-        let stack = f64::from(opts.stacking.clamp(1, 4));
-        let full_belt = 2.0 * crate::common::lane_capacity_stacked(tier, opts.stacking);
+        // Unknown/absent cap resolves to the top tier (express) — the
+        // same fallback `belt_entity_for_rate` uses, so gate and
+        // sizing agree on every config.
+        let tier = opts
+            .max_belt_tier
+            .as_deref()
+            .and_then(|t| {
+                crate::common::BELT_TIERS
+                    .iter()
+                    .find(|(name, _)| *name == t)
+                    .map(|(name, _)| *name)
+            })
+            .unwrap_or(
+                crate::common::BELT_TIERS
+                    .last()
+                    .expect("BELT_TIERS is non-empty")
+                    .0,
+            );
+        let ctx = crate::bus::stacking_ctx::StackingCtx::derive(solver_result, opts.stacking);
         for m in &solver_result.machines {
+            let duty = crate::common::utilization_for(m);
             for inp in &m.inputs {
-                if inp.is_fluid || inp.rate <= full_belt + 1e-9 {
+                let item_stack = ctx.for_item(&inp.item);
+                let full_belt = 2.0 * crate::common::lane_capacity_stacked(tier, item_stack);
+                let draw = inp.rate * duty;
+                if inp.is_fluid || draw <= full_belt + 1e-9 {
                     continue;
                 }
                 if solver_result
@@ -595,36 +620,29 @@ pub fn build_bus_layout(
                     continue;
                 }
                 // BELT_TIERS values are FULL-belt throughputs (15/30/45),
-                // scaled by the same stacking factor as the ceiling.
+                // scaled by the same per-item factor as the ceiling.
                 let needed_tier = crate::common::BELT_TIERS
                     .iter()
-                    .find(|(_, full)| inp.rate <= full * stack + 1e-9)
+                    .find(|(_, full)| draw <= full * f64::from(item_stack) + 1e-9)
                     .map(|(name, _)| *name);
-                let stacked_note = if opts.stacking > 1 {
-                    format!(" (×{} stacked)", opts.stacking)
+                let stacked_note = if item_stack > 1 {
+                    format!(" (×{item_stack} stacked)")
                 } else {
                     String::new()
                 };
-                let advice = match (needed_tier, opts.max_belt_tier.is_some()) {
-                    (Some(t), _) => format!("Raise max_belt_tier (≥ {t})"),
-                    (None, true) => {
-                        "No belt tier suffices — remove the machine's speed \
-                         sources"
-                            .to_string()
-                    }
-                    (None, false) => {
-                        "No belt tier suffices (express is the ceiling) — remove \
-                         the machine's speed sources"
-                            .to_string()
-                    }
+                let advice = match needed_tier {
+                    Some(t) => format!("Raise max_belt_tier (≥ {t})"),
+                    None => "No belt tier suffices (express is the ceiling) — \
+                             remove the machine's speed sources"
+                        .to_string(),
                 };
                 return Err(format!(
                     "unreachable at belt tier: one {} machine (recipe {}) draws \
-                     {:.2}/s of {}, but a full {} belt carries {:.2}/s{} — no row \
-                     arrangement can feed it. {} or lower the \
-                     machine tier; the target rate does not matter (per-machine \
-                     draw is fixed by the recipe)",
-                    m.entity, m.recipe, inp.rate, inp.item, tier, full_belt,
+                     {:.2}/s of {} at its row duty, but a full {} belt carries \
+                     {:.2}/s{} — no row arrangement can feed it. {} or lower \
+                     the machine tier (per-machine draw is fixed by the recipe \
+                     and machine speed, not the target rate)",
+                    m.entity, m.recipe, draw, inp.item, tier, full_belt,
                     stacked_note, advice,
                 ));
             }
@@ -3045,6 +3063,62 @@ mod tests {
             assert!(
                 !e.contains("unreachable at belt tier"),
                 "the refusal must use the STACKED ceiling (60/s at ×4 yellow) — got: {e}"
+            );
+        }
+    }
+
+    /// #723 round 2 (major 3/3): the ceiling is PER-ITEM stacking-aware
+    /// via `StackingCtx::for_item`, not layout-global. A recycler-output
+    /// item is stacking-exempt (plans unstacked everywhere), so at ×4 a
+    /// yellow belt still carries only 15/s for it — a 50/s draw must
+    /// refuse where the same draw on a stackable item stands down
+    /// (`the_refusal_respects_the_stacked_ceiling` above).
+    #[test]
+    fn the_refusal_uses_the_per_item_stacking_ceiling() {
+        let mut sr = unreachable_solver_result();
+        sr.machines[0].inputs[0].rate = 50.0;
+        sr.machines.push(crate::models::MachineSpec {
+            entity: "recycler".to_string(),
+            recipe: "synthetic-recycle".to_string(),
+            count: 1.0,
+            outputs: vec![crate::models::ItemFlow {
+                item: "iron-plate".to_string(),
+                rate: 1.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let opts = LayoutOptions {
+            max_belt_tier: Some("transport-belt".to_string()),
+            stacking: 4,
+            max_inserter_tier: InserterTier::Stack,
+            ..Default::default()
+        };
+        let err = build_bus_layout(&sr, opts).expect_err("must refuse");
+        assert!(
+            err.contains("unreachable at belt tier")
+                && err.contains("50.00/s of iron-plate")
+                && err.contains("15.00/s"),
+            "the exempt item must be judged at the UNSTACKED ceiling — got: {err}"
+        );
+    }
+
+    /// #723 round 2 (major 3/3): the draw is duty-scaled by
+    /// `utilization_for` — the shared placement/validation formula — so
+    /// a fractional-count row is judged at the rate its machine
+    /// actually runs. One machine at 40% duty draws 40/s of a nominal
+    /// 100/s recipe, which express carries; refusing on the nominal
+    /// draw would over-fire on a feedable config.
+    #[test]
+    fn the_refusal_stands_down_at_fractional_duty() {
+        let mut sr = unreachable_solver_result();
+        sr.machines[0].inputs[0].rate = 100.0; // nominal > express's 45/s
+        sr.machines[0].count = 0.4; // duty 0.4 → actual draw 40/s
+        let opts = LayoutOptions { max_belt_tier: None, ..Default::default() };
+        if let Err(e) = build_bus_layout(&sr, opts) {
+            assert!(
+                !e.contains("unreachable at belt tier"),
+                "the refusal must judge the DUTY-SCALED draw (40/s ≤ 45/s) — got: {e}"
             );
         }
     }
