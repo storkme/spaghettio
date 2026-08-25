@@ -212,6 +212,94 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-25 — #722 round 2 adjudicated: pins added, the residual
+  honestly undecomposed, the "structural loss" critical bounded by the
+  sim.* The round demanded oracle unit pins — added:
+  `stamp_plan_pins_the_campaign_shapes` ((10,14) Unresolvable /
+  (10,15) Decomposed / the (4,9)-(4,10) pair) and
+  `extra_gap_heights_agree_with_the_oracle_on_pad_shapes` (bounds the
+  deliberately-kept `compute_extra_gaps` parallel loop exactly where
+  the pad can reach it). The "property test now vacuous" claim is
+  REFUTED: `shape_is_stampable_matches_stamping` compares the
+  predicate against ACTUAL STAMPING over the 10×10 grid, so the
+  delegation strengthens it. The "critical structural throughput loss"
+  is bounded by physics and the receipts: a dead-ended balancer output
+  back-pressures and the splitter redistributes (splitter overflow),
+  and the shipped artifact SIMS 92.0% converged kit-clean; the demanded
+  rate-bookkeeping change is declined in favor of the honest
+  attribution fix — the 8% residual is now recorded as UNDECOMPOSED
+  between zero-headroom (ec30-family precedent) and the stub's
+  dilution, because the decisive experiment came back null: duty 0.6
+  on the padded ec40 is BYTE-IDENTICAL (the cap does not reach these
+  rows), so a stub-less arm is the recorded decomposition path. The
+  `applied_balancer_gaps` comment now states the retry-orthogonality
+  precisely (pure-needs compared on both sides — no spurious pass 3).*
+- *2026-08-25 — #722 round 1 absorbed: the single-oracle thesis
+  completed, the probe shape corrected, the residual attributed.* Both
+  3/3 majors were right: (1) the pad probed `min(effective, consumers)`
+  while the plan-pad arm forms the family at the full trunk count — the
+  probe now mirrors the downstream formation rule exactly
+  (`plan_pad_arm` shares one predicate with `pad_active`); (2) ec40's 1
+  residual belt-dead-end IS the pad's own orphan stub (the +1 pad trunk
+  past the consumer count), NOT unexplained zero-headroom — the
+  attribution is corrected at the site and in the test comment, clean
+  stub termination is a recorded follow-up, and the trade (1 stub vs
+  631 errors, sim 92.0% converged kit-clean) is priced by the
+  correctness-over-footprint call. Of the 1/3 majors:
+  `shape_is_stampable` now delegates to the oracle (its mirror was
+  faithful today — both width guards present — but the mirror class is
+  the defect class); the `compute_extra_gaps` height unification was
+  IMPLEMENTED, MEASURED, and REVERTED — the fingerprint probe showed
+  it reshaping 8+ sim-anchored bank rows (reservation heights are
+  baked into every measured artifact: tier2-from-ore, ec22/23/30/
+  60-red, the decomposed pair, tier5), a full re-bless campaign's
+  worth of drift riding a 1/3 finding; it stands as a RECORDED
+  FOLLOW-UP with its own bank re-bless cycle, and the parallel loop
+  carries a comment naming this adjudication. Also: `GapConvergence.applied` records the MERGED map
+  the placement actually consumed (needs + retry slack); the budget
+  comments state the real bound (first resolvable within
+  max(n,4) lanes; the next-multiple guarantee holds only while
+  m/n ≤ 10) and both instruments are labeled (SIM 92.0% is the bank
+  number; 93.7% is the meter's).*
+- *2026-08-25 — **Phase A3: the coprime-trap class dissolved at the
+  root — the resolvability pad.** Six instrument-falsified hypotheses
+  led here (lane-registry drops, span-metadata defaults,
+  prune_dangling, zone replacement, bus-occupancy, A*-cost steering —
+  each killed by a dedicated probe; plus the mt spacer, measured
+  meter-harmful 18.5%→3.75% and reverted). The receipt chain that
+  ended it: a forced-winner replay exposed k1's own build emitting
+  `STAMP copper-cable (10,14) y=109..109 found=false` +
+  `FEEDER-SKIP rows=10` — a ZERO-HEIGHT balancer band because
+  `family_stamp_plan` returns Unresolvable for (10,14): the gcd
+  decomposition (5,7) exists in the library but fails the stamp's
+  width guard, which the warning-checker's parallel direct+gcd
+  prediction ignores — so ten producer rows shipped silent dead-ends
+  on an ACCEPTED layout. Three coordinated fixes: (1) **the
+  resolvability pad** — the lane split consults the stamper's own
+  oracle (`stamp_plan_for_shape`, factored from `family_stamp_plan` as
+  the single source) and pads an unresolvable trunk count to the
+  nearest resolvable `m`, budget = next multiple of n (guaranteed:
+  g=n → n stacked (1, m/n) stamps; cost ≤ n−1 empty pad columns,
+  priced by the correctness-over-footprint owner call); applies on the
+  consumer-clamped arm too; scoped OFF merge-tap (its fallback owns
+  unstampable shapes). (2) **the ground-truth warning** — the
+  missing-balancer check now consults the same oracle instead of its
+  parallel prediction (both disagreement directions closed). (3) **the
+  gap-convergence pass** — the #652 residual's third placement pass,
+  run when pass-2's re-planned families need different balancer gaps
+  than the placement consumed (its own measured improvement: ec40's
+  native 14E/1057W → 13E/235W before the pad landed). CORPUS OUTCOME:
+  the NATIVE reclaims the class — ec40 builds accepted at 1E/28W,
+  meter **37.46/40 = 93.7%** (winner native@BestAccepted, from the
+  631E merge-tap's 18.5%); ec35's native builds the exact rescue
+  artifact itself (bank hash unchanged, winner label k1→native at the
+  same bytes); tier5@0.6 sheds all three trap families (accepted,
+  184×262); ac45 unchanged. Fingerprint drift: EXACTLY ec40. Full
+  suite: 2 pins re-blessed (ec35 label, ec40 baseline 631E→1E), 1,208
+  others green. The k1 candidate is largely superseded on this class
+  (native accepted ⇒ k1 not built) and retained for residual edges.
+  ec40's one leftover belt-dead-end is adjudicated by its row's sim
+  anchor; tighten to 0 when it falls.*
 - *2026-08-24 — #721 round 2: the arm-asymmetry critical adjudicated BY
   EXPERIMENT — the demanded guard is measured-harmful; parity absorbed
   instead.* The round's 3/3 critical demanded the multi-consumer arm

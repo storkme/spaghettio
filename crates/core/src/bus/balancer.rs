@@ -159,8 +159,20 @@ pub(crate) enum FamilyStampPlan {
 pub(crate) fn family_stamp_plan(
     fam: &crate::bus::lane_planner::LaneFamily,
 ) -> FamilyStampPlan {
-    let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
-    if is_passthrough_shape(n, m) && !fam.demand_skewed {
+    stamp_plan_for_shape(fam.shape.0 as u32, fam.shape.1 as u32, fam.demand_skewed)
+}
+
+/// The shape-only body of [`family_stamp_plan`] — the single
+/// resolvability oracle, factored so PLANNING sites can consult it
+/// before a family exists (RFC-069, 2026-08-25): the ec40-k1 class is
+/// a (10,14) family whose gcd decomposition (5,7) exists in the
+/// library but fails the width guard, nothing else serves the shape,
+/// and the family shipped a zero-height band + `FeederSpecsSkipped` +
+/// ten silent belt-dead-ends. The lane split now pads an unresolvable
+/// lane count to the nearest resolvable one via this oracle, and the
+/// missing-balancer warning consults it as ground truth.
+pub(crate) fn stamp_plan_for_shape(n: u32, m: u32, demand_skewed: bool) -> FamilyStampPlan {
+    if is_passthrough_shape(n, m) && !demand_skewed {
         return FamilyStampPlan::Passthrough;
     }
     let templates = crate::bus::balancer_library::balancer_templates();
@@ -168,7 +180,7 @@ pub(crate) fn family_stamp_plan(
         return FamilyStampPlan::Direct(t);
     }
     for g in (1..=n).rev() {
-        if g == 0 || n % g != 0 || m % g != 0 {
+        if g == 0 || !n.is_multiple_of(g) || !m.is_multiple_of(g) {
             continue;
         }
         let (sub_n, sub_m) = (n / g, m / g);
@@ -288,34 +300,18 @@ pub(crate) fn shape_is_stampable(n: u32, m: u32) -> bool {
     if n == 0 || m == 0 {
         return false;
     }
-    if is_passthrough_shape(n, m) {
-        return true;
-    }
-    let templates = crate::bus::balancer_library::balancer_templates();
-    if templates.contains_key(&(n, m)) {
-        return true;
-    }
-    // Mirror the gcd-decomposition + width-guard at balancer.rs:167-176.
-    for g in (2..=n.min(m)).rev() {
-        if !n.is_multiple_of(g) || !m.is_multiple_of(g) {
-            continue;
-        }
-        let sub_n = n / g;
-        let sub_m = m / g;
-        if let Some(sub_template) = templates.get(&(sub_n, sub_m)) {
-            if sub_template.width <= sub_m {
-                return true;
-            }
-        }
-    }
-    // Phase 2.0 generator. Mirror the same width-guard the stamping path
-    // applies (`generated.width <= m`) so the predicate matches reality.
-    if let Some(generated) = crate::bus::balancer_generate::generate(n, m) {
-        if generated.width <= m {
-            return true;
-        }
-    }
-    false
+    // Delegates to the single resolvability oracle (#722 round 1): this
+    // predicate used to carry its own faithful mirror of the direct/gcd/
+    // generator search with both width guards — faithful TODAY, but the
+    // exact defect the resolvability work fixed was a parallel
+    // prediction drifting from the stamper, so the mirror goes. The
+    // passthrough tail makes every square resolvable regardless of
+    // `demand_skewed`, so `false` here is exact for this predicate's
+    // historical semantics.
+    !matches!(
+        stamp_plan_for_shape(n, m, false),
+        FamilyStampPlan::Unresolvable
+    )
 }
 
 /// Stamp a balancer template at the family's origin position.
@@ -752,6 +748,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// RFC-069 Phase A3 pins (#722 round 2): the oracle's verdicts on
+    /// the campaign's exhibiting shapes. (10,14) is ec40's trap — the
+    /// gcd sub (5,7) exists but fails the width guard; (10,15) is the
+    /// pad's resolution (g=5 → (2,3)); (4,9)/(4,10) are ec35's pair.
+    #[test]
+    fn stamp_plan_pins_the_campaign_shapes() {
+        assert!(
+            matches!(
+                stamp_plan_for_shape(10, 14, false),
+                FamilyStampPlan::Unresolvable
+            ),
+            "(10,14) must be Unresolvable — the ec40 trap"
+        );
+        assert!(
+            matches!(
+                stamp_plan_for_shape(10, 15, false),
+                FamilyStampPlan::Decomposed { .. }
+            ),
+            "(10,15) must resolve by decomposition — the pad's target"
+        );
+        assert!(
+            matches!(
+                stamp_plan_for_shape(4, 9, false),
+                FamilyStampPlan::Unresolvable
+            ),
+            "(4,9) must be Unresolvable — the ec35 coprime trap"
+        );
+        assert!(
+            !matches!(
+                stamp_plan_for_shape(4, 10, false),
+                FamilyStampPlan::Unresolvable
+            ),
+            "(4,10) must resolve — ec35's pad"
+        );
     }
 
     /// Coprime / asymmetric gaps that remain unstampable.

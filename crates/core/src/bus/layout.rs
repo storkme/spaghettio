@@ -1070,6 +1070,14 @@ fn layout_pass(
     });
     let actual_bw = bus_width_for_lanes(&lanes_1, &families_1);
     let balancer_gaps = compute_extra_gaps(&families_1);
+    // The BALANCER COMPONENT of the gaps the final placement consumed
+    // (retry slack is orthogonal and excluded from BOTH sides of the
+    // convergence comparison — `needed_gaps` below is likewise pure
+    // balancer needs, so retry gaps can never trigger a spurious pass 3;
+    // #722 round 2 wording fix). The fast path's condition requires
+    // `balancer_gaps.is_empty()`, so this clone is correct for both
+    // branches. Consumed below by the gap-convergence check (RFC-069).
+    let applied_balancer_gaps = balancer_gaps.clone();
 
     // Pass 2: re-place rows with the real bus width + any balancer
     // gaps. Retry gaps were already applied in pass 1, so they don't
@@ -1135,6 +1143,92 @@ fn layout_pass(
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "plan_bus_lanes_2".to_string(),
                 duration_ms: t_plan2.elapsed().as_millis() as u64,
+            });
+            (re, rs, rw, th, nl, nf)
+        };
+
+    // RFC-069 (2026-08-25) — the #652 residual's first measured casualty,
+    // fixed with the third pass the comment below deemed "not worth it
+    // for a condition with no exhibiting fixture". The fixture exists:
+    // on ec40's k1-enrolled build, pass 2's re-planned families need
+    // different balancer gaps than pass 1's (`compute_extra_gaps` keys
+    // on producer-row indices and template heights, both of which move
+    // with the re-plan), so the copper-cable family's (10,14) balancer
+    // was stamped into a ONE-ROW band: the stamp failed,
+    // `FeederSpecsSkipped` dropped all ten producer feeders, and the
+    // layout shipped ten belt-dead-ends with no warning (the checker's
+    // direct+gcd prediction disagreed with the stamp's reality — that
+    // acceptance blind spot is closed separately by the ground-truth
+    // warning). When the current families' needs differ from what the
+    // placement consumed, run ONE more place+plan iteration with the
+    // converged needs (same retry-slack merge as pass 2). A residual
+    // divergence after that is traced and left: an oscillating gap map
+    // would be a new fixture class to diagnose, not to loop on.
+    let needed_gaps = compute_extra_gaps(&families);
+    let (row_entities, row_spans, row_width, total_height, lanes, families) =
+        if needed_gaps == applied_balancer_gaps {
+            (row_entities, row_spans, row_width, total_height, lanes, families)
+        } else {
+            let merged_gaps: FxHashMap<usize, i32> = match retry_extra_gaps {
+                None => needed_gaps.clone(),
+                Some(retry) => {
+                    let mut merged = needed_gaps.clone();
+                    for (k, v) in retry {
+                        merged.entry(*k).and_modify(|cur| *cur += *v).or_insert(*v);
+                    }
+                    merged
+                }
+            };
+            let bw3 = actual_bw.max(bus_width_for_lanes(&lanes, &families));
+            crate::trace::remove_capped_events_since(pass1_events_start);
+            let t_place3 = web_time::Instant::now();
+            let (re, rs, rw, th) = place_rows(
+                &solver_result.machines,
+                &solver_result.dependency_order,
+                bw3,
+                row_y_origin,
+                max_belt_tier,
+                max_inserter_tier,
+                opts.quality,
+                opts.inserter_capacity,
+                Some(&final_output_items),
+                Some(&merged_gaps),
+                opts.row_layout,
+                opts.direct_insertion.placer_acts().then_some(opts.di_claim_order.clone()),
+                &solver_result.di_couplings,
+                &stacking_ctx,
+                opts.planning_duty,
+            );
+            crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
+                phase: "place_rows_3_gap_convergence".to_string(),
+                duration_ms: t_place3.elapsed().as_millis() as u64,
+            });
+            let t_plan3 = web_time::Instant::now();
+            let (nl, nf) = crate::trace::with_merge_tap_fallback_suppressed(|| {
+                plan_bus_lanes(
+                    solver_result,
+                    &rs,
+                    max_belt_tier,
+                    plan_ref,
+                    th,
+                    opts.merge_tap,
+                    opts.splitter_tap_spacers,
+                    &stacking_ctx,
+                )
+            })?;
+            crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
+                phase: "plan_bus_lanes_3_gap_convergence".to_string(),
+                duration_ms: t_plan3.elapsed().as_millis() as u64,
+            });
+            let converged = compute_extra_gaps(&nf) == needed_gaps;
+            crate::trace::emit(crate::trace::TraceEvent::GapConvergence {
+                converged,
+                // The map the pass-3 placement ACTUALLY consumed —
+                // balancer needs merged with retry slack (#722 round 1:
+                // recording `needed_gaps` alone omitted the retry gaps
+                // on any retried fixture, misleading a converged=false
+                // readout).
+                applied: merged_gaps.iter().map(|(&k, &v)| (k, v)).collect(),
             });
             (re, rs, rw, th, nl, nf)
         };
@@ -1499,7 +1593,6 @@ fn layout_pass(
 
     // Check for missing balancer templates and collect warnings
     let mut warnings = ghost_warnings;
-    let templates = crate::bus::balancer_library::balancer_templates();
     for fam in &families {
         // Merge-tap families are stamped by the splitter merge-tree
         // (`stamp_merge_tap_family`), not the balancer library, so the library
@@ -1515,11 +1608,21 @@ fn layout_pass(
             continue;
         }
         let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
-        let has_direct = templates.contains_key(&(n, m));
-        let has_decomp = (1..=n).rev().any(|g| {
-            n % g == 0 && m % g == 0 && templates.contains_key(&(n / g, m / g))
-        });
-        if !has_direct && !has_decomp {
+        // RFC-069 (2026-08-25): consult the stamper's OWN oracle
+        // (`stamp_plan_for_shape`, the single source `family_stamp_plan`
+        // delegates to) instead of the parallel direct+gcd prediction
+        // this check used to run. The two disagreed in both directions:
+        // the prediction ignored the width guard — ec40's k1 (10,14)
+        // family gcd-decomposes to (5,7) on paper, so no warning fired
+        // while the actual stamp failed and ten producer rows shipped
+        // silent dead-ends — and it ignored the runtime generator, so
+        // shapes only the generator serves warned falsely. Ground truth
+        // by construction: this warning now fires exactly when the
+        // stamp will produce nothing.
+        if matches!(
+            crate::bus::balancer::stamp_plan_for_shape(n, m, fam.demand_skewed),
+            crate::bus::balancer::FamilyStampPlan::Unresolvable
+        ) {
             warnings.push(format!(
                 "No {}→{} balancer template for {}; producer outputs are disconnected",
                 n, m, fam.item
@@ -1801,7 +1904,16 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
         }
 
         let n_producers = fam.shape.0;
-        // Get template height from balancer library
+        // Get template height from balancer library.
+        //
+        // KNOWN PARALLEL PREDICTION, kept deliberately (#722 round 1
+        // adjudication): this unguarded direct+gcd loop is the same
+        // class the resolvability work removed from the warning site,
+        // and unifying it onto `stamp_plan_for_shape` is measured to
+        // reshape 8+ sim-anchored bank rows (every reservation height
+        // is baked into every measured artifact). That unification is a
+        // recorded follow-up requiring its own bank re-bless campaign —
+        // not a rider on this PR.
         let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
         let templates = crate::bus::balancer_library::balancer_templates();
         let template_height = templates.get(&(n, m)).map(|t| t.height as i32)
@@ -2702,6 +2814,53 @@ fn make_substation(x: i32, y: i32) -> PlacedEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #722 round 2: `compute_extra_gaps` deliberately keeps its parallel
+    /// direct+gcd height loop (unifying it onto the oracle is measured to
+    /// reshape 8+ sim-anchored bank rows — a recorded follow-up with its
+    /// own re-bless cycle). This pin bounds the kept divergence where it
+    /// matters NOW: on the shapes the resolvability pad actually emits,
+    /// the loop's height must agree with the stamp oracle's, so a pad
+    /// output can never get a wrong-sized band while the follow-up waits.
+    #[test]
+    fn extra_gap_heights_agree_with_the_oracle_on_pad_shapes() {
+        use crate::bus::balancer::{stamp_plan_for_shape, FamilyStampPlan};
+        for (n, m) in [(4usize, 10usize), (10, 15), (6, 12), (2, 12), (10, 20)] {
+            let plan_height = match stamp_plan_for_shape(n as u32, m as u32, false) {
+                FamilyStampPlan::Passthrough => 1,
+                FamilyStampPlan::Direct(t) => t.height as i32,
+                FamilyStampPlan::Decomposed { sub, .. } => sub.height as i32,
+                FamilyStampPlan::Generated(t) => t.height as i32,
+                FamilyStampPlan::Unresolvable => {
+                    panic!("({n},{m}) is a pad OUTPUT and must be resolvable")
+                }
+            };
+            let fam = crate::bus::lane_planner::LaneFamily {
+                item: "test-item".to_string(),
+                module_id: 0,
+                shape: (n, m),
+                producer_rows: (0..n).collect(),
+                lane_xs: (10..10 + m as i32).collect(),
+                balancer_y_start: 100,
+                balancer_y_end: 150,
+                total_rate: 30.0,
+                merge_tap: false,
+                demand_skewed: false,
+            };
+            let gaps = compute_extra_gaps(std::slice::from_ref(&fam));
+            let expected_needed = if n == 1 {
+                (plan_height - 3).max(0)
+            } else {
+                (plan_height - 2).max(0)
+            };
+            let got = gaps.get(&(n - 1)).copied().unwrap_or(0);
+            assert_eq!(
+                got, expected_needed,
+                "({n},{m}): compute_extra_gaps' parallel height loop diverged from the \
+                 stamp oracle on a pad-emitted shape"
+            );
+        }
+    }
 
     /// RFC-070 Phase 1a (#689 W2a): `UserConstraints`/`SearchAxes`/
     /// `EngineTuning` each carry their own manual `Default` impl (deliberately

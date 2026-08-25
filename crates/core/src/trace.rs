@@ -1485,6 +1485,20 @@ pub enum TraceEvent {
         stage: SelectionStage,
     },
 
+    // RFC-069 gap-convergence pass (layout.rs pass 3): fired once when
+    // pass 2's re-planned families needed different balancer gaps than
+    // the placement consumed and a third place+plan iteration ran with
+    // the converged needs. `converged == false` means the THIRD pass's
+    // families disagree again (an oscillating gap map — a new fixture
+    // class to diagnose, deliberately not looped on); `applied` is the
+    // `(last_producer_row, extra_gap)` map the final placement consumed —
+    // the pass-2 balancer needs MERGED with any retry slack (#722
+    // round 1: the two differ on retried fixtures).
+    GapConvergence {
+        converged: bool,
+        applied: Vec<(usize, i32)>,
+    },
+
     // `ModuleSizeSplit` candidate (see `docs/rfc-decomposition-search.md`)
     // applied a k-way split to one module of the partition plan. Fires
     // once per split module per `produce()` call. With Phase 1's k=2,

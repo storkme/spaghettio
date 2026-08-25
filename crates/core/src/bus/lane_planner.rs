@@ -1090,14 +1090,88 @@ fn split_overflowing_lanes(
         } else {
             n_splits.max(plan_pad_floor)
         };
-        // Empty pad lanes (those with no consumer assignment) must
-        // survive the `consumers.is_empty()` skip below when the plan
-        // forced extra `m` past the natural rate-or-consumer count. Any
-        // other path keeps the legacy skip-empty behaviour.
-        let pad_active = !any_hs
+        // RFC-069 resolvability pad (2026-08-25): probe the stamp
+        // oracle with the shape this split will produce and pad the
+        // trunk count to the FIRST resolvable `m` within
+        // `max(n_producers, 4)` extra lanes. The exhibiting fixture: ec40's
+        // k1-enrolled build produced a (10,14) cable family — the gcd
+        // decomposition (5,7) exists in the library but fails the
+        // stamp's width guard, nothing else serves the shape — which
+        // shipped a zero-height balancer band, `FeederSpecsSkipped`,
+        // and ten silent belt-dead-ends. Scoped OFF the merge-tap path:
+        // its fallback deliberately owns unstampable shapes (a pad here
+        // would preempt the merge-tree and change every mt field).
+        // If nothing within the budget resolves, the natural count
+        // ships and the ground-truth missing-balancer warning reports
+        // it honestly.
+        // The shape the family will ACTUALLY form (#722 round 1, 3/3):
+        // on the plan-pad arm `n_lanes_with_consumers` is the full
+        // trunk count, not the consumer-bearing count — probing
+        // `min(effective, consumers)` there validates a shape that is
+        // never produced. Mirror the downstream formation rule exactly.
+        let plan_pad_arm = !any_hs
             && !clamp_to_consumers
             && plan_pad_floor > n_splits
             && effective_n_splits > consumer_trunk_count;
+        let projected_m = if is_collector || plan_pad_arm {
+            effective_n_splits
+        } else {
+            effective_n_splits.min(consumer_trunk_count).max(1)
+        };
+        // The pad applies on the consumer-clamped arm too (ec40's
+        // (10,14) family is clamped: m == consumer count): pad trunks
+        // beyond the consumers are empty taps under `pad_active`
+        // semantics, and extra trunks only ADD capacity, so the clamped
+        // arm's rate-fit guarantee is preserved.
+        let resolvability_pad: Option<usize> = if !merge_tap
+            && !any_hs
+            && n_producers >= 2
+            && projected_m >= 2
+            && matches!(
+                crate::bus::balancer::stamp_plan_for_shape(
+                    n_producers as u32,
+                    projected_m as u32,
+                    false,
+                ),
+                crate::bus::balancer::FamilyStampPlan::Unresolvable
+            ) {
+            // Budget rationale: the search reaches the next multiple of
+            // `n_producers`, which is resolvable WHEN `m/n ≤ 10` (g = n
+            // decomposes to n stacked (1, m/n) sub-stamps and the
+            // library's (1, k) series runs 2..=10, never wider than its
+            // outputs) — beyond that ratio the find may return None and
+            // the ground-truth warning reports the shape honestly. The
+            // FIRST resolvable m wins, usually before the multiple
+            // (ec40: (10,14) resolves at 15 via g=5 → (2,3)). Cost is
+            // bounded at max(n_producers, 4) empty pad columns — and
+            // each pad trunk past the consumer count is an ORPHAN stub
+            // whose dead-end the validator reports (#722 round 1:
+            // ec40's 1 residual belt-dead-end IS this stub, priced by
+            // the owner's correctness-over-footprint call against the
+            // 631 errors it replaces; terminating pad stubs cleanly is
+            // a recorded follow-up).
+            (projected_m + 1..=projected_m + n_producers.max(4)).find(|&m| {
+                !matches!(
+                    crate::bus::balancer::stamp_plan_for_shape(
+                        n_producers as u32,
+                        m as u32,
+                        false
+                    ),
+                    crate::bus::balancer::FamilyStampPlan::Unresolvable
+                )
+            })
+        } else {
+            None
+        };
+        let effective_n_splits = effective_n_splits.max(resolvability_pad.unwrap_or(0));
+        // Empty pad lanes (those with no consumer assignment) must
+        // survive the `consumers.is_empty()` skip below when the plan
+        // forced extra `m` past the natural rate-or-consumer count. Any
+        // other path keeps the legacy skip-empty behaviour. The
+        // resolvability pad reuses the same semantics when it raised
+        // the count past the consumer-bearing trunks.
+        let pad_active =
+            plan_pad_arm || resolvability_pad.is_some_and(|pm| pm > consumer_trunk_count);
 
         crate::trace::emit(crate::trace::TraceEvent::LaneSplit {
             item: lane.item.clone(),
