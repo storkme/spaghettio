@@ -552,6 +552,47 @@ pub fn build_bus_layout(
             opts.stacking, opts.max_inserter_tier
         ));
     }
+    // RFC-069 Phase C (typed refusal): a machine whose SINGLE-UNIT solid
+    // input rate exceeds the tier's full-belt capacity cannot be fed by
+    // any row arrangement — every feed geometry the placer can build
+    // tops out at one full belt per input item into a row (B7/I6), so
+    // `max_machines_for_belt`'s floor would clamp to a 1-machine row
+    // that ships silently deficient at ANY target rate (per-machine
+    // draw is recipe+machine-bound, not rate-bound). Refuse by name at
+    // plan time. Belt tier is a hard user constraint (never
+    // auto-escalate) — the message names the draw, the tier's ceiling,
+    // and the smallest tier that would carry it; with no tier cap the
+    // engine escalates freely and this cannot fire.
+    if let Some(tier) = opts.max_belt_tier.as_deref() {
+        let full_belt = 2.0 * crate::common::lane_capacity(tier);
+        for m in &solver_result.machines {
+            for inp in &m.inputs {
+                if !inp.is_fluid && inp.rate > full_belt + 1e-9 {
+                    // BELT_TIERS values are FULL-belt throughputs (15/30/45).
+                    let needed_tier = crate::common::BELT_TIERS
+                        .iter()
+                        .find(|(_, full)| inp.rate <= full + 1e-9)
+                        .map(|(name, _)| *name);
+                    return Err(format!(
+                        "unreachable at belt tier: one {} machine (recipe {}) draws \
+                         {:.2}/s of {}, but a full {} belt carries {:.2}/s — no row \
+                         arrangement can feed it. Raise max_belt_tier{} or lower the \
+                         machine tier; the target rate does not matter (per-machine \
+                         draw is fixed by the recipe)",
+                        m.entity,
+                        m.recipe,
+                        inp.rate,
+                        inp.item,
+                        tier,
+                        full_belt,
+                        needed_tier
+                            .map(|t| format!(" (≥ {t})"))
+                            .unwrap_or_else(|| " (no belt tier suffices)".to_string()),
+                    ));
+                }
+            }
+        }
+    }
     // (RFC-058's band_packing measurement path was deleted 2026-08-20 —
     // owner extended the #632 A2 precedent, offpath-code-followups Tier 2;
     // the falsification record lives in the RFC's decision log.)
@@ -2858,6 +2899,73 @@ mod tests {
                 got, expected_needed,
                 "({n},{m}): compute_extra_gaps' parallel height loop diverged from the \
                  stamp oracle on a pad-emitted shape"
+            );
+        }
+    }
+
+    /// RFC-069 Phase C: the typed plan-time refusal. One machine drawing
+    /// more of a solid input than the tier's FULL belt carries cannot be
+    /// fed by any row arrangement (per-machine draw is recipe-bound, not
+    /// rate-bound), so the build must refuse by name instead of clamping
+    /// to a silently-deficient 1-machine row.
+    fn unreachable_solver_result() -> crate::models::SolverResult {
+        crate::models::SolverResult {
+            machines: vec![crate::models::MachineSpec {
+                entity: "assembling-machine-3".to_string(),
+                recipe: "synthetic-hungry-recipe".to_string(),
+                count: 1.0,
+                inputs: vec![crate::models::ItemFlow {
+                    item: "iron-plate".to_string(),
+                    rate: 20.0, // > yellow's full 15/s, ≤ red's 30/s
+                    ..Default::default()
+                }],
+                outputs: vec![crate::models::ItemFlow {
+                    item: "synthetic-output".to_string(),
+                    rate: 1.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn unreachable_rate_at_belt_tier_is_a_named_refusal() {
+        let sr = unreachable_solver_result();
+        let opts = LayoutOptions {
+            max_belt_tier: Some("transport-belt".to_string()),
+            ..Default::default()
+        };
+        let err = build_bus_layout(&sr, opts).expect_err("must refuse");
+        assert!(
+            err.contains("unreachable at belt tier"),
+            "refusal must be the named class — got: {err}"
+        );
+        assert!(
+            err.contains("20.00/s of iron-plate") && err.contains("transport-belt"),
+            "refusal must name the draw, the item, and the tier — got: {err}"
+        );
+        assert!(
+            err.contains("fast-transport-belt"),
+            "refusal must name the smallest sufficient tier — got: {err}"
+        );
+    }
+
+    #[test]
+    fn the_refusal_stands_down_when_the_tier_suffices() {
+        let sr = unreachable_solver_result();
+        // At red belt (full 30/s ≥ the 20/s draw) the refusal must not
+        // fire; the synthetic single-machine input may fail LATER in the
+        // pipeline for unrelated reasons, so assert only on the class.
+        let opts = LayoutOptions {
+            max_belt_tier: Some("fast-transport-belt".to_string()),
+            ..Default::default()
+        };
+        if let Err(e) = build_bus_layout(&sr, opts) {
+            assert!(
+                !e.contains("unreachable at belt tier"),
+                "the named refusal must not fire when the tier carries the draw — got: {e}"
             );
         }
     }
