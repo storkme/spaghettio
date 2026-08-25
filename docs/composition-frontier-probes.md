@@ -6,9 +6,12 @@ evidence base; retained as the raw-numbers record, the RFC carries the
 adjudications). Run 2026-08-25 on
 `main` at `7cec5ca9` (post-RFC-069), instruments: `sim_export` (tracked
 generator) + the meter's `check_one` (108k/216k calibrated window). Meter
-asymmetry applies throughout: **below plan ⇒ believe it**; at-plan clears
-nothing. Every number below is below plan and therefore believable; the
-decisive points should still be sim-anchored before an RFC commits to them.
+asymmetry was believed to apply throughout: *below plan ⇒ believe it*.
+**⚠ 2026-08-25, superseding that caveat: the sim-anchor pass FALSIFIED the
+meter's below-plan direction for turn-heavy fixtures** — see "Ground-truth
+adjudication" at the end of this doc and `meter-divergence.md` §2026-08-25.
+The meter tables below are retained as the historical record and as the
+divergence class's calibration set; the sim table is the truth.
 
 Motivation: the 2026-07-24 strategy call ("bus stays the low-rate winner;
 high rates via composition") left two empirical questions open — *where does
@@ -116,13 +119,35 @@ refusal to the INPUT side and recorded the output side as a follow-up
 reproduction. Anyone picking that up starts here: `sim_export copper-cable
 90 --inputs copper-plate` → meter → 50.0%.
 
-## What this buys the cell-interface RFC
+## Ground-truth adjudication (2026-08-25, the sim-anchor pass)
 
-1. **The requirement is quantified**: beat 91.4% at 90/s / 88.9%-structural
-   at 120/s (uncapped), and beat the belt-capped walls at 30–60/s.
-2. **The seam is the enemy, measured**: 16.5 points at ec30. An interface
-   that makes composed seams behave like boundaries recovers most of it —
-   the 98.1% leg is the existence proof.
-3. **Kill-criterion material**: if a prototype composed pair does not beat
-   81.6% at the same config, the interface design is not paying; if it does
-   not approach ~98%, the seam contract is leaking somewhere measurable.
+Four fixtures run in headless Factorio (all converged, drift ≤ +1.8%):
+
+| fixture | meter said | SIM verdict | reading |
+|---|---:|---|---|
+| `dis-ec20-comp` | 94.6% | produced **+0.0%**, PASS | meter artifact |
+| `seam-ec30-comp` | 81.6% | produced **+0.0%**, PASS | meter artifact |
+| `fp-ec90` | 91.4% | produced **97.9%**, WARN −2.1% | mostly artifact; small real residual |
+| `seam-cable90` | 50.0% | delivered **−50.2%**, FAIL | REAL — and the meter was accurate |
+
+**The seam-cost story above (16.5 / 5.4 points) did not survive ground
+truth** — composed fixtures deliver plan; per-unit receipts DO survive
+composition inside today's bus. The under-read is geometry-correlated
+(the straight-line `dis-ec15-comp` metered 99.7% while every turn-path
+fixture under-read 5–18pp) — recorded as the turn-path divergence class
+in `meter-divergence.md` §2026-08-25, with these fixtures as the
+calibration set. What SURVIVES, sim-anchored: the 120/s plan-arithmetic
+wall (validator-level, needs no sim), the ~98% uncapped bus at 90/s
+with its small real residual, and the output-side half-plan hole
+(`seam-cable90` FAIL), which becomes RFC-072's Phase 1.
+
+## What this buys the cell-interface RFC (rewritten after the adjudication)
+
+1. **The requirement is quantified in ground truth**: the single bus is
+   ~98% to 90/s; the wall at 120/s is plan arithmetic; composition's
+   case is crossing the wall, not rescuing a sag.
+2. **The real defect is the output side**: a 0-error layout that sims at
+   half plan — RFC-072 Phase 1's refusal, sim-anchored.
+3. **The instrument lesson is banked**: sim-anchor before an RFC commits
+   to a meter number on turn-heavy fixtures — this doc's own first
+   edition is the cautionary receipt.
