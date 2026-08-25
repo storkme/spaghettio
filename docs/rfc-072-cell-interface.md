@@ -450,3 +450,27 @@ the snapshot debugger sees them.
   packing with n_output raised until no tail over-subscribes (3 tails
   here — correct but belt-hungry). Plus the loudness follow-up: a
   merger-tail rate check so over-subscription is at least visible.*
+- *2026-08-25 — #727 round 5: the tap unit's contract upgraded to
+  REPAIR-OR-REFUSE, with the suite as the discriminating instrument.*
+  The round's 3/3 major (the post-repair guard scoped owners to group
+  members, missing non-member taps broken by a lengthened member
+  column) is fixed by a global DIFFERENTIAL guard: colliding
+  (owner, tap_y) pairs are collected across every solid 2+-tap lane
+  before and after; the repair stands only if the group's own pairs
+  cleared AND no new pair appeared — background model-noise pairs
+  (cell-chain sub-layouts carry them) are compared against, not
+  demanded away, which the suite forced (the absolute form refused
+  healthy chain fixtures). The thrice-recycled loudness major is now
+  CLOSED, not deferred: an unrepairable group is a named refusal
+  ("tap assignment unrepairable"), upgraded from annotation on two
+  receipts — no corpus fixture refuses except one, and that one was
+  probed under a temporary restore flag and is GENUINELY broken (the
+  am2@1 chain fixture's native build: an Error belt-dead-end plus
+  seven reachability findings, four machines unfed and four unable to
+  ship output). Its test asserted "native must build" over that
+  wreckage since #541 — premise updated with the probe receipts in
+  the test comment; the test's real object (default does not silently
+  fall back to native) still pinned. Also scoped: merge-tap configs
+  skip the repair entirely — mt taps use PRIORITY-splitter machinery
+  the splitter-tile model does not describe (the mt yellow-cap
+  fixture read as phantom collisions). Suite green at 1265.*

@@ -1378,14 +1378,31 @@ fn chain_am2_default_options_ships_cell_composed_rescue() {
         QualityTier::Normal,
     )
     .unwrap();
+    // RFC-072 Phase 1 (#727 r5): the native-only build for this config
+    // is now a NAMED REFUSAL — the restored layout was probed and is
+    // genuinely broken (an Error-severity belt-dead-end plus seven
+    // reachability findings: four machines unfed, four whose output
+    // cannot leave), so "native must build" was a stale premise green
+    // over a disconnected layout. The test's real object (its own
+    // comment below) is that default options do NOT silently fall back
+    // to native's inferior result — which the second build still pins.
     let native = layout::build_bus_layout(
         &sr,
         LayoutOptions {
             cell_composition: CellComposition::Off,
             ..Default::default()
         },
-    )
-    .expect("native-only build must still succeed");
+    );
+    match &native {
+        Err(e) => assert!(
+            e.contains("tap assignment unrepairable"),
+            "native-only must fail as the NAMED refusal class — got: {e}"
+        ),
+        Ok(_) => {
+            // If a future repair heals this config natively, that is
+            // strictly better — the refusal assert stands down.
+        }
+    }
     let default = layout::build_bus_layout(&sr, LayoutOptions::default())
         .expect("default options must compose (cell-composed rescue must not be silently lost)");
     // No exact dims/hash pins here: layout geometry is host-relative
@@ -1393,17 +1410,23 @@ fn chain_am2_default_options_ships_cell_composed_rescue() {
     // back (23, 50, 424) vs (23, 51, 430) on PR #541's CI run). The
     // round-1 regression shape was "default silently falls back to
     // native's inferior result", which these two asserts pin exactly.
-    assert_ne!(
-        geometry_hash(&default),
-        geometry_hash(&native),
-        "the rescue must actually differ from native-only — this is the whole point of the candidate"
-    );
-    assert!(
-        default.entities.len() > native.entities.len() * 3 / 2,
-        "default options must ship the (much larger) cell-composed rescue, not a near-native fallback: default={} native={}",
-        default.entities.len(),
-        native.entities.len()
-    );
+    // With native refused, "default does not silently fall back to
+    // native" holds trivially — there is no native result to fall back
+    // to. The comparative asserts run only if a future repair heals
+    // native.
+    if let Ok(native) = &native {
+        assert_ne!(
+            geometry_hash(&default),
+            geometry_hash(native),
+            "the rescue must actually differ from native-only — this is the whole point of the candidate"
+        );
+        assert!(
+            default.entities.len() > native.entities.len() * 3 / 2,
+            "default options must ship the (much larger) cell-composed rescue, not a near-native fallback: default={} native={}",
+            default.entities.len(),
+            native.entities.len()
+        );
+    }
 }
 
 /// #383 (2026-07-24): the EC@15 chain — the canonical #383 fixture —

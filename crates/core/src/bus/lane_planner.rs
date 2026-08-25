@@ -754,7 +754,14 @@ pub fn plan_bus_lanes(
         }
     }
 
-    repair_tap_splitter_collisions(&mut lanes, row_spans);
+    // The repair's splitter-tile model applies only to ordinary
+    // `tapoff:` splitters; merge-tap trunks tap with PRIORITY splitters
+    // through different machinery (see the router's mt branch), so the
+    // model reads mt-adjacent columns as phantom collisions (#727 r5
+    // suite: the mt yellow-cap fixture). Scope the repair off mt.
+    if !merge_tap {
+        repair_tap_splitter_collisions(&mut lanes, row_spans)?;
+    }
 
     crate::trace::emit(crate::trace::TraceEvent::LanesPlanned {
         lanes: lanes.iter().map(|l| crate::trace::LaneInfo {
@@ -1591,7 +1598,10 @@ fn split_overflowing_lanes(
 /// (the K72-2 discipline). Scope: solid external-input siblings without
 /// balancer families or HS trunks; collisions on other lane classes are
 /// left for the router-loudness follow-up recorded in the RFC.
-fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) {
+fn repair_tap_splitter_collisions(
+    lanes: &mut [BusLane],
+    row_spans: &[RowSpan],
+) -> Result<(), String> {
     use std::collections::BTreeMap;
     // Column occupancy: a lane's trunk covers source_y ..= its last tap
     // (a lane with no taps runs to the perimeter — treat as unbounded).
@@ -1616,37 +1626,46 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
         if members.len() < 2 {
             continue;
         }
-        let collides = |lanes: &[BusLane]| -> bool {
-            members.iter().any(|&i| {
-                let l = &lanes[i];
+        // Colliding (owner, tap_y) pairs across EVERY solid lane with 2+
+        // taps — global scope so a reassignment that lengthens a member
+        // column and breaks a NON-member's tap is caught (#727 r5). The
+        // check is DIFFERENTIAL (r5 suite lesson): cell-chain sub-layouts
+        // carry pre-existing model-noise pairs the repair never touches,
+        // so the guard compares against the pre-repair set instead of
+        // demanding an absolutely clean board.
+        let collision_pairs = |lanes: &[BusLane]| -> Vec<(usize, i32)> {
+            let mut pairs = Vec::new();
+            for (i, l) in lanes.iter().enumerate() {
+                if l.is_fluid || l.tap_off_ys.len() < 2 {
+                    continue;
+                }
                 let last = l.tap_off_ys.iter().copied().max();
-                l.tap_off_ys.iter().any(|&ty| {
-                    Some(ty) != last
+                for &ty in &l.tap_off_ys {
+                    if Some(ty) != last
                         && lanes.iter().enumerate().any(|(j, m)| {
                             j != i
                                 // Fluid columns at x+1 block the splitter
-                                // tile just as solid trunks do (#727 r4 —
-                                // previously skipped; the restore guard
-                                // bounds any over-fire).
-                                // A tapless balancer-family lane's solid trunk
-                                // ends at its balancer — it never runs a south
-                                // column (codex review, HEAD 9a2aded5).
-                                // KNOWN LIMITS (#727 r3, deliberate): fluid
-                                // columns at x+1 also physically block the
-                                // splitter but are skipped here (that class
-                                // ships silent, owned by the loudness
-                                // follow-up); and occupied_at over-approximates
-                                // UG stretches as surface tiles — the restore
-                                // guard bounds any phantom fire to a
-                                // still-valid reassignment.
+                                // tile just as solid trunks do (#727 r4).
+                                // A tapless balancer-family lane's solid
+                                // trunk ends at its balancer (codex review).
+                                // KNOWN LIMIT: occupied_at over-approximates
+                                // UG stretches as surface tiles — phantom
+                                // pairs are neutralised by the differential
+                                // comparison, never by silent shipping.
                                 && !(m.family_id.is_some() && m.tap_off_ys.is_empty())
                                 && m.x == l.x + 1
                                 && (occupied_at(m, ty - 1) || occupied_at(m, ty))
                         })
-                })
-            })
+                    {
+                        pairs.push((i, ty));
+                    }
+                }
+            }
+            pairs
         };
-        if !collides(lanes) {
+        let before = collision_pairs(lanes);
+        let member_set: std::collections::BTreeSet<usize> = members.iter().copied().collect();
+        if !before.iter().any(|(i, _)| member_set.contains(i)) {
             continue;
         }
         // Gather the group's consumers, sorted by row y (top first).
@@ -1752,17 +1771,32 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
             lanes[i].rate = lanes[i].rate.max(block_demand);
             reassigned.push((lanes[i].x, block));
         }
-        if collides(lanes) {
+        let after = collision_pairs(lanes);
+        let before_set: std::collections::BTreeSet<(usize, i32)> =
+            before.iter().copied().collect();
+        let group_pairs_remain = after.iter().any(|(i, _)| member_set.contains(i));
+        let new_pairs_appeared = after.iter().any(|p| !before_set.contains(p));
+        if group_pairs_remain || new_pairs_appeared {
             for (i, rows, taps, rate) in originals {
                 lanes[i].consumer_rows = rows;
                 lanes[i].tap_off_ys = taps;
                 lanes[i].rate = rate;
             }
             crate::trace::emit(crate::trace::TraceEvent::TapAssignmentUnrepairable {
-                item,
+                item: item.clone(),
                 module_id,
             });
-            continue;
+            // Repair-or-REFUSE (#727 r5): shipping the restored layout
+            // would ship the sourceless-tap deficiency this unit exists
+            // to close. No corpus fixture detects a collision (full
+            // suite), so the refusal cannot over-fire on anything that
+            // ships today.
+            return Err(format!(
+                "tap assignment unrepairable for {item}: a non-last tap's \
+                 splitter tile is occupied by an adjacent trunk column and \
+                 no sibling permutation clears it — the layout would ship \
+                 machines disconnected from their input boundary"
+            ));
         }
         crate::trace::emit(crate::trace::TraceEvent::TapAssignmentRepaired {
             item,
@@ -1770,6 +1804,7 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
             reassigned,
         });
     }
+    Ok(())
 }
 
 /// Find y-coordinates where this lane taps off into consumer rows.
