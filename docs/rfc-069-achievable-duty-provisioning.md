@@ -243,16 +243,49 @@ changes shipped geometry):
   calibration work and is this RFC's remaining substance. Until then
   `planning_duty` ships opt-in exactly as today, with its ec30/ec60-red
   gate receipts standing.*
+- *2026-08-25 — #723 round 1 adjudicated: both majors accepted and
+  fixed; two minors scoped, one refuted.* The round's 3/3-pass major
+  was right on both counts against the shipped Phase C: (1) the
+  ceiling was stacking-blind while the placer's own in-belt sizing
+  uses `lane_capacity_stacked` — at ×4 yellow a 50/s draw is feedable
+  (60/s) yet the check refused with a false capacity claim; (2) "with
+  no tier cap the engine escalates freely and this cannot fire" was
+  false above express (45/s tops `BELT_TIERS`; landfill draws 100/s
+  per machine) — the same un-feedable class sailed through uncapped.
+  Fixed: the check now runs unconditionally against the effective
+  tier (cap or express) with a stacking-aware ceiling
+  (`opts.stacking` as the optimistic per-item factor — a
+  stacking-exempt item's real ceiling is lower, so the check
+  under-fires there rather than over-firing; a refusal gate must
+  never refuse a feedable config), plus the reviewer-suggested
+  DI-coupling skip (direct insertion feeds beltlessly, so the belt
+  ceiling is not the operative bound). Four pins now (uncapped >45/s
+  refuses naming express; ×4-stacked 50/s@yellow does NOT refuse);
+  full suite green — nothing in the corpus trips the unconditional
+  check. **Scoped, not fixed** (recorded here as the closed scope):
+  the OUTPUT side (`max_machines_for_belt` clamps on outputs too, but
+  outputs have both-lanes splitting, stacked stack-inserter loading,
+  and output mergers — a correct output ceiling is a different
+  computation, deferred with the campaign's other follow-ups) and the
+  non-`build_bus_layout` entry paths (the refusal lives beside
+  RFC-046's stacking refusal at the shipped entry; parity/legacy
+  callers bypass both by the same precedent). **Refuted**: the
+  epsilon minor — the check already carries `+1e-9` slack and is
+  strictly MORE permissive than `belt_entity_for_rate`'s exact
+  `rate <= throughput`; the review's 15.0001/s example escalates
+  under the engine's own belt-sizing semantics too.*
 - *2026-08-25 — **Phase C shipped**: the typed unreachable-rate
   refusal. A machine whose single-unit solid input draw exceeds the
-  tier's full-belt capacity cannot be fed by any row arrangement
-  (per-machine draw is recipe-bound, not rate-bound) —
+  effective tier's full-belt capacity cannot be fed by any row
+  arrangement (per-machine draw is recipe-bound, not rate-bound) —
   `max_machines_for_belt`'s floor previously clamped it to a 1-machine
   row that shipped silently deficient at any target rate.
   `build_bus_layout` now refuses by name at plan time (draw, item,
-  tier ceiling, smallest sufficient tier); with no tier cap the engine
-  escalates freely and the refusal cannot fire. Two pins cover both
-  directions.*
+  tier ceiling, smallest sufficient tier). As first shipped the check
+  was gated on a tier cap and stacking-blind — both corrected in the
+  #723 round-1 adjudication above (unconditional against the express
+  ceiling, stacking-aware, DI-coupled inputs skipped). Four pins
+  cover the directions.*
 - *2026-08-25 — #722 round 2 adjudicated: pins added, the residual
   honestly undecomposed, the "structural loss" critical bounded by the
   sim.* The round demanded oracle unit pins — added:

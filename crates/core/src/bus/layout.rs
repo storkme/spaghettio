@@ -553,43 +553,80 @@ pub fn build_bus_layout(
         ));
     }
     // RFC-069 Phase C (typed refusal): a machine whose SINGLE-UNIT solid
-    // input rate exceeds the tier's full-belt capacity cannot be fed by
-    // any row arrangement — every feed geometry the placer can build
-    // tops out at one full belt per input item into a row (B7/I6), so
-    // `max_machines_for_belt`'s floor would clamp to a 1-machine row
+    // input rate exceeds the effective tier's full-belt capacity cannot
+    // be fed by any row arrangement — every feed geometry the placer can
+    // build tops out at one full belt per input item into a row (B7/I6),
+    // so `max_machines_for_belt`'s floor would clamp to a 1-machine row
     // that ships silently deficient at ANY target rate (per-machine
     // draw is recipe+machine-bound, not rate-bound). Refuse by name at
     // plan time. Belt tier is a hard user constraint (never
-    // auto-escalate) — the message names the draw, the tier's ceiling,
-    // and the smallest tier that would carry it; with no tier cap the
-    // engine escalates freely and this cannot fire.
-    if let Some(tier) = opts.max_belt_tier.as_deref() {
-        let full_belt = 2.0 * crate::common::lane_capacity(tier);
+    // auto-escalate); with no cap the ceiling is still finite — express
+    // is the top of `BELT_TIERS` — so the check runs unconditionally
+    // against the effective tier (#723 round 1: real recipes like
+    // landfill draw 100/s per machine and previously sailed through).
+    // The ceiling is stacking-aware (#723 round 1): input belts carry
+    // stacks when the upstream row stacks them, and the placer's own
+    // in-belt sizing uses `lane_capacity_stacked` — `opts.stacking` is
+    // the optimistic per-item factor (a stacking-EXEMPT item's real
+    // ceiling is lower, so there the check under-fires rather than
+    // refusing a feedable config; a refusal gate must never over-fire).
+    // DI-coupled inputs are skipped for the same reason: direct
+    // insertion delivers the item machine-to-machine with no belt in
+    // the path, so the belt ceiling is not the operative bound there.
+    {
+        let tier = opts.max_belt_tier.as_deref().unwrap_or(
+            crate::common::BELT_TIERS
+                .last()
+                .expect("BELT_TIERS is non-empty")
+                .0,
+        );
+        let stack = f64::from(opts.stacking.clamp(1, 4));
+        let full_belt = 2.0 * crate::common::lane_capacity_stacked(tier, opts.stacking);
         for m in &solver_result.machines {
             for inp in &m.inputs {
-                if !inp.is_fluid && inp.rate > full_belt + 1e-9 {
-                    // BELT_TIERS values are FULL-belt throughputs (15/30/45).
-                    let needed_tier = crate::common::BELT_TIERS
-                        .iter()
-                        .find(|(_, full)| inp.rate <= full + 1e-9)
-                        .map(|(name, _)| *name);
-                    return Err(format!(
-                        "unreachable at belt tier: one {} machine (recipe {}) draws \
-                         {:.2}/s of {}, but a full {} belt carries {:.2}/s — no row \
-                         arrangement can feed it. Raise max_belt_tier{} or lower the \
-                         machine tier; the target rate does not matter (per-machine \
-                         draw is fixed by the recipe)",
-                        m.entity,
-                        m.recipe,
-                        inp.rate,
-                        inp.item,
-                        tier,
-                        full_belt,
-                        needed_tier
-                            .map(|t| format!(" (≥ {t})"))
-                            .unwrap_or_else(|| " (no belt tier suffices)".to_string()),
-                    ));
+                if inp.is_fluid || inp.rate <= full_belt + 1e-9 {
+                    continue;
                 }
+                if solver_result
+                    .di_couplings
+                    .iter()
+                    .any(|c| c.consumer_recipe == m.recipe && c.item == inp.item)
+                {
+                    continue;
+                }
+                // BELT_TIERS values are FULL-belt throughputs (15/30/45),
+                // scaled by the same stacking factor as the ceiling.
+                let needed_tier = crate::common::BELT_TIERS
+                    .iter()
+                    .find(|(_, full)| inp.rate <= full * stack + 1e-9)
+                    .map(|(name, _)| *name);
+                let stacked_note = if opts.stacking > 1 {
+                    format!(" (×{} stacked)", opts.stacking)
+                } else {
+                    String::new()
+                };
+                let advice = match (needed_tier, opts.max_belt_tier.is_some()) {
+                    (Some(t), _) => format!("Raise max_belt_tier (≥ {t})"),
+                    (None, true) => {
+                        "No belt tier suffices — remove the machine's speed \
+                         sources"
+                            .to_string()
+                    }
+                    (None, false) => {
+                        "No belt tier suffices (express is the ceiling) — remove \
+                         the machine's speed sources"
+                            .to_string()
+                    }
+                };
+                return Err(format!(
+                    "unreachable at belt tier: one {} machine (recipe {}) draws \
+                     {:.2}/s of {}, but a full {} belt carries {:.2}/s{} — no row \
+                     arrangement can feed it. {} or lower the \
+                     machine tier; the target rate does not matter (per-machine \
+                     draw is fixed by the recipe)",
+                    m.entity, m.recipe, inp.rate, inp.item, tier, full_belt,
+                    stacked_note, advice,
+                ));
             }
         }
     }
@@ -2966,6 +3003,48 @@ mod tests {
             assert!(
                 !e.contains("unreachable at belt tier"),
                 "the named refusal must not fire when the tier carries the draw — got: {e}"
+            );
+        }
+    }
+
+    /// #723 round 1 (major 2/3): with NO tier cap the ceiling is still
+    /// finite — express tops `BELT_TIERS` at 45/s — so a per-machine
+    /// draw above it (real data: landfill = 100 stone/s) is the same
+    /// un-feedable class and must refuse, not ship a silently-deficient
+    /// 1-machine row.
+    #[test]
+    fn the_refusal_fires_uncapped_above_the_express_ceiling() {
+        let mut sr = unreachable_solver_result();
+        sr.machines[0].inputs[0].rate = 100.0; // > express's full 45/s
+        let opts = LayoutOptions { max_belt_tier: None, ..Default::default() };
+        let err = build_bus_layout(&sr, opts).expect_err("must refuse");
+        assert!(
+            err.contains("unreachable at belt tier")
+                && err.contains("express-transport-belt")
+                && err.contains("No belt tier suffices"),
+            "the uncapped refusal must name express as the ceiling — got: {err}"
+        );
+    }
+
+    /// #723 round 1 (major 3/3): the ceiling is stacking-aware. At
+    /// stacking ×4 a yellow belt carries 60/s, so a 50/s draw IS
+    /// feedable in one row — the refusal firing here (as the unstacked
+    /// check did) would refuse a physically buildable config with a
+    /// false capacity claim.
+    #[test]
+    fn the_refusal_respects_the_stacked_ceiling() {
+        let mut sr = unreachable_solver_result();
+        sr.machines[0].inputs[0].rate = 50.0; // > 15 unstacked, ≤ 60 at ×4
+        let opts = LayoutOptions {
+            max_belt_tier: Some("transport-belt".to_string()),
+            stacking: 4,
+            max_inserter_tier: InserterTier::Stack,
+            ..Default::default()
+        };
+        if let Err(e) = build_bus_layout(&sr, opts) {
+            assert!(
+                !e.contains("unreachable at belt tier"),
+                "the refusal must use the STACKED ceiling (60/s at ×4 yellow) — got: {e}"
             );
         }
     }
