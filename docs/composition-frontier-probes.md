@@ -85,6 +85,11 @@ provisioning; if it does not, it targets embedded-stage planning.
 
 ### The disambiguation run (2026-08-25, same session)
 
+> **⚠ Superseded by the ground-truth adjudication below**: the sim
+> anchors this section's composed fixture at exactly plan, so its
+> "Adjudication" paragraph and the K72-1 pin it names are RETIRED —
+> retained as the historical record only.
+
 Re-run at ec 20/s, every boundary at or under ~67% belt load
 (copper-plate 30/45 = 67%, iron-plate 20/45 = 44%); `dis-cable40` keeps
 the standalone producer's output under one belt (40 ≤ 45) so its receipt
@@ -123,12 +128,12 @@ reproduction. Anyone picking that up starts here: `sim_export copper-cable
 
 Four fixtures run in headless Factorio (all converged, drift ≤ +1.8%):
 
-| fixture | meter said | SIM verdict | reading |
+| fixture | meter (delivered, % of plan) | SIM (produced d% / delivered d%) | reading |
 |---|---:|---|---|
-| `dis-ec20-comp` | 94.6% | produced **+0.0%**, PASS | meter artifact |
-| `seam-ec30-comp` | 81.6% | produced **+0.0%**, PASS | meter artifact |
-| `fp-ec90` | 91.4% | produced **97.9%**, WARN −2.1% | mostly artifact; small real residual |
-| `seam-cable90` | 50.0% | delivered **−50.2%**, FAIL | REAL — and the meter was accurate |
+| `dis-ec20-comp` | 94.6% | +0.0% / −1.3%, PASS | meter artifact |
+| `seam-ec30-comp` | 81.6% | +0.0% / +1.3%, PASS | meter artifact |
+| `fp-ec90` | 91.4% | −2.1% / −2.2%, WARN | mostly artifact; small real residual |
+| `seam-cable90` | 50.0% | — / −50.2%, FAIL | REAL — and the meter was accurate |
 
 **The seam-cost story above (16.5 / 5.4 points) did not survive ground
 truth** — composed fixtures deliver plan; per-unit receipts DO survive

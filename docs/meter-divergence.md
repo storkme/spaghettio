@@ -1,7 +1,9 @@
 # Meter divergence log (#570, RFC-054 Phase B/C)
 
 Running record of where the fast meter's `produced_per_s`/`delivered_per_s`
-diverges from the measured headless-Factorio sim by more than ±10pp, and why
+diverges from the measured headless-Factorio sim by more than ±10pp — or,
+since 2026-08-25, by any margin that changed a decision (the turn-path
+class's smallest confirmed row is −5.4pp) — and why
 that divergence is believed to live (model gap vs. known-open-item). Updated
 when either sweep — `crates/meter/examples/sweep_corpus.rs` (Job-2 bank) or
 `crates/meter/examples/sweep_postlift.rs` (post-lift layouts) — moves a number
@@ -38,12 +40,12 @@ manufactured a "seam cost" on composed two-stage fixtures that headless
 Factorio does not exhibit. Four fixtures adjudicated against the sim
 (exports under the RFC-072 evidence set; sims converged, drift ≤ +1.8%):
 
-| fixture | topology | meter delivered | sim verdict | divergence |
+| fixture | topology | meter delivered (% of plan) | sim (produced d% / delivered d%) | divergence |
 |---|---|---:|---|---|
-| `dis-ec20-comp` | 2-row, trunk turns | 94.6% | produced +0.0%, PASS | **−5.4pp phantom** |
-| `seam-ec30-comp` | 2-row, trunk turns | 81.6% | produced +0.0%, PASS | **−18.4pp phantom** |
+| `dis-ec20-comp` | 2-row, trunk turns | 94.6% | +0.0% / −1.3%, PASS | **−5.4pp phantom** (meter-delivered vs sim-delivered) |
+| `seam-ec30-comp` | 2-row, trunk turns | 81.6% | +0.0% / +1.3%, PASS | **−18.4pp phantom** |
 | `dis-ec15-comp` | single straight row, no turns | 99.7% | (not simmed) | consistent |
-| `seam-cable90` | capacity-bound (90/s target, one output belt) | 50.0% | delivered −50.2%, FAIL | **accurate** |
+| `seam-cable90` | capacity-bound (90/s target, one output belt) | 50.0% | — / −50.2%, FAIL | **accurate** |
 
 The under-read is **geometry-correlated**: the one straight-line fixture
 meters clean, every turn-path fixture under-reads 5–18pp, and the

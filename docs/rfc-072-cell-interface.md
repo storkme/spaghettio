@@ -171,13 +171,21 @@ acceptance.
   refusal gate must never over-fire.
 - **K72-3 (Phase 2 pays), two-part so a trip is attributable** (#725
   round 1: an absolute bar would mis-read an inherited per-cell gap as
-  replication overhead). **(a)** The composed `ec@240` must beat the
-  single-bus structural ceiling measured at 120/s (88.9% meter) — else
-  composition lost to the wall it exists to cross. **(b)** Composed
-  delivery must sit within 2 points of the constituent cell's own
-  standalone SIM receipt at the chosen quantum (sim, not meter — the
-  meter's below-plan direction is not trusted on turn-heavy fixtures,
-  `meter-divergence.md` §2026-08-25) — else the seams cost
+  replication overhead; #726 round 1: both parts on the same trust
+  basis — the original (a) anchored on the meter's 88.9% at 120/s,
+  a number this RFC's own evidence disqualified). **(a) Validity, by
+  plan arithmetic (no measurement):** the composed `ec@240` plan must
+  carry ZERO `lane-throughput` errors — the wall the single bus
+  cannot cross at that rate (18 such errors at 120/s) — and its sim
+  delivery must not fall below the family's sim-anchored single-bus
+  receipt (97.9% at 90/s, the standing bar until a 120/s sim
+  anchor exists): if k quantized cells plus merges deliver worse
+  than one bus at its best, composition pays overhead without gain.
+  **(b)** Composed delivery must sit within 2 points of the
+  constituent cell's own standalone SIM receipt at the chosen
+  quantum (sim, not meter — the meter's below-plan direction is not
+  trusted on turn-heavy fixtures, `meter-divergence.md`
+  §2026-08-25) — else the seams cost
   more than the interface contract allows, whatever the per-cell level
   is. A trip on (a) alone with (b) clean means the quantum is wrong
   (per-cell gap inherited), not that replication failed — re-quantize

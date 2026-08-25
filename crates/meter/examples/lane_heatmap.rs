@@ -7,8 +7,9 @@
 //! ```
 //! Reads `crates/core/target/tmp/<label>.bp` + `<label>.manifest.json`.
 //! Grid legend: belts print two hex digits (lane0, lane1 occupancy 0-4);
-//! machines print the first two letters of their recipe; inserters `i↕`;
-//! splitters `SS`; empty `··`.
+//! machines print the first two letters of their recipe; inserters `i.`;
+//! splitters `SS`; empty `··`. Splitter stats window is a fixed 3600
+//! ticks after warmup.
 
 use std::path::PathBuf;
 
@@ -19,7 +20,10 @@ use spaghettio_meter::{Factory, Manifest};
 fn main() {
     let mut args = std::env::args().skip(1);
     let label = args.next().expect("label");
-    let warmup: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(60 * 60 * 3);
+    // Default matches the calibrated meter window's warmup (108k, as
+    // check_one/cable_probe use) — a short default on this deep-chain
+    // forensics tool would reproduce the artifact class it exists to hunt.
+    let warmup: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(108_000);
 
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/target/tmp");
     let bp = std::fs::read_to_string(dir.join(format!("{label}.bp"))).expect("blueprint");
@@ -89,11 +93,14 @@ fn main() {
     f.net.reset_splitter_stats();
     f.run_for(60 * 60);
     println!("\nsplitter stats over a 3600-tick window (per input lane):");
-    for (i, t) in f.net.tiles.iter().enumerate() {
+    let mut printed = std::collections::BTreeSet::new();
+    for t in f.net.tiles.iter() {
         if let TileKind::Splitter { id, .. } = t.kind {
+            // Both physical tiles carry the same id — print each splitter once.
+            if !printed.insert(id) {
+                continue;
+            }
             let s = &f.net.splitter_stats[id];
-            // Print once per splitter, from its id-carrying tile only.
-            let _ = i;
             println!(
                 "  sid={id} {:?} {:?} attempts={:?} first_acc={:?} fallback_acc={:?} both_blocked={:?}",
                 t.pos, t.dir, s.attempts, s.first_accepted, s.fallback_accepted, s.both_blocked
