@@ -34,11 +34,13 @@ the 22.5/s physical per-lane cap — plus one belt-dead-end; the warnings are
 input-rate-delivery (30) and 72-machine rows at zero belt margin.
 
 **Read.** There is no cliff. The uncapped bus degrades gracefully
-(~89–91% delivered) all the way through 120/s. What changes between 90 and
+(88.7–91.4% delivered; the 45/s figure is 88.65% at full meter precision,
+rounded up in the table) all the way through 120/s. What changes between 90 and
 120 is the *nature* of the deficit: through 90 it is the family's usual
 ~10% delivery gap on a validator-clean plan; at 120 the plan itself exceeds
-express lane physics (the produced copper-cable clamps at exactly 320/s),
-so the deficit becomes structural — no amount of layout improvement reaches
+express lane physics (the meter's own `produced_per_s` for copper-cable
+reads exactly 320.0 — its independent per-item counter, not a value derived
+from the ec figure), so the deficit becomes structural — no amount of layout improvement reaches
 plan. The composition entry point for this family is therefore ≈ above
 90/s uncapped, and earlier wherever a user belt cap binds (the banked
 belt-capped rows hit their walls at 30–60/s). Composition's pitch at these
@@ -55,21 +57,26 @@ Three legs isolate the producer→consumer seam inside one solve:
 | interface-as-promised | `ec 30`, cable **external** | 0E / 0W | 29.44 / 30 | **98.1%** |
 | composed | `ec 30`, cable made **internally** | 0E / 6W | 24.47 / 30 | **81.6%** |
 
-**Read.** The seam is real and expensive: the identical assembly stage
-delivers 98.1% when its input arrives as a clean boundary belt and 81.6%
-when the same flow is produced internally — a **~16.5-point seam cost**, and
-the internal cable stage tracks it exactly (73.4/90 = 81.6%, cable-limited).
-Per-unit receipts do NOT survive composition inside today's bus. That number
-is simultaneously the cost of the status quo and the target an explicit
-cell interface must recover: the fix hypothesis is standardized full-belt
-hand-offs between units, making every seam look like the 98.1% boundary
-case rather than the 81.6% internal one.
+**Read.** Composition costs ~16.5 points at this config — but the loss does
+NOT sit in the producer→consumer hand-off (#724 round 1 corrected the first
+draft's attribution). The meter's own stage accounting locates it: in the
+composed leg the assembly converted essentially every cable it received
+(24.47 ec × 3 = 73.4 cable consumed of 73.4 produced — loss-free), slightly
+*better* than the boundary leg's conversion (88.3 of 90 available = 98.1%).
+The entire deficit is the **embedded producer stage under-delivering its own
+plan**: cable production achieved 73.4/90 = 81.6% of its planned rate when
+built as an internal stage, where the boundary case receives the same flow
+complete. Per-unit receipts still do not survive composition — but the
+mechanism to fix is how a producer's output rate survives being embedded,
+not a lossy transfer at the consumer.
 
-Confound to carry: the composed leg's copper-plate boundary (45/s) is
-exactly one full express belt with zero margin, so part of the 16.5 points
-may be input-boundary tightness rather than the cable seam itself. The
-follow-up that separates them: re-run the pair at a rate where boundaries
-have margin (e.g. ec 20, cable 60).
+Confound to carry (now the live alternative hypothesis): the composed leg's
+copper-plate boundary (45/s) is exactly one full express belt with zero
+margin, so the embedded cable stage's 81.6% may be input-boundary tightness
+rather than embedding per se. The follow-up that separates them: re-run the
+pair at a rate where boundaries have margin (e.g. ec 20, cable 60). If the
+embedded stage recovers with margin, the interface fix targets boundary
+provisioning; if it does not, it targets embedded-stage planning.
 
 ## Incidental finding — a live specimen of the deferred output-side hole
 
