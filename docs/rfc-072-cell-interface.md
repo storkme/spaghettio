@@ -52,10 +52,19 @@ instruments `sim_export` + meter `check_one`, main @ `7cec5ca9`):
 ### The boundary contract (Phase 1 prerequisite, Phase 2 load-bearing)
 
 A `CellBoundary`: input and output ports, each `(item, rate, belt_tier,
-edge_side, offset)`, plus the constraint vector celldb already derives
-(RFC-067's port contracts are the existing shape to promote — exact type
-reuse to be pinned from the machinery recon before implementation). Two
-rules carry the correctness weight:
+edge_side, offset)`, plus the constraint vector celldb already derives.
+The recon (2026-08-25, decision log) found the engine holds **three
+positional port shapes and none carries a rate**: `cells::extract::Port
+{edge, x, y, item, inbound}` (extract.rs:85), `BoundaryRecord {item, x,
+y, direction, is_fluid, entity}` on `LayoutResult` (models.rs:177), and
+celldb's `Port {dx, dy, kind, item}` with `CellEntry` carrying
+`provenance` + `sim_anchor` (celldb.rs:28–56) — celldb's `check_entry`
+actively rejects stored rate stamps (celldb.rs:438), and only the mega
+planner pairs items with rates (`MegaPlan.outputs: Vec<(String, f64)>`,
+mega.rs:862). So `CellBoundary` is the promotion of celldb's `Port` with
+a typed rate and the entry's existing `sim_anchor` receipt — an
+extension of the store the regression corpus already guards, not a new
+parallel type. Two rules carry the correctness weight:
 
 - **One compatibility oracle.** Whether two boundaries mate — items match,
   rates satisfy, a merge shape is stampable — is answered by ONE function,
@@ -72,21 +81,49 @@ rules carry the correctness weight:
 
 Close the 5.4-point embedding cost inside the existing bus, before any
 composer exists: provision an embedded producer stage's output path the
-way an external boundary input's entry path is provisioned (margin
-included). The exact divergence points between the internal and boundary
-paths are being pinned by recon (lane planner trunk sizing vs entry-belt
-sizing; tap-off vs straight feed); the mechanism lands wherever the two
-paths measurably differ. This phase pays standalone — today's cell-chain
-and DI candidates carry these same embedded seams.
+way an external boundary input's entry path is provisioned. The recon
+pinned the divergence precisely — consumer-row input belts are provisioned
+identically regardless of source (`row_input_belt`, placer.rs:32–50), and
+trunk *counts* match too (internal 60/s at express gets the same three
+20/s trunks external entry does, lane_planner.rs:886–933 vs 917–933).
+The internal path's exclusive loss points, none of which an external
+boundary has:
+
+1. **Producer output lane filling** — some producer row kinds sideload
+   their output belt, filling one physical lane (placer.rs:187–218; the
+   `sideload_bridge` both-lane path exists but is gated by
+   `can_lane_split()`, placer.rs:318–342, 764–804).
+2. **Producer-to-trunk `ret:` sideloads** — non-topmost producer returns
+   merge into one physical lane of the trunk
+   (ghost_router.rs:1658–1735).
+3. **Balancer partial-load** — a non-throughput-unlimited family
+   balancer can deliver less than its input supply
+   (template_validate.rs:196–205); the RFC-069 pad guarantees a stamp
+   *exists*, not that it is throughput-unlimited at the operating point.
+
+Phase 1's mechanism is to make the internal producer→consumer path
+boundary-shaped at these three points (both-lane fill, capacity-split
+returns, throughput-unlimited-or-refuse merge shapes), instrumented one
+point at a time against the K72-1 fixture so the 5.4 points get
+attributed, not just removed. This phase pays standalone — the native
+bus wins these configs today (selection recon: cell-chain loses on
+density, DI displaces only when strictly better), so the fix lands on
+the shipping path.
 
 ### Phase 2 — homogeneous replication
 
 One recipe target beyond the wall: `ec@240 = 4 × ec@60` cells tiled on a
 grid, inputs fanned out and outputs merged through stamp-oracle-vetted
-balancer shapes. The output-side refusal (the deferred RFC-069 follow-up)
-ships here as a prerequisite: a composer that merges outputs must refuse
-a cell whose output cannot leave its boundary, or it inherits the
-cable-90 half-plan lie at every seam.
+balancer shapes. The recon found the quantizer already exists: the cell
+chain's `required_copies` splits a target into K copies against
+`QUANTUM_RATE = 45.0` and plans each stage at
+`outputs[0].rate × count / K` (chain.rs:42–62, 711, 882) — so Phase 2
+promotes an in-tree mechanism from a density-losing candidate to the
+above-the-wall composer, rather than inventing replication. The
+output-side refusal (the deferred RFC-069 follow-up) ships here as a
+prerequisite: a composer that merges outputs must refuse a cell whose
+output cannot leave its boundary, or it inherits the cable-90 half-plan
+lie at every seam.
 
 ### Phase 3 — heterogeneous composition and the library
 
@@ -166,3 +203,22 @@ the snapshot debugger sees them.
   specimen. Two read-only recon tasks dispatched (cell machinery
   inventory; embedded-vs-boundary provisioning divergence) to pin
   Phase 1's exact touch points before implementation.
+- *2026-08-25 — recon adjudicated into the design (both reports,
+  in-repo-verified identifiers).* Three findings reshaped the draft:
+  (1) no existing port type carries a rate, and celldb's `check_entry`
+  actively rejects rate stamps — `CellBoundary` is therefore a
+  promotion of `celldb::Port` + `sim_anchor`, not a new parallel type;
+  (2) the embedded-vs-boundary divergence is NOT in consumer-side or
+  trunk-count provisioning (identical on both paths) but in three
+  internal-only loss points — producer sideload single-lane fill,
+  `ret:`-sideload single-lane trunk merges, balancer partial-load —
+  which become Phase 1's enumerated mechanism list, instrumented
+  point-by-point against K72-1 so the 5.4 points get attributed;
+  (3) the cell chain already quantizes at `QUANTUM_RATE = 45.0` via
+  `required_copies`, so Phase 2 is a promotion of an in-tree
+  density-losing mechanism, not greenfield replication. Also recorded:
+  RFC-055's `CellVariant`/`boundary_records` are design prose only
+  (its compact-ordering implementation was deleted per the owner's
+  #632-A2 extension, offpath Tier 2, #675) — the "de-facto interface
+  spec" the 2026-07-24 strategy memory assumed is thinner than
+  recorded, which raises this RFC's value rather than lowering it.*
