@@ -49,12 +49,16 @@ pub(crate) fn merge_output_rows(
             if ri >= row_spans.len() {
                 0.0
             } else {
-                row_spans[ri]
-                    .spec
+                let rs = &row_spans[ri];
+                rs.spec
                     .outputs
                     .iter()
                     .filter(|o| o.item == item)
-                    .map(|o| o.rate * row_spans[ri].machine_count as f64)
+                    .map(|o| {
+                        o.rate
+                            * rs.machine_count as f64
+                            * crate::common::utilization_for(&rs.spec)
+                    })
                     .sum::<f64>()
             }
         })
@@ -78,12 +82,16 @@ pub(crate) fn merge_output_rows(
         if ri >= row_spans.len() {
             0.0
         } else {
-            row_spans[ri]
-                .spec
+            let rs = &row_spans[ri];
+            rs.spec
                 .outputs
                 .iter()
                 .filter(|o| o.item == item)
-                .map(|o| o.rate * row_spans[ri].machine_count as f64)
+                .map(|o| {
+                    o.rate
+                        * rs.machine_count as f64
+                        * crate::common::utilization_for(&rs.spec)
+                })
                 .sum::<f64>()
         }
     };
@@ -101,10 +109,16 @@ pub(crate) fn merge_output_rows(
                 acc += r;
             }
         }
-        // A single column above cap is the row's own output ceiling
-        // (per-row caps live in the placer); the fold still gives it
-        // its own tail — the best a whole-row partition can do.
-        groups.max((total_rate / single_cap).ceil().max(1.0) as usize)
+        // Greedy first-fit is the authority (contiguous first-fit is
+        // optimal; codex review verified). A ceil(total/cap) floor was
+        // briefly layered on top and REMOVED (codex HIGH): with the
+        // greedy test epsiloned and ceil not, the floor can exceed the
+        // greedy count, and the assignment's coverage arithmetic then
+        // empty-groups and ships ONE overloaded tail. A single column
+        // above cap gets its own tail — the best a whole-row partition
+        // can do (the per-row output ceiling is the placer's domain,
+        // recorded in the RFC log).
+        groups
     };
     // Hops may need more reach than the rate-picked tier offers
     // (alternating blocked columns with 1-tile gaps are unhoppable
