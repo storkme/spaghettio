@@ -1,7 +1,11 @@
 # RFC-069: Achievable-duty provisioning for the zero-headroom family
 
-**Status**: Active (resumed 2026-08-24 as the trunk/tap-provisioning
-campaign — Phases R/A/B/C below; the 2026-08-15 phase results stand)
+**Status**: Active — **trunk/tap-provisioning campaign COMPLETE
+2026-08-25** (Phases R + A1–A3 + C shipped: #720/#721/#722 + the Phase-C
+refusal PR; **Phase B adjudicated GATED by measurement** — see the
+2026-08-25 Phase-B entry: the flip is measured-negative on tier5, duty
+stays opt-in, and the recorded forward path is duty-as-candidate +
+the density-term re-weigh). Remaining RFC substance = that follow-up.
 **Tracking**: #644 (the deficit family this closes)
 **Registry**: [`rfcs.md`](rfcs.md)
 
@@ -212,6 +216,191 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-25 — **PHASE B ADJUDICATED: GATED BY MEASUREMENT; the
+  campaign concludes with duty opt-in.** The flip's precondition ("once
+  the family semantics settle", the 2026-08-15 owner call) is unmet by
+  the owner call's own primary value: at duty 0.6 under the
+  resolvability pad, tier5 ships **13 errors / 56 warnings** (11
+  belt-dead-end + 2 unresolved-junction; down from 18E/320W pre-pad)
+  against its CLEAN 0-error duty-1.0 default — the flip trades ≥13
+  structural errors for a potential +4.4% delivery on that fixture:
+  measured-NEGATIVE, and correctness-over-footprint cuts against
+  shipping it. Both rescue attempts were falsified by experiment: the
+  SAT var-ceiling raise 700→730 (permitted by the [700,756) calibration
+  pin) made the 728-var zone SOLVE and the build go 13E→**78E** — the
+  refusal was protecting tier5 from a bad SOLUTION, reverted; the
+  remaining causes (the ceiling-refused 13×4 zone + the iron-tap
+  "flow_imbalance 1in/0out" boundary class) are recorded. The duty
+  knob also measures byte-identical on the padded ec35/ec40 natives
+  (the DualInput cap does not reach their rows), so the flip's value
+  on the pad-fixed fixtures is currently nil. **The forward path,
+  recorded:** duty-as-candidate — build duty-1.0 and duty-0.6 native
+  variants and let the evidence-calibrated selection adjudicate per
+  solve (tier5 keeps its clean 1.0; ec30 takes 0.6's sim-anchored
+  99.4%) — which requires the density-term re-weigh the owner call
+  itself anticipated ("the selection objective's density term will
+  need re-weighing during the flip"). That is RFC-071-style measured
+  calibration work and is this RFC's remaining substance. Until then
+  `planning_duty` ships opt-in exactly as today, with its ec30/ec60-red
+  gate receipts standing.*
+- *2026-08-25 — #723 round 5 adjudicated: zero accepted items — the
+  recycled/refuted round the declared stop point anticipated; merged
+  on this round's head.* Both 2/3 majors refuted on the engine's own
+  mechanics. (1) The unknown-tier "gate says express, placer says
+  yellow" mismatch: the PHYSICAL belts placed for an unenumerated
+  tier resolve to express via `belt_entity_for_rate`'s fallback — the
+  same one the gate uses — while `effective_in_lane_cap`'s yellow
+  reading only makes row-SPLITTING more conservative (more rows, same
+  total machines, same express belts): footprint, not delivery, the
+  round-2 row-cap corollary again; and unenumerated tier names are
+  unreachable from the shipped web UI's fixed choice set. (2) The
+  `planning_duty` blindness claim misreads the lever: `planning_duty`
+  is a feed-block FRAGMENTATION knob (`duty_input0_block` computes
+  machines-per-feed-segment as `floor(belt_budget × duty /
+  item0_rate)`, clamped `.max(1)`) — it never derates per-machine
+  draw, which is nominal × `utilization_for` at every duty. Even a
+  block of one machine is fed through one belt, so no duty value
+  rescues a per-machine-draw violation and the gate cannot block the
+  duty-as-candidate forward path (which varies fragmentation, not
+  draw). The 3/3 DI-residual minor is the round-3 adjudication
+  restated — the reviewer's own text says "documented-and-accepted in
+  the RFC log"; it stands as scoped. The user-visible-regression
+  minor is Phase C's intended behavior (the named Err with its remedy
+  IS the designed surface); the epsilon minor self-describes as
+  "negligible, and consistent with the never-over-fire requirement".*
+- *2026-08-25 — #723 round 4 adjudicated: the real-recipe pin taken;
+  the lane-split, coupling-key, tier-fallback, and corpus-claim items
+  refuted with receipts.* The 2/3 "vacuous tests" major was
+  half-right in a useful way: the synthetic pins discriminate every
+  gate branch (four firing pins fail if the gate is deleted — the
+  stands-down pins are one-sided BY DESIGN, they exist to catch
+  over-firing, which is the campaign's cardinal sin), but none of
+  them guards against `MachineSpec.inputs` rate-semantics drift (the
+  repo's recurring `e.rate` bug class). Added
+  `a_real_high_draw_recipe_refuses_end_to_end`: the solver's own
+  landfill output (75 stone/s per AM2 machine, real `recipes.json`)
+  trips the gate uncapped — eight pins total. **Refuted**: the 2/3
+  lane-split MED (the gate is an upper bound over feed shapes by
+  construction — "no arrangement can feed it" refuses only
+  impossibility; a specific shape delivering a single lane is the
+  lane-rate/input-rate validators' jurisdiction, and firing on it
+  would over-fire on configs a full-belt shape serves — comment now
+  says "UPPER BOUND" explicitly); the 2/3 coupling-key minor (at this
+  gate's input the solver emits one MachineSpec per recipe —
+  partition families are created by decomposition, downstream — so
+  `(consumer_recipe, item)` is exactly the key `detect_di_couplings`
+  emits); the 1/3 tier-fallback minor (a future `BELT_TIERS` turbo
+  row is matched by the same `.find` that resolves the ceiling, so
+  the gate follows the table, never a stale constant; the
+  silent-degrade UX is `belt_entity_for_rate`'s pre-existing
+  engine-wide semantics); the 1/3 corpus-claim minor (the corpus e2e
+  tests run the full pipeline through `build_bus_layout` — a gate
+  firing on any fixture fails its test, so the green suite IS the
+  measured run, on every round head).*
+- *2026-08-25 — #723 round 3 adjudicated: the DI-skip major accepted
+  as a mode guard; the inserter-ceiling, duty-mismatch, and
+  test-triviality items refuted with receipts.* The 3/3 major was
+  half-right: `di_couplings` is a solver-side PROPOSAL populated
+  unconditionally, so under `DirectInsertion::Off` — where no DI
+  variant can ever place — the skip under-fired with no
+  justification; fixed with a mode guard (skip only when DI ≠ Off) and
+  a discriminating pin (Off refuses the coupled high-draw input,
+  Candidate stands down). The reviewer's stronger fix (skip only when
+  the PLACED RowSpan carries the input) is structurally impossible at
+  this gate: it runs before `select_best_decomposition`, so an Err
+  aborts every candidate including the DI variant that would feed the
+  input — under Candidate/Forced the optimistic skip is mandatory to
+  avoid over-firing, and when DI is proposed-but-not-placed the
+  belt-fed fallback's deficiency is validator-visible
+  (lane-throughput + input-rate checks) and selection prefers
+  error-free: degraded to the pre-Phase-C status quo, never silent.
+  **Refuted**: the 1/3 inserter-throughput ceiling (inserters per
+  machine-input are sized by the count ladder,
+  `docs/rfc-inserter-sizing.md` — not a fixed per-machine bound like
+  the one-belt geometry invariant; residuals are instrumented
+  downstream); the 2/3 duty-mismatch (`utilization_for` is THE
+  single-source formula shared by placement and validation per its own
+  docstring — ceil-rounding IS the formula; pinning the gate's duty
+  against the placer's would compare the formula with itself); the
+  2/3 "needs a real cargo test run" (the full suite ran green on
+  every round head — 30 suites, 1262 tests — and the landfill
+  behavior change is round 1's own accepted 2/3 major); the 1/3
+  max_lane-boundary pin (inserters pick BOTH lanes, rule I6 — the
+  per-machine per-item bound is the full belt, not a lane).*
+- *2026-08-25 — #723 round 2 adjudicated: the major's two accepted
+  halves fixed, its row-cap corollary scoped, the HS sub-claim
+  refuted.* The 3/3 major was right twice more: (1) the ceiling used
+  layout-global `opts.stacking` where `StackingCtx::for_item` is the
+  engine's per-item authority — an exempt item (recycler outputs,
+  second+ solids, self-loops, voider inputs) plans unstacked, so at
+  ×4 the gate credited 60/s to a belt carrying 15/s and under-fired
+  on exactly the silently-deficient class Phase C targets; (2) the
+  gate compared the NOMINAL draw where the placer and validator both
+  size by `utilization_for` (the shared single-source duty formula) —
+  a fractional-count row (landfill at 0.4 machines draws 40/s, which
+  express carries) was refused despite being feedable, an over-fire.
+  Fixed: `StackingCtx::derive` + `for_item` per input, draw scaled by
+  `utilization_for`, message reworded (the duty-scaled draw is what's
+  named; "target rate does not matter" dropped — rate now matters
+  through count). Also fixed the 1/3 unknown-tier minor: an
+  unrecognized cap resolves to express, the same fallback
+  `belt_entity_for_rate` uses. **Refuted**: the HorizontalStack
+  sub-claim ("a single machine whose input₀ exceeds one belt is
+  HS-feedable") — the HS template's K trunks raise per-ROW capacity;
+  every machine's input₀ inserters pick from the single per-block
+  current-feed belt at `y+K+1`, so the one-belt-per-machine bound
+  stands in every row shape. **Scoped**: the 3/3 row-cap corollary
+  (`max_machines_for_belt*` input caps are stacking-blind) is the
+  placer's RECORDED deliberate limit (placer.rs "KNOWN LIMITS",
+  RFC-047 Leg B) — it splits rows conservatively, costing footprint
+  not delivery, and rewiring it is Leg-B work with its own
+  measurement cycle, not this gate's business. Two discriminating
+  pins added (exempt item refuses at ×4 where the stackable one
+  stands down; fractional duty stands down uncapped) — six total;
+  full suite green.*
+- *2026-08-25 — #723 round 1 adjudicated: both majors accepted and
+  fixed; two minors scoped, one refuted.* The round's 3/3-pass major
+  was right on both counts against the shipped Phase C: (1) the
+  ceiling was stacking-blind while the placer's own in-belt sizing
+  uses `lane_capacity_stacked` — at ×4 yellow a 50/s draw is feedable
+  (60/s) yet the check refused with a false capacity claim; (2) "with
+  no tier cap the engine escalates freely and this cannot fire" was
+  false above express (45/s tops `BELT_TIERS`; landfill draws 100/s
+  per machine) — the same un-feedable class sailed through uncapped.
+  Fixed: the check now runs unconditionally against the effective
+  tier (cap or express) with a stacking-aware ceiling
+  (`opts.stacking` as the optimistic per-item factor — a
+  stacking-exempt item's real ceiling is lower, so the check
+  under-fires there rather than over-firing; a refusal gate must
+  never refuse a feedable config), plus the reviewer-suggested
+  DI-coupling skip (direct insertion feeds beltlessly, so the belt
+  ceiling is not the operative bound). Four pins now (uncapped >45/s
+  refuses naming express; ×4-stacked 50/s@yellow does NOT refuse);
+  full suite green — nothing in the corpus trips the unconditional
+  check. **Scoped, not fixed** (recorded here as the closed scope):
+  the OUTPUT side (`max_machines_for_belt` clamps on outputs too, but
+  outputs have both-lanes splitting, stacked stack-inserter loading,
+  and output mergers — a correct output ceiling is a different
+  computation, deferred with the campaign's other follow-ups) and the
+  non-`build_bus_layout` entry paths (the refusal lives beside
+  RFC-046's stacking refusal at the shipped entry; parity/legacy
+  callers bypass both by the same precedent). **Refuted**: the
+  epsilon minor — the check already carries `+1e-9` slack and is
+  strictly MORE permissive than `belt_entity_for_rate`'s exact
+  `rate <= throughput`; the review's 15.0001/s example escalates
+  under the engine's own belt-sizing semantics too.*
+- *2026-08-25 — **Phase C shipped**: the typed unreachable-rate
+  refusal. A machine whose single-unit solid input draw exceeds the
+  effective tier's full-belt capacity cannot be fed by any row
+  arrangement (per-machine draw is recipe-bound, not rate-bound) —
+  `max_machines_for_belt`'s floor previously clamped it to a 1-machine
+  row that shipped silently deficient at any target rate.
+  `build_bus_layout` now refuses by name at plan time (draw, item,
+  tier ceiling, smallest sufficient tier). As first shipped the check
+  was gated on a tier cap and stacking-blind — both corrected in the
+  #723 round-1 adjudication above (unconditional against the express
+  ceiling, stacking-aware, DI-coupled inputs skipped). Four pins
+  cover the directions.*
 - *2026-08-25 — #722 round 2 adjudicated: pins added, the residual
   honestly undecomposed, the "structural loss" critical bounded by the
   sim.* The round demanded oracle unit pins — added:
