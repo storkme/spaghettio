@@ -138,8 +138,9 @@ Four fixtures run in headless Factorio (all converged, drift ≤ +1.8%):
 **The seam-cost story above (16.5 / 5.4 points) did not survive ground
 truth** — composed fixtures deliver plan; per-unit receipts DO survive
 composition inside today's bus. The under-read is geometry-correlated
-(the straight-line `dis-ec15-comp` metered 99.7% while every turn-path
-fixture under-read 5–18pp) — recorded as the turn-path divergence class
+(the straight-line `dis-ec15-comp` metered 99.7% — a meter-only,
+not-yet-simmed control — while every turn-path fixture under-read
+4–20pp against sim-delivered) — recorded as the turn-path divergence class
 in `meter-divergence.md` §2026-08-25, with these fixtures as the
 calibration set. What SURVIVES, sim-anchored: the 120/s plan-arithmetic
 wall (validator-level, needs no sim), the ~98% uncapped bus at 90/s

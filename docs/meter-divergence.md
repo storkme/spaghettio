@@ -42,14 +42,16 @@ Factorio does not exhibit. Four fixtures adjudicated against the sim
 
 | fixture | topology | meter delivered (% of plan) | sim (produced d% / delivered d%) | divergence |
 |---|---|---:|---|---|
-| `dis-ec20-comp` | 2-row, trunk turns | 94.6% | +0.0% / −1.3%, PASS | **−5.4pp phantom** (meter-delivered vs sim-delivered) |
-| `seam-ec30-comp` | 2-row, trunk turns | 81.6% | +0.0% / +1.3%, PASS | **−18.4pp phantom** |
+| `dis-ec20-comp` | 2-row, trunk turns | 94.6% | +0.0% / −1.3%, PASS | **−4.1pp phantom** (meter-delivered 94.6 vs sim-delivered 98.7; −5.4pp vs plan) |
+| `seam-ec30-comp` | 2-row, trunk turns | 81.6% | +0.0% / +1.3%, PASS | **−19.7pp phantom** (81.6 vs sim-delivered 101.3; −18.4pp vs plan) |
 | `dis-ec15-comp` | single straight row, no turns | 99.7% | (not simmed) | consistent |
 | `seam-cable90` | capacity-bound (90/s target, one output belt) | 50.0% | — / −50.2%, FAIL | **accurate** |
 
 The under-read is **geometry-correlated**: the one straight-line fixture
-meters clean, every turn-path fixture under-reads 5–18pp, and the
-capacity-bound failure is measured accurately — so the suspect is the
+meters clean (CAVEAT: that control is meter-only, not simmed — sim it
+when the meter fix lands), every turn-path fixture under-reads 4–20pp
+(sim-delivered base), and the capacity-bound failure is measured
+accurately (on the strength of one sim, `seam-cable90`) — so the suspect is the
 turn-path flow model (per-lane geometry through turns interacting with
 mid-run inserter drops), not belt-capacity math and not a global
 inserter-capacity mismatch (a global cause would have hit the straight
