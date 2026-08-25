@@ -295,3 +295,31 @@ the snapshot debugger sees them.
   output collectors (split collectors / more parallel output belts
   per row — the output-side cousin of RFC-069's trunk provisioning),
   NOT merge-shape work.*
+- *2026-08-25 — **GROUND TRUTH OVERTURNS THE PHASE-1 PREMISE**: the
+  sim anchors the K72-1 fixture AT PLAN; the meter's 94.6% — and the
+  entire drop-contention mechanism above — is instrument artifact.*
+  The scaling discriminator first refuted load-proportional
+  contention (2-row geometries block ~27% at 67% load while a
+  single-row 9-machine collector at 100% load blocks ZERO), pointing
+  at the meter's turn-path handling; per the
+  instrument-before-finding rule the fixture went to the sim before
+  any engine change. Verdict (288k warmup, converged, drift +0.0%,
+  validator clean, all 20 machines working): copper-cable produced
+  **60.00/60.00 (+0.0%)**, electronic-circuit produced **20.00/20.00
+  (+0.0%)**, delivered 19.73 (−1.3% edge effects) — PASS. There is
+  no embedding cost at full margin; the composed pair delivers plan
+  in the real game. Consequences: (1) K72-1 as written is MOOT — its
+  fixture is already at its target in ground truth; (2) the meter's
+  calibrated "below plan ⇒ believe it" asymmetry is FALSIFIED for
+  this fixture class (suspects: the turn-path lane model, or the
+  meter ignoring the manifest's realized inserter-capacity bonuses
+  the sim honors — nb=1/bulk=3) — a new divergence class owed to
+  `meter-divergence.md`, and every meter-only number in the Phase-0
+  evidence (the uncapped frontier percentages included) inherits the
+  suspicion; the validator-level findings (the 120/s lane-saturation
+  errors) are plan-math and stand; (3) whether ANY seam cost is real
+  now rests on the zero-margin ec30-comp fixture (meter 81.6%) —
+  sim dispatched; if it too anchors at plan, Phase 1 closes by
+  measurement with no defect to fix, and the RFC's substance is
+  Phase 2 (above-the-wall composition, whose motivating wall is
+  validator-real) plus the boundary contract.*
