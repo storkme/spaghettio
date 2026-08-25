@@ -1,7 +1,11 @@
 # RFC-069: Achievable-duty provisioning for the zero-headroom family
 
-**Status**: Active (resumed 2026-08-24 as the trunk/tap-provisioning
-campaign — Phases R/A/B/C below; the 2026-08-15 phase results stand)
+**Status**: Active — **trunk/tap-provisioning campaign COMPLETE
+2026-08-25** (Phases R + A1–A3 + C shipped: #720/#721/#722 + the Phase-C
+refusal PR; **Phase B adjudicated GATED by measurement** — see the
+2026-08-25 Phase-B entry: the flip is measured-negative on tier5, duty
+stays opt-in, and the recorded forward path is duty-as-candidate +
+the density-term re-weigh). Remaining RFC substance = that follow-up.
 **Tracking**: #644 (the deficit family this closes)
 **Registry**: [`rfcs.md`](rfcs.md)
 
@@ -212,6 +216,43 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-25 — **PHASE B ADJUDICATED: GATED BY MEASUREMENT; the
+  campaign concludes with duty opt-in.** The flip's precondition ("once
+  the family semantics settle", the 2026-08-15 owner call) is unmet by
+  the owner call's own primary value: at duty 0.6 under the
+  resolvability pad, tier5 ships **13 errors / 56 warnings** (11
+  belt-dead-end + 2 unresolved-junction; down from 18E/320W pre-pad)
+  against its CLEAN 0-error duty-1.0 default — the flip trades ≥13
+  structural errors for a potential +4.4% delivery on that fixture:
+  measured-NEGATIVE, and correctness-over-footprint cuts against
+  shipping it. Both rescue attempts were falsified by experiment: the
+  SAT var-ceiling raise 700→730 (permitted by the [700,756) calibration
+  pin) made the 728-var zone SOLVE and the build go 13E→**78E** — the
+  refusal was protecting tier5 from a bad SOLUTION, reverted; the
+  remaining causes (the ceiling-refused 13×4 zone + the iron-tap
+  "flow_imbalance 1in/0out" boundary class) are recorded. The duty
+  knob also measures byte-identical on the padded ec35/ec40 natives
+  (the DualInput cap does not reach their rows), so the flip's value
+  on the pad-fixed fixtures is currently nil. **The forward path,
+  recorded:** duty-as-candidate — build duty-1.0 and duty-0.6 native
+  variants and let the evidence-calibrated selection adjudicate per
+  solve (tier5 keeps its clean 1.0; ec30 takes 0.6's sim-anchored
+  99.4%) — which requires the density-term re-weigh the owner call
+  itself anticipated ("the selection objective's density term will
+  need re-weighing during the flip"). That is RFC-071-style measured
+  calibration work and is this RFC's remaining substance. Until then
+  `planning_duty` ships opt-in exactly as today, with its ec30/ec60-red
+  gate receipts standing.*
+- *2026-08-25 — **Phase C shipped**: the typed unreachable-rate
+  refusal. A machine whose single-unit solid input draw exceeds the
+  tier's full-belt capacity cannot be fed by any row arrangement
+  (per-machine draw is recipe-bound, not rate-bound) —
+  `max_machines_for_belt`'s floor previously clamped it to a 1-machine
+  row that shipped silently deficient at any target rate.
+  `build_bus_layout` now refuses by name at plan time (draw, item,
+  tier ceiling, smallest sufficient tier); with no tier cap the engine
+  escalates freely and the refusal cannot fire. Two pins cover both
+  directions.*
 - *2026-08-25 — #722 round 2 adjudicated: pins added, the residual
   honestly undecomposed, the "structural loss" critical bounded by the
   sim.* The round demanded oracle unit pins — added:
