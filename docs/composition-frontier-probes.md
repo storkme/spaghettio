@@ -1,7 +1,9 @@
 # Composition-direction probes: the single-bus frontier and the seam cost
 
-**Notes** (per the docs taxonomy: pre-RFC evidence, no durability contract —
-absorb into the cell-interface RFC when it is written). Run 2026-08-25 on
+**Notes** — the measurement record behind
+[`rfc-072-cell-interface.md`](rfc-072-cell-interface.md) (its Phase-0
+evidence base; retained as the raw-numbers record, the RFC carries the
+adjudications). Run 2026-08-25 on
 `main` at `7cec5ca9` (post-RFC-069), instruments: `sim_export` (tracked
 generator) + the meter's `check_one` (108k/216k calibrated window). Meter
 asymmetry applies throughout: **below plan ⇒ believe it**; at-plan clears
@@ -77,6 +79,30 @@ rather than embedding per se. The follow-up that separates them: re-run the
 pair at a rate where boundaries have margin (e.g. ec 20, cable 60). If the
 embedded stage recovers with margin, the interface fix targets boundary
 provisioning; if it does not, it targets embedded-stage planning.
+
+### The disambiguation run (2026-08-25, same session)
+
+Re-run at ec 20/s, every boundary at or under ~67% belt load
+(copper-plate 30/45 = 67%, iron-plate 20/45 = 44%); `dis-cable40` keeps
+the standalone producer's output under one belt (40 ≤ 45) so its receipt
+is clean of the output-belt cap that polluted `seam-cable90`:
+
+| leg | config | validator | meter delivered | of plan |
+|-----|--------|-----------|----------------:|--------:|
+| standalone producer | `copper-cable 40` (plates external) | 0E / 0W | 40.0 / 40 | **100.0%** |
+| interface-as-promised | `ec 20`, cable **external** | 0E / 0W | 20.0 / 20 | **100.0%** |
+| composed | `ec 20`, cable made **internally** | 0E / 0W | 18.93 / 20 | **94.6%** |
+
+**Adjudication: both mechanisms are real, and the split is measured.**
+Margin alone recovers ~11 of ec30's 16.5 points (the boundary leg goes to
+a perfect 100.0%), but embedding still costs **5.4 points at full margin**
+— the internal cable stage delivers 94.6% of its plan (56.78/60) on a
+0-error, 0-warning layout, and the circuit output tracks it exactly. The
+interface fix therefore targets **embedded-stage provisioning** as the
+primary mechanism, with boundary margin as the secondary lever. Consumed
+by [`rfc-072-cell-interface.md`](rfc-072-cell-interface.md) (Phase 0);
+its K72-1 pins this exact fixture: boundary-style provisioning must lift
+`dis-ec20-comp` from 94.6% to ≥98%.
 
 ## Incidental finding — a live specimen of the deferred output-side hole
 
