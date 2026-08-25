@@ -1625,6 +1625,10 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
                         && lanes.iter().enumerate().any(|(j, m)| {
                             j != i
                                 && !m.is_fluid
+                                // A tapless balancer-family lane's solid trunk
+                                // ends at its balancer — it never runs a south
+                                // column (codex review, HEAD 9a2aded5).
+                                && !(m.family_id.is_some() && m.tap_off_ys.is_empty())
                                 && m.x == l.x + 1
                                 && (occupied_at(m, ty - 1) || occupied_at(m, ty))
                         })
@@ -1642,21 +1646,89 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
         consumers.sort_unstable();
         consumers.dedup();
         consumers.sort_by_key(|&ri| row_spans[ri].y_start);
+        if consumers.len() < members.len() {
+            // An equal-count partition would hand some sibling an empty
+            // block — a tapless lane the occupancy predicate treats as
+            // unbounded. Leave the group for the loudness follow-up.
+            continue;
+        }
+        // Snapshot the original assignment: the repair must be no-worse.
+        // A collision against a FOREIGN column (not a sibling) may not
+        // clear under any sibling permutation, and the reassignment
+        // could even introduce a new sibling collision — verify after,
+        // restore on failure, and leave the loud failure to the
+        // router-loudness follow-up recorded in the RFC.
+        let originals: Vec<(usize, Vec<usize>, Vec<i32>)> = members
+            .iter()
+            .map(|&i| (i, lanes[i].consumer_rows.clone(), lanes[i].tap_off_ys.clone()))
+            .collect();
         // Rightmost sibling takes the topmost contiguous block.
         let mut order: Vec<usize> = members.clone();
         order.sort_by_key(|&i| std::cmp::Reverse(lanes[i].x));
         let n = order.len();
-        let base = consumers.len() / n;
-        let extra = consumers.len() % n;
+        // Contiguous blocks with DEMAND-AWARE boundaries (#727 round 1:
+        // equal-count blocks can hand one lane more draw than its belt).
+        // Per-row demand for this item ≈ spec input rate × machines.
+        let demand = |ri: usize| -> f64 {
+            let rs = &row_spans[ri];
+            rs.spec
+                .inputs
+                .iter()
+                .find(|f| !f.is_fluid && f.item == lanes[members[0]].item)
+                .map(|f| f.rate * rs.machine_count as f64)
+                .unwrap_or(0.0)
+        };
+        let m = consumers.len();
+        // Brute-force the boundary placement minimising the max block
+        // demand (m and n are single digits on every real config).
+        let mut best: Option<(f64, Vec<usize>)> = None;
+        let mut sizes = vec![1usize; n];
+        fn walk(
+            k: usize,
+            left: usize,
+            n: usize,
+            sizes: &mut Vec<usize>,
+            eval: &mut dyn FnMut(&[usize]),
+        ) {
+            if k == n - 1 {
+                sizes[k] = left;
+                eval(sizes);
+                return;
+            }
+            for take in 1..=left.saturating_sub(n - k - 1) {
+                sizes[k] = take;
+                walk(k + 1, left - take, n, sizes, eval);
+            }
+        }
+        walk(0, m, n, &mut sizes, &mut |sz: &[usize]| {
+            let mut worst = 0.0_f64;
+            let mut cur = 0usize;
+            for &t in sz {
+                let d: f64 = consumers[cur..cur + t].iter().map(|&ri| demand(ri)).sum();
+                worst = worst.max(d);
+                cur += t;
+            }
+            if best.as_ref().is_none_or(|(w, _)| worst < *w) {
+                best = Some((worst, sz.to_vec()));
+            }
+        });
+        let sizes = best.expect("at least one partition").1;
         let mut cursor = 0usize;
         let mut reassigned: Vec<(i32, Vec<usize>)> = Vec::new();
         for (k, &i) in order.iter().enumerate() {
-            let take = base + usize::from(k < extra);
+            let take = sizes[k];
             let block: Vec<usize> = consumers[cursor..cursor + take].to_vec();
             cursor += take;
             lanes[i].consumer_rows = block.clone();
             lanes[i].tap_off_ys = find_tap_off_ys(&lanes[i], row_spans);
             reassigned.push((lanes[i].x, block));
+        }
+        if collides(lanes) {
+            for (i, rows, taps) in originals {
+                lanes[i].consumer_rows = rows;
+                lanes[i].tap_off_ys = taps;
+            }
+            continue;
         }
         crate::trace::emit(crate::trace::TraceEvent::TapAssignmentRepaired {
             item,
