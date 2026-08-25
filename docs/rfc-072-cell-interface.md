@@ -427,3 +427,26 @@ the snapshot debugger sees them.
   where the splitter's second tile is free. Severity promotion for
   boundary-fed reachability failures remains on the list, adjudicated
   separately under the validator-trust protocol.*
+- *2026-08-25 — Phase 1 unit 1 SHIPPED AND SIM-VERIFIED: the
+  tap-assignment repair; unit 2 measured and characterized: the output
+  merger's rate-blind partition.* The repair
+  (`repair_tap_splitter_collisions`, lane_planner.rs — detection-gated,
+  fires only on the collision class, `TapAssignmentRepaired` trace
+  event, two pins) heals the specimen: validator 6W→0W/0E, meter
+  44.6→73.9, **sim 44.8→74.40** (converged, zero starved machines).
+  Full suite green at 1263 — detection-gating keeps every corpus
+  fixture byte-identical. The residual −17.3% is DEFECT #2, isolated
+  by the sim census (3 machines full_output × 5/s = the 15.6/s
+  shortfall exactly): `merge_output_rows` computes `n_output =
+  ceil(90/45) = 2` correctly but partitions whole producer rows
+  rate-blind — 3 rows × 30/s into 2 groups puts 60/s onto a 45/s
+  tail (45+30 = 75 ≈ 74.4 measured). The validator is CLEAN on the
+  over-subscribed layout — a second sim-anchored silent-deficiency
+  specimen, this one output-side. Fix directions for unit 2, in
+  preference order: (a) consult the RFC-069 stamp oracle for a proper
+  (rows→tails) balancer shape — which is verbatim what Phase 2's
+  composer needs for merging cell outputs, so unit 2 IS the composer's
+  merge primitive built early; (b) fallback, first-fit-decreasing
+  packing with n_output raised until no tail over-subscribes (3 tails
+  here — correct but belt-hungry). Plus the loudness follow-up: a
+  merger-tail rate check so over-subscription is at least visible.*

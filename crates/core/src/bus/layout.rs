@@ -3165,6 +3165,70 @@ mod tests {
     /// `MachineSpec.inputs` rate-semantics drift (per-machine nominal
     /// is what the solver emits and what the gate assumes).
     #[test]
+    fn the_topmost_row_tap_survives_adjacent_trunk_columns() {
+        // RFC-072 Phase 1: the cable-90 specimen. Before the
+        // tap-assignment repair, the topmost row's NON-LAST tap splitter
+        // collided with the sibling trunk column and committed a
+        // sourceless run — six dead machines flagged only by
+        // Warning-severity reachability findings (sim FAIL −50.2%).
+        // The repair reassigns the sibling group's consumers so the
+        // rightmost lane takes the topmost block (last-tap turn).
+        let mut inputs = rustc_hash::FxHashSet::default();
+        inputs.insert("copper-plate".to_string());
+        let sr = crate::solver::solve("copper-cable", 90.0, &inputs, "assembling-machine-3")
+            .expect("solve");
+        let _guard = crate::trace::start_trace();
+        let layout = build_bus_layout(&sr, LayoutOptions::default()).expect("layout");
+        let events = crate::trace::drain_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::trace::TraceEvent::TapAssignmentRepaired { item, .. } if item == "copper-plate"
+            )),
+            "the repair must fire on the specimen config"
+        );
+        let issues = match crate::validate::validate(&layout, Some(&sr)) {
+            Ok(i) => i,
+            Err(e) => e.issues,
+        };
+        let reach: Vec<_> = issues
+            .iter()
+            .filter(|i| i.category == "belt-flow-reachability")
+            .collect();
+        assert!(
+            reach.is_empty(),
+            "no machine may be disconnected from its input boundary — got {reach:?}"
+        );
+        assert_eq!(
+            layout.boundary_outputs.len(),
+            2,
+            "the 90/s target keeps its two merger tails"
+        );
+    }
+
+    #[test]
+    fn the_tap_repair_stands_down_on_unaffected_configs() {
+        // Detection-gated: a config with no splitter collision must not
+        // be reassigned (byte-identity for the corpus — the K72-2
+        // discipline). The ec20 composed pair has its iron tap splitter
+        // at a row where the sibling copper column has long turned east.
+        let mut inputs = rustc_hash::FxHashSet::default();
+        inputs.insert("iron-plate".to_string());
+        inputs.insert("copper-plate".to_string());
+        let sr = crate::solver::solve("electronic-circuit", 20.0, &inputs, "assembling-machine-3")
+            .expect("solve");
+        let _guard = crate::trace::start_trace();
+        let _ = build_bus_layout(&sr, LayoutOptions::default()).expect("layout");
+        let events = crate::trace::drain_events();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, crate::trace::TraceEvent::TapAssignmentRepaired { .. })),
+            "the repair must not touch collision-free configs"
+        );
+    }
+
+    #[test]
     fn a_real_high_draw_recipe_refuses_end_to_end() {
         let mut inputs = rustc_hash::FxHashSet::default();
         inputs.insert("stone".to_string());

@@ -754,6 +754,8 @@ pub fn plan_bus_lanes(
         }
     }
 
+    repair_tap_splitter_collisions(&mut lanes, row_spans);
+
     crate::trace::emit(crate::trace::TraceEvent::LanesPlanned {
         lanes: lanes.iter().map(|l| crate::trace::LaneInfo {
             item: l.item.clone(),
@@ -1569,6 +1571,99 @@ fn split_overflowing_lanes(
     }
 
     Ok((result, families))
+}
+
+/// RFC-072 Phase 1: repair sibling-lane consumer assignments whose
+/// NON-LAST tap splitter would collide with an adjacent sibling column.
+///
+/// The router stamps a non-last tap as a South splitter spanning
+/// `(x, tap_y-1)` and `(x+1, tap_y-1)` with the east feed entering at
+/// `(x+1, tap_y)`. When capacity splitting places sibling trunks in
+/// adjacent columns, a non-last tap whose y lies ABOVE the right
+/// neighbor's last tap finds both of those tiles inside the neighbor's
+/// live column — the splitter is never stamped and the tap's east run
+/// commits SOURCELESS (the cable-90 specimen: six dead machines,
+/// sim −50.2%, six Warning-only reachability findings). Repair: within
+/// the sibling group, reassign consumers as y-contiguous blocks with the
+/// TOPMOST block on the RIGHTMOST sibling — its column then ends in an
+/// immediate last-tap turn, freeing the tiles every lower splitter
+/// needs. Detection-gated so unaffected layouts stay byte-identical
+/// (the K72-2 discipline). Scope: solid external-input siblings without
+/// balancer families or HS trunks; collisions on other lane classes are
+/// left for the router-loudness follow-up recorded in the RFC.
+fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) {
+    use std::collections::BTreeMap;
+    // Column occupancy: a lane's trunk covers source_y ..= its last tap
+    // (a lane with no taps runs to the perimeter — treat as unbounded).
+    let occupied_at = |l: &BusLane, y: i32| -> bool {
+        y >= l.source_y
+            && match l.tap_off_ys.iter().copied().max() {
+                Some(last) => y <= last,
+                None => true,
+            }
+    };
+    let mut groups: BTreeMap<(String, u32), Vec<usize>> = BTreeMap::new();
+    for (i, l) in lanes.iter().enumerate() {
+        if !l.is_fluid
+            && l.producer_row.is_none()
+            && l.family_id.is_none()
+            && l.hs_trunk_idx.is_none()
+        {
+            groups.entry((l.item.clone(), l.module_id)).or_default().push(i);
+        }
+    }
+    for ((item, module_id), members) in groups {
+        if members.len() < 2 {
+            continue;
+        }
+        let collides = |lanes: &[BusLane]| -> bool {
+            members.iter().any(|&i| {
+                let l = &lanes[i];
+                let last = l.tap_off_ys.iter().copied().max();
+                l.tap_off_ys.iter().any(|&ty| {
+                    Some(ty) != last
+                        && lanes.iter().enumerate().any(|(j, m)| {
+                            j != i
+                                && !m.is_fluid
+                                && m.x == l.x + 1
+                                && (occupied_at(m, ty - 1) || occupied_at(m, ty))
+                        })
+                })
+            })
+        };
+        if !collides(lanes) {
+            continue;
+        }
+        // Gather the group's consumers, sorted by row y (top first).
+        let mut consumers: Vec<usize> = members
+            .iter()
+            .flat_map(|&i| lanes[i].consumer_rows.iter().copied())
+            .collect();
+        consumers.sort_unstable();
+        consumers.dedup();
+        consumers.sort_by_key(|&ri| row_spans[ri].y_start);
+        // Rightmost sibling takes the topmost contiguous block.
+        let mut order: Vec<usize> = members.clone();
+        order.sort_by_key(|&i| std::cmp::Reverse(lanes[i].x));
+        let n = order.len();
+        let base = consumers.len() / n;
+        let extra = consumers.len() % n;
+        let mut cursor = 0usize;
+        let mut reassigned: Vec<(i32, Vec<usize>)> = Vec::new();
+        for (k, &i) in order.iter().enumerate() {
+            let take = base + usize::from(k < extra);
+            let block: Vec<usize> = consumers[cursor..cursor + take].to_vec();
+            cursor += take;
+            lanes[i].consumer_rows = block.clone();
+            lanes[i].tap_off_ys = find_tap_off_ys(&lanes[i], row_spans);
+            reassigned.push((lanes[i].x, block));
+        }
+        crate::trace::emit(crate::trace::TraceEvent::TapAssignmentRepaired {
+            item,
+            module_id,
+            reassigned,
+        });
+    }
 }
 
 /// Find y-coordinates where this lane taps off into consumer rows.

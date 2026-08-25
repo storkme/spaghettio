@@ -1499,6 +1499,20 @@ pub enum TraceEvent {
         applied: Vec<(usize, i32)>,
     },
 
+    // RFC-072 Phase 1: a sibling lane group's consumer assignment was
+    // repaired because a NON-LAST tap's splitter tile (x+1, tap_y-1)
+    // fell inside a sibling trunk column still occupied at that y —
+    // the round-robin assignment would have committed a sourceless tap
+    // run (six dead machines on the cable-90 specimen, sim −50.2%).
+    // `reassigned` maps lane x → its new consumer row set (contiguous
+    // y-blocks, topmost block on the rightmost sibling so its column
+    // ends in an immediate turn). Fires once per repaired group.
+    TapAssignmentRepaired {
+        item: String,
+        module_id: u32,
+        reassigned: Vec<(i32, Vec<usize>)>,
+    },
+
     // `ModuleSizeSplit` candidate (see `docs/rfc-decomposition-search.md`)
     // applied a k-way split to one module of the partition plan. Fires
     // once per split module per `produce()` call. With Phase 1's k=2,
