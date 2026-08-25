@@ -1220,7 +1220,12 @@ fn layout_pass(
             let converged = compute_extra_gaps(&nf) == needed_gaps;
             crate::trace::emit(crate::trace::TraceEvent::GapConvergence {
                 converged,
-                applied: needed_gaps.iter().map(|(&k, &v)| (k, v)).collect(),
+                // The map the pass-3 placement ACTUALLY consumed —
+                // balancer needs merged with retry slack (#722 round 1:
+                // recording `needed_gaps` alone omitted the retry gaps
+                // on any retried fixture, misleading a converged=false
+                // readout).
+                applied: merged_gaps.iter().map(|(&k, &v)| (k, v)).collect(),
             });
             (re, rs, rw, th, nl, nf)
         };
@@ -1896,7 +1901,16 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
         }
 
         let n_producers = fam.shape.0;
-        // Get template height from balancer library
+        // Get template height from balancer library.
+        //
+        // KNOWN PARALLEL PREDICTION, kept deliberately (#722 round 1
+        // adjudication): this unguarded direct+gcd loop is the same
+        // class the resolvability work removed from the warning site,
+        // and unifying it onto `stamp_plan_for_shape` is measured to
+        // reshape 8+ sim-anchored bank rows (every reservation height
+        // is baked into every measured artifact). That unification is a
+        // recorded follow-up requiring its own bank re-bless campaign —
+        // not a rider on this PR.
         let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
         let templates = crate::bus::balancer_library::balancer_templates();
         let template_height = templates.get(&(n, m)).map(|t| t.height as i32)

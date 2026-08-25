@@ -5834,10 +5834,12 @@ fn stress_electronic_circuit_40s_from_ore() {
             // AGAIN, back to a NATIVE that finally stamps — the lane
             // split now consults the stamp oracle and pads the (10,14)
             // cable family to a resolvable shape, so the native builds
-            // accepted with ONE residual belt-dead-end and meters
-            // 37.46/40 = 93.7% (from the merge-tap's 18.5% sim). The
-            // residual dead-end is adjudicated by the row's sim anchor;
-            // tighten to 0 when it falls.
+            // accepted with ONE residual belt-dead-end (the pad's own
+            // orphan stub — #722 round 1; clean termination is a
+            // recorded follow-up). Instruments, labeled: METER
+            // 37.46/40 = 93.7%; SIM 36.8/40 = 92.0% converged
+            // kit-clean (the bank row); shipped predecessor: merge-tap
+            // SIM 18.5%. Tighten to 0 errors when the stub terminates.
             max_errors: 1,
             max_warnings: 28,
             max_errors_by_category: [
@@ -5856,9 +5858,9 @@ fn stress_electronic_circuit_40s_from_ore() {
         decided.as_ref().map(|(w, s)| (w.as_str(), *s)),
         Some(("native", spaghettio_core::trace::SelectionStage::BestAccepted)),
         "stress_electronic_circuit_40s_from_ore pins the RFC-069 resolvability-pad \
-         winner: the stamping native at BestAccepted, meter 37.46/40 vs the merge-tap's \
-         8.0-ish/40. If this moved, adjudicate with the SIM before re-blessing — got \
-         {decided:?}",
+         winner: the stamping native at BestAccepted, SIM 36.8/40 = 92.0% converged \
+         kit-clean (meter 93.7%) vs the merge-tap's SIM 18.5%. If this moved, \
+         adjudicate with the SIM before re-blessing — got {decided:?}",
     );
 }
 

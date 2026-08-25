@@ -300,34 +300,18 @@ pub(crate) fn shape_is_stampable(n: u32, m: u32) -> bool {
     if n == 0 || m == 0 {
         return false;
     }
-    if is_passthrough_shape(n, m) {
-        return true;
-    }
-    let templates = crate::bus::balancer_library::balancer_templates();
-    if templates.contains_key(&(n, m)) {
-        return true;
-    }
-    // Mirror the gcd-decomposition + width-guard at balancer.rs:167-176.
-    for g in (2..=n.min(m)).rev() {
-        if !n.is_multiple_of(g) || !m.is_multiple_of(g) {
-            continue;
-        }
-        let sub_n = n / g;
-        let sub_m = m / g;
-        if let Some(sub_template) = templates.get(&(sub_n, sub_m)) {
-            if sub_template.width <= sub_m {
-                return true;
-            }
-        }
-    }
-    // Phase 2.0 generator. Mirror the same width-guard the stamping path
-    // applies (`generated.width <= m`) so the predicate matches reality.
-    if let Some(generated) = crate::bus::balancer_generate::generate(n, m) {
-        if generated.width <= m {
-            return true;
-        }
-    }
-    false
+    // Delegates to the single resolvability oracle (#722 round 1): this
+    // predicate used to carry its own faithful mirror of the direct/gcd/
+    // generator search with both width guards — faithful TODAY, but the
+    // exact defect the resolvability work fixed was a parallel
+    // prediction drifting from the stamper, so the mirror goes. The
+    // passthrough tail makes every square resolvable regardless of
+    // `demand_skewed`, so `false` here is exact for this predicate's
+    // historical semantics.
+    !matches!(
+        stamp_plan_for_shape(n, m, false),
+        FamilyStampPlan::Unresolvable
+    )
 }
 
 /// Stamp a balancer template at the family's origin position.

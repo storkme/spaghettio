@@ -1491,7 +1491,9 @@ pub enum TraceEvent {
     // the converged needs. `converged == false` means the THIRD pass's
     // families disagree again (an oscillating gap map — a new fixture
     // class to diagnose, deliberately not looped on); `applied` is the
-    // `(last_producer_row, extra_gap)` map the final placement consumed.
+    // `(last_producer_row, extra_gap)` map the final placement consumed —
+    // the pass-2 balancer needs MERGED with any retry slack (#722
+    // round 1: the two differ on retried fixtures).
     GapConvergence {
         converged: bool,
         applied: Vec<(usize, i32)>,

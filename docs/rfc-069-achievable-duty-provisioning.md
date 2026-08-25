@@ -212,6 +212,33 @@ changes shipped geometry):
 
 ## Decision log
 
+- *2026-08-25 — #722 round 1 absorbed: the single-oracle thesis
+  completed, the probe shape corrected, the residual attributed.* Both
+  3/3 majors were right: (1) the pad probed `min(effective, consumers)`
+  while the plan-pad arm forms the family at the full trunk count — the
+  probe now mirrors the downstream formation rule exactly
+  (`plan_pad_arm` shares one predicate with `pad_active`); (2) ec40's 1
+  residual belt-dead-end IS the pad's own orphan stub (the +1 pad trunk
+  past the consumer count), NOT unexplained zero-headroom — the
+  attribution is corrected at the site and in the test comment, clean
+  stub termination is a recorded follow-up, and the trade (1 stub vs
+  631 errors, sim 92.0% converged kit-clean) is priced by the
+  correctness-over-footprint call. Of the 1/3 majors:
+  `shape_is_stampable` now delegates to the oracle (its mirror was
+  faithful today — both width guards present — but the mirror class is
+  the defect class); the `compute_extra_gaps` height unification was
+  IMPLEMENTED, MEASURED, and REVERTED — the fingerprint probe showed
+  it reshaping 8+ sim-anchored bank rows (reservation heights are
+  baked into every measured artifact: tier2-from-ore, ec22/23/30/
+  60-red, the decomposed pair, tier5), a full re-bless campaign's
+  worth of drift riding a 1/3 finding; it stands as a RECORDED
+  FOLLOW-UP with its own bank re-bless cycle, and the parallel loop
+  carries a comment naming this adjudication. Also: `GapConvergence.applied` records the MERGED map
+  the placement actually consumed (needs + retry slack); the budget
+  comments state the real bound (first resolvable within
+  max(n,4) lanes; the next-multiple guarantee holds only while
+  m/n ≤ 10) and both instruments are labeled (SIM 92.0% is the bank
+  number; 93.7% is the meter's).*
 - *2026-08-25 — **Phase A3: the coprime-trap class dissolved at the
   root — the resolvability pad.** Six instrument-falsified hypotheses
   led here (lane-registry drops, span-metadata defaults,

@@ -1092,8 +1092,8 @@ fn split_overflowing_lanes(
         };
         // RFC-069 resolvability pad (2026-08-25): probe the stamp
         // oracle with the shape this split will produce and pad the
-        // trunk count to the nearest resolvable `m` (within the
-        // PadLanes budget of +4). The exhibiting fixture: ec40's
+        // trunk count to the FIRST resolvable `m` within
+        // `max(n_producers, 4)` extra lanes. The exhibiting fixture: ec40's
         // k1-enrolled build produced a (10,14) cable family — the gcd
         // decomposition (5,7) exists in the library but fails the
         // stamp's width guard, nothing else serves the shape — which
@@ -1104,7 +1104,16 @@ fn split_overflowing_lanes(
         // If nothing within the budget resolves, the natural count
         // ships and the ground-truth missing-balancer warning reports
         // it honestly.
-        let projected_m = if is_collector {
+        // The shape the family will ACTUALLY form (#722 round 1, 3/3):
+        // on the plan-pad arm `n_lanes_with_consumers` is the full
+        // trunk count, not the consumer-bearing count — probing
+        // `min(effective, consumers)` there validates a shape that is
+        // never produced. Mirror the downstream formation rule exactly.
+        let plan_pad_arm = !any_hs
+            && !clamp_to_consumers
+            && plan_pad_floor > n_splits
+            && effective_n_splits > consumer_trunk_count;
+        let projected_m = if is_collector || plan_pad_arm {
             effective_n_splits
         } else {
             effective_n_splits.min(consumer_trunk_count).max(1)
@@ -1126,13 +1135,21 @@ fn split_overflowing_lanes(
                 ),
                 crate::bus::balancer::FamilyStampPlan::Unresolvable
             ) {
-            // Budget: up to the next multiple of `n_producers`, which is
-            // guaranteed resolvable — g = n decomposes it to n stacked
-            // (1, m/n) sub-stamps, the library carries (1, 2..=10), and
-            // a (1, k) stamp is never wider than its k outputs. Cost is
-            // bounded at n_producers - 1 empty pad columns; the owner's
-            // correctness-over-footprint call (RFC-069 decision log,
-            // 2026-08-15) prices that trade.
+            // Budget rationale: the search reaches the next multiple of
+            // `n_producers`, which is resolvable WHEN `m/n ≤ 10` (g = n
+            // decomposes to n stacked (1, m/n) sub-stamps and the
+            // library's (1, k) series runs 2..=10, never wider than its
+            // outputs) — beyond that ratio the find may return None and
+            // the ground-truth warning reports the shape honestly. The
+            // FIRST resolvable m wins, usually before the multiple
+            // (ec40: (10,14) resolves at 15 via g=5 → (2,3)). Cost is
+            // bounded at max(n_producers, 4) empty pad columns — and
+            // each pad trunk past the consumer count is an ORPHAN stub
+            // whose dead-end the validator reports (#722 round 1:
+            // ec40's 1 residual belt-dead-end IS this stub, priced by
+            // the owner's correctness-over-footprint call against the
+            // 631 errors it replaces; terminating pad stubs cleanly is
+            // a recorded follow-up).
             (projected_m + 1..=projected_m + n_producers.max(4)).find(|&m| {
                 !matches!(
                     crate::bus::balancer::stamp_plan_for_shape(
@@ -1153,11 +1170,8 @@ fn split_overflowing_lanes(
         // other path keeps the legacy skip-empty behaviour. The
         // resolvability pad reuses the same semantics when it raised
         // the count past the consumer-bearing trunks.
-        let pad_active = (!any_hs
-            && !clamp_to_consumers
-            && plan_pad_floor > n_splits
-            && effective_n_splits > consumer_trunk_count)
-            || resolvability_pad.is_some_and(|pm| pm > consumer_trunk_count);
+        let pad_active =
+            plan_pad_arm || resolvability_pad.is_some_and(|pm| pm > consumer_trunk_count);
 
         crate::trace::emit(crate::trace::TraceEvent::LaneSplit {
             item: lane.item.clone(),
