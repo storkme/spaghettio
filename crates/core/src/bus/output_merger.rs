@@ -585,6 +585,113 @@ mod tests {
         let (n, groups) = partition_columns(&[10.0, 10.0, 10.0], 45.0, 30.0);
         assert_eq!((n, groups), (1, vec![0, 0, 0]));
     }
+
+    /// #728 round 2: drive `merge_output_rows` through the ZERO-FOLD
+    /// branch end-to-end — three sub-cap rows whose partition is all
+    /// singletons must yield three distinct southbound tails below the
+    /// merge region (the previously fixed-and-reverted branch).
+    #[test]
+    fn merger_zero_fold_emits_three_distinct_tails() {
+        let mk = |y: i32| {
+            let mut rs = make_test_row_span(
+                "copper-cable",
+                y,
+                vec![],
+                vec![ItemFlow {
+                    item: "copper-cable".to_string(),
+                    rate: 5.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                6, // 30/s per row
+                vec![],
+            );
+            rs.output_belt_y = y + 2;
+            rs
+        };
+        let rows = [mk(0), mk(5), mk(10)];
+        let output_ys: Vec<i32> = rows.iter().map(|r| r.output_belt_y).collect();
+        let (_entities, tails, end_y, _mx) = merge_output_rows(
+            &[0, 1, 2],
+            &output_ys,
+            "copper-cable",
+            &rows,
+            15,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+        );
+        assert_eq!(tails.len(), 3, "three 30/s rows at 45/s need three tails");
+        let mut xs: Vec<i32> = tails.iter().map(|t| t.x).collect();
+        xs.sort_unstable();
+        xs.dedup();
+        assert_eq!(xs.len(), 3, "tails must sit on distinct columns");
+        assert!(end_y > 15, "the zero-fold branch must advance past merge_start_y");
+    }
+
+    /// #728 round 2: the column-order REVERSAL pin, end-to-end. Rows
+    /// [40, 40, 3] (row order) land on columns [3, 40, 40] (row 0 is
+    /// the RIGHTMOST column): the light column pairs with its 40/s
+    /// neighbour under one 45/s tail and the far 40 gets its own —
+    /// survivors at merge_x and merge_x+2. With the `.rev()` reverted
+    /// the partition reads [40, 40, 3], groups {40}/{40+3}, and the
+    /// second survivor sits at merge_x+1 — this pin fails.
+    #[test]
+    fn merger_asymmetric_rates_pin_the_column_order() {
+        let mk = |y: i32, machines: usize| {
+            let mut rs = make_test_row_span(
+                "copper-cable",
+                y,
+                vec![],
+                vec![ItemFlow {
+                    item: "copper-cable".to_string(),
+                    rate: 5.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                machines,
+                vec![],
+            );
+            rs.output_belt_y = y + 2;
+            rs
+        };
+        // row 0 = 40/s, row 1 = 40/s, row 2 = 5/s (light).
+        let rows = [mk(0, 8), mk(5, 8), mk(10, 1)];
+        let output_ys: Vec<i32> = rows.iter().map(|r| r.output_belt_y).collect();
+        let (_entities, tails, _end_y, _mx) = merge_output_rows(
+            &[0, 1, 2],
+            &output_ys,
+            "copper-cable",
+            &rows,
+            15,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+        );
+        let mut xs: Vec<i32> = tails.iter().map(|t| t.x).collect();
+        xs.sort_unstable();
+        assert_eq!(
+            xs.len(),
+            2,
+            "40+40+5 at 45/s packs as {{5+40}}/{{40}} — two tails"
+        );
+        // Columns are merge_x + i with row 0 rightmost; group 0 folds
+        // columns 0..=1 (survivor merge_x = xs[0]) and group 1 is the
+        // singleton column 2 (survivor merge_x + 2).
+        assert_eq!(
+            xs[1] - xs[0],
+            2,
+            "the second tail must be the RIGHTMOST column (row 0's 40/s) — \
+             a reversed column order folds columns 1..=2 instead and puts \
+             it at merge_x + 1: {xs:?}"
+        );
+    }
     use crate::models::{ItemFlow, MachineSpec};
 
     fn make_test_row_span(
