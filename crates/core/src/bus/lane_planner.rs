@@ -1624,7 +1624,10 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
                     Some(ty) != last
                         && lanes.iter().enumerate().any(|(j, m)| {
                             j != i
-                                && !m.is_fluid
+                                // Fluid columns at x+1 block the splitter
+                                // tile just as solid trunks do (#727 r4 —
+                                // previously skipped; the restore guard
+                                // bounds any over-fire).
                                 // A tapless balancer-family lane's solid trunk
                                 // ends at its balancer — it never runs a south
                                 // column (codex review, HEAD 9a2aded5).

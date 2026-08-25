@@ -3231,10 +3231,13 @@ mod tests {
         let _ = build_bus_layout(&sr, LayoutOptions::default()).expect("layout");
         let events = crate::trace::drain_events();
         assert!(
-            !events
-                .iter()
-                .any(|e| matches!(e, crate::trace::TraceEvent::TapAssignmentRepaired { .. })),
-            "the repair must not touch collision-free configs"
+            !events.iter().any(|e| matches!(
+                e,
+                crate::trace::TraceEvent::TapAssignmentRepaired { .. }
+                    | crate::trace::TraceEvent::TapAssignmentUnrepairable { .. }
+            )),
+            "detection must not fire at all on collision-free configs — \
+             neither the repair nor the restore path (#727 r4)"
         );
     }
 
