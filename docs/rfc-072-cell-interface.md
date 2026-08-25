@@ -9,11 +9,13 @@ low-rate/intra-cell winner; high rates via composition")
 
 Give cells a typed boundary contract — ports as `(item, rate, belt tier,
 edge position)` with an attached measurement receipt — and make the engine
-honor it in three steps: provision *embedded* producer stages the way
-boundaries are provisioned (closing the measured 5.4-point embedding cost),
+honor it in two steps: extend the deliver-plan-or-refuse-by-name contract
+(RFC-069) to the OUTPUT side (the sim-confirmed half-plan hole), then
 compose k replicated cells to reach rates the single bus structurally
-cannot (measured wall between 90 and 120/s uncapped), and extend the
-deliver-plan-or-refuse-by-name contract (RFC-069) to the composed level.
+cannot (the 120/s plan-arithmetic wall). A third step — fixing an
+"embedding cost" in composed stages — was in the first draft and was
+retired when ground truth showed the cost was meter artifact
+(Motivation 3).
 The strategic payoff is the verification inversion RFC-067 promised: a
 sim-anchored cell library turns per-layout verification cost into a
 reusable asset, and the celldb power law (top 5 motifs = 87.7% of machine
@@ -25,27 +27,34 @@ All numbers are measured and reproducible today
 ([`composition-frontier-probes.md`](composition-frontier-probes.md),
 instruments `sim_export` + meter `check_one`, main @ `7cec5ca9`):
 
-1. **The single bus has a structural ceiling.** Uncapped ec-from-ore
-   delivers 88.7–91.4% through 120/s with no cliff, but at 120 the plan
-   itself exceeds express lane physics (18 `lane-throughput` errors,
-   lanes planned at 23.2–25.1/s against the 22.5/s cap; cable clamps at
-   exactly 320/s). No layout improvement reaches plan past the wall —
-   only running k units each below saturation does.
-2. **Embedding costs delivery, and the mechanism is isolated.** The ec20
-   disambiguation pair (2026-08-25): with every boundary at or under
-   ~67% belt load (copper-plate 30/45, iron-plate 20/45), the assembly stage delivers **100.0%** when its cable arrives as
-   a boundary input and **94.6%** when the same cable is produced
-   internally — the internal cable stage under-delivers its own plan
-   (56.78/60), and the circuit output tracks it exactly. At zero boundary
-   margin (ec30) the gap widens to 16.5 points. The hand-off itself
-   converts loss-free in both experiments (#724 round 1) — the cost is in
-   how an embedded producer's output rate is planned, not in the
-   transfer.
-3. **The composed-level refusal gap is live.** `copper-cable 90` ships a
-   0-error layout that delivers exactly one full express belt (45.0/s,
-   half plan) — the output-side sibling of the RFC-069 Phase C refusal,
-   deferred there (#723 round-1 adjudication) and required here before
-   any composer merges cell outputs.
+1. **The single bus has a structural ceiling, and it is the wall — not
+   a gradual sag.** Ground truth (sim, 432k warmup, converged): the
+   uncapped ec-from-ore bus produces **97.9% of plan at 90/s** (WARN
+   −2.1%; 437/450 machines working, a small real residual). At 120/s
+   the *plan itself* exceeds express lane physics — 18
+   `lane-throughput` validator errors, lanes planned at 23.2–25.1/s
+   against the 22.5/s physical cap. That wall is plan arithmetic, not
+   a measurement: no layout improvement reaches plan past it. Only
+   running k units each below saturation does.
+2. **The output-side refusal gap is live, sim-confirmed.**
+   `copper-cable 90` ships a 0-error layout that the sim FAILs at
+   **−50.2%** (44.80/90 delivered, converged; 2 machines
+   output-blocked, 6 starved): a 90/s single-item target cannot leave
+   the bus on one express belt, and the validator does not say so.
+   This is the output-side sibling of the RFC-069 Phase C refusal,
+   deferred there (#723 round-1 adjudication) — a prerequisite for any
+   composer that merges cell outputs, and this RFC's Phase 1.
+3. **The seam-cost motivation was tested and DID NOT SURVIVE** — kept
+   here as the record of why this RFC is smaller than its first draft.
+   The meter measured composed two-stage fixtures 5–18 points below
+   plan; the sim anchors both (zero-margin and full-margin) at
+   **exactly plan** (+0.0% produced, PASS). Per-unit receipts DO
+   survive composition inside today's bus; there is no embedded-stage
+   defect and no Phase-1 provisioning work. The false signal became a
+   documented meter divergence class
+   ([`meter-divergence.md`](meter-divergence.md) §2026-08-25:
+   turn-path under-read) — the decision-log entries of 2026-08-25
+   carry the full forensic chain.
 
 ## Design
 
@@ -80,38 +89,29 @@ parallel type. Two rules carry the correctness weight:
   boundary is a kill criterion (K72-4), not an aspiration, because
   relocation-and-reroute is the shape RFC-057/058/064-P3 died on.
 
-### Phase 1 — boundary-style provisioning for embedded stages
+### Phase 1 — the output-side refusal (was: embedded-stage provisioning, CLOSED BY MEASUREMENT)
 
-Close the 5.4-point embedding cost inside the existing bus, before any
-composer exists: provision an embedded producer stage's output path the
-way an external boundary input's entry path is provisioned. The recon
-pinned the divergence precisely — consumer-row input belts are provisioned
-identically regardless of source (`row_input_belt`, placer.rs:32–50), and
-trunk *counts* match too (internal 60/s at express gets the same three
-20/s trunks external entry does, lane_planner.rs:886–933 vs 917–933).
-The internal path's exclusive loss points, none of which an external
-boundary has:
+The first draft's Phase 1 (boundary-style provisioning for embedded
+stages, chasing a 5.4-point "embedding cost") is closed: both composed
+fixtures sim at exactly plan and the cost was the meter's turn-path
+artifact — the decision log of 2026-08-25 carries the full forensic
+chain, and `meter-divergence.md` §2026-08-25 carries the divergence
+class. No embedded-stage work happens under this RFC.
 
-1. **Producer output lane filling** — some producer row kinds sideload
-   their output belt, filling one physical lane (placer.rs, `row_output_belt` sideload path; the
-   `sideload_bridge` both-lane path exists but is gated by
-   `can_lane_split()`, placer.rs).
-2. **Producer-to-trunk `ret:` sideloads** — non-topmost producer returns
-   merge into one physical lane of the trunk
-   (ghost_router.rs, the `ret:` walk).
-3. **Balancer partial-load** — a non-throughput-unlimited family
-   balancer can deliver less than its input supply
-   (template_validate.rs); the RFC-069 pad guarantees a stamp
-   *exists*, not that it is throughput-unlimited at the operating point.
-
-Phase 1's mechanism is to make the internal producer→consumer path
-boundary-shaped at these three points (both-lane fill, capacity-split
-returns, throughput-unlimited-or-refuse merge shapes), instrumented one
-point at a time against the K72-1 fixture so the 5.4 points get
-attributed, not just removed. This phase pays standalone — the native
-bus wins these configs today (selection recon: cell-chain loses on
-density, DI displaces only when strictly better), so the fix lands on
-the shipping path.
+Phase 1 is now the sim-confirmed real defect: **the output-side
+refusal**, the RFC-069 Phase C follow-up (#723 round-1 adjudication).
+A single-item target whose planned output rate exceeds what its
+boundary belts can carry ships a 0-error layout that delivers half
+plan (`copper-cable 90`: sim FAIL −50.2%). The fix mirrors Phase C's
+input-side shape: at plan time, refuse by name when the target's
+output rate exceeds the output boundary's carrying capacity at the
+effective tier (per-item stacking-aware, duty-scaled — the Phase C
+ceiling machinery reused on the output flows), or provision more
+output belts where the boundary contract allows. Same asymmetry
+discipline: the gate must never over-fire (full suite + calibration
+bank green). This is also the composer's prerequisite — merging cell
+outputs inherits the half-plan lie at every seam unless cells refuse
+outputs they cannot ship.
 
 ### Phase 2 — homogeneous replication
 
@@ -155,22 +155,37 @@ acceptance.
 
 ## Kill criteria
 
-- **K72-1 (Phase 1 mechanism).** If boundary-style provisioning of the
-  embedded cable stage does not lift `dis-ec20-comp` from 94.6% to ≥98%
-  on the meter (two points of margin below the boundary leg's measured
-  100.0%), the embedded-stage hypothesis is wrong — stop Phase 1 and
-  re-diagnose; no composer work starts on an unproven mechanism.
-- **K72-2 (Phase 1 never-worse).** If the Phase-1 change regresses any
-  sim-anchored calibration-bank row by more than 1% delivered (sim, not
-  meter — "never worse means never worse by the sim", the #520 lesson),
-  it reverts regardless of what it wins elsewhere.
+- **K72-1 — RETIRED 2026-08-25** (recorded, not deleted: kill criteria
+  are falsifiable claims and this one's premise was falsified before it
+  could gate anything). It demanded lifting `dis-ec20-comp` from 94.6%
+  to ≥98% on the meter; the sim anchors that fixture at 100.0%
+  produced already — the 94.6% was instrument artifact
+  (`meter-divergence.md` §2026-08-25).
+- **K72-2 — RETIRED with K72-1** (its subject phase closed by
+  measurement). Its principle — never worse by the SIM on any
+  calibration-bank row — is inherited verbatim by K72-6.
+- **K72-6 (Phase 1 refusal asymmetry).** If the output-side refusal
+  fires on any fixture the sim shows delivering ≥95% of plan (the gate
+  over-fires on a buildable config), or regresses any sim-anchored
+  calibration-bank row, it reverts — the RFC-069 Phase C rule: a
+  refusal gate must never over-fire.
 - **K72-3 (Phase 2 pays), two-part so a trip is attributable** (#725
   round 1: an absolute bar would mis-read an inherited per-cell gap as
-  replication overhead). **(a)** The composed `ec@240` must beat the
-  single-bus structural ceiling measured at 120/s (88.9% meter) — else
-  composition lost to the wall it exists to cross. **(b)** Composed
-  delivery must sit within 2 points of the constituent cell's own
-  standalone meter receipt at the chosen quantum — else the seams cost
+  replication overhead; #726 round 1: both parts on the same trust
+  basis — the original (a) anchored on the meter's 88.9% at 120/s,
+  a number this RFC's own evidence disqualified). **(a) Validity, by
+  plan arithmetic (no measurement):** the composed `ec@240` plan must
+  carry ZERO `lane-throughput` errors — the wall the single bus
+  cannot cross at that rate (18 such errors at 120/s) — and its sim
+  delivery must not fall below the family's sim-anchored single-bus
+  receipt (97.9% at 90/s, the standing bar until a 120/s sim
+  anchor exists): if k quantized cells plus merges deliver worse
+  than one bus at its best, composition pays overhead without gain.
+  **(b)** Composed delivery must sit within 2 points of the
+  constituent cell's own standalone SIM receipt at the chosen
+  quantum (sim, not meter — the meter's below-plan direction is not
+  trusted on turn-heavy fixtures, `meter-divergence.md`
+  §2026-08-25) — else the seams cost
   more than the interface contract allows, whatever the per-cell level
   is. A trip on (a) alone with (b) clean means the quantum is wrong
   (per-cell gap inherited), not that replication failed — re-quantize
@@ -184,25 +199,31 @@ acceptance.
 
 ## Verification plan
 
-Per the CLAUDE.md layout-engine protocol. The meter iterates (its
-below-plan direction is calibrated); **sims anchor every phase gate**:
-the ec20 pair after Phase 1 (K72-1's meter verdict confirmed by sim
-before the phase closes), the composed ec@240 fixture at Phase 2, and
-any calibration-bank row the changes touch re-blessed only through the
-bank refresh protocol. Seam checks (boundary rates match, ports align)
+Per the CLAUDE.md layout-engine protocol, with one amendment this RFC
+itself forced: **the meter's below-plan direction is NOT trusted on
+turn-heavy fixtures** (`meter-divergence.md` §2026-08-25 — a divergence
+class this RFC's own Phase 0 discovered), so **sims anchor every
+claim and every phase gate**: the output-refusal fixtures at Phase 1
+(the cable-90 specimen plus the never-over-fire sweep), the composed
+ec@240 fixture at Phase 2, and any calibration-bank row the changes
+touch re-blessed only through the bank refresh protocol. The meter
+remains the fast iterator for capacity-bound questions, where it
+measured accurately. Seam checks (boundary rates match, ports align)
 land as validator checks with per-instance positioned issues
 (`validator-reporting.md` rules). Trace events for composer decisions so
 the snapshot debugger sees them.
 
 ## Phasing
 
-- **Phase 0 — evidence (COMPLETE 2026-08-25).** The frontier and seam
-  probes plus the ec20 disambiguation; all numbers in
-  `composition-frontier-probes.md`.
-- **Phase 1 — boundary-style provisioning.** Standalone value; gates on
-  K72-1/K72-2.
-- **Phase 2 — replication composer + output-side refusal.** Gates on
-  K72-3/K72-4.
+- **Phase 0 — evidence (COMPLETE 2026-08-25, twice).** The frontier and
+  seam probes plus the ec20 disambiguation; then the sim-anchor pass
+  that overturned the seam-cost premise and established the turn-path
+  meter divergence. All numbers in `composition-frontier-probes.md`;
+  the adjudications in this decision log.
+- **Phase 1 — the output-side refusal.** Standalone value (closes the
+  sim-confirmed half-plan hole); gates on K72-6.
+- **Phase 2 — replication composer.** Gates on K72-3/K72-4; Phase 1 is
+  its prerequisite.
 - **Phase 3 — heterogeneous + library.** Not committed by acceptance;
   opens only on a clean Phase 2.
 
@@ -269,3 +290,93 @@ the snapshot debugger sees them.
   ec20 draws 30/s of copper plate, the export manifest's boundary
   line). Probes-doc header reclassified from "absorb when written" to
   the RFC's retained measurement record.*
+- *2026-08-25 — Phase 1 forensics complete: the mechanism is drop-point
+  contention (head-loading vs mid-loading), one suspect withdrawn.* New
+  instrument `crates/meter/examples/lane_heatmap.rs` (whole-map
+  per-lane occupancy + splitter routing counters + RECT path dump —
+  the questions trace_belt's boundary-feed walker cannot answer for
+  internal items). Chain on the K72-1 fixture: (1) the family
+  balancer is EXONERATED — the cable path has no splitter at all (two
+  producer rows cross-feed two consumer rows via turn-taps; trunks run
+  at 50–75% occupancy, flowing); (2) the one blocked splitter (iron
+  tap, input lane 1 at 1350/1350 both_blocked) is saturation
+  backpressure on a 45/s boundary trunk against 20/s demand — zero
+  iron starvation, a saturated input behaving saturated, suspect
+  withdrawn per the instrument-before-finding rule; (3) the loss is at
+  the producer DROP POINTS: the row's output belt is mid-loaded —
+  each output inserter needs a far-lane gap under which upstream
+  machines' items already stream, so the last machines in line face
+  60–80% local lane occupancy and stall in bursts (the attribution's
+  27% output_inserter_blocked), netting exactly the 5.4%. The
+  sideload bridge itself works as designed (both lanes fill west of
+  the merge). An external boundary belt is HEAD-loaded — compression
+  arrives pre-formed, no mid-run gap-hunting — which is why the
+  boundary leg measures 100.0% at identical average rates. Phase 1's
+  fix direction is therefore drop-point headroom on embedded rows'
+  output collectors (split collectors / more parallel output belts
+  per row — the output-side cousin of RFC-069's trunk provisioning),
+  NOT merge-shape work.*
+- *2026-08-25 — **GROUND TRUTH OVERTURNS THE PHASE-1 PREMISE**: the
+  sim anchors the K72-1 fixture AT PLAN; the meter's 94.6% — and the
+  entire drop-contention mechanism above — is instrument artifact.*
+  The scaling discriminator first refuted load-proportional
+  contention (2-row geometries block ~27% at 67% load while a
+  single-row 9-machine collector at 100% load blocks ZERO), pointing
+  at the meter's turn-path handling; per the
+  instrument-before-finding rule the fixture went to the sim before
+  any engine change. Verdict (288k warmup, converged, drift +0.0%,
+  validator clean, all 20 machines working): copper-cable produced
+  **60.00/60.00 (+0.0%)**, electronic-circuit produced **20.00/20.00
+  (+0.0%)**, delivered 19.73 (−1.3% edge effects) — PASS. There is
+  no embedding cost at full margin; the composed pair delivers plan
+  in the real game. Consequences: (1) K72-1 as written is MOOT — its
+  fixture is already at its target in ground truth; (2) the meter's
+  calibrated "below plan ⇒ believe it" asymmetry is FALSIFIED for
+  this fixture class (suspects: the turn-path lane model, or the
+  meter ignoring the manifest's realized inserter-capacity bonuses
+  the sim honors — nb=1/bulk=3) — a new divergence class owed to
+  `meter-divergence.md`, and every meter-only number in the Phase-0
+  evidence (the uncapped frontier percentages included) inherits the
+  suspicion; the validator-level findings (the 120/s lane-saturation
+  errors) are plan-math and stand; (3) whether ANY seam cost is real
+  now rests on the zero-margin ec30-comp fixture (meter 81.6%) —
+  sim dispatched; if it too anchors at plan, Phase 1 closes by
+  measurement with no defect to fix, and the RFC's substance is
+  Phase 2 (above-the-wall composition, whose motivating wall is
+  validator-real) plus the boundary contract.*
+- *2026-08-25 — **Phase 1 CLOSED BY MEASUREMENT**: the zero-margin
+  ec30-comp fixture also sims at plan.* Verdict (288k warmup,
+  converged, drift +0.0%, PASS): electronic-circuit produced
+  30.00/30.00 (+0.0%), delivered +1.3% — which requires the full
+  90/s of internally produced cable to flow. The meter's 81.6% was
+  artifact, so the ENTIRE seam-cost story (16.5 points at zero
+  margin, 5.4 at full margin) is instrument error and there is no
+  embedded-stage defect to fix. The artifact is GEOMETRY-CORRELATED:
+  the one straight-line fixture (ec15-comp, single 65×11 row, no
+  trunk turns) metered 99.7% while every turn-path fixture under-read
+  by 5–18 points — the root-cause hint for the meter follow-up (the
+  turn-path lane model, not a global capacity mismatch, since a
+  global cause would have hit ec15 too). Remaining meter-only claims
+  under sim adjudication before the RFC's motivation is rewritten:
+  the uncapped frontier percentages (fp-ec90 dispatched, 432k
+  warmup — deep chain) and the output-side half-plan specimen
+  (seam-cable90 dispatched). The 120/s wall needs no sim: 18
+  lane-throughput errors are plan arithmetic (planned lane rates
+  above the 22.5/s physical cap).*
+- *2026-08-25 — the last two anchors land; the RFC restructured around
+  what survived.* fp-ec90 (432k warmup, converged, WARN): produced
+  **97.9%** of plan (−2.1%; 437/450 working, 11 full-output, 2
+  starved) — the uncapped bus is far better than the meter's 91.4%,
+  and the small residual is real. seam-cable90 (converged, FAIL):
+  delivered **−50.2%** — the output-side hole is REAL and
+  sim-confirmed (and the meter was accurate here: capacity-bound
+  failures are outside the turn-path artifact class). Restructure:
+  Motivation rewritten on sim anchors with the retired seam-cost
+  claim kept as Motivation 3 (the record of why the RFC shrank);
+  Phase 1 is now the output-side refusal (Phase C's ceiling machinery
+  mirrored onto output flows, never-over-fire discipline, K72-6);
+  K72-1/K72-2 RETIRED with their falsification recorded in place;
+  K72-3(b) re-based on SIM receipts; the verification plan trusts the
+  meter only on capacity-bound questions. The meter's turn-model fix
+  is deliberately NOT this RFC's scope — it is a meter-crate
+  follow-up with the four anchored fixtures as its calibration set.*
