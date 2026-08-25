@@ -243,6 +243,31 @@ changes shipped geometry):
   calibration work and is this RFC's remaining substance. Until then
   `planning_duty` ships opt-in exactly as today, with its ec30/ec60-red
   gate receipts standing.*
+- *2026-08-25 — #723 round 5 adjudicated: zero accepted items — the
+  recycled/refuted round the declared stop point anticipated; merged
+  on this round's head.* Both 2/3 majors refuted on the engine's own
+  mechanics. (1) The unknown-tier "gate says express, placer says
+  yellow" mismatch: the PHYSICAL belts placed for an unenumerated
+  tier resolve to express via `belt_entity_for_rate`'s fallback — the
+  same one the gate uses — while `effective_in_lane_cap`'s yellow
+  reading only makes row-SPLITTING more conservative (more rows, same
+  total machines, same express belts): footprint, not delivery, the
+  round-2 row-cap corollary again; and unenumerated tier names are
+  unreachable from the shipped web UI's fixed choice set. (2) The
+  `planning_duty` blindness claim misreads the lever: `planning_duty`
+  is a feed-block FRAGMENTATION knob (`duty_input0_block` computes
+  machines-per-feed-segment as `floor(belt_budget × duty /
+  item0_rate)`, clamped `.max(1)`) — it never derates per-machine
+  draw, which is nominal × `utilization_for` at every duty. Even a
+  block of one machine is fed through one belt, so no duty value
+  rescues a per-machine-draw violation and the gate cannot block the
+  duty-as-candidate forward path (which varies fragmentation, not
+  draw). The 3/3 DI-residual minor is the round-3 adjudication
+  restated — the reviewer's own text says "documented-and-accepted in
+  the RFC log"; it stands as scoped. The user-visible-regression
+  minor is Phase C's intended behavior (the named Err with its remedy
+  IS the designed surface); the epsilon minor self-describes as
+  "negligible, and consistent with the never-over-fire requirement".*
 - *2026-08-25 — #723 round 4 adjudicated: the real-recipe pin taken;
   the lane-split, coupling-key, tier-fallback, and corpus-claim items
   refuted with receipts.* The 2/3 "vacuous tests" major was
