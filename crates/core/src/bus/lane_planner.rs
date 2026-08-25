@@ -1628,6 +1628,14 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
                                 // A tapless balancer-family lane's solid trunk
                                 // ends at its balancer — it never runs a south
                                 // column (codex review, HEAD 9a2aded5).
+                                // KNOWN LIMITS (#727 r3, deliberate): fluid
+                                // columns at x+1 also physically block the
+                                // splitter but are skipped here (that class
+                                // ships silent, owned by the loudness
+                                // follow-up); and occupied_at over-approximates
+                                // UG stretches as surface tiles — the restore
+                                // guard bounds any phantom fire to a
+                                // still-valid reassignment.
                                 && !(m.family_id.is_some() && m.tap_off_ys.is_empty())
                                 && m.x == l.x + 1
                                 && (occupied_at(m, ty - 1) || occupied_at(m, ty))
@@ -1658,9 +1666,19 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
         // could even introduce a new sibling collision — verify after,
         // restore on failure, and leave the loud failure to the
         // router-loudness follow-up recorded in the RFC.
-        let originals: Vec<(usize, Vec<usize>, Vec<i32>)> = members
+        let originals: Vec<(usize, Vec<usize>, Vec<i32>, f64)> = members
             .iter()
-            .map(|&i| (i, lanes[i].consumer_rows.clone(), lanes[i].tap_off_ys.clone()))
+            .map(|&i| {
+                (
+                    i,
+                    lanes[i].consumer_rows.clone(),
+                    lanes[i].tap_off_ys.clone(),
+                    // The rate is grown during reassignment BEFORE the
+                    // collision re-check; the restore must roll it back
+                    // too or stand-down configs tier-diverge (#727 r3).
+                    lanes[i].rate,
+                )
+            })
             .collect();
         // Rightmost sibling takes the topmost contiguous block.
         let mut order: Vec<usize> = members.clone();
@@ -1732,9 +1750,10 @@ fn repair_tap_splitter_collisions(lanes: &mut [BusLane], row_spans: &[RowSpan]) 
             reassigned.push((lanes[i].x, block));
         }
         if collides(lanes) {
-            for (i, rows, taps) in originals {
+            for (i, rows, taps, rate) in originals {
                 lanes[i].consumer_rows = rows;
                 lanes[i].tap_off_ys = taps;
+                lanes[i].rate = rate;
             }
             crate::trace::emit(crate::trace::TraceEvent::TapAssignmentUnrepairable {
                 item,
