@@ -7,6 +7,11 @@ when either sweep — `crates/meter/examples/sweep_corpus.rs` (Job-2 bank) or
 `crates/meter/examples/sweep_postlift.rs` (post-lift layouts) — moves a number
 or reveals a new one.
 
+**⚠ 2026-08-25: a third, broader hole — the turn-path under-read class
+(see the section at the head of this log). "Below plan ⇒ believe it" is
+falsified for turn-heavy fixtures until the meter's turn model is fixed;
+sim-anchor before deciding on any below-plan meter reading there.**
+
 **Two open residuals, and they are different animals:**
 
 1. `tier5_processing_unit_from_ore_am3`, −13.6% on the corpus (sim-relative,
@@ -25,6 +30,43 @@ or reveals a new one.
    log.
 
 
+
+## 2026-08-25 — turn-path under-read: BELOW PLAN IS NOT BELIEVABLE on turn-heavy fixtures
+
+Found during RFC-072 Phase-0/1 (the composition probes): the meter
+manufactured a "seam cost" on composed two-stage fixtures that headless
+Factorio does not exhibit. Four fixtures adjudicated against the sim
+(exports under the RFC-072 evidence set; sims converged, drift ≤ +1.8%):
+
+| fixture | topology | meter delivered | sim verdict | divergence |
+|---|---|---:|---|---|
+| `dis-ec20-comp` | 2-row, trunk turns | 94.6% | produced +0.0%, PASS | **−5.4pp phantom** |
+| `seam-ec30-comp` | 2-row, trunk turns | 81.6% | produced +0.0%, PASS | **−18.4pp phantom** |
+| `dis-ec15-comp` | single straight row, no turns | 99.7% | (not simmed) | consistent |
+| `seam-cable90` | capacity-bound (90/s target, one output belt) | 50.0% | delivered −50.2%, FAIL | **accurate** |
+
+The under-read is **geometry-correlated**: the one straight-line fixture
+meters clean, every turn-path fixture under-reads 5–18pp, and the
+capacity-bound failure is measured accurately — so the suspect is the
+turn-path flow model (per-lane geometry through turns interacting with
+mid-run inserter drops), not belt-capacity math and not a global
+inserter-capacity mismatch (a global cause would have hit the straight
+fixture too). The meter's own counters blame drops
+(`output_inserter_blocked` ≈ 27% of machine-ticks on the phantom
+fixtures) that the real game does not exhibit (sim census: all machines
+working).
+
+**Consequence for the calibrated asymmetry: "meter says below plan ⇒
+believe it" is FALSIFIED for turn-heavy fixtures.** Until the turn model
+is fixed and re-validated, a below-plan meter reading on a layout whose
+item paths turn (which is most bus layouts) refutes nothing by itself —
+it must be sim-anchored before any decision rides on it. The four
+fixtures above are the ready-made calibration set for the fix; the
+bank's own rows are unaffected (they were sim-anchored directly).
+Instrument used for the forensics:
+`crates/meter/examples/lane_heatmap.rs` (whole-map per-lane occupancy +
+splitter counters + RECT path dump). Follow-up: the meter-side turn
+model fix, tracked from RFC-072's decision log.
 
 ## 2026-08-08 — post-lift calibration: the FLOOR PROPERTY DOES NOT HOLD on the gate population
 
