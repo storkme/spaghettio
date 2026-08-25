@@ -380,3 +380,25 @@ the snapshot debugger sees them.
   meter only on capacity-bound questions. The meter's turn-model fix
   is deliberately NOT this RFC's scope — it is a meter-crate
   follow-up with the four anchored fixtures as its calibration set.*
+- *2026-08-25 — Phase 1's mechanism corrected by its own recon: the
+  output side is INNOCENT; the real defect is an input-tap
+  disconnection that only warns.* The output-boundary recon found
+  `merge_output_rows` already computes `n_output = ceil(total_rate /
+  single_cap)` (output_merger.rs) — and the engine probe confirms
+  cable-90 gets TWO express tails; ec60-red's two red tails ride the
+  same mechanism. The "exactly one full belt" reading in Motivation 2
+  was numerology: the sim's 44.8/s ≈ 10–11 working machines × 5/s,
+  because SIX machines (the whole first row) are dead — their pickup
+  belt is a 2-tile stub with no upstream path from the plate
+  boundary, exactly what the fixture's six `belt-flow-reachability`
+  warnings say, positioned per machine. "The validator does not say
+  so" was also wrong: it says so at Warning severity, which nothing
+  gates on, so the layout shipped 0E/6W. Phase 1 therefore targets:
+  (1) the row-input tap bug — the topmost row's tap stamps a dead
+  stub in this config class (single-recipe solve, external input,
+  3 rows); (2) the severity adjudication for
+  boundary-fed-reachability failures (a machine that can NEVER
+  receive input is a delivery-zero defect; promotion follows the
+  validator-trust protocol with its doc updated in the same PR).
+  The refusal framing is retired — the engine provisions output
+  capacity correctly and refuses nothing it can build.*
