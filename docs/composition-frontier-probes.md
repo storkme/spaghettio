@@ -1,7 +1,9 @@
 # Composition-direction probes: the single-bus frontier and the seam cost
 
-**Notes** (per the docs taxonomy: pre-RFC evidence, no durability contract —
-absorb into the cell-interface RFC when it is written). Run 2026-08-25 on
+**Notes** — the measurement record behind
+[`rfc-072-cell-interface.md`](rfc-072-cell-interface.md) (its Phase-0
+evidence base; retained as the raw-numbers record, the RFC carries the
+adjudications). Run 2026-08-25 on
 `main` at `7cec5ca9` (post-RFC-069), instruments: `sim_export` (tracked
 generator) + the meter's `check_one` (108k/216k calibrated window). Meter
 asymmetry applies throughout: **below plan ⇒ believe it**; at-plan clears
@@ -80,7 +82,8 @@ provisioning; if it does not, it targets embedded-stage planning.
 
 ### The disambiguation run (2026-08-25, same session)
 
-Re-run at ec 20/s, every boundary at ~67% belt load; `dis-cable40` keeps
+Re-run at ec 20/s, every boundary at or under ~67% belt load
+(copper-plate 30/45 = 67%, iron-plate 20/45 = 44%); `dis-cable40` keeps
 the standalone producer's output under one belt (40 ≤ 45) so its receipt
 is clean of the output-belt cap that polluted `seam-cable90`:
 

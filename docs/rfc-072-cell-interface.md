@@ -32,8 +32,8 @@ instruments `sim_export` + meter `check_one`, main @ `7cec5ca9`):
    exactly 320/s). No layout improvement reaches plan past the wall —
    only running k units each below saturation does.
 2. **Embedding costs delivery, and the mechanism is isolated.** The ec20
-   disambiguation pair (2026-08-25): with every boundary at ~67% belt
-   load, the assembly stage delivers **100.0%** when its cable arrives as
+   disambiguation pair (2026-08-25): with every boundary at or under
+   ~67% belt load (copper-plate 30/45, iron-plate 20/45), the assembly stage delivers **100.0%** when its cable arrives as
    a boundary input and **94.6%** when the same cable is produced
    internally — the internal cable stage under-delivers its own plan
    (56.78/60), and the circuit output tracks it exactly. At zero boundary
@@ -55,13 +55,16 @@ A `CellBoundary`: input and output ports, each `(item, rate, belt_tier,
 edge_side, offset)`, plus the constraint vector celldb already derives.
 The recon (2026-08-25, decision log) found the engine holds **three
 positional port shapes and none carries a rate**: `cells::extract::Port
-{edge, x, y, item, inbound}` (extract.rs:85), `BoundaryRecord {item, x,
-y, direction, is_fluid, entity}` on `LayoutResult` (models.rs:177), and
+{edge, x, y, item, inbound}` (extract.rs), `BoundaryRecord {item, x, y,
+direction, is_fluid, entity}` on `LayoutResult` (models.rs), and
 celldb's `Port {dx, dy, kind, item}` with `CellEntry` carrying
-`provenance` + `sim_anchor` (celldb.rs:28–56) — celldb's `check_entry`
-actively rejects stored rate stamps (celldb.rs:438), and only the mega
-planner pairs items with rates (`MegaPlan.outputs: Vec<(String, f64)>`,
-mega.rs:862). So `CellBoundary` is the promotion of celldb's `Port` with
+`provenance` + `sim_anchor` (celldb.rs) — celldb's `check_entry`
+actively rejects stored rate stamps, and among *planner-level port/
+boundary shapes* only `MegaPlan` pairs items with rates
+(`outputs: Vec<(String, f64)>`, mega.rs; entity- and solver-level
+rates exist — `PlacedEntity::rate`, `ItemFlow::rate` — but neither is
+a boundary contract). Identifier-level references are deliberate: the
+fine line spans drift (#725 round 1); the types are the anchor. So `CellBoundary` is the promotion of celldb's `Port` with
 a typed rate and the entry's existing `sim_anchor` receipt — an
 extension of the store the regression corpus already guards, not a new
 parallel type. Two rules carry the correctness weight:
@@ -90,15 +93,15 @@ The internal path's exclusive loss points, none of which an external
 boundary has:
 
 1. **Producer output lane filling** — some producer row kinds sideload
-   their output belt, filling one physical lane (placer.rs:187–218; the
+   their output belt, filling one physical lane (placer.rs, `row_output_belt` sideload path; the
    `sideload_bridge` both-lane path exists but is gated by
-   `can_lane_split()`, placer.rs:318–342, 764–804).
+   `can_lane_split()`, placer.rs).
 2. **Producer-to-trunk `ret:` sideloads** — non-topmost producer returns
    merge into one physical lane of the trunk
-   (ghost_router.rs:1658–1735).
+   (ghost_router.rs, the `ret:` walk).
 3. **Balancer partial-load** — a non-throughput-unlimited family
    balancer can deliver less than its input supply
-   (template_validate.rs:196–205); the RFC-069 pad guarantees a stamp
+   (template_validate.rs); the RFC-069 pad guarantees a stamp
    *exists*, not that it is throughput-unlimited at the operating point.
 
 Phase 1's mechanism is to make the internal producer→consumer path
@@ -112,14 +115,20 @@ the shipping path.
 
 ### Phase 2 — homogeneous replication
 
-One recipe target beyond the wall: `ec@240 = 4 × ec@60` cells tiled on a
-grid, inputs fanned out and outputs merged through stamp-oracle-vetted
-balancer shapes. The recon found the quantizer already exists: the cell
-chain's `required_copies` splits a target into K copies against
-`QUANTUM_RATE = 45.0` and plans each stage at
-`outputs[0].rate × count / K` (chain.rs:42–62, 711, 882) — so Phase 2
-promotes an in-tree mechanism from a density-losing candidate to the
-above-the-wall composer, rather than inventing replication. The
+One recipe target beyond the wall: `ec@240 = 6 × ec@40` — the quantizer's
+own split — cells tiled on a grid, inputs fanned out and outputs merged
+through stamp-oracle-vetted balancer shapes. The recon found the
+quantizer already exists: the cell chain's `required_copies` splits a
+target into K copies against `QUANTUM_RATE = 45.0` (so 240/s → 6 copies
+at 40/s each) and plans each stage at `outputs[0].rate × count / K`
+(chain.rs, `required_copies` + the per-stage rate at the compose loop) —
+so Phase 2 promotes an in-tree mechanism from a density-losing candidate
+to the above-the-wall composer, rather than inventing replication. The
+quantum itself is a Phase-2 tunable, not a constant to defend: the
+status ledger shows small cells deliver near plan (ec22 sims 99.4%)
+while 40–60/s buses carry the family's ~10% gap, so the
+delivery-optimal quantum may sit well below 45 and the fixture's copy
+count follows the measurement, not the constant. The
 output-side refusal (the deferred RFC-069 follow-up) ships here as a
 prerequisite: a composer that merges outputs must refuse a cell whose
 output cannot leave its boundary, or it inherits the cable-90 half-plan
@@ -148,17 +157,24 @@ acceptance.
 
 - **K72-1 (Phase 1 mechanism).** If boundary-style provisioning of the
   embedded cable stage does not lift `dis-ec20-comp` from 94.6% to ≥98%
-  on the meter (the boundary leg's own measured level), the
-  embedded-stage hypothesis is wrong — stop Phase 1 and re-diagnose;
-  no composer work starts on an unproven mechanism.
+  on the meter (two points of margin below the boundary leg's measured
+  100.0%), the embedded-stage hypothesis is wrong — stop Phase 1 and
+  re-diagnose; no composer work starts on an unproven mechanism.
 - **K72-2 (Phase 1 never-worse).** If the Phase-1 change regresses any
   sim-anchored calibration-bank row by more than 1% delivered (sim, not
   meter — "never worse means never worse by the sim", the #520 lesson),
   it reverts regardless of what it wins elsewhere.
-- **K72-3 (Phase 2 pays).** If the composed `ec@240` does not exceed 94%
-  delivered on the meter — beating the single-bus structural ceiling
-  measured at 120/s (88.9%) by ≥5 points — replication overhead ate the
-  win; stop before Phase 3.
+- **K72-3 (Phase 2 pays), two-part so a trip is attributable** (#725
+  round 1: an absolute bar would mis-read an inherited per-cell gap as
+  replication overhead). **(a)** The composed `ec@240` must beat the
+  single-bus structural ceiling measured at 120/s (88.9% meter) — else
+  composition lost to the wall it exists to cross. **(b)** Composed
+  delivery must sit within 2 points of the constituent cell's own
+  standalone meter receipt at the chosen quantum — else the seams cost
+  more than the interface contract allows, whatever the per-cell level
+  is. A trip on (a) alone with (b) clean means the quantum is wrong
+  (per-cell gap inherited), not that replication failed — re-quantize
+  before killing.
 - **K72-4 (no global routing).** If Phase 2's composer needs the ghost
   router across cell boundaries — anything beyond butt-joints, straight
   trunks, and stamped merge shapes — the standardized-port premise
@@ -222,3 +238,34 @@ the snapshot debugger sees them.
   #632-A2 extension, offpath Tier 2, #675) — the "de-facto interface
   spec" the 2026-07-24 strategy memory assumed is thinner than
   recorded, which raises this RFC's value rather than lowering it.*
+- *2026-08-25 — Phase 1's first attribution, from the meter's own
+  per-recipe accounting on the K72-1 fixture (`dis-ec20-comp`):* cable
+  machines show `item_shortage_ticks = 0` (the plate boundary with
+  margin is fully clean) but are output-inserter-blocked for ~27% of
+  machine-ticks (696,800 of 2,592,000, plus 139,200 output-full),
+  while the circuit machines starve for cable at exactly 5.4% of
+  machine-ticks (92,808 of 1,728,000) — matching the delivered deficit
+  to the decimal. The 5.4 points are **producer-output-side blocking**:
+  loss points 1–2 (sideload single-lane fill, `ret:` trunk merges)
+  implicated, loss point 3 (balancer) and input margin exonerated.
+  Phase 1 starts at the producer output path.*
+- *2026-08-25 — #725 round 1 adjudicated: the quantizer contradiction
+  fixed, K72-3 restructured for attributability, precision items
+  taken.* The 2/3 major was right: `4 × ec@60` contradicted the
+  promoted quantizer (`required_copies` at 45 yields 6 × 40/s, and 60
+  exceeds the quantum) — fixture corrected, and the quantum recorded
+  as a Phase-2 tunable (ec22's 99.4% sim receipt says the
+  delivery-optimal quantum may sit well below 45). The 1/3 K72-3
+  critique was taken in restructured form: an absolute 94% bar would
+  mis-read an inherited per-cell gap as replication overhead, so
+  K72-3 is now two-part — beat the wall (a), seams within 2 points of
+  the constituent cell's own receipt (b) — with a trip on (a)-alone
+  routed to re-quantization, not a kill. Precision fixes: K72-1's bar
+  phrasing (98% is two points below the boundary leg's measured
+  100.0%), line references loosened to identifier level (fine spans
+  drift), the rate-pairing claim restricted to planner-level boundary
+  shapes, the ~67% boundary-load claim itemized (copper 67%, iron
+  44% — the review's own 6.7/s recomputation was arithmetic error:
+  ec20 draws 30/s of copper plate, the export manifest's boundary
+  line). Probes-doc header reclassified from "absorb when written" to
+  the RFC's retained measurement record.*
