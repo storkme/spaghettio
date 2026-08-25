@@ -380,3 +380,97 @@ the snapshot debugger sees them.
   meter only on capacity-bound questions. The meter's turn-model fix
   is deliberately NOT this RFC's scope — it is a meter-crate
   follow-up with the four anchored fixtures as its calibration set.*
+- *2026-08-25 — Phase 1's mechanism corrected by its own recon: the
+  output side is INNOCENT; the real defect is an input-tap
+  disconnection that only warns.* The output-boundary recon found
+  `merge_output_rows` already computes `n_output = ceil(total_rate /
+  single_cap)` (output_merger.rs) — and the engine probe confirms
+  cable-90 gets TWO express tails; ec60-red's two red tails ride the
+  same mechanism. The "exactly one full belt" reading in Motivation 2
+  was numerology: the sim's 44.8/s ≈ 10–11 working machines × 5/s,
+  because SIX machines (the whole first row) are dead — their pickup
+  belt is a 2-tile stub with no upstream path from the plate
+  boundary, exactly what the fixture's six `belt-flow-reachability`
+  warnings say, positioned per machine. "The validator does not say
+  so" was also wrong: it says so at Warning severity, which nothing
+  gates on, so the layout shipped 0E/6W. Phase 1 therefore targets:
+  (1) the row-input tap bug — the topmost row's tap stamps a dead
+  stub in this config class (single-recipe solve, external input,
+  3 rows); (2) the severity adjudication for
+  boundary-fed-reachability failures (a machine that can NEVER
+  receive input is a delivery-zero defect; promotion follows the
+  validator-trust protocol with its doc updated in the same PR).
+  The refusal framing is retired — the engine provisions output
+  capacity correctly and refuses nothing it can build.*
+- *2026-08-25 — Phase 1 root cause: a NON-LAST tap whose splitter tile
+  is occupied by the adjacent trunk column commits a SOURCELESS belt
+  run.* Full chain from the trace + entity dump on cable-90: the
+  boundary's 45/s enters one belt; the trunk-head splitter at (1,0)
+  feeds two adjacent trunk columns (x=1, x=2); row 0's tap on lane 1
+  at y=1 is a non-last tap, whose splitter must span (1,1)-(2,1) —
+  but (2,1) is trunk 2's head. No splitter is stamped, the tap spec's
+  entry tile is dropped at commit (the route even RECORDED the
+  crossing: `GhostSpecRouted{tap:copper-plate:1:1,
+  crossing_tiles:[(2,1)]}` — then nothing resolved it), and the
+  surviving east run (3,1)→(8,1) has no upstream. Six machines dead;
+  six `belt-flow-reachability` warnings say so per machine; nothing
+  gates. The class boundary is proven in the same fixture: both LAST
+  taps (trunk turns at y=8 and y=15) work — only non-last tap
+  splitters with an occupied right-neighbor column break (ec20-comp's
+  iron tap splitter at (1,17)-(2,17) worked because the copper trunk
+  had turned east seven rows up). Fix shape, two mandatory parts:
+  (1) LOUDNESS — the router fails the tap spec when its source cannot
+  be stamped (sourceless commits are the silent-deficiency class this
+  campaign exists to close), surfacing as GhostSpecFailed → retry or
+  a named error; (2) AVOIDANCE — the lane planner assigns the
+  cramped lane the last-tap/turn role and places non-last taps only
+  where the splitter's second tile is free. Severity promotion for
+  boundary-fed reachability failures remains on the list, adjudicated
+  separately under the validator-trust protocol.*
+- *2026-08-25 — Phase 1 unit 1 SHIPPED AND SIM-VERIFIED: the
+  tap-assignment repair; unit 2 measured and characterized: the output
+  merger's rate-blind partition.* The repair
+  (`repair_tap_splitter_collisions`, lane_planner.rs — detection-gated,
+  fires only on the collision class, `TapAssignmentRepaired` trace
+  event, two pins) heals the specimen: validator 6W→0W/0E, meter
+  44.6→73.9, **sim 44.8→74.40** (converged, zero starved machines).
+  Full suite green at 1263 — detection-gating keeps every corpus
+  fixture byte-identical. The residual −17.3% is DEFECT #2, isolated
+  by the sim census (3 machines full_output × 5/s = the 15.6/s
+  shortfall exactly): `merge_output_rows` computes `n_output =
+  ceil(90/45) = 2` correctly but partitions whole producer rows
+  rate-blind — 3 rows × 30/s into 2 groups puts 60/s onto a 45/s
+  tail (45+30 = 75 ≈ 74.4 measured). The validator is CLEAN on the
+  over-subscribed layout — a second sim-anchored silent-deficiency
+  specimen, this one output-side. Fix directions for unit 2, in
+  preference order: (a) consult the RFC-069 stamp oracle for a proper
+  (rows→tails) balancer shape — which is verbatim what Phase 2's
+  composer needs for merging cell outputs, so unit 2 IS the composer's
+  merge primitive built early; (b) fallback, first-fit-decreasing
+  packing with n_output raised until no tail over-subscribes (3 tails
+  here — correct but belt-hungry). Plus the loudness follow-up: a
+  merger-tail rate check so over-subscription is at least visible.*
+- *2026-08-25 — #727 round 5: the tap unit's contract upgraded to
+  REPAIR-OR-REFUSE, with the suite as the discriminating instrument.*
+  The round's 3/3 major (the post-repair guard scoped owners to group
+  members, missing non-member taps broken by a lengthened member
+  column) is fixed by a global DIFFERENTIAL guard: colliding
+  (owner, tap_y) pairs are collected across every solid 2+-tap lane
+  before and after; the repair stands only if the group's own pairs
+  cleared AND no new pair appeared — background model-noise pairs
+  (cell-chain sub-layouts carry them) are compared against, not
+  demanded away, which the suite forced (the absolute form refused
+  healthy chain fixtures). The thrice-recycled loudness major is now
+  CLOSED, not deferred: an unrepairable group is a named refusal
+  ("tap assignment unrepairable"), upgraded from annotation on two
+  receipts — no corpus fixture refuses except one, and that one was
+  probed under a temporary restore flag and is GENUINELY broken (the
+  am2@1 chain fixture's native build: an Error belt-dead-end plus
+  seven reachability findings, four machines unfed and four unable to
+  ship output). Its test asserted "native must build" over that
+  wreckage since #541 — premise updated with the probe receipts in
+  the test comment; the test's real object (default does not silently
+  fall back to native) still pinned. Also scoped: merge-tap configs
+  skip the repair entirely — mt taps use PRIORITY-splitter machinery
+  the splitter-tile model does not describe (the mt yellow-cap
+  fixture read as phantom collisions). Suite green at 1265.*
