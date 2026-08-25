@@ -402,3 +402,28 @@ the snapshot debugger sees them.
   validator-trust protocol with its doc updated in the same PR).
   The refusal framing is retired — the engine provisions output
   capacity correctly and refuses nothing it can build.*
+- *2026-08-25 — Phase 1 root cause: a NON-LAST tap whose splitter tile
+  is occupied by the adjacent trunk column commits a SOURCELESS belt
+  run.* Full chain from the trace + entity dump on cable-90: the
+  boundary's 45/s enters one belt; the trunk-head splitter at (1,0)
+  feeds two adjacent trunk columns (x=1, x=2); row 0's tap on lane 1
+  at y=1 is a non-last tap, whose splitter must span (1,1)-(2,1) —
+  but (2,1) is trunk 2's head. No splitter is stamped, the tap spec's
+  entry tile is dropped at commit (the route even RECORDED the
+  crossing: `GhostSpecRouted{tap:copper-plate:1:1,
+  crossing_tiles:[(2,1)]}` — then nothing resolved it), and the
+  surviving east run (3,1)→(8,1) has no upstream. Six machines dead;
+  six `belt-flow-reachability` warnings say so per machine; nothing
+  gates. The class boundary is proven in the same fixture: both LAST
+  taps (trunk turns at y=8 and y=15) work — only non-last tap
+  splitters with an occupied right-neighbor column break (ec20-comp's
+  iron tap splitter at (1,17)-(2,17) worked because the copper trunk
+  had turned east seven rows up). Fix shape, two mandatory parts:
+  (1) LOUDNESS — the router fails the tap spec when its source cannot
+  be stamped (sourceless commits are the silent-deficiency class this
+  campaign exists to close), surfacing as GhostSpecFailed → retry or
+  a named error; (2) AVOIDANCE — the lane planner assigns the
+  cramped lane the last-tap/turn role and places non-last taps only
+  where the splitter's second tile is free. Severity promotion for
+  boundary-fed reachability failures remains on the list, adjudicated
+  separately under the validator-trust protocol.*
