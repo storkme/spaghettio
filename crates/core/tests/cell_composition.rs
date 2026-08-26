@@ -1249,7 +1249,8 @@ fn chain_capacity_reaches_the_placer() {
 /// To force the split without the quantizer intervening, this test
 /// takes a real solved `SolverResult` and overrides ONLY the
 /// copper-cable spec's `count` (test-only, not flow-conserving) to
-/// keep its total output under the 45/s quantum while leaving the EC
+/// keep its total output at-or-under the quantum (40 since RFC-072
+/// unit 1) while leaving the EC
 /// spec's own rate untouched — `required_copies` stays at K=1, EC's
 /// cell still splits into 2 rows, and the internal corridor is
 /// exercised exactly as `compose_chain` would drive it for any future
@@ -1274,7 +1275,9 @@ fn chain_refuses_multirow_internal_corridor() {
     .unwrap();
     for m in sr.machines.iter_mut() {
         if m.recipe == "copper-cable" {
-            // 5.0/s per machine * 8 = 40.0/s, under the 45/s quantum
+            // 5.0/s per machine * 8 = 40.0/s — exactly AT the quantum since
+            // RFC-072 unit 1 dropped it to 40: an epsilon-boundary case
+            // (required_copies' -1e-9 keeps K=1; a ~1% rate swing flips K=2)
             // (the unmodified solve's 9.6 machines = 48.0/s would push
             // required_copies to K=2 and mask the bug — see doc comment).
             m.count = 8.0;

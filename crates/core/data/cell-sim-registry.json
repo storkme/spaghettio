@@ -76,6 +76,18 @@
   "target": "electronic-circuit",
   "rate": 15.0,
   "geometry_hash": "8f2473ecbb564af4",
+  "declared_inserter_capacity": 2,
+  "declared_stacking": 1,
+  "harness_world": "nb=1 bulk=3 (the engine's shipping default, realized)",
+  "verdict": "PASS",
+  "produced_per_s": 15.0,
+  "scenario": "spaghettio-sim chain-ec15-d2 (Factorio 2.0.77, 2-copy quantum-40 geometry, converged; produced +0.0%, delivered -1.3%, all 15 working +1 transient full \u2014 the shipping-default world AT PLAN; RFC-072 P2 unit 1)",
+  "date": "2026-08-26"
+ },
+ {
+  "target": "electronic-circuit",
+  "rate": 15.0,
+  "geometry_hash": "8f2473ecbb564af4",
   "declared_inserter_capacity": 7,
   "declared_stacking": 1,
   "harness_world": "nb=3 bulk=11, S=1",

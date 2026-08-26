@@ -122,12 +122,18 @@ listed once, in the Phasing section.
 
 ### Phase 2 — homogeneous replication
 
-One recipe target beyond the wall: `ec@240 = 6 × ec@40` — the quantizer's
-own split — cells tiled on a grid, inputs fanned out and outputs merged
-through stamp-oracle-vetted balancer shapes. The recon found the
-quantizer already exists: the cell chain's `required_copies` splits a
-target into K copies against `QUANTUM_RATE = 45.0` (so 240/s → 6 copies
-at 40/s each) and plans each stage at `outputs[0].rate × count / K`
+One recipe target beyond the wall, composed as the quantizer actually
+splits it (**corrected twice**: first from the draft's `6 × ec@40`
+guess when Phase-2 recon showed the quantum applies to the chain's
+TOTAL flow, intermediates included; then re-derived when unit 1
+shipped `QUANTUM_RATE = 40.0` — at 40, ec@240's cable runs 720/s so
+`required_copies` gives K = 18 > K_MAX, the unit-2 territory; the
+shipped above-the-wall exemplars are ec150 = 12 × ec@12.5 and
+ec75 = 6 × ec@12.5, both sim-verified at plan). Cells tile side by
+side with per-copy feeds and drains; unit 2's grid/merge composer
+owns rates past K_MAX. The recon found the quantizer already exists:
+the cell chain's `required_copies` splits against the quantum
+and plans each stage at `outputs[0].rate × count / K`
 (chain.rs, `required_copies` + the per-stage rate at the compose loop) —
 so Phase 2 promotes an in-tree mechanism from a density-losing candidate
 to the above-the-wall composer, rather than inventing replication. The
