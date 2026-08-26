@@ -1253,9 +1253,37 @@ fn mismatch_note_is_fail_dominant_and_order_independent() {
     )
     .unwrap();
     // Capacity 1 composes the registered `8f2473ec`-family geometry
-    // (the registry gate below guarantees rows re-derive). Re-declare
-    // an UNMEASURED world on the same geometry to force the mismatch
-    // arm with all three verdict siblings in scope.
+    // (the registry gate below guarantees rows re-derive). #730 round
+    // 6: that rests on the L0==L1 geometry coincidence — the #381
+    // sizing ladder does not change hands between capacity 0 and 1 at
+    // this rate — which was previously UNSTATED; guard it so a moved
+    // breakpoint fails here by name instead of silently shifting the
+    // test onto an unregistered hash.
+    {
+        use spaghettio_core::bus::cells::chain::compose_chain_with_capacity as cc;
+        use spaghettio_core::bus::cells::registry::geometry_hash;
+        assert_eq!(
+            geometry_hash(&cc(&sr, 0).unwrap()),
+            geometry_hash(&cc(&sr, 1).unwrap()),
+            "the L0==L1 geometry coincidence this test rests on has moved \
+             (#381 ladder breakpoint?) — re-anchor these probes on whatever \
+             capacity now composes the registered FAIL-family hash"
+        );
+    }
+    // #730 round 5 (carried): the FULL-MATCH FAIL arm — the most
+    // behavior-changing arm in the round-2 fix — exercised through the
+    // real producer: capacity 1 unmutated declares the d1 world, whose
+    // registered row is the honest FAIL.
+    let l1 = compose_chain_with_capacity(&sr, 1).unwrap();
+    assert_eq!(l1.inserter_capacity, 1);
+    let note1 = verification_note("electronic-circuit", 15.0, &l1);
+    assert!(
+        note1.contains("NOT sim-verified") && note1.contains("FAILED it at its declared world"),
+        "a measured-FAIL world must rank unverified via the real producer, \
+         got: {note1:?}"
+    );
+    // Re-declare an UNMEASURED world on the same geometry to force the
+    // mismatch arm with all three verdict siblings in scope.
     let mut l = compose_chain_with_capacity(&sr, 1).unwrap();
     l.inserter_capacity = 3;
     let note = verification_note("electronic-circuit", 15.0, &l);
@@ -1385,12 +1413,16 @@ fn chain_refuses_multirow_internal_corridor() {
     .unwrap();
     for m in sr.machines.iter_mut() {
         if m.recipe == "copper-cable" {
-            // 5.0/s per machine * 8 = 40.0/s — exactly AT the quantum since
-            // RFC-072 unit 1 dropped it to 40: an epsilon-boundary case
-            // (required_copies' -1e-9 keeps K=1; a ~1% rate swing flips K=2)
-            // (the unmodified solve's 9.6 machines = 48.0/s would push
-            // required_copies to K=2 and mask the bug — see doc comment).
-            m.count = 8.0;
+            // 5.0/s per machine * 7.9 = 39.5/s — strictly UNDER the
+            // quantum (40 since RFC-072 unit 1), so K stays 1 with real
+            // margin. The first cut sat exactly AT 40.0, surviving only
+            // on required_copies' -1e-9 epsilon (#730 round 5: any
+            // upstream rate imprecision flips K=2 and silently changes
+            // what this test exercises). The cable count only feeds
+            // required_copies — EC's own 16/s drives the row split —
+            // and the unmodified solve's 9.6 machines = 48.0/s would
+            // push K=2 and mask the bug (see doc comment).
+            m.count = 7.9;
         }
     }
     let err = compose_chain_with_capacity(&sr, 2).expect_err(

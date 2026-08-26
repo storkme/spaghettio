@@ -776,3 +776,62 @@ way. The meter's turn-model fix
   recorded in memory: arming the review gate is not watching CI —
   check the full `gh pr checks` list after every push on a
   geometry-moving PR.*
+- *2026-08-26 — #730 MERGED (six rounds absorbed, all checks green;
+  squash e58a95fc). Unit 1 complete. Carried review items land in
+  unit 2's opening commit: the full-match-FAIL arm's real-producer
+  test + the L0==L1 coincidence guard; the corridor pin's 40.0
+  razor's-edge override moved to 39.5; the quantum comment scoped to
+  the ec corpus (the single-row cap is recipe-specific — the derived
+  form stays the recorded refinement); the full-match-precedence
+  clarification in the selection-policy comment; the coupled
+  tier/warning rate-argument comment at the drain; the registry
+  JSON trailing newline. New standing residual (#730 round 6): the
+  d1 FAIL rows (`8f2473ec` ec15, `f4b22018` ec30) are #383
+  inserter-plateau verdicts, not geometry defects — when RFC-049
+  Phase 3 inserter sizing lands, RE-MEASURE them rather than letting
+  a sizing-era FAIL fossilize the hash's unmeasured worlds at the
+  unverified rank tier.*
+- *2026-08-26 — Phase 2 unit 2 design adjudicated: STACKED
+  INDEPENDENT STRIPS.* The K_MAX successor was recon'd three ways
+  (two codex read-only passes with file:line receipts). (1)
+  Interior-corridor grids with central merges: real machinery for a
+  merge nothing requires. (2) Through-columns (all records on the
+  outer perimeter, trunks crossing inner strips): REFUTED — a shared
+  feed column needs a 1→2 branch primitive at the port turn
+  (stamp_path corners are flow turns, not splits); the inbound port
+  band spans ~10 rows, more than one express UG hop (reach 8); and
+  `CORRIDOR_GAP = 6` is a dynamic allowance consumed by
+  merges/fan-out/bypass/poles with no reservation API — a
+  through-drain cannot be certified from source. (3) The winner
+  falls out of the shipped interface: strips already carry fully
+  INDEPENDENT per-copy feeds and drains, so the composed artifact
+  needs NO inter-strip flow. K > K_MAX splits into R = ceil(K/K_MAX)
+  balanced strips; each composes exactly as today and translates by
+  (0, r × (strip_h + CLEARANCE)) — entities AND boundary records
+  (also fixing the recon-found mega-input y-translation gap at the
+  boundary-record translation); one stamped vertical pole column per
+  gap bridges the power networks (the power validator refuses
+  islands). K72-4 is satisfied by construction — the only
+  inter-strip geometry is a straight pole line. The Phase-2 section's
+  "stamp-oracle merges" language was speculative design; per-copy
+  exits ARE the shipped contract K72-3 measures, and merge machinery
+  would be spend on a measured non-problem (the same adjudication
+  class as Phase 0's hand-off finding). Implementation must settle:
+  CLEARANCE sized for the harness kit (strip r's south drain rigs
+  and strip r+1's north feed rigs share the gap; x-disjoint by slot
+  construction; the rig ext_len growth `11 + 2·idx` and the 12-tile
+  feed jog are the collision candidates — tune in the harness if the
+  kit census shows contact); the refusal moves from K_MAX to a
+  grid-level honesty bound (R_MAX = 4 → K ≤ 48, same loud-refusal
+  wording contract). Exemplar: ec@240 = 2×9. FRESH WALL RECEIPTS
+  (wall_probe.rs, local example; CELLCOMP off, AM3, from-ore): at
+  150/s native ships 35 lane-throughput + 2 dead-end errors (the
+  recorded "37"); at 240/s the failure MODE shifts — 0
+  lane-throughput but a caught ghost-router panic ("template place
+  failed: AlreadyClaimed") plus 13 dead-end + 9 unresolved-junction
+  errors in 251 issues. K72-3(a)'s "zero lane-throughput errors" is
+  therefore necessary but under-describes the 240 wall: the unit-2
+  bar is validator-0E, recorded against the native panic. (The
+  criterion's "18 such errors at 120/s" figure does not reproduce
+  from plates on current main — the wall receipts are the from-ore
+  numbers above; cite these, don't relitigate the old figure.)*

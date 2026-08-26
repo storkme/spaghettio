@@ -50,17 +50,23 @@ const VLANES: i32 = 2;
 /// template's long-handed input inserters concentrate their deficit
 /// (#383; the fix is RFC-049 Phase 3 inserter sizing, not geometry).
 /// RFC-072 Phase 2 unit 1 (was 45.0): the quantum must satisfy TWO
-/// physical caps — the express belt (45/s) AND single-row-per-stage
-/// composability: at 45 a copy's copper-cable stage needs 9 machines
-/// against the 8-per-row cap, so `CellComposedCandidate` refused every
-/// above-the-wall config with a multi-row internal corridor and the
-/// engine had NO error-free path past ~120/s. At 40 every ec-family
-/// stage fits one row and the composed strip ships and delivers:
-/// ec75 (K=6) sim 75.00/75.00 and ec150 (K=12) sim 150.00/150.00,
-/// both +0.0% produced, PASS, above the wall where native carries 37
-/// lane-throughput errors (receipts in the RFC's decision log; the
-/// derived form min(belt, max single-row stage rate) is the recorded
-/// refinement).
+/// caps — the express belt (45/s, universal) AND single-row-per-stage
+/// composability, which is RECIPE-SPECIFIC (8 machines per row × that
+/// stage's per-machine output): at 45 a copy's copper-cable stage
+/// needs 9 machines against the 8-per-row cap, so
+/// `CellComposedCandidate` refused every above-the-wall config with a
+/// multi-row internal corridor and the engine had NO error-free path
+/// past ~120/s. 40 is the value where every EC-FAMILY stage fits one
+/// row (#730 round 5: for the ec corpus the two caps coincide at 40 —
+/// AM3 cable at 5/s/machine — but that is a corpus fact, not a
+/// universal invariant; a chain whose bottleneck stage could carry
+/// more than 40/s in one row pays extra copies it does not need).
+/// The derived form min(belt, max single-row stage rate) is the
+/// recorded refinement that would make it per-recipe. At 40 the
+/// composed strip ships and delivers: ec75 (K=6) sim 75.00/75.00 and
+/// ec150 (K=12) sim 150.00/150.00, both +0.0% produced, PASS, above
+/// the wall where native carries 37 lane-throughput errors (receipts
+/// in the RFC's decision log).
 const QUANTUM_RATE: f64 = 40.0;
 /// Copy-count bound. Beyond this the footprint cost stops being honest
 /// scaling and the chain should be decomposed differently; refuse
@@ -1435,6 +1441,14 @@ pub fn compose_chain_with_capacity(
             // bound itself now — RFC-072 decision log, #730 round 4.)
             let spec = &specs[pi % n];
             let drain_rate = spec.outputs[0].rate * spec.count as f64;
+            // TIER from the FULL rate, warning against the PER-COPY
+            // share (#730 round 6): `belt_entity_for_rate(drain_rate)`
+            // and the `per_copy_drain` comparison below are a coupled
+            // pair — the tier deliberately over-provisions (full rate)
+            // while the warning measures what one copy's exit actually
+            // carries. Changing either side's rate argument without
+            // the other re-opens the phantom-warning class (K>1 exits
+            // compared at K× their real flow) or the under-tier class.
             let drain_belt = crate::common::belt_entity_for_rate(drain_rate, None);
             // The tier ladder tops out at express: a single-column drain
             // caps at 45/s, and a plan above that would under-deliver at
