@@ -215,12 +215,22 @@ pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
             let mut solids: Vec<f64> =
                 m.inputs.iter().filter(|i| !i.is_fluid).map(|i| i.rate * u).collect();
             solids.sort_by(|a, b| a.partial_cmp(b).expect("finite rates"));
-            // Two or more solid inputs: the lowest-rate one rides the FAR
-            // belt (`reassign_near_far` sends the hungrier item near), the
-            // rest are near; one budgeted extra column per side.
+            // Reach model mirrors the row templates: with two or more
+            // solid inputs the lowest-rate one rides the FAR belt
+            // (`reassign_near_far` sends the hungrier item near) with the
+            // contested extra column as its budget; the second is NEAR
+            // with one extra column; a THIRD (and beyond) sits at reach-2
+            // on a single long-handed hand with NO extra column
+            // (`triple_input_row`'s input3 — #733 round 4: pricing it as
+            // a near stack hand over-credited it ~5×).
             solids.iter().enumerate().any(|(idx, &rate)| {
-                let reach = if solids.len() >= 2 && idx == 0 { Reach::Far } else { Reach::Near };
-                let plan = size_side(rate, reach, 1, InserterTier::Stack, quality, level);
+                let (reach, budget) = match (solids.len(), idx) {
+                    (n, 0) if n >= 2 => (Reach::Far, 1),
+                    (_, 1) => (Reach::Near, 1),
+                    (_, i) if i >= 2 => (Reach::Far, 0),
+                    _ => (Reach::Near, 1),
+                };
+                let plan = size_side(rate, reach, budget, InserterTier::Stack, quality, level);
                 let capacity =
                     plan.count as f64 * crate::common::machine_feed_rate(plan.entity, quality, level);
                 // In grid territory a plan the ladder CANNOT cover (an
@@ -248,6 +258,14 @@ pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
 /// Why a solve is not chain-composable. Stable strings — the candidate
 /// reports these as its `accepted_reason`.
 pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
+    chain_eligible_at(sr, crate::common::DEFAULT_INSERTER_CAPACITY)
+}
+
+/// [`chain_eligible`] at the declared level the chain will compose at —
+/// the grid bound is level-dependent through the margin terms (#733
+/// round 4: a chain grid-composable at L7 must not be refused by the
+/// default-level count).
+pub fn chain_eligible_at(sr: &SolverResult, level: u8) -> Result<(), String> {
     if sr.machines.is_empty() {
         return Err("cells: empty chain".into());
     }
@@ -300,7 +318,7 @@ pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
     // instead of overloading a belt. Up to K_MAX copies compose as one
     // strip; beyond it the grid composer stacks up to R_MAX strips
     // (RFC-072 P2 unit 2). Refuse only past the grid bound.
-    let k = required_copies(sr);
+    let k = required_copies_at(sr, level);
     if k > K_MAX * R_MAX {
         return Err(format!(
             "cells: chain needs {k} quantized copies (max {} = {R_MAX} strips x {K_MAX} at quantum {QUANTUM_RATE}/s)",
@@ -1942,11 +1960,11 @@ fn compose_grid_with_capacity(
     inserter_capacity: u8,
     k: i32,
 ) -> Result<LayoutResult, String> {
-    chain_eligible(sr)?; // owns the K_MAX * R_MAX refusal at the default level
-    // The caller's K is evaluated at ITS declared level (#733 round 1):
-    // a low-level grid can need more copies than the default-level
-    // eligibility check saw, so the grid bound is re-asserted here with
-    // the same wording contract.
+    chain_eligible_at(sr, inserter_capacity)?; // the K_MAX * R_MAX refusal at the composing level
+    // Belt-and-braces: `k` is the caller's count at its declared level,
+    // the eligibility check above re-derives it at the same level; keep
+    // the explicit bound so a caller passing a stale K still refuses
+    // with the same wording contract.
     if k > K_MAX * R_MAX {
         return Err(format!(
             "cells: chain needs {k} quantized copies (max {} = {R_MAX} strips x {K_MAX} at quantum {QUANTUM_RATE}/s)",
@@ -2054,10 +2072,14 @@ fn append_strip_translated(acc: &mut LayoutResult, strip: LayoutResult, dy: i32)
     for (item, x, y) in strip.surplus_exits {
         acc.surplus_exits.push((item, x, y + dy));
     }
-    for mut r in strip.regions {
-        r.y += dy;
-        acc.regions.push(r);
-    }
+    // Regions carry absolute port coordinates inside `RegionPort`, which
+    // a bare `r.y += dy` would leave untranslated (#733 round 4). The
+    // strip composer never emits regions today; refuse to merge them
+    // silently rather than half-translate them.
+    debug_assert!(
+        strip.regions.is_empty() && acc.regions.is_empty(),
+        "a strip emitted regions — extend append_strip_translated to translate their ports too"
+    );
     acc.voided_streams.extend(strip.voided_streams);
     acc.warnings.extend(strip.warnings);
     acc.width = acc.width.max(strip.width);
