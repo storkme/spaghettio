@@ -670,3 +670,22 @@ the snapshot debugger sees them.
   position-dependent layout structure). The harness gains one
   follow-up all the same: a `world` field beside the layout coords
   in sim_state dumps, so this misread class cannot recur.*
+- *2026-08-26 — ROOT CAUSE, THIRD INSTRUMENT'S THE CHARM: the harness
+  drain rigs' POWER runs out with rig index; the layout is innocent
+  after all.* The discriminating pair: ec75 (6 copies) sims AT PLAN
+  (75.00/75.00, +3.5% delivered, all 374 machines working) while
+  ec150 delivered EXACTLY the same 77.6/s — the 12-copy run behaved
+  as a 6-copy one. With frames corrected, the saved report shows
+  exit 6's extension belts PACKED (8s) against exit 0's flowing
+  (2-3): items reach the far drains; the bank inserters never pick.
+  The rig places its substation+EEI at the extension HEAD
+  (scenario.rs, `exit + lateral·4/7 + flow·1`) while the bank sits at
+  `t = ext_len−8..ext_len` and `ext_len = 11 + 2·idx` — from rig ~6
+  the bank leaves the substation's supply area: unpowered legendary
+  stack inserters, full extension, blocked copy, kit_errors empty
+  (placement all succeeded). FIXED: the substation/EEI now anchor at
+  the bank's center (`t = ext_len−4`), covering every bank at any
+  ext_len; the ec150 re-run with the fixed harness is in flight as
+  the verification. If it lands at plan, the quantum-40 receipts
+  complete and unit 1 (the quantum change + this harness fix + the
+  bank re-bless) ships.*
