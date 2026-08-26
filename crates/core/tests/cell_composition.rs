@@ -1431,21 +1431,9 @@ fn chain_refuses_multirow_internal_corridor() {
     )
     .unwrap();
     for m in sr.machines.iter_mut() {
-        if m.recipe == "electronic-circuit" {
-            // RFC-072 P2 unit 2: `required_copies` now also bumps K
-            // until every copy's row-input MACHINE-CAPACITY draw clears
-            // express — EC@16 is 7 machines × 7.5/s = 52.5 > 45, which
-            // would quantize to K=2 and dissolve the 2-row cell this test
-            // exists to exercise. Override the per-machine cable draw
-            // (test-only, like the count override below) so 7 × 6.0 = 42
-            // stays under the margin; the cell's row split is driven by
-            // EC's OUTPUT rate, which is untouched.
-            for i in m.inputs.iter_mut() {
-                if i.item == "copper-cable" {
-                    i.rate = 6.0;
-                }
-            }
-        }
+        // (RFC-072 P2 unit 2's quantizer margin terms are scoped to grid
+        // territory, K > K_MAX — #733 round 1 — so this K=1 config never
+        // sees them; the first cut had to override EC's cable draw too.)
         if m.recipe == "copper-cable" {
             // 5.0/s per machine * 7.9 = 39.5/s — strictly UNDER the
             // quantum (40 since RFC-072 unit 1), so K stays 1 with real
@@ -1830,7 +1818,9 @@ fn cell_registry_hashes_current() {
             "chain",
             2,
         ),
-        // RFC-072 P2 unit 2: the grid exemplar (K=18 → 2×9 strips).
+        // RFC-072 P2 unit 2: the grid exemplar (K=24 → 2×12 strips; the
+        // K=18/K=20 numbers in the decision log are the earlier receipts,
+        // not the registered geometry).
         (
             "electronic-circuit",
             240.0,
@@ -1982,9 +1972,12 @@ fn cell_quantization_copy_counts() {
         QualityTier::Normal,
     )
     .unwrap();
-    // 45 by the rate quantum; the row-input margin bump carries it to
-    // 48 (at 45..47 a copy's 6 EC machines sit at zero margin; at 48
-    // exactly 5 per copy) — still within the grid bound, 4×12.
+    // 45 by the rate quantum; the margin terms carry it to 48 (at
+    // 45..47 a copy's 6 EC machines sit at zero belt margin; at 48
+    // exactly 5 per copy at 100%, iron 2.5/s → two far hands at 52%,
+    // so 48 is genuinely margin-clean, not merely the loop bound —
+    // 4×12, the last eligible K. A chain the margins cannot satisfy
+    // by 48 leaves the loop at 49 and refuses, see ec700 below.
     assert_eq!(required_copies(&sr), 48, "ec600 copy count");
     assert!(
         chain_eligible(&sr).is_ok(),
@@ -2075,9 +2068,13 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
         .map(|e| e.y)
         .min()
         .unwrap();
+    // STRIP_CLEARANCE is 32 (chain.rs, private); the gap between the
+    // last non-pole entity of strip 0 and the first of strip 1 is the
+    // clearance plus one, so pin it at ≥ 32 — a smaller constant would
+    // fail here before it failed in the harness's rig-vs-layout guard.
     assert!(
-        strip1_min - strip0_max >= 20,
-        "strips must be separated by the kit clearance, got {strip0_max}..{strip1_min}"
+        strip1_min - strip0_max >= 32,
+        "strips must be separated by the kit clearance (32), got {strip0_max}..{strip1_min}"
     );
     let interlopers: Vec<&str> = l
         .entities

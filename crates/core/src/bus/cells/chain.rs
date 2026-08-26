@@ -90,7 +90,19 @@ const STRIP_CLEARANCE: i32 = 32;
 /// item runs at ≤ `QUANTUM_RATE` per copy. Chains under the cap stay
 /// K=1 and compose bit-identically to the pre-quantization placer —
 /// quantization only activates where the placer previously refused.
+/// Evaluated at the default declared level; the grid path uses
+/// [`required_copies_at`] with the level it composes at (#733 round 1).
 pub fn required_copies(sr: &SolverResult) -> i32 {
+    required_copies_at(sr, crate::common::DEFAULT_INSERTER_CAPACITY)
+}
+
+/// [`required_copies`] with the declared inserter-capacity level the
+/// chain will compose at — the grid-territory margin terms ask the
+/// inserter ladder at THAT level, so the estimator and the composer
+/// can never disagree on what a hand moves. Sub-K_MAX results are
+/// level-independent by construction (the margin terms are gated to
+/// K > K_MAX), so every registered strip's K is unchanged.
+pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
     let produced: FxHashSet<&str> = sr
         .machines
         .iter()
@@ -173,9 +185,12 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
     // (`machine_feed_rate`) rather than re-deriving them. Gated on plans
     // the ladder believes cover (no shortfall): low declared levels whose
     // plans carry honest shortfalls are a receipted class of their own
-    // (the d1 FAIL rows) and must not shift geometry here — so K is the
-    // same at every declared level, as before. Mega members are the
-    // block's business, as in the rate loop above. SCOPED TO GRID
+    // (the d1 FAIL rows) and must not shift geometry here. Evaluated at
+    // the level the chain composes at (`level`), so a low-level grid
+    // plans more copies rather than trusting default-level hands (#733
+    // round 1); sub-K_MAX strips never enter this term, so their K stays
+    // level-independent as before. Mega members are the block's
+    // business, as in the rate loop above. SCOPED TO GRID
     // TERRITORY (K > K_MAX): applied to every chain it re-shaped the
     // registered military-science-pack@5 strip (the registry gate
     // caught it) — receipted sub-K_MAX strips keep their measured
@@ -183,7 +198,6 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
     // is for; RFC-049 P3 owns the general fix), while a grid's copies
     // carry no receipt and must be planned with margin.
     const HAND_MARGIN: f64 = 0.85;
-    let level = crate::common::DEFAULT_INSERTER_CAPACITY;
     let quality = crate::common::QualityTier::Normal;
     let hand_violates = |k: i32| {
         use crate::bus::inserter_ladder::{size_side, InserterTier, Reach};
@@ -201,11 +215,23 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
                 let plan = size_side(rate, reach, 1, InserterTier::Stack, quality, level);
                 let capacity =
                     plan.count as f64 * crate::common::machine_feed_rate(plan.entity, quality, level);
-                plan.shortfall.is_none() && rate > HAND_MARGIN * capacity + 1e-9
+                // In grid territory a plan the ladder CANNOT cover (an
+                // honest shortfall) is the strongest signal a copy would
+                // starve, so it counts as a violation too (#733 round 1 —
+                // the first cut excluded it, a holdover from when this
+                // term also saw the receipted low-level strips).
+                plan.shortfall.is_some() || rate > HAND_MARGIN * capacity + 1e-9
             })
         })
     };
-    while (belt_violates(k) || (k > K_MAX && hand_violates(k))) && k < K_MAX * R_MAX {
+    // BOTH margin terms are grid-territory only (#733 round 1: the belt
+    // term was unscoped and re-quantized a K=1 multirow-corridor config
+    // — the same re-shaping mechanism the hand term was scoped for).
+    // The loop runs THROUGH the grid bound: a chain the margins cannot
+    // satisfy within K_MAX × R_MAX copies leaves here at bound + 1 and
+    // `chain_eligible` refuses it by name, instead of shipping a 4×12
+    // grid with the violation still standing.
+    while k > K_MAX && (belt_violates(k) || hand_violates(k)) && k <= K_MAX * R_MAX {
         k += 1;
     }
     k
@@ -817,7 +843,7 @@ pub fn compose_chain_with_capacity(
     sr: &SolverResult,
     inserter_capacity: u8,
 ) -> Result<LayoutResult, String> {
-    let k = required_copies(sr);
+    let k = required_copies_at(sr, inserter_capacity);
     if k > K_MAX {
         return compose_grid_with_capacity(sr, inserter_capacity, k);
     }
@@ -1908,7 +1934,17 @@ fn compose_grid_with_capacity(
     inserter_capacity: u8,
     k: i32,
 ) -> Result<LayoutResult, String> {
-    chain_eligible(sr)?; // owns the K_MAX * R_MAX refusal
+    chain_eligible(sr)?; // owns the K_MAX * R_MAX refusal at the default level
+    // The caller's K is evaluated at ITS declared level (#733 round 1):
+    // a low-level grid can need more copies than the default-level
+    // eligibility check saw, so the grid bound is re-asserted here with
+    // the same wording contract.
+    if k > K_MAX * R_MAX {
+        return Err(format!(
+            "cells: chain needs {k} quantized copies (max {} = {R_MAX} strips x {K_MAX} at quantum {QUANTUM_RATE}/s)",
+            K_MAX * R_MAX
+        ));
+    }
     let strips = (k + K_MAX - 1) / K_MAX;
     // Balanced split: strip copy counts differ by at most one, summing
     // to K (18 -> 9+9, 25 -> 9+8+8).
@@ -1974,7 +2010,12 @@ fn compose_grid_with_capacity(
 /// coordinate translates — entities, BOTH boundary record sets (the
 /// harness attaches rigs at these exact tiles), surplus exits, regions;
 /// `power_wires` is dropped (strip-local indices) and rebuilt by the
-/// caller's `repair_pole_network`.
+/// caller's `repair_pole_network`. `effective_rows` and
+/// `research_productivity` are NOT merged: the strip composer never
+/// populates either today (cells attribute rows by belt adjacency,
+/// validate/inserters.rs), so a strip composer that starts to must
+/// extend this merge — the debug asserts below are the tripwire for
+/// the declared axes.
 fn append_strip_translated(acc: &mut LayoutResult, strip: LayoutResult, dy: i32) {
     debug_assert_eq!(acc.inserter_capacity, strip.inserter_capacity);
     debug_assert_eq!(acc.stacking, strip.stacking);
