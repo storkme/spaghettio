@@ -1436,11 +1436,19 @@ pub fn compose_chain_with_capacity(
             // rides LayoutResult.warnings, where selection's
             // layout-warnings floor counts it and a user can read it.
             let drain_cap = crate::common::belt_throughput(drain_belt);
-            if drain_rate > drain_cap {
+            // The WARNING compares the PER-COPY rate (each copy drains its
+            // own disjoint exit at full_rate/kq) — the tier selection above
+            // deliberately stays full-rate (recorded over-tiering). The
+            // unscaled comparison fired falsely on every K>1 chain
+            // (480/s vs 45 on drains carrying 40/s), and those phantom
+            // warnings entered selection's layout-warnings floor
+            // (codex review of RFC-072 P2 unit 1).
+            let per_copy_drain = drain_rate / kq as f64;
+            if per_copy_drain > drain_cap {
                 chain_warnings.push(format!(
-                    "cell chain exit for {} carries {drain_rate:.1}/s on a single {} \
-                     column capped at {drain_cap:.0}/s — the drain under-delivers; \
-                     no single-belt tier can carry this plan",
+                    "cell chain exit for {} carries {per_copy_drain:.1}/s per copy on a \
+                     single {} column capped at {drain_cap:.0}/s — the drain \
+                     under-delivers; no single-belt tier can carry this plan",
                     out_item, drain_belt
                 ));
             }

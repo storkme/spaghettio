@@ -68,7 +68,7 @@
   "harness_world": "nb=0 bulk=2, S=1",
   "verdict": "FAIL",
   "produced_per_s": 12.58,
-  "known_residual": "produced -8.0% vs plan (13.80/15.00): EC-row yellow output-belt ceiling, priced at generation by row-output-lane-budget (13.0/s measured floor on yellow) + input-side inserter bound at declared L1 (capacity never reaches composed cells until #415) \u2014 #383 attribution, 2026-07-24",
+  "known_residual": "12.58/15.00 at the low-bonus d1 world \u2014 the #383 inserter plateau taxed per copy hand-off; regressed from 13.80 by the quantum-40 2-copy geometry (RFC-072 P2 unit 1's recorded trade; the d2 shipping default PASSES at plan)",
   "scenario": "spaghettio-sim chain-ec15-d1 (Factorio 2.0.77, 2-copy quantum-40 geometry, converged; -16.1% produced \u2014 the low-bonus #383 plateau taxes each copy's hand-offs; the d2 shipping-default world PASSES at plan and d7 improved to -4.0%; RFC-072 P2 unit 1's recorded trade)",
   "date": "2026-08-26"
  },
@@ -81,7 +81,7 @@
   "harness_world": "nb=3 bulk=11, S=1",
   "verdict": "WARN",
   "produced_per_s": 15.0,
-  "known_residual": "produced -5.3% vs plan (14.20/15.00): EC-row yellow output-belt ceiling only (input bound cleared at L7 bonuses), priced at generation by row-output-lane-budget (13.0/s measured floor on yellow) \u2014 #383 attribution, 2026-07-24",
+  "known_residual": "15.00 produced, 14.40/15.00 delivered (-4.0%) at d7 \u2014 improved from 14.20 by the quantum-40 2-copy geometry",
   "scenario": "spaghettio-sim chain-ec15-d7 (Factorio 2.0.77, 2-copy quantum-40 geometry, converged; produced +0.0%, delivered -4.0% \u2014 improved from the old -5.3%; RFC-072 P2 unit 1)",
   "date": "2026-08-26"
  },
@@ -94,7 +94,7 @@
   "harness_world": "nb=0 bulk=2, S=1",
   "verdict": "FAIL",
   "produced_per_s": 26.5,
-  "known_residual": "produced -7.6% vs plan (27.73/30.00): same EC-row output ceiling + declared-L1 input bound as chain-ec15 (K=2 copies of the same row class) \u2014 #383 attribution. Re-measured IDENTICAL after the 2026-08-23 #700 drain re-tier (yellow\u2192fast on the final drains \u2014 belt_entity_for_rate(30) = fast, 30 <= 30; review round 2 corrected an 'express' misattribution here): the drains sat exactly at yellow's 15/s and were not the binding constraint here; the residual is the row-internal ceiling + input bound, not the chain exit",
+  "known_residual": "26.50/30.00 at the low-bonus d1 world \u2014 same plateau trade as chain-ec15-d1 (RFC-072 P2 unit 1)",
   "scenario": "spaghettio-sim chain-ec30-d1 (Factorio 2.0.77, 3-copy quantum-40 geometry, converged; -11.7% produced \u2014 same low-bonus plateau trade as chain-ec15-d1; RFC-072 P2 unit 1)",
   "date": "2026-08-26"
  },

@@ -1744,7 +1744,7 @@ fn cell_quantization_copy_counts() {
             "{label}: must be chain-eligible"
         );
     }
-    // Past K_MAX=12 the chain refuses loudly (ec600 → cable 1800/s → K=40).
+    // Past K_MAX=12 the chain refuses loudly (ec600 → cable 1800/s → K=45 at quantum 40).
     let inputs_set: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())
