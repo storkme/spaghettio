@@ -500,9 +500,10 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 2,
         levels: &[2],
     },
-    // RFC-072 Phase 2 unit 2: the K_MAX successor's exemplar — K=20
-    // (18 by rate, 20 with the row-input margin bump) composes as a
-    // 2×10 GRID of stacked strips (the K72-3 fixture).
+    // RFC-072 Phase 2 unit 2: the K_MAX successor's exemplar — K=24
+    // (18 by rate, 20 with the belt margin, 24 with the input-hand
+    // margin) composes as a 2×12 GRID of stacked strips (the K72-3
+    // fixture; the K=18 and K=20 receipts are in the decision log).
     SimFixture {
         label: "chain-ec240",
         target: "electronic-circuit",
@@ -1935,6 +1936,14 @@ fn cell_quantization_copy_counts() {
             "electronic-circuit",
             60.0,
             &["iron-plate", "copper-plate"][..],
+            // 5 by the rate quantum (12/s per copy). NOTE: this copy's
+            // 5 EC machines draw iron at exactly the one-long-handed-
+            // hand credit (2.40/s) — the zero-margin provisioning the
+            // ec@240 grid sims measured short (RFC-072 P2 unit 2). The
+            // quantizer's input-hand margin is scoped to K > K_MAX, so
+            // this sub-K_MAX strip keeps its shape; a first sim of
+            // chain-ec60 should expect the same tail-starvation class
+            // until RFC-049 P3 puts margin in the ladder itself.
             5,
         ),
     ] {
@@ -2000,7 +2009,7 @@ fn cell_quantization_copy_counts() {
 
 /// RFC-072 Phase 2 unit 2: past K_MAX the chain composes as a GRID of
 /// stacked independent strips. This pins the whole contract on the
-/// ec@240 exemplar (K=20 → 2×10): balanced split, strip translation
+/// ec@240 exemplar (K=24 → 2×12): balanced split, strip translation
 /// (entities AND boundary records — the harness attaches rigs at those
 /// exact tiles), one bridged power network, the CellGridComposed trace
 /// event, and validator ZERO ERRORS — the K72-3(a) plan bar, where the
@@ -2024,11 +2033,14 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
     )
     .unwrap();
     // 18 by the rate quantum alone (cable 720/s ÷ 40); 20 once the
-    // row-input margin bump applies — at 18 a copy's 6 EC machines can
-    // draw exactly 45/s on express (zero margin), and the K=18 sim
-    // starved one machine per copy (RFC-072 log, 2026-08-26). At 20 a
-    // copy is the 5-machine cell ec150 ships at plan.
-    assert_eq!(required_copies(&sr), 20, "ec240 quantizes to 20 copies");
+    // row-input BELT margin applies (at 18 a copy's 6 EC machines can
+    // draw exactly 45/s on express); 24 once the input-HAND margin
+    // applies — K=19..23 all land a copy's iron draw on a single
+    // long-handed hand above 85% of its 2.4/s credit (the K=18 sim
+    // measured 92.6% → one machine short per copy, K=20 measured 100%
+    // → two short per copy; RFC-072 log, 2026-08-26). At 24 a copy is
+    // the 4-machine 10/s cell: iron 2.5/s → two hands at 52%.
+    assert_eq!(required_copies(&sr), 24, "ec240 quantizes to 24 copies");
     let _guard = spaghettio_core::trace::start_trace();
     let l = compose_chain(&sr).expect("grid composes");
     let events = spaghettio_core::trace::drain_events();
@@ -2039,8 +2051,8 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
         .collect();
     assert_eq!(grid_events.len(), 1, "exactly one grid event");
     assert!(
-        grid_events[0].contains("copies_per_strip: [10, 10]"),
-        "balanced 2x10 split, got: {}",
+        grid_events[0].contains("copies_per_strip: [12, 12]"),
+        "balanced 2x12 split, got: {}",
         grid_events[0]
     );
     // Two entity bands separated by the clearance: nothing except the
@@ -2085,7 +2097,7 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
     );
     assert_eq!(
         l.boundary_outputs.len(),
-        20,
+        24,
         "one exit per copy across both strips"
     );
     // The K72-3(a) bar: zero validator errors (native at this rate has

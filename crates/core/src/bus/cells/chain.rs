@@ -148,7 +148,7 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
     // No-op for every registered strip (their K already clears it —
     // the copy-count pins and registry gates hold).
     let express = crate::common::belt_throughput("express-transport-belt");
-    let violates = |k: i32| {
+    let belt_violates = |k: i32| {
         sr.machines.iter().any(|m| {
             let per_copy = (m.count / k as f64 - 1e-9).ceil();
             m.inputs
@@ -156,7 +156,56 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
                 .any(|i| !i.is_fluid && per_copy * i.rate >= express - 1e-9)
         })
     };
-    while violates(k) && k < K_MAX * R_MAX {
+    // Input-HAND margin (RFC-072 P2 unit 2, the second re-quantization
+    // the ec@240 receipts forced): the row's inserter ladder sizes each
+    // machine side with `required <= n·rate` and NO margin, crediting a
+    // long-handed hand exactly 2.4/s at the default level — so a copy
+    // whose per-machine far-belt draw lands at 2.4/s gets ONE hand at
+    // 100% of its credited rate, and the sim starves the row's tail
+    // (ec@240 at K=20: 12/s per copy → 5 EC machines at 96% → iron
+    // 2.40/s → one hand → two machines short per copy, −6.7%; K=18 →
+    // 92.6% of one hand → one short per copy, −1.7%; the receipted
+    // ec150 cell at 12.5/s → 2.5/s → TWO hands at 52% → plan). The fix
+    // for the ladder itself is RFC-049 Phase 3 (a margin in sizing);
+    // until it lands the quantizer refuses to PLAN a copy whose hands
+    // the ladder would fill past HAND_MARGIN. Single source of truth:
+    // this asks the ladder (`size_side`) and its calibrated rates
+    // (`machine_feed_rate`) rather than re-deriving them. Gated on plans
+    // the ladder believes cover (no shortfall): low declared levels whose
+    // plans carry honest shortfalls are a receipted class of their own
+    // (the d1 FAIL rows) and must not shift geometry here — so K is the
+    // same at every declared level, as before. Mega members are the
+    // block's business, as in the rate loop above. SCOPED TO GRID
+    // TERRITORY (K > K_MAX): applied to every chain it re-shaped the
+    // registered military-science-pack@5 strip (the registry gate
+    // caught it) — receipted sub-K_MAX strips keep their measured
+    // geometry whatever their hand utilization (that is what a receipt
+    // is for; RFC-049 P3 owns the general fix), while a grid's copies
+    // carry no receipt and must be planned with margin.
+    const HAND_MARGIN: f64 = 0.85;
+    let level = crate::common::DEFAULT_INSERTER_CAPACITY;
+    let quality = crate::common::QualityTier::Normal;
+    let hand_violates = |k: i32| {
+        use crate::bus::inserter_ladder::{size_side, InserterTier, Reach};
+        sr.machines.iter().filter(|m| !is_member(&m.recipe)).any(|m| {
+            let n = (m.count / k as f64 - 1e-9).ceil().max(1.0);
+            let u = (m.count / k as f64 / n).min(1.0);
+            let mut solids: Vec<f64> =
+                m.inputs.iter().filter(|i| !i.is_fluid).map(|i| i.rate * u).collect();
+            solids.sort_by(|a, b| a.partial_cmp(b).expect("finite rates"));
+            // Two or more solid inputs: the lowest-rate one rides the FAR
+            // belt (`reassign_near_far` sends the hungrier item near), the
+            // rest are near; one budgeted extra column per side.
+            solids.iter().enumerate().any(|(idx, &rate)| {
+                let reach = if solids.len() >= 2 && idx == 0 { Reach::Far } else { Reach::Near };
+                let plan = size_side(rate, reach, 1, InserterTier::Stack, quality, level);
+                let capacity =
+                    plan.count as f64 * crate::common::machine_feed_rate(plan.entity, quality, level);
+                plan.shortfall.is_none() && rate > HAND_MARGIN * capacity + 1e-9
+            })
+        })
+    };
+    while (belt_violates(k) || (k > K_MAX && hand_violates(k))) && k < K_MAX * R_MAX {
         k += 1;
     }
     k
@@ -772,23 +821,26 @@ pub fn compose_chain_with_capacity(
     if k > K_MAX {
         return compose_grid_with_capacity(sr, inserter_capacity, k);
     }
-    compose_strip_with_capacity(sr, inserter_capacity)
+    compose_strip_with_capacity(sr, inserter_capacity, k)
 }
 
-/// One horizontal strip of up to K_MAX quantized copies — the entire
-/// pre-unit-2 composer, unchanged. The grid path calls this once per
-/// strip with a proportionally scaled `SolverResult`, whose own
-/// `required_copies` lands exactly on the strip's planned copy count
-/// (verified by the caller before composing).
+/// One horizontal strip of `copies` quantized copies — the entire
+/// pre-unit-2 composer, unchanged except that the copy count is now the
+/// caller's: the single-strip path passes the quantizer's own value,
+/// the grid path passes each strip's planned share of a proportionally
+/// scaled `SolverResult` (a strip re-deriving its count from the scaled
+/// rate would disagree with the grid-only margin terms in
+/// `required_copies`, which is what the planned count exists to avoid).
 fn compose_strip_with_capacity(
     sr: &SolverResult,
     inserter_capacity: u8,
+    copies: i32,
 ) -> Result<LayoutResult, String> {
     // (RFC-055's ChainOrder::Compact axis and its compose_chain_compact
     // entry were deleted 2026-08-20 with cells/placement.rs — owner call
     // extending #632 A2; record in RFC-055's decision log.)
     chain_eligible(sr)?;
-    let kq = required_copies(sr);
+    let kq = copies.max(1);
     let scale = 1.0 / kq as f64;
     // RFC-052 Phase B: fluid specs collapse into one SUPER-SPEC whose
     // placed form is the boundary-adapted mega block. Solid-only chains
@@ -1885,18 +1937,11 @@ fn compose_grid_with_capacity(
         {
             f.rate *= ratio;
         }
-        // The split arithmetic guarantees required_copies(sub) == k_s
-        // (per-copy flow is identical, so the scaled totals quantize to
-        // exactly k_s); verify rather than assume — a drifted quantizer
-        // must refuse, not ship a mis-scaled strip.
-        let got = required_copies(&sub);
-        if got != k_s {
-            return Err(format!(
-                "cells: grid strip {s} quantized to {got} copies where the split \
-                 planned {k_s} — the quantizer and the split arithmetic disagree"
-            ));
-        }
-        let strip = compose_strip_with_capacity(&sub, inserter_capacity)?;
+        // The strip composes at the PLANNED count k_s (not its own
+        // re-derived quantization: the scaled sub-result's rate-only
+        // quantum can be lower than the grid's margin-bumped share, and
+        // the per-copy flow must be the grid's, not the strip's).
+        let strip = compose_strip_with_capacity(&sub, inserter_capacity, k_s)?;
         composed = Some(match composed {
             None => {
                 y_off = strip.height + STRIP_CLEARANCE;
