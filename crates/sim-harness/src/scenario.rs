@@ -783,8 +783,10 @@ fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
         y = rec.y,
     );
     if rec.is_fluid {
-        // Fluids hold the FRONT of the direction's ladder (see
-        // `feed_slots`), so `slot` here is the fluid's rank 0..f-1 and
+        // Fluids hold the FRONT of their band+CLUSTER's ladder (see
+        // `feed_slots`; per cluster since RFC-072 P2 unit 2 — six fluids
+        // split across two lateral clusters legitimately pass, since caps
+        // only merge when ADJACENT), so `slot` here is the fluid's rank 0..f-1 and
         // the staggered run length keeps every surface cap ≥2 tiles from
         // its neighbors while staying below every item band. The ug span
         // (gap = dist-1 = 1+2*slot) hits the game's 9-tile limit at
@@ -793,7 +795,7 @@ fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
         // loudly rather than fabricate a rate.
         assert!(
             slot <= 4,
-            "more than 5 fluid boundary feeds on one side (slot {slot} for {}): \
+            "more than 5 fluid boundary feeds in one lateral cluster (slot {slot} for {}): \
              the ug-run stagger cannot exceed the game's 9-tile span; extend \
              add_fluid_feed with chained hops before running this fixture",
             rec.item
@@ -871,8 +873,13 @@ fn drain_ext_lens(records: &[BoundaryRecord]) -> Vec<i32> {
                     // Base 11 (was 5): the widened 9-position drain bank
                     // needs ext_len-8 >= 3 so every chest/inserter sits
                     // outside the layout. The 2-step stagger within a
-                    // cluster reproduces the old global scheme's spacing
-                    // for close exits EXACTLY as measured. KNOWN-IMPERFECT
+                    // cluster keeps the old global scheme's SPACING for
+                    // close exits (the old scheme indexed by manifest
+                    // order, so a given pair's exact ext values can
+                    // differ; kit parity is receipted, not assumed —
+                    // ec22 re-measured under the clustered kit
+                    // reproduces its old-kit report to three decimals,
+                    // #731 round 1). KNOWN-IMPERFECT
                     // at close pitch, deliberately preserved (RFC-072 P2
                     // unit 2 audit): at pitch ≤ 8 a rig's ±2 bank tiles or
                     // its lateral +4..+8 power island can land on a
@@ -956,9 +963,12 @@ pub(crate) fn feed_footprint(
             tiles.insert((b.0 + into.0 * side, b.1 + into.1 * side));
         }
     }
+    // 2×2 entities (substation, EEI) are CORNER-centred: `create_entity`
+    // at integer (x, y) occupies tiles x-1..=x × y-1..=y (#731 round 2 —
+    // the first cut claimed x..=x+1, one tile off toward the jog tip).
     for k in [15, 18] {
         let b = (corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k);
-        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        for (dx, dy) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
             tiles.insert((b.0 + dx, b.1 + dy));
         }
     }
@@ -1001,9 +1011,11 @@ pub(crate) fn drain_footprint(
             ));
         }
     }
+    // 2×2 entities are corner-centred: tiles x-1..=x × y-1..=y around
+    // the integer position (#731 round 2).
     let bank_t = ext - 4;
     for off in [4, 7] {
-        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        for (dx, dy) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
             tiles.insert((
                 head.0 + flow.0 * bank_t + lateral.0 * off + dx,
                 head.1 + flow.1 * bank_t + lateral.1 * off + dy,
@@ -1019,7 +1031,14 @@ pub(crate) fn drain_footprint(
 /// each other, and the Lua-side kit audit only RECORDS an overlap — so
 /// refuse at codegen if any feed-rig tile coincides with any drain-rig
 /// tile. Same-type overlap inside a close-pitch drain cluster is the
-/// documented known-imperfect case and is not judged here.
+/// documented known-imperfect case and is not judged here. KNOWN GAP
+/// (#731 round 2): same-type rigs on PERPENDICULAR edges near a corner
+/// (a north-edge feed's lateral jog vs a west-edge feed's outward
+/// column) are checked by neither the band guards (same-direction
+/// only) nor this one (cross-type only); no engine shape produces it
+/// today (strips and grids feed north / drain south), and the
+/// rig-vs-layout guard below is shape-agnostic. Extend this guard to
+/// all-pairs rig disjointness before any composer emits such a corner.
 fn assert_feed_drain_rigs_disjoint(
     inputs: &[BoundaryRecord],
     slots: &[i32],
@@ -1093,12 +1112,23 @@ fn assert_rigs_clear_of_layout(
     outputs: &[BoundaryRecord],
     exts: &[i32],
 ) {
-    // Unit tests drive codegen with placeholder blueprint strings; a
-    // string that does not decode carries no layout to collide with.
-    // Every real run decodes (the same parser ingests the whole fixture
-    // corpus), so this is a test-only skip, not a silent production path.
-    let Ok(entities) = spaghettio_meter::blueprint_in::decode(bp) else {
-        return;
+    // A blueprint that does not decode is a REFUSAL in production
+    // (#731 round 2): this guard exists to turn silent kit truncation
+    // into a loud stop, and "the blueprint failed to parse" is inside
+    // the class it backstops, not outside it. The one legitimate
+    // non-decoding input is the unit tests' placeholder string
+    // ("0eNBPFAKE"), which exercise other parts of the codegen — gated
+    // on `cfg!(test)` so no production build can take the skip.
+    let entities = match spaghettio_meter::blueprint_in::decode(bp) {
+        Ok(e) => e,
+        Err(err) if cfg!(test) => {
+            eprintln!("rig-vs-layout guard skipped: placeholder blueprint ({err})");
+            return;
+        }
+        Err(err) => panic!(
+            "rig-vs-layout guard: the blueprint does not decode ({err}) — refusing to \
+             place rigs blind rather than ship a kit that may sit on the layout"
+        ),
     };
     let mut occupied: std::collections::HashSet<(i32, i32)> = Default::default();
     for e in &entities {
@@ -3760,6 +3790,59 @@ mod tests {
         let slots = feed_slots(&inputs);
         let exts = drain_ext_lens(&outputs);
         assert_rigs_clear_of_occupied(&grid_occupied(8), &inputs, &slots, &outputs, &exts);
+    }
+
+    /// The DEFAULT-PATH corpus check (#731 round 2): every guard, against
+    /// real engine exports committed under `tests/fixtures/<label>/`
+    /// (`bp.txt` + `manifest-real.json`) — a single strip (chain-ec15-d2,
+    /// the calibration-family fixture) and a real two-strip GRID
+    /// (grid-ec180p, ec@180 from plates, 544×64, 0 errors / 0 warnings)
+    /// whose interior-edge rigs are exactly what the guards exist for.
+    /// Runs in CI on every push; the bank-wide sweep below stays the
+    /// operator's deep check.
+    #[test]
+    fn codegen_guards_accept_committed_real_fixtures() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let mut checked = Vec::new();
+        for entry in std::fs::read_dir(&root).expect("tests/fixtures").flatten() {
+            let mp = entry.path().join("manifest-real.json");
+            let Ok(text) = std::fs::read_to_string(&mp) else { continue };
+            let m: crate::manifest::Manifest =
+                serde_json::from_str(&text).unwrap_or_else(|e| panic!("{mp:?}: {e}"));
+            let bp = std::fs::read_to_string(entry.path().join("bp.txt"))
+                .unwrap_or_else(|e| panic!("{:?}/bp.txt: {e}", entry.path()));
+            let slots = feed_slots(&m.boundary_inputs);
+            let exts = drain_ext_lens(&m.boundary_outputs);
+            assert_feed_drain_rigs_disjoint(&m.boundary_inputs, &slots, &m.boundary_outputs, &exts);
+            assert_rigs_clear_of_layout(&bp, &m.boundary_inputs, &slots, &m.boundary_outputs, &exts);
+            checked.push(entry.file_name().to_string_lossy().to_string());
+        }
+        checked.sort();
+        assert_eq!(
+            checked,
+            vec!["chain-ec15-d2".to_string(), "grid-ec180p".to_string()],
+            "both committed real fixtures must be present and pass every guard"
+        );
+    }
+
+    /// The grid fixture's interior edge is real: its second strip's feed
+    /// heads sit at a nonzero y, so the banded ladder (not the old global
+    /// one) is what makes its rigs fit — pin that shape so a regression
+    /// to a single global ladder fails here, not in a sim.
+    #[test]
+    fn committed_grid_fixture_has_interior_feed_band() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/grid-ec180p");
+        let m: crate::manifest::Manifest = serde_json::from_str(
+            &std::fs::read_to_string(root.join("manifest-real.json")).expect("manifest"),
+        )
+        .expect("parse");
+        let ys: std::collections::BTreeSet<i32> = m.boundary_inputs.iter().map(|r| r.y).collect();
+        assert_eq!(ys.len(), 2, "two feed bands (outer + interior), got {ys:?}");
+        let slots = feed_slots(&m.boundary_inputs);
+        assert!(
+            slots.iter().max().copied().unwrap_or(0) <= 2,
+            "per-copy clusters must keep the ladder shallow, got {slots:?}"
+        );
     }
 
     /// Codegen over every manifest in a real bank — the rig guards

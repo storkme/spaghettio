@@ -1,0 +1,408 @@
+{
+  "bbox_min": [
+    1,
+    0
+  ],
+  "boundary_inputs": [
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 1,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 39,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 69,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 107,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 137,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 175,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 205,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 243,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 273,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 311,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 341,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 379,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 409,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 447,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 477,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 515,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 1,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 39,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 69,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 107,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 137,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 175,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 205,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 243,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 273,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 311,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 341,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 379,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 409,
+      "y": 48
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 447,
+      "y": 48
+    }
+  ],
+  "boundary_outputs": [
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 62,
+      "y": 15
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 130,
+      "y": 15
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 198,
+      "y": 15
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 266,
+      "y": 15
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 334,
+      "y": 15
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 402,
+      "y": 15
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 470,
+      "y": 15
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 538,
+      "y": 15
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 62,
+      "y": 63
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 130,
+      "y": 63
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 198,
+      "y": 63
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 266,
+      "y": 63
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 334,
+      "y": 63
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 402,
+      "y": 63
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 470,
+      "y": 63
+    }
+  ],
+  "dims": [
+    544,
+    64
+  ],
+  "entities": 3192,
+  "external_inputs": [
+    {
+      "is_fluid": false,
+      "item": "iron-plate",
+      "rate": 180.0
+    },
+    {
+      "is_fluid": false,
+      "item": "copper-plate",
+      "rate": 270.0
+    }
+  ],
+  "inserter_capacity": 2,
+  "label": "grid-ec180p",
+  "planned_rates": {
+    "copper-cable": 540.0,
+    "electronic-circuit": 180.0
+  },
+  "stacking": 1,
+  "surplus_exits": [],
+  "targets": [
+    {
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "rate": 180.0
+    }
+  ],
+  "validator": {
+    "by_category": {},
+    "errors": 0,
+    "layout_warnings": 1,
+    "warnings": 0
+  }
+}

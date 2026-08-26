@@ -1,0 +1,90 @@
+{
+  "bbox_min": [
+    1,
+    0
+  ],
+  "boundary_inputs": [
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 1,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 31,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "copper-plate",
+      "x": 56,
+      "y": 0
+    },
+    {
+      "direction": 8,
+      "entity": "express-transport-belt",
+      "is_fluid": false,
+      "item": "iron-plate",
+      "x": 86,
+      "y": 0
+    }
+  ],
+  "boundary_outputs": [
+    {
+      "direction": 8,
+      "entity": "transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 49,
+      "y": 15
+    },
+    {
+      "direction": 8,
+      "entity": "transport-belt",
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "x": 104,
+      "y": 15
+    }
+  ],
+  "dims": [
+    110,
+    16
+  ],
+  "entities": 316,
+  "external_inputs": [
+    {
+      "is_fluid": false,
+      "item": "iron-plate",
+      "rate": 15.0
+    },
+    {
+      "is_fluid": false,
+      "item": "copper-plate",
+      "rate": 22.50000000000003
+    }
+  ],
+  "inserter_capacity": 2,
+  "label": "chain-ec15-d2",
+  "planned_rates": {
+    "copper-cable": 45.0,
+    "electronic-circuit": 15.0
+  },
+  "stacking": 1,
+  "surplus_exits": [],
+  "targets": [
+    {
+      "is_fluid": false,
+      "item": "electronic-circuit",
+      "rate": 15.0
+    }
+  ]
+}
