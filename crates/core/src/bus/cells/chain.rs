@@ -49,7 +49,19 @@ const VLANES: i32 = 2;
 /// capacity small rows measure WORSE (−24% vs −8%) because the row
 /// template's long-handed input inserters concentrate their deficit
 /// (#383; the fix is RFC-049 Phase 3 inserter sizing, not geometry).
-const QUANTUM_RATE: f64 = 45.0;
+/// RFC-072 Phase 2 unit 1 (was 45.0): the quantum must satisfy TWO
+/// physical caps — the express belt (45/s) AND single-row-per-stage
+/// composability: at 45 a copy's copper-cable stage needs 9 machines
+/// against the 8-per-row cap, so `CellComposedCandidate` refused every
+/// above-the-wall config with a multi-row internal corridor and the
+/// engine had NO error-free path past ~120/s. At 40 every ec-family
+/// stage fits one row and the composed strip ships and delivers:
+/// ec75 (K=6) sim 75.00/75.00 and ec150 (K=12) sim 150.00/150.00,
+/// both +0.0% produced, PASS, above the wall where native carries 37
+/// lane-throughput errors (receipts in the RFC's decision log; the
+/// derived form min(belt, max single-row stage rate) is the recorded
+/// refinement).
+const QUANTUM_RATE: f64 = 40.0;
 /// Copy-count bound. Beyond this the footprint cost stops being honest
 /// scaling and the chain should be decomposed differently; refuse
 /// loudly.

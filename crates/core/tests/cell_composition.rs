@@ -1012,13 +1012,18 @@ fn cell_candidate_resolves_ec15_refusal() {
                 || i.category == "input-rate-delivery"),
         "only the adjudicated categories tolerated: {issues:?}"
     );
+    // Quantum 40 (RFC-072 P2 unit 1): the 2-copy chain runs cable at
+    // 22.5/s per copy — the zero-margin 45-on-45 input belt this pin
+    // adjudicated (with its measured −3.6% effect) no longer exists on
+    // this fixture. The finding's absence IS the improvement; a
+    // reappearance would be a regression.
     assert_eq!(
         issues
             .iter()
             .filter(|i| i.category == "row-input-belt-margin")
             .count(),
-        1,
-        "expected exactly the one measured copper-cable input finding: {issues:?}"
+        0,
+        "the zero-margin cable input was dissolved by quantum 40: {issues:?}"
     );
     // Post-#431 recalibration the row sits exactly at the bridged
     // budget (2.0 × 7.5 = 15.0/s) — any lane-budget warning here would
@@ -1683,11 +1688,13 @@ fn cell_quantization_copy_counts() {
     use spaghettio_core::bus::cells::chain::{chain_eligible, required_copies};
     for (label, item, rate, inputs, want_k) in [
         (
+            // Quantum 40 (RFC-072 P2 unit 1): ec15's cable runs 45/s,
+            // one over the quantum — 2 copies now (was 1 at quantum 45).
             "ec15",
             "electronic-circuit",
             15.0,
             &["iron-plate", "copper-plate"][..],
-            1,
+            2,
         ),
         (
             "ac1",
@@ -1703,20 +1710,21 @@ fn cell_quantization_copy_counts() {
             &["iron-plate", "copper-plate"][..],
             1,
         ),
-        // pre-quantization these two REFUSED on the 45/s corridor cap
+        // pre-quantization these two REFUSED on the 45/s corridor cap;
+        // at quantum 40 (RFC-072 P2 unit 1): cable 90 → 3, cable 180 → 5
         (
             "ec30",
             "electronic-circuit",
             30.0,
             &["iron-plate", "copper-plate"][..],
-            2,
+            3,
         ),
         (
             "ec60",
             "electronic-circuit",
             60.0,
             &["iron-plate", "copper-plate"][..],
-            4,
+            5,
         ),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
