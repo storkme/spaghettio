@@ -80,10 +80,15 @@ const R_MAX: i32 = 4;
 /// Vertical kit band between stacked strips. Must hold the lower
 /// strip's north feed rigs (per-copy clusters: depth ≤ 4+6·(c−1), plus
 /// the ±2 bank overhang) and the upper strip's south drain rigs (base
-/// ext 11 + bank flow margin) — the harness's near-parallel band guard
-/// (scenario.rs, RFC-072 P2 unit 2) refuses codegen if this is ever
-/// too small for a manifest, so an undersized clearance fails LOUD at
-/// sim time, never silently.
+/// ext 11 + bank flow margin). The band holds OPPOSITE-facing rigs
+/// (the lower strip's north-extending feed rigs against the upper
+/// strip's south-extending drain rigs), so the harness guards that
+/// hold it are the cross-type feed-vs-drain guard and the rig-vs-LAYOUT
+/// guard (scenario.rs `assert_feed_drain_rigs_disjoint`,
+/// `assert_rigs_clear_of_layout`; #733 round 5 corrected the citation —
+/// the near-parallel band guards compare same-direction bands only).
+/// Both run in CI's default path against a committed real grid fixture,
+/// so an undersized clearance fails LOUD there, never silently.
 const STRIP_CLEARANCE: i32 = 32;
 
 /// Smallest K such that every produced item and every external input
@@ -891,7 +896,7 @@ fn compose_strip_with_capacity(
     // (RFC-055's ChainOrder::Compact axis and its compose_chain_compact
     // entry were deleted 2026-08-20 with cells/placement.rs — owner call
     // extending #632 A2; record in RFC-055's decision log.)
-    chain_eligible(sr)?;
+    chain_eligible_at(sr, inserter_capacity)?; // #733 round 5: at the composing level, like the grid path
     let kq = copies.max(1);
     let scale = 1.0 / kq as f64;
     // RFC-052 Phase B: fluid specs collapse into one SUPER-SPEC whose

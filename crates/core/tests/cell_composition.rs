@@ -2121,6 +2121,24 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
         errors.len(),
         errors.iter().take(5).collect::<Vec<_>>()
     );
+    // Warnings are pinned by CATEGORY too (#733 round 5): the only
+    // honest warning class on a grid is the zero-margin row input; a
+    // flow-path or reachability warning on an interior strip edge means
+    // a record-aware exemption regressed on one side (round 3 broke the
+    // reachability SINK side exactly this way and the error-only
+    // assertion could not see it).
+    let stray: Vec<String> = issues
+        .iter()
+        .filter(|i| !format!("{:?}", i.severity).contains("Error"))
+        .filter(|i| i.category != "row-input-belt-margin")
+        .map(|i| format!("{}/{}", i.category, i.message))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "grid must carry no warnings beyond row-input-belt-margin, got {}: {:?}",
+        stray.len(),
+        stray.iter().take(5).collect::<Vec<_>>()
+    );
 }
 
 /// PERMANENT GATE (belt-tier constraint): composed corridors are
