@@ -160,8 +160,13 @@ pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
     // No-op for every registered strip (their K already clears it —
     // the copy-count pins and registry gates hold).
     let express = crate::common::belt_throughput("express-transport-belt");
+    // Mega members are the block's business here too (#733 round 2 —
+    // the rate loop and the hand term already skipped them; a member's
+    // internal solid input rides the block's own belts, not a chain
+    // corridor, so a belt margin on it is meaningless and could inflate
+    // K past the grid bound for a mega-containing chain).
     let belt_violates = |k: i32| {
-        sr.machines.iter().any(|m| {
+        sr.machines.iter().filter(|m| !is_member(&m.recipe)).any(|m| {
             let per_copy = (m.count / k as f64 - 1e-9).ceil();
             m.inputs
                 .iter()
@@ -2019,6 +2024,18 @@ fn compose_grid_with_capacity(
 fn append_strip_translated(acc: &mut LayoutResult, strip: LayoutResult, dy: i32) {
     debug_assert_eq!(acc.inserter_capacity, strip.inserter_capacity);
     debug_assert_eq!(acc.stacking, strip.stacking);
+    // The two un-merged fields must actually be empty on both sides —
+    // the tripwire the doc comment promises (#733 round 2): a strip
+    // composer that starts populating either would otherwise lose the
+    // upper strips' contribution silently.
+    debug_assert!(
+        strip.effective_rows.is_empty() && acc.effective_rows.is_empty(),
+        "a strip populated effective_rows — extend append_strip_translated to merge (translate y) them"
+    );
+    debug_assert!(
+        strip.research_productivity.is_empty() && acc.research_productivity.is_empty(),
+        "a strip declared research_productivity — extend append_strip_translated to merge it"
+    );
     for mut e in strip.entities {
         e.y += dy;
         acc.entities.push(e);
