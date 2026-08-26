@@ -752,3 +752,27 @@ way. The meter's turn-model fix
   joins the residual list as harness hardening — the fix shipped
   with its own verification (77.6 → 152.8 on the same fixture) and
   the assert is belt-and-braces, not a gap.*
+- *2026-08-26 — the calibration-bank half of unit 1's promised
+  re-bless, found red by CI four rounds in.* The `rust` check had
+  been failing since round 2 on the calibration-bank fingerprint
+  probe and nobody — not me (the review gate watches only
+  `second-opinion`; the probe is an ignored test local `cargo test`
+  never runs), not five bot rounds — looked. Quantum 40 re-shaped 7
+  of the 35 bank rows: six ec fixtures (the exact blast radius this
+  log promised to re-bless; the sim-registry half shipped in round
+  1, this half was missed) and ac45. Re-blessed per ci.yml's
+  golden-style protocol: fresh `calibration_matrix_export` (diff
+  confirmed exactly the 7 rows), the 28 unchanged rows' reports
+  adopted byte-verified from the standing measured bank, the 7
+  re-measured in Factorio (432k warmup). THE TRADE, measured: no
+  row regressed — ec22/ec30/ec30dp/ec60red reproduce their old
+  delivered numbers to the decimal, ec23 holds at plan (99.4) —
+  and two rows materially improved: **ac45 non-converged 63.7% →
+  converged 99.6% PASS** (the phantom-warning fix + re-quantized
+  internals) and **ec35's "overlapping kit chests" kit-error
+  cleared** (93.7 → 96.0 measured clean). matrix.json and the
+  evidence doc regenerate from the new bank
+  (`/tmp/calibration-matrix-2026-08-26-q40`). Process lesson
+  recorded in memory: arming the review gate is not watching CI —
+  check the full `gh pr checks` list after every push on a
+  geometry-moving PR.*
