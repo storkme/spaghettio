@@ -36,14 +36,16 @@ instruments `sim_export` + meter `check_one`, main @ `7cec5ca9`):
    against the 22.5/s physical cap. That wall is plan arithmetic, not
    a measurement: no layout improvement reaches plan past it. Only
    running k units each below saturation does.
-2. **The output-side refusal gap is live, sim-confirmed.**
-   `copper-cable 90` ships a 0-error layout that the sim FAILs at
-   **−50.2%** (44.80/90 delivered, converged; 2 machines
-   output-blocked, 6 starved): a 90/s single-item target cannot leave
-   the bus on one express belt, and the validator does not say so.
-   This is the output-side sibling of the RFC-069 Phase C refusal,
-   deferred there (#723 round-1 adjudication) — a prerequisite for any
-   composer that merges cell outputs, and this RFC's Phase 1.
+2. **The −50.2% specimen (sim-confirmed) — SINCE RE-DIAGNOSED AND
+   FIXED.** `copper-cable 90` shipped a 0-error layout the sim FAILed
+   at −50.2%. The first reading ("a 90/s target cannot leave on one
+   express belt — an output-side refusal gap") did not survive
+   Phase 1's forensics: the real defects were an input-tap
+   disconnection (six machines wired to a dead stub) plus the output
+   merger's rate-blind partition — both fixed (#727, #728), the
+   specimen now at plan (90.00/90.00 produced, PASS). Kept as the
+   record of the motivating measurement; the decision log carries the
+   re-diagnosis chain.
 3. **The seam-cost motivation was tested and DID NOT SURVIVE** — kept
    here as the record of why this RFC is smaller than its first draft.
    The meter measured composed two-stage fixtures 5–18 points below
@@ -89,29 +91,34 @@ parallel type. Two rules carry the correctness weight:
   boundary is a kill criterion (K72-4), not an aspiration, because
   relocation-and-reroute is the shape RFC-057/058/064-P3 died on.
 
-### Phase 1 — the output-side refusal (was: embedded-stage provisioning, CLOSED BY MEASUREMENT)
+### Phase 1 — the specimen's two real defects (COMPLETE 2026-08-26; two earlier framings superseded)
 
-The first draft's Phase 1 (boundary-style provisioning for embedded
-stages, chasing a 5.4-point "embedding cost") is closed: both composed
-fixtures sim at exactly plan and the cost was the meter's turn-path
-artifact — the decision log of 2026-08-25 carries the full forensic
-chain, and `meter-divergence.md` §2026-08-25 carries the divergence
-class. No embedded-stage work happens under this RFC.
+Two framings died on the way here, both recorded in the decision log:
+the first draft's "boundary-style provisioning for embedded stages"
+(closed by measurement — the 5.4-point embedding cost was the meter's
+turn-path artifact, `meter-divergence.md` §2026-08-25), and then "the
+output-side refusal" (closed by forensics — the −50.2% specimen was
+never an output-capacity refusal case; the engine's merger already
+provisions `ceil(rate/cap)` tails).
 
-Phase 1 is now the sim-confirmed real defect: **the output-side
-refusal**, the RFC-069 Phase C follow-up (#723 round-1 adjudication).
-A single-item target whose planned output rate exceeds what its
-boundary belts can carry ships a 0-error layout that delivers half
-plan (`copper-cable 90`: sim FAIL −50.2%). The fix mirrors Phase C's
-input-side shape: at plan time, refuse by name when the target's
-output rate exceeds the output boundary's carrying capacity at the
-effective tier (per-item stacking-aware, duty-scaled — the Phase C
-ceiling machinery reused on the output flows), or provision more
-output belts where the boundary contract allows. Same asymmetry
-discipline: the gate must never over-fire (full suite + calibration
-bank green). This is also the composer's prerequisite — merging cell
-outputs inherits the half-plan lie at every seam unless cells refuse
-outputs they cannot ship.
+What Phase 1 actually shipped, each sim-verified:
+
+1. **The tap-assignment repair with a repair-or-refuse contract**
+   (#727): a non-last tap whose splitter tile is occupied by an
+   adjacent trunk column committed a SOURCELESS belt run (six dead
+   machines, warnings only). `repair_tap_splitter_collisions`
+   reassigns sibling consumers (detection-gated, differential global
+   guard, restore-verified) or refuses by name — never silent.
+2. **The capacity-aware merger partition** (#728):
+   `merge_output_rows`' count-based fold put 60/s on a 45/s tail;
+   `partition_columns` (greedy first-fit, column-order-correct,
+   utilization-scaled true flows) sizes and assigns from one walk,
+   with the voider path pinned single-tail.
+
+Specimen arc: 44.8 → 74.4 → **90.00/90.00 produced, sim PASS**. The
+never-over-fire asymmetry discipline was enforced across the review
+rounds (the refusal upgrade shipped only on receipts). Residuals are
+listed once, in the Phasing section.
 
 ### Phase 2 — homogeneous replication
 
@@ -129,10 +136,10 @@ status ledger shows small cells deliver near plan (ec22 sims 99.4%)
 while 40–60/s buses carry the family's ~10% gap, so the
 delivery-optimal quantum may sit well below 45 and the fixture's copy
 count follows the measurement, not the constant. The
-output-side refusal (the deferred RFC-069 follow-up) ships here as a
-prerequisite: a composer that merges outputs must refuse a cell whose
-output cannot leave its boundary, or it inherits the cable-90 half-plan
-lie at every seam.
+output-capacity side is already sound: Phase 1's partition provisions
+`ceil`-packed tails (the cable-90 half-plan lie is fixed), and the
+composer's merge primitive is the stamp-oracle-vetted successor of
+that same fold.
 
 ### Phase 3 — heterogeneous composition and the library
 
@@ -164,11 +171,14 @@ acceptance.
 - **K72-2 — RETIRED with K72-1** (its subject phase closed by
   measurement). Its principle — never worse by the SIM on any
   calibration-bank row — is inherited verbatim by K72-6.
-- **K72-6 (Phase 1 refusal asymmetry).** If the output-side refusal
-  fires on any fixture the sim shows delivering ≥95% of plan (the gate
-  over-fires on a buildable config), or regresses any sim-anchored
-  calibration-bank row, it reverts — the RFC-069 Phase C rule: a
-  refusal gate must never over-fire.
+- **K72-6 — RETIRED 2026-08-26 with Phase 1's close-out** (recorded,
+  not deleted, like K72-1/K72-2): its subject — an output-side
+  refusal gate — never shipped, because forensics re-diagnosed the
+  specimen (decision log) and the output side needed provisioning,
+  not refusal. The criterion's PRINCIPLE (a refusal gate must never
+  over-fire; regressions on sim-anchored bank rows revert) was
+  applied verbatim to the tap unit's repair-or-refuse contract and
+  enforced through #727's six review rounds.
 - **K72-3 (Phase 2 pays), two-part so a trip is attributable** (#725
   round 1: an absolute bar would mis-read an inherited per-cell gap as
   replication overhead; #726 round 1: both parts on the same trust
@@ -224,10 +234,18 @@ the snapshot debugger sees them.
   with the repair-or-refuse contract; #728 the capacity-aware merger
   partition). The Phase-0 specimen's arc is the verification record:
   44.8 (silent wreck) → 74.4 → **90.00/90.00 produced, sim PASS**.
-  Recorded residuals, none gating: the foreign-column/severity
-  loudness follow-up, the merger's zero-rate-column guard and
-  secondary-row rate reads (pre-existing input-quality classes), the
-  at-cap fold and fractional end-to-end meter readings.
+  **The canonical Phase-1 residual list** (log entries point here;
+  none gating): (a) the boundary-fed-reachability SEVERITY PROMOTION
+  (foreign-column collisions and any residual sourceless class made
+  Error-severity under the validator-trust protocol — distinct from
+  #727's "loudness" refusal contract, which SHIPPED); (b) the
+  merger's zero-rate-column guard (`[0.0, 60.0]` mis-groups) and the
+  D2b-secondary/scrap-row rate reads (pre-existing input-quality —
+  the old `total_rate` read the same source); (c) the zero-fold
+  continuation row's occupancy check (bridge like the east-extension
+  path when Phase 2 touches the merger); (d) the at-cap fold and
+  fractional multi-row meter readings; (e) the single over-cap
+  column (the placer's per-row output ceiling domain).
 - **Phase 2 — replication composer.** Gates on K72-3/K72-4; Phase 1 is
   its prerequisite.
 - **Phase 3 — heterogeneous + library.** Not committed by acceptance;
