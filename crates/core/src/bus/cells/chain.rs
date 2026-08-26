@@ -49,7 +49,19 @@ const VLANES: i32 = 2;
 /// capacity small rows measure WORSE (−24% vs −8%) because the row
 /// template's long-handed input inserters concentrate their deficit
 /// (#383; the fix is RFC-049 Phase 3 inserter sizing, not geometry).
-const QUANTUM_RATE: f64 = 45.0;
+/// RFC-072 Phase 2 unit 1 (was 45.0): the quantum must satisfy TWO
+/// physical caps — the express belt (45/s) AND single-row-per-stage
+/// composability: at 45 a copy's copper-cable stage needs 9 machines
+/// against the 8-per-row cap, so `CellComposedCandidate` refused every
+/// above-the-wall config with a multi-row internal corridor and the
+/// engine had NO error-free path past ~120/s. At 40 every ec-family
+/// stage fits one row and the composed strip ships and delivers:
+/// ec75 (K=6) sim 75.00/75.00 and ec150 (K=12) sim 150.00/150.00,
+/// both +0.0% produced, PASS, above the wall where native carries 37
+/// lane-throughput errors (receipts in the RFC's decision log; the
+/// derived form min(belt, max single-row stage rate) is the recorded
+/// refinement).
+const QUANTUM_RATE: f64 = 40.0;
 /// Copy-count bound. Beyond this the footprint cost stops being honest
 /// scaling and the chain should be decomposed differently; refuse
 /// loudly.
@@ -1409,10 +1421,18 @@ pub fn compose_chain_with_capacity(
             // kq used here matches the placed copies. Known ceiling, out
             // of scope here: `belt_entity_for_rate` tops out at express,
             // so a single-column drain caps at 45/s and a plan above that
-            // would under-deliver at the exit — no corpus fixture ships a
-            // >45/s single solid product today, and no K>1 fixture has an
-            // exit above 15/s, so both arms are recorded follow-ups
-            // rather than tested behaviour (RFC-071 decision log).
+            // would under-deliver at the exit. (#730 r3+r4: the
+            // under-delivery warning below is provably dead for ALL K,
+            // not just K≥2 — `required_copies` bounds per_copy_drain =
+            // drain_rate/kq ≤ QUANTUM_RATE (40) < express (45) whenever
+            // the ladder tops out, and below the top the tier is chosen
+            // for the FULL drain_rate so its cap already covers the
+            // per-copy share. Kept as defensive code, NOT an assert (a
+            // warning-class condition must never become a panic path):
+            // it goes live again if the quantum ever exceeds a belt cap
+            // or the drain sizing decouples from `required_copies`. The
+            // #715 loud-exit contract is carried by the quantization
+            // bound itself now — RFC-072 decision log, #730 round 4.)
             let spec = &specs[pi % n];
             let drain_rate = spec.outputs[0].rate * spec.count as f64;
             let drain_belt = crate::common::belt_entity_for_rate(drain_rate, None);
@@ -1424,11 +1444,19 @@ pub fn compose_chain_with_capacity(
             // rides LayoutResult.warnings, where selection's
             // layout-warnings floor counts it and a user can read it.
             let drain_cap = crate::common::belt_throughput(drain_belt);
-            if drain_rate > drain_cap {
+            // The WARNING compares the PER-COPY rate (each copy drains its
+            // own disjoint exit at full_rate/kq) — the tier selection above
+            // deliberately stays full-rate (recorded over-tiering). The
+            // unscaled comparison fired falsely on every K>1 chain
+            // (480/s vs 45 on drains carrying 40/s), and those phantom
+            // warnings entered selection's layout-warnings floor
+            // (codex review of RFC-072 P2 unit 1).
+            let per_copy_drain = drain_rate / kq as f64;
+            if per_copy_drain > drain_cap {
                 chain_warnings.push(format!(
-                    "cell chain exit for {} carries {drain_rate:.1}/s on a single {} \
-                     column capped at {drain_cap:.0}/s — the drain under-delivers; \
-                     no single-belt tier can carry this plan",
+                    "cell chain exit for {} carries {per_copy_drain:.1}/s per copy on a \
+                     single {} column capped at {drain_cap:.0}/s — the drain \
+                     under-delivers; no single-belt tier can carry this plan",
                     out_item, drain_belt
                 ));
             }

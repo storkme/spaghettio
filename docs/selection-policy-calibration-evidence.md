@@ -1,6 +1,6 @@
 # Selection-policy calibration evidence
 
-Source bank: `/tmp/calibration-matrix-2026-08-25-a3`. Validator probe: `/tmp/calibration-matrix-2026-08-25-a3/calibration-issue-breakdown.json`. Corpus-definition fingerprint (`corpus_sha256` — the ordered fixture declarations, deliberately independent of any generated layout): `88c59075b90b4b22fdc0a4711b1b43c7aa47ab676488b4d93e19754fb5004617` — must match the same field in the committed `crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine's corpus; per-row geometry binds via each row's `blueprint_sha256`/`manifest_sha256`, which the CI probe checks.
+Source bank: `/tmp/calibration-matrix-2026-08-26-q40`. Validator probe: `/tmp/calibration-matrix-2026-08-26-q40/calibration-issue-breakdown.json`. Corpus-definition fingerprint (`corpus_sha256` — the ordered fixture declarations, deliberately independent of any generated layout): `88c59075b90b4b22fdc0a4711b1b43c7aa47ab676488b4d93e19754fb5004617` — must match the same field in the committed `crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine's corpus; per-row geometry binds via each row's `blueprint_sha256`/`manifest_sha256`, which the CI probe checks.
 
 Status preserves campaign state: `awaiting-measurement` has no `report.json`; `non-converged` and `kit-error` retain their measured values but are excluded from the clean-row findings; `excluded` covers every probe-side determinism refusal — the probe's `exclusion_reason` names which: `blueprint-sha256-mismatch`, `manifest-sha256-mismatch`, `validator-totals-mismatch`, or `build-failed`.
 
@@ -31,17 +31,17 @@ Status preserves campaign state: `awaiting-measurement` has no `report.json`; `n
 | tier_fish_breeding_self_loop | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier_bacteria_self_loop_regression | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | stress_electronic_circuit_30s_from_ore | measured | true |  | 92.121 | 90.909 |  | 0 | 0 | 0 | 0 | 0 | 0 | 8 | 5 |
-| stress_advanced_circuit_45s_from_plates | non-converged | false |  | 63.704 | 60.926 |  | 0 | 0 | 0 | 0 | 0 | 0 | 30 | 0 |
+| stress_advanced_circuit_45s_from_plates | measured | true |  | 99.556 | 100.444 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | stress_advanced_circuit_partitioned_5s_from_plates_pooled | non-converged | false |  | 100.339 | 101.695 |  | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
 | stress_advanced_circuit_partitioned_5s_from_plates_partitioned | measured | true |  | 98.667 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 2 | 1 | 0 |
 | stress_advanced_circuit_partitioned_4s_from_plates_pooled | measured | true |  | 101.333 | 100.333 |  | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
 | stress_advanced_circuit_partitioned_4s_from_plates_partitioned | measured | true |  | 100.000 | 100.329 |  | 0 | 0 | 0 | 0 | 0 | 2 | 1 | 0 |
 | stress_electronic_circuit_30s_decomposed_pooled | measured | true |  | 92.121 | 90.909 |  | 0 | 0 | 0 | 0 | 0 | 0 | 8 | 5 |
 | stress_electronic_circuit_30s_decomposed_partitioned | measured | true |  | 99.394 | 99.394 |  | 0 | 0 | 0 | 0 | 0 | 0 | 6 | 5 |
-| stress_electronic_circuit_60s_red_from_ore | measured | true |  | 90.667 | 89.833 |  | 0 | 0 | 0 | 0 | 0 | 0 | 4 | 5 |
+| stress_electronic_circuit_60s_red_from_ore | measured | true |  | 90.667 | 90.667 |  | 0 | 0 | 0 | 0 | 0 | 0 | 4 | 5 |
 | stress_electronic_circuit_22s_from_ore | measured | true |  | 99.394 | 95.455 |  | 0 | 0 | 0 | 0 | 0 | 0 | 4 | 0 |
-| stress_electronic_circuit_23s_from_ore | measured | true |  | 101.863 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 6 | 0 |
-| stress_electronic_circuit_35s_from_ore | kit-error | true | overlapping kit chests | 93.714 | 94.286 |  | 0 | 0 | 0 | 0 | 0 | 0 | 10 | 0 |
+| stress_electronic_circuit_23s_from_ore | measured | true |  | 99.379 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 6 | 0 |
+| stress_electronic_circuit_35s_from_ore | measured | true |  | 96.000 | 94.286 |  | 0 | 0 | 0 | 0 | 0 | 0 | 10 | 0 |
 | stress_electronic_circuit_40s_from_ore | measured | true |  | 92.000 | 93.000 |  | 1 | 0 | 0 | 0 | 0 | 0 | 24 | 4 |
 
 ## Findings
@@ -52,7 +52,7 @@ Clean-row comparison uses a 95% threshold. A converged, kit-clean row is a short
 
 - `belt-dead-end`: `stress_electronic_circuit_40s_from_ore`
 - `belt-detour`: `tier5_processing_unit_from_ore_am3`
-- `input-rate-delivery`: `tier2_electronic_circuit_from_ore`, `tier5_processing_unit_from_ore_am3`, `stress_electronic_circuit_30s_from_ore`, `stress_electronic_circuit_30s_decomposed_pooled`, `stress_electronic_circuit_60s_red_from_ore`, `stress_electronic_circuit_40s_from_ore`
+- `input-rate-delivery`: `tier2_electronic_circuit_from_ore`, `tier5_processing_unit_from_ore_am3`, `stress_electronic_circuit_30s_from_ore`, `stress_electronic_circuit_30s_decomposed_pooled`, `stress_electronic_circuit_60s_red_from_ore`, `stress_electronic_circuit_35s_from_ore`, `stress_electronic_circuit_40s_from_ore`
 - `row-input-belt-margin`: `tier2_electronic_circuit_from_ore`, `stress_electronic_circuit_30s_from_ore`, `stress_electronic_circuit_30s_decomposed_pooled`, `stress_electronic_circuit_60s_red_from_ore`, `stress_electronic_circuit_40s_from_ore`
 
 ### Categories never seen on a clean measured row
@@ -70,4 +70,4 @@ These are candidates, not adjudicated false positives: this table establishes co
 
 ## Coverage
 
-kit-error: 2, measured: 21, non-converged: 12.
+kit-error: 1, measured: 23, non-converged: 11.

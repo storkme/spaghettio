@@ -162,7 +162,34 @@ pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
     let full = matches.iter().find(|e| {
         e.declared_inserter_capacity == l.inserter_capacity && e.declared_stacking == l.stacking
     });
-    match (full, matches.first()) {
+    // #730 round 4 (2/3): the world-MISMATCH sibling must be chosen
+    // deterministically, never by file order — one hash can carry
+    // FAIL(d1) + PASS(d2) + WARN(d7) rows (8f2473ec does today), and a
+    // JSON re-sort must not flip which tier the note lands in. Any
+    // sibling FAIL dominates: an other-world PASS transfers nothing
+    // (#383), so mixed evidence stays unverified until THIS world is
+    // measured. Among several FAILs, or several non-FAILs (best
+    // receipt first: at-plan before warned), the lowest declared world
+    // is reported — an arbitrary but stable pick.
+    let mismatch = matches
+        .iter()
+        .filter(|e| e.verdict == "FAIL")
+        .min_by_key(|e| (e.declared_inserter_capacity, e.declared_stacking))
+        .or_else(|| {
+            matches.iter().min_by_key(|e| {
+                (e.known_residual.is_some(), e.declared_inserter_capacity, e.declared_stacking)
+            })
+        });
+    match (full, mismatch) {
+        (Some(e), _) if e.verdict == "FAIL" => format!(
+            // A FAILED sim is the OPPOSITE of verification: carry the
+            // policy's not-verified substring so `verified_geometry_first`
+            // ranks this geometry with the unverified, never above them
+            // (codex review of RFC-072 P2 unit 1 — the re-bless introduced
+            // the first FAIL rows and the old arms read them as verified).
+            "cell-composed: geometry NOT sim-verified — the sim FAILED it at its declared world ({} — {} produced {:.2}/s at declared capacity {}, {})",
+            e.scenario, e.verdict, e.produced_per_s, e.declared_inserter_capacity, e.date
+        ),
         (Some(e), _) => match &e.known_residual {
             None => format!(
                 "cell-composed: geometry SIM-VERIFIED at plan ({} — {} produced {:.2}/s at declared capacity {}, {})",
@@ -173,6 +200,27 @@ pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
                 e.scenario, e.verdict, e.produced_per_s, e.declared_inserter_capacity, e.date
             ),
         },
+        // A FAIL row in the world-MISMATCH arm too (#730 round 2, 3/3):
+        // the mismatch sibling can be a FAIL row sharing the hash (and
+        // after round 4, any sibling FAIL lands here by construction), and
+        // the old wording never emitted the not-verified substring —
+        // ranking a proven-failing geometry as verified. Guard on the
+        // VERDICT, not on known_residual (round-2 minor: a verdict-less
+        // FAIL row would otherwise read "at plan").
+        // #730 round 3 wording: THIS layout's world was never measured —
+        // the hash-sharing row failed in a DIFFERENT world. Unverified is
+        // the safe standing; the note must not assert a measurement that
+        // did not happen.
+        (None, Some(e)) if e.verdict == "FAIL" => format!(
+            "cell-composed: geometry NOT sim-verified — a hash-sharing build sim-FAILED in a DIFFERENT declared world (capacity {} / stacking {}: {} produced {:.2}/s, {}); this layout declares capacity {} / stacking {}, which was never measured",
+            e.declared_inserter_capacity,
+            e.declared_stacking,
+            e.verdict,
+            e.produced_per_s,
+            e.date,
+            l.inserter_capacity,
+            l.stacking
+        ),
         (None, Some(e)) => format!(
             "cell-composed: geometry sim-verified {} ONLY under declared capacity {} / stacking {} ({} produced {:.2}/s, {}); this layout declares capacity {} / stacking {} — measurements do NOT transfer across worlds (#383)",
             if e.known_residual.is_some() { "as warned" } else { "at plan" },

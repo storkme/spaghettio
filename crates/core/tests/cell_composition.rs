@@ -464,6 +464,42 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 0,
         levels: &[1, 2, 3, 5, 7],
     },
+    // RFC-072 P2 unit 1 (#730 round 3): the PRODUCTION-DEFAULT ec15
+    // geometry — geo_cap 2, the compose production actually ships
+    // (hash e442f54f, which the L2 golden pins and assert_ne proves
+    // differs from chain-ec15's frozen L0 d-sweep geometry). Exists so
+    // the shipping default's sim receipt attaches to the shipped
+    // geometry, not to the L0 one measured in an L2 world.
+    SimFixture {
+        label: "chain-ec15g2",
+        target: "electronic-circuit",
+        rate: 15.0,
+        inputs: &["iron-plate", "copper-plate"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
+    // RFC-072 Phase 2 unit 1: the above-the-wall exemplars — the only
+    // error-free path past ~120/s. From-ore solves (the sim_export
+    // default input set my receipts used), shipping-default world only.
+    SimFixture {
+        label: "chain-ec75",
+        target: "electronic-circuit",
+        rate: 75.0,
+        inputs: &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
+    SimFixture {
+        label: "chain-ec150",
+        target: "electronic-circuit",
+        rate: 150.0,
+        inputs: &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
     SimFixture {
         // RFC-071 B3: the shipped gear@20/am2 cell-composed winner — the
         // only production cell win — earning its registry entry after
@@ -1012,13 +1048,18 @@ fn cell_candidate_resolves_ec15_refusal() {
                 || i.category == "input-rate-delivery"),
         "only the adjudicated categories tolerated: {issues:?}"
     );
+    // Quantum 40 (RFC-072 P2 unit 1): the 2-copy chain runs cable at
+    // 22.5/s per copy — the zero-margin 45-on-45 input belt this pin
+    // adjudicated (with its measured −3.6% effect) no longer exists on
+    // this fixture. The finding's absence IS the improvement; a
+    // reappearance would be a regression.
     assert_eq!(
         issues
             .iter()
             .filter(|i| i.category == "row-input-belt-margin")
             .count(),
-        1,
-        "expected exactly the one measured copper-cable input finding: {issues:?}"
+        0,
+        "the zero-margin cable input was dissolved by quantum 40: {issues:?}"
     );
     // Post-#431 recalibration the row sits exactly at the bridged
     // budget (2.0 × 7.5 = 15.0/s) — any lane-budget warning here would
@@ -1034,7 +1075,9 @@ fn cell_candidate_resolves_ec15_refusal() {
 
     // Under the TRUE default all refusal-resolving candidates are live.
     // Succession on this config, each step strictly at-or-above the
-    // last on both issue channels: composition (292 entities, 1
+    // last on both issue channels: composition (292 entities THEN — a
+    // historical snapshot; quantum 40 re-quantized it to 316 in
+    // RFC-072 P2 unit 1, and the succession verdict predates that, 1
     // adjudicated warning) → DI (RFC-053, 2026-07-26: 272 entities,
     // 0/0, cable off the belts entirely) → horizontal-stack (RFC-060,
     // 2026-07-30: 252 entities, 0/0 — equal cleanliness, so the
@@ -1083,6 +1126,18 @@ fn probe_registry_hashes() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::bus::cells::registry::geometry_hash;
     for (label, item, rate, inputs) in [
+        (
+            "chain-ec75",
+            "electronic-circuit",
+            75.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
+        ),
+        (
+            "chain-ec150",
+            "electronic-circuit",
+            150.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
+        ),
         (
             "chain-ec15",
             "electronic-circuit",
@@ -1170,6 +1225,66 @@ fn probe_registry_hashes() {
     }
 }
 
+/// #730 round 4 (2/3): with one geometry hash carrying MIXED-verdict
+/// rows across declared worlds (ec15's `8f2473ec` family is FAIL@d1 /
+/// PASS@d2 / WARN@d7 today), `verification_note`'s world-mismatch
+/// sibling pick must be deterministic and FAIL-dominant — a JSON
+/// re-sort must never flip an unmeasured world's note between "sim-
+/// verified only under ..." and "NOT sim-verified". Runs the REAL
+/// producer on the REAL registry: if a re-bless later clears the d1
+/// FAIL, the mismatch assertion here goes stale WITH the receipts and
+/// should be updated to whatever mixed shape then exists.
+#[test]
+fn mismatch_note_is_fail_dominant_and_order_independent() {
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    use spaghettio_core::bus::cells::registry::verification_note;
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        15.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    // Capacity 1 composes the registered `8f2473ec`-family geometry
+    // (the registry gate below guarantees rows re-derive). Re-declare
+    // an UNMEASURED world on the same geometry to force the mismatch
+    // arm with all three verdict siblings in scope.
+    let mut l = compose_chain_with_capacity(&sr, 1).unwrap();
+    l.inserter_capacity = 3;
+    let note = verification_note("electronic-circuit", 15.0, &l);
+    assert!(
+        note.contains("NOT sim-verified") && note.contains("DIFFERENT declared world"),
+        "an unmeasured world on a geometry with ANY sim-FAILED sibling must \
+         rank unverified (FAIL-dominant pick), got: {note:?}"
+    );
+    assert!(
+        note.contains("capacity 1 / stacking 1"),
+        "the reported sibling must be the deterministic lowest-world FAIL \
+         row, not a file-order accident, got: {note:?}"
+    );
+    // The flip side: the SAME geometry declared at its MEASURED PASS
+    // world (the d2 sim ran the L0-family geometry in the capacity-2
+    // world — capacity 2 must be re-declared here, because composing
+    // AT capacity 2 yields the different e442 shipped geometry whose
+    // own honest receipt is WARN) still reads verified — sibling
+    // FAILs stay out of the full-match arm.
+    let mut l2 = compose_chain_with_capacity(&sr, 1).unwrap();
+    l2.inserter_capacity = 2;
+    let note2 = verification_note("electronic-circuit", 15.0, &l2);
+    assert!(
+        note2.contains("SIM-VERIFIED at plan"),
+        "the measured PASS world must stay verified despite FAIL siblings, \
+         got: {note2:?}"
+    );
+}
+
 /// PERMANENT GATE (RFC-051 registry): every seeded sim-verified entry
 /// still matches freshly composed geometry — iterated from the
 /// registry itself, so adding an entry without a re-derivable fixture
@@ -1244,7 +1359,8 @@ fn chain_capacity_reaches_the_placer() {
 /// To force the split without the quantizer intervening, this test
 /// takes a real solved `SolverResult` and overrides ONLY the
 /// copper-cable spec's `count` (test-only, not flow-conserving) to
-/// keep its total output under the 45/s quantum while leaving the EC
+/// keep its total output at-or-under the quantum (40 since RFC-072
+/// unit 1) while leaving the EC
 /// spec's own rate untouched — `required_copies` stays at K=1, EC's
 /// cell still splits into 2 rows, and the internal corridor is
 /// exercised exactly as `compose_chain` would drive it for any future
@@ -1269,7 +1385,9 @@ fn chain_refuses_multirow_internal_corridor() {
     .unwrap();
     for m in sr.machines.iter_mut() {
         if m.recipe == "copper-cable" {
-            // 5.0/s per machine * 8 = 40.0/s, under the 45/s quantum
+            // 5.0/s per machine * 8 = 40.0/s — exactly AT the quantum since
+            // RFC-072 unit 1 dropped it to 40: an epsilon-boundary case
+            // (required_copies' -1e-9 keeps K=1; a ~1% rate swing flips K=2)
             // (the unmodified solve's 9.6 machines = 48.0/s would push
             // required_copies to K=2 and mask the bug — see doc comment).
             m.count = 8.0;
@@ -1461,7 +1579,7 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
     // deliberately if a change legitimately reshapes the default geometry.
     assert_eq!(
         format!("{:016x}", geometry_hash(&compose_chain(&sr).unwrap())),
-        "eb9e1796a1f53695",
+        "e442f54fb0dfc6cc",
         "EC@15 default (L2) geometry changed — re-verify and re-bless"
     );
     // RE-INSTRUMENTED 2026-08-21 (offpath item 9): this test's original
@@ -1621,6 +1739,31 @@ fn cell_registry_hashes_current() {
         // win, registered at plan after #715 — blessed at the L2 default
         // like chem5.
         ("iron-gear-wheel", 20.0, &["iron-plate"], "chain", 2),
+        // RFC-072 P2 unit 1 (#730 r3): the production-default ec15
+        // geometry (chain-ec15g2), blessed at capacity 2.
+        (
+            "electronic-circuit",
+            15.0,
+            &["iron-plate", "copper-plate"],
+            "chain",
+            2,
+        ),
+        // RFC-072 P2 unit 1: the above-the-wall exemplars, from-ore
+        // solves at the shipping-default world.
+        (
+            "electronic-circuit",
+            75.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+            "chain",
+            2,
+        ),
+        (
+            "electronic-circuit",
+            150.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+            "chain",
+            2,
+        ),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {
@@ -1683,11 +1826,13 @@ fn cell_quantization_copy_counts() {
     use spaghettio_core::bus::cells::chain::{chain_eligible, required_copies};
     for (label, item, rate, inputs, want_k) in [
         (
+            // Quantum 40 (RFC-072 P2 unit 1): ec15's cable runs 45/s,
+            // one over the quantum — 2 copies now (was 1 at quantum 45).
             "ec15",
             "electronic-circuit",
             15.0,
             &["iron-plate", "copper-plate"][..],
-            1,
+            2,
         ),
         (
             "ac1",
@@ -1703,20 +1848,21 @@ fn cell_quantization_copy_counts() {
             &["iron-plate", "copper-plate"][..],
             1,
         ),
-        // pre-quantization these two REFUSED on the 45/s corridor cap
+        // pre-quantization these two REFUSED on the 45/s corridor cap;
+        // at quantum 40 (RFC-072 P2 unit 1): cable 90 → 3, cable 180 → 5
         (
             "ec30",
             "electronic-circuit",
             30.0,
             &["iron-plate", "copper-plate"][..],
-            2,
+            3,
         ),
         (
             "ec60",
             "electronic-circuit",
             60.0,
             &["iron-plate", "copper-plate"][..],
-            4,
+            5,
         ),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
@@ -1736,7 +1882,7 @@ fn cell_quantization_copy_counts() {
             "{label}: must be chain-eligible"
         );
     }
-    // Past K_MAX=12 the chain refuses loudly (ec600 → cable 1800/s → K=40).
+    // Past K_MAX=12 the chain refuses loudly (ec600 → cable 1800/s → K=45 at quantum 40).
     let inputs_set: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())

@@ -522,8 +522,17 @@ local function add_drain(s, force, exit_x, exit_y, fx, fy, lx, ly, ext_len, item
       table.insert(chests, c)
     end
   end
-  local subx, suby = exit_x + lx * 4 + fx, exit_y + ly * 4 + fy
-  local eeix, eeiy = exit_x + lx * 7 + fx, exit_y + ly * 7 + fy
+  -- Power the BANK, not the extension head (RFC-072 Phase-2 forensics):
+  -- ext_len grows with rig index (11 + 2*idx), and with the substation
+  -- anchored at the head its supply area ran out around rig 6 — the
+  -- bank's legendary stack inserters sat unpowered, the extension
+  -- filled, and every copy behind a far rig blocked at full_output
+  -- (the ec150 composed strip: copies 6-11 dead at exactly -50%,
+  -- while ec75's six rigs all fit in reach and PASSed). The bank
+  -- spans t = ext_len-8 .. ext_len; center the substation on it.
+  local bank_t = ext_len - 4
+  local subx, suby = exit_x + fx * bank_t + lx * 4, exit_y + fy * bank_t + ly * 4
+  local eeix, eeiy = exit_x + fx * bank_t + lx * 7, exit_y + fy * bank_t + ly * 7
   s.create_entity{name = "substation", position = {subx, suby}, force = force, quality = "legendary"}
   local eei = s.create_entity{name = "electric-energy-interface", position = {eeix, eeiy}, force = force}
   eei.electric_buffer_size = 1e13

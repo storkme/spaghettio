@@ -1042,9 +1042,13 @@ impl SelectionPolicy {
             // refusal re-ships a broken native in the rescue class
             // (cells fixing an error-laden incumbent), which the suite
             // demonstrated — an unverified rescue still wins when it is
-            // the only error-free candidate. Matches ONLY the
-            // never-verified tier; a world-mismatch note ("do NOT
-            // transfer across worlds") stays rankable as verified.
+            // the only error-free candidate. Matches the unverified
+            // TIER, which since #730 is three-way: never-measured
+            // geometries, sim-FAILED-at-declared-world rows, and
+            // world-mismatches whose hash has ANY sim-FAILED sibling
+            // all carry the substring; a world-mismatch note whose
+            // siblings are FAIL-free ("do NOT transfer across worlds")
+            // stays rankable as verified.
             unverified_geometry_substring: "geometry NOT sim-verified",
             // Sourced from the constant the live mechanism reads, not
             // re-typed beside it: a second definition is the

@@ -122,12 +122,18 @@ listed once, in the Phasing section.
 
 ### Phase 2 — homogeneous replication
 
-One recipe target beyond the wall: `ec@240 = 6 × ec@40` — the quantizer's
-own split — cells tiled on a grid, inputs fanned out and outputs merged
-through stamp-oracle-vetted balancer shapes. The recon found the
-quantizer already exists: the cell chain's `required_copies` splits a
-target into K copies against `QUANTUM_RATE = 45.0` (so 240/s → 6 copies
-at 40/s each) and plans each stage at `outputs[0].rate × count / K`
+One recipe target beyond the wall, composed as the quantizer actually
+splits it (**corrected twice**: first from the draft's `6 × ec@40`
+guess when Phase-2 recon showed the quantum applies to the chain's
+TOTAL flow, intermediates included; then re-derived when unit 1
+shipped `QUANTUM_RATE = 40.0` — at 40, ec@240's cable runs 720/s so
+`required_copies` gives K = 18 > K_MAX, the unit-2 territory; the
+shipped above-the-wall exemplars are ec150 = 12 × ec@12.5 and
+ec75 = 6 × ec@12.5, both sim-verified at plan). Cells tile side by
+side with per-copy feeds and drains; unit 2's grid/merge composer
+owns rates past K_MAX. The recon found the quantizer already exists:
+the cell chain's `required_copies` splits against the quantum
+and plans each stage at `outputs[0].rate × count / K`
 (chain.rs, `required_copies` + the per-stage rate at the compose loop) —
 so Phase 2 promotes an in-tree mechanism from a density-losing candidate
 to the above-the-wall composer, rather than inventing replication. The
@@ -401,7 +407,13 @@ the snapshot debugger sees them.
   mirrored onto output flows, never-over-fire discipline, K72-6);
   K72-1/K72-2 RETIRED with their falsification recorded in place;
   K72-3(b) re-based on SIM receipts; the verification plan trusts the
-  meter only on capacity-bound questions. The meter's turn-model fix
+  meter only on capacity-bound questions.
+
+Known limitation (#730 round 2, recorded): a sim-FAILED geometry and a
+never-measured one both rank as unverified — a three-tier ordering
+(verified > never-measured > measured-failing) is future policy work,
+not a silent choice; the FAIL rows' notes carry their receipts either
+way. The meter's turn-model fix
   is deliberately NOT this RFC's scope — it is a meter-crate
   follow-up with the four anchored fixtures as its calibration set.*
 - *2026-08-25 — Phase 1's mechanism corrected by its own recon: the
@@ -575,3 +587,192 @@ the snapshot debugger sees them.
   input side (tap repair-or-refuse) and the output capacity side
   (partition), with loudness residuals recorded. Phase 2 — the
   composer — is the RFC's remaining committed substance.*
+- *2026-08-26 — Phase 2 reconnaissance: the composer's build surface
+  mapped by three probes.* (1) ec@240 today: the composed candidate
+  is gated off by `chain_eligible` — "needs 16 quantized copies (max
+  12 at quantum 45/s)". Sixteen, not the fixture's assumed six: the
+  quantum applies to the chain's TOTAL flow (intermediates included),
+  so copies are ~15/s-of-ec each and the `6 × ec@40` fixture in the
+  Phase-2 section needs correcting to the real quantization
+  arithmetic. `K_MAX = 12`'s own doc names this RFC's job: beyond it
+  "the chain should be decomposed differently; refuse loudly" — the
+  grid-tiling composer IS that different decomposition. (2) ec@150
+  (K≈10, gate passes): the candidate RUNS and refuses in production —
+  "copper-cable has 2 in-ports for copper-plate across 2 rows" (the
+  multi-row internal corridor class its own test pins): at quantum 45
+  a copy's cable stage is 9 machines > the 8-per-row cap. The
+  native bus ships with 37 errors at that rate; above the wall the
+  engine currently has NO error-free path. (3) A local
+  quantum-40 experiment (reverted) makes the cable stage single-row
+  but the candidate goes NotRun despite `chain_eligible` passing — a
+  selection-laziness interaction to root-cause first. Phase 2's
+  build order therefore: (i) root-cause the NotRun, (ii) the quantum
+  as a real tunable with the single-row-per-stage constraint driving
+  its value, (iii) the K_MAX successor (grid tiling + stamp-oracle
+  merges) for rates the strip cannot honestly serve, measured
+  against K72-3 as restated (zero lane-throughput errors; sim vs the
+  standing 97.9% bar; seams within 2 points of the constituent
+  cell's sim receipt).*
+- *2026-08-26 — recon item (3) RETRACTED as my own instrument error,
+  and the quantum-40 experiment measures AT PLAN.* The "selection-
+  laziness NotRun" was a probe-reading artifact: each cell sub-solve
+  emits its own seven-row board, and my head-limited grep read
+  sub-boards as the outer one. The outer board decides
+  **cell-composed at BestErrorFree** at ec@150/quantum-40 — the
+  composer already wins above the wall once every stage fits one row
+  per copy. Measurements on that config: 10,392 entities (2892×17 —
+  the strip's footprint-honesty concern made visible), validator
+  0E/0W, **meter 150.0/150.0 delivered** (at-plan clears nothing;
+  the sim is running as the anchor). Phase 2 unit 1 is therefore the
+  quantum change (45 → the single-row-per-stage value) shipped WITH
+  its sim receipts and the calibration-bank re-bless its blast
+  radius requires (every cell-chain bank row re-shapes); the K_MAX
+  successor remains unit 2 for rates beyond ~150.*
+- *2026-08-26 — the sim FAILS the quantum-40 composed strip at
+  exactly −50.0%: unit 1 re-scoped from "the quantum const" to the
+  chain's DRAIN capacity at high K.* Verdict (432k warmup): produced
+  75.00/150 (−50.0%), delivered −48.3%, FAIL; census 378 machines
+  full_output vs 374 working — HALF the factory output-blocked while
+  the meter read 150.0 at plan (its at-plan direction proven
+  worthless again, exactly as calibrated) and the validator was
+  clean (0E/0W — a THIRD sim-anchored silent-deficiency specimen,
+  this one in the chain's drain/corridor provisioning). The
+  exactly-half signature on the output side at K≈12 points at the
+  chain's final-drain/corridor capacity — the same subsystem as
+  gear@20's yellow-hardcoded drain (#715), now at scale where the
+  drain must carry 150/s. Unit 1 is therefore drain forensics
+  (lane_heatmap on this fixture) + fix + the quantum, shipped
+  together with sim receipts; K72-3(a) as it stands would fail this
+  layout and correctly so.*
+- *2026-08-26 — THE −50% VERDICT IS INVALIDATED AS A LAYOUT
+  MEASUREMENT: the harness kit mis-placed every sink on this fixture
+  class.* Kit-forensics (per the sim-kit-first-suspect rule) on the
+  saved run: all 12 drain-rig chest banks sit displaced ≈ +dims_x/2
+  (world x 237+241i vs exits at world 236+241i−1446), every bank
+  EMPTY, kit_errors empty (the belts placed fine — on empty land);
+  the 24 feed rigs are similarly off-frame; offx/offy themselves are
+  correct (−1445/−8). "Copies 6–11 dead" was the kit's geometry, not
+  the strip's — the chain's drain is UN-blamed and the previous
+  entry's re-scope is superseded. The displacement does NOT affect
+  narrow fixtures (fp-ec90 at 241 wide simmed 97.9% with working
+  sinks), so the bug class is wide/multi-exit-specific — the
+  composed-strip class is exactly what it breaks. Codex is on the
+  frame forensic (scenario.rs; feed/drain calls vs the centered-paste
+  offset); the ec75 6-copy strip sim now in flight will be read with
+  the same lens (its rigs displace by its own dims/2 = 723).
+  Phase 2's measurement path is BLOCKED on the harness fix — which
+  therefore becomes part of unit 1, with the ec150 sim re-run as its
+  verification.*
+- *2026-08-26 — THE INVALIDATION IS ITSELF RETRACTED: the kit is
+  exonerated by the codex frame forensic; the displacement was MY
+  double conversion.* `sim_state.chests` coordinates are already
+  manifest-framed (the dumper converts `floor(world − offx) + LX0`,
+  scenario.rs:2020) — subtracting offx again manufactured the
+  +dims/2 shift; and the drain banks read empty because the delivery
+  counter EMPTIES registered chests each cycle by design
+  (scenario.rs:2325). Rigs are correctly placed at every exit; the
+  −50% sim verdict on the ec150 strip STANDS as a layout
+  measurement. Two instrument-error lessons in one campaign day (the
+  turn-path meter class, now this frame misread) — both caught by
+  the instrument-before-finding rule applied to my own probes. The
+  physical cause of "copies 6–11 output-blocked with working sinks"
+  is REOPENED; the in-flight ec75 6-copy sim discriminates next
+  (same class, half the width: at-plan kills scale-independent
+  chain-mechanism theories; a repeat east-half block points at
+  position-dependent layout structure). The harness gains one
+  follow-up all the same: a `world` field beside the layout coords
+  in sim_state dumps, so this misread class cannot recur.*
+- *2026-08-26 — ROOT CAUSE, THIRD INSTRUMENT'S THE CHARM: the harness
+  drain rigs' POWER runs out with rig index; the layout is innocent
+  after all.* The discriminating pair: ec75 (6 copies) sims AT PLAN
+  (75.00/75.00, +3.5% delivered, all 374 machines working) while
+  ec150 delivered EXACTLY the same 77.6/s — the 12-copy run behaved
+  as a 6-copy one. With frames corrected, the saved report shows
+  exit 6's extension belts PACKED (8s) against exit 0's flowing
+  (2-3): items reach the far drains; the bank inserters never pick.
+  The rig places its substation+EEI at the extension HEAD
+  (scenario.rs, `exit + lateral·4/7 + flow·1`) while the bank sits at
+  `t = ext_len−8..ext_len` and `ext_len = 11 + 2·idx` — from rig ~6
+  the bank leaves the substation's supply area: unpowered legendary
+  stack inserters, full extension, blocked copy, kit_errors empty
+  (placement all succeeded). FIXED: the substation/EEI now anchor at
+  the bank's center (`t = ext_len−4`), covering every bank at any
+  ext_len; the ec150 re-run with the fixed harness is in flight as
+  the verification. If it lands at plan, the quantum-40 receipts
+  complete and unit 1 (the quantum change + this harness fix + the
+  bank re-bless) ships.*
+- *2026-08-26 — the ec150 re-run lands AT PLAN (150.00/150.00, +1.9%
+  delivered, all 748 working): unit 1's receipts complete; the
+  re-bless adjudicates a MEASURED TRADE.* K72-3 clears both parts on
+  this exemplar (plan-valid 0E; 100% ≥ the 97.9% bar; seams within
+  bounds trivially). The quantum's blast radius, re-blessed with
+  honest verdicts: chain-ec15-d2 — the **L0 d-sweep calibration
+  geometry** (hash `8f2473ec`) measured in the shipping-default
+  WORLD — now PASSES at plan, and d7 improved (−5.3% → −4.0%),
+  while the low-bonus d1 calibration worlds REGRESS (ec15: −8.0% →
+  −16.1%; ec30: −7.7% → −11.7%) — more copy hand-offs × the #383
+  inserter plateau. **What production actually ships** is the
+  different L2 geometry (`e442f54f`, the default compose at
+  capacity 2), whose own receipt (chain-ec15g2, #730 round 3) is
+  **WARN: produced 15.00/15.00 (+0.0%), delivered −4.0%** — the d7
+  drain-tail class; "at plan" for the shipped geometry is a
+  produced-side claim, never a delivered-side one. Adjudication: the regression is calibration-world-only
+  and selection-shielded at shipping rates (the chain loses to HS/DI
+  below the wall — the succession record in the ec15 test — and
+  above the wall no old receipts existed), while the trade buys the
+  engine's ONLY error-free path above ~120/s plus a produced-at-plan
+  default world. Registry rows carry the FAIL verdicts openly with
+  the trade note; the copy-count and refusal pins updated on
+  semantics (the adjudicated zero-margin cable input is dissolved);
+  the L2 self-consistency golden re-blessed per its own contract
+  with the d2 PASS as corroboration. Suite 1272/0.*
+- *2026-08-26 — #730 round 4 absorbed: the narrative catches up with
+  the receipts, and the mismatch note goes deterministic.* The
+  round's 3/3 major was prose, and correctly so: the entry above
+  said "the shipping-default world PASSES at plan" while that
+  receipt belongs to the L0 d-sweep calibration geometry — the
+  SHIPPED L2 geometry's own receipt (chain-ec15g2, added in round
+  3) is WARN, produced +0.0% / delivered −4.0%. Reworded in place
+  (produced-side at plan; delivery carries the d7-class drain
+  tail). Taken with it: (1) `verification_note`'s world-mismatch
+  sibling is now picked deterministically with FAIL-dominance — one
+  hash carries FAIL/PASS/WARN across worlds today, and file order
+  must not decide the tier; an other-world PASS transfers nothing
+  under #383, so mixed evidence ranks unverified until the actual
+  world is measured (real-producer test pins both directions).
+  (2) The chain's drain under-delivery warning is provably dead for
+  ALL K, not just K≥2 as round 3's comment claimed — kept as
+  defensive code, never an assert (a warning-class condition must
+  not become a panic path); the #715 loud-exit contract now rides
+  the quantization bound itself. (3) The selection-policy comment
+  now names the three-tier reality. Recorded, not taken: the
+  derived-quantum form min(belt, max single-row stage rate) was
+  already the standing follow-up (the reviewer independently
+  re-derived it); the harness drain-rig supply-area self-check
+  joins the residual list as harness hardening — the fix shipped
+  with its own verification (77.6 → 152.8 on the same fixture) and
+  the assert is belt-and-braces, not a gap.*
+- *2026-08-26 — the calibration-bank half of unit 1's promised
+  re-bless, found red by CI four rounds in.* The `rust` check had
+  been failing since round 2 on the calibration-bank fingerprint
+  probe and nobody — not me (the review gate watches only
+  `second-opinion`; the probe is an ignored test local `cargo test`
+  never runs), not five bot rounds — looked. Quantum 40 re-shaped 7
+  of the 35 bank rows: six ec fixtures (the exact blast radius this
+  log promised to re-bless; the sim-registry half shipped in round
+  1, this half was missed) and ac45. Re-blessed per ci.yml's
+  golden-style protocol: fresh `calibration_matrix_export` (diff
+  confirmed exactly the 7 rows), the 28 unchanged rows' reports
+  adopted byte-verified from the standing measured bank, the 7
+  re-measured in Factorio (432k warmup). THE TRADE, measured: no
+  row regressed — ec22/ec30/ec30dp/ec60red reproduce their old
+  delivered numbers to the decimal, ec23 holds at plan (99.4) —
+  and two rows materially improved: **ac45 non-converged 63.7% →
+  converged 99.6% PASS** (the phantom-warning fix + re-quantized
+  internals) and **ec35's "overlapping kit chests" kit-error
+  cleared** (93.7 → 96.0 measured clean). matrix.json and the
+  evidence doc regenerate from the new bank
+  (`/tmp/calibration-matrix-2026-08-26-q40`). Process lesson
+  recorded in memory: arming the review gate is not watching CI —
+  check the full `gh pr checks` list after every push on a
+  geometry-moving PR.*

@@ -554,12 +554,12 @@
     },
     {
       "belt_tier": "transport-belt",
-      "blueprint_sha256": "99786fcf081ca592733fbc9385b3845a376182e72f7fd80496f59b204d2008df",
+      "blueprint_sha256": "f69fc86d26689ac40b863921538776f7b6573f801fbac200f186850000a76576",
       "dimensions": [
         96,
-        140
+        141
       ],
-      "entities": 3369,
+      "entities": 3371,
       "excluded_recipes": [],
       "inputs": [
         "iron-ore",
@@ -567,7 +567,7 @@
       ],
       "label": "stress_electronic_circuit_30s_from_ore",
       "machine": "assembling-machine-2",
-      "manifest_sha256": "b482c5d114ac5a283c85aec764e47c4ce37449c42493beedeceedb2e7e0589c3",
+      "manifest_sha256": "056c18d3a3883642ddff7b340b457f2774e6e01bce8c9a68d359a0ac09867c52",
       "rate": 30.0,
       "target": "electronic-circuit",
       "validator": {
@@ -578,12 +578,12 @@
     },
     {
       "belt_tier": null,
-      "blueprint_sha256": "c52fb7c5c0d6d1a98e503bc23a6489975673ae4ce90c73d01e0c961abb33a2d5",
+      "blueprint_sha256": "1c1beb27585e7db7d4882c51495aa522f2332b41575e8d3fb501bd97de42fa23",
       "dimensions": [
-        1470,
-        22
+        1632,
+        19
       ],
-      "entities": 7674,
+      "entities": 7488,
       "excluded_recipes": [],
       "inputs": [
         "iron-plate",
@@ -592,12 +592,12 @@
       ],
       "label": "stress_advanced_circuit_45s_from_plates",
       "machine": "assembling-machine-2",
-      "manifest_sha256": "d55d67766d151f5babc3b470c329811eb4160c6d422768ae4865e4cb7ead0cce",
+      "manifest_sha256": "eb68d0392a8a281ea9be47e130c0265612f6df3624731c486da44d773542347d",
       "rate": 45.0,
       "target": "advanced-circuit",
       "validator": {
         "errors": 0,
-        "warnings": 30
+        "warnings": 0
       },
       "variant": "plain"
     },
@@ -711,12 +711,12 @@
     },
     {
       "belt_tier": "transport-belt",
-      "blueprint_sha256": "ccb65828cfa403fec108d0025aa9941917bad410850d432a821b02c547fd6695",
+      "blueprint_sha256": "a06e2e03893ba81bf7c4a29c439cc3cb92ca8e542e244444224772a7db9b20d3",
       "dimensions": [
         96,
-        140
+        141
       ],
-      "entities": 3369,
+      "entities": 3371,
       "excluded_recipes": [],
       "inputs": [
         "iron-ore",
@@ -724,7 +724,7 @@
       ],
       "label": "stress_electronic_circuit_30s_decomposed_pooled",
       "machine": "assembling-machine-2",
-      "manifest_sha256": "0e81da277994785521d1f432dbe0af1440e9d08a1d4d4d9fc0f53919eb3707f5",
+      "manifest_sha256": "7808c3c09e9db33d48c9df00e14096d401af5b76d2f4095289d14f33d511a916",
       "rate": 30.0,
       "target": "electronic-circuit",
       "validator": {
@@ -759,12 +759,12 @@
     },
     {
       "belt_tier": "fast-transport-belt",
-      "blueprint_sha256": "e3638799c2082bc8e0cb1a169b58552ba0c4be7f0e744e5f01c042941b5ca317",
+      "blueprint_sha256": "5781e45b277f5e0b9d6d95356674b19d87df73eef5b9e8030b7f9aed88b1df9a",
       "dimensions": [
         166,
-        129
+        130
       ],
-      "entities": 4967,
+      "entities": 4969,
       "excluded_recipes": [],
       "inputs": [
         "iron-ore",
@@ -772,7 +772,7 @@
       ],
       "label": "stress_electronic_circuit_60s_red_from_ore",
       "machine": "assembling-machine-2",
-      "manifest_sha256": "25d6ea7fb139103ea29516b235cbd5c5b38a619073756d6e3150e5113a501d6f",
+      "manifest_sha256": "0d68969bf58c0ce55fb365d4e718e8934d0644f39315ce18ee843c103d04f83f",
       "rate": 60.0,
       "target": "electronic-circuit",
       "validator": {
@@ -783,12 +783,12 @@
     },
     {
       "belt_tier": "transport-belt",
-      "blueprint_sha256": "d41001e51e780f52b517ca342b6a8c018c5c30ba4c522840b8a82665a5e4ee38",
+      "blueprint_sha256": "e1a26a3c7adf96ce93ba91b13117f79652b00d6f156f2660339a1788ee0cee3b",
       "dimensions": [
         74,
-        127
+        128
       ],
-      "entities": 2441,
+      "entities": 2443,
       "excluded_recipes": [],
       "inputs": [
         "iron-ore",
@@ -796,7 +796,7 @@
       ],
       "label": "stress_electronic_circuit_22s_from_ore",
       "machine": "assembling-machine-2",
-      "manifest_sha256": "6ac97b0706a37bcdc4d0c275128402fe78bdaa2fa6d4a99ec50601372d7bd494",
+      "manifest_sha256": "8ff844fb15086f70aec095b7e4a928afc4bf1e478a6564d4776fa370439057b5",
       "rate": 22.0,
       "target": "electronic-circuit",
       "validator": {
@@ -807,12 +807,12 @@
     },
     {
       "belt_tier": "transport-belt",
-      "blueprint_sha256": "58be66fef24fe9dee4ec571b01202d52a3e8836dce72fd9eb2ee81808fcbcd40",
+      "blueprint_sha256": "8408b9337bcbc407ede40f4d41ced36e3e04e9a0b6addd280607aae22cd9fd20",
       "dimensions": [
         77,
-        127
+        128
       ],
-      "entities": 2500,
+      "entities": 2502,
       "excluded_recipes": [],
       "inputs": [
         "iron-ore",
@@ -820,7 +820,7 @@
       ],
       "label": "stress_electronic_circuit_23s_from_ore",
       "machine": "assembling-machine-2",
-      "manifest_sha256": "6b035a0bda7c18ece4913447663a86ac4173514a6142f3f937527af7466aa3ac",
+      "manifest_sha256": "2e8c847e82ab90e9c301304a18f4276e05d566209cd85f36c7358e5cc7c20175",
       "rate": 23.0,
       "target": "electronic-circuit",
       "validator": {
@@ -831,7 +831,7 @@
     },
     {
       "belt_tier": "transport-belt",
-      "blueprint_sha256": "88aa5f12e3ee46edf4561b761cec300d03cd451d4716a9175da36780849c6c1a",
+      "blueprint_sha256": "847ca92f556ee53951cd4395a39822b2a9ff665a00897e3804beb3613722f3cb",
       "dimensions": [
         105,
         253
@@ -844,7 +844,7 @@
       ],
       "label": "stress_electronic_circuit_35s_from_ore",
       "machine": "assembling-machine-2",
-      "manifest_sha256": "daa66c8e4bb1af678e5ce698e320437dd700367a4cfa7c1b66bbb7a3fbbdcaf7",
+      "manifest_sha256": "89b33a0dda8adb80018fdf1a8d407b078d90acf87bc4100e7546f277c48d6275",
       "rate": 35.0,
       "target": "electronic-circuit",
       "validator": {
