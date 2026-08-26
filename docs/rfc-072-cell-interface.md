@@ -848,8 +848,11 @@ way. The meter's turn-model fix
   the power islands and recomputes the wire graph; `CellGridComposed`
   trace event; the refusal moves to R_MAX × K_MAX = 48 (ec700, K=53)
   with the same wording contract (ec600's K=45 now composes as 4
-  strips). Measured: ec@240 from ore = 2304×66, 16,600 entities, 36
-  feeds / 18 exits, selection ships it at BestErrorFree; the only
+  strips). Measured at the K=18 quantization current when this entry
+  was written — SUPERSEDED by the registered K=24 geometry (17,148
+  entities / 24 exits, two entries below): ec@240 from ore = 2304×66,
+  16,600 entities, 36 feeds / 18 exits, selection ships it at
+  BestErrorFree; the only
   warnings are 18 zero-margin cable inputs (6 EC machines per copy can
   demand exactly 45/s against express — the honest class the sim
   adjudicates). **The finding on the way**: every validator's notion

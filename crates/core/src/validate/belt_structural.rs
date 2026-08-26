@@ -413,10 +413,13 @@ pub fn check_belt_dead_ends(layout: &LayoutResult) -> Vec<ValidationIssue> {
     // belt may run ALONG an edge): the exemption applies only when the
     // belt faces the record's declared outward flow — a head laid facing
     // back into the strip is a genuine dead end and stays one.
-    let exit_heads: rustc_hash::FxHashMap<(i32, i32), EntityDirection> = layout
+    // Keyed on the tile, matched on facing AND the carried item (#733
+    // round 3): standalone, this check must not let a belt carrying
+    // something else borrow a record's exemption.
+    let exit_heads: rustc_hash::FxHashMap<(i32, i32), (EntityDirection, &str)> = layout
         .boundary_outputs
         .iter()
-        .map(|r| ((r.x, r.y), r.direction))
+        .map(|r| ((r.x, r.y), (r.direction, r.item.as_str())))
         .collect();
 
     for e in &layout.entities {
@@ -429,7 +432,7 @@ pub fn check_belt_dead_ends(layout: &LayoutResult) -> Vec<ValidationIssue> {
         if out_x < 0 || out_x >= w || out_y < 0 || out_y >= h {
             continue;
         }
-        if exit_heads.get(&(e.x, e.y)) == Some(&e.direction) {
+        if exit_heads.get(&(e.x, e.y)) == Some(&(e.direction, e.carries.as_deref().unwrap_or(""))) {
             continue;
         }
         if receiver_tiles.contains(&(out_x, out_y)) {
@@ -1035,9 +1038,14 @@ mod tests {
             is_fluid: false,
             entity: "transport-belt".into(),
         };
-        // Facing South with a South record: the head, exempt.
+        let head = |dir: EntityDirection, carries: &str| PlacedEntity {
+            carries: Some(carries.into()),
+            ..belt(6, 5, dir)
+        };
+        // Facing South with a South record, carrying the recorded item:
+        // the head, exempt.
         let inserter_drop = inserter(7, 5, EntityDirection::West); // drops at (6,5)
-        let mut lr = layout(vec![belt(6, 5, EntityDirection::South), inserter_drop.clone()]);
+        let mut lr = layout(vec![head(EntityDirection::South, "electronic-circuit"), inserter_drop.clone()]);
         lr.boundary_outputs.push(record(EntityDirection::South));
         assert!(
             check_belt_dead_ends(&lr).is_empty(),
@@ -1045,7 +1053,14 @@ mod tests {
         );
         // Same tile, same record, belt facing NORTH (back into the strip):
         // the record does not buy the exemption.
-        let mut lr = layout(vec![belt(6, 5, EntityDirection::North), inserter_drop]);
+        let mut lr = layout(vec![head(EntityDirection::North, "electronic-circuit"), inserter_drop.clone()]);
+        lr.boundary_outputs.push(record(EntityDirection::South));
+        let issues = check_belt_dead_ends(&lr);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].category, "belt-dead-end");
+        // Right facing, WRONG item: not the recorded exit either (#733
+        // round 3 — the record is item-specific).
+        let mut lr = layout(vec![head(EntityDirection::South, "copper-cable"), inserter_drop]);
         lr.boundary_outputs.push(record(EntityDirection::South));
         let issues = check_belt_dead_ends(&lr);
         assert_eq!(issues.len(), 1, "{issues:?}");

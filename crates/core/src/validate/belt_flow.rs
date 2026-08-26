@@ -517,17 +517,22 @@ pub fn check_belt_flow_path(
 
     // A declared boundary-record tile counts as boundary wherever it
     // sits — a grid layout's records are on interior strip edges
-    // (RFC-072 P2 unit 2; see `boundary_record_tiles`).
-    let record_tiles = super::boundary_record_tiles(layout);
-    let on_boundary = |bx: i32, by: i32| -> bool {
-        bx == min_bx
-            || bx == max_bx
-            || by == min_by
-            || by == max_by
-            || record_tiles.contains(&(bx, by))
+    // (RFC-072 P2 unit 2). ROLE-AWARE (#733 round 3): an input network
+    // is sourced only by INPUT records (feed heads), an output network
+    // is sunk only by OUTPUT records (exit heads) — an input network
+    // that merely touches an exit head has found no source.
+    let feed_heads: FxHashSet<(i32, i32)> =
+        layout.boundary_inputs.iter().map(|r| (r.x, r.y)).collect();
+    let exit_heads: FxHashSet<(i32, i32)> =
+        layout.boundary_outputs.iter().map(|r| (r.x, r.y)).collect();
+    let on_edge = |bx: i32, by: i32| -> bool {
+        bx == min_bx || bx == max_bx || by == min_by || by == max_by
     };
-    let network_reaches_boundary = |network: &FxHashSet<(i32, i32)>| -> bool {
-        network.len() >= 3 && network.iter().any(|&(bx, by)| on_boundary(bx, by))
+    let network_reaches_boundary = |network: &FxHashSet<(i32, i32)>, heads: &FxHashSet<(i32, i32)>| -> bool {
+        network.len() >= 3
+            && network
+                .iter()
+                .any(|&(bx, by)| on_edge(bx, by) || heads.contains(&(bx, by)))
     };
 
     // Recipes with solid outputs
@@ -612,7 +617,7 @@ pub fn check_belt_flow_path(
                     }
                 }
             }
-            if !reaches_source && !network_reaches_boundary(&network) {
+            if !reaches_source && !network_reaches_boundary(&network, &feed_heads) {
                 issues.push(ValidationIssue::with_pos(
                     severity,
                     "belt-flow-path",
@@ -656,7 +661,7 @@ pub fn check_belt_flow_path(
             }
         }
 
-        if !reaches_sink && !network_reaches_boundary(&network) {
+        if !reaches_sink && !network_reaches_boundary(&network, &exit_heads) {
             issues.push(ValidationIssue::with_pos(
                 severity,
                 "belt-flow-path",
@@ -809,13 +814,17 @@ pub fn check_belt_flow_reachability(
 
     // Declared boundary-record tiles count as boundary wherever they
     // sit (grid layouts: interior strip edges — RFC-072 P2 unit 2).
-    let record_tiles = super::boundary_record_tiles(layout);
+    // This check asks whether a pickup belt is fed from UPSTREAM, so
+    // only INPUT records (feed heads) are boundary here — an exit head
+    // feeds nothing (#733 round 3, role-aware).
+    let feed_heads: FxHashSet<(i32, i32)> =
+        layout.boundary_inputs.iter().map(|r| (r.x, r.y)).collect();
     let on_boundary = |(x, y): (i32, i32)| -> bool {
         x == min_bx
             || x == max_bx
             || y == min_by
             || y == max_by
-            || record_tiles.contains(&(x, y))
+            || feed_heads.contains(&(x, y))
     };
 
     // Warning unconditionally: production only ever built Bus layouts and

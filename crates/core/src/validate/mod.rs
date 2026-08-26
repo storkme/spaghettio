@@ -421,22 +421,6 @@ pub const SELECTION_EXCLUDED_WARNING_CATEGORIES: [&str; 1] = [
     // checks themselves are now gone.)
 ];
 
-/// Tiles carrying a declared boundary record — feed heads and exit
-/// heads. RFC-072 P2 unit 2: a grid layout's records sit on INTERIOR
-/// strip edges, so "reaches the layout boundary" can no longer mean the
-/// bounding box alone — a declared record tile IS where the outside
-/// world attaches, and `check_boundary_integrity` validates every
-/// record against a real matching belt carrying the recorded item, so
-/// this exemption cannot be claimed by an unbacked record.
-pub(crate) fn boundary_record_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
-    layout
-        .boundary_inputs
-        .iter()
-        .chain(layout.boundary_outputs.iter())
-        .map(|r| (r.x, r.y))
-        .collect()
-}
-
 pub fn selection_warning_count(issues: &[ValidationIssue]) -> usize {
     issues
         .iter()

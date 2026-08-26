@@ -1959,7 +1959,8 @@ fn cell_quantization_copy_counts() {
         );
     }
     // RFC-072 P2 unit 2: past K_MAX=12 the chain no longer refuses — it
-    // grid-composes (ec600 → cable 1800/s → K=45 → 4 strips). The
+    // grid-composes (ec600 → cable 1800/s → K=45 by rate, 48 with the
+    // grid-territory margins → 4 strips). The
     // refusal moved to the GRID bound R_MAX×K_MAX=48: ec700 → cable
     // 2100/s → K=53 refuses with the same wording contract.
     let inputs_set: FxHashSet<String> = ["iron-plate", "copper-plate"]
@@ -1980,8 +1981,10 @@ fn cell_quantization_copy_counts() {
     // 45..47 a copy's 6 EC machines sit at zero belt margin; at 48
     // exactly 5 per copy at 100%, iron 2.5/s → two far hands at 52%,
     // so 48 is genuinely margin-clean, not merely the loop bound —
-    // 4×12, the last eligible K. A chain the margins cannot satisfy
-    // by 48 leaves the loop at 49 and refuses, see ec700 below.
+    // 4×12, the last eligible K. Two refusal paths past it: a chain
+    // the margins cannot satisfy by 48 leaves the loop at 49; a chain
+    // whose RATE quantum alone exceeds 48 (ec700 below, K=53) never
+    // enters the loop. Both refuse with the same wording.
     assert_eq!(required_copies(&sr), 48, "ec600 copy count");
     assert!(
         chain_eligible(&sr).is_ok(),

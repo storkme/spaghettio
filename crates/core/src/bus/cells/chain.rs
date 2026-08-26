@@ -187,10 +187,13 @@ pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
     // until it lands the quantizer refuses to PLAN a copy whose hands
     // the ladder would fill past HAND_MARGIN. Single source of truth:
     // this asks the ladder (`size_side`) and its calibrated rates
-    // (`machine_feed_rate`) rather than re-deriving them. Gated on plans
-    // the ladder believes cover (no shortfall): low declared levels whose
-    // plans carry honest shortfalls are a receipted class of their own
-    // (the d1 FAIL rows) and must not shift geometry here. Evaluated at
+    // (`machine_feed_rate`) rather than re-deriving them, for EVERY solid
+    // input — the far (long-handed) side and the near (regular/fast/
+    // stack) side alike. A plan the ladder cannot cover (an honest
+    // shortfall) counts as a violation here (#733 round 1); the
+    // receipted low-level strips whose plans carry such shortfalls (the
+    // d1 FAIL rows) never reach this term because it is grid-only, see
+    // below. Evaluated at
     // the level the chain composes at (`level`), so a low-level grid
     // plans more copies rather than trusting default-level hands (#733
     // round 1); sub-K_MAX strips never enter this term, so their K stays
