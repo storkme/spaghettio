@@ -57,8 +57,9 @@ fn ingests_chain_ec15() {
 
     // 316 since RFC-072 P2 unit 1 (was 290, and 292 before #466):
     // quantum 40 re-quantized chain-ec15 into the 2-copy geometry
-    // `8f2473ecbb564af4` (sim-blessed across d1/d2/d7 — see
-    // cell-sim-registry.json). These fixtures are REGENERATED from the
+    // `8f2473ecbb564af4` (sim-MEASURED across d1/d2/d7 — honest mixed
+    // verdicts: FAIL/PASS/WARN, see cell-sim-registry.json). These
+    // fixtures are REGENERATED from the
     // live exporter (the module doc's command), so the census follows
     // the blessed geometry; this test pins the parser against real
     // engine output, and the pin moves exactly when the geometry

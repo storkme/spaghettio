@@ -706,17 +706,49 @@ way. The meter's turn-model fix
   re-bless adjudicates a MEASURED TRADE.* K72-3 clears both parts on
   this exemplar (plan-valid 0E; 100% ≥ the 97.9% bar; seams within
   bounds trivially). The quantum's blast radius, re-blessed with
-  honest verdicts: chain-ec15-d2 (the shipping-default world) now
-  **PASSES at plan** and d7 improved (−5.3% → −4.0%), while the
-  low-bonus d1 calibration worlds REGRESS (ec15: −8.0% → −16.1%;
-  ec30: −7.7% → −11.7%) — more copy hand-offs × the #383 inserter
-  plateau. Adjudication: the regression is calibration-world-only
+  honest verdicts: chain-ec15-d2 — the **L0 d-sweep calibration
+  geometry** (hash `8f2473ec`) measured in the shipping-default
+  WORLD — now PASSES at plan, and d7 improved (−5.3% → −4.0%),
+  while the low-bonus d1 calibration worlds REGRESS (ec15: −8.0% →
+  −16.1%; ec30: −7.7% → −11.7%) — more copy hand-offs × the #383
+  inserter plateau. **What production actually ships** is the
+  different L2 geometry (`e442f54f`, the default compose at
+  capacity 2), whose own receipt (chain-ec15g2, #730 round 3) is
+  **WARN: produced 15.00/15.00 (+0.0%), delivered −4.0%** — the d7
+  drain-tail class; "at plan" for the shipped geometry is a
+  produced-side claim, never a delivered-side one. Adjudication: the regression is calibration-world-only
   and selection-shielded at shipping rates (the chain loses to HS/DI
   below the wall — the succession record in the ec15 test — and
   above the wall no old receipts existed), while the trade buys the
-  engine's ONLY error-free path above ~120/s plus at-plan default
-  worlds. Registry rows carry the FAIL verdicts openly with the
-  trade note; the copy-count and refusal pins updated on semantics
-  (the adjudicated zero-margin cable input is dissolved); the L2
-  self-consistency golden re-blessed per its own contract with the
-  d2 PASS as corroboration. Suite 1272/0.*
+  engine's ONLY error-free path above ~120/s plus a produced-at-plan
+  default world. Registry rows carry the FAIL verdicts openly with
+  the trade note; the copy-count and refusal pins updated on
+  semantics (the adjudicated zero-margin cable input is dissolved);
+  the L2 self-consistency golden re-blessed per its own contract
+  with the d2 PASS as corroboration. Suite 1272/0.*
+- *2026-08-26 — #730 round 4 absorbed: the narrative catches up with
+  the receipts, and the mismatch note goes deterministic.* The
+  round's 3/3 major was prose, and correctly so: the entry above
+  said "the shipping-default world PASSES at plan" while that
+  receipt belongs to the L0 d-sweep calibration geometry — the
+  SHIPPED L2 geometry's own receipt (chain-ec15g2, added in round
+  3) is WARN, produced +0.0% / delivered −4.0%. Reworded in place
+  (produced-side at plan; delivery carries the d7-class drain
+  tail). Taken with it: (1) `verification_note`'s world-mismatch
+  sibling is now picked deterministically with FAIL-dominance — one
+  hash carries FAIL/PASS/WARN across worlds today, and file order
+  must not decide the tier; an other-world PASS transfers nothing
+  under #383, so mixed evidence ranks unverified until the actual
+  world is measured (real-producer test pins both directions).
+  (2) The chain's drain under-delivery warning is provably dead for
+  ALL K, not just K≥2 as round 3's comment claimed — kept as
+  defensive code, never an assert (a warning-class condition must
+  not become a panic path); the #715 loud-exit contract now rides
+  the quantization bound itself. (3) The selection-policy comment
+  now names the three-tier reality. Recorded, not taken: the
+  derived-quantum form min(belt, max single-row stage rate) was
+  already the standing follow-up (the reviewer independently
+  re-derived it); the harness drain-rig supply-area self-check
+  joins the residual list as harness hardening — the fix shipped
+  with its own verification (77.6 → 152.8 on the same fixture) and
+  the assert is belt-and-braces, not a gap.*

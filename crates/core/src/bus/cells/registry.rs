@@ -162,7 +162,25 @@ pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
     let full = matches.iter().find(|e| {
         e.declared_inserter_capacity == l.inserter_capacity && e.declared_stacking == l.stacking
     });
-    match (full, matches.first()) {
+    // #730 round 4 (2/3): the world-MISMATCH sibling must be chosen
+    // deterministically, never by file order — one hash can carry
+    // FAIL(d1) + PASS(d2) + WARN(d7) rows (8f2473ec does today), and a
+    // JSON re-sort must not flip which tier the note lands in. Any
+    // sibling FAIL dominates: an other-world PASS transfers nothing
+    // (#383), so mixed evidence stays unverified until THIS world is
+    // measured. Among several FAILs, or several non-FAILs (best
+    // receipt first: at-plan before warned), the lowest declared world
+    // is reported — an arbitrary but stable pick.
+    let mismatch = matches
+        .iter()
+        .filter(|e| e.verdict == "FAIL")
+        .min_by_key(|e| (e.declared_inserter_capacity, e.declared_stacking))
+        .or_else(|| {
+            matches.iter().min_by_key(|e| {
+                (e.known_residual.is_some(), e.declared_inserter_capacity, e.declared_stacking)
+            })
+        });
+    match (full, mismatch) {
         (Some(e), _) if e.verdict == "FAIL" => format!(
             // A FAILED sim is the OPPOSITE of verification: carry the
             // policy's not-verified substring so `verified_geometry_first`
@@ -183,7 +201,8 @@ pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
             ),
         },
         // A FAIL row in the world-MISMATCH arm too (#730 round 2, 3/3):
-        // matches.first() can resolve to a FAIL row sharing the hash, and
+        // the mismatch sibling can be a FAIL row sharing the hash (and
+        // after round 4, any sibling FAIL lands here by construction), and
         // the old wording never emitted the not-verified substring —
         // ranking a proven-failing geometry as verified. Guard on the
         // VERDICT, not on known_residual (round-2 minor: a verdict-less

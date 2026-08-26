@@ -1075,7 +1075,9 @@ fn cell_candidate_resolves_ec15_refusal() {
 
     // Under the TRUE default all refusal-resolving candidates are live.
     // Succession on this config, each step strictly at-or-above the
-    // last on both issue channels: composition (292 entities, 1
+    // last on both issue channels: composition (292 entities THEN — a
+    // historical snapshot; quantum 40 re-quantized it to 316 in
+    // RFC-072 P2 unit 1, and the succession verdict predates that, 1
     // adjudicated warning) → DI (RFC-053, 2026-07-26: 272 entities,
     // 0/0, cable off the belts entirely) → horizontal-stack (RFC-060,
     // 2026-07-30: 252 entities, 0/0 — equal cleanliness, so the
@@ -1221,6 +1223,66 @@ fn probe_registry_hashes() {
             geometry_hash(&compose_chain(&sr).unwrap())
         );
     }
+}
+
+/// #730 round 4 (2/3): with one geometry hash carrying MIXED-verdict
+/// rows across declared worlds (ec15's `8f2473ec` family is FAIL@d1 /
+/// PASS@d2 / WARN@d7 today), `verification_note`'s world-mismatch
+/// sibling pick must be deterministic and FAIL-dominant — a JSON
+/// re-sort must never flip an unmeasured world's note between "sim-
+/// verified only under ..." and "NOT sim-verified". Runs the REAL
+/// producer on the REAL registry: if a re-bless later clears the d1
+/// FAIL, the mismatch assertion here goes stale WITH the receipts and
+/// should be updated to whatever mixed shape then exists.
+#[test]
+fn mismatch_note_is_fail_dominant_and_order_independent() {
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    use spaghettio_core::bus::cells::registry::verification_note;
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        15.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    // Capacity 1 composes the registered `8f2473ec`-family geometry
+    // (the registry gate below guarantees rows re-derive). Re-declare
+    // an UNMEASURED world on the same geometry to force the mismatch
+    // arm with all three verdict siblings in scope.
+    let mut l = compose_chain_with_capacity(&sr, 1).unwrap();
+    l.inserter_capacity = 3;
+    let note = verification_note("electronic-circuit", 15.0, &l);
+    assert!(
+        note.contains("NOT sim-verified") && note.contains("DIFFERENT declared world"),
+        "an unmeasured world on a geometry with ANY sim-FAILED sibling must \
+         rank unverified (FAIL-dominant pick), got: {note:?}"
+    );
+    assert!(
+        note.contains("capacity 1 / stacking 1"),
+        "the reported sibling must be the deterministic lowest-world FAIL \
+         row, not a file-order accident, got: {note:?}"
+    );
+    // The flip side: the SAME geometry declared at its MEASURED PASS
+    // world (the d2 sim ran the L0-family geometry in the capacity-2
+    // world — capacity 2 must be re-declared here, because composing
+    // AT capacity 2 yields the different e442 shipped geometry whose
+    // own honest receipt is WARN) still reads verified — sibling
+    // FAILs stay out of the full-match arm.
+    let mut l2 = compose_chain_with_capacity(&sr, 1).unwrap();
+    l2.inserter_capacity = 2;
+    let note2 = verification_note("electronic-circuit", 15.0, &l2);
+    assert!(
+        note2.contains("SIM-VERIFIED at plan"),
+        "the measured PASS world must stay verified despite FAIL siblings, \
+         got: {note2:?}"
+    );
 }
 
 /// PERMANENT GATE (RFC-051 registry): every seeded sim-verified entry

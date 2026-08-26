@@ -1421,11 +1421,18 @@ pub fn compose_chain_with_capacity(
             // kq used here matches the placed copies. Known ceiling, out
             // of scope here: `belt_entity_for_rate` tops out at express,
             // so a single-column drain caps at 45/s and a plan above that
-            // would under-deliver at the exit. (#730 r3: with per-copy
-            // drains ≤ QUANTUM_RATE < express by construction, the
-            // under-delivery warning below cannot fire for K≥2 — kept as
-            // defensive code; K>1 exits now run up to 15/s in-corpus,
-            // e.g. chain-ec30's 3 copies.)
+            // would under-deliver at the exit. (#730 r3+r4: the
+            // under-delivery warning below is provably dead for ALL K,
+            // not just K≥2 — `required_copies` bounds per_copy_drain =
+            // drain_rate/kq ≤ QUANTUM_RATE (40) < express (45) whenever
+            // the ladder tops out, and below the top the tier is chosen
+            // for the FULL drain_rate so its cap already covers the
+            // per-copy share. Kept as defensive code, NOT an assert (a
+            // warning-class condition must never become a panic path):
+            // it goes live again if the quantum ever exceeds a belt cap
+            // or the drain sizing decouples from `required_copies`. The
+            // #715 loud-exit contract is carried by the quantization
+            // bound itself now — RFC-072 decision log, #730 round 4.)
             let spec = &specs[pi % n];
             let drain_rate = spec.outputs[0].rate * spec.count as f64;
             let drain_belt = crate::common::belt_entity_for_rate(drain_rate, None);
