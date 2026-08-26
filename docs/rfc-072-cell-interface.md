@@ -651,3 +651,22 @@ the snapshot debugger sees them.
   Phase 2's measurement path is BLOCKED on the harness fix — which
   therefore becomes part of unit 1, with the ec150 sim re-run as its
   verification.*
+- *2026-08-26 — THE INVALIDATION IS ITSELF RETRACTED: the kit is
+  exonerated by the codex frame forensic; the displacement was MY
+  double conversion.* `sim_state.chests` coordinates are already
+  manifest-framed (the dumper converts `floor(world − offx) + LX0`,
+  scenario.rs:2020) — subtracting offx again manufactured the
+  +dims/2 shift; and the drain banks read empty because the delivery
+  counter EMPTIES registered chests each cycle by design
+  (scenario.rs:2325). Rigs are correctly placed at every exit; the
+  −50% sim verdict on the ec150 strip STANDS as a layout
+  measurement. Two instrument-error lessons in one campaign day (the
+  turn-path meter class, now this frame misread) — both caught by
+  the instrument-before-finding rule applied to my own probes. The
+  physical cause of "copies 6–11 output-blocked with working sinks"
+  is REOPENED; the in-flight ec75 6-copy sim discriminates next
+  (same class, half the width: at-plan kills scale-independent
+  chain-mechanism theories; a repeat east-half block points at
+  position-dependent layout structure). The harness gains one
+  follow-up all the same: a `world` field beside the layout coords
+  in sim_state dumps, so this misread class cannot recur.*
