@@ -1466,7 +1466,7 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
     // deliberately if a change legitimately reshapes the default geometry.
     assert_eq!(
         format!("{:016x}", geometry_hash(&compose_chain(&sr).unwrap())),
-        "eb9e1796a1f53695",
+        "e442f54fb0dfc6cc",
         "EC@15 default (L2) geometry changed — re-verify and re-bless"
     );
     // RE-INSTRUMENTED 2026-08-21 (offpath item 9): this test's original

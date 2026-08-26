@@ -689,3 +689,22 @@ the snapshot debugger sees them.
   the verification. If it lands at plan, the quantum-40 receipts
   complete and unit 1 (the quantum change + this harness fix + the
   bank re-bless) ships.*
+- *2026-08-26 — the ec150 re-run lands AT PLAN (150.00/150.00, +1.9%
+  delivered, all 748 working): unit 1's receipts complete; the
+  re-bless adjudicates a MEASURED TRADE.* K72-3 clears both parts on
+  this exemplar (plan-valid 0E; 100% ≥ the 97.9% bar; seams within
+  bounds trivially). The quantum's blast radius, re-blessed with
+  honest verdicts: chain-ec15-d2 (the shipping-default world) now
+  **PASSES at plan** and d7 improved (−5.3% → −4.0%), while the
+  low-bonus d1 calibration worlds REGRESS (ec15: −8.0% → −16.1%;
+  ec30: −7.7% → −11.7%) — more copy hand-offs × the #383 inserter
+  plateau. Adjudication: the regression is calibration-world-only
+  and selection-shielded at shipping rates (the chain loses to HS/DI
+  below the wall — the succession record in the ec15 test — and
+  above the wall no old receipts existed), while the trade buys the
+  engine's ONLY error-free path above ~120/s plus at-plan default
+  worlds. Registry rows carry the FAIL verdicts openly with the
+  trade note; the copy-count and refusal pins updated on semantics
+  (the adjudicated zero-margin cable input is dissolved); the L2
+  self-consistency golden re-blessed per its own contract with the
+  d2 PASS as corroboration. Suite 1272/0.*
