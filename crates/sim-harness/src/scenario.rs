@@ -867,7 +867,6 @@ fn drain_ext_lens(records: &[BoundaryRecord]) -> Vec<i32> {
                 let lat = |i: usize| records[i].x * lateral.0 + records[i].y * lateral.1;
                 let mut cluster = cluster.to_vec();
                 cluster.sort_by_key(|&i| lat(i));
-                let _ = &lat;
                 for (k, &i) in cluster.iter().enumerate() {
                     // Base 11 (was 5): the widened 9-position drain bank
                     // needs ext_len-8 >= 3 so every chest/inserter sits
@@ -929,6 +928,225 @@ fn drain_ext_lens(records: &[BoundaryRecord]) -> Vec<i32> {
         }
     }
     exts
+}
+
+/// The item feed rig's occupied tiles, mirroring `add_feed` exactly:
+/// the outward column, the 12-tile jog, the ±1/±2 chest+inserter bank
+/// on jog tiles 10–12, and the substation/EEI (2×2 each) at jog 15/18.
+pub(crate) fn feed_footprint(
+    head: (i32, i32),
+    into: (i32, i32),
+    depth: i32,
+) -> std::collections::HashSet<(i32, i32)> {
+    let outward = neg(into);
+    let lateral = rot90(into);
+    let neg_lateral = neg(lateral);
+    let corner = (head.0 + outward.0 * depth, head.1 + outward.1 * depth);
+    let mut tiles = std::collections::HashSet::new();
+    for t in 1..=depth {
+        tiles.insert((head.0 + outward.0 * t, head.1 + outward.1 * t));
+    }
+    for k in 1..=12 {
+        tiles.insert((corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k));
+    }
+    for k in 10..=12 {
+        let b = (corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k);
+        for side in [-1, 1] {
+            tiles.insert((b.0 + into.0 * 2 * side, b.1 + into.1 * 2 * side));
+            tiles.insert((b.0 + into.0 * side, b.1 + into.1 * side));
+        }
+    }
+    for k in [15, 18] {
+        let b = (corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k);
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            tiles.insert((b.0 + dx, b.1 + dy));
+        }
+    }
+    tiles
+}
+
+/// The fluid feed's occupied tiles: the whole outward column through
+/// the infinity cap (out-tiles 1..=2+dist). Conservative — the ug gap
+/// tiles hold no entity — but claiming them keeps the disjointness
+/// argument independent of that detail.
+pub(crate) fn fluid_feed_footprint(
+    head: (i32, i32),
+    into: (i32, i32),
+    dist: i32,
+) -> std::collections::HashSet<(i32, i32)> {
+    let outward = neg(into);
+    (1..=2 + dist)
+        .map(|t| (head.0 + outward.0 * t, head.1 + outward.1 * t))
+        .collect()
+}
+
+/// The drain rig's occupied tiles, mirroring `add_drain`: extension
+/// column, ±1/±2 lateral bank over its last 9 tiles, substation/EEI
+/// (2×2 each) at lateral +4/+7 of the bank center.
+pub(crate) fn drain_footprint(
+    head: (i32, i32),
+    flow: (i32, i32),
+    ext: i32,
+) -> std::collections::HashSet<(i32, i32)> {
+    let lateral = rot90(flow);
+    let mut tiles = std::collections::HashSet::new();
+    for t in 1..=ext {
+        tiles.insert((head.0 + flow.0 * t, head.1 + flow.1 * t));
+    }
+    for t in (ext - 8)..=ext {
+        for side in [-2, -1, 1, 2] {
+            tiles.insert((
+                head.0 + flow.0 * t + lateral.0 * side,
+                head.1 + flow.1 * t + lateral.1 * side,
+            ));
+        }
+    }
+    let bank_t = ext - 4;
+    for off in [4, 7] {
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            tiles.insert((
+                head.0 + flow.0 * bank_t + lateral.0 * off + dx,
+                head.1 + flow.1 * bank_t + lateral.1 * off + dy,
+            ));
+        }
+    }
+    tiles
+}
+
+/// Structural cross-type guard (RFC-072 P2 unit 2, #731 round 1): a
+/// grid's inter-strip clearance hosts the upper strip's DRAIN rigs and
+/// the lower strip's FEED rigs. The same-type ladders above can't see
+/// each other, and the Lua-side kit audit only RECORDS an overlap — so
+/// refuse at codegen if any feed-rig tile coincides with any drain-rig
+/// tile. Same-type overlap inside a close-pitch drain cluster is the
+/// documented known-imperfect case and is not judged here.
+fn assert_feed_drain_rigs_disjoint(
+    inputs: &[BoundaryRecord],
+    slots: &[i32],
+    outputs: &[BoundaryRecord],
+    exts: &[i32],
+) {
+    let mut drain_tiles: std::collections::HashMap<(i32, i32), &str> = Default::default();
+    for (i, rec) in outputs.iter().enumerate() {
+        for t in drain_footprint((rec.x, rec.y), rec.direction().vector(), exts[i]) {
+            drain_tiles.insert(t, &rec.item);
+        }
+    }
+    for (i, rec) in inputs.iter().enumerate() {
+        let into = rec.direction().vector();
+        let tiles = if rec.is_fluid {
+            fluid_feed_footprint((rec.x, rec.y), into, 2 + 2 * slots[i])
+        } else {
+            feed_footprint((rec.x, rec.y), into, 4 + 6 * slots[i])
+        };
+        for t in tiles {
+            if let Some(drain_item) = drain_tiles.get(&t) {
+                panic!(
+                    "feed rig for '{}' (head ({},{}), slot {}) and drain rig for '{drain_item}' \
+                     share tile {t:?} — the clearance between these edges is too small for \
+                     both rigs; widen it rather than let the kit stack entities",
+                    rec.item, rec.x, rec.y, slots[i]
+                );
+            }
+        }
+    }
+}
+
+/// Every rig tile per record, in the manifest's layout frame.
+fn rig_footprints(
+    inputs: &[BoundaryRecord],
+    slots: &[i32],
+    outputs: &[BoundaryRecord],
+    exts: &[i32],
+) -> Vec<(String, std::collections::HashSet<(i32, i32)>)> {
+    let mut rigs = Vec::new();
+    for (i, rec) in inputs.iter().enumerate() {
+        let into = rec.direction().vector();
+        let tiles = if rec.is_fluid {
+            fluid_feed_footprint((rec.x, rec.y), into, 2 + 2 * slots[i])
+        } else {
+            feed_footprint((rec.x, rec.y), into, 4 + 6 * slots[i])
+        };
+        rigs.push((format!("feed rig for '{}' at ({},{})", rec.item, rec.x, rec.y), tiles));
+    }
+    for (i, rec) in outputs.iter().enumerate() {
+        let tiles = drain_footprint((rec.x, rec.y), rec.direction().vector(), exts[i]);
+        rigs.push((format!("drain rig for '{}' at ({},{})", rec.item, rec.x, rec.y), tiles));
+    }
+    rigs
+}
+
+/// Structural rig-vs-LAYOUT guard (RFC-072 P2 unit 2, #731 round 1): a
+/// rig launched from an INTERIOR boundary head (a grid's inter-strip
+/// edges) extends into the bounding box, where the layout's own
+/// entities may sit. `create_entity` on an occupied tile fails
+/// silently for feed rigs (only drain belts log), so a too-small
+/// clearance would ship as a starved strip with an empty kit_errors —
+/// exactly the silent class this project refuses. Decode the blueprint
+/// (the meter crate's parser), align frames via the record-integrity
+/// contract (every boundary head must land on a decoded belt), and
+/// refuse if any rig tile is occupied by the layout.
+fn assert_rigs_clear_of_layout(
+    bp: &str,
+    inputs: &[BoundaryRecord],
+    slots: &[i32],
+    outputs: &[BoundaryRecord],
+    exts: &[i32],
+) {
+    // Unit tests drive codegen with placeholder blueprint strings; a
+    // string that does not decode carries no layout to collide with.
+    // Every real run decodes (the same parser ingests the whole fixture
+    // corpus), so this is a test-only skip, not a silent production path.
+    let Ok(entities) = spaghettio_meter::blueprint_in::decode(bp) else {
+        return;
+    };
+    let mut occupied: std::collections::HashSet<(i32, i32)> = Default::default();
+    for e in &entities {
+        let horizontal = matches!(
+            e.direction,
+            spaghettio_meter::blueprint_in::Dir::East | spaghettio_meter::blueprint_in::Dir::West
+        );
+        let (w, h) = spaghettio_meter::entity_data::footprint_oriented(&e.name, horizontal);
+        for dx in 0..w as i32 {
+            for dy in 0..h as i32 {
+                occupied.insert((e.x + dx, e.y + dy));
+            }
+        }
+    }
+    // Frame alignment: the manifest's records and the blueprint's tiles
+    // must share the layout frame — every boundary head sits ON a
+    // layout belt by the record-integrity contract. A frame mismatch
+    // would make this whole guard check the wrong tiles, so it is a
+    // refusal, not a tolerance.
+    for rec in inputs.iter().chain(outputs.iter()) {
+        assert!(
+            occupied.contains(&(rec.x, rec.y)),
+            "boundary record for '{}' at ({},{}) lands on no decoded blueprint tile — \
+             manifest and blueprint frames disagree; refusing to place rigs blind",
+            rec.item, rec.x, rec.y
+        );
+    }
+    assert_rigs_clear_of_occupied(&occupied, inputs, slots, outputs, exts);
+}
+
+/// The occupancy half of `assert_rigs_clear_of_layout`, split out so the
+/// geometry is unit-testable without a blueprint.
+fn assert_rigs_clear_of_occupied(
+    occupied: &std::collections::HashSet<(i32, i32)>,
+    inputs: &[BoundaryRecord],
+    slots: &[i32],
+    outputs: &[BoundaryRecord],
+    exts: &[i32],
+) {
+    for (label, tiles) in rig_footprints(inputs, slots, outputs, exts) {
+        if let Some(t) = tiles.iter().find(|t| occupied.contains(t)) {
+            panic!(
+                "{label} would place kit on layout tile {t:?} — the clearance around this \
+                 boundary edge is smaller than the rig; feed placement failures are silent \
+                 in-game, so refusing here instead"
+            );
+        }
+    }
 }
 
 fn drain_call(out: &mut String, idx: usize, ext_len: i32, rec: &BoundaryRecord) {
@@ -1368,6 +1586,19 @@ script.on_init(function()
         feed_call(&mut out, idx, feed_depth_slots[idx], rec);
     }
     let drain_exts = drain_ext_lens(&manifest.boundary_outputs);
+    assert_feed_drain_rigs_disjoint(
+        &manifest.boundary_inputs,
+        &feed_depth_slots,
+        &manifest.boundary_outputs,
+        &drain_exts,
+    );
+    assert_rigs_clear_of_layout(
+        bp,
+        &manifest.boundary_inputs,
+        &feed_depth_slots,
+        &manifest.boundary_outputs,
+        &drain_exts,
+    );
     for (idx, rec) in manifest.boundary_outputs.iter().enumerate() {
         drain_call(&mut out, idx, drain_exts[idx], rec);
     }
@@ -3229,47 +3460,6 @@ mod tests {
     /// silently"). The substation/EEI power island (further out along the
     /// jog than the chest bank) isn't included — it's never the colliding
     /// entity class in the issue's datum.
-    fn feed_footprint(
-        head: (i32, i32),
-        into: (i32, i32),
-        depth: i32,
-    ) -> std::collections::HashSet<(i32, i32)> {
-        let outward = neg(into);
-        let lateral = rot90(into);
-        let neg_lateral = neg(lateral);
-        let corner = (head.0 + outward.0 * depth, head.1 + outward.1 * depth);
-        let mut tiles = std::collections::HashSet::new();
-        for t in 1..=depth {
-            tiles.insert((head.0 + outward.0 * t, head.1 + outward.1 * t));
-        }
-        for k in 1..=12 {
-            tiles.insert((corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k));
-        }
-        for k in 10..=12 {
-            let b = (corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k);
-            for side in [-1, 1] {
-                tiles.insert((b.0 + into.0 * 2 * side, b.1 + into.1 * 2 * side));
-                tiles.insert((b.0 + into.0 * side, b.1 + into.1 * side));
-            }
-        }
-        tiles
-    }
-
-    /// The fluid feed's occupied tiles: the whole outward column through
-    /// the infinity cap (out-tiles 1..=2+dist). Conservative — the ug
-    /// gap tiles hold no entity — but claiming them keeps the disjointness
-    /// argument independent of that detail.
-    fn fluid_feed_footprint(
-        head: (i32, i32),
-        into: (i32, i32),
-        dist: i32,
-    ) -> std::collections::HashSet<(i32, i32)> {
-        let outward = neg(into);
-        (1..=2 + dist)
-            .map(|t| (head.0 + outward.0 * t, head.1 + outward.1 * t))
-            .collect()
-    }
-
     fn south_feed(item: &str, x: i32) -> BoundaryRecord {
         BoundaryRecord {
             item: item.into(),
@@ -3450,39 +3640,6 @@ mod tests {
         }
     }
 
-    /// The drain rig's occupied tiles: extension column, ±1/±2 lateral
-    /// bank over its last 9 tiles, substation/EEI at lateral +4/+7 of
-    /// the bank center (each 2×2).
-    fn drain_footprint(
-        head: (i32, i32),
-        flow: (i32, i32),
-        ext: i32,
-    ) -> std::collections::HashSet<(i32, i32)> {
-        let lateral = rot90(flow);
-        let mut tiles = std::collections::HashSet::new();
-        for t in 1..=ext {
-            tiles.insert((head.0 + flow.0 * t, head.1 + flow.1 * t));
-        }
-        for t in (ext - 8)..=ext {
-            for side in [-2, -1, 1, 2] {
-                tiles.insert((
-                    head.0 + flow.0 * t + lateral.0 * side,
-                    head.1 + flow.1 * t + lateral.1 * side,
-                ));
-            }
-        }
-        let bank_t = ext - 4;
-        for off in [4, 7] {
-            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                tiles.insert((
-                    head.0 + flow.0 * bank_t + lateral.0 * off + dx,
-                    head.1 + flow.1 * bank_t + lateral.1 * off + dy,
-                ));
-            }
-        }
-        tiles
-    }
-
     /// RFC-072 P2 unit 2: drain extensions stagger per lateral cluster,
     /// not per manifest index — far-apart exits all get the base 11
     /// (the grid's inter-strip clearance is sized to that), close exits
@@ -3533,6 +3690,144 @@ mod tests {
     fn near_parallel_drain_bands_refuse() {
         let records = vec![south_drain("near", 0, 0), south_drain("far", 0, 8)];
         drain_ext_lens(&records);
+    }
+
+    /// A grid-shaped manifest: strip 0's exits at its south edge (y=16)
+    /// draining SOUTH into the clearance, strip 1's feeds at its north
+    /// edge (y=49) whose rigs extend NORTH into the same clearance. Per
+    /// slot the feed columns sit west of the cell and the drain column
+    /// east of it. At the engine's 32-tile clearance the cross-type
+    /// guard passes; below it, it must refuse by name.
+    fn grid_manifest(clearance: i32) -> (Vec<BoundaryRecord>, Vec<BoundaryRecord>) {
+        let strip_h = 17;
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+        for copy in 0..3 {
+            let slot_x = copy * 60;
+            for k in 0..2 {
+                inputs.push(south_feed(&format!("ore-{copy}-{k}"), slot_x + k * 4));
+                let mut inner = south_feed(&format!("ore-inner-{copy}-{k}"), slot_x + k * 4);
+                inner.y = strip_h + clearance;
+                inputs.push(inner);
+            }
+            outputs.push(south_drain(&format!("ec-{copy}"), slot_x + 30, strip_h - 1));
+            outputs.push(south_drain(
+                &format!("ec-inner-{copy}"),
+                slot_x + 30,
+                2 * strip_h + clearance - 1,
+            ));
+        }
+        (inputs, outputs)
+    }
+
+    #[test]
+    fn grid_clearance_keeps_feed_and_drain_rigs_disjoint() {
+        let (inputs, outputs) = grid_manifest(32);
+        let slots = feed_slots(&inputs);
+        let exts = drain_ext_lens(&outputs);
+        assert_feed_drain_rigs_disjoint(&inputs, &slots, &outputs, &exts);
+        assert_feed_footprints_disjoint(&inputs);
+    }
+
+    /// The two strips' occupied bands (every tile of a 17-tall strip
+    /// across the manifest's width), as the layout decode would report.
+    fn grid_occupied(clearance: i32) -> std::collections::HashSet<(i32, i32)> {
+        let mut occ = std::collections::HashSet::new();
+        for x in -4..200 {
+            for y in 0..17 {
+                occ.insert((x, y));
+                occ.insert((x, y + 17 + clearance));
+            }
+        }
+        occ
+    }
+
+    #[test]
+    fn grid_clearance_keeps_rigs_off_both_strips() {
+        let (inputs, outputs) = grid_manifest(32);
+        let slots = feed_slots(&inputs);
+        let exts = drain_ext_lens(&outputs);
+        assert_rigs_clear_of_occupied(&grid_occupied(32), &inputs, &slots, &outputs, &exts);
+    }
+
+    /// At clearance 8 the inner feed rigs (depth up to 10, plus the ±2
+    /// bank) reach north INTO strip 0's machine band — the silent kit
+    /// failure the layout guard exists to refuse by name.
+    #[test]
+    #[should_panic(expected = "would place kit on layout tile")]
+    fn undersized_grid_clearance_refuses_rigs_inside_a_strip() {
+        let (inputs, outputs) = grid_manifest(8);
+        let slots = feed_slots(&inputs);
+        let exts = drain_ext_lens(&outputs);
+        assert_rigs_clear_of_occupied(&grid_occupied(8), &inputs, &slots, &outputs, &exts);
+    }
+
+    /// Codegen over every manifest in a real bank — the rig guards
+    /// (near-parallel bands, cross-type overlap, rig-vs-layout) must
+    /// accept every fixture the sim has ever legitimately measured.
+    /// Ignored: needs SPAGHETTIO_CALIBRATION_BANK pointing at a measured
+    /// bank with per-fixture `manifest-real.json` + `bp.txt`.
+    ///
+    /// KNOWN REFUSALS (found by this sweep, 2026-08-26): fluid feed
+    /// records whose head entity is a bare `pipe` carry direction 0 —
+    /// a pipe has no direction, so the engine records North — and the
+    /// harness's "outward = −into" then points INTO the layout: the
+    /// fluid rig is built on top of the factory. Exactly these three
+    /// fixtures are the calibration bank's three "non-converged 0.000"
+    /// rows; those were never layout measurements. The list can only
+    /// SHRINK: the fix is engine-side (record the real into-layout flow
+    /// direction for pipe heads), followed by a manifest re-bless and
+    /// re-measure of the three rows — a followup, not this unit.
+    #[test]
+    #[ignore]
+    fn codegen_accepts_every_bank_manifest() {
+        const KNOWN_REFUSED: &[&str] =
+            &["tier3_heavy_oil_cracking", "tier3_sulfuric_acid", "tier3_plastic_bar"];
+        let bank = std::env::var("SPAGHETTIO_CALIBRATION_BANK")
+            .expect("set SPAGHETTIO_CALIBRATION_BANK to a measured bank dir");
+        let mut checked = 0;
+        let mut refused: Vec<(String, String)> = Vec::new();
+        for entry in std::fs::read_dir(&bank).expect("read bank").flatten() {
+            let mp = entry.path().join("manifest-real.json");
+            let Ok(text) = std::fs::read_to_string(&mp) else { continue };
+            let label = entry.file_name().to_string_lossy().to_string();
+            let m: crate::manifest::Manifest =
+                serde_json::from_str(&text).unwrap_or_else(|e| panic!("{mp:?}: {e}"));
+            let bp = std::fs::read_to_string(entry.path().join("bp.txt"))
+                .unwrap_or_else(|e| panic!("{:?}/bp.txt: {e}", entry.path()));
+            let outcome = std::panic::catch_unwind(|| {
+                let slots = feed_slots(&m.boundary_inputs);
+                let exts = drain_ext_lens(&m.boundary_outputs);
+                assert_feed_drain_rigs_disjoint(&m.boundary_inputs, &slots, &m.boundary_outputs, &exts);
+                assert_rigs_clear_of_layout(&bp, &m.boundary_inputs, &slots, &m.boundary_outputs, &exts);
+            });
+            checked += 1;
+            if let Err(e) = outcome {
+                let msg = e
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                refused.push((label, msg));
+            }
+        }
+        assert!(checked > 0, "no manifests found under {bank}");
+        let unexpected: Vec<&(String, String)> = refused
+            .iter()
+            .filter(|(l, _)| !KNOWN_REFUSED.contains(&l.as_str()))
+            .collect();
+        eprintln!(
+            "codegen guards: {checked} manifests, {} refused ({} known)",
+            refused.len(),
+            refused.len() - unexpected.len()
+        );
+        for (l, m) in &refused {
+            eprintln!("  {l}: {m}");
+        }
+        assert!(
+            unexpected.is_empty(),
+            "guards refused fixtures outside the known set: {unexpected:?}"
+        );
     }
 
     /// A sixth same-side fluid would need a ug span beyond the game's
