@@ -1496,7 +1496,9 @@ fn select_best_decomposition_with_policy(
             .max_belt_tier
             .as_deref()
             .is_none_or(|t| t == "express-transport-belt")
-        && crate::bus::cells::chain::chain_eligible(solver_result).is_ok();
+        // Level-aware like the composer it gates (#733 round 6): a chain
+        // grid-composable at the caller's level must be OFFERED at it.
+        && crate::bus::cells::chain::chain_eligible_at(solver_result, opts.inserter_capacity).is_ok();
     let cells_run = if try_cells {
         run_candidate_catch_unwind("cell-composed", solver_result, || {
             CellComposedCandidate.produce(solver_result, &opts)

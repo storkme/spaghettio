@@ -1253,7 +1253,11 @@ fn current_producers() -> Vec<ProducerRegistration> {
         },
         GateClause {
             name: "chain-eligible",
-            test: |c| super::cells::chain::chain_eligible(c.solver_result).is_ok(),
+            // Level-aware like the composer it gates (#733 round 6).
+            test: |c| {
+                super::cells::chain::chain_eligible_at(c.solver_result, c.opts.inserter_capacity)
+                    .is_ok()
+            },
         },
     ]);
     cells.refuse_on_error = true;

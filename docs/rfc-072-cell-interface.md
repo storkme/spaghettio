@@ -1,6 +1,6 @@
 # RFC-072: The cell interface — boundary contracts and rate-scaling composition
 
-Status: Proposed
+Status: Accepted — Phases 0–2 COMPLETE 2026-08-26 (#725–#733); Phase 3 not committed by acceptance
 Evidence base: [`composition-frontier-probes.md`](composition-frontier-probes.md)
 Successor framing to: the 2026-07-24 strategy call ("bus stays the
 low-rate/intra-cell winner; high rates via composition")
@@ -252,8 +252,32 @@ the snapshot debugger sees them.
   path when Phase 2 touches the merger); (d) the at-cap fold and
   fractional multi-row meter readings; (e) the single over-cap
   column (the placer's per-row output ceiling domain).
-- **Phase 2 — replication composer.** Gates on K72-3/K72-4; Phase 1 is
-  its prerequisite.
+- **Phase 2 — COMPLETE 2026-08-26.** #730 (unit 1): quantum 40, the
+  harness drain-rig power fix, the honest registry + calibration-bank
+  re-bless; ec75/ec150 strips sim PASS at plan. #731 (groundwork):
+  the harness rig ladders banded/clustered with structural guards —
+  which found #732. #733 (unit 2): the K_MAX successor — K > 12
+  composes as a grid of stacked independent strips, record-aware
+  validators, the belt and input-hand margins in the quantizer;
+  ec@240 = 2×12, sim PASS 240.00/240.00 at plan, all 1,200 machines
+  working. K72-3 cleared on the exemplar, K72-4 by construction,
+  K72-5 trivial. **The canonical Phase-2 residual list** (none
+  gating): (a) RFC-049 Phase 3 — margin in the inserter ladder
+  itself (the hand margin is scoped to grid territory; sub-K_MAX
+  strips whose per-copy draw lands a hand at ≥90% of its credit —
+  ec60 at K=5, the d1 FAIL rows' class — wait on it); (b) the
+  delivered-vs-produced gap widening with layout width (a
+  transit/window effect — `--fixed-window` before reading a
+  delivered-side bar on grids); (c) the delivered metric's drain-kit
+  sensitivity on small fixtures (read produced where receipts differ
+  only by kit; the bank's seven pre-#731 re-measures are comparable
+  among themselves only); (d) #732 bare-pipe fluid heads (engine-side
+  direction fix + 3-row bank re-measure); (e) the harness's
+  perpendicular-corner same-type rig gap (extend to all-pairs before
+  any composer emits a corner); (f) the mega/fluid grid path is
+  untested by construction — no fluid-touching chain reaches K > 12
+  in the corpus; (g) the derived-quantum form min(belt, max
+  single-row stage rate); (h) the Phase-1 residuals (unchanged).
 - **Phase 3 — heterogeneous + library.** Not committed by acceptance;
   opens only on a clean Phase 2.
 
@@ -958,3 +982,29 @@ way. The meter's turn-model fix
   seven re-measured rows (pre-#731 kit) are comparable among
   themselves, not to post-#731 delivered readings without a
   re-measure. The K=24 exemplar's delivered +4.0% is post-#731 kit.*
+- *2026-08-26 — PHASE 2 CLOSED (#733 merged, six review rounds): the
+  RFC's committed substance is delivered.* Against the Summary's
+  promise: the deliver-plan-or-refuse contract extended to the
+  output side (Phase 1, sim-verified at plan), and k replicated
+  cells composing to rates the single bus structurally cannot reach
+  — ec75 (6 copies), ec150 (12), ec240 (a 2×12 grid) — each
+  sim-verified at plan where the native path carries lane-throughput
+  saturation or, at 240/s, a router panic. The interface contract
+  the composition rests on is the one the registry already measured:
+  per-copy feeds and drains, so composed artifacts need no
+  inter-strip flow — the "stamp-oracle merge" and typed
+  `CellBoundary` machinery in the Design section was never needed
+  for homogeneous replication and is deferred with Phase 3
+  (heterogeneous composition is where a typed boundary earns its
+  keep). Carried forward from this phase: the meter's turn-path
+  under-read (Phase 0); the harness kit's own defects — #730's
+  unpowered far drain banks, #731's bare-pipe fluid heads (#732) —
+  twice the "silent −50%" was the instrument; and the inserter
+  ladder's zero-margin hand sizing (#733), which the grid made
+  visible at scale and which RFC-049 Phase 3 owns generally. Kill
+  criteria: K72-1/2/6 retired on falsified premises; K72-3/4/5
+  cleared on receipts. Review carry-over closed in the close-out PR
+  itself: the far budget follows the row's own contest, the search
+  gate is level-aware like the composer, a from-ore grid contract
+  test joins the plates one, and the merge helper's tripwires are
+  hard asserts.*

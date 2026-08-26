@@ -228,9 +228,38 @@ pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
             // on a single long-handed hand with NO extra column
             // (`triple_input_row`'s input3 — #733 round 4: pricing it as
             // a near stack hand over-credited it ~5×).
+            // The far side gets the contested column only when the row's
+            // own contest grants it (#733 round 6): `dual_input_row` runs
+            // `contest_favors_far(near, far, …)` for the shared dx=1
+            // column, so pricing the far hand at budget 1 unconditionally
+            // over-credited it by one inserter whenever near wins.
+            // …and a row is only as fed as its LAST machine: at `LastInRow`
+            // the far belt is trimmed and the contested column exists only
+            // when `dual_input_row`'s one-tile extension rule fires (far
+            // capped at the baseline hand, covered with one extra, near
+            // needing no extra — templates.rs) — so the budget is priced
+            // by that rule, not by an always-eligible column (codex review
+            // of the close-out PR). For the receipted 12.5/s cell: iron 2.5
+            // > 2.4 caps the baseline, two hands cover, cable's stack hand
+            // needs nothing → budget 1, as the sim measured.
+            let far_budget = if solids.len() >= 2 {
+                let (far, near) = (solids[0], solids[1]);
+                let contest = crate::bus::inserter_ladder::contest_favors_far(
+                    near, far, true, quality, level,
+                );
+                let far_capped =
+                    size_side(far, Reach::Far, 0, InserterTier::Stack, quality, level).shortfall.is_some();
+                let far_covered_extended =
+                    size_side(far, Reach::Far, 1, InserterTier::Stack, quality, level).shortfall.is_none();
+                let near_needs_no_extra =
+                    size_side(near, Reach::Near, 0, InserterTier::Stack, quality, level).shortfall.is_none();
+                if contest && far_capped && far_covered_extended && near_needs_no_extra { 1 } else { 0 }
+            } else {
+                0
+            };
             solids.iter().enumerate().any(|(idx, &rate)| {
                 let (reach, budget) = match (solids.len(), idx) {
-                    (n, 0) if n >= 2 => (Reach::Far, 1),
+                    (n, 0) if n >= 2 => (Reach::Far, far_budget),
                     (_, 1) => (Reach::Near, 1),
                     (_, i) if i >= 2 => (Reach::Far, 0),
                     _ => (Reach::Near, 1),
@@ -2054,11 +2083,13 @@ fn append_strip_translated(acc: &mut LayoutResult, strip: LayoutResult, dy: i32)
     // the tripwire the doc comment promises (#733 round 2): a strip
     // composer that starts populating either would otherwise lose the
     // upper strips' contribution silently.
-    debug_assert!(
+    // Hard asserts, not debug: the "refuse silently" promise must hold
+    // in release/WASM builds too (#733 round 6).
+    assert!(
         strip.effective_rows.is_empty() && acc.effective_rows.is_empty(),
         "a strip populated effective_rows — extend append_strip_translated to merge (translate y) them"
     );
-    debug_assert!(
+    assert!(
         strip.research_productivity.is_empty() && acc.research_productivity.is_empty(),
         "a strip declared research_productivity — extend append_strip_translated to merge it"
     );
@@ -2081,7 +2112,7 @@ fn append_strip_translated(acc: &mut LayoutResult, strip: LayoutResult, dy: i32)
     // a bare `r.y += dy` would leave untranslated (#733 round 4). The
     // strip composer never emits regions today; refuse to merge them
     // silently rather than half-translate them.
-    debug_assert!(
+    assert!(
         strip.regions.is_empty() && acc.regions.is_empty(),
         "a strip emitted regions — extend append_strip_translated to translate their ports too"
     );

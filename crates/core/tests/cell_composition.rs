@@ -2007,6 +2007,62 @@ fn cell_quantization_copy_counts() {
     );
 }
 
+/// The FROM-ORE grid — the configuration the registry row, the
+/// SIM_FIXTURES entry and the sim receipt actually describe (#733
+/// round 6: the plates test below pins the composer on a different
+/// input set; ec-from-ore has no fluid block — electric furnaces — but
+/// six external feeds per copy give it the deeper feed clusters). Pins
+/// the same contract: K=24 → 2×12, zero validator errors, and no
+/// warning outside the honest zero-margin class.
+#[test]
+fn grid_composes_ec240_from_ore_zero_errors() {
+    use spaghettio_core::bus::cells::chain::{compose_chain, required_copies};
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        240.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    assert_eq!(required_copies(&sr), 24, "ec240 from ore quantizes to 24 copies");
+    let _guard = spaghettio_core::trace::start_trace();
+    let l = compose_chain(&sr).expect("from-ore grid composes");
+    let events = spaghettio_core::trace::drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| format!("{e:?}").contains("copies_per_strip: [12, 12]")),
+        "balanced 2x12 split"
+    );
+    assert_eq!(l.boundary_outputs.len(), 24, "one exit per copy");
+    let issues = match spaghettio_core::validate::validate(&l, Some(&sr)) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+    let errors = issues
+        .iter()
+        .filter(|i| format!("{:?}", i.severity).contains("Error"))
+        .count();
+    assert_eq!(errors, 0, "from-ore grid must validate error-free: {issues:?}");
+    let stray: Vec<&str> = issues
+        .iter()
+        .filter(|i| i.category != "row-input-belt-margin")
+        .map(|i| i.category.as_str())
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "from-ore grid must carry no warnings beyond row-input-belt-margin, got {stray:?}"
+    );
+}
+
 /// RFC-072 Phase 2 unit 2: past K_MAX the chain composes as a GRID of
 /// stacked independent strips. This pins the whole contract on the
 /// ec@240 exemplar (K=24 → 2×12): balanced split, strip translation
