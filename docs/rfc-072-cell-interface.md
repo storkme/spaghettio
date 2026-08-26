@@ -407,7 +407,13 @@ the snapshot debugger sees them.
   mirrored onto output flows, never-over-fire discipline, K72-6);
   K72-1/K72-2 RETIRED with their falsification recorded in place;
   K72-3(b) re-based on SIM receipts; the verification plan trusts the
-  meter only on capacity-bound questions. The meter's turn-model fix
+  meter only on capacity-bound questions.
+
+Known limitation (#730 round 2, recorded): a sim-FAILED geometry and a
+never-measured one both rank as unverified — a three-tier ordering
+(verified > never-measured > measured-failing) is future policy work,
+not a silent choice; the FAIL rows' notes carry their receipts either
+way. The meter's turn-model fix
   is deliberately NOT this RFC's scope — it is a meter-crate
   follow-up with the four anchored fixtures as its calibration set.*
 - *2026-08-25 — Phase 1's mechanism corrected by its own recon: the
