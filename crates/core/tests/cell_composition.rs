@@ -500,6 +500,19 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 2,
         levels: &[2],
     },
+    // RFC-072 Phase 2 unit 2: the K_MAX successor's exemplar — K=24
+    // (18 by rate, 20 with the belt margin, 24 with the input-hand
+    // margin) composes as a 2×12 GRID of stacked strips (the K72-3
+    // fixture; the K=18 and K=20 receipts are in the decision log).
+    SimFixture {
+        label: "chain-ec240",
+        target: "electronic-circuit",
+        rate: 240.0,
+        inputs: &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
     SimFixture {
         // RFC-071 B3: the shipped gear@20/am2 cell-composed winner — the
         // only production cell win — earning its registry entry after
@@ -1139,6 +1152,12 @@ fn probe_registry_hashes() {
             &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
         ),
         (
+            "chain-ec240",
+            "electronic-circuit",
+            240.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
+        ),
+        (
             "chain-ec15",
             "electronic-circuit",
             15.0,
@@ -1306,9 +1325,13 @@ fn mismatch_note_is_fail_dominant_and_order_independent() {
     let mut l2 = compose_chain_with_capacity(&sr, 1).unwrap();
     l2.inserter_capacity = 2;
     let note2 = verification_note("electronic-circuit", 15.0, &l2);
+    // The d2 row reads "AS WARNED" since its clustered-kit re-measure
+    // (delivered −4.0%, produced +0.0% — RFC-072 log, 2026-08-26); the
+    // point pinned here is the TIER: a measured non-FAIL world stays
+    // sim-verified despite FAIL siblings, never "NOT sim-verified".
     assert!(
-        note2.contains("SIM-VERIFIED at plan"),
-        "the measured PASS world must stay verified despite FAIL siblings, \
+        note2.contains("SIM-VERIFIED") && !note2.contains("NOT sim-verified"),
+        "the measured non-FAIL world must stay verified despite FAIL siblings, \
          got: {note2:?}"
     );
 }
@@ -1412,6 +1435,9 @@ fn chain_refuses_multirow_internal_corridor() {
     )
     .unwrap();
     for m in sr.machines.iter_mut() {
+        // (RFC-072 P2 unit 2's quantizer margin terms are scoped to grid
+        // territory, K > K_MAX — #733 round 1 — so this K=1 config never
+        // sees them; the first cut had to override EC's cable draw too.)
         if m.recipe == "copper-cable" {
             // 5.0/s per machine * 7.9 = 39.5/s — strictly UNDER the
             // quantum (40 since RFC-072 unit 1), so K stays 1 with real
@@ -1796,6 +1822,16 @@ fn cell_registry_hashes_current() {
             "chain",
             2,
         ),
+        // RFC-072 P2 unit 2: the grid exemplar (K=24 → 2×12 strips; the
+        // K=18/K=20 numbers in the decision log are the earlier receipts,
+        // not the registered geometry).
+        (
+            "electronic-circuit",
+            240.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+            "chain",
+            2,
+        ),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {
@@ -1894,6 +1930,14 @@ fn cell_quantization_copy_counts() {
             "electronic-circuit",
             60.0,
             &["iron-plate", "copper-plate"][..],
+            // 5 by the rate quantum (12/s per copy). NOTE: this copy's
+            // 5 EC machines draw iron at exactly the one-long-handed-
+            // hand credit (2.40/s) — the zero-margin provisioning the
+            // ec@240 grid sims measured short (RFC-072 P2 unit 2). The
+            // quantizer's input-hand margin is scoped to K > K_MAX, so
+            // this sub-K_MAX strip keeps its shape; a first sim of
+            // chain-ec60 should expect the same tail-starvation class
+            // until RFC-049 P3 puts margin in the ladder itself.
             5,
         ),
     ] {
@@ -1914,7 +1958,11 @@ fn cell_quantization_copy_counts() {
             "{label}: must be chain-eligible"
         );
     }
-    // Past K_MAX=12 the chain refuses loudly (ec600 → cable 1800/s → K=45 at quantum 40).
+    // RFC-072 P2 unit 2: past K_MAX=12 the chain no longer refuses — it
+    // grid-composes (ec600 → cable 1800/s → K=45 by rate, 48 with the
+    // grid-territory margins → 4 strips). The
+    // refusal moved to the GRID bound R_MAX×K_MAX=48: ec700 → cable
+    // 2100/s → K=53 refuses with the same wording contract.
     let inputs_set: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())
@@ -1929,10 +1977,167 @@ fn cell_quantization_copy_counts() {
         QualityTier::Normal,
     )
     .unwrap();
+    // 45 by the rate quantum; the margin terms carry it to 48 (at
+    // 45..47 a copy's 6 EC machines sit at zero belt margin; at 48
+    // exactly 5 per copy at 100%, iron 2.5/s → two far hands at 52%,
+    // so 48 is genuinely margin-clean, not merely the loop bound —
+    // 4×12, the last eligible K. Two refusal paths past it: a chain
+    // the margins cannot satisfy by 48 leaves the loop at 49; a chain
+    // whose RATE quantum alone exceeds 48 (ec700 below, K=53) never
+    // enters the loop. Both refuse with the same wording.
+    assert_eq!(required_copies(&sr), 48, "ec600 copy count");
+    assert!(
+        chain_eligible(&sr).is_ok(),
+        "K=48 must be grid-eligible (4 strips) since RFC-072 P2 unit 2"
+    );
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        700.0,
+        &inputs_set,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let err = chain_eligible(&sr).unwrap_err();
     assert!(
-        err.contains("quantized copies"),
-        "K_MAX refusal, got: {err}"
+        err.contains("quantized copies") && err.contains("strips"),
+        "grid-bound refusal, got: {err}"
+    );
+}
+
+/// RFC-072 Phase 2 unit 2: past K_MAX the chain composes as a GRID of
+/// stacked independent strips. This pins the whole contract on the
+/// ec@240 exemplar (K=24 → 2×12): balanced split, strip translation
+/// (entities AND boundary records — the harness attaches rigs at those
+/// exact tiles), one bridged power network, the CellGridComposed trace
+/// event, and validator ZERO ERRORS — the K72-3(a) plan bar, where the
+/// native bus at the same rate ships 22 structural errors around a
+/// caught router panic (decision log, 2026-08-26).
+#[test]
+fn grid_composes_ec240_as_two_strips_zero_errors() {
+    use spaghettio_core::bus::cells::chain::{compose_chain, required_copies};
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        240.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    // 18 by the rate quantum alone (cable 720/s ÷ 40); 20 once the
+    // row-input BELT margin applies (at 18 a copy's 6 EC machines can
+    // draw exactly 45/s on express); 24 once the input-HAND margin
+    // applies — K=19..23 all land a copy's iron draw on a single
+    // long-handed hand above 85% of its 2.4/s credit (the K=18 sim
+    // measured 92.6% → one machine short per copy, K=20 measured 100%
+    // → two short per copy; RFC-072 log, 2026-08-26). At 24 a copy is
+    // the 4-machine 10/s cell: iron 2.5/s → two hands at 52%.
+    assert_eq!(required_copies(&sr), 24, "ec240 quantizes to 24 copies");
+    let _guard = spaghettio_core::trace::start_trace();
+    let l = compose_chain(&sr).expect("grid composes");
+    let events = spaghettio_core::trace::drain_events();
+    let grid_events: Vec<String> = events
+        .iter()
+        .map(|e| format!("{e:?}"))
+        .filter(|d| d.contains("CellGridComposed"))
+        .collect();
+    assert_eq!(grid_events.len(), 1, "exactly one grid event");
+    assert!(
+        grid_events[0].contains("copies_per_strip: [12, 12]"),
+        "balanced 2x12 split, got: {}",
+        grid_events[0]
+    );
+    // Two entity bands separated by the clearance: nothing except the
+    // pole bridge may occupy the inter-strip band (bridge poles span it
+    // by design, so bands are computed over non-pole entities).
+    let non_pole = |e: &&spaghettio_core::models::PlacedEntity| !e.name.contains("pole");
+    let strip0_max = l
+        .entities
+        .iter()
+        .filter(non_pole)
+        .filter(|e| e.y < l.height / 2)
+        .map(|e| e.y)
+        .max()
+        .unwrap();
+    let strip1_min = l
+        .entities
+        .iter()
+        .filter(non_pole)
+        .filter(|e| e.y >= l.height / 2)
+        .map(|e| e.y)
+        .min()
+        .unwrap();
+    // STRIP_CLEARANCE is 32 (chain.rs, private); the gap between the
+    // last non-pole entity of strip 0 and the first of strip 1 is the
+    // clearance plus one, so pin it at ≥ 32 — a smaller constant would
+    // fail here before it failed in the harness's rig-vs-layout guard.
+    assert!(
+        strip1_min - strip0_max >= 32,
+        "strips must be separated by the kit clearance (32), got {strip0_max}..{strip1_min}"
+    );
+    let interlopers: Vec<&str> = l
+        .entities
+        .iter()
+        .filter(|e| e.y > strip0_max && e.y < strip1_min)
+        .map(|e| e.name.as_str())
+        .collect();
+    assert!(
+        interlopers.iter().all(|n| n.contains("pole")),
+        "only the pole bridge may sit in the clearance, found {interlopers:?}"
+    );
+    // Boundary records split across the two strip edges: every record
+    // must sit on a real belt (record-integrity re-checks this too).
+    assert!(
+        l.boundary_inputs.iter().any(|r| r.y > strip0_max),
+        "the second strip's feeds must be interior records"
+    );
+    assert_eq!(
+        l.boundary_outputs.len(),
+        24,
+        "one exit per copy across both strips"
+    );
+    // The K72-3(a) bar: zero validator errors (native at this rate has
+    // 22 structural errors), single bridged power network included.
+    let issues = match spaghettio_core::validate::validate(&l, Some(&sr)) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+    let errors: Vec<String> = issues
+        .iter()
+        .filter(|i| format!("{:?}", i.severity).contains("Error"))
+        .map(|i| format!("{}/{}", i.category, i.message))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "grid must validate error-free, got {} errors: {:?}",
+        errors.len(),
+        errors.iter().take(5).collect::<Vec<_>>()
+    );
+    // Warnings are pinned by CATEGORY too (#733 round 5): the only
+    // honest warning class on a grid is the zero-margin row input; a
+    // flow-path or reachability warning on an interior strip edge means
+    // a record-aware exemption regressed on one side (round 3 broke the
+    // reachability SINK side exactly this way and the error-only
+    // assertion could not see it).
+    let stray: Vec<String> = issues
+        .iter()
+        .filter(|i| !format!("{:?}", i.severity).contains("Error"))
+        .filter(|i| i.category != "row-input-belt-margin")
+        .map(|i| format!("{}/{}", i.category, i.message))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "grid must carry no warnings beyond row-input-belt-margin, got {}: {:?}",
+        stray.len(),
+        stray.iter().take(5).collect::<Vec<_>>()
     );
 }
 

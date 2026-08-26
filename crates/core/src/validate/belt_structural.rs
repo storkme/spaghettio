@@ -400,6 +400,27 @@ pub fn check_belt_dead_ends(layout: &LayoutResult) -> Vec<ValidationIssue> {
 
     let w = layout.width;
     let h = layout.height;
+    // A belt carrying a declared boundary-OUTPUT record is the layout's
+    // exit head: items are meant to accumulate there until the outside
+    // world (the harness drain, a downstream factory) picks them up. On
+    // a single strip these heads sat on the bounding-box edge and the
+    // out-of-bounds test below exempted them by coincidence; a grid's
+    // first-strip exits are INTERIOR (RFC-072 P2 unit 2), so exempt by
+    // record — `check_boundary_integrity` holds each record to a real
+    // matching belt carrying the item, so an unbacked record cannot buy
+    // this exemption. FACING is this check's own business (#733 round 1:
+    // the integrity check deliberately ignores it, because a boundary
+    // belt may run ALONG an edge): the exemption applies only when the
+    // belt faces the record's declared outward flow — a head laid facing
+    // back into the strip is a genuine dead end and stays one.
+    // Keyed on the tile, matched on facing AND the carried item (#733
+    // round 3): standalone, this check must not let a belt carrying
+    // something else borrow a record's exemption.
+    let exit_heads: rustc_hash::FxHashMap<(i32, i32), (EntityDirection, &str)> = layout
+        .boundary_outputs
+        .iter()
+        .map(|r| ((r.x, r.y), (r.direction, r.item.as_str())))
+        .collect();
 
     for e in &layout.entities {
         if !is_surface_belt(&e.name) {
@@ -409,6 +430,9 @@ pub fn check_belt_dead_ends(layout: &LayoutResult) -> Vec<ValidationIssue> {
         let out_x = e.x + d.0;
         let out_y = e.y + d.1;
         if out_x < 0 || out_x >= w || out_y < 0 || out_y >= h {
+            continue;
+        }
+        if exit_heads.get(&(e.x, e.y)) == Some(&(e.direction, e.carries.as_deref().unwrap_or(""))) {
             continue;
         }
         if receiver_tiles.contains(&(out_x, out_y)) {
@@ -995,6 +1019,52 @@ mod tests {
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].category, "belt-dead-end");
         assert_eq!(issues[0].severity, Severity::Error);
+    }
+
+    /// RFC-072 P2 unit 2 (#733 round 1): an INTERIOR exit head — a belt
+    /// carrying a `boundary_outputs` record whose out-tile is inside the
+    /// bounding box — is exempt only when it faces the record's declared
+    /// outward flow. The same belt laid facing back into the strip is a
+    /// genuine dead end and must stay one: the integrity check ignores
+    /// facing on purpose, so this check owns it.
+    #[test]
+    fn dead_end_interior_exit_head_exempt_only_when_facing_the_record() {
+        use crate::models::BoundaryRecord;
+        let record = |dir: EntityDirection| BoundaryRecord {
+            item: "electronic-circuit".into(),
+            x: 6,
+            y: 5,
+            direction: dir,
+            is_fluid: false,
+            entity: "transport-belt".into(),
+        };
+        let head = |dir: EntityDirection, carries: &str| PlacedEntity {
+            carries: Some(carries.into()),
+            ..belt(6, 5, dir)
+        };
+        // Facing South with a South record, carrying the recorded item:
+        // the head, exempt.
+        let inserter_drop = inserter(7, 5, EntityDirection::West); // drops at (6,5)
+        let mut lr = layout(vec![head(EntityDirection::South, "electronic-circuit"), inserter_drop.clone()]);
+        lr.boundary_outputs.push(record(EntityDirection::South));
+        assert!(
+            check_belt_dead_ends(&lr).is_empty(),
+            "an interior exit head facing its declared flow is not a dead end"
+        );
+        // Same tile, same record, belt facing NORTH (back into the strip):
+        // the record does not buy the exemption.
+        let mut lr = layout(vec![head(EntityDirection::North, "electronic-circuit"), inserter_drop.clone()]);
+        lr.boundary_outputs.push(record(EntityDirection::South));
+        let issues = check_belt_dead_ends(&lr);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].category, "belt-dead-end");
+        // Right facing, WRONG item: not the recorded exit either (#733
+        // round 3 — the record is item-specific).
+        let mut lr = layout(vec![head(EntityDirection::South, "copper-cable"), inserter_drop]);
+        lr.boundary_outputs.push(record(EntityDirection::South));
+        let issues = check_belt_dead_ends(&lr);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].category, "belt-dead-end");
     }
 
     #[test]

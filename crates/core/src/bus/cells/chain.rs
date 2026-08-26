@@ -68,16 +68,46 @@ const VLANES: i32 = 2;
 /// the wall where native carries 37 lane-throughput errors (receipts
 /// in the RFC's decision log).
 const QUANTUM_RATE: f64 = 40.0;
-/// Copy-count bound. Beyond this the footprint cost stops being honest
-/// scaling and the chain should be decomposed differently; refuse
-/// loudly.
+/// Per-STRIP copy-count bound. Beyond this the single strip's aspect
+/// ratio stops being honest scaling (ec150 at K=12 is already 2892×17)
+/// and the chain composes as a GRID of stacked strips instead
+/// (RFC-072 Phase 2 unit 2).
 const K_MAX: i32 = 12;
+/// Grid strip-count bound — the K_MAX successor's own honesty limit.
+/// Beyond R_MAX × K_MAX copies, refuse loudly with the same wording
+/// contract the old K_MAX refusal carried.
+const R_MAX: i32 = 4;
+/// Vertical kit band between stacked strips. Must hold the lower
+/// strip's north feed rigs (per-copy clusters: depth ≤ 4+6·(c−1), plus
+/// the ±2 bank overhang) and the upper strip's south drain rigs (base
+/// ext 11 + bank flow margin). The band holds OPPOSITE-facing rigs
+/// (the lower strip's north-extending feed rigs against the upper
+/// strip's south-extending drain rigs), so the harness guards that
+/// hold it are the cross-type feed-vs-drain guard and the rig-vs-LAYOUT
+/// guard (scenario.rs `assert_feed_drain_rigs_disjoint`,
+/// `assert_rigs_clear_of_layout`; #733 round 5 corrected the citation —
+/// the near-parallel band guards compare same-direction bands only).
+/// Both run in CI's default path against a committed real grid fixture,
+/// so an undersized clearance fails LOUD there, never silently.
+const STRIP_CLEARANCE: i32 = 32;
 
 /// Smallest K such that every produced item and every external input
 /// item runs at ≤ `QUANTUM_RATE` per copy. Chains under the cap stay
 /// K=1 and compose bit-identically to the pre-quantization placer —
 /// quantization only activates where the placer previously refused.
+/// Evaluated at the default declared level; the grid path uses
+/// [`required_copies_at`] with the level it composes at (#733 round 1).
 pub fn required_copies(sr: &SolverResult) -> i32 {
+    required_copies_at(sr, crate::common::DEFAULT_INSERTER_CAPACITY)
+}
+
+/// [`required_copies`] with the declared inserter-capacity level the
+/// chain will compose at — the grid-territory margin terms ask the
+/// inserter ladder at THAT level, so the estimator and the composer
+/// can never disagree on what a hand moves. Sub-K_MAX results are
+/// level-independent by construction (the margin terms are gated to
+/// K > K_MAX), so every registered strip's K is unchanged.
+pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
     let produced: FxHashSet<&str> = sr
         .machines
         .iter()
@@ -121,12 +151,126 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
     for total in ext.values() {
         k = k.max(((total / QUANTUM_RATE) - 1e-9).ceil() as i32);
     }
+    // Row-input MARGIN (RFC-072 P2 unit 2, the K72-3 "re-quantize before
+    // killing" path, taken on the ec@240 receipt): the rate quantum
+    // bounds PLANNED flow, but a copy's row input belt must also clear
+    // the MACHINE-CAPACITY demand of the machines it feeds — a copy with
+    // ceil(count/K) machines whose full-speed draw equals the belt cap
+    // has zero margin, and the sim starves exactly one machine per copy
+    // (ec@240 at K=18: 6 EC machines × 7.5/s = 45.00 on express; 18
+    // ingredient-shortage machines, one per copy, produced −1.7%). The
+    // validator's `row-input-belt-margin` warns on the same condition;
+    // this keeps the quantizer from planning it. Bump K until every
+    // solid input's per-copy capacity demand is strictly under express.
+    // No-op for every registered strip (their K already clears it —
+    // the copy-count pins and registry gates hold).
+    let express = crate::common::belt_throughput("express-transport-belt");
+    // Mega members are the block's business here too (#733 round 2 —
+    // the rate loop and the hand term already skipped them; a member's
+    // internal solid input rides the block's own belts, not a chain
+    // corridor, so a belt margin on it is meaningless and could inflate
+    // K past the grid bound for a mega-containing chain).
+    let belt_violates = |k: i32| {
+        sr.machines.iter().filter(|m| !is_member(&m.recipe)).any(|m| {
+            let per_copy = (m.count / k as f64 - 1e-9).ceil();
+            m.inputs
+                .iter()
+                .any(|i| !i.is_fluid && per_copy * i.rate >= express - 1e-9)
+        })
+    };
+    // Input-HAND margin (RFC-072 P2 unit 2, the second re-quantization
+    // the ec@240 receipts forced): the row's inserter ladder sizes each
+    // machine side with `required <= n·rate` and NO margin, crediting a
+    // long-handed hand exactly 2.4/s at the default level — so a copy
+    // whose per-machine far-belt draw lands at 2.4/s gets ONE hand at
+    // 100% of its credited rate, and the sim starves the row's tail
+    // (ec@240 at K=20: 12/s per copy → 5 EC machines at 96% → iron
+    // 2.40/s → one hand → two machines short per copy, −6.7%; K=18 →
+    // 92.6% of one hand → one short per copy, −1.7%; the receipted
+    // ec150 cell at 12.5/s → 2.5/s → TWO hands at 52% → plan). The fix
+    // for the ladder itself is RFC-049 Phase 3 (a margin in sizing);
+    // until it lands the quantizer refuses to PLAN a copy whose hands
+    // the ladder would fill past HAND_MARGIN. Single source of truth:
+    // this asks the ladder (`size_side`) and its calibrated rates
+    // (`machine_feed_rate`) rather than re-deriving them, for EVERY solid
+    // input — the far (long-handed) side and the near (regular/fast/
+    // stack) side alike. A plan the ladder cannot cover (an honest
+    // shortfall) counts as a violation here (#733 round 1); the
+    // receipted low-level strips whose plans carry such shortfalls (the
+    // d1 FAIL rows) never reach this term because it is grid-only, see
+    // below. Evaluated at
+    // the level the chain composes at (`level`), so a low-level grid
+    // plans more copies rather than trusting default-level hands (#733
+    // round 1); sub-K_MAX strips never enter this term, so their K stays
+    // level-independent as before. Mega members are the block's
+    // business, as in the rate loop above. SCOPED TO GRID
+    // TERRITORY (K > K_MAX): applied to every chain it re-shaped the
+    // registered military-science-pack@5 strip (the registry gate
+    // caught it) — receipted sub-K_MAX strips keep their measured
+    // geometry whatever their hand utilization (that is what a receipt
+    // is for; RFC-049 P3 owns the general fix), while a grid's copies
+    // carry no receipt and must be planned with margin.
+    const HAND_MARGIN: f64 = 0.85;
+    let quality = crate::common::QualityTier::Normal;
+    let hand_violates = |k: i32| {
+        use crate::bus::inserter_ladder::{size_side, InserterTier, Reach};
+        sr.machines.iter().filter(|m| !is_member(&m.recipe)).any(|m| {
+            let n = (m.count / k as f64 - 1e-9).ceil().max(1.0);
+            let u = (m.count / k as f64 / n).min(1.0);
+            let mut solids: Vec<f64> =
+                m.inputs.iter().filter(|i| !i.is_fluid).map(|i| i.rate * u).collect();
+            solids.sort_by(|a, b| a.partial_cmp(b).expect("finite rates"));
+            // Reach model mirrors the row templates: with two or more
+            // solid inputs the lowest-rate one rides the FAR belt
+            // (`reassign_near_far` sends the hungrier item near) with the
+            // contested extra column as its budget; the second is NEAR
+            // with one extra column; a THIRD (and beyond) sits at reach-2
+            // on a single long-handed hand with NO extra column
+            // (`triple_input_row`'s input3 — #733 round 4: pricing it as
+            // a near stack hand over-credited it ~5×).
+            solids.iter().enumerate().any(|(idx, &rate)| {
+                let (reach, budget) = match (solids.len(), idx) {
+                    (n, 0) if n >= 2 => (Reach::Far, 1),
+                    (_, 1) => (Reach::Near, 1),
+                    (_, i) if i >= 2 => (Reach::Far, 0),
+                    _ => (Reach::Near, 1),
+                };
+                let plan = size_side(rate, reach, budget, InserterTier::Stack, quality, level);
+                let capacity =
+                    plan.count as f64 * crate::common::machine_feed_rate(plan.entity, quality, level);
+                // In grid territory a plan the ladder CANNOT cover (an
+                // honest shortfall) is the strongest signal a copy would
+                // starve, so it counts as a violation too (#733 round 1 —
+                // the first cut excluded it, a holdover from when this
+                // term also saw the receipted low-level strips).
+                plan.shortfall.is_some() || rate > HAND_MARGIN * capacity + 1e-9
+            })
+        })
+    };
+    // BOTH margin terms are grid-territory only (#733 round 1: the belt
+    // term was unscoped and re-quantized a K=1 multirow-corridor config
+    // — the same re-shaping mechanism the hand term was scoped for).
+    // The loop runs THROUGH the grid bound: a chain the margins cannot
+    // satisfy within K_MAX × R_MAX copies leaves here at bound + 1 and
+    // `chain_eligible` refuses it by name, instead of shipping a 4×12
+    // grid with the violation still standing.
+    while k > K_MAX && (belt_violates(k) || hand_violates(k)) && k <= K_MAX * R_MAX {
+        k += 1;
+    }
     k
 }
 
 /// Why a solve is not chain-composable. Stable strings — the candidate
 /// reports these as its `accepted_reason`.
 pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
+    chain_eligible_at(sr, crate::common::DEFAULT_INSERTER_CAPACITY)
+}
+
+/// [`chain_eligible`] at the declared level the chain will compose at —
+/// the grid bound is level-dependent through the margin terms (#733
+/// round 4: a chain grid-composable at L7 must not be refused by the
+/// default-level count).
+pub fn chain_eligible_at(sr: &SolverResult, level: u8) -> Result<(), String> {
     if sr.machines.is_empty() {
         return Err("cells: empty chain".into());
     }
@@ -176,11 +320,14 @@ pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
     }
     // Corridor capacity: ratio quantization bounds every copy's
     // corridors at QUANTUM_RATE, so high rates raise the copy count
-    // instead of overloading a belt. Refuse only past the copy bound.
-    let k = required_copies(sr);
-    if k > K_MAX {
+    // instead of overloading a belt. Up to K_MAX copies compose as one
+    // strip; beyond it the grid composer stacks up to R_MAX strips
+    // (RFC-072 P2 unit 2). Refuse only past the grid bound.
+    let k = required_copies_at(sr, level);
+    if k > K_MAX * R_MAX {
         return Err(format!(
-            "cells: chain needs {k} quantized copies (max {K_MAX} at quantum {QUANTUM_RATE}/s)"
+            "cells: chain needs {k} quantized copies (max {} = {R_MAX} strips x {K_MAX} at quantum {QUANTUM_RATE}/s)",
+            K_MAX * R_MAX
         ));
     }
     Ok(())
@@ -719,15 +866,38 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
 /// to the pre-RFC-049 chain output by construction; the no-argument
 /// `compose_chain` now defaults to `common::DEFAULT_INSERTER_CAPACITY`
 /// (L2), so pass 0 explicitly for the raw unresearched world.
+///
+/// RFC-072 Phase 2 unit 2: chains up to K_MAX copies compose as ONE
+/// strip, bit-identical to the pre-grid composer; beyond it,
+/// `compose_grid_with_capacity` stacks balanced strips.
 pub fn compose_chain_with_capacity(
     sr: &SolverResult,
     inserter_capacity: u8,
 ) -> Result<LayoutResult, String> {
+    let k = required_copies_at(sr, inserter_capacity);
+    if k > K_MAX {
+        return compose_grid_with_capacity(sr, inserter_capacity, k);
+    }
+    compose_strip_with_capacity(sr, inserter_capacity, k)
+}
+
+/// One horizontal strip of `copies` quantized copies — the entire
+/// pre-unit-2 composer, unchanged except that the copy count is now the
+/// caller's: the single-strip path passes the quantizer's own value,
+/// the grid path passes each strip's planned share of a proportionally
+/// scaled `SolverResult` (a strip re-deriving its count from the scaled
+/// rate would disagree with the grid-only margin terms in
+/// `required_copies`, which is what the planned count exists to avoid).
+fn compose_strip_with_capacity(
+    sr: &SolverResult,
+    inserter_capacity: u8,
+    copies: i32,
+) -> Result<LayoutResult, String> {
     // (RFC-055's ChainOrder::Compact axis and its compose_chain_compact
     // entry were deleted 2026-08-20 with cells/placement.rs — owner call
     // extending #632 A2; record in RFC-055's decision log.)
-    chain_eligible(sr)?;
-    let kq = required_copies(sr);
+    chain_eligible_at(sr, inserter_capacity)?; // #733 round 5: at the composing level, like the grid path
+    let kq = copies.max(1);
     let scale = 1.0 / kq as f64;
     // RFC-052 Phase B: fluid specs collapse into one SUPER-SPEC whose
     // placed form is the boundary-adapted mega block. Solid-only chains
@@ -1010,7 +1180,10 @@ pub fn compose_chain_with_capacity(
                     if cf.iter().any(|(i, _)| i == &r.item) {
                         continue;
                     }
-                    b_in.push(BoundaryRecord { x: r.x + x, ..r.clone() });
+                    // Both axes translate (unit-2 recon finding: x-only
+                    // held only because a mega block's y_off is always 0
+                    // today — the drain map below always translated both).
+                    b_in.push(BoundaryRecord { x: r.x + x, y: r.y + y_off, ..r.clone() });
                 }
                 if block.boundary_outputs.is_empty() {
                     return Err("mega: block has no drain record".to_string());
@@ -1776,4 +1949,145 @@ pub fn compose_chain_with_capacity(
     // from any single power source. Additive: bridge poles only.
     crate::bus::layout::repair_pole_network(&mut composed);
     Ok(composed)
+}
+
+/// RFC-072 Phase 2 unit 2 — the K_MAX successor: K > K_MAX quantized
+/// copies compose as a GRID of vertically stacked, fully independent
+/// strips. Every strip carries its own per-copy feeds and drains (the
+/// interface contract the sim receipts measure), so the composed
+/// artifact needs NO inter-strip flow: the only shared geometry is the
+/// pole bridge `repair_pole_network` stamps across the clearance —
+/// K72-4 (no routing across cell boundaries) holds by construction.
+/// Design adjudication, refuted alternatives (through-columns, interior
+/// merges), and the wall receipts: the RFC's decision log, 2026-08-26.
+fn compose_grid_with_capacity(
+    sr: &SolverResult,
+    inserter_capacity: u8,
+    k: i32,
+) -> Result<LayoutResult, String> {
+    chain_eligible_at(sr, inserter_capacity)?; // the K_MAX * R_MAX refusal at the composing level
+    // Belt-and-braces: `k` is the caller's count at its declared level,
+    // the eligibility check above re-derives it at the same level; keep
+    // the explicit bound so a caller passing a stale K still refuses
+    // with the same wording contract.
+    if k > K_MAX * R_MAX {
+        return Err(format!(
+            "cells: chain needs {k} quantized copies (max {} = {R_MAX} strips x {K_MAX} at quantum {QUANTUM_RATE}/s)",
+            K_MAX * R_MAX
+        ));
+    }
+    let strips = (k + K_MAX - 1) / K_MAX;
+    // Balanced split: strip copy counts differ by at most one, summing
+    // to K (18 -> 9+9, 25 -> 9+8+8).
+    let base = k / strips;
+    let extra = (k % strips) as usize;
+    let mut copies_per_strip = Vec::with_capacity(strips as usize);
+    let mut composed: Option<LayoutResult> = None;
+    let mut y_off = 0i32;
+    for s in 0..strips as usize {
+        let k_s = base + if s < extra { 1 } else { 0 };
+        copies_per_strip.push(k_s);
+        let ratio = k_s as f64 / k as f64;
+        // A strip is the SAME chain at k_s/K of the flow: scale every
+        // machine count and external total; per-machine rates (and so
+        // per-copy cell geometry) are untouched, which is what makes
+        // every strip's cells identical to the single-strip case.
+        let mut sub = sr.clone();
+        for m in sub.machines.iter_mut() {
+            m.count *= ratio;
+        }
+        for f in sub
+            .external_inputs
+            .iter_mut()
+            .chain(sub.external_outputs.iter_mut())
+            .chain(sub.surplus_outputs.iter_mut())
+        {
+            f.rate *= ratio;
+        }
+        // The strip composes at the PLANNED count k_s (not its own
+        // re-derived quantization: the scaled sub-result's rate-only
+        // quantum can be lower than the grid's margin-bumped share, and
+        // the per-copy flow must be the grid's, not the strip's).
+        let strip = compose_strip_with_capacity(&sub, inserter_capacity, k_s)?;
+        composed = Some(match composed {
+            None => {
+                y_off = strip.height + STRIP_CLEARANCE;
+                strip
+            }
+            Some(mut acc) => {
+                let strip_h = strip.height;
+                append_strip_translated(&mut acc, strip, y_off);
+                y_off += strip_h + STRIP_CLEARANCE;
+                acc
+            }
+        });
+    }
+    let mut composed = composed.expect("grid path implies K > K_MAX implies strips >= 2");
+    // One power network: the strips' own pole lines are islands until
+    // bridged. `repair_pole_network` adds bridge poles across the
+    // clearance and recomputes the stored wire graph for the combined
+    // entity list (per-strip graphs were dropped in the merge — their
+    // indices are strip-local).
+    let pole_bridges = crate::bus::layout::repair_pole_network(&mut composed);
+    crate::trace::emit(crate::trace::TraceEvent::CellGridComposed {
+        copies_per_strip,
+        clearance: STRIP_CLEARANCE,
+        pole_bridges,
+    });
+    Ok(composed)
+}
+
+/// Append `strip` to `acc`, translated down by `dy`. Everything with a
+/// coordinate translates — entities, BOTH boundary record sets (the
+/// harness attaches rigs at these exact tiles), surplus exits, regions;
+/// `power_wires` is dropped (strip-local indices) and rebuilt by the
+/// caller's `repair_pole_network`. `effective_rows` and
+/// `research_productivity` are NOT merged: the strip composer never
+/// populates either today (cells attribute rows by belt adjacency,
+/// validate/inserters.rs), so a strip composer that starts to must
+/// extend this merge — the debug asserts below are the tripwire for
+/// the declared axes.
+fn append_strip_translated(acc: &mut LayoutResult, strip: LayoutResult, dy: i32) {
+    debug_assert_eq!(acc.inserter_capacity, strip.inserter_capacity);
+    debug_assert_eq!(acc.stacking, strip.stacking);
+    // The two un-merged fields must actually be empty on both sides —
+    // the tripwire the doc comment promises (#733 round 2): a strip
+    // composer that starts populating either would otherwise lose the
+    // upper strips' contribution silently.
+    debug_assert!(
+        strip.effective_rows.is_empty() && acc.effective_rows.is_empty(),
+        "a strip populated effective_rows — extend append_strip_translated to merge (translate y) them"
+    );
+    debug_assert!(
+        strip.research_productivity.is_empty() && acc.research_productivity.is_empty(),
+        "a strip declared research_productivity — extend append_strip_translated to merge it"
+    );
+    for mut e in strip.entities {
+        e.y += dy;
+        acc.entities.push(e);
+    }
+    for mut b in strip.boundary_inputs {
+        b.y += dy;
+        acc.boundary_inputs.push(b);
+    }
+    for mut b in strip.boundary_outputs {
+        b.y += dy;
+        acc.boundary_outputs.push(b);
+    }
+    for (item, x, y) in strip.surplus_exits {
+        acc.surplus_exits.push((item, x, y + dy));
+    }
+    // Regions carry absolute port coordinates inside `RegionPort`, which
+    // a bare `r.y += dy` would leave untranslated (#733 round 4). The
+    // strip composer never emits regions today; refuse to merge them
+    // silently rather than half-translate them.
+    debug_assert!(
+        strip.regions.is_empty() && acc.regions.is_empty(),
+        "a strip emitted regions — extend append_strip_translated to translate their ports too"
+    );
+    acc.voided_streams.extend(strip.voided_streams);
+    acc.warnings.extend(strip.warnings);
+    acc.width = acc.width.max(strip.width);
+    acc.height = dy + strip.height;
+    acc.power_wires = None;
 }

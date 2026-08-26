@@ -515,11 +515,24 @@ pub fn check_belt_flow_path(
     let min_by = *all_ys.iter().min().unwrap();
     let max_by = *all_ys.iter().max().unwrap();
 
-    let on_boundary = |bx: i32, by: i32| -> bool {
+    // A declared boundary-record tile counts as boundary wherever it
+    // sits — a grid layout's records are on interior strip edges
+    // (RFC-072 P2 unit 2). ROLE-AWARE (#733 round 3): an input network
+    // is sourced only by INPUT records (feed heads), an output network
+    // is sunk only by OUTPUT records (exit heads) — an input network
+    // that merely touches an exit head has found no source.
+    let feed_heads: FxHashSet<(i32, i32)> =
+        layout.boundary_inputs.iter().map(|r| (r.x, r.y)).collect();
+    let exit_heads: FxHashSet<(i32, i32)> =
+        layout.boundary_outputs.iter().map(|r| (r.x, r.y)).collect();
+    let on_edge = |bx: i32, by: i32| -> bool {
         bx == min_bx || bx == max_bx || by == min_by || by == max_by
     };
-    let network_reaches_boundary = |network: &FxHashSet<(i32, i32)>| -> bool {
-        network.len() >= 3 && network.iter().any(|&(bx, by)| on_boundary(bx, by))
+    let network_reaches_boundary = |network: &FxHashSet<(i32, i32)>, heads: &FxHashSet<(i32, i32)>| -> bool {
+        network.len() >= 3
+            && network
+                .iter()
+                .any(|&(bx, by)| on_edge(bx, by) || heads.contains(&(bx, by)))
     };
 
     // Recipes with solid outputs
@@ -604,7 +617,7 @@ pub fn check_belt_flow_path(
                     }
                 }
             }
-            if !reaches_source && !network_reaches_boundary(&network) {
+            if !reaches_source && !network_reaches_boundary(&network, &feed_heads) {
                 issues.push(ValidationIssue::with_pos(
                     severity,
                     "belt-flow-path",
@@ -648,7 +661,7 @@ pub fn check_belt_flow_path(
             }
         }
 
-        if !reaches_sink && !network_reaches_boundary(&network) {
+        if !reaches_sink && !network_reaches_boundary(&network, &exit_heads) {
             issues.push(ValidationIssue::with_pos(
                 severity,
                 "belt-flow-path",
@@ -799,9 +812,24 @@ pub fn check_belt_flow_reachability(
     let min_by = *all_ys.iter().min().unwrap();
     let max_by = *all_ys.iter().max().unwrap();
 
-    let on_boundary = |(x, y): (i32, i32)| -> bool {
+    // Declared boundary-record tiles count as boundary wherever they
+    // sit (grid layouts: interior strip edges — RFC-072 P2 unit 2).
+    // ROLE-aware (#733 rounds 3+5): the forward sweep is sourced by
+    // INPUT records (feed heads — an exit head feeds nothing), the
+    // backward sweep is sunk by OUTPUT records (exit heads — a feed head
+    // drains nothing). Round 3 split only the source side and left the
+    // sink side on the same feed-only closure, which turned every
+    // interior exit run of a grid back into "items cannot leave"
+    // warnings — the class the grid test now pins by category.
+    let feed_heads: FxHashSet<(i32, i32)> =
+        layout.boundary_inputs.iter().map(|r| (r.x, r.y)).collect();
+    let exit_heads: FxHashSet<(i32, i32)> =
+        layout.boundary_outputs.iter().map(|r| (r.x, r.y)).collect();
+    let on_edge = |(x, y): (i32, i32)| -> bool {
         x == min_bx || x == max_bx || y == min_by || y == max_by
     };
+    let on_source_boundary = |t: (i32, i32)| -> bool { on_edge(t) || feed_heads.contains(&t) };
+    let on_sink_boundary = |t: (i32, i32)| -> bool { on_edge(t) || exit_heads.contains(&t) };
 
     // Warning unconditionally: production only ever built Bus layouts and
     // the Spaghetti Error arm (with the LayoutStyle enum itself) was
@@ -871,7 +899,7 @@ pub fn check_belt_flow_reachability(
     let mut source_tiles: FxHashSet<(i32, i32)> = belt_dir_map
         .keys()
         .copied()
-        .filter(|&t| on_boundary(t))
+        .filter(|&t| on_source_boundary(t))
         .collect();
     source_tiles.extend(output_belt_tiles.iter().copied());
     source_tiles.extend(lift_drop_tiles.iter().copied());
@@ -900,7 +928,7 @@ pub fn check_belt_flow_reachability(
     let mut sink_tiles: FxHashSet<(i32, i32)> = belt_dir_map
         .keys()
         .copied()
-        .filter(|&t| on_boundary(t))
+        .filter(|&t| on_sink_boundary(t))
         .collect();
     sink_tiles.extend(input_belt_tiles.iter().copied());
     sink_tiles.extend(di_bridge_pickup_tiles.iter().copied());

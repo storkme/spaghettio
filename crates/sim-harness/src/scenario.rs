@@ -728,9 +728,18 @@ fn feed_slots(records: &[BoundaryRecord]) -> Vec<i32> {
             } else {
                 (coord_b, coord_a, idxs_a)
             };
+            // Item rigs reach depth + the ±2 bank overhang; fluid feeds
+            // are a bare ug-run of out-tiles 1..=2+dist (#731 round 3 —
+            // the item formula over-reached fluid bands by up to 18).
             let far_reach = far_idxs
                 .iter()
-                .map(|&i| 4 + 6 * slots[i] + 2)
+                .map(|&i| {
+                    if records[i].is_fluid {
+                        2 + (2 + 2 * slots[i])
+                    } else {
+                        4 + 6 * slots[i] + 2
+                    }
+                })
                 .max()
                 .unwrap_or(0);
             let lateral = rot90(records[far_idxs[0]].direction().vector());
@@ -913,6 +922,11 @@ fn drain_ext_lens(records: &[BoundaryRecord]) -> Vec<i32> {
             } else {
                 (coord_b, coord_a, idxs_b)
             };
+            // `add_drain` is the only output rig (fluid targets never reach
+            // `boundary_outputs` — fluid surplus rides `surplus_exits` and
+            // `add_fluid_void`), so the item reach applies to every record
+            // here; +1 keeps the last extension tile off the far band's
+            // head line (#731 round 3).
             let near_reach = near_idxs.iter().map(|&i| exts[i] + 1).max().unwrap_or(0);
             let lateral = rot90(records[near_idxs[0]].direction().vector());
             let lat = |i: usize| records[i].x * lateral.0 + records[i].y * lateral.1;
@@ -1126,8 +1140,10 @@ fn assert_rigs_clear_of_layout(
             return;
         }
         Err(err) => panic!(
-            "rig-vs-layout guard: the blueprint does not decode ({err}) — refusing to \
-             place rigs blind rather than ship a kit that may sit on the layout"
+            "rig-vs-layout guard: the blueprint does not decode — {err}. This is usually an \
+             entity the meter's footprint table (crates/meter/src/entity_data.rs) does not \
+             size yet; register it there, then re-run. Refusing to place rigs blind rather \
+             than ship a kit that may sit on the layout (#731 round 3)"
         ),
     };
     let mut occupied: std::collections::HashSet<(i32, i32)> = Default::default();
@@ -3941,9 +3957,12 @@ mod tests {
 
         // south-facing exit: flow=(0,1), lateral=(1,0) -- matches
         // gen_harness_scenario.py's drain (fx=south, lx=east). ext_len
-        // is 11 + 2*idx (idx=0 here): widened 2026-07-24 from 5 so the
-        // bank spans 9 positions (`t = ext_len - 8, ext_len`) / 18
-        // inserters, keeping every chest outside the layout.
+        // is the ladder's base 11 (a lone exit is its own lateral
+        // cluster; the 2-step stagger only applies within a cluster
+        // since RFC-072 P2 unit 2 — before that, 11 + 2*manifest idx):
+        // widened 2026-07-24 from 5 so the bank spans 9 positions
+        // (`t = ext_len - 8, ext_len`) / 18 inserters, keeping every
+        // chest outside the layout.
         assert!(lua
             .contains("add_drain(s, force, exit_x, exit_y, 0, 1, 1, 0, 11, \"iron-gear-wheel\")"));
         assert!(

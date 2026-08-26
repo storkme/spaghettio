@@ -79,10 +79,11 @@
   "declared_inserter_capacity": 2,
   "declared_stacking": 1,
   "harness_world": "nb=1 bulk=3 (the L2 WORLD; the geometry is chain-ec15's frozen L0 d-sweep build \u2014 production's default composes the DIFFERENT e442 L2 geometry, receipted by the chain-ec15g2 row)",
-  "verdict": "PASS",
+  "verdict": "WARN",
   "produced_per_s": 15.0,
-  "scenario": "spaghettio-sim chain-ec15-d2 (Factorio 2.0.77, 2-copy quantum-40 geometry, converged; produced +0.0%, delivered -1.3%, all 15 working +1 transient full \u2014 the L0 d-sweep geometry AT PLAN in the shipping-default WORLD (not the shipped geometry \u2014 see chain-ec15g2); RFC-072 P2 unit 1)",
-  "date": "2026-08-26"
+  "scenario": "spaghettio-sim chain-ec15-d2 re-measured under the clustered kit (Factorio 2.0.77, 2-copy quantum-40 L0 d-sweep geometry in the shipping-default WORLD \u2014 not the shipped geometry, see chain-ec15g2; converged, kit clean; produced +0.0%, delivered -4.0%). Earlier receipt (pre-#731 kit): produced +0.0%, delivered -1.3%, PASS; RFC-072 P2 units 1-2",
+  "date": "2026-08-26",
+  "known_residual": "15.00 produced (+0.0%), 14.40/15.00 delivered (-4.0%) under the CLUSTERED drain kit (#731, 2026-08-26); the pre-#731 kit read the same produced with delivered -1.3% (PASS). Delivered moves with the drain kit at the \u00b13-point level on small fixtures, produced does not \u2014 read produced where the kit is the only difference (RFC-072 log)"
  },
  {
   "target": "electronic-circuit",
@@ -145,6 +146,18 @@
   "verdict": "PASS",
   "produced_per_s": 150.0,
   "scenario": "spaghettio-sim p2-ec150-q40 re-run with powered drain banks (Factorio 2.0.77, 12-copy quantum-40 strip from ore, 10392 entities, converged; produced +0.0%, delivered +1.9%, all 748 machines working \u2014 the above-the-wall exemplar at K=12, K72-3 cleared; RFC-072 P2 unit 1)",
+  "date": "2026-08-26"
+ },
+ {
+  "target": "electronic-circuit",
+  "rate": 240.0,
+  "geometry_hash": "4f95009b0204275e",
+  "declared_inserter_capacity": 2,
+  "declared_stacking": 1,
+  "harness_world": "nb=1 bulk=3 (the engine's shipping default, realized)",
+  "verdict": "PASS",
+  "produced_per_s": 240.0,
+  "scenario": "spaghettio-sim chain-ec240-d2 (Factorio 2.0.77, the K_MAX successor: 24-copy quantum-40 GRID of 2x12 stacked strips from ore, 17148 entities, 432k warmup, converged, kit clean; produced +0.0%, delivered +4.0%; the K72-3 exemplar \u2014 K=18/K=20 receipts and the constituent anchor in RFC-072's decision log; RFC-072 P2 unit 2)",
   "date": "2026-08-26"
  },
  {

@@ -293,6 +293,8 @@ programme.
 
 ## Sim-harness measurement integrity (2026-07-22)
 
+- **[#732](https://github.com/storkme/spaghettio/issues/732) — bare-pipe fluid feed heads carry direction 0; the kit builds their rigs INTO the layout (found 2026-08-26 by #731's rig-vs-layout guard sweeping every measured bank manifest).** The calibration bank's three "non-converged 0.000" rows (`tier3_heavy_oil_cracking`, `tier3_sulfuric_acid`, `tier3_plastic_bar`) were never layout measurements — every other fluid-fed row has a `pipe-to-ground` head with a real direction and converges. The harness now REFUSES those three at codegen (loud) instead of reporting a fake non-converged verdict. Fix is engine-side (record the into-layout flow direction, not the pipe entity's default) + a 3-row manifest re-bless and re-measure.
+
 The #357 investigation inverted itself: **every "clean-but-failing" sweep
 fixture was a harness artifact, not a layout defect.** Root cause: feed-rig
 bank chests from adjacent rigs overlapped on one tile (`create_entity` in

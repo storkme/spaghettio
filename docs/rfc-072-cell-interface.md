@@ -835,3 +835,126 @@ way. The meter's turn-model fix
   criterion's "18 such errors at 120/s" figure does not reproduce
   from plates on current main — the wall receipts are the from-ore
   numbers above; cite these, don't relitigate the old figure.)*
+- *2026-08-26 — unit 2 ENGINE SHIPPED (grid composer + record-aware
+  validators): the composed ec@240 grid validates at ZERO ERRORS —
+  K72-3(a)'s plan bar — where native carries 22 structural errors
+  around a caught router panic.* Shape: `compose_chain_with_capacity`
+  dispatches K ≤ K_MAX to the unchanged strip composer and K > K_MAX
+  to `compose_grid_with_capacity` — R = ceil(K/K_MAX) balanced strips
+  (18 → 9+9), each a proportionally scaled `SolverResult` whose own
+  `required_copies` is verified to land on the planned count, composed
+  as today and translated by strip_h + STRIP_CLEARANCE (32) —
+  entities AND boundary records — then `repair_pole_network` bridges
+  the power islands and recomputes the wire graph; `CellGridComposed`
+  trace event; the refusal moves to R_MAX × K_MAX = 48 (ec700, K=53)
+  with the same wording contract (ec600's K=45 now composes as 4
+  strips). Measured at the K=18 quantization current when this entry
+  was written — SUPERSEDED by the registered K=24 geometry (17,148
+  entities / 24 exits, two entries below): ec@240 from ore = 2304×66,
+  16,600 entities, 36 feeds / 18 exits, selection ships it at
+  BestErrorFree; the only
+  warnings are 18 zero-margin cable inputs (6 EC machines per copy can
+  demand exactly 45/s against express — the honest class the sim
+  adjudicates). **The finding on the way**: every validator's notion
+  of "boundary" was the bounding-box EDGE — the single strip's records
+  sat there by coincidence, so a grid's interior strip edges read as 9
+  dead-end Errors, 48 flow-path and 502 reachability warnings.
+  Corrected to record-aware semantics (`boundary_record_tiles`): a
+  declared record tile is boundary wherever it sits, and
+  `check_boundary_integrity` already holds every record to a real
+  matching belt, so the exemption cannot be bought by an unbacked
+  record (validator-trust.md rows updated; core suite unchanged
+  elsewhere, 1274/0). Mega-input boundary records now translate y as
+  well as x (the recon-found latent gap). Harness side (#731): the
+  rig ladders banded + clustered, plus two structural refusals (feed-
+  vs-drain, rig-vs-layout) — and the rig-vs-layout sweep over the
+  real bank found a LATENT KIT DEFECT unrelated to grids: fluid feed
+  heads that are bare pipes carry direction 0, so the harness builds
+  their rigs INTO the layout; the bank's three "non-converged 0.000"
+  rows (tier3 heavy-oil cracking / sulfuric acid / plastic bar) were
+  never layout measurements. Fix is engine-side (`bus/layout.rs`
+  records the head entity's direction — a pipe has none) with a
+  3-row manifest re-bless + re-measure: a followup outside this RFC's
+  scope, tracked on the status ledger. Next: the chain-ec240 fixture,
+  its sim (the interior-edge kit, now structurally guarded), registry
+  row + gates, K72-3(b)/K72-5, and Phase 2's close-out.*
+- *2026-08-26 — the ec@240 grid sims: the GRID is exonerated by
+  census, the deficit is the inherited cell gap, and K72-3's
+  "re-quantize before killing" provision is taken twice.* Receipts
+  (432k warmup, converged, kit clean, Factorio 2.0.77): **K=18**
+  (2×9, 13.33/s per copy) produced 235.80/240 (−1.7%), delivered
+  −4.0%, WARN — 18 machines ingredient-short, ONE per copy, 54
+  full_output; **K=20** (2×10, 12/s per copy — the belt-margin
+  re-quantization) produced 224.00 (−6.7%), delivered −13.3%, FAIL —
+  40 short, TWO per copy. In BOTH runs the per-strip census is
+  machine-for-machine identical (crafts 2770/2770 furnace,
+  2740/2740 assembler at K=20): the two strips behave as one strip
+  copied — interior edges, kit, clearance, pole bridge all clean.
+  **The constituent alone** (ec@12, one copy, 849 entities) produces
+  11.15/12 (−7.1%), delivered −8.6%, WARN — so K72-3(b) HOLDS (the
+  composed grid is within 0.4 points of its constituent on the
+  produced side) and (a)'s trip is the per-cell gap the criterion
+  names. Mechanism (codex recon, inserter_ladder.rs `count_ladder`,
+  common.rs `machine_feed_rate`): the row's ladder sizes each side
+  by `required <= n·rate` with NO margin, crediting a long-handed
+  hand 2.4/s at the default level; the EC row's far belt is IRON
+  (the hungrier cable rides the near belt on stack hands), and a
+  12/s copy's 5 EC machines at 96% draw iron at exactly 2.40/s → one
+  far hand at 100% of its credit (two short per copy); K=18's copies
+  sit at 92.6% of one hand (one short); the receipted ec150 cell at
+  12.5/s draws 2.5 → TWO hands at 52% → plan. The general fix is
+  RFC-049 Phase 3 (margin in the ladder). Unit 2's bounded response:
+  `required_copies` gains an input-HAND margin (0.85 of the ladder's
+  own credited capacity, asking `size_side`/`machine_feed_rate`, gated
+  on plans the ladder believes cover so the receipted low-level
+  worlds do not move) — SCOPED TO K > K_MAX after the registry gate
+  caught the general form re-shaping the registered
+  military-science-pack@5 strip: receipted strips keep their measured
+  geometry, a grid's copies carry no receipt and are planned with
+  margin. ec@240 → K=24 (2×12, the 4-machine 10/s cell, two hands at
+  52%); strips now compose at the CALLER's planned count (the grid's
+  scaled sub-result would re-derive a lower rate-only K — the
+  verify-then-refuse tripped exactly there). **K=24 PASSES AT PLAN:
+  produced 240.00/240.00 (+0.0%), delivered 249.60 (+4.0%),
+  converged, kit clean, all 1,200 machines working — 600 per strip,
+  zero short, zero output-blocked** (17,148 entities; registry hash
+  `4f95009b0204275e`, row + gate config + probe entry). K72-3
+  CLEARS on the exemplar: (a) the composed plan carries zero
+  validator errors (native at 240/s: 22 structural errors around a
+  caught router panic) and sim delivery sits above the 97.9% bar;
+  (b) at-plan composition is within 2 points of the constituent
+  family's at-plan receipts (ec75/ec150 cells) — and the K=18/K=20
+  runs showed composition reproducing its constituent to 0.4 points
+  even when the constituent was deficient. K72-4 holds by
+  construction (the only inter-strip geometry is the pole bridge);
+  K72-5: the existing corpus never enters the grid path, the
+  exemplar solves+composes+validates in 0.08 s. Recorded, not fixed here:
+  the delivered-vs-produced gap widens with layout size (ec12 alone
+  −1.5 pts, K=18 −2.3, K=20 −6.6 — a transit/window effect at
+  2304-wide grids, to be checked with `--fixed-window` before any
+  delivered-side bar is read on grids); ec60 at K=5 has the same
+  zero-margin iron hand and no registry row (pin annotated).*
+- *2026-08-26 — the per-fixture kit-parity receipt promised in #731
+  (note 4): chain-ec15-d2 under the clustered kit reads produced
+  +0.0% (identical) but delivered −4.0% where the pre-#731 kit read
+  −1.3% — PASS becomes WARN on the delivered side alone.* The sim is
+  deterministic for a fixed kit (ec22 reproduced to three decimals),
+  so this is kit-caused: the fixture's four feed heads sit 25–30
+  tiles apart, so their depths collapsed from {4,10,16,22} to {4,4,
+  4,4} and the second exit's extension from 13 to 11 — and the
+  delivered figure moved 2.7 points while produced did not. −4.0% is
+  also the figure the d7 and g2 rows carry, so on small fixtures the
+  DELIVERED metric is drain-kit-sensitive at the ±3-point level (a
+  transit/window quantization at the chest bank — the same class as
+  the width-dependent gap two entries up) while PRODUCED is
+  kit-stable. Adjudication: the d2 registry row is re-blessed to the
+  shipping kit's receipt (WARN, produced +0.0%, delivered −4.0%, the
+  earlier receipt kept in its note) — a registry must describe the
+  instrument that ships, and the row's corroborating role (the L0
+  geometry produces at plan in the L2 world) is a produced-side
+  claim that stands. Standing rule from here: where two receipts
+  differ only by kit, read produced; delivered-side bars (K72-3(a)'s
+  97.9%) are read against a fixed kit, and the calibration bank's
+  seven re-measured rows (pre-#731 kit) are comparable among
+  themselves, not to post-#731 delivered readings without a
+  re-measure. The K=24 exemplar's delivered +4.0% is post-#731 kit.*
