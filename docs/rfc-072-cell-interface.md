@@ -220,8 +220,14 @@ the snapshot debugger sees them.
   that overturned the seam-cost premise and established the turn-path
   meter divergence. All numbers in `composition-frontier-probes.md`;
   the adjudications in this decision log.
-- **Phase 1 — the output-side refusal.** Standalone value (closes the
-  sim-confirmed half-plan hole); gates on K72-6.
+- **Phase 1 — COMPLETE 2026-08-26** (#727 the tap-assignment repair
+  with the repair-or-refuse contract; #728 the capacity-aware merger
+  partition). The Phase-0 specimen's arc is the verification record:
+  44.8 (silent wreck) → 74.4 → **90.00/90.00 produced, sim PASS**.
+  Recorded residuals, none gating: the foreign-column/severity
+  loudness follow-up, the merger's zero-rate-column guard and
+  secondary-row rate reads (pre-existing input-quality classes), the
+  at-cap fold and fractional end-to-end meter readings.
 - **Phase 2 — replication composer.** Gates on K72-3/K72-4; Phase 1 is
   its prerequisite.
 - **Phase 3 — heterogeneous + library.** Not committed by acceptance;
@@ -533,3 +539,21 @@ the snapshot debugger sees them.
   measured accurately), neither gating the unit (the partition
   arithmetic is directly unit-pinned; the geometry-change class's
   exemplar is sim-anchored at plan).*
+- *2026-08-26 — #728 merged on a MAJORLESS round 5; **Phase 1
+  COMPLETE**.* The round's five minors are recorded as unit
+  follow-ups rather than bought as a sixth ~12-minute cycle (the
+  stop-point rule's exact case): the `acc > 0.0` guard mis-groups a
+  zero-rate column preceding an over-cap one (`[0.0, 60.0]` packs as
+  one group — reachable only through the secondary-row rate-read
+  class below); D2b-secondary and scrap-recycling columns can read
+  `column_rate = 0.0` while genuinely flowing (pre-existing — the
+  old `total_rate` read the same source on every path); the
+  zero-fold continuation row stamps without an occupancy check
+  (the east-extension path bridges; this branch should too when
+  Phase 2 touches the merger); the single over-cap column's
+  under-delivery is the placer's recorded domain. Phase 1 closes
+  with both sim-anchored defects fixed and the specimen at plan:
+  the campaign's deliver-or-refuse contract now holds on the
+  input side (tap repair-or-refuse) and the output capacity side
+  (partition), with loudness residuals recorded. Phase 2 — the
+  composer — is the RFC's remaining committed substance.*
