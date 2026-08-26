@@ -875,3 +875,59 @@ way. The meter's turn-model fix
   scope, tracked on the status ledger. Next: the chain-ec240 fixture,
   its sim (the interior-edge kit, now structurally guarded), registry
   row + gates, K72-3(b)/K72-5, and Phase 2's close-out.*
+- *2026-08-26 — the ec@240 grid sims: the GRID is exonerated by
+  census, the deficit is the inherited cell gap, and K72-3's
+  "re-quantize before killing" provision is taken twice.* Receipts
+  (432k warmup, converged, kit clean, Factorio 2.0.77): **K=18**
+  (2×9, 13.33/s per copy) produced 235.80/240 (−1.7%), delivered
+  −4.0%, WARN — 18 machines ingredient-short, ONE per copy, 54
+  full_output; **K=20** (2×10, 12/s per copy — the belt-margin
+  re-quantization) produced 224.00 (−6.7%), delivered −13.3%, FAIL —
+  40 short, TWO per copy. In BOTH runs the per-strip census is
+  machine-for-machine identical (crafts 2770/2770 furnace,
+  2740/2740 assembler at K=20): the two strips behave as one strip
+  copied — interior edges, kit, clearance, pole bridge all clean.
+  **The constituent alone** (ec@12, one copy, 849 entities) produces
+  11.15/12 (−7.1%), delivered −8.6%, WARN — so K72-3(b) HOLDS (the
+  composed grid is within 0.4 points of its constituent on the
+  produced side) and (a)'s trip is the per-cell gap the criterion
+  names. Mechanism (codex recon, inserter_ladder.rs `count_ladder`,
+  common.rs `machine_feed_rate`): the row's ladder sizes each side
+  by `required <= n·rate` with NO margin, crediting a long-handed
+  hand 2.4/s at the default level; the EC row's far belt is IRON
+  (the hungrier cable rides the near belt on stack hands), and a
+  12/s copy's 5 EC machines at 96% draw iron at exactly 2.40/s → one
+  far hand at 100% of its credit (two short per copy); K=18's copies
+  sit at 92.6% of one hand (one short); the receipted ec150 cell at
+  12.5/s draws 2.5 → TWO hands at 52% → plan. The general fix is
+  RFC-049 Phase 3 (margin in the ladder). Unit 2's bounded response:
+  `required_copies` gains an input-HAND margin (0.85 of the ladder's
+  own credited capacity, asking `size_side`/`machine_feed_rate`, gated
+  on plans the ladder believes cover so the receipted low-level
+  worlds do not move) — SCOPED TO K > K_MAX after the registry gate
+  caught the general form re-shaping the registered
+  military-science-pack@5 strip: receipted strips keep their measured
+  geometry, a grid's copies carry no receipt and are planned with
+  margin. ec@240 → K=24 (2×12, the 4-machine 10/s cell, two hands at
+  52%); strips now compose at the CALLER's planned count (the grid's
+  scaled sub-result would re-derive a lower rate-only K — the
+  verify-then-refuse tripped exactly there). **K=24 PASSES AT PLAN:
+  produced 240.00/240.00 (+0.0%), delivered 249.60 (+4.0%),
+  converged, kit clean, all 1,200 machines working — 600 per strip,
+  zero short, zero output-blocked** (17,148 entities; registry hash
+  `4f95009b0204275e`, row + gate config + probe entry). K72-3
+  CLEARS on the exemplar: (a) the composed plan carries zero
+  validator errors (native at 240/s: 22 structural errors around a
+  caught router panic) and sim delivery sits above the 97.9% bar;
+  (b) at-plan composition is within 2 points of the constituent
+  family's at-plan receipts (ec75/ec150 cells) — and the K=18/K=20
+  runs showed composition reproducing its constituent to 0.4 points
+  even when the constituent was deficient. K72-4 holds by
+  construction (the only inter-strip geometry is the pole bridge);
+  K72-5: the existing corpus never enters the grid path, the
+  exemplar solves+composes+validates in 0.08 s. Recorded, not fixed here:
+  the delivered-vs-produced gap widens with layout size (ec12 alone
+  −1.5 pts, K=18 −2.3, K=20 −6.6 — a transit/window effect at
+  2304-wide grids, to be checked with `--fixed-window` before any
+  delivered-side bar is read on grids); ec60 at K=5 has the same
+  zero-margin iron hand and no registry row (pin annotated).*

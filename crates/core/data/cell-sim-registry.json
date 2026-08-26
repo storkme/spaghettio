@@ -148,6 +148,18 @@
   "date": "2026-08-26"
  },
  {
+  "target": "electronic-circuit",
+  "rate": 240.0,
+  "geometry_hash": "4f95009b0204275e",
+  "declared_inserter_capacity": 2,
+  "declared_stacking": 1,
+  "harness_world": "nb=1 bulk=3 (the engine's shipping default, realized)",
+  "verdict": "PASS",
+  "produced_per_s": 240.0,
+  "scenario": "spaghettio-sim chain-ec240-d2 (Factorio 2.0.77, the K_MAX successor: 24-copy quantum-40 GRID of 2x12 stacked strips from ore, 17148 entities, 432k warmup, converged, kit clean; produced +0.0%, delivered +4.0%; the K72-3 exemplar \u2014 K=18/K=20 receipts and the constituent anchor in RFC-072's decision log; RFC-072 P2 unit 2)",
+  "date": "2026-08-26"
+ },
+ {
   "target": "iron-gear-wheel",
   "rate": 20.0,
   "geometry_hash": "bf44f2261fb871ca",
