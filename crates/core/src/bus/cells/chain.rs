@@ -68,10 +68,23 @@ const VLANES: i32 = 2;
 /// the wall where native carries 37 lane-throughput errors (receipts
 /// in the RFC's decision log).
 const QUANTUM_RATE: f64 = 40.0;
-/// Copy-count bound. Beyond this the footprint cost stops being honest
-/// scaling and the chain should be decomposed differently; refuse
-/// loudly.
+/// Per-STRIP copy-count bound. Beyond this the single strip's aspect
+/// ratio stops being honest scaling (ec150 at K=12 is already 2892×17)
+/// and the chain composes as a GRID of stacked strips instead
+/// (RFC-072 Phase 2 unit 2).
 const K_MAX: i32 = 12;
+/// Grid strip-count bound — the K_MAX successor's own honesty limit.
+/// Beyond R_MAX × K_MAX copies, refuse loudly with the same wording
+/// contract the old K_MAX refusal carried.
+const R_MAX: i32 = 4;
+/// Vertical kit band between stacked strips. Must hold the lower
+/// strip's north feed rigs (per-copy clusters: depth ≤ 4+6·(c−1), plus
+/// the ±2 bank overhang) and the upper strip's south drain rigs (base
+/// ext 11 + bank flow margin) — the harness's near-parallel band guard
+/// (scenario.rs, RFC-072 P2 unit 2) refuses codegen if this is ever
+/// too small for a manifest, so an undersized clearance fails LOUD at
+/// sim time, never silently.
+const STRIP_CLEARANCE: i32 = 32;
 
 /// Smallest K such that every produced item and every external input
 /// item runs at ≤ `QUANTUM_RATE` per copy. Chains under the cap stay
@@ -176,11 +189,14 @@ pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
     }
     // Corridor capacity: ratio quantization bounds every copy's
     // corridors at QUANTUM_RATE, so high rates raise the copy count
-    // instead of overloading a belt. Refuse only past the copy bound.
+    // instead of overloading a belt. Up to K_MAX copies compose as one
+    // strip; beyond it the grid composer stacks up to R_MAX strips
+    // (RFC-072 P2 unit 2). Refuse only past the grid bound.
     let k = required_copies(sr);
-    if k > K_MAX {
+    if k > K_MAX * R_MAX {
         return Err(format!(
-            "cells: chain needs {k} quantized copies (max {K_MAX} at quantum {QUANTUM_RATE}/s)"
+            "cells: chain needs {k} quantized copies (max {} = {R_MAX} strips x {K_MAX} at quantum {QUANTUM_RATE}/s)",
+            K_MAX * R_MAX
         ));
     }
     Ok(())
@@ -719,7 +735,27 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
 /// to the pre-RFC-049 chain output by construction; the no-argument
 /// `compose_chain` now defaults to `common::DEFAULT_INSERTER_CAPACITY`
 /// (L2), so pass 0 explicitly for the raw unresearched world.
+///
+/// RFC-072 Phase 2 unit 2: chains up to K_MAX copies compose as ONE
+/// strip, bit-identical to the pre-grid composer; beyond it,
+/// `compose_grid_with_capacity` stacks balanced strips.
 pub fn compose_chain_with_capacity(
+    sr: &SolverResult,
+    inserter_capacity: u8,
+) -> Result<LayoutResult, String> {
+    let k = required_copies(sr);
+    if k > K_MAX {
+        return compose_grid_with_capacity(sr, inserter_capacity, k);
+    }
+    compose_strip_with_capacity(sr, inserter_capacity)
+}
+
+/// One horizontal strip of up to K_MAX quantized copies — the entire
+/// pre-unit-2 composer, unchanged. The grid path calls this once per
+/// strip with a proportionally scaled `SolverResult`, whose own
+/// `required_copies` lands exactly on the strip's planned copy count
+/// (verified by the caller before composing).
+fn compose_strip_with_capacity(
     sr: &SolverResult,
     inserter_capacity: u8,
 ) -> Result<LayoutResult, String> {
@@ -1010,7 +1046,10 @@ pub fn compose_chain_with_capacity(
                     if cf.iter().any(|(i, _)| i == &r.item) {
                         continue;
                     }
-                    b_in.push(BoundaryRecord { x: r.x + x, ..r.clone() });
+                    // Both axes translate (unit-2 recon finding: x-only
+                    // held only because a mega block's y_off is always 0
+                    // today — the drain map below always translated both).
+                    b_in.push(BoundaryRecord { x: r.x + x, y: r.y + y_off, ..r.clone() });
                 }
                 if block.boundary_outputs.is_empty() {
                     return Err("mega: block has no drain record".to_string());
@@ -1776,4 +1815,121 @@ pub fn compose_chain_with_capacity(
     // from any single power source. Additive: bridge poles only.
     crate::bus::layout::repair_pole_network(&mut composed);
     Ok(composed)
+}
+
+/// RFC-072 Phase 2 unit 2 — the K_MAX successor: K > K_MAX quantized
+/// copies compose as a GRID of vertically stacked, fully independent
+/// strips. Every strip carries its own per-copy feeds and drains (the
+/// interface contract the sim receipts measure), so the composed
+/// artifact needs NO inter-strip flow: the only shared geometry is the
+/// pole bridge `repair_pole_network` stamps across the clearance —
+/// K72-4 (no routing across cell boundaries) holds by construction.
+/// Design adjudication, refuted alternatives (through-columns, interior
+/// merges), and the wall receipts: the RFC's decision log, 2026-08-26.
+fn compose_grid_with_capacity(
+    sr: &SolverResult,
+    inserter_capacity: u8,
+    k: i32,
+) -> Result<LayoutResult, String> {
+    chain_eligible(sr)?; // owns the K_MAX * R_MAX refusal
+    let strips = (k + K_MAX - 1) / K_MAX;
+    // Balanced split: strip copy counts differ by at most one, summing
+    // to K (18 -> 9+9, 25 -> 9+8+8).
+    let base = k / strips;
+    let extra = (k % strips) as usize;
+    let mut copies_per_strip = Vec::with_capacity(strips as usize);
+    let mut composed: Option<LayoutResult> = None;
+    let mut y_off = 0i32;
+    for s in 0..strips as usize {
+        let k_s = base + if s < extra { 1 } else { 0 };
+        copies_per_strip.push(k_s);
+        let ratio = k_s as f64 / k as f64;
+        // A strip is the SAME chain at k_s/K of the flow: scale every
+        // machine count and external total; per-machine rates (and so
+        // per-copy cell geometry) are untouched, which is what makes
+        // every strip's cells identical to the single-strip case.
+        let mut sub = sr.clone();
+        for m in sub.machines.iter_mut() {
+            m.count *= ratio;
+        }
+        for f in sub
+            .external_inputs
+            .iter_mut()
+            .chain(sub.external_outputs.iter_mut())
+            .chain(sub.surplus_outputs.iter_mut())
+        {
+            f.rate *= ratio;
+        }
+        // The split arithmetic guarantees required_copies(sub) == k_s
+        // (per-copy flow is identical, so the scaled totals quantize to
+        // exactly k_s); verify rather than assume — a drifted quantizer
+        // must refuse, not ship a mis-scaled strip.
+        let got = required_copies(&sub);
+        if got != k_s {
+            return Err(format!(
+                "cells: grid strip {s} quantized to {got} copies where the split \
+                 planned {k_s} — the quantizer and the split arithmetic disagree"
+            ));
+        }
+        let strip = compose_strip_with_capacity(&sub, inserter_capacity)?;
+        composed = Some(match composed {
+            None => {
+                y_off = strip.height + STRIP_CLEARANCE;
+                strip
+            }
+            Some(mut acc) => {
+                let strip_h = strip.height;
+                append_strip_translated(&mut acc, strip, y_off);
+                y_off += strip_h + STRIP_CLEARANCE;
+                acc
+            }
+        });
+    }
+    let mut composed = composed.expect("grid path implies K > K_MAX implies strips >= 2");
+    // One power network: the strips' own pole lines are islands until
+    // bridged. `repair_pole_network` adds bridge poles across the
+    // clearance and recomputes the stored wire graph for the combined
+    // entity list (per-strip graphs were dropped in the merge — their
+    // indices are strip-local).
+    let pole_bridges = crate::bus::layout::repair_pole_network(&mut composed);
+    crate::trace::emit(crate::trace::TraceEvent::CellGridComposed {
+        copies_per_strip,
+        clearance: STRIP_CLEARANCE,
+        pole_bridges,
+    });
+    Ok(composed)
+}
+
+/// Append `strip` to `acc`, translated down by `dy`. Everything with a
+/// coordinate translates — entities, BOTH boundary record sets (the
+/// harness attaches rigs at these exact tiles), surplus exits, regions;
+/// `power_wires` is dropped (strip-local indices) and rebuilt by the
+/// caller's `repair_pole_network`.
+fn append_strip_translated(acc: &mut LayoutResult, strip: LayoutResult, dy: i32) {
+    debug_assert_eq!(acc.inserter_capacity, strip.inserter_capacity);
+    debug_assert_eq!(acc.stacking, strip.stacking);
+    for mut e in strip.entities {
+        e.y += dy;
+        acc.entities.push(e);
+    }
+    for mut b in strip.boundary_inputs {
+        b.y += dy;
+        acc.boundary_inputs.push(b);
+    }
+    for mut b in strip.boundary_outputs {
+        b.y += dy;
+        acc.boundary_outputs.push(b);
+    }
+    for (item, x, y) in strip.surplus_exits {
+        acc.surplus_exits.push((item, x, y + dy));
+    }
+    for mut r in strip.regions {
+        r.y += dy;
+        acc.regions.push(r);
+    }
+    acc.voided_streams.extend(strip.voided_streams);
+    acc.warnings.extend(strip.warnings);
+    acc.width = acc.width.max(strip.width);
+    acc.height = dy + strip.height;
+    acc.power_wires = None;
 }

@@ -400,6 +400,19 @@ pub fn check_belt_dead_ends(layout: &LayoutResult) -> Vec<ValidationIssue> {
 
     let w = layout.width;
     let h = layout.height;
+    // A belt carrying a declared boundary-OUTPUT record is the layout's
+    // exit head: items are meant to accumulate there until the outside
+    // world (the harness drain, a downstream factory) picks them up. On
+    // a single strip these heads sat on the bounding-box edge and the
+    // out-of-bounds test below exempted them by coincidence; a grid's
+    // first-strip exits are INTERIOR (RFC-072 P2 unit 2), so exempt by
+    // record — `check_boundary_integrity` holds each record to a real
+    // matching belt, so an unbacked record cannot buy this exemption.
+    let exit_heads: FxHashSet<(i32, i32)> = layout
+        .boundary_outputs
+        .iter()
+        .map(|r| (r.x, r.y))
+        .collect();
 
     for e in &layout.entities {
         if !is_surface_belt(&e.name) {
@@ -409,6 +422,9 @@ pub fn check_belt_dead_ends(layout: &LayoutResult) -> Vec<ValidationIssue> {
         let out_x = e.x + d.0;
         let out_y = e.y + d.1;
         if out_x < 0 || out_x >= w || out_y < 0 || out_y >= h {
+            continue;
+        }
+        if exit_heads.contains(&(e.x, e.y)) {
             continue;
         }
         if receiver_tiles.contains(&(out_x, out_y)) {

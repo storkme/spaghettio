@@ -1523,6 +1523,17 @@ pub enum TraceEvent {
         module_id: u32,
     },
 
+    // RFC-072 Phase 2 unit 2: the cell chain's quantization exceeded one
+    // strip's K_MAX and composed as a GRID of stacked independent strips.
+    // `copies_per_strip` is the balanced split (sums to the chain's K);
+    // `clearance` is the inter-strip kit band; `pole_bridges` is how many
+    // poles `repair_pole_network` added to join the strips' islands.
+    CellGridComposed {
+        copies_per_strip: Vec<i32>,
+        clearance: i32,
+        pole_bridges: usize,
+    },
+
     // `ModuleSizeSplit` candidate (see `docs/rfc-decomposition-search.md`)
     // applied a k-way split to one module of the partition plan. Fires
     // once per split module per `produce()` call. With Phase 1's k=2,

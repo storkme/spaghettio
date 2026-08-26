@@ -835,3 +835,43 @@ way. The meter's turn-model fix
   criterion's "18 such errors at 120/s" figure does not reproduce
   from plates on current main — the wall receipts are the from-ore
   numbers above; cite these, don't relitigate the old figure.)*
+- *2026-08-26 — unit 2 ENGINE SHIPPED (grid composer + record-aware
+  validators): the composed ec@240 grid validates at ZERO ERRORS —
+  K72-3(a)'s plan bar — where native carries 22 structural errors
+  around a caught router panic.* Shape: `compose_chain_with_capacity`
+  dispatches K ≤ K_MAX to the unchanged strip composer and K > K_MAX
+  to `compose_grid_with_capacity` — R = ceil(K/K_MAX) balanced strips
+  (18 → 9+9), each a proportionally scaled `SolverResult` whose own
+  `required_copies` is verified to land on the planned count, composed
+  as today and translated by strip_h + STRIP_CLEARANCE (32) —
+  entities AND boundary records — then `repair_pole_network` bridges
+  the power islands and recomputes the wire graph; `CellGridComposed`
+  trace event; the refusal moves to R_MAX × K_MAX = 48 (ec700, K=53)
+  with the same wording contract (ec600's K=45 now composes as 4
+  strips). Measured: ec@240 from ore = 2304×66, 16,600 entities, 36
+  feeds / 18 exits, selection ships it at BestErrorFree; the only
+  warnings are 18 zero-margin cable inputs (6 EC machines per copy can
+  demand exactly 45/s against express — the honest class the sim
+  adjudicates). **The finding on the way**: every validator's notion
+  of "boundary" was the bounding-box EDGE — the single strip's records
+  sat there by coincidence, so a grid's interior strip edges read as 9
+  dead-end Errors, 48 flow-path and 502 reachability warnings.
+  Corrected to record-aware semantics (`boundary_record_tiles`): a
+  declared record tile is boundary wherever it sits, and
+  `check_boundary_integrity` already holds every record to a real
+  matching belt, so the exemption cannot be bought by an unbacked
+  record (validator-trust.md rows updated; core suite unchanged
+  elsewhere, 1274/0). Mega-input boundary records now translate y as
+  well as x (the recon-found latent gap). Harness side (#731): the
+  rig ladders banded + clustered, plus two structural refusals (feed-
+  vs-drain, rig-vs-layout) — and the rig-vs-layout sweep over the
+  real bank found a LATENT KIT DEFECT unrelated to grids: fluid feed
+  heads that are bare pipes carry direction 0, so the harness builds
+  their rigs INTO the layout; the bank's three "non-converged 0.000"
+  rows (tier3 heavy-oil cracking / sulfuric acid / plastic bar) were
+  never layout measurements. Fix is engine-side (`bus/layout.rs`
+  records the head entity's direction — a pipe has none) with a
+  3-row manifest re-bless + re-measure: a followup outside this RFC's
+  scope, tracked on the status ledger. Next: the chain-ec240 fixture,
+  its sim (the interior-edge kit, now structurally guarded), registry
+  row + gates, K72-3(b)/K72-5, and Phase 2's close-out.*

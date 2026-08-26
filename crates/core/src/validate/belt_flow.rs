@@ -515,8 +515,16 @@ pub fn check_belt_flow_path(
     let min_by = *all_ys.iter().min().unwrap();
     let max_by = *all_ys.iter().max().unwrap();
 
+    // A declared boundary-record tile counts as boundary wherever it
+    // sits — a grid layout's records are on interior strip edges
+    // (RFC-072 P2 unit 2; see `boundary_record_tiles`).
+    let record_tiles = super::boundary_record_tiles(layout);
     let on_boundary = |bx: i32, by: i32| -> bool {
-        bx == min_bx || bx == max_bx || by == min_by || by == max_by
+        bx == min_bx
+            || bx == max_bx
+            || by == min_by
+            || by == max_by
+            || record_tiles.contains(&(bx, by))
     };
     let network_reaches_boundary = |network: &FxHashSet<(i32, i32)>| -> bool {
         network.len() >= 3 && network.iter().any(|&(bx, by)| on_boundary(bx, by))
@@ -799,8 +807,15 @@ pub fn check_belt_flow_reachability(
     let min_by = *all_ys.iter().min().unwrap();
     let max_by = *all_ys.iter().max().unwrap();
 
+    // Declared boundary-record tiles count as boundary wherever they
+    // sit (grid layouts: interior strip edges — RFC-072 P2 unit 2).
+    let record_tiles = super::boundary_record_tiles(layout);
     let on_boundary = |(x, y): (i32, i32)| -> bool {
-        x == min_bx || x == max_bx || y == min_by || y == max_by
+        x == min_bx
+            || x == max_bx
+            || y == min_by
+            || y == max_by
+            || record_tiles.contains(&(x, y))
     };
 
     // Warning unconditionally: production only ever built Bus layouts and

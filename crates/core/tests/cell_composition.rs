@@ -500,6 +500,17 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 2,
         levels: &[2],
     },
+    // RFC-072 Phase 2 unit 2: the K_MAX successor's exemplar — K=18
+    // composes as a 2×9 GRID of stacked strips (the K72-3 fixture).
+    SimFixture {
+        label: "chain-ec240",
+        target: "electronic-circuit",
+        rate: 240.0,
+        inputs: &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
     SimFixture {
         // RFC-071 B3: the shipped gear@20/am2 cell-composed winner — the
         // only production cell win — earning its registry entry after
@@ -1914,7 +1925,10 @@ fn cell_quantization_copy_counts() {
             "{label}: must be chain-eligible"
         );
     }
-    // Past K_MAX=12 the chain refuses loudly (ec600 → cable 1800/s → K=45 at quantum 40).
+    // RFC-072 P2 unit 2: past K_MAX=12 the chain no longer refuses — it
+    // grid-composes (ec600 → cable 1800/s → K=45 → 4 strips). The
+    // refusal moved to the GRID bound R_MAX×K_MAX=48: ec700 → cable
+    // 2100/s → K=53 refuses with the same wording contract.
     let inputs_set: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())
@@ -1929,10 +1943,129 @@ fn cell_quantization_copy_counts() {
         QualityTier::Normal,
     )
     .unwrap();
+    assert_eq!(required_copies(&sr), 45, "ec600 copy count");
+    assert!(
+        chain_eligible(&sr).is_ok(),
+        "K=45 must be grid-eligible (4 strips) since RFC-072 P2 unit 2"
+    );
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        700.0,
+        &inputs_set,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
     let err = chain_eligible(&sr).unwrap_err();
     assert!(
-        err.contains("quantized copies"),
-        "K_MAX refusal, got: {err}"
+        err.contains("quantized copies") && err.contains("strips"),
+        "grid-bound refusal, got: {err}"
+    );
+}
+
+/// RFC-072 Phase 2 unit 2: past K_MAX the chain composes as a GRID of
+/// stacked independent strips. This pins the whole contract on the
+/// ec@240 exemplar (K=18 → 2×9): balanced split, strip translation
+/// (entities AND boundary records — the harness attaches rigs at those
+/// exact tiles), one bridged power network, the CellGridComposed trace
+/// event, and validator ZERO ERRORS — the K72-3(a) plan bar, where the
+/// native bus at the same rate ships 22 structural errors around a
+/// caught router panic (decision log, 2026-08-26).
+#[test]
+fn grid_composes_ec240_as_two_strips_zero_errors() {
+    use spaghettio_core::bus::cells::chain::{compose_chain, required_copies};
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        240.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    assert_eq!(required_copies(&sr), 18, "ec240 quantizes to 18 copies");
+    let _guard = spaghettio_core::trace::start_trace();
+    let l = compose_chain(&sr).expect("grid composes");
+    let events = spaghettio_core::trace::drain_events();
+    let grid_events: Vec<String> = events
+        .iter()
+        .map(|e| format!("{e:?}"))
+        .filter(|d| d.contains("CellGridComposed"))
+        .collect();
+    assert_eq!(grid_events.len(), 1, "exactly one grid event");
+    assert!(
+        grid_events[0].contains("copies_per_strip: [9, 9]"),
+        "balanced 2x9 split, got: {}",
+        grid_events[0]
+    );
+    // Two entity bands separated by the clearance: nothing except the
+    // pole bridge may occupy the inter-strip band (bridge poles span it
+    // by design, so bands are computed over non-pole entities).
+    let non_pole = |e: &&spaghettio_core::models::PlacedEntity| !e.name.contains("pole");
+    let strip0_max = l
+        .entities
+        .iter()
+        .filter(non_pole)
+        .filter(|e| e.y < l.height / 2)
+        .map(|e| e.y)
+        .max()
+        .unwrap();
+    let strip1_min = l
+        .entities
+        .iter()
+        .filter(non_pole)
+        .filter(|e| e.y >= l.height / 2)
+        .map(|e| e.y)
+        .min()
+        .unwrap();
+    assert!(
+        strip1_min - strip0_max >= 20,
+        "strips must be separated by the kit clearance, got {strip0_max}..{strip1_min}"
+    );
+    let interlopers: Vec<&str> = l
+        .entities
+        .iter()
+        .filter(|e| e.y > strip0_max && e.y < strip1_min)
+        .map(|e| e.name.as_str())
+        .collect();
+    assert!(
+        interlopers.iter().all(|n| n.contains("pole")),
+        "only the pole bridge may sit in the clearance, found {interlopers:?}"
+    );
+    // Boundary records split across the two strip edges: every record
+    // must sit on a real belt (record-integrity re-checks this too).
+    assert!(
+        l.boundary_inputs.iter().any(|r| r.y > strip0_max),
+        "the second strip's feeds must be interior records"
+    );
+    assert_eq!(
+        l.boundary_outputs.len(),
+        18,
+        "one exit per copy across both strips"
+    );
+    // The K72-3(a) bar: zero validator errors (native at this rate has
+    // 22 structural errors), single bridged power network included.
+    let issues = match spaghettio_core::validate::validate(&l, Some(&sr)) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+    let errors: Vec<String> = issues
+        .iter()
+        .filter(|i| format!("{:?}", i.severity).contains("Error"))
+        .map(|i| format!("{}/{}", i.category, i.message))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "grid must validate error-free, got {} errors: {:?}",
+        errors.len(),
+        errors.iter().take(5).collect::<Vec<_>>()
     );
 }
 
