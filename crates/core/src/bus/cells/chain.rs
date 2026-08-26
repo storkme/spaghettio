@@ -233,11 +233,27 @@ pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
             // `contest_favors_far(near, far, …)` for the shared dx=1
             // column, so pricing the far hand at budget 1 unconditionally
             // over-credited it by one inserter whenever near wins.
-            let far_budget = if solids.len() >= 2
-                && crate::bus::inserter_ladder::contest_favors_far(
-                    solids[1], solids[0], true, quality, level,
-                ) {
-                1
+            // …and a row is only as fed as its LAST machine: at `LastInRow`
+            // the far belt is trimmed and the contested column exists only
+            // when `dual_input_row`'s one-tile extension rule fires (far
+            // capped at the baseline hand, covered with one extra, near
+            // needing no extra — templates.rs) — so the budget is priced
+            // by that rule, not by an always-eligible column (codex review
+            // of the close-out PR). For the receipted 12.5/s cell: iron 2.5
+            // > 2.4 caps the baseline, two hands cover, cable's stack hand
+            // needs nothing → budget 1, as the sim measured.
+            let far_budget = if solids.len() >= 2 {
+                let (far, near) = (solids[0], solids[1]);
+                let contest = crate::bus::inserter_ladder::contest_favors_far(
+                    near, far, true, quality, level,
+                );
+                let far_capped =
+                    size_side(far, Reach::Far, 0, InserterTier::Stack, quality, level).shortfall.is_some();
+                let far_covered_extended =
+                    size_side(far, Reach::Far, 1, InserterTier::Stack, quality, level).shortfall.is_none();
+                let near_needs_no_extra =
+                    size_side(near, Reach::Near, 0, InserterTier::Stack, quality, level).shortfall.is_none();
+                if contest && far_capped && far_covered_extended && near_needs_no_extra { 1 } else { 0 }
             } else {
                 0
             };
