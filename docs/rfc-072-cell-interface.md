@@ -575,3 +575,29 @@ the snapshot debugger sees them.
   input side (tap repair-or-refuse) and the output capacity side
   (partition), with loudness residuals recorded. Phase 2 — the
   composer — is the RFC's remaining committed substance.*
+- *2026-08-26 — Phase 2 reconnaissance: the composer's build surface
+  mapped by three probes.* (1) ec@240 today: the composed candidate
+  is gated off by `chain_eligible` — "needs 16 quantized copies (max
+  12 at quantum 45/s)". Sixteen, not the fixture's assumed six: the
+  quantum applies to the chain's TOTAL flow (intermediates included),
+  so copies are ~15/s-of-ec each and the `6 × ec@40` fixture in the
+  Phase-2 section needs correcting to the real quantization
+  arithmetic. `K_MAX = 12`'s own doc names this RFC's job: beyond it
+  "the chain should be decomposed differently; refuse loudly" — the
+  grid-tiling composer IS that different decomposition. (2) ec@150
+  (K≈10, gate passes): the candidate RUNS and refuses in production —
+  "copper-cable has 2 in-ports for copper-plate across 2 rows" (the
+  multi-row internal corridor class its own test pins): at quantum 45
+  a copy's cable stage is 9 machines > the 8-per-row cap. The
+  native bus ships with 37 errors at that rate; above the wall the
+  engine currently has NO error-free path. (3) A local
+  quantum-40 experiment (reverted) makes the cable stage single-row
+  but the candidate goes NotRun despite `chain_eligible` passing — a
+  selection-laziness interaction to root-cause first. Phase 2's
+  build order therefore: (i) root-cause the NotRun, (ii) the quantum
+  as a real tunable with the single-row-per-stage constraint driving
+  its value, (iii) the K_MAX successor (grid tiling + stamp-oracle
+  merges) for rates the strip cannot honestly serve, measured
+  against K72-3 as restated (zero lane-throughput errors; sim vs the
+  standing 97.9% bar; seams within 2 points of the constituent
+  cell's sim receipt).*
