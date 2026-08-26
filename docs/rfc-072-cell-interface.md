@@ -601,3 +601,18 @@ the snapshot debugger sees them.
   against K72-3 as restated (zero lane-throughput errors; sim vs the
   standing 97.9% bar; seams within 2 points of the constituent
   cell's sim receipt).*
+- *2026-08-26 — recon item (3) RETRACTED as my own instrument error,
+  and the quantum-40 experiment measures AT PLAN.* The "selection-
+  laziness NotRun" was a probe-reading artifact: each cell sub-solve
+  emits its own seven-row board, and my head-limited grep read
+  sub-boards as the outer one. The outer board decides
+  **cell-composed at BestErrorFree** at ec@150/quantum-40 — the
+  composer already wins above the wall once every stage fits one row
+  per copy. Measurements on that config: 10,392 entities (2892×17 —
+  the strip's footprint-honesty concern made visible), validator
+  0E/0W, **meter 150.0/150.0 delivered** (at-plan clears nothing;
+  the sim is running as the anchor). Phase 2 unit 1 is therefore the
+  quantum change (45 → the single-row-per-stage value) shipped WITH
+  its sim receipts and the calibration-bank re-bless its blast
+  radius requires (every cell-chain bank row re-shapes); the K_MAX
+  successor remains unit 2 for rates beyond ~150.*
