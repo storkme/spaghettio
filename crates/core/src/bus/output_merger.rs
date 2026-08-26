@@ -13,6 +13,38 @@ use crate::bus::placer::RowSpan;
 use crate::bus::stacking_ctx::StackingCtx;
 use crate::models::{EntityDirection, PlacedEntity};
 
+/// Capacity-aware contiguous partition of merger columns (#727 unit 2,
+/// #728 round 1): greedy first-fit over per-column rates — optimal for
+/// the minimum contiguous group count (codex-verified) — sizing and
+/// assignment from ONE walk so the two can never disagree. A column
+/// above `single_cap` gets its own group (the per-row output ceiling is
+/// the placer's domain — note such a group's SUM exceeds `single_cap`
+/// by itself; the guarantee is that no MULTI-column group does).
+/// Returns `(n_output, group_of)` with `group_of` non-decreasing and
+/// every group `0..n_output` non-empty.
+pub(crate) fn partition_columns(
+    col_rates: &[f64],
+    single_cap: f64,
+    total_rate: f64,
+) -> (usize, Vec<usize>) {
+    if single_cap >= total_rate || col_rates.is_empty() {
+        return (1, vec![0; col_rates.len()]);
+    }
+    let mut group_of: Vec<usize> = Vec::with_capacity(col_rates.len());
+    let mut g = 0usize;
+    let mut acc = 0.0_f64;
+    for &r in col_rates {
+        if acc > 0.0 && acc + r > single_cap + 1e-9 {
+            g += 1;
+            acc = r;
+        } else {
+            acc += r;
+        }
+        group_of.push(g);
+    }
+    (g + 1, group_of)
+}
+
 pub(crate) fn merge_output_rows(
     output_rows: &[usize],
     output_ys: &[i32],
@@ -25,6 +57,11 @@ pub(crate) fn merge_output_rows(
     ctx: &StackingCtx,
     existing_tiles: &FxHashSet<(i32, i32)>,
     row_tile_overrides: &mut FxHashSet<(i32, i32)>,
+    // #728 r4: the VOIDER merge consumes exactly one tail (the voider
+    // row has one input belt — its ceiling is input-side territory),
+    // so that caller forces single-tail packing, preserving its
+    // pre-partition behavior. Target and surplus merges pass false.
+    force_single_tail: bool,
 ) -> (Vec<PlacedEntity>, Vec<PlacedEntity>, i32, i32) {
     use crate::bus::balancer::underground_for_belt;
     use crate::common::{belt_entity_for_rate_stacked, belt_throughput_stacked, ug_max_reach};
@@ -49,12 +86,16 @@ pub(crate) fn merge_output_rows(
             if ri >= row_spans.len() {
                 0.0
             } else {
-                row_spans[ri]
-                    .spec
+                let rs = &row_spans[ri];
+                rs.spec
                     .outputs
                     .iter()
                     .filter(|o| o.item == item)
-                    .map(|o| o.rate * row_spans[ri].machine_count as f64)
+                    .map(|o| {
+                        o.rate
+                            * rs.machine_count as f64
+                            * crate::common::utilization_for(&rs.spec)
+                    })
                     .sum::<f64>()
             }
         })
@@ -67,10 +108,40 @@ pub(crate) fn merge_output_rows(
     // for every under-cap fixture -> byte-identical to the pre-#567 path.
     // Stack-aware via the same per-item stack `ctx.for_item` the pick uses.
     let single_cap = belt_throughput_stacked(belt_name, ctx.for_item(item));
-    let n_output = if single_cap >= total_rate {
-        1
+    // #727/RFC-072 Phase 1 unit 2: the group partition below is
+    // CONTIGUOUS, so the belt count must come from a contiguous
+    // capacity packing, not from ceil(total/cap) alone — 3 rows x 30/s
+    // into ceil(90/45)=2 count-based groups put 60/s on a 45/s tail
+    // (sim-anchored: cable-90 delivered 74.4/90 with the deficit equal
+    // to the over-subscription). Greedy first-fit over contiguous
+    // per-column rates is optimal for the minimum group count.
+    let column_rate = |&ri: &usize| -> f64 {
+        if ri >= row_spans.len() {
+            0.0
+        } else {
+            let rs = &row_spans[ri];
+            rs.spec
+                .outputs
+                .iter()
+                .filter(|o| o.item == item)
+                .map(|o| {
+                    o.rate
+                        * rs.machine_count as f64
+                        * crate::common::utilization_for(&rs.spec)
+                })
+                .sum::<f64>()
+        }
+    };
+    // COLUMN ORDER: the east extensions place row 0 at the RIGHTMOST
+    // column (x = merge_x + n-1) and row n-1 at merge_x — the committed
+    // geometry is the receipt (#728 round 1: the un-reversed form read
+    // the wrong row's rate per column; symmetric specimen rates masked
+    // it). col_rates[i] is the rate of the column at merge_x + i.
+    let col_rates: Vec<f64> = output_rows.iter().rev().map(column_rate).collect();
+    let (n_output, group_of) = if force_single_tail {
+        (1, vec![0; col_rates.len()])
     } else {
-        (total_rate / single_cap).ceil().max(1.0) as usize
+        partition_columns(&col_rates, single_cap, total_rate)
     };
     // Hops may need more reach than the rate-picked tier offers
     // (alternating blocked columns with 1-tile gaps are unhoppable
@@ -356,16 +427,7 @@ pub(crate) fn merge_output_rows(
     // it dumps the whole tail onto the leftmost survivors (one gets ~all the
     // columns and saturates, the rest idle) — the measured half-empty belts.
     // Per-group folds keep each output belt fed by exactly its own columns.
-    let m = n_output.max(1);
-    let base = n / m;
-    let extra = n % m;
-    let mut group_of: Vec<usize> = Vec::with_capacity(n);
-    for g in 0..m {
-        let count = base + if g < extra { 1 } else { 0 };
-        for _ in 0..count {
-            group_of.push(g);
-        }
-    }
+
     let mut surviving: Vec<i32> = all_x.clone(); // columns not yet merged away
 
     // Fold right-to-left WITHIN each group. At every step merge the rightmost
@@ -447,6 +509,32 @@ pub(crate) fn merge_output_rows(
         y_cursor += 1;
     }
 
+    // Zero-fold case (#727 unit 2): when every group is a single column
+    // the loop never runs and y_cursor still sits at merge_start_y — the
+    // tails would land INSIDE the row region and never register as
+    // boundary sinks. Emit one row of continuation belts so each column
+    // gets a real southbound tail. (Reachable pre-unit-2 only when the
+    // count-based n_output equaled n; no fixture did.)
+    // NOTE (#728 r3): merge tails are boundary MARKERS, not additional
+    // physical tiles — the caller's south flush starts at tail.y + 1
+    // (ghost_router), so a tail sharing its tile with the continuation
+    // belt is the standing convention (the fold path does the same).
+    if y_cursor == merge_start_y && n_output > 1 {
+        for &ax in &surviving {
+            entities.push(PlacedEntity {
+                name: belt_name.to_string(),
+                x: ax,
+                y: y_cursor,
+                direction: EntityDirection::South,
+                carries: Some(item.to_string()),
+                segment_id: merger_seg_id.clone(),
+                rate: Some(total_rate),
+                ..Default::default()
+            });
+        }
+        y_cursor += 1;
+    }
+
     // Survivor columns (one per group = one per output belt), each with a tail
     // at `y_cursor - 1`. n_output == 1 -> single tail, byte-identical to the
     // pre-#567 behavior. n_output > 1 -> n_output parallel exit belts.
@@ -470,6 +558,207 @@ pub(crate) fn merge_output_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #728 round 1: the partition's own unit pins — sizing and
+    /// assignment from one walk, asymmetric rates included (the
+    /// symmetric specimen masked the column-order reversal).
+    #[test]
+    fn partition_symmetric_three_rows_one_tail_each() {
+        let (n, groups) = partition_columns(&[30.0, 30.0, 30.0], 45.0, 90.0);
+        assert_eq!((n, groups), (3, vec![0, 1, 2]));
+    }
+
+    #[test]
+    fn partition_asymmetric_pairs_the_light_column() {
+        // Column order [3, 40, 40] (rates already reversed to columns):
+        // 3+40 = 43 fits one 45/s tail; the last 40 gets its own.
+        let (n, groups) = partition_columns(&[3.0, 40.0, 40.0], 45.0, 83.0);
+        assert_eq!((n, groups.clone()), (2, vec![0, 0, 1]));
+        // No group over cap.
+        for g in 0..n {
+            let d: f64 = [3.0, 40.0, 40.0]
+                .iter()
+                .zip(&groups)
+                .filter(|(_, &gg)| gg == g)
+                .map(|(r, _)| r)
+                .sum();
+            assert!(d <= 45.0 + 1e-9, "group {g} over cap: {d}");
+        }
+    }
+
+    #[test]
+    fn partition_over_cap_column_gets_its_own_tail() {
+        // The codex-HIGH counterexample: [60, 60] at 45 — no feasible
+        // capacity partition exists; each column gets its own tail and
+        // nothing empty-groups.
+        let (n, groups) = partition_columns(&[60.0, 60.0], 45.0, 120.0);
+        assert_eq!((n, groups), (2, vec![0, 1]));
+    }
+
+    #[test]
+    fn partition_under_cap_is_single_group() {
+        let (n, groups) = partition_columns(&[10.0, 10.0, 10.0], 45.0, 30.0);
+        assert_eq!((n, groups), (1, vec![0, 0, 0]));
+    }
+
+    /// #728 round 2: drive `merge_output_rows` through the ZERO-FOLD
+    /// branch end-to-end — three sub-cap rows whose partition is all
+    /// singletons must yield three distinct southbound tails below the
+    /// merge region (the previously fixed-and-reverted branch).
+    #[test]
+    fn merger_zero_fold_emits_three_distinct_tails() {
+        let mk = |y: i32| {
+            let mut rs = make_test_row_span(
+                "copper-cable",
+                y,
+                vec![],
+                vec![ItemFlow {
+                    item: "copper-cable".to_string(),
+                    rate: 5.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                6, // 30/s per row
+                vec![],
+            );
+            rs.output_belt_y = y + 2;
+            rs
+        };
+        let rows = [mk(0), mk(5), mk(10)];
+        let output_ys: Vec<i32> = rows.iter().map(|r| r.output_belt_y).collect();
+        let (_entities, tails, end_y, _mx) = merge_output_rows(
+            &[0, 1, 2],
+            &output_ys,
+            "copper-cable",
+            &rows,
+            15,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+            false,
+        );
+        assert_eq!(tails.len(), 3, "three 30/s rows at 45/s need three tails");
+        let mut xs: Vec<i32> = tails.iter().map(|t| t.x).collect();
+        xs.sort_unstable();
+        xs.dedup();
+        assert_eq!(xs.len(), 3, "tails must sit on distinct columns");
+        assert!(end_y > 15, "the zero-fold branch must advance past merge_start_y");
+    }
+
+    /// #728 round 3: the utilization pin — fractional-count rows pack
+    /// by their TRUE steady flow (`utilization_for`, the shared
+    /// placement/validation formula), not the nominal rate a
+    /// fractional row cannot sustain. Two rows at spec count 4.5 over
+    /// 5 machines flow 22.5/s each: scaled total 45 fits ONE express
+    /// tail; the nominal 50 would split into two. The unscaled form
+    /// fails this pin.
+    #[test]
+    fn merger_fractional_rows_pack_by_true_flow() {
+        let mk = |y: i32| {
+            let mut rs = make_test_row_span(
+                "copper-cable",
+                y,
+                vec![],
+                vec![ItemFlow {
+                    item: "copper-cable".to_string(),
+                    rate: 5.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                5,
+                vec![],
+            );
+            rs.spec.count = 4.5; // utilization 0.9 → 22.5/s true flow
+            rs.output_belt_y = y + 2;
+            rs
+        };
+        let rows = [mk(0), mk(5)];
+        let output_ys: Vec<i32> = rows.iter().map(|r| r.output_belt_y).collect();
+        let (_entities, tails, _end_y, _mx) = merge_output_rows(
+            &[0, 1],
+            &output_ys,
+            "copper-cable",
+            &rows,
+            15,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+            false,
+        );
+        assert_eq!(
+            tails.len(),
+            1,
+            "two 22.5/s true flows fit one 45/s tail — nominal-rate packing would split"
+        );
+    }
+
+    /// #728 round 2: the column-order REVERSAL pin, end-to-end. Rows
+    /// [40, 40, 3] (row order) land on columns [3, 40, 40] (row 0 is
+    /// the RIGHTMOST column): the light column pairs with its 40/s
+    /// neighbour under one 45/s tail and the far 40 gets its own —
+    /// survivors at merge_x and merge_x+2. With the `.rev()` reverted
+    /// the partition reads [40, 40, 3], groups {40}/{40+3}, and the
+    /// second survivor sits at merge_x+1 — this pin fails.
+    #[test]
+    fn merger_asymmetric_rates_pin_the_column_order() {
+        let mk = |y: i32, machines: usize| {
+            let mut rs = make_test_row_span(
+                "copper-cable",
+                y,
+                vec![],
+                vec![ItemFlow {
+                    item: "copper-cable".to_string(),
+                    rate: 5.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                machines,
+                vec![],
+            );
+            rs.output_belt_y = y + 2;
+            rs
+        };
+        // row 0 = 40/s, row 1 = 40/s, row 2 = 5/s (light).
+        let rows = [mk(0, 8), mk(5, 8), mk(10, 1)];
+        let output_ys: Vec<i32> = rows.iter().map(|r| r.output_belt_y).collect();
+        let (_entities, tails, _end_y, _mx) = merge_output_rows(
+            &[0, 1, 2],
+            &output_ys,
+            "copper-cable",
+            &rows,
+            15,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+            false,
+        );
+        let mut xs: Vec<i32> = tails.iter().map(|t| t.x).collect();
+        xs.sort_unstable();
+        assert_eq!(
+            xs.len(),
+            2,
+            "40+40+5 at 45/s packs as {{5+40}}/{{40}} — two tails"
+        );
+        // Columns are merge_x + i with row 0 rightmost; group 0 folds
+        // columns 0..=1 (survivor merge_x = xs[0]) and group 1 is the
+        // singleton column 2 (survivor merge_x + 2).
+        assert_eq!(
+            xs[1] - xs[0],
+            2,
+            "the second tail must be the RIGHTMOST column (row 0's 40/s) — \
+             a reversed column order folds columns 1..=2 instead and puts \
+             it at merge_x + 1: {xs:?}"
+        );
+    }
     use crate::models::{ItemFlow, MachineSpec};
 
     fn make_test_row_span(
@@ -558,6 +847,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
         // Caller threads: next min_merge_x = returned max_x + 1, start_y = max_y.
         let blocked: Vec<i32> = ((a_max_x - 1)..a_max_x).collect();
@@ -573,6 +863,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
         assert!(b_max_x > a_max_x);
         let a_tiles: FxHashSet<(i32, i32)> = a_ents.iter().map(|e| (e.x, e.y)).collect();
@@ -595,6 +886,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
         let c_overlap = c_ents
             .iter()
@@ -636,6 +928,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
 
         // Single row should extend EAST and SOUTH without splitters
@@ -688,6 +981,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
 
         // Multiple rows should include splitters
@@ -752,6 +1046,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
 
         // Splitters must be present
@@ -823,6 +1118,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
 
         let splitters: Vec<_> = entities
@@ -884,6 +1180,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &existing_tiles,
             &mut row_tile_overrides,
+            false,
         );
 
         assert!(

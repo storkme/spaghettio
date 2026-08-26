@@ -3209,10 +3209,14 @@ mod tests {
             reach.is_empty(),
             "no machine may be disconnected from its input boundary — got {reach:?}"
         );
+        // Unit 2 (the capacity-aware merger partition) raised this from
+        // the over-subscribed 2 (count-based {60,30} vs 45/s tails —
+        // the sim-anchored 74.4/90 residual) to 3: no contiguous
+        // 2-group split of three 30/s rows fits under a 45/s belt.
         assert_eq!(
             layout.boundary_outputs.len(),
-            2,
-            "the 90/s target keeps its two merger tails"
+            3,
+            "the 90/s target needs one tail per 30/s row at express"
         );
     }
 
