@@ -1421,10 +1421,11 @@ pub fn compose_chain_with_capacity(
             // kq used here matches the placed copies. Known ceiling, out
             // of scope here: `belt_entity_for_rate` tops out at express,
             // so a single-column drain caps at 45/s and a plan above that
-            // would under-deliver at the exit — no corpus fixture ships a
-            // >45/s single solid product today, and no K>1 fixture has an
-            // exit above 15/s, so both arms are recorded follow-ups
-            // rather than tested behaviour (RFC-071 decision log).
+            // would under-deliver at the exit. (#730 r3: with per-copy
+            // drains ≤ QUANTUM_RATE < express by construction, the
+            // under-delivery warning below cannot fire for K≥2 — kept as
+            // defensive code; K>1 exits now run up to 15/s in-corpus,
+            // e.g. chain-ec30's 3 copies.)
             let spec = &specs[pi % n];
             let drain_rate = spec.outputs[0].rate * spec.count as f64;
             let drain_belt = crate::common::belt_entity_for_rate(drain_rate, None);

@@ -188,8 +188,12 @@ pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
         // ranking a proven-failing geometry as verified. Guard on the
         // VERDICT, not on known_residual (round-2 minor: a verdict-less
         // FAIL row would otherwise read "at plan").
+        // #730 round 3 wording: THIS layout's world was never measured —
+        // the hash-sharing row failed in a DIFFERENT world. Unverified is
+        // the safe standing; the note must not assert a measurement that
+        // did not happen.
         (None, Some(e)) if e.verdict == "FAIL" => format!(
-            "cell-composed: geometry NOT sim-verified — the sim FAILED it under declared capacity {} / stacking {} ({} produced {:.2}/s, {}); this layout declares capacity {} / stacking {}",
+            "cell-composed: geometry NOT sim-verified — a hash-sharing build sim-FAILED in a DIFFERENT declared world (capacity {} / stacking {}: {} produced {:.2}/s, {}); this layout declares capacity {} / stacking {}, which was never measured",
             e.declared_inserter_capacity,
             e.declared_stacking,
             e.verdict,

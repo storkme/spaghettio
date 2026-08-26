@@ -464,6 +464,21 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 0,
         levels: &[1, 2, 3, 5, 7],
     },
+    // RFC-072 P2 unit 1 (#730 round 3): the PRODUCTION-DEFAULT ec15
+    // geometry — geo_cap 2, the compose production actually ships
+    // (hash e442f54f, which the L2 golden pins and assert_ne proves
+    // differs from chain-ec15's frozen L0 d-sweep geometry). Exists so
+    // the shipping default's sim receipt attaches to the shipped
+    // geometry, not to the L0 one measured in an L2 world.
+    SimFixture {
+        label: "chain-ec15g2",
+        target: "electronic-circuit",
+        rate: 15.0,
+        inputs: &["iron-plate", "copper-plate"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
     // RFC-072 Phase 2 unit 1: the above-the-wall exemplars — the only
     // error-free path past ~120/s. From-ore solves (the sim_export
     // default input set my receipts used), shipping-default world only.
@@ -1662,6 +1677,15 @@ fn cell_registry_hashes_current() {
         // win, registered at plan after #715 — blessed at the L2 default
         // like chem5.
         ("iron-gear-wheel", 20.0, &["iron-plate"], "chain", 2),
+        // RFC-072 P2 unit 1 (#730 r3): the production-default ec15
+        // geometry (chain-ec15g2), blessed at capacity 2.
+        (
+            "electronic-circuit",
+            15.0,
+            &["iron-plate", "copper-plate"],
+            "chain",
+            2,
+        ),
         // RFC-072 P2 unit 1: the above-the-wall exemplars, from-ore
         // solves at the shipping-default world.
         (

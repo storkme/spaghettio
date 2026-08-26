@@ -2214,7 +2214,7 @@ mod tests {
         );
         assert!(
             matches(
-                "cell-composed: geometry NOT sim-verified — the sim FAILED it under declared                  capacity 1 / stacking 1 (FAIL produced 12.58/s, 2026-08-26); this layout                  declares capacity 2 / stacking 1"
+                "cell-composed: geometry NOT sim-verified — a hash-sharing build sim-FAILED in a DIFFERENT declared world (capacity 1 / stacking 1: FAIL produced 12.58/s, 2026-08-26); this layout declares capacity 2 / stacking 1, which was never measured"
             ),
             "the world-mismatch FAIL arm must read as unverified"
         );
