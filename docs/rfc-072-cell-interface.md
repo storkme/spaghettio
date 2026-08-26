@@ -632,3 +632,22 @@ the snapshot debugger sees them.
   (lane_heatmap on this fixture) + fix + the quantum, shipped
   together with sim receipts; K72-3(a) as it stands would fail this
   layout and correctly so.*
+- *2026-08-26 — THE −50% VERDICT IS INVALIDATED AS A LAYOUT
+  MEASUREMENT: the harness kit mis-placed every sink on this fixture
+  class.* Kit-forensics (per the sim-kit-first-suspect rule) on the
+  saved run: all 12 drain-rig chest banks sit displaced ≈ +dims_x/2
+  (world x 237+241i vs exits at world 236+241i−1446), every bank
+  EMPTY, kit_errors empty (the belts placed fine — on empty land);
+  the 24 feed rigs are similarly off-frame; offx/offy themselves are
+  correct (−1445/−8). "Copies 6–11 dead" was the kit's geometry, not
+  the strip's — the chain's drain is UN-blamed and the previous
+  entry's re-scope is superseded. The displacement does NOT affect
+  narrow fixtures (fp-ec90 at 241 wide simmed 97.9% with working
+  sinks), so the bug class is wide/multi-exit-specific — the
+  composed-strip class is exactly what it breaks. Codex is on the
+  frame forensic (scenario.rs; feed/drain calls vs the centered-paste
+  offset); the ec75 6-copy strip sim now in flight will be read with
+  the same lens (its rigs displace by its own dims/2 = 723).
+  Phase 2's measurement path is BLOCKED on the harness fix — which
+  therefore becomes part of unit 1, with the ec150 sim re-run as its
+  verification.*
