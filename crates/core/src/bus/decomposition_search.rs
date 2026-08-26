@@ -2199,6 +2199,25 @@ mod tests {
             !matches("cell-composed: geometry SIM-VERIFIED at plan (…)"),
             "verified tier must not read as unverified"
         );
+        // #730 round 2 (3/3): the FAIL arms — both the full-world match
+        // and the world-mismatch fallback — MUST carry the unverified
+        // substring: a failed sim is the opposite of verification, and
+        // the mismatch arm laundering a FAIL row into "sim-verified as
+        // warned" ranked a proven-failing geometry above never-measured
+        // ones. Transcriptions of `verification_note`'s FAIL arms —
+        // update them WITH that function.
+        assert!(
+            matches(
+                "cell-composed: geometry NOT sim-verified — the sim FAILED it at its declared                  world (scenario — FAIL produced 12.58/s at declared capacity 1, 2026-08-26)"
+            ),
+            "the full-world FAIL arm must read as unverified"
+        );
+        assert!(
+            matches(
+                "cell-composed: geometry NOT sim-verified — the sim FAILED it under declared                  capacity 1 / stacking 1 (FAIL produced 12.58/s, 2026-08-26); this layout                  declares capacity 2 / stacking 1"
+            ),
+            "the world-mismatch FAIL arm must read as unverified"
+        );
     }
 
     /// RFC-071 B3, end-to-end over the shipping mapping (#717 review,

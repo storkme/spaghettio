@@ -55,22 +55,19 @@ fn ingests_chain_ec15() {
         .filter(|e| BeltTier::from_entity_name(&e.name).is_some())
         .count();
 
-    // 290, not the 292 originally pinned here. That 292 was recorded from a
-    // fixture built at the ambient L2 default while labelled `-d1`; #466
-    // corrected the exporter to build at the capacity the geometry is
-    // BLESSED at, and 290 is the entity count of registry geometry
-    // `cde5f2fcb0f5ef21` — the one real Factorio's 13.8/s measurement was
-    // taken against. The pin moved because the fixture was wrong, not
-    // because the ingestion changed.
-    assert_eq!(ents.len(), 290, "entity count changed: {}", ents.len());
-    assert_eq!(machines, 15, "expected 15 assembling machines");
-    // 41, not 42, for the same reason as the entity count above: L0 geometry
-    // provisions one fewer inserter than the L2 build that was mistakenly
-    // pinned. Machine count is unchanged at 15 — the capacity level moves
-    // how machines are FED, not how many there are, which is the whole
-    // reason a geometry/world mismatch under-provisions rather than
-    // visibly breaking.
-    assert_eq!(inserters, 41, "expected 41 inserters");
+    // 316 since RFC-072 P2 unit 1 (was 290, and 292 before #466):
+    // quantum 40 re-quantized chain-ec15 into the 2-copy geometry
+    // `8f2473ecbb564af4` (sim-blessed across d1/d2/d7 — see
+    // cell-sim-registry.json). These fixtures are REGENERATED from the
+    // live exporter (the module doc's command), so the census follows
+    // the blessed geometry; this test pins the parser against real
+    // engine output, and the pin moves exactly when the geometry
+    // legitimately re-blesses.
+    assert_eq!(ents.len(), 316, "entity count changed: {}", ents.len());
+    assert_eq!(machines, 16, "expected 16 assembling machines (2 copies x 8)");
+    // 42 in the 2-copy quantum-40 geometry (the historical 41-vs-42
+    // note about L0-vs-L2 provisioning is retired with that geometry).
+    assert_eq!(inserters, 42, "expected 42 inserters");
     assert!(belts > 150, "expected the bulk to be belt-like, got {belts}");
 
     // Every crafting machine must carry a recipe — a machine without one

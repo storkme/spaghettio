@@ -464,6 +464,27 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 0,
         levels: &[1, 2, 3, 5, 7],
     },
+    // RFC-072 Phase 2 unit 1: the above-the-wall exemplars — the only
+    // error-free path past ~120/s. From-ore solves (the sim_export
+    // default input set my receipts used), shipping-default world only.
+    SimFixture {
+        label: "chain-ec75",
+        target: "electronic-circuit",
+        rate: 75.0,
+        inputs: &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
+    SimFixture {
+        label: "chain-ec150",
+        target: "electronic-circuit",
+        rate: 150.0,
+        inputs: &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
     SimFixture {
         // RFC-071 B3: the shipped gear@20/am2 cell-composed winner — the
         // only production cell win — earning its registry entry after
@@ -1089,6 +1110,18 @@ fn probe_registry_hashes() {
     use spaghettio_core::bus::cells::registry::geometry_hash;
     for (label, item, rate, inputs) in [
         (
+            "chain-ec75",
+            "electronic-circuit",
+            75.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
+        ),
+        (
+            "chain-ec150",
+            "electronic-circuit",
+            150.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
+        ),
+        (
             "chain-ec15",
             "electronic-circuit",
             15.0,
@@ -1629,6 +1662,22 @@ fn cell_registry_hashes_current() {
         // win, registered at plan after #715 — blessed at the L2 default
         // like chem5.
         ("iron-gear-wheel", 20.0, &["iron-plate"], "chain", 2),
+        // RFC-072 P2 unit 1: the above-the-wall exemplars, from-ore
+        // solves at the shipping-default world.
+        (
+            "electronic-circuit",
+            75.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+            "chain",
+            2,
+        ),
+        (
+            "electronic-circuit",
+            150.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+            "chain",
+            2,
+        ),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {

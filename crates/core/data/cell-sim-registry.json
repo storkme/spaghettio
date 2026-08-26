@@ -111,6 +111,30 @@
   "date": "2026-08-26"
  },
  {
+  "target": "electronic-circuit",
+  "rate": 75.0,
+  "geometry_hash": "6ee78789b320f2a9",
+  "declared_inserter_capacity": 2,
+  "declared_stacking": 1,
+  "harness_world": "nb=1 bulk=3 (the engine's shipping default, realized)",
+  "verdict": "PASS",
+  "produced_per_s": 75.0,
+  "scenario": "spaghettio-sim p2-ec75-cells-q40 (Factorio 2.0.77, 6-copy quantum-40 strip from ore, 5196 entities, converged; produced +0.0%, delivered +3.5%, all 374 machines working \u2014 the above-the-wall exemplar at K=6; RFC-072 P2 unit 1)",
+  "date": "2026-08-26"
+ },
+ {
+  "target": "electronic-circuit",
+  "rate": 150.0,
+  "geometry_hash": "4204524ce811eb8e",
+  "declared_inserter_capacity": 2,
+  "declared_stacking": 1,
+  "harness_world": "nb=1 bulk=3 (the engine's shipping default, realized)",
+  "verdict": "PASS",
+  "produced_per_s": 150.0,
+  "scenario": "spaghettio-sim p2-ec150-q40 re-run with powered drain banks (Factorio 2.0.77, 12-copy quantum-40 strip from ore, 10392 entities, converged; produced +0.0%, delivered +1.9%, all 748 machines working \u2014 the above-the-wall exemplar at K=12, K72-3 cleared; RFC-072 P2 unit 1)",
+  "date": "2026-08-26"
+ },
+ {
   "target": "iron-gear-wheel",
   "rate": 20.0,
   "geometry_hash": "bf44f2261fb871ca",
