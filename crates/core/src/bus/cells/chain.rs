@@ -49,7 +49,7 @@ const VLANES: i32 = 2;
 /// capacity small rows measure WORSE (−24% vs −8%) because the row
 /// template's long-handed input inserters concentrate their deficit
 /// (#383; the fix is RFC-049 Phase 3 inserter sizing, not geometry).
-const QUANTUM_RATE: f64 = 40.0;
+const QUANTUM_RATE: f64 = 45.0;
 /// Copy-count bound. Beyond this the footprint cost stops being honest
 /// scaling and the chain should be decomposed differently; refuse
 /// loudly.
