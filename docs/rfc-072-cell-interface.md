@@ -616,3 +616,19 @@ the snapshot debugger sees them.
   its sim receipts and the calibration-bank re-bless its blast
   radius requires (every cell-chain bank row re-shapes); the K_MAX
   successor remains unit 2 for rates beyond ~150.*
+- *2026-08-26 — the sim FAILS the quantum-40 composed strip at
+  exactly −50.0%: unit 1 re-scoped from "the quantum const" to the
+  chain's DRAIN capacity at high K.* Verdict (432k warmup): produced
+  75.00/150 (−50.0%), delivered −48.3%, FAIL; census 378 machines
+  full_output vs 374 working — HALF the factory output-blocked while
+  the meter read 150.0 at plan (its at-plan direction proven
+  worthless again, exactly as calibrated) and the validator was
+  clean (0E/0W — a THIRD sim-anchored silent-deficiency specimen,
+  this one in the chain's drain/corridor provisioning). The
+  exactly-half signature on the output side at K≈12 points at the
+  chain's final-drain/corridor capacity — the same subsystem as
+  gear@20's yellow-hardcoded drain (#715), now at scale where the
+  drain must carry 150/s. Unit 1 is therefore drain forensics
+  (lane_heatmap on this fixture) + fix + the quantum, shipped
+  together with sim receipts; K72-3(a) as it stands would fail this
+  layout and correctly so.*
