@@ -797,6 +797,8 @@ install (e.g. a candidate pin bump) side by side.
 
 ## Troubleshooting
 
+- **The run aborts at codegen with "feed rig for '<fluid>' … would place kit on layout tile"** (2026-08-26, RFC-072 P2 unit 2 groundwork, #731): the scenario builder now refuses, before Factorio starts, any manifest whose boundary rigs would land on the layout, on each other (feed vs drain), or in near-parallel bands the depth ladder cannot separate. Three calibration-bank fixtures trip it by design — `tier3_heavy_oil_cracking`, `tier3_sulfuric_acid`, `tier3_plastic_bar` — because their fluid feed heads are bare `pipe` entities whose recorded direction is 0 (a pipe has no direction), so the rig would be built INTO the layout; that is [#732](https://github.com/storkme/spaghettio/issues/732), not new corruption, and their historical "non-converged 0.000" rows were never layout measurements. The fix is engine-side (record the into-layout flow direction), after which the codegen accepts them and they can be re-measured. Any OTHER fixture hitting one of these refusals is a real clearance problem in the layout's boundary geometry — widen it rather than bypass the guard. A blueprint that fails to decode is also a refusal (never a silent skip) outside unit tests.
+
 - **`factorio exited early`** — a real crash (bad blueprint string, Lua
   error at startup): read the log at the path `run` printed; the kept
   run dir has the generated `config.ini` and scenario for repro.

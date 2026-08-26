@@ -1043,12 +1043,17 @@ impl SelectionPolicy {
             // (cells fixing an error-laden incumbent), which the suite
             // demonstrated — an unverified rescue still wins when it is
             // the only error-free candidate. Matches the unverified
-            // TIER, which since #730 is three-way: never-measured
+            // TIER, which since #730 covers: never-measured
             // geometries, sim-FAILED-at-declared-world rows, and
-            // world-mismatches whose hash has ANY sim-FAILED sibling
-            // all carry the substring; a world-mismatch note whose
-            // siblings are FAIL-free ("do NOT transfer across worlds")
-            // stays rankable as verified.
+            // UNMEASURED-world mismatches whose hash has ANY
+            // sim-FAILED sibling. Precedence matters (#730 round 6):
+            // a full world match beats sibling FAILs — a layout whose
+            // OWN world was measured PASS/WARN reads "SIM-VERIFIED"
+            // even when another world's row FAILed on the same hash
+            // (per-world semantics, #383); FAIL-dominance applies
+            // only where THIS world was never measured. A mismatch
+            // note whose siblings are FAIL-free ("do NOT transfer
+            // across worlds") stays rankable as verified.
             unverified_geometry_substring: "geometry NOT sim-verified",
             // Sourced from the constant the live mechanism reads, not
             // re-typed beside it: a second definition is the

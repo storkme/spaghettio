@@ -480,8 +480,8 @@ local function add_drain(s, force, exit_x, exit_y, fx, fy, lx, ly, ext_len, item
   -- SECOND target's drain rig land at whichever edge that target's own
   -- physical exit happens to be on, which the single global radius may
   -- not reliably reach for every possible exit position and rig index
-  -- (ext_len grows with boundary_outputs index, extending further out
-  -- each time). Explicitly chunk-generate this specific rig's own
+  -- (ext_len staggers within each lateral cluster of exits, extending
+  -- further out each step). Explicitly chunk-generate this specific rig's own
   -- footprint before placing anything in it -- redundant (cheap,
   -- idempotent) when the global call already covers it, a guarantee
   -- when it doesn't.
@@ -523,7 +523,8 @@ local function add_drain(s, force, exit_x, exit_y, fx, fy, lx, ly, ext_len, item
     end
   end
   -- Power the BANK, not the extension head (RFC-072 Phase-2 forensics):
-  -- ext_len grows with rig index (11 + 2*idx), and with the substation
+  -- ext_len staggers with cluster-local rig index (11 + 2*k — global
+  -- manifest index until RFC-072 P2 unit 2), and with the substation
   -- anchored at the head its supply area ran out around rig 6 — the
   -- bank's legendary stack inserters sat unpowered, the extension
   -- filled, and every copy behind a far rig blocked at full_output
@@ -622,33 +623,134 @@ end
 /// staggered by depth instead) — but they DO consume a slot, ordered
 /// first within each direction group, ahead of items (see the depth
 /// layout below).
+/// Two rigs whose heads sit further apart along the lateral axis than
+/// this can never touch — the item rig's one-sided halo is the 12-tile
+/// jog plus the power island at jog tiles 15/18 (2×2 entities → reach
+/// 19), the drain rig's is its lateral +7 EEI. Beyond it, restarting
+/// the depth/extension ladder is safe; within it, the ladder staggers
+/// exactly as before (#363/#357 invariants preserved per cluster).
+const RIG_LATERAL_HALO: i32 = 21;
+
+/// Assign each record within one band to a lateral CLUSTER, then hand
+/// each cluster to `ladder` for slot assignment. `lat` is the record's
+/// lateral coordinate; clusters break where consecutive (sorted)
+/// records sit more than `RIG_LATERAL_HALO` apart.
+fn assign_clustered(
+    records: &[BoundaryRecord],
+    mut idxs: Vec<usize>,
+    lat: impl Fn(usize) -> i32,
+    ladder: impl Fn(&[BoundaryRecord], &[usize], &mut [i32]),
+    slots: &mut [i32],
+) {
+    idxs.sort_by_key(|&i| lat(i));
+    let mut start = 0;
+    for k in 1..=idxs.len() {
+        if k == idxs.len() || lat(idxs[k]) - lat(idxs[k - 1]) > RIG_LATERAL_HALO {
+            ladder(records, &idxs[start..k], slots);
+            start = k;
+        }
+    }
+}
+
 fn feed_slots(records: &[BoundaryRecord]) -> Vec<i32> {
-    // ONE ladder per direction, fluids FIRST (PR #515 review finding: a
-    // separate fluid counter staggered fluids only against each other, so
-    // a fluid ug-run could land exactly on an item rig's jog row and
-    // stack silently). Fluids take slots 0..f-1 — their occupied band
-    // (out-tiles 1..=2+dist, dist = 2+2*slot, max 2+2f) sits strictly
-    // below the shallowest item band ([2+6f, 6+6f] for item slot f), so
-    // no item jog row or chest bank can ever reach a fluid column's
-    // tiles. Items keep their lateral-sorted relative order (the #363
-    // invariant), just offset by f.
-    let mut by_dir: BTreeMap<u8, Vec<usize>> = BTreeMap::new();
+    // One ladder per (direction, flow-axis coordinate) BAND and lateral
+    // CLUSTER; fluids FIRST within each cluster (PR #515 review finding:
+    // a separate fluid counter staggered fluids only against each other,
+    // so a fluid ug-run could land exactly on an item rig's jog row and
+    // stack silently). Fluids take cluster slots 0..f-1 — their occupied
+    // band (out-tiles 1..=2+dist, dist = 2+2*slot, max 2+2f) sits
+    // strictly below the shallowest item band ([2+6f, 6+6f] for item
+    // slot f), so no item jog row or chest bank can ever reach a fluid
+    // column's tiles. Items keep their lateral-sorted relative order
+    // (the #363 invariant), just offset by f.
+    //
+    // RFC-072 P2 unit 2 reshaped the ladder from ONE-PER-DIRECTION to
+    // banded + clustered: a grid fixture has feed heads on INTERIOR
+    // edges, where the old global ladder's depth (4 + 6·slot across
+    // every same-direction feed in the manifest — 100+ tiles on a
+    // 12-copy strip) cannot fit in any honest inter-strip clearance.
+    // Records launched from different flow-axis coordinates never share
+    // tiles (their rigs extend outward from different lines — the
+    // near-parallel guard below refuses the one geometry where that
+    // argument fails), and same-band records beyond RIG_LATERAL_HALO
+    // can't reach each other's tiles, so neither needs a shared ladder.
+    let mut by_band: BTreeMap<(u8, i32), Vec<usize>> = BTreeMap::new();
     for (i, rec) in records.iter().enumerate() {
-        by_dir.entry(rec.direction).or_default().push(i);
+        let into = rec.direction().vector();
+        by_band
+            .entry((rec.direction, rec.x * into.0 + rec.y * into.1))
+            .or_default()
+            .push(i);
     }
     let mut slots = vec![0i32; records.len()];
-    for idxs in by_dir.into_values() {
-        let lateral = rot90(records[idxs[0]].direction().vector());
-        let mut idxs = idxs;
-        // Fluids-first, then lateral position within each class.
-        idxs.sort_by_key(|&i| {
-            (
-                !records[i].is_fluid,
-                records[i].x * lateral.0 + records[i].y * lateral.1,
-            )
-        });
-        for (slot, i) in idxs.into_iter().enumerate() {
-            slots[i] = slot as i32;
+    for idxs in by_band.values().cloned() {
+        let into = records[idxs[0]].direction().vector();
+        let lateral = rot90(into);
+        assign_clustered(
+            records,
+            idxs,
+            |i| records[i].x * lateral.0 + records[i].y * lateral.1,
+            |records, cluster, slots| {
+                let lateral = rot90(records[cluster[0]].direction().vector());
+                let mut cluster = cluster.to_vec();
+                cluster.sort_by_key(|&i| {
+                    (
+                        !records[i].is_fluid,
+                        records[i].x * lateral.0 + records[i].y * lateral.1,
+                    )
+                });
+                for (slot, i) in cluster.into_iter().enumerate() {
+                    slots[i] = slot as i32;
+                }
+            },
+            &mut slots,
+        );
+    }
+    // Near-parallel band guard: a feed rig extends OUTWARD (decreasing
+    // flow coordinate) by its depth plus the ±2 bank overhang. Two
+    // same-direction bands closer than the deeper band's reach, with
+    // laterally overlapping spans, would interleave rigs the ladder
+    // cannot separate — refuse loudly rather than stack entities
+    // silently (the #357 failure mode).
+    let bands: Vec<((u8, i32), &Vec<usize>)> =
+        by_band.iter().map(|(k, v)| (*k, v)).collect();
+    for a in 0..bands.len() {
+        for b in (a + 1)..bands.len() {
+            let ((dir_a, coord_a), idxs_a) = bands[a];
+            let ((dir_b, coord_b), idxs_b) = bands[b];
+            if dir_a != dir_b || coord_a == coord_b {
+                continue;
+            }
+            // Rigs extend OUTWARD = toward decreasing flow coordinate,
+            // so only the FARTHER band's rigs can reach the nearer one.
+            let (near_coord, far_coord, far_idxs) = if coord_a < coord_b {
+                (coord_a, coord_b, idxs_b)
+            } else {
+                (coord_b, coord_a, idxs_a)
+            };
+            let far_reach = far_idxs
+                .iter()
+                .map(|&i| 4 + 6 * slots[i] + 2)
+                .max()
+                .unwrap_or(0);
+            let lateral = rot90(records[far_idxs[0]].direction().vector());
+            let lat = |i: usize| records[i].x * lateral.0 + records[i].y * lateral.1;
+            let span = |idxs: &[usize]| {
+                idxs.iter().fold((i32::MAX, i32::MIN), |(lo, hi), &i| {
+                    (lo.min(lat(i)), hi.max(lat(i)))
+                })
+            };
+            let (amin, amax) = span(idxs_a);
+            let (bmin, bmax) = span(idxs_b);
+            let lateral_overlap = amin - RIG_LATERAL_HALO <= bmax + RIG_LATERAL_HALO
+                && bmin - RIG_LATERAL_HALO <= amax + RIG_LATERAL_HALO;
+            assert!(
+                far_coord - near_coord > far_reach || !lateral_overlap,
+                "feed bands at flow coords {near_coord} and {far_coord} (direction \
+                 {dir_a}) are closer than the deeper band's {far_reach}-tile rig \
+                 reach with overlapping lateral spans — the stagger cannot \
+                 separate them; widen the clearance between these edges"
+            );
         }
     }
     slots
@@ -681,8 +783,10 @@ fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
         y = rec.y,
     );
     if rec.is_fluid {
-        // Fluids hold the FRONT of the direction's ladder (see
-        // `feed_slots`), so `slot` here is the fluid's rank 0..f-1 and
+        // Fluids hold the FRONT of their band+CLUSTER's ladder (see
+        // `feed_slots`; per cluster since RFC-072 P2 unit 2 — six fluids
+        // split across two lateral clusters legitimately pass, since caps
+        // only merge when ADJACENT), so `slot` here is the fluid's rank 0..f-1 and
         // the staggered run length keeps every surface cap ≥2 tiles from
         // its neighbors while staying below every item band. The ug span
         // (gap = dist-1 = 1+2*slot) hits the game's 9-tile limit at
@@ -691,7 +795,7 @@ fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
         // loudly rather than fabricate a rate.
         assert!(
             slot <= 4,
-            "more than 5 fluid boundary feeds on one side (slot {slot} for {}): \
+            "more than 5 fluid boundary feeds in one lateral cluster (slot {slot} for {}): \
              the ug-run stagger cannot exceed the game's 9-tile span; extend \
              add_fluid_feed with chained hops before running this fixture",
             rec.item
@@ -736,12 +840,348 @@ fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
     );
 }
 
-fn drain_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
+/// Extension length per drain record — banded and clustered exactly
+/// like `feed_slots` (RFC-072 P2 unit 2: the old global `11 + 2·idx`
+/// grew with MANIFEST position, so an 18-exit grid's first strip would
+/// push rigs ~45 tiles into the inter-strip clearance; exits beyond
+/// RIG_LATERAL_HALO can't touch each other's banks, so they don't need
+/// distinct extensions). Within a cluster the stagger is preserved:
+/// two exits ≤4 tiles apart with EQUAL ext would land their ±2-lateral
+/// chest banks on shared tiles (the #357 stacking class).
+fn drain_ext_lens(records: &[BoundaryRecord]) -> Vec<i32> {
+    let mut by_band: BTreeMap<(u8, i32), Vec<usize>> = BTreeMap::new();
+    for (i, rec) in records.iter().enumerate() {
+        let flow = rec.direction().vector();
+        by_band
+            .entry((rec.direction, rec.x * flow.0 + rec.y * flow.1))
+            .or_default()
+            .push(i);
+    }
+    let mut exts = vec![0i32; records.len()];
+    for idxs in by_band.values().cloned() {
+        let lateral = rot90(records[idxs[0]].direction().vector());
+        assign_clustered(
+            records,
+            idxs,
+            |i| records[i].x * lateral.0 + records[i].y * lateral.1,
+            |records, cluster, exts| {
+                let lateral = rot90(records[cluster[0]].direction().vector());
+                let lat = |i: usize| records[i].x * lateral.0 + records[i].y * lateral.1;
+                let mut cluster = cluster.to_vec();
+                cluster.sort_by_key(|&i| lat(i));
+                for (k, &i) in cluster.iter().enumerate() {
+                    // Base 11 (was 5): the widened 9-position drain bank
+                    // needs ext_len-8 >= 3 so every chest/inserter sits
+                    // outside the layout. The 2-step stagger within a
+                    // cluster keeps the old global scheme's SPACING for
+                    // close exits (the old scheme indexed by manifest
+                    // order, so a given pair's exact ext values can
+                    // differ; kit parity is receipted, not assumed —
+                    // ec22 re-measured under the clustered kit
+                    // reproduces its old-kit report to three decimals,
+                    // #731 round 1). KNOWN-IMPERFECT
+                    // at close pitch, deliberately preserved (RFC-072 P2
+                    // unit 2 audit): at pitch ≤ 8 a rig's ±2 bank tiles or
+                    // its lateral +4..+8 power island can land on a
+                    // neighbor's tiles, where create_entity fails per-tile
+                    // and the over-provisioned 18-position bank absorbs
+                    // the loss — ec23's pitch-1 exit pair measures PASS at
+                    // −0.6% under exactly this degradation. A redesign
+                    // (tip-anchored islands, flow-span staggering) would
+                    // change verified kit geometry for every measured
+                    // fixture; recorded as a harness follow-up instead.
+                    exts[i] = 11 + 2 * k as i32;
+                }
+            },
+            &mut exts,
+        );
+    }
+    // Near-parallel band guard, mirroring `feed_slots`': drains extend
+    // ALONG flow (increasing flow coordinate), so only the NEARER band
+    // can reach the farther one.
+    let bands: Vec<((u8, i32), &Vec<usize>)> =
+        by_band.iter().map(|(k, v)| (*k, v)).collect();
+    for a in 0..bands.len() {
+        for b in (a + 1)..bands.len() {
+            let ((dir_a, coord_a), idxs_a) = bands[a];
+            let ((dir_b, coord_b), idxs_b) = bands[b];
+            if dir_a != dir_b || coord_a == coord_b {
+                continue;
+            }
+            let (near_coord, far_coord, near_idxs) = if coord_a < coord_b {
+                (coord_a, coord_b, idxs_a)
+            } else {
+                (coord_b, coord_a, idxs_b)
+            };
+            let near_reach = near_idxs.iter().map(|&i| exts[i] + 1).max().unwrap_or(0);
+            let lateral = rot90(records[near_idxs[0]].direction().vector());
+            let lat = |i: usize| records[i].x * lateral.0 + records[i].y * lateral.1;
+            let span = |idxs: &[usize]| {
+                idxs.iter().fold((i32::MAX, i32::MIN), |(lo, hi), &i| {
+                    (lo.min(lat(i)), hi.max(lat(i)))
+                })
+            };
+            let (amin, amax) = span(idxs_a);
+            let (bmin, bmax) = span(idxs_b);
+            let lateral_overlap = amin - RIG_LATERAL_HALO <= bmax + RIG_LATERAL_HALO
+                && bmin - RIG_LATERAL_HALO <= amax + RIG_LATERAL_HALO;
+            assert!(
+                far_coord - near_coord > near_reach || !lateral_overlap,
+                "drain bands at flow coords {near_coord} and {far_coord} (direction \
+                 {dir_a}) are closer than the nearer band's {near_reach}-tile rig \
+                 reach with overlapping lateral spans — the stagger cannot \
+                 separate them; widen the clearance between these edges"
+            );
+        }
+    }
+    exts
+}
+
+/// The item feed rig's occupied tiles, mirroring `add_feed` exactly:
+/// the outward column, the 12-tile jog, the ±1/±2 chest+inserter bank
+/// on jog tiles 10–12, and the substation/EEI (2×2 each) at jog 15/18.
+pub(crate) fn feed_footprint(
+    head: (i32, i32),
+    into: (i32, i32),
+    depth: i32,
+) -> std::collections::HashSet<(i32, i32)> {
+    let outward = neg(into);
+    let lateral = rot90(into);
+    let neg_lateral = neg(lateral);
+    let corner = (head.0 + outward.0 * depth, head.1 + outward.1 * depth);
+    let mut tiles = std::collections::HashSet::new();
+    for t in 1..=depth {
+        tiles.insert((head.0 + outward.0 * t, head.1 + outward.1 * t));
+    }
+    for k in 1..=12 {
+        tiles.insert((corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k));
+    }
+    for k in 10..=12 {
+        let b = (corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k);
+        for side in [-1, 1] {
+            tiles.insert((b.0 + into.0 * 2 * side, b.1 + into.1 * 2 * side));
+            tiles.insert((b.0 + into.0 * side, b.1 + into.1 * side));
+        }
+    }
+    // 2×2 entities (substation, EEI) are CORNER-centred: `create_entity`
+    // at integer (x, y) occupies tiles x-1..=x × y-1..=y (#731 round 2 —
+    // the first cut claimed x..=x+1, one tile off toward the jog tip).
+    for k in [15, 18] {
+        let b = (corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k);
+        for (dx, dy) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
+            tiles.insert((b.0 + dx, b.1 + dy));
+        }
+    }
+    tiles
+}
+
+/// The fluid feed's occupied tiles: the whole outward column through
+/// the infinity cap (out-tiles 1..=2+dist). Conservative — the ug gap
+/// tiles hold no entity — but claiming them keeps the disjointness
+/// argument independent of that detail.
+pub(crate) fn fluid_feed_footprint(
+    head: (i32, i32),
+    into: (i32, i32),
+    dist: i32,
+) -> std::collections::HashSet<(i32, i32)> {
+    let outward = neg(into);
+    (1..=2 + dist)
+        .map(|t| (head.0 + outward.0 * t, head.1 + outward.1 * t))
+        .collect()
+}
+
+/// The drain rig's occupied tiles, mirroring `add_drain`: extension
+/// column, ±1/±2 lateral bank over its last 9 tiles, substation/EEI
+/// (2×2 each) at lateral +4/+7 of the bank center.
+pub(crate) fn drain_footprint(
+    head: (i32, i32),
+    flow: (i32, i32),
+    ext: i32,
+) -> std::collections::HashSet<(i32, i32)> {
+    let lateral = rot90(flow);
+    let mut tiles = std::collections::HashSet::new();
+    for t in 1..=ext {
+        tiles.insert((head.0 + flow.0 * t, head.1 + flow.1 * t));
+    }
+    for t in (ext - 8)..=ext {
+        for side in [-2, -1, 1, 2] {
+            tiles.insert((
+                head.0 + flow.0 * t + lateral.0 * side,
+                head.1 + flow.1 * t + lateral.1 * side,
+            ));
+        }
+    }
+    // 2×2 entities are corner-centred: tiles x-1..=x × y-1..=y around
+    // the integer position (#731 round 2).
+    let bank_t = ext - 4;
+    for off in [4, 7] {
+        for (dx, dy) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
+            tiles.insert((
+                head.0 + flow.0 * bank_t + lateral.0 * off + dx,
+                head.1 + flow.1 * bank_t + lateral.1 * off + dy,
+            ));
+        }
+    }
+    tiles
+}
+
+/// Structural cross-type guard (RFC-072 P2 unit 2, #731 round 1): a
+/// grid's inter-strip clearance hosts the upper strip's DRAIN rigs and
+/// the lower strip's FEED rigs. The same-type ladders above can't see
+/// each other, and the Lua-side kit audit only RECORDS an overlap — so
+/// refuse at codegen if any feed-rig tile coincides with any drain-rig
+/// tile. Same-type overlap inside a close-pitch drain cluster is the
+/// documented known-imperfect case and is not judged here. KNOWN GAP
+/// (#731 round 2): same-type rigs on PERPENDICULAR edges near a corner
+/// (a north-edge feed's lateral jog vs a west-edge feed's outward
+/// column) are checked by neither the band guards (same-direction
+/// only) nor this one (cross-type only); no engine shape produces it
+/// today (strips and grids feed north / drain south), and the
+/// rig-vs-layout guard below is shape-agnostic. Extend this guard to
+/// all-pairs rig disjointness before any composer emits such a corner.
+fn assert_feed_drain_rigs_disjoint(
+    inputs: &[BoundaryRecord],
+    slots: &[i32],
+    outputs: &[BoundaryRecord],
+    exts: &[i32],
+) {
+    let mut drain_tiles: std::collections::HashMap<(i32, i32), &str> = Default::default();
+    for (i, rec) in outputs.iter().enumerate() {
+        for t in drain_footprint((rec.x, rec.y), rec.direction().vector(), exts[i]) {
+            drain_tiles.insert(t, &rec.item);
+        }
+    }
+    for (i, rec) in inputs.iter().enumerate() {
+        let into = rec.direction().vector();
+        let tiles = if rec.is_fluid {
+            fluid_feed_footprint((rec.x, rec.y), into, 2 + 2 * slots[i])
+        } else {
+            feed_footprint((rec.x, rec.y), into, 4 + 6 * slots[i])
+        };
+        for t in tiles {
+            if let Some(drain_item) = drain_tiles.get(&t) {
+                panic!(
+                    "feed rig for '{}' (head ({},{}), slot {}) and drain rig for '{drain_item}' \
+                     share tile {t:?} — the clearance between these edges is too small for \
+                     both rigs; widen it rather than let the kit stack entities",
+                    rec.item, rec.x, rec.y, slots[i]
+                );
+            }
+        }
+    }
+}
+
+/// Every rig tile per record, in the manifest's layout frame.
+fn rig_footprints(
+    inputs: &[BoundaryRecord],
+    slots: &[i32],
+    outputs: &[BoundaryRecord],
+    exts: &[i32],
+) -> Vec<(String, std::collections::HashSet<(i32, i32)>)> {
+    let mut rigs = Vec::new();
+    for (i, rec) in inputs.iter().enumerate() {
+        let into = rec.direction().vector();
+        let tiles = if rec.is_fluid {
+            fluid_feed_footprint((rec.x, rec.y), into, 2 + 2 * slots[i])
+        } else {
+            feed_footprint((rec.x, rec.y), into, 4 + 6 * slots[i])
+        };
+        rigs.push((format!("feed rig for '{}' at ({},{})", rec.item, rec.x, rec.y), tiles));
+    }
+    for (i, rec) in outputs.iter().enumerate() {
+        let tiles = drain_footprint((rec.x, rec.y), rec.direction().vector(), exts[i]);
+        rigs.push((format!("drain rig for '{}' at ({},{})", rec.item, rec.x, rec.y), tiles));
+    }
+    rigs
+}
+
+/// Structural rig-vs-LAYOUT guard (RFC-072 P2 unit 2, #731 round 1): a
+/// rig launched from an INTERIOR boundary head (a grid's inter-strip
+/// edges) extends into the bounding box, where the layout's own
+/// entities may sit. `create_entity` on an occupied tile fails
+/// silently for feed rigs (only drain belts log), so a too-small
+/// clearance would ship as a starved strip with an empty kit_errors —
+/// exactly the silent class this project refuses. Decode the blueprint
+/// (the meter crate's parser), align frames via the record-integrity
+/// contract (every boundary head must land on a decoded belt), and
+/// refuse if any rig tile is occupied by the layout.
+fn assert_rigs_clear_of_layout(
+    bp: &str,
+    inputs: &[BoundaryRecord],
+    slots: &[i32],
+    outputs: &[BoundaryRecord],
+    exts: &[i32],
+) {
+    // A blueprint that does not decode is a REFUSAL in production
+    // (#731 round 2): this guard exists to turn silent kit truncation
+    // into a loud stop, and "the blueprint failed to parse" is inside
+    // the class it backstops, not outside it. The one legitimate
+    // non-decoding input is the unit tests' placeholder string
+    // ("0eNBPFAKE"), which exercise other parts of the codegen — gated
+    // on `cfg!(test)` so no production build can take the skip.
+    let entities = match spaghettio_meter::blueprint_in::decode(bp) {
+        Ok(e) => e,
+        Err(err) if cfg!(test) => {
+            eprintln!("rig-vs-layout guard skipped: placeholder blueprint ({err})");
+            return;
+        }
+        Err(err) => panic!(
+            "rig-vs-layout guard: the blueprint does not decode ({err}) — refusing to \
+             place rigs blind rather than ship a kit that may sit on the layout"
+        ),
+    };
+    let mut occupied: std::collections::HashSet<(i32, i32)> = Default::default();
+    for e in &entities {
+        let horizontal = matches!(
+            e.direction,
+            spaghettio_meter::blueprint_in::Dir::East | spaghettio_meter::blueprint_in::Dir::West
+        );
+        let (w, h) = spaghettio_meter::entity_data::footprint_oriented(&e.name, horizontal);
+        for dx in 0..w as i32 {
+            for dy in 0..h as i32 {
+                occupied.insert((e.x + dx, e.y + dy));
+            }
+        }
+    }
+    // Frame alignment: the manifest's records and the blueprint's tiles
+    // must share the layout frame — every boundary head sits ON a
+    // layout belt by the record-integrity contract. A frame mismatch
+    // would make this whole guard check the wrong tiles, so it is a
+    // refusal, not a tolerance.
+    for rec in inputs.iter().chain(outputs.iter()) {
+        assert!(
+            occupied.contains(&(rec.x, rec.y)),
+            "boundary record for '{}' at ({},{}) lands on no decoded blueprint tile — \
+             manifest and blueprint frames disagree; refusing to place rigs blind",
+            rec.item, rec.x, rec.y
+        );
+    }
+    assert_rigs_clear_of_occupied(&occupied, inputs, slots, outputs, exts);
+}
+
+/// The occupancy half of `assert_rigs_clear_of_layout`, split out so the
+/// geometry is unit-testable without a blueprint.
+fn assert_rigs_clear_of_occupied(
+    occupied: &std::collections::HashSet<(i32, i32)>,
+    inputs: &[BoundaryRecord],
+    slots: &[i32],
+    outputs: &[BoundaryRecord],
+    exts: &[i32],
+) {
+    for (label, tiles) in rig_footprints(inputs, slots, outputs, exts) {
+        if let Some(t) = tiles.iter().find(|t| occupied.contains(t)) {
+            panic!(
+                "{label} would place kit on layout tile {t:?} — the clearance around this \
+                 boundary edge is smaller than the rig; feed placement failures are silent \
+                 in-game, so refusing here instead"
+            );
+        }
+    }
+}
+
+fn drain_call(out: &mut String, idx: usize, ext_len: i32, rec: &BoundaryRecord) {
     let flow = rec.direction().vector();
     let lateral = rot90(flow);
-    // Base 11 (was 5): the widened 9-position drain bank needs
-    // ext_len-8 >= 3 so every chest/inserter sits outside the layout.
-    let ext_len = 11 + 2 * (idx as i32);
     let _ = writeln!(
         out,
         "  do\n    local exit_x, exit_y = {x} - LX0 + storage.offx, {y} - LY0 + storage.offy",
@@ -1175,8 +1615,22 @@ script.on_init(function()
     for (idx, rec) in manifest.boundary_inputs.iter().enumerate() {
         feed_call(&mut out, idx, feed_depth_slots[idx], rec);
     }
+    let drain_exts = drain_ext_lens(&manifest.boundary_outputs);
+    assert_feed_drain_rigs_disjoint(
+        &manifest.boundary_inputs,
+        &feed_depth_slots,
+        &manifest.boundary_outputs,
+        &drain_exts,
+    );
+    assert_rigs_clear_of_layout(
+        bp,
+        &manifest.boundary_inputs,
+        &feed_depth_slots,
+        &manifest.boundary_outputs,
+        &drain_exts,
+    );
     for (idx, rec) in manifest.boundary_outputs.iter().enumerate() {
-        drain_call(&mut out, idx, rec);
+        drain_call(&mut out, idx, drain_exts[idx], rec);
     }
     for (item, x, y) in &manifest.surplus_exits {
         let _ = writeln!(
@@ -3036,47 +3490,6 @@ mod tests {
     /// silently"). The substation/EEI power island (further out along the
     /// jog than the chest bank) isn't included — it's never the colliding
     /// entity class in the issue's datum.
-    fn feed_footprint(
-        head: (i32, i32),
-        into: (i32, i32),
-        depth: i32,
-    ) -> std::collections::HashSet<(i32, i32)> {
-        let outward = neg(into);
-        let lateral = rot90(into);
-        let neg_lateral = neg(lateral);
-        let corner = (head.0 + outward.0 * depth, head.1 + outward.1 * depth);
-        let mut tiles = std::collections::HashSet::new();
-        for t in 1..=depth {
-            tiles.insert((head.0 + outward.0 * t, head.1 + outward.1 * t));
-        }
-        for k in 1..=12 {
-            tiles.insert((corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k));
-        }
-        for k in 10..=12 {
-            let b = (corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k);
-            for side in [-1, 1] {
-                tiles.insert((b.0 + into.0 * 2 * side, b.1 + into.1 * 2 * side));
-                tiles.insert((b.0 + into.0 * side, b.1 + into.1 * side));
-            }
-        }
-        tiles
-    }
-
-    /// The fluid feed's occupied tiles: the whole outward column through
-    /// the infinity cap (out-tiles 1..=2+dist). Conservative — the ug
-    /// gap tiles hold no entity — but claiming them keeps the disjointness
-    /// argument independent of that detail.
-    fn fluid_feed_footprint(
-        head: (i32, i32),
-        into: (i32, i32),
-        dist: i32,
-    ) -> std::collections::HashSet<(i32, i32)> {
-        let outward = neg(into);
-        (1..=2 + dist)
-            .map(|t| (head.0 + outward.0 * t, head.1 + outward.1 * t))
-            .collect()
-    }
-
     fn south_feed(item: &str, x: i32) -> BoundaryRecord {
         BoundaryRecord {
             item: item.into(),
@@ -3183,6 +3596,320 @@ mod tests {
             item_slots,
             [2, 3, 4].into(),
             "items must shift above the fluids"
+        );
+    }
+
+    /// RFC-072 P2 unit 2: two same-direction feed bands at different
+    /// flow coordinates (a grid's outer north edge and its interior
+    /// gap edge) get INDEPENDENT ladders — the old global ladder gave
+    /// the second band depths the inter-strip clearance cannot hold —
+    /// and their combined footprints stay disjoint.
+    #[test]
+    fn interior_band_feeds_get_their_own_ladder() {
+        let mut records = Vec::new();
+        for x in [0, 4, 8] {
+            records.push(south_feed(&format!("outer-{x}"), x));
+        }
+        for x in [0, 4, 8] {
+            let mut r = south_feed(&format!("inner-{x}"), x);
+            r.y = 57; // one strip height + clearance below the outer edge
+            records.push(r);
+        }
+        let slots = feed_slots(&records);
+        assert_eq!(
+            slots,
+            vec![0, 1, 2, 0, 1, 2],
+            "each band must restart its ladder"
+        );
+        assert_feed_footprints_disjoint(&records);
+    }
+
+    /// RFC-072 P2 unit 2: same-band feeds beyond RIG_LATERAL_HALO
+    /// restart the ladder — a 9-copy strip's per-copy feed clusters
+    /// must not accumulate depth across the whole strip (the old
+    /// behavior: 18 feeds → depth 106).
+    #[test]
+    fn lateral_clusters_reset_the_ladder() {
+        let mut records = Vec::new();
+        for copy in 0..9 {
+            for input in 0..2 {
+                records.push(south_feed(&format!("c{copy}-i{input}"), copy * 30 + input * 4));
+            }
+        }
+        let slots = feed_slots(&records);
+        assert_eq!(
+            slots.iter().max(),
+            Some(&1),
+            "per-copy clusters of 2 must cap the ladder at slot 1 \
+             (max depth 10), got slots {slots:?}"
+        );
+        assert_feed_footprints_disjoint(&records);
+    }
+
+    /// Two same-direction bands closer than the deeper band's rig
+    /// reach, laterally overlapping, cannot be separated by any
+    /// stagger — the codegen must refuse loudly (the #357 silent
+    /// entity-stacking class), not build overlapping rigs.
+    #[test]
+    #[should_panic(expected = "the stagger cannot separate them")]
+    fn near_parallel_feed_bands_refuse() {
+        let mut inner = south_feed("inner", 0);
+        inner.y = 6; // within the outer band's depth-4 rig reach
+        let records = vec![south_feed("outer", 0), inner];
+        feed_slots(&records);
+    }
+
+    fn south_drain(item: &str, x: i32, y: i32) -> BoundaryRecord {
+        BoundaryRecord {
+            item: item.into(),
+            x,
+            y,
+            direction: 8, // flowing south, rig extends south
+            is_fluid: false,
+            entity: "express-transport-belt".into(),
+        }
+    }
+
+    /// RFC-072 P2 unit 2: drain extensions stagger per lateral cluster,
+    /// not per manifest index — far-apart exits all get the base 11
+    /// (the grid's inter-strip clearance is sized to that), close exits
+    /// keep the old scheme's 2-step spacing exactly as measured. Rigs
+    /// beyond RIG_LATERAL_HALO must be fully tile-disjoint; WITHIN a
+    /// cluster full disjointness is deliberately NOT the contract (see
+    /// the known-imperfect note in `drain_ext_lens` — ec23's pitch-1
+    /// pair measures PASS under per-tile placement loss).
+    #[test]
+    fn drain_extensions_cluster_and_far_rigs_stay_disjoint() {
+        let records = vec![
+            south_drain("a", 0, 20),
+            south_drain("b", 4, 20),   // same cluster as a — 2-step stagger
+            south_drain("c", 100, 20), // own cluster — back to base
+            south_drain("d", 200, 20), // own cluster — back to base
+        ];
+        let exts = drain_ext_lens(&records);
+        assert_eq!(exts, vec![11, 13, 11, 11]);
+        // Cross-cluster disjointness: every tile of rigs a+b vs c vs d.
+        let mut clusters: Vec<std::collections::HashSet<(i32, i32)>> = Vec::new();
+        let groups: [&[usize]; 3] = [&[0, 1], &[2], &[3]];
+        for g in groups {
+            let mut tiles = std::collections::HashSet::new();
+            for &i in g {
+                let rec = &records[i];
+                tiles.extend(drain_footprint(
+                    (rec.x, rec.y),
+                    rec.direction().vector(),
+                    exts[i],
+                ));
+            }
+            clusters.push(tiles);
+        }
+        for a in 0..clusters.len() {
+            for b in (a + 1)..clusters.len() {
+                assert!(
+                    clusters[a].is_disjoint(&clusters[b]),
+                    "clusters {a} and {b} share tiles"
+                );
+            }
+        }
+    }
+
+    /// Drain bands closer along the flow axis than the nearer band's
+    /// extension reach must refuse loudly.
+    #[test]
+    #[should_panic(expected = "the stagger cannot separate them")]
+    fn near_parallel_drain_bands_refuse() {
+        let records = vec![south_drain("near", 0, 0), south_drain("far", 0, 8)];
+        drain_ext_lens(&records);
+    }
+
+    /// A grid-shaped manifest: strip 0's exits at its south edge (y=16)
+    /// draining SOUTH into the clearance, strip 1's feeds at its north
+    /// edge (y=49) whose rigs extend NORTH into the same clearance. Per
+    /// slot the feed columns sit west of the cell and the drain column
+    /// east of it. At the engine's 32-tile clearance the cross-type
+    /// guard passes; below it, it must refuse by name.
+    fn grid_manifest(clearance: i32) -> (Vec<BoundaryRecord>, Vec<BoundaryRecord>) {
+        let strip_h = 17;
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+        for copy in 0..3 {
+            let slot_x = copy * 60;
+            for k in 0..2 {
+                inputs.push(south_feed(&format!("ore-{copy}-{k}"), slot_x + k * 4));
+                let mut inner = south_feed(&format!("ore-inner-{copy}-{k}"), slot_x + k * 4);
+                inner.y = strip_h + clearance;
+                inputs.push(inner);
+            }
+            outputs.push(south_drain(&format!("ec-{copy}"), slot_x + 30, strip_h - 1));
+            outputs.push(south_drain(
+                &format!("ec-inner-{copy}"),
+                slot_x + 30,
+                2 * strip_h + clearance - 1,
+            ));
+        }
+        (inputs, outputs)
+    }
+
+    #[test]
+    fn grid_clearance_keeps_feed_and_drain_rigs_disjoint() {
+        let (inputs, outputs) = grid_manifest(32);
+        let slots = feed_slots(&inputs);
+        let exts = drain_ext_lens(&outputs);
+        assert_feed_drain_rigs_disjoint(&inputs, &slots, &outputs, &exts);
+        assert_feed_footprints_disjoint(&inputs);
+    }
+
+    /// The two strips' occupied bands (every tile of a 17-tall strip
+    /// across the manifest's width), as the layout decode would report.
+    fn grid_occupied(clearance: i32) -> std::collections::HashSet<(i32, i32)> {
+        let mut occ = std::collections::HashSet::new();
+        for x in -4..200 {
+            for y in 0..17 {
+                occ.insert((x, y));
+                occ.insert((x, y + 17 + clearance));
+            }
+        }
+        occ
+    }
+
+    #[test]
+    fn grid_clearance_keeps_rigs_off_both_strips() {
+        let (inputs, outputs) = grid_manifest(32);
+        let slots = feed_slots(&inputs);
+        let exts = drain_ext_lens(&outputs);
+        assert_rigs_clear_of_occupied(&grid_occupied(32), &inputs, &slots, &outputs, &exts);
+    }
+
+    /// At clearance 8 the inner feed rigs (depth up to 10, plus the ±2
+    /// bank) reach north INTO strip 0's machine band — the silent kit
+    /// failure the layout guard exists to refuse by name.
+    #[test]
+    #[should_panic(expected = "would place kit on layout tile")]
+    fn undersized_grid_clearance_refuses_rigs_inside_a_strip() {
+        let (inputs, outputs) = grid_manifest(8);
+        let slots = feed_slots(&inputs);
+        let exts = drain_ext_lens(&outputs);
+        assert_rigs_clear_of_occupied(&grid_occupied(8), &inputs, &slots, &outputs, &exts);
+    }
+
+    /// The DEFAULT-PATH corpus check (#731 round 2): every guard, against
+    /// real engine exports committed under `tests/fixtures/<label>/`
+    /// (`bp.txt` + `manifest-real.json`) — a single strip (chain-ec15-d2,
+    /// the calibration-family fixture) and a real two-strip GRID
+    /// (grid-ec180p, ec@180 from plates, 544×64, 0 errors / 0 warnings)
+    /// whose interior-edge rigs are exactly what the guards exist for.
+    /// Runs in CI on every push; the bank-wide sweep below stays the
+    /// operator's deep check.
+    #[test]
+    fn codegen_guards_accept_committed_real_fixtures() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let mut checked = Vec::new();
+        for entry in std::fs::read_dir(&root).expect("tests/fixtures").flatten() {
+            let mp = entry.path().join("manifest-real.json");
+            let Ok(text) = std::fs::read_to_string(&mp) else { continue };
+            let m: crate::manifest::Manifest =
+                serde_json::from_str(&text).unwrap_or_else(|e| panic!("{mp:?}: {e}"));
+            let bp = std::fs::read_to_string(entry.path().join("bp.txt"))
+                .unwrap_or_else(|e| panic!("{:?}/bp.txt: {e}", entry.path()));
+            let slots = feed_slots(&m.boundary_inputs);
+            let exts = drain_ext_lens(&m.boundary_outputs);
+            assert_feed_drain_rigs_disjoint(&m.boundary_inputs, &slots, &m.boundary_outputs, &exts);
+            assert_rigs_clear_of_layout(&bp, &m.boundary_inputs, &slots, &m.boundary_outputs, &exts);
+            checked.push(entry.file_name().to_string_lossy().to_string());
+        }
+        checked.sort();
+        assert_eq!(
+            checked,
+            vec!["chain-ec15-d2".to_string(), "grid-ec180p".to_string()],
+            "both committed real fixtures must be present and pass every guard"
+        );
+    }
+
+    /// The grid fixture's interior edge is real: its second strip's feed
+    /// heads sit at a nonzero y, so the banded ladder (not the old global
+    /// one) is what makes its rigs fit — pin that shape so a regression
+    /// to a single global ladder fails here, not in a sim.
+    #[test]
+    fn committed_grid_fixture_has_interior_feed_band() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/grid-ec180p");
+        let m: crate::manifest::Manifest = serde_json::from_str(
+            &std::fs::read_to_string(root.join("manifest-real.json")).expect("manifest"),
+        )
+        .expect("parse");
+        let ys: std::collections::BTreeSet<i32> = m.boundary_inputs.iter().map(|r| r.y).collect();
+        assert_eq!(ys.len(), 2, "two feed bands (outer + interior), got {ys:?}");
+        let slots = feed_slots(&m.boundary_inputs);
+        assert!(
+            slots.iter().max().copied().unwrap_or(0) <= 2,
+            "per-copy clusters must keep the ladder shallow, got {slots:?}"
+        );
+    }
+
+    /// Codegen over every manifest in a real bank — the rig guards
+    /// (near-parallel bands, cross-type overlap, rig-vs-layout) must
+    /// accept every fixture the sim has ever legitimately measured.
+    /// Ignored: needs SPAGHETTIO_CALIBRATION_BANK pointing at a measured
+    /// bank with per-fixture `manifest-real.json` + `bp.txt`.
+    ///
+    /// KNOWN REFUSALS (found by this sweep, 2026-08-26): fluid feed
+    /// records whose head entity is a bare `pipe` carry direction 0 —
+    /// a pipe has no direction, so the engine records North — and the
+    /// harness's "outward = −into" then points INTO the layout: the
+    /// fluid rig is built on top of the factory. Exactly these three
+    /// fixtures are the calibration bank's three "non-converged 0.000"
+    /// rows; those were never layout measurements. The list can only
+    /// SHRINK: the fix is engine-side (record the real into-layout flow
+    /// direction for pipe heads), followed by a manifest re-bless and
+    /// re-measure of the three rows — a followup, not this unit.
+    #[test]
+    #[ignore]
+    fn codegen_accepts_every_bank_manifest() {
+        const KNOWN_REFUSED: &[&str] =
+            &["tier3_heavy_oil_cracking", "tier3_sulfuric_acid", "tier3_plastic_bar"];
+        let bank = std::env::var("SPAGHETTIO_CALIBRATION_BANK")
+            .expect("set SPAGHETTIO_CALIBRATION_BANK to a measured bank dir");
+        let mut checked = 0;
+        let mut refused: Vec<(String, String)> = Vec::new();
+        for entry in std::fs::read_dir(&bank).expect("read bank").flatten() {
+            let mp = entry.path().join("manifest-real.json");
+            let Ok(text) = std::fs::read_to_string(&mp) else { continue };
+            let label = entry.file_name().to_string_lossy().to_string();
+            let m: crate::manifest::Manifest =
+                serde_json::from_str(&text).unwrap_or_else(|e| panic!("{mp:?}: {e}"));
+            let bp = std::fs::read_to_string(entry.path().join("bp.txt"))
+                .unwrap_or_else(|e| panic!("{:?}/bp.txt: {e}", entry.path()));
+            let outcome = std::panic::catch_unwind(|| {
+                let slots = feed_slots(&m.boundary_inputs);
+                let exts = drain_ext_lens(&m.boundary_outputs);
+                assert_feed_drain_rigs_disjoint(&m.boundary_inputs, &slots, &m.boundary_outputs, &exts);
+                assert_rigs_clear_of_layout(&bp, &m.boundary_inputs, &slots, &m.boundary_outputs, &exts);
+            });
+            checked += 1;
+            if let Err(e) = outcome {
+                let msg = e
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                refused.push((label, msg));
+            }
+        }
+        assert!(checked > 0, "no manifests found under {bank}");
+        let unexpected: Vec<&(String, String)> = refused
+            .iter()
+            .filter(|(l, _)| !KNOWN_REFUSED.contains(&l.as_str()))
+            .collect();
+        eprintln!(
+            "codegen guards: {checked} manifests, {} refused ({} known)",
+            refused.len(),
+            refused.len() - unexpected.len()
+        );
+        for (l, m) in &refused {
+            eprintln!("  {l}: {m}");
+        }
+        assert!(
+            unexpected.is_empty(),
+            "guards refused fixtures outside the known set: {unexpected:?}"
         );
     }
 
