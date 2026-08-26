@@ -931,3 +931,27 @@ way. The meter's turn-model fix
   2304-wide grids, to be checked with `--fixed-window` before any
   delivered-side bar is read on grids); ec60 at K=5 has the same
   zero-margin iron hand and no registry row (pin annotated).*
+- *2026-08-26 — the per-fixture kit-parity receipt promised in #731
+  (note 4): chain-ec15-d2 under the clustered kit reads produced
+  +0.0% (identical) but delivered −4.0% where the pre-#731 kit read
+  −1.3% — PASS becomes WARN on the delivered side alone.* The sim is
+  deterministic for a fixed kit (ec22 reproduced to three decimals),
+  so this is kit-caused: the fixture's four feed heads sit 25–30
+  tiles apart, so their depths collapsed from {4,10,16,22} to {4,4,
+  4,4} and the second exit's extension from 13 to 11 — and the
+  delivered figure moved 2.7 points while produced did not. −4.0% is
+  also the figure the d7 and g2 rows carry, so on small fixtures the
+  DELIVERED metric is drain-kit-sensitive at the ±3-point level (a
+  transit/window quantization at the chest bank — the same class as
+  the width-dependent gap two entries up) while PRODUCED is
+  kit-stable. Adjudication: the d2 registry row is re-blessed to the
+  shipping kit's receipt (WARN, produced +0.0%, delivered −4.0%, the
+  earlier receipt kept in its note) — a registry must describe the
+  instrument that ships, and the row's corroborating role (the L0
+  geometry produces at plan in the L2 world) is a produced-side
+  claim that stands. Standing rule from here: where two receipts
+  differ only by kit, read produced; delivered-side bars (K72-3(a)'s
+  97.9%) are read against a fixed kit, and the calibration bank's
+  seven re-measured rows (pre-#731 kit) are comparable among
+  themselves, not to post-#731 delivered readings without a
+  re-measure. The K=24 exemplar's delivered +4.0% is post-#731 kit.*

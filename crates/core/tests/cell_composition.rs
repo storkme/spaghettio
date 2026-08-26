@@ -1325,9 +1325,13 @@ fn mismatch_note_is_fail_dominant_and_order_independent() {
     let mut l2 = compose_chain_with_capacity(&sr, 1).unwrap();
     l2.inserter_capacity = 2;
     let note2 = verification_note("electronic-circuit", 15.0, &l2);
+    // The d2 row reads "AS WARNED" since its clustered-kit re-measure
+    // (delivered −4.0%, produced +0.0% — RFC-072 log, 2026-08-26); the
+    // point pinned here is the TIER: a measured non-FAIL world stays
+    // sim-verified despite FAIL siblings, never "NOT sim-verified".
     assert!(
-        note2.contains("SIM-VERIFIED at plan"),
-        "the measured PASS world must stay verified despite FAIL siblings, \
+        note2.contains("SIM-VERIFIED") && !note2.contains("NOT sim-verified"),
+        "the measured non-FAIL world must stay verified despite FAIL siblings, \
          got: {note2:?}"
     );
 }
