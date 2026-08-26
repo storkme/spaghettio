@@ -499,3 +499,25 @@ the snapshot debugger sees them.
   preference order: the oracle-backed (rows→tails) merge IS Phase 2's
   composer primitive and supersedes this fold there; the fold is the
   correctness fix at unit scale.*
+- *2026-08-26 — #728 rounds 1–3 adjudicated into the unit.* Round 1
+  (bot + codex jointly): the column-order reversal (the bot's 1/3
+  critical — east extensions place row 0 RIGHTMOST, so un-reversed
+  col_rates read the wrong row per column; the symmetric specimen
+  masked it) and the codex HIGH (the ceil floor over the greedy count
+  empty-grouped the assignment — the floor is gone, greedy first-fit
+  is the sole authority, sizing and assignment in ONE walk via the
+  extracted `partition_columns`). Round 2: merger-level end-to-end
+  pins for the zero-fold branch and the reversal, the latter's
+  discrimination EXECUTED (bug restored → pin fails [11,12] vs
+  [11,13] → fix restored). Round 3: the **utilization multiplier is
+  deliberate unit scope, now recorded here**: both `total_rate` and
+  per-column rates apply `utilization_for` — the shared
+  placement/validation single-source formula — because a fractional
+  row's true steady flow is what the tails must carry (nominal-rate
+  packing splits belts a fractional row cannot fill); pinned by the
+  discriminating `merger_fractional_rows_pack_by_true_flow` (two
+  22.5/s true flows fit one tail where nominal 50 would split). The
+  placer's own unscaled row-output sizing is conservative oversizing,
+  not a contradiction. Zero-fold tails share their tile with the
+  continuation belt by the standing marker convention (flush starts
+  at tail.y+1), now commented at the site.*

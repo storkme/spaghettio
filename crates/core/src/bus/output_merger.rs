@@ -504,6 +504,10 @@ pub(crate) fn merge_output_rows(
     // boundary sinks. Emit one row of continuation belts so each column
     // gets a real southbound tail. (Reachable pre-unit-2 only when the
     // count-based n_output equaled n; no fixture did.)
+    // NOTE (#728 r3): merge tails are boundary MARKERS, not additional
+    // physical tiles — the caller's south flush starts at tail.y + 1
+    // (ghost_router), so a tail sharing its tile with the continuation
+    // belt is the standing convention (the fold path does the same).
     if y_cursor == merge_start_y && n_output > 1 {
         for &ax in &surviving {
             entities.push(PlacedEntity {
@@ -630,6 +634,55 @@ mod tests {
         xs.dedup();
         assert_eq!(xs.len(), 3, "tails must sit on distinct columns");
         assert!(end_y > 15, "the zero-fold branch must advance past merge_start_y");
+    }
+
+    /// #728 round 3: the utilization pin — fractional-count rows pack
+    /// by their TRUE steady flow (`utilization_for`, the shared
+    /// placement/validation formula), not the nominal rate a
+    /// fractional row cannot sustain. Two rows at spec count 4.5 over
+    /// 5 machines flow 22.5/s each: scaled total 45 fits ONE express
+    /// tail; the nominal 50 would split into two. The unscaled form
+    /// fails this pin.
+    #[test]
+    fn merger_fractional_rows_pack_by_true_flow() {
+        let mk = |y: i32| {
+            let mut rs = make_test_row_span(
+                "copper-cable",
+                y,
+                vec![],
+                vec![ItemFlow {
+                    item: "copper-cable".to_string(),
+                    rate: 5.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                5,
+                vec![],
+            );
+            rs.spec.count = 4.5; // utilization 0.9 → 22.5/s true flow
+            rs.output_belt_y = y + 2;
+            rs
+        };
+        let rows = [mk(0), mk(5)];
+        let output_ys: Vec<i32> = rows.iter().map(|r| r.output_belt_y).collect();
+        let (_entities, tails, _end_y, _mx) = merge_output_rows(
+            &[0, 1],
+            &output_ys,
+            "copper-cable",
+            &rows,
+            15,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
+        );
+        assert_eq!(
+            tails.len(),
+            1,
+            "two 22.5/s true flows fit one 45/s tail — nominal-rate packing would split"
+        );
     }
 
     /// #728 round 2: the column-order REVERSAL pin, end-to-end. Rows
