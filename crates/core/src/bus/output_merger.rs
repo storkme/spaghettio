@@ -18,8 +18,10 @@ use crate::models::{EntityDirection, PlacedEntity};
 /// the minimum contiguous group count (codex-verified) — sizing and
 /// assignment from ONE walk so the two can never disagree. A column
 /// above `single_cap` gets its own group (the per-row output ceiling is
-/// the placer's domain). Returns `(n_output, group_of)` with `group_of`
-/// non-decreasing and every group `0..n_output` non-empty.
+/// the placer's domain — note such a group's SUM exceeds `single_cap`
+/// by itself; the guarantee is that no MULTI-column group does).
+/// Returns `(n_output, group_of)` with `group_of` non-decreasing and
+/// every group `0..n_output` non-empty.
 pub(crate) fn partition_columns(
     col_rates: &[f64],
     single_cap: f64,
@@ -55,6 +57,11 @@ pub(crate) fn merge_output_rows(
     ctx: &StackingCtx,
     existing_tiles: &FxHashSet<(i32, i32)>,
     row_tile_overrides: &mut FxHashSet<(i32, i32)>,
+    // #728 r4: the VOIDER merge consumes exactly one tail (the voider
+    // row has one input belt — its ceiling is input-side territory),
+    // so that caller forces single-tail packing, preserving its
+    // pre-partition behavior. Target and surplus merges pass false.
+    force_single_tail: bool,
 ) -> (Vec<PlacedEntity>, Vec<PlacedEntity>, i32, i32) {
     use crate::bus::balancer::underground_for_belt;
     use crate::common::{belt_entity_for_rate_stacked, belt_throughput_stacked, ug_max_reach};
@@ -131,7 +138,11 @@ pub(crate) fn merge_output_rows(
     // the wrong row's rate per column; symmetric specimen rates masked
     // it). col_rates[i] is the rate of the column at merge_x + i.
     let col_rates: Vec<f64> = output_rows.iter().rev().map(column_rate).collect();
-    let (n_output, group_of) = partition_columns(&col_rates, single_cap, total_rate);
+    let (n_output, group_of) = if force_single_tail {
+        (1, vec![0; col_rates.len()])
+    } else {
+        partition_columns(&col_rates, single_cap, total_rate)
+    };
     // Hops may need more reach than the rate-picked tier offers
     // (alternating blocked columns with 1-tile gaps are unhoppable
     // at yellow reach and split into exit-abuts-next-entrance
@@ -627,6 +638,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
         assert_eq!(tails.len(), 3, "three 30/s rows at 45/s need three tails");
         let mut xs: Vec<i32> = tails.iter().map(|t| t.x).collect();
@@ -677,6 +689,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
         assert_eq!(
             tails.len(),
@@ -726,6 +739,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
         let mut xs: Vec<i32> = tails.iter().map(|t| t.x).collect();
         xs.sort_unstable();
@@ -833,6 +847,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
         // Caller threads: next min_merge_x = returned max_x + 1, start_y = max_y.
         let blocked: Vec<i32> = ((a_max_x - 1)..a_max_x).collect();
@@ -848,6 +863,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
         assert!(b_max_x > a_max_x);
         let a_tiles: FxHashSet<(i32, i32)> = a_ents.iter().map(|e| (e.x, e.y)).collect();
@@ -870,6 +886,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
         let c_overlap = c_ents
             .iter()
@@ -911,6 +928,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
 
         // Single row should extend EAST and SOUTH without splitters
@@ -963,6 +981,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
 
         // Multiple rows should include splitters
@@ -1027,6 +1046,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
 
         // Splitters must be present
@@ -1098,6 +1118,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &FxHashSet::default(),
             &mut FxHashSet::default(),
+            false,
         );
 
         let splitters: Vec<_> = entities
@@ -1159,6 +1180,7 @@ mod tests {
             &StackingCtx::unstacked(),
             &existing_tiles,
             &mut row_tile_overrides,
+            false,
         );
 
         assert!(

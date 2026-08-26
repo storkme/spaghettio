@@ -3977,6 +3977,7 @@ pub fn route_bus_ghost(
                 ctx,
                 &existing_tiles,
                 &mut row_tile_overrides,
+                false,
             );
             blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
             merge_x_cursor = item_merge_x + 1;
@@ -4071,6 +4072,7 @@ pub fn route_bus_ghost(
             ctx,
             &existing_tiles,
             &mut row_tile_overrides,
+            false,
         );
         blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
         merge_x_cursor = item_merge_x + 1;
@@ -4161,6 +4163,7 @@ pub fn route_bus_ghost(
             ctx,
             &existing_tiles,
             &mut row_tile_overrides,
+            true,
         );
         blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
         merge_x_cursor = item_merge_x + 1;
