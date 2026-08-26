@@ -134,6 +134,31 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
     for total in ext.values() {
         k = k.max(((total / QUANTUM_RATE) - 1e-9).ceil() as i32);
     }
+    // Row-input MARGIN (RFC-072 P2 unit 2, the K72-3 "re-quantize before
+    // killing" path, taken on the ec@240 receipt): the rate quantum
+    // bounds PLANNED flow, but a copy's row input belt must also clear
+    // the MACHINE-CAPACITY demand of the machines it feeds — a copy with
+    // ceil(count/K) machines whose full-speed draw equals the belt cap
+    // has zero margin, and the sim starves exactly one machine per copy
+    // (ec@240 at K=18: 6 EC machines × 7.5/s = 45.00 on express; 18
+    // ingredient-shortage machines, one per copy, produced −1.7%). The
+    // validator's `row-input-belt-margin` warns on the same condition;
+    // this keeps the quantizer from planning it. Bump K until every
+    // solid input's per-copy capacity demand is strictly under express.
+    // No-op for every registered strip (their K already clears it —
+    // the copy-count pins and registry gates hold).
+    let express = crate::common::belt_throughput("express-transport-belt");
+    let violates = |k: i32| {
+        sr.machines.iter().any(|m| {
+            let per_copy = (m.count / k as f64 - 1e-9).ceil();
+            m.inputs
+                .iter()
+                .any(|i| !i.is_fluid && per_copy * i.rate >= express - 1e-9)
+        })
+    };
+    while violates(k) && k < K_MAX * R_MAX {
+        k += 1;
+    }
     k
 }
 

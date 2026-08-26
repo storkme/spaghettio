@@ -500,8 +500,9 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 2,
         levels: &[2],
     },
-    // RFC-072 Phase 2 unit 2: the K_MAX successor's exemplar — K=18
-    // composes as a 2×9 GRID of stacked strips (the K72-3 fixture).
+    // RFC-072 Phase 2 unit 2: the K_MAX successor's exemplar — K=20
+    // (18 by rate, 20 with the row-input margin bump) composes as a
+    // 2×10 GRID of stacked strips (the K72-3 fixture).
     SimFixture {
         label: "chain-ec240",
         target: "electronic-circuit",
@@ -1150,6 +1151,12 @@ fn probe_registry_hashes() {
             &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
         ),
         (
+            "chain-ec240",
+            "electronic-circuit",
+            240.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
+        ),
+        (
             "chain-ec15",
             "electronic-circuit",
             15.0,
@@ -1423,6 +1430,21 @@ fn chain_refuses_multirow_internal_corridor() {
     )
     .unwrap();
     for m in sr.machines.iter_mut() {
+        if m.recipe == "electronic-circuit" {
+            // RFC-072 P2 unit 2: `required_copies` now also bumps K
+            // until every copy's row-input MACHINE-CAPACITY draw clears
+            // express — EC@16 is 7 machines × 7.5/s = 52.5 > 45, which
+            // would quantize to K=2 and dissolve the 2-row cell this test
+            // exists to exercise. Override the per-machine cable draw
+            // (test-only, like the count override below) so 7 × 6.0 = 42
+            // stays under the margin; the cell's row split is driven by
+            // EC's OUTPUT rate, which is untouched.
+            for i in m.inputs.iter_mut() {
+                if i.item == "copper-cable" {
+                    i.rate = 6.0;
+                }
+            }
+        }
         if m.recipe == "copper-cable" {
             // 5.0/s per machine * 7.9 = 39.5/s — strictly UNDER the
             // quantum (40 since RFC-072 unit 1), so K stays 1 with real
@@ -1807,6 +1829,14 @@ fn cell_registry_hashes_current() {
             "chain",
             2,
         ),
+        // RFC-072 P2 unit 2: the grid exemplar (K=18 → 2×9 strips).
+        (
+            "electronic-circuit",
+            240.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+            "chain",
+            2,
+        ),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {
@@ -1943,10 +1973,13 @@ fn cell_quantization_copy_counts() {
         QualityTier::Normal,
     )
     .unwrap();
-    assert_eq!(required_copies(&sr), 45, "ec600 copy count");
+    // 45 by the rate quantum; the row-input margin bump carries it to
+    // 48 (at 45..47 a copy's 6 EC machines sit at zero margin; at 48
+    // exactly 5 per copy) — still within the grid bound, 4×12.
+    assert_eq!(required_copies(&sr), 48, "ec600 copy count");
     assert!(
         chain_eligible(&sr).is_ok(),
-        "K=45 must be grid-eligible (4 strips) since RFC-072 P2 unit 2"
+        "K=48 must be grid-eligible (4 strips) since RFC-072 P2 unit 2"
     );
     let sr = solver::solve_with_palette_exclusions_and_quality(
         "electronic-circuit",
@@ -1967,7 +2000,7 @@ fn cell_quantization_copy_counts() {
 
 /// RFC-072 Phase 2 unit 2: past K_MAX the chain composes as a GRID of
 /// stacked independent strips. This pins the whole contract on the
-/// ec@240 exemplar (K=18 → 2×9): balanced split, strip translation
+/// ec@240 exemplar (K=20 → 2×10): balanced split, strip translation
 /// (entities AND boundary records — the harness attaches rigs at those
 /// exact tiles), one bridged power network, the CellGridComposed trace
 /// event, and validator ZERO ERRORS — the K72-3(a) plan bar, where the
@@ -1990,7 +2023,12 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
         QualityTier::Normal,
     )
     .unwrap();
-    assert_eq!(required_copies(&sr), 18, "ec240 quantizes to 18 copies");
+    // 18 by the rate quantum alone (cable 720/s ÷ 40); 20 once the
+    // row-input margin bump applies — at 18 a copy's 6 EC machines can
+    // draw exactly 45/s on express (zero margin), and the K=18 sim
+    // starved one machine per copy (RFC-072 log, 2026-08-26). At 20 a
+    // copy is the 5-machine cell ec150 ships at plan.
+    assert_eq!(required_copies(&sr), 20, "ec240 quantizes to 20 copies");
     let _guard = spaghettio_core::trace::start_trace();
     let l = compose_chain(&sr).expect("grid composes");
     let events = spaghettio_core::trace::drain_events();
@@ -2001,8 +2039,8 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
         .collect();
     assert_eq!(grid_events.len(), 1, "exactly one grid event");
     assert!(
-        grid_events[0].contains("copies_per_strip: [9, 9]"),
-        "balanced 2x9 split, got: {}",
+        grid_events[0].contains("copies_per_strip: [10, 10]"),
+        "balanced 2x10 split, got: {}",
         grid_events[0]
     );
     // Two entity bands separated by the clearance: nothing except the
@@ -2047,7 +2085,7 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
     );
     assert_eq!(
         l.boundary_outputs.len(),
-        18,
+        20,
         "one exit per copy across both strips"
     );
     // The K72-3(a) bar: zero validator errors (native at this rate has
