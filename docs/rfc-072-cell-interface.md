@@ -521,3 +521,15 @@ the snapshot debugger sees them.
   not a contradiction. Zero-fold tails share their tile with the
   continuation belt by the standing marker convention (flush starts
   at tail.y+1), now commented at the site.*
+- *2026-08-26 — #728 round 4: the voider merge forces single-tail
+  packing* (`force_single_tail` — the voider row has one input belt,
+  so multi-tail packing at that merge strands columns; the flag
+  preserves that caller's pre-partition behavior, and the hole
+  predates the unit: the old ceil count could also multi-tail there).
+  **Unit follow-ups recorded**: (a) an at-cap fold measurement (the
+  exactly-full splitter merge from the asymmetric pin's {5+40}
+  group); (b) a fractional multi-row end-to-end reading — both
+  meter-instrument work (capacity-bound class, where the meter
+  measured accurately), neither gating the unit (the partition
+  arithmetic is directly unit-pinned; the geometry-change class's
+  exemplar is sim-anchored at plan).*
