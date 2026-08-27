@@ -348,6 +348,28 @@ fn category_machines(category: &str) -> &'static [&'static str] {
     }
 }
 
+/// #461 part (a) follow-up: does `category` have AT LEAST ONE electric
+/// machine among its valid options? Used to scope
+/// `netflow::BURNER_MACHINE_COST_FACTOR` to burner-ONLY categories
+/// (`organic`, today) rather than every category that happens to place a
+/// burner column — a category like `smelting` lists `electric-furnace`
+/// alongside `stone-furnace`/`steel-furnace`, and the electric sibling
+/// already wins on machine time within that category (faster crafting
+/// speed), so penalizing the furnace columns there buys nothing but
+/// perturbs the LP's floating-point path for every fixture that smelts
+/// anything (see the calibration-probe note in `BURNER_MACHINE_COST_FACTOR`'s
+/// doc comment).
+///
+/// A `[]` result from [`category_machines`] means the category falls
+/// through to the caller's assembler tier (`GENERAL_CATEGORIES`, or an
+/// unsupported category that never survives to a real column either way —
+/// see [`machine_handles_category`]) — always electric, so this returns
+/// `true`.
+pub fn category_has_electric_machine(category: &str) -> bool {
+    let valid = category_machines(category);
+    valid.is_empty() || valid.iter().any(|m| crate::common::needs_electricity(m))
+}
+
 /// Categories that genuinely run on general-purpose assemblers. An explicit
 /// whitelist, not a fall-through: before Phase 1 of
 /// docs/rfc-solver-net-flow.md, *any* unmapped category (`centrifuging`,
