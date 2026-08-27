@@ -1968,6 +1968,14 @@ fn compose_strip_with_capacity(
         // at chain coordinates so the top-level stranded-byproduct check
         // can cross-check them against the translated pipe entities (#476).
         surplus_exits,
+        // The typed receipt (RFC-074 Unit 1): one strip of `kq` copies.
+        // Verification is attached by the selection candidate.
+        composition: Some(crate::models::CompositionReceipt {
+            kind: "cell-chain".to_string(),
+            copies_per_strip: vec![kq],
+            strips: vec![crate::models::StripRect { x: 0, y: 0, width, height, copies: kq }],
+            ..Default::default()
+        }),
         ..Default::default()
     };
     // Heuristic pole placement leaves islands, which is why
@@ -2010,6 +2018,7 @@ fn compose_grid_with_capacity(
     let base = k / strips;
     let extra = (k % strips) as usize;
     let mut copies_per_strip = Vec::with_capacity(strips as usize);
+    let mut strip_rects: Vec<crate::models::StripRect> = Vec::with_capacity(strips as usize);
     let mut composed: Option<LayoutResult> = None;
     let mut y_off = 0i32;
     for s in 0..strips as usize {
@@ -2037,6 +2046,15 @@ fn compose_grid_with_capacity(
         // quantum can be lower than the grid's margin-bumped share, and
         // the per-copy flow must be the grid's, not the strip's).
         let strip = compose_strip_with_capacity(&sub, inserter_capacity, k_s)?;
+        // The strip's own receipt is one rect at its origin; in the grid
+        // frame it sits at `y_off` (strip 0 at 0).
+        strip_rects.push(crate::models::StripRect {
+            x: 0,
+            y: if composed.is_none() { 0 } else { y_off },
+            width: strip.width,
+            height: strip.height,
+            copies: k_s,
+        });
         composed = Some(match composed {
             None => {
                 y_off = strip.height + STRIP_CLEARANCE;
@@ -2058,9 +2076,19 @@ fn compose_grid_with_capacity(
     // indices are strip-local).
     let pole_bridges = crate::bus::layout::repair_pole_network(&mut composed);
     crate::trace::emit(crate::trace::TraceEvent::CellGridComposed {
-        copies_per_strip,
+        copies_per_strip: copies_per_strip.clone(),
         clearance: STRIP_CLEARANCE,
         pole_bridges,
+    });
+    // The typed receipt (RFC-074 Unit 1): the strips' own single-rect
+    // receipts were merged away by `append_strip_translated`; the grid
+    // states its shape here. Verification is attached by the selection
+    // candidate, which is where the registry is consulted.
+    composed.composition = Some(crate::models::CompositionReceipt {
+        kind: "cell-grid".to_string(),
+        copies_per_strip,
+        strips: strip_rects,
+        ..Default::default()
     });
     Ok(composed)
 }

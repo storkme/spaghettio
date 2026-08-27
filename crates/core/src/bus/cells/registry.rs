@@ -148,6 +148,16 @@ pub fn lookup(target: &str, rate: f64, hash: u64) -> Option<&'static RegistryEnt
 /// "AS WARNED", never "at plan" — the claim is exactly as strong as
 /// the measurement.
 pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
+    verification_status(target, rate, l).0
+}
+
+/// [`verification_note`] plus the typed verdict it rests on (RFC-074
+/// Unit 1, `CompositionReceipt::verified`): `true` iff a registry row
+/// matches THIS geometry in THIS declared world with a non-FAIL verdict
+/// — the two "SIM-VERIFIED" arms below. Every other arm (no row, FAIL,
+/// other-world match) is `false`; the note says which. Derived from the
+/// same match, never from the note's wording.
+pub fn verification_status(target: &str, rate: f64, l: &LayoutResult) -> (String, bool) {
     let hash = geometry_hash(l);
     let hex = format!("{hash:016x}");
     let matches: Vec<&RegistryEntry> = registry()
@@ -180,7 +190,8 @@ pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
                 (e.known_residual.is_some(), e.declared_inserter_capacity, e.declared_stacking)
             })
         });
-    match (full, mismatch) {
+    let verified = matches!(full, Some(e) if e.verdict != "FAIL");
+    let note = match (full, mismatch) {
         (Some(e), _) if e.verdict == "FAIL" => format!(
             // A FAILED sim is the OPPOSITE of verification: carry the
             // policy's not-verified substring so `verified_geometry_first`
@@ -235,5 +246,6 @@ pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
         (None, None) => format!(
             "cell-composed: geometry NOT sim-verified (hash {hex}) — run spaghettio-sim and add the entry to cell-sim-registry.json"
         ),
-    }
+    };
+    (note, verified)
 }

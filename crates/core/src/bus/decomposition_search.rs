@@ -372,11 +372,17 @@ impl DecompositionCandidate for CellComposedCandidate {
         }
         // Tier-1 verification annotation (RFC-051 registry): sim-verified
         // geometries carry their measurement; unverified ones say so.
+        // The note stays on `warnings` — selection counts that channel
+        // and RFC-071 B3 reads the never-verified substring from it —
+        // and is ALSO carried typed on the composition receipt (RFC-074
+        // Unit 1) so a consumer can tell the receipt from a warning.
         if let Some(t) = solver_result.external_outputs.first() {
-            l.warnings
-                .push(crate::bus::cells::registry::verification_note(
-                    &t.item, t.rate, &l,
-                ));
+            let (note, verified) =
+                crate::bus::cells::registry::verification_status(&t.item, t.rate, &l);
+            let receipt = l.composition.get_or_insert_with(Default::default);
+            receipt.verification = note.clone();
+            receipt.verified = verified;
+            l.warnings.push(note);
         }
         Ok(l)
     }
@@ -1909,6 +1915,7 @@ mod tests {
             boundary_outputs: vec![],
             warnings: vec![],
             regions: vec![],
+            composition: None,
             trace: None,
             surplus_exits: vec![],
             voided_streams: vec![],

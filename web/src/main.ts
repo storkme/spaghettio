@@ -24,6 +24,7 @@ import { renderModuleSlotsOverlay } from "./renderer/moduleSlotsOverlay";
 import { renderSimStateOverlay } from "./renderer/simStateOverlay";
 import { createSimReportPanel } from "./ui/simReportPanel";
 import { renderRegionOverlayDetailed, type RegionOverlayItem } from "./renderer/regionOverlay";
+import { renderCompositionOverlay } from "./renderer/compositionOverlay";
 import { renderJunctionZoneOverlay } from "./renderer/junctionZoneOverlay";
 import { createSatZoneOverlay } from "./renderer/satZoneOverlay";
 import { renderGhostTilesOverlay } from "./renderer/ghostTilesOverlay";
@@ -578,6 +579,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       // The aggregate ghost-router crossing count is replaced by the
       // per-region rows above — skip it so we don't double-report.
       if (/^ghost router:.*unresolved crossings/i.test(w)) continue;
+      // A cell composition's registry receipt rides `warnings` for the
+      // engine's selection accounting (RFC-074 Unit 1) but is not an
+      // issue: the sidebar shows it as a badge, not a validation row.
+      if (layout.composition && w === layout.composition.verification) continue;
       out.push({
         severity: "Warning",
         category: "layout",
@@ -689,6 +694,24 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       lastLayout.entities,
       entityLayer,
     );
+    requestRender();
+  }
+
+  /** Cell-composition overlay (RFC-074 Unit 2): strip outlines + copy
+   *  counts from `layout.composition`. Always on when a receipt exists —
+   *  native layouts draw nothing. Same shape as `updatePowerWiresOverlay`. */
+  let compositionLayer: Container | null = null;
+  function updateCompositionOverlay(): void {
+    if (compositionLayer) {
+      entityLayer.removeChild(compositionLayer);
+      compositionLayer.destroy({ children: true });
+      compositionLayer = null;
+    }
+    if (!lastLayout?.composition) {
+      requestRender();
+      return;
+    }
+    compositionLayer = renderCompositionOverlay(lastLayout.composition, entityLayer);
     requestRender();
   }
 
@@ -1374,6 +1397,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     updateRegionOverlay();
     updateGhostTilesOverlay();
     updatePowerWiresOverlay();
+    updateCompositionOverlay();
     updateModuleSlotsOverlay();
     simReportPanel.setLayoutInfo({ entities: layout.entities?.length ?? 0 });
     updateSimStateOverlay();

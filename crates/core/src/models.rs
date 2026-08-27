@@ -403,6 +403,49 @@ pub struct LayoutRegion {
     pub max_ug_reach: Option<u32>,
 }
 
+/// One strip of a cell composition, in layout coordinates (RFC-074
+/// Unit 1). A chain is one strip; a grid stacks several with a clearance
+/// between them. `copies` is the strip's quantized copy count.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StripRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub copies: i32,
+}
+
+/// What a cell-composed layout IS, typed (RFC-074 Unit 1): which
+/// composer built it, its strips, and its sim-registry standing. Before
+/// this the only surface was the registry note pushed onto
+/// `LayoutResult::warnings` — which the web reads as "do not export".
+/// The note still rides `warnings` unchanged: selection counts
+/// `warnings.len()` as a floor channel and RFC-071 B3 reads the
+/// never-verified substring from it, so moving the channel would move
+/// selection (RFC-074 K74-1). `verification` is that note verbatim, so
+/// a consumer can tell the receipt from a real warning by equality.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CompositionReceipt {
+    /// `"cell-chain"` (one strip of K copies) or `"cell-grid"` (R strips).
+    pub kind: String,
+    pub copies_per_strip: Vec<i32>,
+    pub strips: Vec<StripRect>,
+    /// The registry note (`cells::registry::verification_note`), verbatim
+    /// — empty until the selection candidate attaches it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub verification: String,
+    /// A registry row exists for THIS geometry in THIS declared world
+    /// with a non-FAIL verdict (`cells::registry::verification_status`).
+    /// `false` means unverified OR failed OR verified only in another
+    /// world — the note says which; this flag is deliberately one-sided.
+    #[serde(default)]
+    pub verified: bool,
+}
+
 /// Everything the layout engine produces — no rate data.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -417,6 +460,11 @@ pub struct LayoutResult {
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<LayoutRegion>,
+    /// Present iff a cell composer built this layout (RFC-074 Unit 1).
+    /// Additive: no entity, blueprint byte, hash or selection input
+    /// depends on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition: Option<CompositionReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<Vec<crate::trace::TraceEvent>>,
     /// `(item, x, y)` perimeter exit tile per routed fluid surplus lane —

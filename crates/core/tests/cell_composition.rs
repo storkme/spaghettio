@@ -899,6 +899,79 @@ fn inserter_sizing_census_registry() {
     }
 }
 
+/// RFC-074 Unit 4 — the uniform-K over-provisioning probe. "Chains of
+/// unlike cell groups" (RFC-072 Phase 3's heterogeneous composition)
+/// would let each spec pick its own copy count; today every spec is
+/// replicated K times, so a spec whose machine count is not a multiple
+/// of K over-builds by `ceil(count/K)·K / count`. This prints, per
+/// chain-eligible fixture, the K the quantizer picks, the chain-wide
+/// ratio (machines placed / machines needed) and the worst single
+/// spec — the number K74-3 adjudicates on. Survey, not a gate.
+#[test]
+#[ignore = "measurement probe — RFC-074 Unit 4 over-provisioning"]
+fn probe_uniform_k_overprovisioning() {
+    use spaghettio_core::bus::cells::chain::{chain_eligible, required_copies};
+    let mut fixtures: Vec<(String, &str, f64, Vec<String>)> = SIM_FIXTURES
+        .iter()
+        .filter(|f| matches!(f.compose, Compose::Chain))
+        .map(|f| (f.label.to_string(), f.target, f.rate, f.inputs.iter().map(|s| s.to_string()).collect()))
+        .collect();
+    for (label, item, rate, inputs) in [
+        ("gear15", "iron-gear-wheel", 15.0, &["iron-plate"][..]),
+        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"][..]),
+        ("ac2", "advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("ac4-ore", "advanced-circuit", 4.0, &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..]),
+        ("csp5-ore", "chemical-science-pack", 5.0, &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..]),
+        ("ec240-plates", "electronic-circuit", 240.0, &["iron-plate", "copper-plate"][..]),
+        ("ec600-ore", "electronic-circuit", 600.0, &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..]),
+    ] {
+        fixtures.push((label.to_string(), item, rate, inputs.iter().map(|s| s.to_string()).collect()));
+    }
+    println!("fixture,K,specs,needed,placed,ratio,worst_spec,worst_needed,worst_placed,worst_ratio");
+    for (label, item, rate, inputs) in fixtures {
+        let inputs_set: FxHashSet<String> = inputs.into_iter().collect();
+        let sr = match solver::solve_with_palette_exclusions_and_quality(
+            item,
+            rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        ) {
+            Ok(sr) => sr,
+            Err(e) => {
+                println!("{label},SOLVE-FAIL,{e:?}");
+                continue;
+            }
+        };
+        if let Err(e) = chain_eligible(&sr) {
+            println!("{label},REFUSED,{e}");
+            continue;
+        }
+        let k = required_copies(&sr);
+        let mut needed = 0.0;
+        let mut placed = 0.0;
+        let mut worst: Option<(String, f64, f64)> = None;
+        for m in &sr.machines {
+            let n = (m.count / k as f64 - 1e-9).ceil().max(1.0) * k as f64;
+            needed += m.count;
+            placed += n;
+            let ratio = n / m.count;
+            if worst.as_ref().is_none_or(|w| ratio > w.2 / w.1) {
+                worst = Some((m.recipe.clone(), m.count, n));
+            }
+        }
+        let (wr, wn, wp) = worst.expect("a chain has machines");
+        println!(
+            "{label},{k},{},{needed:.2},{placed:.0},{:.3},{wr},{wn:.2},{wp:.0},{:.3}",
+            sr.machines.len(),
+            placed / needed,
+            wp / wn
+        );
+    }
+}
+
 /// Phase-B differential scoreboard (kill-3 evidence): composed vs bus
 /// on every chain-eligible ladder fixture. Prints errors / warnings /
 /// area / refusals per path.
@@ -2201,6 +2274,18 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
         "balanced 2x12 split, got: {}",
         grid_events[0]
     );
+    // The typed receipt (RFC-074 Unit 1) states the same shape: two
+    // strips, 12 copies each, the second starting one clearance below
+    // the first's bottom. Verification is the candidate's business, so
+    // the bare composer leaves it empty.
+    let receipt = l.composition.as_ref().expect("grid carries a composition receipt");
+    assert_eq!(receipt.kind, "cell-grid");
+    assert_eq!(receipt.copies_per_strip, vec![12, 12]);
+    assert_eq!(receipt.strips.len(), 2);
+    assert_eq!((receipt.strips[0].x, receipt.strips[0].y, receipt.strips[0].copies), (0, 0, 12));
+    assert_eq!(receipt.strips[1].y, receipt.strips[0].height + 32, "strip 1 starts one clearance below strip 0");
+    assert_eq!(receipt.strips[1].y + receipt.strips[1].height, l.height, "the last strip ends at the layout's bottom");
+    assert!(receipt.verification.is_empty() && !receipt.verified);
     // Two entity bands separated by the clearance: nothing except the
     // pole bridge may occupy the inter-strip band (bridge poles span it
     // by design, so bands are computed over non-pole entities).
@@ -2492,6 +2577,18 @@ fn cell_candidate_wins_mil5_plates_over_broken_native() {
     assert!(
         l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
         "the clean composed candidate must win over the validation-broken native"
+    );
+    // RFC-074 Unit 1: the shipped layout carries the typed receipt, and
+    // its `verification` is the SAME string as the warning — that
+    // equality is how a consumer tells the receipt from a real warning
+    // without the note leaving the selection-counted channel.
+    let receipt = l.composition.as_ref().expect("a cell-composed winner carries its receipt");
+    assert_eq!(receipt.kind, "cell-chain");
+    assert!(l.warnings.contains(&receipt.verification), "the receipt's note is the warning, verbatim");
+    assert_eq!(
+        receipt.verified,
+        receipt.verification.contains("SIM-VERIFIED") && !receipt.verification.contains("NOT sim-verified"),
+        "verified is derived from the registry match the note describes"
     );
     let issues = validate::validate(&l, Some(&sr)).unwrap();
     let errors: Vec<_> = issues

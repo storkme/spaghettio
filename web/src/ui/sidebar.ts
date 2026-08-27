@@ -920,6 +920,47 @@ export function renderSidebar(
   solverBody.appendChild(resultContainer);
   inner.appendChild(solverSection);
 
+  // Cell-composition badge (RFC-074 Unit 2): what the composer built
+  // and its sim-registry standing. Hidden for native layouts.
+  const compositionBadge = document.createElement("div");
+  compositionBadge.className = "sb-composition";
+  compositionBadge.style.display = "none";
+  solverBody.appendChild(compositionBadge);
+
+  /** The layout's warnings minus its composition receipt — the receipt
+   *  rides `warnings` for the engine's selection accounting (RFC-074
+   *  Unit 1) and is not a reason to withhold the blueprint. */
+  function realWarnings(layout: LayoutResult): string[] {
+    const note = layout.composition?.verification;
+    return (layout.warnings ?? []).filter((w) => w !== note);
+  }
+
+  function setCompositionBadge(layout: LayoutResult): void {
+    const c = layout.composition;
+    if (!c) {
+      compositionBadge.style.display = "none";
+      compositionBadge.textContent = "";
+      compositionBadge.title = "";
+      compositionBadge.className = "sb-composition";
+      return;
+    }
+    const strips = c.strips?.length ?? 0;
+    const copies = c.copies_per_strip ?? [];
+    const shape = strips > 1
+      ? `${strips} strips × ${copies.join("/")} copies`
+      : `${copies[0] ?? "?"} copies`;
+    // The badge must be as loud about a FAIL or an unverified geometry
+    // as about a PASS (RFC-074 K74-5): the verdict phrase and colour
+    // come from the receipt's typed flag and the note's own wording.
+    const note = c.verification ?? "";
+    const failed = /sim-FAILED|FAILED it/.test(note);
+    const status = c.verified ? "sim-verified" : failed ? "sim FAILED" : "not sim-verified";
+    compositionBadge.className = `sb-composition ${c.verified ? "is-verified" : failed ? "is-failed" : "is-unverified"}`;
+    compositionBadge.textContent = `${c.kind} · ${shape} · ${status}`;
+    compositionBadge.title = note;
+    compositionBadge.style.display = "block";
+  }
+
   // Copy-blueprint action — appended to solver body when a layout is ready.
   const blueprintSection = document.createElement("div");
   blueprintSection.className = "sb-actions";
@@ -1077,6 +1118,7 @@ export function renderSidebar(
     setConfigError(null);
     currentLayout = null;
     blueprintSection.style.display = "none";
+    compositionBadge.style.display = "none";
 
     let result: SolverResult;
     try {
@@ -1187,6 +1229,7 @@ export function renderSidebar(
     setConfigError(null);
     currentLayout = null;
     blueprintSection.style.display = "none";
+    compositionBadge.style.display = "none";
 
     let result: SolverResult;
     try {
@@ -1252,7 +1295,8 @@ export function renderSidebar(
     currentLayout = layout;
     setRecipeFlows(result.machines);
     callbacks.renderLayout(layout, result);
-    blueprintSection.style.display = layout.warnings?.length ? "none" : "flex";
+    setCompositionBadge(layout);
+    blueprintSection.style.display = realWarnings(layout).length ? "none" : "flex";
   }
 
   copyBtn.addEventListener("click", async () => {
