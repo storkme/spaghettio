@@ -90,9 +90,14 @@ grid quantizer today) is a second opinion on the same number.
 - Two ignored probes: `inserter_sizing_census_calibration_bank`
   (`tests/inserter_sizing_census.rs`) and
   `inserter_sizing_census_registry` (`tests/cell_composition.rs`).
-- Known instrument gap: the nine direct `size_side` calls in
+- Coverage, exactly: every side the row templates size — including
+  `quad_input_row`'s mirrored input3 pair, which sizes per slot and
+  records itself as one side of two hands (#735 review found it
+  missing from the first cut). The nine direct `size_side` calls in
   `placer.rs` (DI bridge, fused/straddle cells) emit nothing — the
-  census covers row templates. Recorded, not fixed here.
+  census's recorded gap, not fixed here. The event is built only when
+  a collector or sink is listening (`trace::is_listening`), so the
+  untraced path pays nothing.
 
 ### Phase 1 — the margin (gated on K73-1)
 
@@ -208,9 +213,9 @@ K73-2..K73-4 read off those receipts; the copy-count pins and
   everywhere). The sink-based `capture` and the unjoined composed-form
   fix both. Census tables: below.
 - *2026-08-27 — K73-1 TRIPPED on the Phase 0 census; concluded without
-  writing the margin.* Both clauses hold, each more than once:
-  **fixtures the sim measures at plan ship input hands at ≥ 0.95 of
-  credit** — `stress_electronic_circuit_30s_decomposed_partitioned`
+  writing the margin.* Both clauses hold — the first four times, the
+  second once. **Fixtures the sim measures at plan ship input hands at
+  ≥ 0.95 of credit** — `stress_electronic_circuit_30s_decomposed_partitioned`
   (20 sides at 0.974, the EC row's cable fast hand at 4.50/4.62;
   produced 99.4%), `stress_electronic_circuit_22s` (0.952; delivered
   99.4%), `_23s` (0.933; 100.0%), and the composed `chain-ec15` at L2,
@@ -218,7 +223,12 @@ K73-2..K73-4 read off those receipts; the copy-count pins and
   its credit (2.50 on 2.40) and produces 15.0/15** — while **a fixture
   the sim measures short ships no hand above 0.90**:
   `tier2_electronic_circuit_from_ore` (produced 93.3%, fullest input
-  0.649). Fullness on the ladder's credit is neither sufficient nor
+  0.649). The other short rows (`stress_electronic_circuit_30s`,
+  `_60s_red`, `_35s`, `_40s` at 90.7–94.3%) DO ship full hands
+  (0.947–0.974) — but so does the at-plan partitioned twin of the
+  first, with the same twenty hands, which is what makes fullness
+  non-discriminating rather than merely non-necessary. Fullness on the
+  ladder's credit is neither sufficient nor
   necessary for a deficit; a uniform margin at any value between 0.85
   and 0.97 would re-shape a dozen at-plan bank rows (every one with
   sides in the 0.85–0.97 bands) for no measured gain, and K73-4 would
@@ -246,8 +256,16 @@ K73-2..K73-4 read off those receipts; the copy-count pins and
 ### Phase 0 census — sim registry (composed cells, input sides re-priced at the declared level)
 
 `inserter_sizing_census_registry`, 2026-08-27. Bands over INPUT sides:
-`<0.85 | 0.85–0.90 | 0.90–0.95 | 0.95–1.00 | shortfall`. Verdicts from
-`cell-sim-registry.json` (produced % of plan).
+`<0.85 | 0.85–0.90 | 0.90–0.95 | 0.95–1.00 | shortfall` — a hand at
+exactly its credit (1.000) is in `0.95–1.00`; `shortfall` is a plan the
+ladder itself could not cover. Side counts are **per generated cell**
+(one copy per spec — ec75 and ec150 read the same because they seed the
+same per-copy cell), not per fixture. Verdicts from
+`cell-sim-registry.json` (produced % of plan). The tables are the
+survey the verdict was read from, dated; the instrument's end-to-end
+behaviour on the decisive row is pinned by the non-ignored
+`census_sees_the_ec15_cells_far_hand_at_the_credit`
+(`tests/cell_composition.rs`), the numbers themselves are not a gate.
 
 | fixture | level | sides in/out | bands | fullest input | sim |
 |---|---|---|---|---|---|
@@ -272,8 +290,12 @@ and the L2 world produces at plan with one hand 4% over its credit.
 
 `inserter_sizing_census_calibration_bank`, 2026-08-27, joined to
 `docs/selection-policy-calibration-evidence.md` (produced % of plan;
-`ambiguous` was 0 on every row). Rows with no sized side (fluid-only
-chains, the cell-composed `iron_gear_wheel_20s`, `ac_45s`) omitted.
+`ambiguous` was 0 on every row; same band semantics as above — PU's
+twenty `2.40/2.40` sides are AT the credit, band `0.95–1.00`, not
+shortfalls). Rows with no sized side (fluid-only chains, the
+cell-composed `iron_gear_wheel_20s`, `ac_45s`) omitted. Taken before
+the quad row's input3 was instrumented; no bank fixture uses that
+template's third input at a rate near its credit, so the rows stand.
 
 | fixture | sides in | bands | fullest input | produced |
 |---|---|---|---|---|

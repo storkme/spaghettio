@@ -428,17 +428,21 @@ fn emit_side_trace(
     quality: QualityTier,
     level: u8,
 ) {
-    crate::trace::emit(crate::trace::TraceEvent::InserterSideSized {
-        recipe: recipe.to_string(),
-        side_is_output,
-        item: item.to_string(),
-        required,
-        entity: plan.entity.to_string(),
-        count: plan.count,
-        capacity: plan.capacity,
-        machine_x,
-        machine_y,
-    });
+    // Built only when someone is listening: the event allocates three
+    // strings per machine side, ~18k per ec@240 build (#735 review).
+    if crate::trace::is_listening() {
+        crate::trace::emit(crate::trace::TraceEvent::InserterSideSized {
+            recipe: recipe.to_string(),
+            side_is_output,
+            item: item.to_string(),
+            required,
+            entity: plan.entity.to_string(),
+            count: plan.count,
+            capacity: plan.capacity,
+            machine_x,
+            machine_y,
+        });
+    }
     if let Some(shortfall) = plan.shortfall {
         crate::trace::emit(crate::trace::TraceEvent::InserterSideCapped {
             recipe: recipe.to_string(),
@@ -2174,6 +2178,22 @@ pub fn quad_input_row(
                 carries: Some(input3.to_string()),
                 segment_id: inserter_in3_seg.clone(),
                 ..Default::default()
+            });
+        }
+        // The census sees this side as ONE side of two mirrored hands
+        // (#735 review: the quad row's input3 sized without recording
+        // itself, under-reporting exactly the third-input class).
+        if crate::trace::is_listening() {
+            crate::trace::emit(crate::trace::TraceEvent::InserterSideSized {
+                recipe: recipe.to_string(),
+                side_is_output: false,
+                item: input3.to_string(),
+                required: input3_rate,
+                entity: input3_plan.entity.to_string(),
+                count: 2,
+                capacity: 2.0 * input3_plan.capacity,
+                machine_x: mx,
+                machine_y: y_offset + 4,
             });
         }
         {

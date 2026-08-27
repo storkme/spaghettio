@@ -809,6 +809,44 @@ fn export_chain_fixtures_for_sim() {
     }
 }
 
+/// RFC-073 Phase 0 — the instrument, pinned end-to-end on the row the
+/// K73-1 verdict rests on (#735 review: the census tables are a dated
+/// survey; this is the gate that the plumbing behind them still works).
+/// The ec15 cell sized at L0: the EC row's far iron side asks 2.5/s;
+/// interior machines get two long-handed hands, the trimmed last-in-row
+/// machine one. Re-priced at L2 (2.4/s per hand) that last hand sits at
+/// 1.042 of its credit and the cell still produces 15.0/15 in the sim —
+/// the counter-example to "fullness predicts deficit".
+#[test]
+fn census_sees_the_ec15_cells_far_hand_at_the_credit() {
+    use spaghettio_core::bus::sizing_census::{capture, side_loads_unjoined, summarize};
+    let f = SimFixture::find("chain-ec15");
+    let (_l, events) = capture(|| f.compose_layout());
+    let (loads, ambiguous) = side_loads_unjoined(&events);
+    assert_eq!(ambiguous, 0, "one cell per spec, no candidate contamination");
+    let iron: Vec<_> = loads
+        .iter()
+        .filter(|s| !s.side_is_output && s.recipe == "electronic-circuit" && s.item == "iron-plate")
+        .collect();
+    assert!(!iron.is_empty(), "the EC row's far iron side is recorded");
+    assert!(iron.iter().all(|s| s.entity == "long-handed-inserter" && (s.required - 2.5).abs() < 1e-9));
+    // At the sizing level (L0, 1.2/s per hand) every iron side is a shortfall.
+    assert!(iron.iter().all(|s| s.utilization() > 1.0));
+    // Re-priced at L2 the double-handed interior sides sit at 52%, the
+    // single-handed last-in-row machine at 1.042 — and lands in the
+    // `0.95–1.00`-or-above accounting, not the sub-0.85 band.
+    let at_l2: Vec<_> = loads.iter().map(|s| s.repriced(2)).collect();
+    let s = summarize(&at_l2, ambiguous);
+    let m = s.max_in.expect("an input side");
+    assert_eq!((m.recipe.as_str(), m.item.as_str(), m.count), ("electronic-circuit", "iron-plate", 1));
+    assert!((m.utilization() - 2.5 / 2.4).abs() < 1e-6, "last-in-row hand at 1.042, got {}", m.utilization());
+    assert!(s.bands[4] >= 1, "the 1.042 side is a shortfall against the L2 credit");
+    assert!(
+        at_l2.iter().any(|x| x.count == 2 && x.item == "iron-plate" && (x.utilization() - 2.5 / 4.8).abs() < 1e-6),
+        "interior machines: two hands at 52%"
+    );
+}
+
 /// RFC-073 Phase 0 — the inserter sizing census over the SIM REGISTRY's
 /// fixtures: one CSV row per (fixture, declared level), the input sides
 /// re-priced at that level (the registry runs one geometry, sized at its

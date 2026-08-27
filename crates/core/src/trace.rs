@@ -147,6 +147,16 @@ pub fn is_active() -> bool {
     COLLECTOR.with(|c| c.borrow().is_some())
 }
 
+/// Would an `emit` right now reach anyone — a collector OR a sink?
+/// For emit sites whose event is costly to BUILD (allocating strings
+/// per machine side), so they can skip construction on the untraced
+/// path instead of paying for an event `emit` then drops (#735 review:
+/// the per-side sizing event was ~18k allocations per ec@240 build for
+/// nothing). `with_muted` is checked by `emit` itself, not here.
+pub fn is_listening() -> bool {
+    COLLECTOR.with(|c| c.borrow().is_some()) || SINK.with(|s| s.borrow().is_some())
+}
+
 /// Number of events currently in the collector (0 if none active).
 /// Lets the layout-retry loop snapshot the collector size before its
 /// inner pass, then read only events emitted by that pass.
@@ -315,13 +325,18 @@ pub enum TraceEvent {
     },
 
     /// One machine side was sized by `bus::inserter_ladder` (RFC-073
-    /// Phase 0, the sizing census). Emitted for EVERY sized side, covered
-    /// or not — `InserterSideCapped` above is the shortfall subset. The
-    /// census reads `required / capacity` per side to find the hands the
-    /// ladder fills to the brim; `capacity` is the plan's own credit at
-    /// the level the layout was sized at (`SidePlan::capacity`), and
+    /// Phase 0, the sizing census). Emitted for every side the ROW
+    /// TEMPLATES size (`bus::templates`, through `emit_side_trace` and
+    /// the quad row's mirrored input3), covered or not —
+    /// `InserterSideCapped` above is the shortfall subset. NOT emitted
+    /// by the nine direct `size_side` calls in `bus::placer` (the DI
+    /// bridge and the fused/straddle cells) — the census's recorded gap.
+    /// The census reads `required / capacity` per side to find the hands
+    /// the ladder fills to the brim; `capacity` is the plan's own credit
+    /// at the level the layout was sized at (`SidePlan::capacity`), and
     /// `(entity, count)` lets a consumer re-price the side at a different
     /// declared level. Same machine-origin anchor as the capped event.
+    /// Built only when `trace::is_listening()` — it allocates.
     InserterSideSized {
         recipe: String,
         side_is_output: bool,

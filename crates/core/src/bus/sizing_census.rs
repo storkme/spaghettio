@@ -12,11 +12,17 @@
 //! measured deficit?
 //!
 //! The instrument is `TraceEvent::InserterSideSized`, emitted by the row
-//! templates for every sized side with the plan's own credited capacity.
+//! templates (`bus::templates`) for every side they size, with the plan's
+//! own credited capacity. Coverage is exactly that: the nine direct
+//! `size_side` calls in `bus::placer` (the DI bridge, the fused/straddle
+//! cells) emit nothing and are the census's recorded gap.
 //! [`capture`] runs a build under a collector AND a sink: `build_bus_layout`
 //! detaches the sink for its pass 1 and replays pass-1 events only when no
 //! retry follows, so the sink sees exactly the shipped passes while the
-//! collector (which the replay reads from) sees everything. [`side_loads`]
+//! collector (which the replay reads from) sees everything. Wrap the
+//! PLAIN `build_bus_layout` (or a composer) — the `_traced` / `_streaming`
+//! entries install their own collector and sink and would clobber
+//! `capture`'s, returning an empty census. [`side_loads`]
 //! then joins the sink's events onto the machines of a layout when the
 //! events are in that layout's frame (a native build; the selection loop
 //! builds several candidates, so an event is only a shipped side if its
@@ -70,6 +76,16 @@ impl SideLoad {
     /// `machine_feed_rate` (the table the ladder used); output sides are
     /// returned unchanged (their belt-drop rate needs the stacking and the
     /// target belt, which the event does not carry).
+    ///
+    /// Two assumptions, stated: (1) `QualityTier::Normal` — the event
+    /// carries no quality, and every composer sizes at Normal today
+    /// (`cells::chain::required_copies_at` does too); a non-Normal sizing
+    /// would re-price wrong here without any signal. (2) `count` is the
+    /// count the SIZING level chose: a geometry sized at L2 and run at L0
+    /// keeps its L2 hand count at L0's per-hand rate, which is exactly the
+    /// registry's world-mismatch question — but it means this is not
+    /// "what the ladder would have placed at L0", which could be more
+    /// hands. Read it as the fixed geometry in another world, nothing else.
     pub fn repriced(&self, level: u8) -> SideLoad {
         if self.side_is_output || self.count == 0 {
             return self.clone();
@@ -205,7 +221,12 @@ pub fn side_loads_unjoined(events: &[TraceEvent]) -> (Vec<SideLoad>, usize) {
 /// Utilization bands for input sides. The edges are the census's
 /// hypotheses, not calibrated thresholds: 0.85 is the margin RFC-072's
 /// grid quantizer ships, 0.926 (K=18, one short per copy) and 1.0 (K=20,
-/// two short) are the receipted failures.
+/// two short) are the receipted failures. Bands are `u < edge + 1e-9`,
+/// so a hand at EXACTLY its credit (1.000 — the K=20 / PU-from-ore
+/// class) lands in `0.95–1.00`, and only a plan the ladder itself could
+/// not cover (`required > capacity` beyond the ladder's own EPS) reads
+/// as the `>1.00` shortfall band; the two are different facts and the
+/// table keeps them apart.
 pub const BAND_EDGES: [f64; 4] = [0.85, 0.90, 0.95, 1.0];
 
 /// Per-fixture census row.
@@ -241,6 +262,12 @@ pub fn summarize(loads: &[SideLoad], ambiguous: usize) -> Summary {
 
 impl Summary {
     /// CSV columns: `sides_in,sides_out,ambiguous,lt85,b85_90,b90_95,b95_100,short,max_util,max_recipe,max_side`.
+    /// Unquoted; `max_util` prints `inf` for a zero-capacity side (no
+    /// template emits one today) and the last three columns are empty
+    /// when no input side exists — consumers join on the fixture column.
+    /// For a COMPOSED layout the side counts are per generated cell (one
+    /// copy per spec), not per fixture: ec75 and ec150 read identically
+    /// because both seed the same per-copy cell.
     pub fn csv(&self) -> String {
         let (u, recipe, side) = match &self.max_in {
             Some(m) => (
