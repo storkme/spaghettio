@@ -441,9 +441,19 @@ pub struct CompositionReceipt {
     /// A registry row exists for THIS geometry in THIS declared world
     /// with a non-FAIL verdict (`cells::registry::verification_status`).
     /// `false` means unverified OR failed OR verified only in another
-    /// world — the note says which; this flag is deliberately one-sided.
+    /// world — the note says which; this flag is deliberately one-sided
+    /// (it is `true` for a WARN row too). Surfaces that must be as loud
+    /// about a warned or failed standing as about a pass read `standing`.
     #[serde(default)]
     pub verified: bool,
+    /// The registry arm, typed (`cells::registry::STANDING_*`):
+    /// `verified` (measured at plan in this world), `warned` (measured,
+    /// NOT at plan — `known_residual`), `failed`, `failed-elsewhere` /
+    /// `verified-elsewhere` (a hash-sharing row in another declared
+    /// world; this one unmeasured), `unverified` (no row). Empty until
+    /// the selection candidate attaches the verification.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub standing: String,
 }
 
 /// Everything the layout engine produces — no rate data.

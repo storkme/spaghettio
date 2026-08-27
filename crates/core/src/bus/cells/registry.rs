@@ -151,13 +151,28 @@ pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
     verification_status(target, rate, l).0
 }
 
+/// The six standings a composed geometry can have against the registry
+/// — one per arm of [`verification_note`], typed so a surface can be as
+/// loud about each as the note is (RFC-074 K74-5; #737 review round 2:
+/// a one-sided `verified` flag showed a WARN row as plain "verified").
+pub const STANDING_VERIFIED: &str = "verified";
+pub const STANDING_WARNED: &str = "warned";
+pub const STANDING_FAILED: &str = "failed";
+pub const STANDING_FAILED_ELSEWHERE: &str = "failed-elsewhere";
+pub const STANDING_VERIFIED_ELSEWHERE: &str = "verified-elsewhere";
+pub const STANDING_UNVERIFIED: &str = "unverified";
+
 /// [`verification_note`] plus the typed verdict it rests on (RFC-074
-/// Unit 1, `CompositionReceipt::verified`): `true` iff a registry row
-/// matches THIS geometry in THIS declared world with a non-FAIL verdict
-/// — the two "SIM-VERIFIED" arms below. Every other arm (no row, FAIL,
-/// other-world match) is `false`; the note says which. Derived from the
-/// same match, never from the note's wording.
-pub fn verification_status(target: &str, rate: f64, l: &LayoutResult) -> (String, bool) {
+/// Unit 1, `CompositionReceipt`): `(note, verified, standing)`.
+/// `verified` is `true` iff a registry row matches THIS geometry in THIS
+/// declared world with a non-FAIL verdict — the two "SIM-VERIFIED" arms
+/// below (at plan AND as-warned; it is deliberately one-sided). `standing`
+/// names the arm exactly: `verified` (full match, at plan), `warned` (full
+/// match, `known_residual` — measured, NOT at plan), `failed` (full match,
+/// FAIL), `failed-elsewhere` / `verified-elsewhere` (a hash-sharing row in
+/// a DIFFERENT declared world; this world unmeasured), `unverified` (no
+/// row). Derived from the same match, never from the note's wording.
+pub fn verification_status(target: &str, rate: f64, l: &LayoutResult) -> (String, bool, &'static str) {
     let hash = geometry_hash(l);
     let hex = format!("{hash:016x}");
     let matches: Vec<&RegistryEntry> = registry()
@@ -191,6 +206,14 @@ pub fn verification_status(target: &str, rate: f64, l: &LayoutResult) -> (String
             })
         });
     let verified = matches!(full, Some(e) if e.verdict != "FAIL");
+    let standing = match (full, mismatch) {
+        (Some(e), _) if e.verdict == "FAIL" => STANDING_FAILED,
+        (Some(e), _) if e.known_residual.is_some() => STANDING_WARNED,
+        (Some(_), _) => STANDING_VERIFIED,
+        (None, Some(e)) if e.verdict == "FAIL" => STANDING_FAILED_ELSEWHERE,
+        (None, Some(_)) => STANDING_VERIFIED_ELSEWHERE,
+        (None, None) => STANDING_UNVERIFIED,
+    };
     let note = match (full, mismatch) {
         (Some(e), _) if e.verdict == "FAIL" => format!(
             // A FAILED sim is the OPPOSITE of verification: carry the
@@ -247,5 +270,5 @@ pub fn verification_status(target: &str, rate: f64, l: &LayoutResult) -> (String
             "cell-composed: geometry NOT sim-verified (hash {hex}) — run spaghettio-sim and add the entry to cell-sim-registry.json"
         ),
     };
-    (note, verified)
+    (note, verified, standing)
 }

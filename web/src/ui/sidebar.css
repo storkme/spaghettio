@@ -372,6 +372,7 @@
   cursor: help;
 }
 .sb-composition.is-verified { border-left-color: #6c6; }
+.sb-composition.is-warned { border-left-color: #f80; color: #fc8; }
 .sb-composition.is-unverified { border-left-color: #fa0; }
 .sb-composition.is-failed { border-left-color: #f44; color: #f88; }
 

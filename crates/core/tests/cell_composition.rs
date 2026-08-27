@@ -2699,12 +2699,42 @@ fn cell_candidate_wins_mil5_plates_over_broken_native() {
         receipt.verification.starts_with("cell-composed: geometry SIM-VERIFIED"),
         "verified is the registry's full-match verdict, not a reading of the note"
     );
+    assert!(
+        ["verified", "warned", "failed", "failed-elsewhere", "verified-elsewhere", "unverified"]
+            .contains(&receipt.standing.as_str()),
+        "the candidate attaches a typed standing, got {:?}",
+        receipt.standing
+    );
+    assert_eq!(receipt.verified, matches!(receipt.standing.as_str(), "verified" | "warned"));
     let issues = validate::validate(&l, Some(&sr)).unwrap();
     let errors: Vec<_> = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
         .collect();
     assert!(errors.is_empty(), "winner must validate clean: {errors:?}");
+}
+
+/// RFC-074 K74-5 (#737 round 2): a full-match WARN row is `verified`
+/// (measured in this world, non-FAIL) but NOT at plan, and the typed
+/// `standing` must say so — the ec15g2 registry row is exactly that
+/// (produced +0.0%, delivered −4.0%, `known_residual`). A surface that
+/// read only `verified` would paint it green; `standing == "warned"` is
+/// what keeps the badge as loud as the note.
+#[test]
+fn warned_registry_row_is_verified_but_stands_as_warned() {
+    use spaghettio_core::bus::cells::registry::verification_status;
+    let f = SimFixture::find("chain-ec15g2");
+    let mut l = f.compose_layout();
+    l.inserter_capacity = 2;
+    let (note, verified, standing) = verification_status("electronic-circuit", 15.0, &l);
+    assert!(note.starts_with("cell-composed: geometry SIM-VERIFIED AS WARNED"), "got: {note}");
+    assert!(verified, "a WARN row is a measurement in this world");
+    assert_eq!(standing, "warned");
+    // And the no-row arm, for contrast.
+    l.inserter_capacity = 5;
+    let (note5, verified5, standing5) = verification_status("electronic-circuit", 15.0, &l);
+    assert!(!verified5);
+    assert_eq!(standing5, "verified-elsewhere", "a hash-sharing row exists only in other worlds: {note5}");
 }
 
 /// PERMANENT GATE (#396 review, blocking finding): the selection

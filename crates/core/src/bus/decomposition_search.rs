@@ -377,11 +377,19 @@ impl DecompositionCandidate for CellComposedCandidate {
         // and is ALSO carried typed on the composition receipt (RFC-074
         // Unit 1) so a consumer can tell the receipt from a warning.
         if let Some(t) = solver_result.external_outputs.first() {
-            let (note, verified) =
+            let (note, verified, standing) =
                 crate::bus::cells::registry::verification_status(&t.item, t.rate, &l);
+            // The chain/grid composers always attach the receipt's shape;
+            // a composed layout arriving here without one would ship an
+            // empty-kind badge (#737 round 2) — loud in debug.
+            debug_assert!(
+                l.composition.as_ref().is_some_and(|c| !c.kind.is_empty()),
+                "cell composition produced a layout without a composition receipt"
+            );
             let receipt = l.composition.get_or_insert_with(Default::default);
             receipt.verification = note.clone();
             receipt.verified = verified;
+            receipt.standing = standing.to_string();
             l.warnings.push(note);
         }
         Ok(l)

@@ -949,13 +949,26 @@ export function renderSidebar(
     const shape = strips > 1
       ? `${strips} strips × ${copies.join("/")} copies`
       : `${copies[0] ?? "?"} copies`;
-    // The badge must be as loud about a FAIL or an unverified geometry
-    // as about a PASS (RFC-074 K74-5): the verdict phrase and colour
-    // come from the receipt's typed flag and the note's own wording.
+    // The badge must be as loud about a warned, failed or unverified
+    // geometry as about a pass (RFC-074 K74-5): the phrase and colour
+    // come from the receipt's typed `standing` — one per registry arm —
+    // never from a reading of the note's wording (#737 round 2: a
+    // one-sided `verified` flag showed a measured-not-at-plan WARN row as
+    // green, and a wording regex showed a sibling's FAIL in ANOTHER world
+    // as this world's FAIL).
     const note = c.verification ?? "";
-    const failed = /sim-FAILED|FAILED it/.test(note);
-    const status = c.verified ? "sim-verified" : failed ? "sim FAILED" : "not sim-verified";
-    compositionBadge.className = `sb-composition ${c.verified ? "is-verified" : failed ? "is-failed" : "is-unverified"}`;
+    const [status, cls] = ((): [string, string] => {
+      switch (c.standing) {
+        case "verified": return ["sim-verified at plan", "is-verified"];
+        case "warned": return ["sim-verified AS WARNED — not at plan", "is-warned"];
+        case "failed": return ["sim FAILED", "is-failed"];
+        case "failed-elsewhere": return ["not sim-verified here (a hash-sharing build FAILED in another declared world)", "is-unverified"];
+        case "verified-elsewhere": return ["not sim-verified here (verified only in another declared world)", "is-unverified"];
+        case "unverified": return ["not sim-verified", "is-unverified"];
+        default: return ["no verification recorded", "is-unverified"];
+      }
+    })();
+    compositionBadge.className = `sb-composition ${cls}`;
     compositionBadge.textContent = `${c.kind} · ${shape} · ${status}`;
     compositionBadge.title = note;
     compositionBadge.style.display = "block";

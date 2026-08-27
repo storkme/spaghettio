@@ -51,9 +51,13 @@ export function renderCompositionOverlay(
       style: { fontFamily: "monospace", fontSize: 14, fill: STROKE },
     });
     label.alpha = LABEL_ALPHA;
-    // Above the strip's top-left corner, clear of the outline.
-    label.x = s.x * TILE_PX;
-    label.y = s.y * TILE_PX - TILE_PX / 2 - label.height - 2;
+    // Above the strip's top-left corner, clear of the outline — unless
+    // that is off-canvas (strip 0, and every single-strip chain, starts
+    // at y = 0; #737 round 2), in which case it sits just inside the
+    // top-left corner instead.
+    const above = s.y * TILE_PX - TILE_PX / 2 - label.height - 2;
+    label.x = s.x * TILE_PX + 2;
+    label.y = above >= 0 ? above : s.y * TILE_PX + 2;
     layer.addChild(label);
   });
 
