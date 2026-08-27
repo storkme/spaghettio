@@ -96,12 +96,18 @@ pub enum SolverError {
 /// assembler-tier alternative anywhere in the recipe graph), nothing is
 /// excluded and `result` is returned untouched: no re-solve is attempted.
 ///
-/// Otherwise, `resolve` is called exactly ONCE with the expanded exclusion
-/// set. A trace event names the excluded recipes either way — re-solve
-/// attempted is the caller-visible fact, not whether it changed anything.
-/// If the re-solve errors, the ORIGINAL result is returned: a burner
-/// layout that #461 part (b)'s `burner-fuel` validator check can make loud
-/// beats refusing outright.
+/// `resolve` is then called exactly ONCE with the expanded exclusion set.
+/// The re-solve is only WORTH taking if it actually gets rid of the
+/// burner(s): a second plan that still contains any `!needs_electricity`
+/// machine is strictly worse than the first (more machines, still
+/// unfuelled — #461 part (b)'s `burner-fuel` validator check makes that
+/// loud either way, so there is nothing to gain by swapping one unfuelled
+/// plan for a bigger one). So the re-solve's result is accepted ONLY when
+/// it both succeeds AND comes back fully burner-free; otherwise the
+/// ORIGINAL result is returned untouched. A trace event fires whenever a
+/// re-solve is ATTEMPTED (naming the excluded recipes), with `accepted`
+/// carrying which of the two results actually got used — see
+/// [`crate::trace::TraceEvent::BurnerRecipeExcluded`].
 fn avoid_burner_recipes(
     result: SolverResult,
     target_item: &str,
@@ -137,11 +143,18 @@ fn avoid_burner_recipes(
     let mut newly_excluded: Vec<String> =
         expanded.difference(excluded_recipes).cloned().collect();
     newly_excluded.sort();
+    // Accept the re-solve only when it succeeded AND is itself burner-free
+    // — a re-solve that still contains a burner is strictly worse (more
+    // machines, still unfuelled) than the original, so it's discarded.
+    let accepted_result = resolve(&expanded)
+        .ok()
+        .filter(|r| r.machines.iter().all(|m| needs_electricity(&m.entity)));
     trace::emit(TraceEvent::BurnerRecipeExcluded {
         target_item: target_item.to_string(),
         excluded_recipes: newly_excluded,
+        accepted: accepted_result.is_some(),
     });
-    resolve(&expanded).unwrap_or(result)
+    accepted_result.unwrap_or(result)
 }
 
 /// Compute machines needed to produce `target_item` at `target_rate` items/sec.

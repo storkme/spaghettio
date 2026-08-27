@@ -684,10 +684,11 @@ fn issue_461_am1_fluid_recipe_outcome_matches_processing_unit() {
 /// the electric `ammonia-rocket-fuel` alternative. `avoid_burner_recipes`
 /// then excludes `rocket-fuel-from-jelly` (its product, `rocket-fuel`, has
 /// other producers whose category has an electric machine) and re-solves
-/// once, landing on the electric chain. Asserts both the outcome (no
-/// burner in the final result) AND that the re-solve trace event actually
-/// fired — confirming the mechanism engaged, not that the LP happened to
-/// avoid a burner on its own.
+/// once, landing on the electric chain — burner-free, so round 6's
+/// acceptance rule takes it. Asserts the outcome (no burner in the final
+/// result) AND that the re-solve trace event fired with `accepted: true` —
+/// confirming the mechanism both engaged AND kept its result, not that the
+/// LP happened to avoid a burner on its own.
 #[test]
 fn issue_461_production_path_prefers_electric_rocket_fuel() {
     let _guard = trace::start_trace();
@@ -707,9 +708,11 @@ fn issue_461_production_path_prefers_electric_rocket_fuel() {
     }
     let events = trace::drain_events();
     assert!(
-        events.iter().any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. })),
-        "expected a BurnerRecipeExcluded trace event confirming the re-solve fired, \
-         got: {events:?}"
+        events
+            .iter()
+            .any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { accepted: true, .. })),
+        "expected an ACCEPTED BurnerRecipeExcluded trace event — the re-solve here is \
+         burner-free and round 6's acceptance rule must keep it — got: {events:?}"
     );
 }
 
@@ -769,6 +772,46 @@ fn issue_461_no_burner_no_resolve_for_electronic_circuit_from_ore() {
         !events.iter().any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. })),
         "electronic-circuit from ore never touches a burner machine — no re-solve should \
          have been attempted, but got: {events:?}"
+    );
+}
+
+/// #461 part (a) round 6 — the rejection path. `avoid_burner_recipes`
+/// attempts a re-solve whenever a burner has SOME electric alternative
+/// producer, but only ACCEPTS it if the re-solve comes back burner-free.
+/// `lubricant` off only `{jelly}` is the case that motivated the rule:
+/// `biolubricant` (`organic`, biochamber) is genuinely cost-optimal here,
+/// and the `lubricant` recipe (`chemistry` → chemical-plant) is a real
+/// electric alternative for the same item, so a re-solve IS attempted —
+/// but it doesn't land on that simple chemistry chain; it wanders into an
+/// 11-machine-type plan (coal-liquefaction, coal-synthesis, sulfuric-acid,
+/// …) that itself contains THREE other biochamber recipes (burnt-spoilage,
+/// biosulfur, bioflux) — strictly worse, not burner-free — so it must be
+/// discarded. This is `crates/core/tests/e2e.rs`'s
+/// `phase0e1_biolubricant_biochamber` fixture's exact shape, pinned here
+/// at the solver level: the event fires with `accepted: false`, and the
+/// ORIGINAL result — biolubricant on a biochamber — is what solver.rs
+/// actually returns.
+#[test]
+fn issue_461_burner_resolve_rejected_when_still_burner() {
+    let _guard = trace::start_trace();
+    let inputs = set(&["jelly"]);
+    let sr = solver::solve("lubricant", 5.0, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("lubricant solves: {e}"));
+    let m = sr
+        .machines
+        .iter()
+        .find(|m| m.recipe == "biolubricant")
+        .expect("expected the ORIGINAL biolubricant/biochamber result — the re-solve should \
+                 have been rejected as still-burner, not replaced this");
+    assert_eq!(m.entity, "biochamber", "biolubricant always runs on a biochamber");
+    let events = trace::drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { accepted: false, .. })),
+        "expected a REJECTED BurnerRecipeExcluded trace event — the re-solve here still \
+         contains burners (three other biochamber recipes) and must be discarded, \
+         got: {events:?}"
     );
 }
 

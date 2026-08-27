@@ -755,18 +755,23 @@ pub enum TraceEvent {
     /// placed a burner machine (the engine delivers no fuel to any burner)
     /// for one or more recipes whose product item has at least one OTHER
     /// producer that CAN run on an electric machine, so those recipes were
-    /// added to the exclusion set and the target was re-solved once.
-    /// Emitted whether or not the re-solve improved anything — a re-solve
-    /// that still contains a burner (no fully-electric plan exists), or one
-    /// that fails outright and falls back to the original result, still
-    /// emits this. The caller-visible fact is "a re-solve was attempted",
-    /// not its outcome. Absence of this event for a solve means no burner
-    /// machine had an electric alternative to steer toward (e.g.
-    /// `pentapod-egg`, biochamber-only) — the original result stands
-    /// untouched, no re-solve attempted.
+    /// added to the exclusion set and the target was re-solved once. This
+    /// event is always emitted when a re-solve is ATTEMPTED — `accepted`
+    /// carries the outcome: `true` when the re-solve succeeded AND came
+    /// back fully burner-free, so its result replaced the original;
+    /// `false` when the re-solve errored, or succeeded but still placed a
+    /// burner somewhere (a strictly worse plan than the original — more
+    /// machines, still unfuelled — see `phase0e1_biolubricant_biochamber`,
+    /// whose re-solve wanders into an 11-machine-type plan carrying three
+    /// OTHER biochamber recipes), in which case the ORIGINAL result is
+    /// what actually got used. Absence of this event for a solve means no
+    /// burner machine had an electric alternative to steer toward at all
+    /// (e.g. `pentapod-egg`, biochamber-only) — no re-solve was even
+    /// attempted.
     BurnerRecipeExcluded {
         target_item: String,
         excluded_recipes: Vec<String>,
+        accepted: bool,
     },
 
     /// The layout pipeline ran once, hit `JunctionGrowthCapped` events,
