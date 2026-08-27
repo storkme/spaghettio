@@ -12,6 +12,8 @@ export type {
   MachineSpec,
   ItemFlow,
   LayoutResult,
+  CompositionReceipt,
+  StripRect,
   LayoutRegion,
   RegionKind,
   RegionPort,

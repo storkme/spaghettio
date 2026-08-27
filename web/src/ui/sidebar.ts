@@ -920,6 +920,60 @@ export function renderSidebar(
   solverBody.appendChild(resultContainer);
   inner.appendChild(solverSection);
 
+  // Cell-composition badge (RFC-074 Unit 2): what the composer built
+  // and its sim-registry standing. Hidden for native layouts.
+  const compositionBadge = document.createElement("div");
+  compositionBadge.className = "sb-composition";
+  compositionBadge.style.display = "none";
+  solverBody.appendChild(compositionBadge);
+
+  /** The layout's warnings minus its composition receipt — the receipt
+   *  rides `warnings` for the engine's selection accounting (RFC-074
+   *  Unit 1) and is not a reason to withhold the blueprint. */
+  function realWarnings(layout: LayoutResult): string[] {
+    const note = layout.composition?.verification;
+    return (layout.warnings ?? []).filter((w) => w !== note);
+  }
+
+  function setCompositionBadge(layout: LayoutResult): void {
+    const c = layout.composition;
+    if (!c) {
+      compositionBadge.style.display = "none";
+      compositionBadge.textContent = "";
+      compositionBadge.title = "";
+      compositionBadge.className = "sb-composition";
+      return;
+    }
+    const strips = c.strips?.length ?? 0;
+    const copies = c.copies_per_strip ?? [];
+    const shape = strips > 1
+      ? `${strips} strips × ${copies.join("/")} copies`
+      : `${copies[0] ?? "?"} copies`;
+    // The badge must be as loud about a warned, failed or unverified
+    // geometry as about a pass (RFC-074 K74-5): the phrase and colour
+    // come from the receipt's typed `standing` — one per registry arm —
+    // never from a reading of the note's wording (#737 round 2: a
+    // one-sided `verified` flag showed a measured-not-at-plan WARN row as
+    // green, and a wording regex showed a sibling's FAIL in ANOTHER world
+    // as this world's FAIL).
+    const note = c.verification ?? "";
+    const [status, cls] = ((): [string, string] => {
+      switch (c.standing) {
+        case "verified": return ["sim-verified at plan", "is-verified"];
+        case "warned": return ["sim-verified AS WARNED — not at plan", "is-warned"];
+        case "failed": return ["sim FAILED", "is-failed"];
+        case "failed-elsewhere": return ["not sim-verified here (a hash-sharing build FAILED in another declared world)", "is-unverified"];
+        case "verified-elsewhere": return ["not sim-verified here (verified only in another declared world)", "is-unverified"];
+        case "unverified": return ["not sim-verified", "is-unverified"];
+        default: return ["no verification recorded", "is-unverified"];
+      }
+    })();
+    compositionBadge.className = `sb-composition ${cls}`;
+    compositionBadge.textContent = `${c.kind} · ${shape} · ${status}`;
+    compositionBadge.title = note;
+    compositionBadge.style.display = "block";
+  }
+
   // Copy-blueprint action — appended to solver body when a layout is ready.
   const blueprintSection = document.createElement("div");
   blueprintSection.className = "sb-actions";
@@ -1077,6 +1131,7 @@ export function renderSidebar(
     setConfigError(null);
     currentLayout = null;
     blueprintSection.style.display = "none";
+    compositionBadge.style.display = "none";
 
     let result: SolverResult;
     try {
@@ -1161,7 +1216,11 @@ export function renderSidebar(
     // Layout-level warnings (missing balancer templates, unresolved
     // ghost-router crossings) now surface in the Validation panel below
     // — kept off the result container so there's a single source of truth.
-    blueprintSection.style.display = layout.warnings?.length ? "none" : "flex";
+    // The composition receipt is not one of them (RFC-074 Unit 2) — the
+    // SAME gate as `runSolveMulti` below; #737 review found this primary
+    // path un-patched (the six-sites lesson).
+    setCompositionBadge(layout);
+    blueprintSection.style.display = realWarnings(layout).length ? "none" : "flex";
   }
 
   /**
@@ -1187,6 +1246,7 @@ export function renderSidebar(
     setConfigError(null);
     currentLayout = null;
     blueprintSection.style.display = "none";
+    compositionBadge.style.display = "none";
 
     let result: SolverResult;
     try {
@@ -1252,7 +1312,8 @@ export function renderSidebar(
     currentLayout = layout;
     setRecipeFlows(result.machines);
     callbacks.renderLayout(layout, result);
-    blueprintSection.style.display = layout.warnings?.length ? "none" : "flex";
+    setCompositionBadge(layout);
+    blueprintSection.style.display = realWarnings(layout).length ? "none" : "flex";
   }
 
   copyBtn.addEventListener("click", async () => {

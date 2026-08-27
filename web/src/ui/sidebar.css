@@ -358,6 +358,24 @@
   margin: 0;
 }
 
+/* ---- Cell-composition badge (RFC-074 Unit 2) ---- */
+.sb-composition {
+  font-family: monospace;
+  font-size: 11px;
+  padding: 4px 6px;
+  margin: 4px 0;
+  border-left: 3px solid #f0c060;
+  background: rgba(240, 192, 96, 0.08);
+  color: #ddd;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: help;
+}
+.sb-composition.is-verified { border-left-color: #6c6; }
+.sb-composition.is-warned { border-left-color: #f80; color: #fc8; }
+.sb-composition.is-unverified { border-left-color: #fa0; }
+.sb-composition.is-failed { border-left-color: #f44; color: #f88; }
+
 /* ---- Errors (inline) ---- */
 .sb-result-error {
   color: #f44;

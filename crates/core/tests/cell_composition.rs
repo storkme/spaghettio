@@ -513,6 +513,34 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 2,
         levels: &[2],
     },
+    // RFC-074 Unit 3: the grid a browser user actually gets — ec@240
+    // from PLATES (the ordinary external inputs) — is a 2×12 grid of
+    // the 4-machine 10/s cell with no furnace stage (4,460 entities,
+    // hash 5c83b419… on 2026-08-27) and had no receipt at all.
+    SimFixture {
+        label: "chain-ec240p",
+        target: "electronic-circuit",
+        rate: 240.0,
+        inputs: &["iron-plate", "copper-plate"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
+    // RFC-074 Unit 3: the mega/fluid GRID path (RFC-072 residual (f)) —
+    // the smallest fluid-touching request past K_MAX: advanced-circuit
+    // from ore + crude at 56/s quantizes to K=14 → a 2×7 grid whose
+    // strips each carry a mega block (refinery + chem) with its own
+    // fluid heads. Composed 0 errors / 0 warnings, 26,454 entities
+    // (2026-08-27); the sim receipt is what K74-2 adjudicates on.
+    SimFixture {
+        label: "chain-ac56",
+        target: "advanced-circuit",
+        rate: 56.0,
+        inputs: &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
     SimFixture {
         // RFC-071 B3: the shipped gear@20/am2 cell-composed winner — the
         // only production cell win — earning its registry entry after
@@ -899,6 +927,129 @@ fn inserter_sizing_census_registry() {
     }
 }
 
+/// RFC-074 Unit 3 — the mega/fluid GRID path (RFC-072 residual (f):
+/// "untested by construction"). advanced-circuit from ore + crude at
+/// 56/s is the smallest fluid-touching request past K_MAX: K=14 → a
+/// 2×7 grid whose every strip carries its own mega block (refinery +
+/// chem plants) and so its own fluid feed heads. Pins that it composes
+/// with zero validator errors, that the receipt says so, that BOTH
+/// strips carry fluid heads (the boundary records translated with the
+/// strip — #732's direction fix included), and that the fluid heads
+/// carry the into-layout flow direction the harness rigs against.
+#[test]
+fn grid_composes_ac56_from_ore_with_fluid_heads_on_every_strip() {
+    use spaghettio_core::bus::cells::chain::{compose_chain, required_copies};
+    use spaghettio_core::models::EntityDirection;
+    use spaghettio_core::validate::{self, Severity};
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "advanced-circuit",
+        56.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    assert_eq!(required_copies(&sr), 14, "ac56 quantizes to 14 copies (2×7)");
+    let l = compose_chain(&sr).expect("the mega/fluid grid composes");
+    let receipt = l.composition.as_ref().expect("grid receipt");
+    assert_eq!((receipt.kind.as_str(), receipt.copies_per_strip.as_slice()), ("cell-grid", &[7, 7][..]));
+    let issues = validate::validate(&l, Some(&sr)).unwrap_or_else(|e| e.issues);
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "fluid grid must carry zero errors, got {errors:?}");
+    // Fluid heads: one per copy per fluid chain-fed... each strip's
+    // records lie inside that strip's rect.
+    let fluid: Vec<_> = l.boundary_inputs.iter().filter(|b| b.is_fluid).collect();
+    assert!(!fluid.is_empty(), "the mega block's fluid inputs are recorded");
+    for (i, s) in receipt.strips.iter().enumerate() {
+        let in_strip = fluid.iter().filter(|b| b.y >= s.y && b.y < s.y + s.height).count();
+        assert!(in_strip > 0, "strip {i} carries fluid heads");
+    }
+    assert!(
+        fluid.iter().all(|b| b.direction == EntityDirection::South),
+        "fluid heads record the into-layout flow (#732), got {:?}",
+        fluid.iter().map(|b| (b.entity.as_str(), b.direction)).collect::<Vec<_>>()
+    );
+}
+
+/// RFC-074 Unit 4 — the uniform-K over-provisioning probe. "Chains of
+/// unlike cell groups" (RFC-072 Phase 3's heterogeneous composition)
+/// would let each spec pick its own copy count; today every spec is
+/// replicated K times, so a spec whose machine count is not a multiple
+/// of K over-builds by `ceil(count/K)·K / count`. This prints, per
+/// chain-eligible fixture, the K the quantizer picks, the chain-wide
+/// ratio (machines placed / machines needed) and the worst single
+/// spec — the number K74-3 adjudicates on. Survey, not a gate.
+#[test]
+#[ignore = "measurement probe — RFC-074 Unit 4 over-provisioning"]
+fn probe_uniform_k_overprovisioning() {
+    use spaghettio_core::bus::cells::chain::{chain_eligible, required_copies};
+    let mut fixtures: Vec<(String, &str, f64, Vec<String>)> = SIM_FIXTURES
+        .iter()
+        .filter(|f| matches!(f.compose, Compose::Chain))
+        .map(|f| (f.label.to_string(), f.target, f.rate, f.inputs.iter().map(|s| s.to_string()).collect()))
+        .collect();
+    for (label, item, rate, inputs) in [
+        ("gear15", "iron-gear-wheel", 15.0, &["iron-plate"][..]),
+        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"][..]),
+        ("ac2", "advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("ac4-ore", "advanced-circuit", 4.0, &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..]),
+        ("csp5-ore", "chemical-science-pack", 5.0, &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..]),
+        ("ec240-plates", "electronic-circuit", 240.0, &["iron-plate", "copper-plate"][..]),
+        ("ec600-ore", "electronic-circuit", 600.0, &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..]),
+    ] {
+        fixtures.push((label.to_string(), item, rate, inputs.iter().map(|s| s.to_string()).collect()));
+    }
+    println!("fixture,K,specs,needed,placed,ratio,worst_spec,worst_needed,worst_placed,worst_ratio");
+    for (label, item, rate, inputs) in fixtures {
+        let inputs_set: FxHashSet<String> = inputs.into_iter().collect();
+        let sr = match solver::solve_with_palette_exclusions_and_quality(
+            item,
+            rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        ) {
+            Ok(sr) => sr,
+            Err(e) => {
+                println!("{label},SOLVE-FAIL,{e:?}");
+                continue;
+            }
+        };
+        if let Err(e) = chain_eligible(&sr) {
+            println!("{label},REFUSED,{e}");
+            continue;
+        }
+        let k = required_copies(&sr);
+        let mut needed = 0.0;
+        let mut placed = 0.0;
+        let mut worst: Option<(String, f64, f64)> = None;
+        for m in &sr.machines {
+            let n = (m.count / k as f64 - 1e-9).ceil().max(1.0) * k as f64;
+            needed += m.count;
+            placed += n;
+            let ratio = n / m.count;
+            if worst.as_ref().is_none_or(|w| ratio > w.2 / w.1) {
+                worst = Some((m.recipe.clone(), m.count, n));
+            }
+        }
+        let (wr, wn, wp) = worst.expect("a chain has machines");
+        println!(
+            "{label},{k},{},{needed:.2},{placed:.0},{:.3},{wr},{wn:.2},{wp:.0},{:.3}",
+            sr.machines.len(),
+            placed / needed,
+            wp / wn
+        );
+    }
+}
+
 /// Phase-B differential scoreboard (kill-3 evidence): composed vs bus
 /// on every chain-eligible ladder fixture. Prints errors / warnings /
 /// area / refusals per path.
@@ -1245,6 +1396,13 @@ fn probe_registry_hashes() {
             "chain-ec240",
             "electronic-circuit",
             240.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
+        ),
+        ("chain-ec240p", "electronic-circuit", 240.0, &["iron-plate", "copper-plate"][..]),
+        (
+            "chain-ac56",
+            "advanced-circuit",
+            56.0,
             &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
         ),
         (
@@ -1922,6 +2080,23 @@ fn cell_registry_hashes_current() {
             "chain",
             2,
         ),
+        // RFC-074 Unit 3: the from-plates ec@240 grid the browser
+        // builds (same (target, rate) as the from-ore row — the hash
+        // disambiguates), and the mega/fluid grid exemplar ac@56.
+        (
+            "electronic-circuit",
+            240.0,
+            &["iron-plate", "copper-plate"],
+            "chain",
+            2,
+        ),
+        (
+            "advanced-circuit",
+            56.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+            "chain",
+            2,
+        ),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {
@@ -2201,6 +2376,21 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
         "balanced 2x12 split, got: {}",
         grid_events[0]
     );
+    // The typed receipt (RFC-074 Unit 1) states the same shape: two
+    // strips, 12 copies each, the second starting one clearance below
+    // the first's bottom. Verification is the candidate's business, so
+    // the bare composer leaves it empty.
+    let receipt = l.composition.as_ref().expect("grid carries a composition receipt");
+    assert_eq!(receipt.kind, "cell-grid");
+    assert_eq!(receipt.copies_per_strip, vec![12, 12]);
+    assert_eq!(receipt.strips.len(), 2);
+    assert_eq!((receipt.strips[0].x, receipt.strips[0].y, receipt.strips[0].copies), (0, 0, 12));
+    // 32 = chain.rs's private `STRIP_CLEARANCE`, the same literal the
+    // inter-strip band assertion below pins (a change to the constant
+    // must move both, deliberately).
+    assert_eq!(receipt.strips[1].y, receipt.strips[0].height + 32, "strip 1 starts one clearance below strip 0");
+    assert_eq!(receipt.strips[1].y + receipt.strips[1].height, l.height, "the last strip ends at the layout's bottom");
+    assert!(receipt.verification.is_empty() && !receipt.verified);
     // Two entity bands separated by the clearance: nothing except the
     // pole bridge may occupy the inter-strip band (bridge poles span it
     // by design, so bands are computed over non-pole entities).
@@ -2493,12 +2683,58 @@ fn cell_candidate_wins_mil5_plates_over_broken_native() {
         l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
         "the clean composed candidate must win over the validation-broken native"
     );
+    // RFC-074 Unit 1: the shipped layout carries the typed receipt, and
+    // its `verification` is the SAME string as the warning — that
+    // equality is how a consumer tells the receipt from a real warning
+    // without the note leaving the selection-counted channel.
+    let receipt = l.composition.as_ref().expect("a cell-composed winner carries its receipt");
+    assert_eq!(receipt.kind, "cell-chain");
+    assert!(l.warnings.contains(&receipt.verification), "the receipt's note is the warning, verbatim");
+    // `verified` is true on exactly the two full-match non-FAIL arms of
+    // `verification_status`, whose notes both open with this prefix; the
+    // other-world arm reads "sim-verified … ONLY under" (lowercase) and
+    // is `false`, like the NOT-verified and FAIL arms.
+    assert_eq!(
+        receipt.verified,
+        receipt.verification.starts_with("cell-composed: geometry SIM-VERIFIED"),
+        "verified is the registry's full-match verdict, not a reading of the note"
+    );
+    assert!(
+        ["verified", "warned", "failed", "failed-elsewhere", "verified-elsewhere", "unverified"]
+            .contains(&receipt.standing.as_str()),
+        "the candidate attaches a typed standing, got {:?}",
+        receipt.standing
+    );
+    assert_eq!(receipt.verified, matches!(receipt.standing.as_str(), "verified" | "warned"));
     let issues = validate::validate(&l, Some(&sr)).unwrap();
     let errors: Vec<_> = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
         .collect();
     assert!(errors.is_empty(), "winner must validate clean: {errors:?}");
+}
+
+/// RFC-074 K74-5 (#737 round 2): a full-match WARN row is `verified`
+/// (measured in this world, non-FAIL) but NOT at plan, and the typed
+/// `standing` must say so — the ec15g2 registry row is exactly that
+/// (produced +0.0%, delivered −4.0%, `known_residual`). A surface that
+/// read only `verified` would paint it green; `standing == "warned"` is
+/// what keeps the badge as loud as the note.
+#[test]
+fn warned_registry_row_is_verified_but_stands_as_warned() {
+    use spaghettio_core::bus::cells::registry::verification_status;
+    let f = SimFixture::find("chain-ec15g2");
+    let mut l = f.compose_layout();
+    l.inserter_capacity = 2;
+    let (note, verified, standing) = verification_status("electronic-circuit", 15.0, &l);
+    assert!(note.starts_with("cell-composed: geometry SIM-VERIFIED AS WARNED"), "got: {note}");
+    assert!(verified, "a WARN row is a measurement in this world");
+    assert_eq!(standing, "warned");
+    // And the no-row arm, for contrast.
+    l.inserter_capacity = 5;
+    let (note5, verified5, standing5) = verification_status("electronic-circuit", 15.0, &l);
+    assert!(!verified5);
+    assert_eq!(standing5, "verified-elsewhere", "a hash-sharing row exists only in other worlds: {note5}");
 }
 
 /// PERMANENT GATE (#396 review, blocking finding): the selection

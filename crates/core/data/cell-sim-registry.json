@@ -183,5 +183,29 @@
   "produced_per_s": 5.0,
   "scenario": "spaghettio-sim chem5-rebless (Factorio 2.0.77, 216k-tick warmup, 177 working, produced 5.00/s EXACT at plan, delivered 5.07/s; power: 1 pole network). RE-BLESSED after the chain composer's pole fix: its spanning pole line stepped by 8 on an absolute grid against wire reach 9, so any forward nudge past congestion orphaned the pole behind it, and composition never ran the connectivity repair that build_bus_layout has always run. This fixture composed with its power network in 17 pieces; it now composes as ONE. Geometry differs from the 2026-07-24 pin by added bridge poles only \u2014 no machine, recipe or belt changed \u2014 and was re-measured rather than re-hashed, since the pin carries a sim-verified claim. Convergence flag reads false at the tick ceiling, but the window series oscillates around plan (5.08/4.84/4.75/5.00/5.22/5.15/5.00/5.08/4.62/5.00/5.00) rather than trending; produced is exact at plan. Fluid boundaries remain UNCALIBRATED (RFC-050 Phase 1), as at first registration.",
   "date": "2026-07-29"
+ },
+ {
+  "target": "electronic-circuit",
+  "rate": 240.0,
+  "geometry_hash": "5c83b4199631358a",
+  "declared_inserter_capacity": 2,
+  "declared_stacking": 1,
+  "harness_world": "nb=1 bulk=3 (the engine's shipping default, realized)",
+  "verdict": "PASS",
+  "produced_per_s": 240.0,
+  "scenario": "spaghettio-sim chain-ec240p-d2 (Factorio 2.0.77, the browser's own ec@240 request — from PLATES: a 24-copy quantum-40 GRID of 2x12 stacked strips of the 4-machine 10/s cell, no furnace stage, 4460 entities, 432k warmup, converged, kit clean; produced +0.0%, delivered +4.0%, all 240 machines working; RFC-074 Unit 3 — the from-plates grid had no receipt while the badge it feeds says so)",
+  "date": "2026-08-27"
+ },
+ {
+  "target": "advanced-circuit",
+  "rate": 56.0,
+  "geometry_hash": "d2ed811902dea6af",
+  "declared_inserter_capacity": 2,
+  "declared_stacking": 1,
+  "harness_world": "nb=1 bulk=3 (the engine's shipping default, realized)",
+  "verdict": "PASS",
+  "produced_per_s": 57.4,
+  "scenario": "spaghettio-sim chain-ac56-d2 (Factorio 2.0.77, the mega/fluid GRID exemplar — RFC-072 residual (f): advanced-circuit from ore + crude, 14-copy quantum-40 GRID of 2x7 stacked strips, every strip carrying its own refinery+chem mega block and fluid feed heads, 26454 entities, 432k warmup, converged, kit clean, 0 fluid errors; produced +2.5%, delivered +20.0% (window artifact), 1246 working, 14 ingredient-short = one per copy across both strips; per-strip split not in the report — the 1-per-copy count is the symmetry signature; RFC-074 Unit 3)",
+  "date": "2026-08-27"
  }
 ]

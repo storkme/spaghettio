@@ -1,6 +1,8 @@
 # RFC-074: Cells at the surface — RFC-072 Phase 3, scoped
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Design → Active 2026-08-27.**
+Registry: [`rfcs.md`](rfcs.md). Status: **COMPLETE 2026-08-27 — Units
+1–4 landed in one PR; RFC-072 Phase 3 closed as scoped.** Residuals in
+the close-out entry of the decision log.
 This is RFC-072's uncommitted Phase 3 ("heterogeneous composition and
 the library; the web surface") scoped to what its own evidence supports:
 the surface is a measured defect and ships; the fluid/mega grid path gets
@@ -183,3 +185,123 @@ entry, as #733 did. Unit 4: the probe's table in the decision log.
   the export), the fluid grid is a receipt-or-refuse, heterogeneity is
   a number, the library is parked under K67-3. RFC-073's Phase 0 census
   (same day) is the precedent for measuring before building.
+- *2026-08-27 — Unit 1 adjudication: the note does NOT leave
+  `warnings`.* The design said "`warnings` no longer carries the note";
+  the code says otherwise, deliberately. `warnings.len()` is a
+  selection input twice over — `IssueCounts::layout_warnings` is a
+  never-worse floor channel and half of the error-free tier's ordering
+  key (`selection_policy.rs`), and RFC-071 B3's `unverified_geometry`
+  reads the never-verified substring out of the same list — so moving
+  the note would change what ships on any fixture where a cell
+  candidate and a native one sit within one warning of each other.
+  That is exactly what K74-1 forbids. Unit 1 therefore ADDS the typed
+  receipt (`CompositionReceipt { kind, copies_per_strip, strips,
+  verification, verified }`, filled by the chain/grid composers and
+  completed by `CellComposedCandidate` from
+  `registry::verification_status`) and leaves the note in place;
+  `verification` is the note verbatim, so the web tells the receipt
+  from a warning by string equality. The one-warning penalty every cell
+  candidate carries in selection is pre-existing and recorded here as
+  a policy question for RFC-071's owner, not silently removed. Zero
+  geometry change: the receipt is derived after composition; the
+  registry gate, copy-count pins and the grid tests hold unchanged.
+- *2026-08-27 — Unit 2 landed with Unit 1 (one PR).* Sidebar: the
+  blueprint section hides on `realWarnings` (warnings minus the
+  receipt) — the ec@240 grid exports again; a composition badge shows
+  `kind · strips × copies · sim-verified | not sim-verified | sim
+  FAILED` (colour by the typed flag and the note's wording, full note
+  on hover — K74-5); the validation panel drops the receipt row.
+  Renderer: `compositionOverlay.ts` outlines each strip and labels its
+  copy count, always on when a receipt exists. The "winner name" item
+  is satisfied by the badge (native layouts have no receipt, so no
+  badge) rather than a separate `SelectionDecided` reader — fewer
+  sites, same information. User eyeball pending per the standing UI
+  rule. **#737 review round 1 caught the primary path un-patched**: the
+  sidebar has two layout-commit sites and the gate fix had landed only
+  on `runSolveMulti` (a comment block sits between `renderLayout` and
+  the gate on `runSolve`, so a replace-all edit matched one of the
+  two) — the exact single-target ec@240 request this RFC opened on was
+  still hiding the export button. Fixed; the six-sites rule for
+  sidebar changes applies to gates as much as to controls.
+- *2026-08-27 — Unit 4 adjudicated: K74-3 closes heterogeneous
+  composition by measurement.* `probe_uniform_k_overprovisioning`
+  (`tests/cell_composition.rs`, release) over every chain-eligible
+  fixture in the registry plus the ladder/mega corpus — ratio =
+  machines placed under uniform K ÷ machines the solve needs:
+
+  | fixture | K | specs | needed → placed | ratio | worst spec |
+  |---|---|---|---|---|---|
+  | chain-ac1 | 1 | 3 | 7.60 → 8 | 1.053 | EC 0.80 → 1 (1.25) |
+  | chain-ec15 / ec15g2 | 2 | 2 | 15 → 16 | 1.067 | cable 9 → 10 (1.11) |
+  | chain-ec30 | 3 | 2 | 30 → 30 | 1.000 | — |
+  | chain-ec75 / ec150 | 6 / 12 | 4 | 375 → 378 / 750 → 756 | 1.008 | cable (1.067) |
+  | chain-ec240 (ore) / ec240 (plates) | 24 | 4 / 2 | 1200 → 1200 / 240 → 240 | 1.000 | — |
+  | ec600-ore | 48 | 4 | 3000 → 3024 | 1.008 | cable 360 → 384 (1.067) |
+  | chain-gear20, gear15, ec5 | 1 | 1–2 | exact | 1.000 | — |
+  | chain-mil5ore / mil5plates | 2 / 1 | 9 / 5 | 146 → 146 / 46 → 46 | 1.000 | — |
+  | ac2 / ac4-ore | 1 | 3 / 7 | 15.2 → 16 / 88.1 → 90 | 1.053 / 1.022 | EC (1.25) |
+  | mega-chain-ac2raw | 1 | 7 | 44.0 → 46 | 1.044 | EC 1.6 → 2 (1.25) |
+  | mega-chain-chem5raw / csp5-ore | 2 | 10 / 13 | 180.6 → 184 / 376.6 → 380 | 1.019 / 1.009 | sulfur 1.25 → 2 (1.6) |
+  | mega-chain-usp2raw | 3 | 22 | 464.8 → 495 | 1.065 | gear 0.27 → 3 (**11.25**) |
+  | mega-chain-pu4raw | 8 | 10 | 613.6 → 640 | 1.043 | sulfuric-acid 0.40 → 8 (**20.0**) |
+
+  Chain-wide, uniform K over-builds by 0–6.7% (median 0.8%); no
+  fixture reaches K74-3's 15%, and the median is under its 5%. The
+  per-spec extremes are real — a 0.27-machine gear spec in USP@2 ships
+  as 3 machines, a 0.40 sulfuric-acid spec in PU@4 as 8 — but they are
+  the chain's cheapest machines and cost 30 and 26 machines out of 495
+  and 640. A per-group K would buy back ≤ 6.7% of machines on the
+  worst fixture in exchange for a composer that gives up cell cloning,
+  the copy-scoped corridor rule, per-copy bypass rows, uniform pole
+  bands and the registry key (recon §A). Not worth it on this
+  evidence: **"chains of unlike cell groups" closes**, and with it the
+  library reuse it would have needed (still parked under K67-3; #619
+  / #629 hold the state). Reopens only with a chain whose uniform-K
+  ratio exceeds 15% — the probe is the instrument, and it stays.
+- *2026-08-27 — Unit 3: both receipts PASS; RFC-072 residual (f) closes
+  as RECEIPTED, not refused.* (1) **ec@240 from plates** (hash
+  `5c83b419…`, the browser's own request): 2×12 grid of the 4-machine
+  10/s cell, 4,460 entities — sim PASS, produced **240.00/240.00
+  (+0.0%)**, delivered +4.0%, all 240 machines working, converged, kit
+  clean. The badge now reads sim-verified for the layout a user gets
+  first. (2) **The mega/fluid grid** — advanced-circuit from ore +
+  crude at 56/s, the smallest fluid-touching request past K_MAX: K=14
+  → a 2×7 grid, each strip carrying its own refinery+chem mega block
+  and its own fluid feed heads (translated with the strip; heads face
+  into the layout, so #732's class never arose — the mega block's
+  heads are pipe-to-ground). Composed with **0 validator errors, 0
+  warnings**, 26,454 entities; sim PASS, produced **57.40/56.00
+  (+2.5%)**, converged, kit clean, 0 fluid errors, 1,246 machines
+  working, 14 ingredient-short. K74-2 read honestly: the report is
+  aggregate (no per-strip census in `report.json`, unlike the
+  K72-3-era probe), so "strips within 2 points" is not directly
+  measured; the 14 short machines are exactly one per copy across
+  both strips, which is the symmetric signature (an asymmetric
+  starvation reads as a per-strip multiple), and produced is above
+  the family bar with margin. Recorded as such — (f) closes, and a
+  per-strip census in the harness report is noted as the instrument
+  that would have made this a measurement rather than a signature.
+  Both rows are in `cell-sim-registry.json` with gate configs and
+  probe entries; `grid_composes_ac56_from_ore_with_fluid_heads_on_every_strip`
+  pins the composition contract.
+- *2026-08-27 — CLOSE-OUT: complete as scoped.* Against the Summary:
+  (1) the receipt and the surface shipped — `CompositionReceipt` on
+  `LayoutResult`, the export button back, the badge, the strip
+  outlines; (2) the two receipts are in the registry — the browser's
+  ec@240 at plan, the mega/fluid grid at +2.5% — and RFC-072 residual
+  (f) is closed; (3) heterogeneous composition is closed by its
+  number (0–6.7% chain-wide), and the library with it, parked where
+  K67-3 left it (#619/#629) — reopen only with a chain whose uniform-K
+  ratio exceeds 15%. Every kill criterion held: K74-1 (registry gate,
+  pins, fingerprints unchanged), K74-2 (receipted, with the per-strip
+  caveat stated), K74-3 (closed), K74-4 (no runtime change), K74-5
+  (the badge is as loud about FAIL and unverified as PASS). **Residuals,
+  none gating:** (a) the harness report carries no per-strip census —
+  add one before the next grid receipt is read for symmetry; (b) every
+  cell candidate carries a one-warning selection penalty (its own
+  receipt on `warnings`) — a policy question for RFC-071's owner, not
+  silently removed here; (c) the surface has not been eyeballed by the
+  user yet (standing UI rule; URL in the PR); (d) RFC-072's Phase-1
+  residuals and the pickup-side follow-up from RFC-073 are unchanged.
+  RFC-072's Phase 3 line and residuals (d)/(f) are updated in the same
+  PR; `rfcs.md` and `status.md` carry the row.

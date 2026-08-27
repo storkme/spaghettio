@@ -1927,6 +1927,8 @@ fn layout_pass(
             height: max_y,
             warnings,
             regions,
+            // A native build is not a composition (RFC-074 Unit 1).
+            composition: None,
             trace: None,
             surplus_exits,
             voided_streams,
