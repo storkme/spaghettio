@@ -2586,12 +2586,12 @@ fn try_build_row_cell(
     let p_feed = match p_in {
         Some(f) => size_side(f.rate * p_util, Reach::Near, p_budget, max_inserter_tier, quality, level),
         // No solid feed face to size — the pipe carries it.
-        None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None },
+        None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None, capacity: 0.0 },
     };
     let c_feed = match c_in {
         Some(f) => size_side(f.rate * c_util, Reach::Near, c_budget, max_inserter_tier, quality, level),
         // Nothing belt-fed to size; the coupling supplies every solid.
-        None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None },
+        None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None, capacity: 0.0 },
     };
     // Reach-2 only when the output inserter must step OVER the consumer's
     // input belt. Without that belt the output belt sits directly below the
@@ -2600,7 +2600,7 @@ fn try_build_row_cell(
     // so its inserter always swings over the producer's belt.
     let c_feed_b = match c_in_b {
         Some(f) => size_side(f.rate * c_util, Reach::Far, c_budget, max_inserter_tier, quality, level),
-        None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None },
+        None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None, capacity: 0.0 },
     };
     if c_feed_b.shortfall.is_some() || c_feed_b.count > cmw.max(1) as usize {
         return None;

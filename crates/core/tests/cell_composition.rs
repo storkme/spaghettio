@@ -809,6 +809,96 @@ fn export_chain_fixtures_for_sim() {
     }
 }
 
+/// RFC-073 Phase 0 — the instrument, pinned end-to-end on the row the
+/// K73-1 verdict rests on (#735 review: the census tables are a dated
+/// survey; this is the gate that the plumbing behind them still works).
+/// The ec15 cell sized at L0: the EC row's far iron side asks 2.5/s;
+/// interior machines get two long-handed hands, the trimmed last-in-row
+/// machine one. Re-priced at L2 (2.4/s per hand) that last hand sits at
+/// 1.042 of its credit and the cell still produces 15.0/15 in the sim —
+/// the counter-example to "fullness predicts deficit".
+///
+/// This IS a pinned-geometry gate, deliberately (#735 round 2): the ec15
+/// cell's geometry is frozen by `cell_registry_hashes_current` (hash
+/// `8f2473ec…`, three sim rows), so its side plans cannot legitimately
+/// move without a registry re-bless — and a re-bless is exactly when
+/// these numbers should be re-read, not silently regenerated. The
+/// per-hand rates (1.2 at L0, 2.4 at L2) are `machine_feed_rate`'s
+/// measured table; a recalibration fails here on purpose.
+#[test]
+fn census_sees_the_ec15_cells_far_hand_at_the_credit() {
+    use spaghettio_core::bus::sizing_census::{capture, side_loads_unjoined, summarize};
+    let f = SimFixture::find("chain-ec15");
+    let (_l, events) = capture(|| f.compose_layout());
+    let (loads, ambiguous) = side_loads_unjoined(&events);
+    assert_eq!(ambiguous, 0, "one cell per spec, no candidate contamination");
+    let iron: Vec<_> = loads
+        .iter()
+        .filter(|s| !s.side_is_output && s.recipe == "electronic-circuit" && s.item == "iron-plate")
+        .collect();
+    assert!(!iron.is_empty(), "the EC row's far iron side is recorded");
+    assert!(iron.iter().all(|s| s.entity == "long-handed-inserter" && (s.required - 2.5).abs() < 1e-9));
+    // At the sizing level (L0, 1.2/s per hand) every iron side is a shortfall.
+    assert!(iron.iter().all(|s| s.utilization() > 1.0));
+    // Re-priced at L2 the double-handed interior sides sit at 52%, the
+    // single-handed last-in-row machine at 1.042 — and lands in the
+    // `0.95–1.00`-or-above accounting, not the sub-0.85 band.
+    let at_l2: Vec<_> = loads.iter().map(|s| s.repriced(2)).collect();
+    let s = summarize(&at_l2, ambiguous);
+    let m = s.max_in.expect("an input side");
+    assert_eq!((m.recipe.as_str(), m.item.as_str(), m.count), ("electronic-circuit", "iron-plate", 1));
+    assert!((m.utilization() - 2.5 / 2.4).abs() < 1e-6, "last-in-row hand at 1.042, got {}", m.utilization());
+    assert!(s.bands[4] >= 1, "the 1.042 side is a shortfall against the L2 credit");
+    assert!(
+        at_l2.iter().any(|x| x.count == 2 && x.item == "iron-plate" && (x.utilization() - 2.5 / 4.8).abs() < 1e-6),
+        "interior machines: two hands at 52%"
+    );
+}
+
+/// RFC-073 Phase 0 — the inserter sizing census over the SIM REGISTRY's
+/// fixtures: one CSV row per (fixture, declared level), the input sides
+/// re-priced at that level (the registry runs one geometry, sized at its
+/// `geo_cap`, in several declared worlds — the hand that starves is the
+/// hand at the world's rate). Join onto `cell-sim-registry.json` by
+/// (target, rate, level) for the verdict each row measured.
+///
+/// Survey, not a gate: `cargo test --manifest-path crates/core/Cargo.toml
+/// --test cell_composition -- inserter_sizing_census_registry --ignored
+/// --nocapture`.
+#[test]
+#[ignore = "survey — RFC-073 Phase 0 sizing census over the sim registry"]
+fn inserter_sizing_census_registry() {
+    use spaghettio_core::bus::sizing_census::{capture, side_loads_unjoined, summarize, Summary};
+    println!("fixture,target,rate,geo_cap,level,{}", Summary::CSV_HEADER);
+    let only = std::env::var("SPAGHETTIO_CENSUS_ONLY").ok();
+    for f in SIM_FIXTURES
+        .iter()
+        .filter(|f| !f.levels.is_empty() && only.as_deref().is_none_or(|o| o == f.label))
+    {
+        // Composed layouts: cells are generated once in their own frame and
+        // cloned, so the loads are taken unjoined (one copy per spec).
+        let (_l, events) = capture(|| f.compose_layout());
+        let (loads, ambiguous) = side_loads_unjoined(&events);
+        if std::env::var("SPAGHETTIO_CENSUS_RAW").is_ok() {
+            for l in &loads {
+                println!("raw {}: {l:?}", f.label);
+            }
+        }
+        for &lvl in f.levels {
+            let at_level: Vec<_> = loads.iter().map(|s| s.repriced(lvl)).collect();
+            println!(
+                "{},{},{},{},{},{}",
+                f.label,
+                f.target,
+                f.rate,
+                f.geo_cap,
+                lvl,
+                summarize(&at_level, ambiguous)
+            );
+        }
+    }
+}
+
 /// Phase-B differential scoreboard (kill-3 evidence): composed vs bus
 /// on every chain-eligible ladder fixture. Prints errors / warnings /
 /// area / refusals per path.

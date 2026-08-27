@@ -147,6 +147,35 @@ pub fn is_active() -> bool {
     COLLECTOR.with(|c| c.borrow().is_some())
 }
 
+thread_local! {
+    /// The sizing census is ON: `InserterSideSized` is built and emitted
+    /// (RFC-073 Phase 0). Opt-in per scope via `with_sizing_census`
+    /// (`bus::sizing_census::capture`), never by a collector or sink
+    /// being present — the web's streaming solve installs both on every
+    /// interactive layout, so a "someone is listening" gate would build
+    /// one event per machine side (~18k allocations on the ec@240 grid)
+    /// and serialize them to the browser for nothing (#735 rounds 1–2).
+    static SIZING_CENSUS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Is the sizing census on for this thread? The per-side sizing event
+/// is built only when this is true.
+pub fn sizing_census_enabled() -> bool {
+    SIZING_CENSUS.with(|c| c.get())
+}
+
+/// Run `f` with the sizing census on (RAII — restored on panic too).
+pub fn with_sizing_census<F: FnOnce() -> R, R>(f: F) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SIZING_CENSUS.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(SIZING_CENSUS.with(|c| c.replace(true)));
+    f()
+}
+
 /// Number of events currently in the collector (0 if none active).
 /// Lets the layout-retry loop snapshot the collector size before its
 /// inner pass, then read only events emitted by that pass.
@@ -312,6 +341,35 @@ pub enum TraceEvent {
         /// (the row shape offers no further slots). Derived centrally in
         /// `inserter_ladder::capped_limit`, never guessed post-hoc.
         limit: String,
+    },
+
+    /// One machine side was sized by `bus::inserter_ladder` (RFC-073
+    /// Phase 0, the sizing census). Emitted for every side the ROW
+    /// TEMPLATES size (`bus::templates`, through `emit_side_trace` and
+    /// the quad row's mirrored input3), covered or not —
+    /// `InserterSideCapped` above is the shortfall subset. NOT emitted
+    /// by the nine direct `size_side` calls in `bus::placer` (the DI
+    /// bridge and the fused/straddle cells) — the census's recorded gap.
+    /// The census reads `required / capacity` per side to find the hands
+    /// the ladder fills to the brim; `capacity` is the plan's own credit
+    /// at the level the layout was sized at (`SidePlan::capacity`), and
+    /// `(entity, count)` lets a consumer re-price the side at a different
+    /// declared level. Same machine-origin anchor as the capped event.
+    /// Built only inside `trace::with_sizing_census` (the census's own
+    /// `capture`) — never on an ordinary traced or streaming build, so
+    /// it does not appear in snapshots or the browser's trace.
+    InserterSideSized {
+        recipe: String,
+        side_is_output: bool,
+        /// The item this side moves — a machine's near and far inputs are
+        /// distinct sides at the same origin.
+        item: String,
+        required: f64,
+        entity: String,
+        count: usize,
+        capacity: f64,
+        machine_x: i32,
+        machine_y: i32,
     },
 
     // Phase 2: Lane Planning
