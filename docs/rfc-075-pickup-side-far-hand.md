@@ -506,6 +506,20 @@ near-side hands do not qualify.
   direction; (e) the rig-footprint model in `interior_rig_lanes`
   mirrors `scenario.rs` by hand (jog handedness, slot depths, kit
   sizes) — the harness's pre-flight guard remains the oracle, and a
-  change to the rig geometry must revisit it. The far hands were one of PU's
+  change to the rig geometry must revisit it.
+- *2026-08-27 — review round 1 (#741): no majors; one scoping leak
+  fixed.* Of `contest_favors_far`'s six callers, five contest a reach-2
+  PICKUP; the self-loop row's major-vs-minor OUTPUT tile
+  (`templates.rs`, `self_loop_row`) contests two belt-drop hands, and
+  routing its far ceiling through the pickup credit opened a
+  2.04–2.40/s window where a belt-drop far hand could win the column
+  against a near hand with its own shortfall. That site now calls
+  `contest_favors_far_belt_drop` (flooded ceiling — the pre-RFC number,
+  bit-identical: the eight self-loop/voider fixtures' pins are
+  unchanged); `contest_window_between_pickup_and_flooded_credit` pins
+  the window both ways. Also corrected: the L7 arithmetic in one test
+  comment (the pickup ladder's L7 hand is 4 — 1.2 × 4 × 0.85 = 4.08 —
+  not the belt-drop 2.67 correction; now asserted, not just stated).
+  The other five minors are residuals (a)–(e) above, restated. The far hands were one of PU's
   standing causes, not the main one; the RFC-073 census had said so
   ("with other standing causes").

@@ -10,7 +10,8 @@
 //! Port of `src/bus/templates.py`.
 
 use crate::bus::inserter_ladder::{
-    capped_limit, contest_favors_far, size_belt_drop_side, size_side, size_side_output,
+    capped_limit, contest_favors_far, contest_favors_far_belt_drop, size_belt_drop_side, size_side,
+    size_side_output,
     InserterTier, Reach, SidePlan,
 };
 use crate::bus::stacking_ctx::StackingCtx;
@@ -4436,7 +4437,10 @@ pub fn self_loop_row(
     for &mx in &mxs {
         if has_minor {
             let shared_dx = vec![2i32];
-            let minor_wins = contest_favors_far(major_produced_rate, minor_produced_rate, true, quality, level);
+            // Both sides DROP onto belts: the minor's reach-2 hand is a
+            // belt-drop, not a pickup, so its contest ceiling stays the
+            // flooded credit (RFC-075 scopes the derating to pickups).
+            let minor_wins = contest_favors_far_belt_drop(major_produced_rate, minor_produced_rate, true, quality, level);
             let major_extra_dx: Vec<i32> = if minor_wins { vec![] } else { shared_dx.clone() };
             let minor_extra_dx: Vec<i32> = if minor_wins { shared_dx } else { vec![] };
 

@@ -412,18 +412,58 @@ pub fn contest_favors_far(
     quality: QualityTier,
     level: u8,
 ) -> bool {
+    // The far side here is a reach-2 PICKUP (a belt→machine input hand):
+    // its ceiling is the derated pickup credit (RFC-075), the same number
+    // `size_side` ladders against, so a far side the ladder would give two
+    // hands wins the shared column by its own shortfall rather than on the
+    // tie rule. Every caller but the self-loop row's output contest is
+    // this case; that one uses [`contest_favors_far_belt_drop`].
+    contest_with_far_ceiling(
+        near_required,
+        far_required,
+        far_eligible,
+        far_pickup_rate(LONG_HANDED, Reach::Far, quality, level),
+        quality,
+        level,
+    )
+}
+
+/// [`contest_favors_far`] for a contest whose far side DROPS onto a belt
+/// (the self-loop row's major-vs-minor OUTPUT tile): a belt-drop hand is
+/// not a pickup, so its ceiling stays the flooded `machine_feed_rate` —
+/// the pre-RFC-075 number, bit-identical for every such row.
+pub fn contest_favors_far_belt_drop(
+    near_required: f64,
+    far_required: f64,
+    far_eligible: bool,
+    quality: QualityTier,
+    level: u8,
+) -> bool {
+    contest_with_far_ceiling(
+        near_required,
+        far_required,
+        far_eligible,
+        machine_feed_rate(LONG_HANDED, quality, level),
+        quality,
+        level,
+    )
+}
+
+fn contest_with_far_ceiling(
+    near_required: f64,
+    far_required: f64,
+    far_eligible: bool,
+    far_ceiling: f64,
+    quality: QualityTier,
+    level: u8,
+) -> bool {
     if !far_eligible {
         return false;
     }
     // Ceilings at the research level's measured machine-feed rates
     // (RFC-049 Phase 3) — at L0 identical to the historical flat
     // constants, so contest outcomes are unchanged at zero research.
-    // The far ceiling is the PICKUP credit (RFC-075: derated for the
-    // moving-belt regime), the same number `size_side` ladders against,
-    // so a far side the ladder would give two hands wins the shared
-    // column by its own shortfall rather than on the tie rule.
-    let near_ceiling = far_pickup_rate(STACK, Reach::Near, quality, level);
-    let far_ceiling = far_pickup_rate(LONG_HANDED, Reach::Far, quality, level);
+    let near_ceiling = machine_feed_rate(STACK, quality, level);
     let near_shortfall = (near_required - near_ceiling).max(0.0);
     let far_shortfall = (far_required - far_ceiling).max(0.0);
     let near_rel = if near_required > 0.0 { near_shortfall / near_required } else { 0.0 };
@@ -1101,14 +1141,17 @@ mod tests {
         assert!(l7.shortfall.is_none());
     }
 
-    /// Far (long-handed) ceiling rises with research: 2.5/s far demand
-    /// is a shortfall at L0 (pickup credit 1.02/s) but covered at L7
-    /// (1.2 × 2.67 × 0.85 = 2.72/s).
+    /// Far (long-handed) ceiling rises with research: 4.0/s far demand
+    /// is a shortfall at L0 (pickup credit 1.2 × 0.85 = 1.02/s) but
+    /// covered at L7 (hand 4: 1.2 × 4 × 0.85 = 4.08/s — the machine-feed
+    /// hand ratio, not the belt-drop 2.67 sim correction).
     #[test]
     fn far_ceiling_rises_with_research() {
         let q = QualityTier::Normal;
-        assert!(size_side(2.5, Reach::Far, 0, InserterTier::Stack, q, 0).shortfall.is_some());
-        assert!(size_side(2.5, Reach::Far, 0, InserterTier::Stack, q, 7).shortfall.is_none());
+        assert!(size_side(4.0, Reach::Far, 0, InserterTier::Stack, q, 0).shortfall.is_some());
+        let l7 = size_side(4.0, Reach::Far, 0, InserterTier::Stack, q, 7);
+        assert!(l7.shortfall.is_none());
+        assert!((l7.capacity - 4.08).abs() < 1e-9, "L7 pickup credit, got {}", l7.capacity);
     }
 
     /// Contest ceilings scale with the level. The decisive case: near
@@ -1123,6 +1166,26 @@ mod tests {
         let q = QualityTier::Normal;
         assert!(!contest_favors_far(13.0, 1.0, true, q, 0));
         assert!(contest_favors_far(13.0, 1.0, true, q, 7));
+    }
+
+    /// RFC-075 scoping: a far side between the derated pickup credit and
+    /// the flooded credit (2.04–2.40 at L2) carries a shortfall as a
+    /// PICKUP and none as a BELT DROP. Against a near side with its own
+    /// small shortfall (13.0 vs the 19.2 stack ceiling at L2 is zero, so
+    /// use 20.0: rel 0.04), the pickup contest goes to far (rel 0.11)
+    /// and the belt-drop contest — the self-loop row's output tile —
+    /// stays with near, exactly as before RFC-075.
+    #[test]
+    fn contest_window_between_pickup_and_flooded_credit() {
+        let q = QualityTier::Normal;
+        assert!(contest_favors_far(20.0, 2.3, true, q, 2));
+        assert!(!contest_favors_far_belt_drop(20.0, 2.3, true, q, 2));
+        // Above the flooded credit both agree on far; below the pickup
+        // credit both agree on near (near has the only shortfall).
+        assert!(contest_favors_far(20.0, 2.6, true, q, 2));
+        assert!(contest_favors_far_belt_drop(20.0, 2.6, true, q, 2));
+        assert!(!contest_favors_far(20.0, 1.9, true, q, 2));
+        assert!(!contest_favors_far_belt_drop(20.0, 1.9, true, q, 2));
     }
 
     #[test]
