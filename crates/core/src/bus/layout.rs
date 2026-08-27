@@ -1859,23 +1859,45 @@ fn layout_pass(
         .iter()
         .filter(|l| l.producer_row.is_none() && external_items.contains(l.item.as_str()))
         .filter_map(|l| {
-            entity_at(l.x, l.source_y).map(|e| crate::models::BoundaryRecord {
-                item: l.item.clone(),
-                x: l.x,
-                y: l.source_y,
-                // Bus lanes run south from the north-edge source. A
-                // pipe-to-ground head already carries that flow direction,
-                // but a bare pipe has EntityDirection's default North because
-                // pipes themselves have no facing. Record the lane flow for
-                // that class so the external fluid feed is placed outside the
-                // layout rather than inside it.
-                direction: if l.is_fluid && e.name == "pipe" {
-                    EntityDirection::South
+            entity_at(l.x, l.source_y).map(|e| {
+                // The record's direction is the INTO-LAYOUT flow at the
+                // head tile — what the harness rigs against (outward =
+                // the opposite). Derived from the lane's own geometry,
+                // not assumed: a lane flows from its source tile toward
+                // its tap-offs (#732, #736 review: the first fix wrote
+                // `South` as a constant, which is the same shape of
+                // assumption that produced the bug — a bare `pipe` has no
+                // facing, so its entity direction is the export default,
+                // North, and a north-edge-only assumption would silently
+                // re-create #732 for a feed on any other edge).
+                //   * every tap-off below the source → South
+                //   * every tap-off above the source → North
+                //   * mixed / none → the entity's own direction (no claim)
+                // Pipe-to-ground heads carry their placed direction, which
+                // the same derivation must agree with (debug-asserted).
+                let flow = lane_flow_direction(l);
+                let direction = if l.is_fluid && e.name == "pipe" {
+                    flow.unwrap_or(e.direction)
                 } else {
+                    debug_assert!(
+                        !(l.is_fluid && e.name == "pipe-to-ground")
+                            || flow.is_none_or(|f| f == e.direction),
+                        "pipe-to-ground head at ({}, {}) faces {:?} but its lane flows {:?}",
+                        l.x,
+                        l.source_y,
+                        e.direction,
+                        flow
+                    );
                     e.direction
-                },
-                is_fluid: l.is_fluid,
-                entity: e.name.clone(),
+                };
+                crate::models::BoundaryRecord {
+                    item: l.item.clone(),
+                    x: l.x,
+                    y: l.source_y,
+                    direction,
+                    is_fluid: l.is_fluid,
+                    entity: e.name.clone(),
+                }
             })
         })
         .collect();
@@ -1952,6 +1974,29 @@ fn layout_pass(
         cap_coords,
         uncovered_inserters_out,
     ))
+}
+
+/// The direction a bus lane FLOWS at its source tile, from its own
+/// geometry: a lane runs from `source_y` toward its tap-offs, so every
+/// tap-off below the source means South, every one above means North.
+/// `None` when the lane has no tap-offs or they straddle the source —
+/// no claim is better than a wrong one (the record then keeps the head
+/// entity's own direction). Used for fluid boundary-input records whose
+/// head is a bare `pipe` (no facing of its own, #732) and to cross-check
+/// pipe-to-ground heads. Bus lanes flow south from the north edge today;
+/// this derives that rather than assuming it, so a feed on another edge
+/// records its real flow instead of re-creating #732 (#736 review).
+pub fn lane_flow_direction(lane: &crate::bus::lane_planner::BusLane) -> Option<EntityDirection> {
+    if lane.tap_off_ys.is_empty() {
+        return None;
+    }
+    if lane.tap_off_ys.iter().all(|&y| y > lane.source_y) {
+        Some(EntityDirection::South)
+    } else if lane.tap_off_ys.iter().all(|&y| y < lane.source_y) {
+        Some(EntityDirection::North)
+    } else {
+        None
+    }
 }
 
 /// Traced variant of [`build_bus_layout`].
