@@ -187,10 +187,13 @@ territory, and this RFC replaces that scoped term with the ladder's
 own). A plan that fits within one derated hand keeps one hand; a plan
 between the derated and the flooded credit gets a second hand, sized
 by the existing ladder with no other change. Near sides are untouched
-(RFC-073: their 0.93–0.974 hands produce at plan). The trimmed
-last-in-row far side is untouched too — it is the tail hand, the
-flooded case, and the ec15 receipt says so — which the templates
-already distinguish (`LastInRow`).
+(RFC-073: their 0.93–0.974 hands produce at plan). *As proposed*, the
+trimmed last-in-row far side would be untouched too — it is the tail
+hand, the flooded case, and the ec15 receipt says so. **As shipped it
+is derated with the rest** (decision log, residual (c)): the ladder
+sizes a side without knowing its position on the belt, the cost is one
+long-handed inserter per affected row end, and a position-aware
+exemption stays available if that count ever matters.
 
 Where it lands: `inserter_ladder.rs` (the far branch of `size_side` /
 `count_ladder`), `SidePlan::capacity` reads the derated credit so

@@ -461,8 +461,12 @@ fn contest_with_far_ceiling(
         return false;
     }
     // Ceilings at the research level's measured machine-feed rates
-    // (RFC-049 Phase 3) — at L0 identical to the historical flat
-    // constants, so contest outcomes are unchanged at zero research.
+    // (RFC-049 Phase 3). The near ceiling is the flat stack rate at L0;
+    // the far ceiling is whatever the caller passed — the flooded rate
+    // for a belt-drop contest (unchanged at every level), the derated
+    // pickup credit for an input contest (RFC-075: 1.02 at L0, so a far
+    // pickup demanding between 1.02 and 1.2 now wins a column it used to
+    // tie for — that is the point, the ladder gives it two hands).
     let near_ceiling = machine_feed_rate(STACK, quality, level);
     let near_shortfall = (near_required - near_ceiling).max(0.0);
     let far_shortfall = (far_required - far_ceiling).max(0.0);
