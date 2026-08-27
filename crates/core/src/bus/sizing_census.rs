@@ -122,12 +122,17 @@ impl SideLoad {
         })
     }
 
-    /// Dedupe key: one side of one machine. `entity` is part of it because
-    /// a template can put the same item on a near AND a far hand of one
-    /// machine (the 2-wide pair rows); a candidate that re-sizes the same
-    /// side to a different tier therefore reads as a distinct side, not
-    /// as ambiguity — accepted for a census.
-    fn key(&self) -> (String, bool, String, String, i32, i32) {
+    /// Dedupe key: one side of one machine. `entity` and `required` are
+    /// part of it because a template can put the same item on a near AND
+    /// a far hand of one machine (the 2-wide pair rows split one item's
+    /// rate across a near hand and a far hand; a voider row can feed two
+    /// long-handed hands the same item) and the event carries no reach —
+    /// the two hands differ in what they are asked to move or what they
+    /// are. The cost is the ambiguity signal's reach: a losing candidate
+    /// that re-sizes the same side to a different tier or a different
+    /// rate reads as a distinct side, not as ambiguity, so `ambiguous`
+    /// counts only same-key plans that differ in count or capacity.
+    fn key(&self) -> (String, bool, String, String, i32, i32, i64) {
         (
             self.recipe.clone(),
             self.side_is_output,
@@ -135,21 +140,23 @@ impl SideLoad {
             self.entity.clone(),
             self.machine_x,
             self.machine_y,
+            (self.required * 1e6).round() as i64,
         )
     }
 
     fn same_plan(&self, other: &SideLoad) -> bool {
-        self.count == other.count
-            && (self.required - other.required).abs() < 1e-9
-            && (self.capacity - other.capacity).abs() < 1e-9
+        self.count == other.count && (self.capacity - other.capacity).abs() < 1e-9
     }
 }
 
-/// Run `f` under a trace collector and a recording sink; return its result
-/// with the events the SINK saw — the shipped passes only (see the module
-/// doc). The collector is required: `build_bus_layout` replays pass 1 to
-/// the sink out of the collector.
+/// Run `f` with the sizing census ON, under a trace collector and a
+/// recording sink; return its result with the events the SINK saw — the
+/// shipped passes only (see the module doc). The collector is required:
+/// `build_bus_layout` replays pass 1 to the sink out of the collector.
+/// Not nestable inside an outer trace: `TraceGuard` clears the collector
+/// on drop, so an enclosing trace would end here (debug-asserted).
 pub fn capture<R>(f: impl FnOnce() -> R) -> (R, Vec<TraceEvent>) {
+    debug_assert!(!trace::is_active(), "capture() must not run inside an outer trace");
     let buf: Rc<RefCell<Vec<TraceEvent>>> = Rc::new(RefCell::new(Vec::new()));
     let _collector = trace::start_trace();
     let sink_buf = Rc::clone(&buf);
@@ -158,15 +165,17 @@ pub fn capture<R>(f: impl FnOnce() -> R) -> (R, Vec<TraceEvent>) {
             sink_buf.borrow_mut().push(e.clone());
         }
     }));
-    let r = f();
+    let r = trace::with_sizing_census(f);
     drop(_sink);
     let events = std::mem::take(&mut *buf.borrow_mut());
     (r, events)
 }
 
+type SideKey = (String, bool, String, String, i32, i32, i64);
+
 fn dedupe(loads: impl Iterator<Item = SideLoad>) -> (Vec<SideLoad>, usize) {
-    let mut by_key: FxHashMap<(String, bool, String, String, i32, i32), SideLoad> = FxHashMap::default();
-    let mut ambiguous: FxHashSet<(String, bool, String, String, i32, i32)> = Default::default();
+    let mut by_key: FxHashMap<SideKey, SideLoad> = FxHashMap::default();
+    let mut ambiguous: FxHashSet<SideKey> = Default::default();
     for load in loads {
         let key = load.key();
         if let Some(prev) = by_key.get(&key) {
@@ -222,11 +231,14 @@ pub fn side_loads_unjoined(events: &[TraceEvent]) -> (Vec<SideLoad>, usize) {
 /// hypotheses, not calibrated thresholds: 0.85 is the margin RFC-072's
 /// grid quantizer ships, 0.926 (K=18, one short per copy) and 1.0 (K=20,
 /// two short) are the receipted failures. Bands are `u < edge + 1e-9`,
-/// so a hand at EXACTLY its credit (1.000 — the K=20 / PU-from-ore
-/// class) lands in `0.95–1.00`, and only a plan the ladder itself could
-/// not cover (`required > capacity` beyond the ladder's own EPS) reads
-/// as the `>1.00` shortfall band; the two are different facts and the
-/// table keeps them apart.
+/// closed on the top at every edge alike: a hand at exactly 0.85 is in
+/// the first band (`≤0.85`), exactly 0.90 in the second, and exactly
+/// its credit (1.000 — the K=20 / PU-from-ore class) in `0.95–1.00`;
+/// only a plan the ladder itself could not cover (`required > capacity`
+/// beyond the ladder's own EPS) reads as the `>1.00` shortfall band.
+/// The band names in `CSV_HEADER` (`lt85` …) are shorthand for those
+/// closed intervals; the fullest side's exact utilization is printed
+/// alongside, so a hand at the 0.85 margin is never lost in a band.
 pub const BAND_EDGES: [f64; 4] = [0.85, 0.90, 0.95, 1.0];
 
 /// Per-fixture census row.
@@ -235,8 +247,8 @@ pub struct Summary {
     pub sides_in: usize,
     pub sides_out: usize,
     pub ambiguous: usize,
-    /// `[<0.85, 0.85–0.90, 0.90–0.95, 0.95–1.00, >1.00 (shortfall)]`
-    /// over input sides.
+    /// `[≤0.85, 0.85–0.90, 0.90–0.95, 0.95–1.00, >1.00 (shortfall)]`
+    /// over input sides (each band closed at its top edge — `BAND_EDGES`).
     pub bands: [usize; 5],
     /// The fullest input side.
     pub max_in: Option<SideLoad>,
@@ -344,10 +356,14 @@ mod tests {
             // Near (cable) and far (iron) inputs of ONE machine: two sides.
             sized("electronic-circuit", false, "iron-plate", 2.4, "long-handed-inserter", 1, 2.4, 0, 2),
             sized("electronic-circuit", false, "copper-cable", 7.5, "stack-inserter", 1, 12.0, 0, 2),
-            // A losing candidate re-sized the iron side with a different
-            // required rate: ambiguous, last one wins.
-            sized("electronic-circuit", false, "iron-plate", 2.0, "long-handed-inserter", 1, 2.4, 0, 2),
+            // A losing candidate planned the SAME side (same item, entity,
+            // origin, required) with a different hand count: ambiguous,
+            // last one wins.
+            sized("electronic-circuit", false, "iron-plate", 2.4, "long-handed-inserter", 2, 4.8, 0, 2),
             sized("electronic-circuit", false, "iron-plate", 2.4, "long-handed-inserter", 1, 2.4, 0, 2),
+            // The same item on a second hand of the same machine at a
+            // different rate (a pair row's near/far split) is its own side.
+            sized("electronic-circuit", false, "iron-plate", 2.0, "long-handed-inserter", 1, 2.4, 0, 2),
             // Re-stamped identically (a layout retry): not ambiguous.
             sized("electronic-circuit", false, "iron-plate", 1.0, "long-handed-inserter", 1, 2.4, 3, 2),
             sized("electronic-circuit", false, "iron-plate", 1.0, "long-handed-inserter", 1, 2.4, 3, 2),
@@ -357,14 +373,34 @@ mod tests {
         ];
         let (loads, ambiguous) = side_loads(&events, &layout);
         assert_eq!(ambiguous, 1);
-        assert_eq!(loads.len(), 4);
+        assert_eq!(loads.len(), 5);
         let s = summarize(&loads, ambiguous);
-        assert_eq!((s.sides_in, s.sides_out), (3, 1));
-        assert_eq!(s.bands, [2, 0, 0, 1, 0], "7.5/12 and 1.0/2.4 sit under 0.85; 2.4/2.4 is the 0.95–1.00 band");
+        assert_eq!((s.sides_in, s.sides_out), (4, 1));
+        assert_eq!(
+            s.bands,
+            [3, 0, 0, 1, 0],
+            "7.5/12, 2.0/2.4 and 1.0/2.4 sit at or under 0.85; 2.4/2.4 is the 0.95–1.00 band"
+        );
         let m = s.max_in.expect("an input side");
-        assert_eq!((m.machine_x, m.item.as_str(), m.required), (0, "iron-plate", 2.4));
+        assert_eq!((m.machine_x, m.item.as_str(), m.required, m.count), (0, "iron-plate", 2.4, 1));
         // The unjoined form keeps the off-layout side too.
-        assert_eq!(side_loads_unjoined(&events).0.len(), 5);
+        assert_eq!(side_loads_unjoined(&events).0.len(), 6);
+    }
+
+    #[test]
+    fn exact_edges_close_their_band_from_the_top() {
+        let layout = layout_with(&[("r", 0, 0)]);
+        let at = |u: f64, x: i32| sized("r", false, "i", u * 2.0, "fast-inserter", 1, 2.0, x, 0);
+        let layout = {
+            let mut l = layout;
+            for x in 1..5 {
+                l.entities.push(PlacedEntity { name: "m".into(), x, y: 0, recipe: Some("r".into()), ..Default::default() });
+            }
+            l
+        };
+        let events = vec![at(0.85, 0), at(0.90, 1), at(0.95, 2), at(1.0, 3), at(1.0 + 1e-6, 4)];
+        let (loads, amb) = side_loads(&events, &layout);
+        assert_eq!(summarize(&loads, amb).bands, [1, 1, 1, 1, 1]);
     }
 
     #[test]

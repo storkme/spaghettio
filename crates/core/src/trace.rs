@@ -147,14 +147,33 @@ pub fn is_active() -> bool {
     COLLECTOR.with(|c| c.borrow().is_some())
 }
 
-/// Would an `emit` right now reach anyone — a collector OR a sink?
-/// For emit sites whose event is costly to BUILD (allocating strings
-/// per machine side), so they can skip construction on the untraced
-/// path instead of paying for an event `emit` then drops (#735 review:
-/// the per-side sizing event was ~18k allocations per ec@240 build for
-/// nothing). `with_muted` is checked by `emit` itself, not here.
-pub fn is_listening() -> bool {
-    COLLECTOR.with(|c| c.borrow().is_some()) || SINK.with(|s| s.borrow().is_some())
+thread_local! {
+    /// The sizing census is ON: `InserterSideSized` is built and emitted
+    /// (RFC-073 Phase 0). Opt-in per scope via `with_sizing_census`
+    /// (`bus::sizing_census::capture`), never by a collector or sink
+    /// being present — the web's streaming solve installs both on every
+    /// interactive layout, so a "someone is listening" gate would build
+    /// one event per machine side (~18k allocations on the ec@240 grid)
+    /// and serialize them to the browser for nothing (#735 rounds 1–2).
+    static SIZING_CENSUS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Is the sizing census on for this thread? The per-side sizing event
+/// is built only when this is true.
+pub fn sizing_census_enabled() -> bool {
+    SIZING_CENSUS.with(|c| c.get())
+}
+
+/// Run `f` with the sizing census on (RAII — restored on panic too).
+pub fn with_sizing_census<F: FnOnce() -> R, R>(f: F) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SIZING_CENSUS.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(SIZING_CENSUS.with(|c| c.replace(true)));
+    f()
 }
 
 /// Number of events currently in the collector (0 if none active).
@@ -336,7 +355,9 @@ pub enum TraceEvent {
     /// at the level the layout was sized at (`SidePlan::capacity`), and
     /// `(entity, count)` lets a consumer re-price the side at a different
     /// declared level. Same machine-origin anchor as the capped event.
-    /// Built only when `trace::is_listening()` — it allocates.
+    /// Built only inside `trace::with_sizing_census` (the census's own
+    /// `capture`) — never on an ordinary traced or streaming build, so
+    /// it does not appear in snapshots or the browser's trace.
     InserterSideSized {
         recipe: String,
         side_is_output: bool,

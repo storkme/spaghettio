@@ -428,9 +428,12 @@ fn emit_side_trace(
     quality: QualityTier,
     level: u8,
 ) {
-    // Built only when someone is listening: the event allocates three
-    // strings per machine side, ~18k per ec@240 build (#735 review).
-    if crate::trace::is_listening() {
+    // Built only under the sizing census (`sizing_census::capture`): the
+    // event allocates three strings per machine side, ~18k per ec@240
+    // build, and the web's streaming solve always has a collector and a
+    // sink installed, so "someone is listening" is not a cheap enough
+    // gate (#735 rounds 1–2).
+    if crate::trace::sizing_census_enabled() {
         crate::trace::emit(crate::trace::TraceEvent::InserterSideSized {
             recipe: recipe.to_string(),
             side_is_output,
@@ -2183,7 +2186,7 @@ pub fn quad_input_row(
         // The census sees this side as ONE side of two mirrored hands
         // (#735 review: the quad row's input3 sized without recording
         // itself, under-reporting exactly the third-input class).
-        if crate::trace::is_listening() {
+        if crate::trace::sizing_census_enabled() {
             crate::trace::emit(crate::trace::TraceEvent::InserterSideSized {
                 recipe: recipe.to_string(),
                 side_is_output: false,

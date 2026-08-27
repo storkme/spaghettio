@@ -817,6 +817,14 @@ fn export_chain_fixtures_for_sim() {
 /// machine one. Re-priced at L2 (2.4/s per hand) that last hand sits at
 /// 1.042 of its credit and the cell still produces 15.0/15 in the sim —
 /// the counter-example to "fullness predicts deficit".
+///
+/// This IS a pinned-geometry gate, deliberately (#735 round 2): the ec15
+/// cell's geometry is frozen by `cell_registry_hashes_current` (hash
+/// `8f2473ec…`, three sim rows), so its side plans cannot legitimately
+/// move without a registry re-bless — and a re-bless is exactly when
+/// these numbers should be re-read, not silently regenerated. The
+/// per-hand rates (1.2 at L0, 2.4 at L2) are `machine_feed_rate`'s
+/// measured table; a recalibration fails here on purpose.
 #[test]
 fn census_sees_the_ec15_cells_far_hand_at_the_credit() {
     use spaghettio_core::bus::sizing_census::{capture, side_loads_unjoined, summarize};

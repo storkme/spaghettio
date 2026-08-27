@@ -95,9 +95,13 @@ grid quantizer today) is a second opinion on the same number.
   records itself as one side of two hands (#735 review found it
   missing from the first cut). The nine direct `size_side` calls in
   `placer.rs` (DI bridge, fused/straddle cells) emit nothing — the
-  census's recorded gap, not fixed here. The event is built only when
-  a collector or sink is listening (`trace::is_listening`), so the
-  untraced path pays nothing.
+  census's recorded gap, not fixed here. The event is built only under
+  the census's own scope (`trace::with_sizing_census`, entered by
+  `capture`) — NOT whenever a collector or sink is present, because
+  the web's streaming solve installs both on every interactive layout
+  and would otherwise build and serialize one event per machine side
+  for nothing (#735 round 2). Ordinary traced builds and snapshots
+  never contain it.
 
 ### Phase 1 — the margin (gated on K73-1)
 
@@ -256,16 +260,21 @@ K73-2..K73-4 read off those receipts; the copy-count pins and
 ### Phase 0 census — sim registry (composed cells, input sides re-priced at the declared level)
 
 `inserter_sizing_census_registry`, 2026-08-27. Bands over INPUT sides:
-`<0.85 | 0.85–0.90 | 0.90–0.95 | 0.95–1.00 | shortfall` — a hand at
-exactly its credit (1.000) is in `0.95–1.00`; `shortfall` is a plan the
-ladder itself could not cover. Side counts are **per generated cell**
+`≤0.85 | 0.85–0.90 | 0.90–0.95 | 0.95–1.00 | shortfall` — every band
+closed at its top edge, so a hand at exactly 0.85 is in the first and a
+hand at exactly its credit (1.000) in `0.95–1.00`; `shortfall` is a
+plan the ladder itself could not cover. Side counts are **per generated cell**
 (one copy per spec — ec75 and ec150 read the same because they seed the
 same per-copy cell), not per fixture. Verdicts from
 `cell-sim-registry.json` (produced % of plan). The tables are the
 survey the verdict was read from, dated; the instrument's end-to-end
 behaviour on the decisive row is pinned by the non-ignored
 `census_sees_the_ec15_cells_far_hand_at_the_credit`
-(`tests/cell_composition.rs`), the numbers themselves are not a gate.
+(`tests/cell_composition.rs`) — a pinned-geometry gate on purpose: the
+ec15 cell is frozen by the registry hash, so its 2.5/s far side, its
+two-hand interior and its one-hand last machine cannot move without a
+re-bless, and a recalibration of `machine_feed_rate` should fail it
+loudly. The rest of the tables are not gated.
 
 | fixture | level | sides in/out | bands | fullest input | sim |
 |---|---|---|---|---|---|
