@@ -1203,7 +1203,11 @@ export function renderSidebar(
     // Layout-level warnings (missing balancer templates, unresolved
     // ghost-router crossings) now surface in the Validation panel below
     // — kept off the result container so there's a single source of truth.
-    blueprintSection.style.display = layout.warnings?.length ? "none" : "flex";
+    // The composition receipt is not one of them (RFC-074 Unit 2) — the
+    // SAME gate as `runSolveMulti` below; #737 review found this primary
+    // path un-patched (the six-sites lesson).
+    setCompositionBadge(layout);
+    blueprintSection.style.display = realWarnings(layout).length ? "none" : "flex";
   }
 
   /**

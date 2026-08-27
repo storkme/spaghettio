@@ -216,7 +216,13 @@ entry, as #733 did. Unit 4: the probe's table in the decision log.
   is satisfied by the badge (native layouts have no receipt, so no
   badge) rather than a separate `SelectionDecided` reader — fewer
   sites, same information. User eyeball pending per the standing UI
-  rule.
+  rule. **#737 review round 1 caught the primary path un-patched**: the
+  sidebar has two layout-commit sites and the gate fix had landed only
+  on `runSolveMulti` (a comment block sits between `renderLayout` and
+  the gate on `runSolve`, so a replace-all edit matched one of the
+  two) — the exact single-target ec@240 request this RFC opened on was
+  still hiding the export button. Fixed; the six-sites rule for
+  sidebar changes applies to gates as much as to controls.
 - *2026-08-27 — Unit 4 adjudicated: K74-3 closes heterogeneous
   composition by measurement.* `probe_uniform_k_overprovisioning`
   (`tests/cell_composition.rs`, release) over every chain-eligible

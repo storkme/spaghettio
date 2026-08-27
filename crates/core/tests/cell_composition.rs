@@ -2385,6 +2385,9 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
     assert_eq!(receipt.copies_per_strip, vec![12, 12]);
     assert_eq!(receipt.strips.len(), 2);
     assert_eq!((receipt.strips[0].x, receipt.strips[0].y, receipt.strips[0].copies), (0, 0, 12));
+    // 32 = chain.rs's private `STRIP_CLEARANCE`, the same literal the
+    // inter-strip band assertion below pins (a change to the constant
+    // must move both, deliberately).
     assert_eq!(receipt.strips[1].y, receipt.strips[0].height + 32, "strip 1 starts one clearance below strip 0");
     assert_eq!(receipt.strips[1].y + receipt.strips[1].height, l.height, "the last strip ends at the layout's bottom");
     assert!(receipt.verification.is_empty() && !receipt.verified);
@@ -2687,10 +2690,14 @@ fn cell_candidate_wins_mil5_plates_over_broken_native() {
     let receipt = l.composition.as_ref().expect("a cell-composed winner carries its receipt");
     assert_eq!(receipt.kind, "cell-chain");
     assert!(l.warnings.contains(&receipt.verification), "the receipt's note is the warning, verbatim");
+    // `verified` is true on exactly the two full-match non-FAIL arms of
+    // `verification_status`, whose notes both open with this prefix; the
+    // other-world arm reads "sim-verified … ONLY under" (lowercase) and
+    // is `false`, like the NOT-verified and FAIL arms.
     assert_eq!(
         receipt.verified,
-        receipt.verification.contains("SIM-VERIFIED") && !receipt.verification.contains("NOT sim-verified"),
-        "verified is derived from the registry match the note describes"
+        receipt.verification.starts_with("cell-composed: geometry SIM-VERIFIED"),
+        "verified is the registry's full-match verdict, not a reading of the note"
     );
     let issues = validate::validate(&l, Some(&sr)).unwrap();
     let errors: Vec<_> = issues
