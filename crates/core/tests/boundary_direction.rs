@@ -30,7 +30,16 @@ fn step(d: EntityDirection) -> (i32, i32) {
 /// empty by design — and the tile the other way carries nothing (the
 /// outside, where the rig goes). Returns the violations (empty = holds).
 fn into_layout_violations(layout: &LayoutResult) -> Vec<String> {
-    let occupied: FxHashSet<(i32, i32)> = layout.entities.iter().map(|e| (e.x, e.y)).collect();
+    // Full footprints, not anchors: a 3×3 machine whose anchor is two
+    // tiles away still occupies the tile next to a head (#736 round 3).
+    let occupied: FxHashSet<(i32, i32)> = layout
+        .entities
+        .iter()
+        .flat_map(|e| {
+            let (w, h) = spaghettio_core::common::entity_size(&e.name);
+            (0..w as i32).flat_map(move |dx| (0..h as i32).map(move |dy| (e.x + dx, e.y + dy)))
+        })
+        .collect();
     layout
         .boundary_inputs
         .iter()
@@ -117,10 +126,16 @@ fn the_732_witnesses_record_the_flow_for_both_head_classes() {
             match record.entity.as_str() {
                 "pipe" => {
                     bare_pipe += 1;
-                    assert_ne!(
+                    // These three are north-edge feeds whose lanes run
+                    // south — the derivation's answer for them is South,
+                    // which is also "not the export default (North)". A
+                    // north-flowing feed would legitimately record North;
+                    // none of the witnesses is one (the mechanism itself
+                    // is unit-tested in `bus::layout::flow_from_taps`).
+                    assert_eq!(
                         record.direction,
-                        EntityDirection::North,
-                        "{}: a bare pipe's record must not be the export default",
+                        EntityDirection::South,
+                        "{}: a north-edge bare-pipe feed records the southbound lane flow",
                         fixture.name
                     );
                 }
