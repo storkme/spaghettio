@@ -424,3 +424,22 @@ near-side hands do not qualify.
   the final fixtures (two earlier sims, started on superseded
   geometries, were killed — they measured factories no longer
   produced).
+- *2026-08-27 — K75-3 on the bank row.* `tier5_processing_unit_from_ore_am3`
+  re-exported under the derated credit (6,661 entities, from 6,554 —
+  the twenty 2.40/2.40 iron sides and their kin got second hands; 0 E /
+  14 W: input-rate-delivery ×13, belt-detour ×1) and re-measured
+  (Factorio 2.0.77, 432k warmup, speed 32, converged, drift +0.9%):
+  **produced 1.80/2.00 (−10.1%), delivered −9.5%, WARN** — from
+  1.754 (−12.3%, FAIL) on the bank's previous geometry. No regression
+  (K75-3 holds: +2.2 points), and no claim beyond that: the deficit is
+  a uniform −10% across every stage (the shared-constraint shape), the
+  machines short in the timeseries are the LAST machines of the
+  tap-fed EC rows (x=51 at y=160–200), i.e. tail starvation on belts
+  provisioned at exactly plan — RFC-069's class, the opposite profile
+  from this RFC's head-slow cell. The profile flip is the receipt for
+  both halves: those rows read `2.26 2.33 2.43 1.32*` on one hand and
+  `2.50 2.50 2.50 0.84*` on two — the head machines rose to their
+  crafting maximum (the hand was their limit) and the tail fell to
+  what the tap leaves (the belt is its limit). The far hands were one of PU's
+  standing causes, not the main one; the RFC-073 census had said so
+  ("with other standing causes").
