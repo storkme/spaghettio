@@ -1,6 +1,6 @@
 # Selection-policy calibration evidence
 
-Source bank: `/tmp/calibration-matrix-2026-08-27-732`. Validator probe: `/tmp/calibration-matrix-2026-08-27-732/calibration-issue-breakdown.json`. Corpus-definition fingerprint (`corpus_sha256` — the ordered fixture declarations, deliberately independent of any generated layout): `88c59075b90b4b22fdc0a4711b1b43c7aa47ab676488b4d93e19754fb5004617` — must match the same field in the committed `crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine's corpus; per-row geometry binds via each row's `blueprint_sha256`/`manifest_sha256`, which the CI probe checks.
+Source bank: `/tmp/calibration-matrix-2026-08-27-rfc075`. Validator probe: `/tmp/claude-1000/-home-stork-code-fucktorio/db6aaf3b-8fab-4260-b2cb-087807a1b90c/scratchpad/rfc075/bank-issues-rfc075.json`. Corpus-definition fingerprint (`corpus_sha256` — the ordered fixture declarations, deliberately independent of any generated layout): `88c59075b90b4b22fdc0a4711b1b43c7aa47ab676488b4d93e19754fb5004617` — must match the same field in the committed `crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine's corpus; per-row geometry binds via each row's `blueprint_sha256`/`manifest_sha256`, which the CI probe checks.
 
 Status preserves campaign state: `awaiting-measurement` has no `report.json`; `non-converged` and `kit-error` retain their measured values but are excluded from the clean-row findings; `excluded` covers every probe-side determinism refusal — the probe's `exclusion_reason` names which: `blueprint-sha256-mismatch`, `manifest-sha256-mismatch`, `validator-totals-mismatch`, or `build-failed`.
 
@@ -23,7 +23,7 @@ Status preserves campaign state: `awaiting-measurement` has no `report.json`; `n
 | tier4_advanced_circuit_from_plates | measured | true |  | 101.672 | 100.334 |  | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
 | tier4_advanced_circuit_partitioned | kit-error | true | research-productivity parity | 98.997 | 100.669 |  | 0 | 0 | 0 | 0 | 0 | 2 | 1 | 0 |
 | tier4_advanced_circuit_from_ore_am2 | measured | true |  | 100.645 | 98.065 |  | 0 | 0 | 0 | 0 | 0 | 0 | 6 | 0 |
-| tier5_processing_unit_from_ore_am3 | measured | true |  | 86.550 | 87.719 |  | 0 | 0 | 0 | 0 | 0 | 1 | 10 | 0 |
+| tier5_processing_unit_from_ore_am3 | measured | true |  | 90.476 | 89.881 |  | 0 | 0 | 0 | 0 | 0 | 1 | 13 | 0 |
 | tier_kovarex_self_loop | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
 | tier_uranium_processing_surplus_export | non-converged | false |  | 0.000 | 95.709 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier_uranium_processing_voider | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |

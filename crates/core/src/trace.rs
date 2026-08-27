@@ -1592,6 +1592,16 @@ pub enum TraceEvent {
         pole_bridges: usize,
     },
 
+    // RFC-075: the plain pole repair would have dropped a bridge pole
+    // inside a harness rig lane (±`RIG_LANE_HALF_WIDTH` around an
+    // interior boundary head over the clearance), so the grid stamped
+    // `columns` explicit bridge poles at the safest x per gap and
+    // repaired again with the lanes kept out. Fires at most once per
+    // grid; absent when the plain repair was already clear.
+    CellGridBridgeRerouted {
+        columns: usize,
+    },
+
     // `ModuleSizeSplit` candidate (see `docs/rfc-decomposition-search.md`)
     // applied a k-way split to one module of the partition plan. Fires
     // once per split module per `produce()` call. With Phase 1's k=2,

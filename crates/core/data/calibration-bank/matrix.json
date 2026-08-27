@@ -379,12 +379,12 @@
     },
     {
       "belt_tier": "fast-transport-belt",
-      "blueprint_sha256": "b1188d2b812faaac9a94e3b6cd37da9b793968b0aad237e599a8d7afb5268ce8",
+      "blueprint_sha256": "04509f30a3fe054a68f165a57f63a75546a52cf4bbe0a2cca50b1086bd207a76",
       "dimensions": [
         169,
-        240
+        248
       ],
-      "entities": 6554,
+      "entities": 6661,
       "excluded_recipes": [],
       "inputs": [
         "iron-ore",
@@ -395,12 +395,12 @@
       ],
       "label": "tier5_processing_unit_from_ore_am3",
       "machine": "assembling-machine-3",
-      "manifest_sha256": "122b0ef86ab4fb824f7acccbee7d66b134734afa39e118ea16787b9e3a212069",
+      "manifest_sha256": "99fa6093bb7f314cbee05260e928af4b1f62e9df8185d24461ce78b2b62ef038",
       "rate": 2.0,
       "target": "processing-unit",
       "validator": {
         "errors": 0,
-        "warnings": 11
+        "warnings": 14
       },
       "variant": "plain"
     },
