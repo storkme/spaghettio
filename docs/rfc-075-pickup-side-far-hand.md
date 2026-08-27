@@ -306,3 +306,37 @@ near-side hands do not qualify.
   too so the outcome is by margin, not by tie. The K75-2 pricing runs
   (bank fingerprint probe + registry gate under the gate) were
   launched alongside.
+- *2026-08-27 — K75-2 pricing at 0.85 (before any sim verdict, so the
+  cap is read cold).* Bank fingerprint probe (`SPAGHETTIO_CALIBRATION_BANK=
+  /tmp/calibration-matrix-2026-08-27-732`, zone cache copied): **34/35
+  rows byte-identical**; the one that moves is
+  `tier5_processing_unit_from_ore_am3` (0 E / 14 W vs the bank's 0 E /
+  11 W) — the 87.7% row whose twenty 2.40/2.40 iron sides RFC-073
+  censused. Registry pin survey (`probe_registry_pin_survey`): **every
+  sub-K_MAX strip unchanged** (ac@1, mil5 ×2, plastic@2, sulfur@2,
+  ac@2, ec@15 ×4, ec@30, ec@75, ec@150, gear@20, chem5); **three grid
+  rows move** — ec@240 from ore (4f95009b → eac22938), ec@240 from
+  plates (5c83b419 → 7ffba350), ac@56 (d2ed8119 → b955d9aa). The grid
+  moves are the quantizer re-planning: with the derated credit K=18's
+  2.22/s iron hands get two hands (54%) instead of one at 92.6%, so
+  `required_copies_at` stops bumping at K=18 rather than K=24 — a
+  different, smaller grid, which K75-3 requires re-simmed before the
+  factor ships. Cost against the cap: 1 bank row (already deficient)
+  + 3 registry rows (all at plan today) ≤ K75-2's 6 / 3. Proceeds.
+- *2026-08-27 — E1 receipt: the mechanism is the belt state.*
+  `cell-ec12-plates` (the same 12/s cell composed from plates — 5 EC
+  machines on ONE long-handed iron hand each at the 2.40 credit, 8
+  cable machines, 213 entities, 0 errors; the harness feed rig floods
+  both plate belts), Factorio 2.0.77, 432k warmup, speed 32,
+  converged, drift +0.0%, kit clean: **PASS — produced 12.50/12.00
+  (+4.2%), delivered +5.6%; all 13 machines `working`; every one of
+  the five EC machines crafts 2.500/s** (its crafting maximum; the row
+  planned 2.40) — a flat profile at the head as at the tail
+  (`x=47..59`: 2.500 ×5). The cable machines read 1.96–2.42/s, under
+  their 2.5 ceiling only because the EC row is the one pulling on
+  them. Contrast E0 (furnace-fed, 27%-dense moving express stream):
+  2.11 → 2.48, −7.1%. Same hand, same credit, same geometry class;
+  the belt under the hand is the only variable, and it moves the hand
+  from 88% of credit to 104%. The 2.40 credit is a flooded-belt
+  number. (E1's "1L" is the composition receipt riding `warnings`,
+  RFC-074 K74-1 — not a validator finding.)
