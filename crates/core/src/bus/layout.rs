@@ -1859,13 +1859,78 @@ fn layout_pass(
         .iter()
         .filter(|l| l.producer_row.is_none() && external_items.contains(l.item.as_str()))
         .filter_map(|l| {
-            entity_at(l.x, l.source_y).map(|e| crate::models::BoundaryRecord {
-                item: l.item.clone(),
-                x: l.x,
-                y: l.source_y,
-                direction: e.direction,
-                is_fluid: l.is_fluid,
-                entity: e.name.clone(),
+            entity_at(l.x, l.source_y).and_then(|e| {
+                // The record's direction is the INTO-LAYOUT flow at the
+                // head tile — what the harness rigs against (outward =
+                // the opposite). Derived from the lane's own geometry,
+                // not assumed: a lane flows from its source tile toward
+                // its tap-offs (#732, #736 review: the first fix wrote
+                // `South` as a constant, which is the same shape of
+                // assumption that produced the bug — a bare `pipe` has no
+                // facing, so its entity direction is the export default,
+                // North, and a north-edge-only assumption would silently
+                // re-create #732 for a feed on any other edge).
+                //   * every tap-off below the source → South
+                //   * every tap-off above the source → North
+                //   * mixed / none → the head's occupied neighbour along
+                //     the lane axis (the lane continues INTO the layout:
+                //     below occupied → South, above → North — the same
+                //     fact `tests/boundary_direction.rs` checks)
+                //   * neither → NO record and a layout warning: the head
+                //     entity's own direction is the export default for a
+                //     bare pipe (the #732 shape), so "no claim" must mean
+                //     no record — the harness then refuses the manifest
+                //     for the missing feed, loudly, in release builds too
+                //     (#736 rounds 2–3). Unreachable today.
+                // Pipe-to-ground heads carry their placed direction, which
+                // the same derivation must agree with (debug-asserted).
+                let flow = lane_flow_direction(l);
+                let direction = if l.is_fluid && e.name == "pipe" {
+                    // The neighbour must be a fluid carrier — an unrelated
+                    // machine or belt tile at (x, y±1) says nothing about
+                    // where THIS lane goes.
+                    let is_pipe_at = |x: i32, y: i32| {
+                        entity_at(x, y).is_some_and(|n| n.name.contains("pipe"))
+                    };
+                    let neighbour = || {
+                        if is_pipe_at(l.x, l.source_y + 1) {
+                            Some(EntityDirection::South)
+                        } else if is_pipe_at(l.x, l.source_y - 1) {
+                            Some(EntityDirection::North)
+                        } else {
+                            None
+                        }
+                    };
+                    match flow.or_else(neighbour) {
+                        Some(d) => d,
+                        None => {
+                            warnings.push(format!(
+                                "boundary: fluid feed head for {} at ({}, {}) has no derivable flow direction (no taps, no pipe neighbour) — no boundary record emitted (#732 class)",
+                                l.item, l.x, l.source_y
+                            ));
+                            return None;
+                        }
+                    }
+                } else {
+                    debug_assert!(
+                        !(l.is_fluid && e.name == "pipe-to-ground")
+                            || flow.is_none_or(|f| f == e.direction),
+                        "pipe-to-ground head at ({}, {}) faces {:?} but its lane flows {:?}",
+                        l.x,
+                        l.source_y,
+                        e.direction,
+                        flow
+                    );
+                    e.direction
+                };
+                Some(crate::models::BoundaryRecord {
+                    item: l.item.clone(),
+                    x: l.x,
+                    y: l.source_y,
+                    direction,
+                    is_fluid: l.is_fluid,
+                    entity: e.name.clone(),
+                })
             })
         })
         .collect();
@@ -1944,6 +2009,37 @@ fn layout_pass(
         cap_coords,
         uncovered_inserters_out,
     ))
+}
+
+/// The direction a bus lane FLOWS at its source tile, from its own
+/// geometry: a lane runs from `source_y` toward its tap-offs, so every
+/// tap-off below the source means South, every one above means North.
+/// `None` when the lane has no tap-offs or they straddle the source —
+/// no claim is better than a wrong one (the record then keeps the head
+/// entity's own direction). Used for fluid boundary-input records whose
+/// head is a bare `pipe` (no facing of its own, #732) and to cross-check
+/// pipe-to-ground heads. Bus lanes flow south from the north edge today;
+/// this derives that rather than assuming it, so a feed on another edge
+/// records its real flow instead of re-creating #732 (#736 review).
+pub fn lane_flow_direction(lane: &crate::bus::lane_planner::BusLane) -> Option<EntityDirection> {
+    flow_from_taps(lane.source_y, &lane.tap_off_ys)
+}
+
+/// The pure core of [`lane_flow_direction`]: the flow at `source_y` given
+/// the lane's tap-off rows. Unit-tested directly (#736 round 3 — the
+/// occupancy invariant in `tests/boundary_direction.rs` shares a fact with
+/// the neighbour fallback, so the primary derivation needs its own test).
+pub fn flow_from_taps(source_y: i32, tap_off_ys: &[i32]) -> Option<EntityDirection> {
+    if tap_off_ys.is_empty() {
+        return None;
+    }
+    if tap_off_ys.iter().all(|&y| y > source_y) {
+        Some(EntityDirection::South)
+    } else if tap_off_ys.iter().all(|&y| y < source_y) {
+        Some(EntityDirection::North)
+    } else {
+        None
+    }
 }
 
 /// Traced variant of [`build_bus_layout`].
@@ -2926,6 +3022,18 @@ fn make_substation(x: i32, y: i32) -> PlacedEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #732 / #736: the flow a fluid boundary record derives from its
+    /// lane's taps — the primary derivation, tested on its own rather than
+    /// through the occupancy invariant it shares a fact with.
+    #[test]
+    fn flow_from_taps_reads_the_lane_geometry() {
+        assert_eq!(flow_from_taps(0, &[5, 9, 23]), Some(EntityDirection::South));
+        assert_eq!(flow_from_taps(40, &[12, 3]), Some(EntityDirection::North));
+        assert_eq!(flow_from_taps(10, &[3, 20]), None, "taps straddling the source: no claim");
+        assert_eq!(flow_from_taps(0, &[]), None, "no taps: no claim");
+        assert_eq!(flow_from_taps(5, &[5]), None, "a tap AT the source is not a direction");
+    }
 
     /// #722 round 2: `compute_extra_gaps` deliberately keeps its parallel
     /// direct+gcd height loop (unifying it onto the oracle is measured to

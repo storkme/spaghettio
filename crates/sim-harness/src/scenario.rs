@@ -3867,21 +3867,16 @@ mod tests {
     /// Ignored: needs SPAGHETTIO_CALIBRATION_BANK pointing at a measured
     /// bank with per-fixture `manifest-real.json` + `bp.txt`.
     ///
-    /// KNOWN REFUSALS (found by this sweep, 2026-08-26): fluid feed
-    /// records whose head entity is a bare `pipe` carry direction 0 —
-    /// a pipe has no direction, so the engine records North — and the
-    /// harness's "outward = −into" then points INTO the layout: the
-    /// fluid rig is built on top of the factory. Exactly these three
-    /// fixtures are the calibration bank's three "non-converged 0.000"
-    /// rows; those were never layout measurements. The list can only
-    /// SHRINK: the fix is engine-side (record the real into-layout flow
-    /// direction for pipe heads), followed by a manifest re-bless and
-    /// re-measure of the three rows — a followup, not this unit.
+    /// Historical known refusals (found by the 2026-08-26 bank sweep) were
+    /// fluid feed records whose head entity was a bare `pipe`: the engine
+    /// recorded North for a directionless pipe, so the harness's
+    /// "outward = −into" placed the fluid rig into the layout. The engine
+    /// now records the southbound lane flow for those heads, and a fresh
+    /// bank sweep accepts all rows. The list can only SHRINK.
     #[test]
     #[ignore]
     fn codegen_accepts_every_bank_manifest() {
-        const KNOWN_REFUSED: &[&str] =
-            &["tier3_heavy_oil_cracking", "tier3_sulfuric_acid", "tier3_plastic_bar"];
+        const KNOWN_REFUSED: &[&str] = &[];
         let bank = std::env::var("SPAGHETTIO_CALIBRATION_BANK")
             .expect("set SPAGHETTIO_CALIBRATION_BANK to a measured bank dir");
         let mut checked = 0;

@@ -160,7 +160,7 @@
       ],
       "label": "tier3_plastic_bar",
       "machine": "chemical-plant",
-      "manifest_sha256": "582e1cf538dd6a0ef2b345025db35237ebe4387b52419b53e222c04504dc9649",
+      "manifest_sha256": "8b195701f45e967512cb344d445f78da8829373db619946eff253b6d768a23c2",
       "rate": 10.0,
       "target": "plastic-bar",
       "validator": {
@@ -209,7 +209,7 @@
       ],
       "label": "tier3_sulfuric_acid",
       "machine": "chemical-plant",
-      "manifest_sha256": "cf709c3cdd4650b66163dbe7dd143915db70153f18dad978cc76c706b99b245c",
+      "manifest_sha256": "5f3ac856cea2325db59521eb09e4957f05bfd24b185de65203215a403dfbedee",
       "rate": 5.0,
       "target": "sulfuric-acid",
       "validator": {
@@ -236,7 +236,7 @@
       ],
       "label": "tier3_heavy_oil_cracking",
       "machine": "chemical-plant",
-      "manifest_sha256": "aa7d84c61bcdd34725e5b96b9ee19346182b3a8cdd7736de7e9c4876149c33b2",
+      "manifest_sha256": "125b7a33d7c71ffd4276399446ffb8f95d74faf354f1f247c9d3ea47158cf3a3",
       "rate": 5.0,
       "target": "light-oil",
       "validator": {
