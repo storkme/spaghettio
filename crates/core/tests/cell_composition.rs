@@ -513,6 +513,34 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 2,
         levels: &[2],
     },
+    // RFC-074 Unit 3: the grid a browser user actually gets — ec@240
+    // from PLATES (the ordinary external inputs) — is a 2×12 grid of
+    // the 4-machine 10/s cell with no furnace stage (4,460 entities,
+    // hash 5c83b419… on 2026-08-27) and had no receipt at all.
+    SimFixture {
+        label: "chain-ec240p",
+        target: "electronic-circuit",
+        rate: 240.0,
+        inputs: &["iron-plate", "copper-plate"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
+    // RFC-074 Unit 3: the mega/fluid GRID path (RFC-072 residual (f)) —
+    // the smallest fluid-touching request past K_MAX: advanced-circuit
+    // from ore + crude at 56/s quantizes to K=14 → a 2×7 grid whose
+    // strips each carry a mega block (refinery + chem) with its own
+    // fluid heads. Composed 0 errors / 0 warnings, 26,454 entities
+    // (2026-08-27); the sim receipt is what K74-2 adjudicates on.
+    SimFixture {
+        label: "chain-ac56",
+        target: "advanced-circuit",
+        rate: 56.0,
+        inputs: &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+        compose: Compose::Chain,
+        geo_cap: 2,
+        levels: &[2],
+    },
     SimFixture {
         // RFC-071 B3: the shipped gear@20/am2 cell-composed winner — the
         // only production cell win — earning its registry entry after
@@ -897,6 +925,56 @@ fn inserter_sizing_census_registry() {
             );
         }
     }
+}
+
+/// RFC-074 Unit 3 — the mega/fluid GRID path (RFC-072 residual (f):
+/// "untested by construction"). advanced-circuit from ore + crude at
+/// 56/s is the smallest fluid-touching request past K_MAX: K=14 → a
+/// 2×7 grid whose every strip carries its own mega block (refinery +
+/// chem plants) and so its own fluid feed heads. Pins that it composes
+/// with zero validator errors, that the receipt says so, that BOTH
+/// strips carry fluid heads (the boundary records translated with the
+/// strip — #732's direction fix included), and that the fluid heads
+/// carry the into-layout flow direction the harness rigs against.
+#[test]
+fn grid_composes_ac56_from_ore_with_fluid_heads_on_every_strip() {
+    use spaghettio_core::bus::cells::chain::{compose_chain, required_copies};
+    use spaghettio_core::models::EntityDirection;
+    use spaghettio_core::validate::{self, Severity};
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "advanced-circuit",
+        56.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    assert_eq!(required_copies(&sr), 14, "ac56 quantizes to 14 copies (2×7)");
+    let l = compose_chain(&sr).expect("the mega/fluid grid composes");
+    let receipt = l.composition.as_ref().expect("grid receipt");
+    assert_eq!((receipt.kind.as_str(), receipt.copies_per_strip.as_slice()), ("cell-grid", &[7, 7][..]));
+    let issues = validate::validate(&l, Some(&sr)).unwrap_or_else(|e| e.issues);
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "fluid grid must carry zero errors, got {errors:?}");
+    // Fluid heads: one per copy per fluid chain-fed... each strip's
+    // records lie inside that strip's rect.
+    let fluid: Vec<_> = l.boundary_inputs.iter().filter(|b| b.is_fluid).collect();
+    assert!(!fluid.is_empty(), "the mega block's fluid inputs are recorded");
+    for (i, s) in receipt.strips.iter().enumerate() {
+        let in_strip = fluid.iter().filter(|b| b.y >= s.y && b.y < s.y + s.height).count();
+        assert!(in_strip > 0, "strip {i} carries fluid heads");
+    }
+    assert!(
+        fluid.iter().all(|b| b.direction == EntityDirection::South),
+        "fluid heads record the into-layout flow (#732), got {:?}",
+        fluid.iter().map(|b| (b.entity.as_str(), b.direction)).collect::<Vec<_>>()
+    );
 }
 
 /// RFC-074 Unit 4 — the uniform-K over-provisioning probe. "Chains of
@@ -1318,6 +1396,13 @@ fn probe_registry_hashes() {
             "chain-ec240",
             "electronic-circuit",
             240.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
+        ),
+        ("chain-ec240p", "electronic-circuit", 240.0, &["iron-plate", "copper-plate"][..]),
+        (
+            "chain-ac56",
+            "advanced-circuit",
+            56.0,
             &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"][..],
         ),
         (
@@ -1991,6 +2076,23 @@ fn cell_registry_hashes_current() {
         (
             "electronic-circuit",
             240.0,
+            &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
+            "chain",
+            2,
+        ),
+        // RFC-074 Unit 3: the from-plates ec@240 grid the browser
+        // builds (same (target, rate) as the from-ore row — the hash
+        // disambiguates), and the mega/fluid grid exemplar ac@56.
+        (
+            "electronic-circuit",
+            240.0,
+            &["iron-plate", "copper-plate"],
+            "chain",
+            2,
+        ),
+        (
+            "advanced-circuit",
+            56.0,
             &["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"],
             "chain",
             2,
