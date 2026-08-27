@@ -595,6 +595,32 @@ mod tests {
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "chemical-plant");
     }
 
+    /// #461 part (a) negative pin: a palette (or hand-edited URL, same path
+    /// `category_mismatch_rejected` guards) that asks for `biochamber` on an
+    /// `organic-or-assembling` recipe must be refused, not silently
+    /// accepted. This is deliberate — the engine cannot fuel a biochamber
+    /// (burner, fuel category `nutrients`, nothing delivers it), so a
+    /// config that names one here should get a clear `CategoryNotSupported`
+    /// refusal at solve time, not a layout that validates clean and
+    /// produces 0/s. `biochamber` remains valid for the pure `organic`
+    /// category (unaffected below), which is the only category it is still
+    /// listed under in `category_machines`.
+    #[test]
+    fn organic_or_assembling_palette_rejects_biochamber() {
+        let recipe = make_recipe("organic-or-assembling");
+        let err = machine_can_run_recipe("biochamber", &recipe).unwrap_err();
+        assert!(
+            matches!(err, MachineIncompatibility::CategoryNotSupported { .. }),
+            "expected CategoryNotSupported, got {err:?}"
+        );
+
+        // Contrast: biochamber is still accepted for the pure `organic`
+        // category (no `-or-assembling` half to fall through from).
+        let organic_recipe = make_recipe("organic");
+        machine_can_run_recipe("biochamber", &organic_recipe)
+            .expect("biochamber still handles the pure organic category");
+    }
+
     fn palette_with(entries: &[(&str, &str)]) -> MachinePalette {
         let mut p = MachinePalette::default();
         for (k, v) in entries {

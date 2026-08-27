@@ -26,10 +26,11 @@
 //! in the same PR (#635) that caught the over-deletion.
 
 use rustc_hash::FxHashSet;
+use spaghettio_core::common;
 use spaghettio_core::models::SolverResult;
 use spaghettio_core::netflow::{solve_netflow, solve_netflow_with_options, CostTable, NetflowOptions, RecipeScope};
 use spaghettio_core::recipe_db::{self, MachinePalette};
-use spaghettio_core::solver::SolverError;
+use spaghettio_core::solver::{self, SolverError};
 
 fn set(items: &[&str]) -> FxHashSet<String> {
     items.iter().map(|s| s.to_string()).collect()
@@ -429,6 +430,206 @@ fn golden_epsilon_sensitivity() {
             );
         }
     }
+}
+
+/// #461 part (a) follow-up — solver-level pin. The `recipe_db.rs` unit
+/// test fixed alongside this only pins `machine_for_recipe`'s lookup
+/// table; this pins the actual entry point `run_e2e` (and the web app)
+/// call — `solver::solve_with_exclusions` — so a future palette or
+/// category change that reintroduces a burner anywhere on the machine-
+/// selection path trips a test against the real pipeline, not just the
+/// table lookup.
+///
+/// Before #461 part (a), `organic-or-assembling` recipes resolved to
+/// `biochamber` — a burner (fuel category `nutrients`) — and nothing in
+/// the engine delivers burner fuel, so the layout validated clean and
+/// produced 0/s (issue #461's rocket-fuel example: 0 errors, 0 warnings,
+/// 0.00/s measured, census `no_fuel: 8`).
+///
+/// Two of the six `organic-or-assembling` recipes, each solved off a
+/// single raw input so the LP has no other recipe to reach for:
+/// - `rocket-fuel` — `light-oil` supplies both itself (direct, fluid
+///   ingredient) and `solid-fuel` (via `solid-fuel-from-light-oil`,
+///   category `chemistry` → chemical-plant, electric).
+/// - `nutrients-from-spoilage` — targeted via its product `nutrients`
+///   (the item name differs from the recipe name here, unlike
+///   rocket-fuel).
+///
+/// **Both items have OTHER producer recipes outside the six, and free-mode
+/// cost selection is not shy about reaching for them** — discovered
+/// empirically writing this test, not something to leave implicit:
+/// `rocket-fuel` is ALSO produced by `rocket-fuel-from-jelly` (pure
+/// `organic` — biochamber; out of #461 part (a)'s scope, a separate task's
+/// concern) and `ammonia-rocket-fuel` (`chemistry-or-cryogenics` —
+/// chemical-plant); `nutrients` is ALSO produced by
+/// `nutrients-from-yumako-mash` and `nutrients-from-bioflux` (both pure
+/// `organic` — biochamber) besides the other two `-or-assembling` siblings
+/// (`nutrients-from-fish`, `nutrients-from-biter-egg`). Root resources with
+/// no recipe of their own (`jellynut`, `yumako`, `ammoniacal-solution`, …)
+/// are automatically free supply in the LP regardless of what
+/// `available_inputs` lists (`s_eligible` in netflow.rs — anything with no
+/// in-closure producer is eligible), so a first attempt at this test that
+/// supplied only `light-oil` and left `rocket-fuel-from-jelly` uncontested
+/// actually solved via the biochamber path (cheaper here: fewer, faster
+/// machines dominated the raw-input weight disadvantage) — the OPPOSITE
+/// of what this test exists to catch. All non-`-or-assembling` producers
+/// (and the `-or-assembling` siblings not under test) are excluded below
+/// so the solve is forced through the recipe #461 part (a) actually fixed.
+#[test]
+fn issue_461_no_burner_machines_in_solver_result() {
+    let assert_no_burners = |item: &str, inputs: &FxHashSet<String>, excluded: &FxHashSet<String>| {
+        let sr = solver::solve_with_exclusions(item, 1.0, inputs, "assembling-machine-3", excluded)
+            .unwrap_or_else(|e| panic!("{item} solves: {e}"));
+        for m in &sr.machines {
+            assert!(
+                common::needs_electricity(&m.entity),
+                "#461: solving {item} placed a burner machine ({} for recipe {}) — nothing \
+                 in the engine delivers burner fuel, so this layout would validate clean \
+                 and produce 0/s",
+                m.entity,
+                m.recipe,
+            );
+        }
+    };
+
+    assert_no_burners(
+        "rocket-fuel",
+        &set(&["light-oil"]),
+        &set(&["rocket-fuel-from-jelly", "ammonia-rocket-fuel"]),
+    );
+    assert_no_burners(
+        "nutrients",
+        &set(&["spoilage"]),
+        &set(&[
+            "nutrients-from-yumako-mash",
+            "nutrients-from-bioflux",
+            "nutrients-from-fish",
+            "nutrients-from-biter-egg",
+        ]),
+    );
+}
+
+/// #461 follow-up — the AM1 question, pinned rather than asserted.
+/// `organic-or-assembling` now sits in `GENERAL_CATEGORIES` (`recipe_db.rs`)
+/// alongside every other assembler-tier category, and every recipe in that
+/// set is checked by the SAME function, `machine_can_run_recipe`, in the
+/// SAME order: ingredient-slot count, then fluid support, then category.
+/// There is no tier-bump/auto-uptier mechanism anywhere in netflow.rs or
+/// solver.rs (checked): a machine-incompatible column is either a hard
+/// error (when it is the target's only producer) or silently dropped (when
+/// an alternative exists) — never routed to a bigger machine.
+///
+/// **Outcome class, pinned against `processing-unit`** (category
+/// `electronics-with-fluid`, also a `GENERAL_CATEGORIES` member, needs
+/// sulfuric-acid): both `processing-unit`@AM1 and `rocket-fuel`@AM1 are a
+/// HARD `SolverError::IncompatibleMachine` — never `Ok`, never a
+/// substituted machine. Under `RecipeScope::Free` (what
+/// `solve_with_exclusions` always uses), an incompatible column that is
+/// the target's ONLY producer surfaces as this hard error instead of being
+/// silently dropped (netflow.rs's `dropped_incompat` bookkeeping) — true
+/// for both recipes here, since every other ingredient is supplied
+/// directly.
+///
+/// **The specific `reason` genuinely differs, and that is expected, not a
+/// bug**: `processing-unit` needs 3 ingredients (electronic-circuit,
+/// advanced-circuit, sulfuric-acid) against AM1's 2-slot limit, so the
+/// SLOT-COUNT check (which runs first) fires — `TooManyIngredients`, the
+/// fluid check never even runs. `rocket-fuel` needs exactly 2
+/// (solid-fuel, light-oil), clears the slot check, and hits the FLUID
+/// check instead — `FluidNotSupported`. Both are the same ordered gate in
+/// the same shared function; which sub-check fires depends on each
+/// recipe's own shape, not on any divergence in machine-selection logic.
+/// (`advanced-circuit`'s own 3-ingredient recipe is excluded even though
+/// it is supplied directly: free mode still considers it as a candidate
+/// column, and `dropped_incompat` surfaces whichever incompatible column
+/// was enumerated FIRST — not necessarily the target's own producer — so
+/// leaving it in would report `advanced-circuit`'s own refusal instead of
+/// `processing-unit`'s.)
+#[test]
+fn issue_461_am1_fluid_recipe_outcome_matches_processing_unit() {
+    fn outcome_class(result: &Result<SolverResult, SolverError>) -> &'static str {
+        match result {
+            Ok(_) => "solved",
+            Err(SolverError::IncompatibleMachine { .. }) => "IncompatibleMachine",
+            Err(SolverError::MissingCraftingSpeed { .. }) => "MissingCraftingSpeed",
+            Err(SolverError::UnsupportedSelfLoop { .. }) => "UnsupportedSelfLoop",
+            Err(SolverError::UnsupportedCycle { .. }) => "UnsupportedCycle",
+            Err(SolverError::LpFailed { .. }) => "LpFailed",
+        }
+    }
+
+    let processing_unit_result = solver::solve_with_exclusions(
+        "processing-unit",
+        1.0,
+        &set(&["electronic-circuit", "advanced-circuit", "sulfuric-acid"]),
+        "assembling-machine-1",
+        &set(&["advanced-circuit"]),
+    );
+    let rocket_fuel_result = solver::solve_with_exclusions(
+        "rocket-fuel",
+        1.0,
+        &set(&["solid-fuel", "light-oil"]),
+        "assembling-machine-1",
+        // Same reasoning as `issue_461_no_burner_machines_in_solver_result`'s
+        // doc comment: `rocket-fuel-from-jelly` / `ammonia-rocket-fuel` are
+        // OTHER producers of `rocket-fuel`, and `solid-fuel-from-*` are
+        // other producers of the directly-supplied `solid-fuel` — left in,
+        // free mode can route around the AM1-incompatible `rocket-fuel`
+        // column entirely (solving via the biochamber path) instead of
+        // hitting the refusal this test exists to pin, or `dropped_incompat`
+        // can surface one of these siblings' refusal instead of
+        // `rocket-fuel`'s own. Excluding them forces `rocket-fuel` to be
+        // the only candidate, exactly like `advanced-circuit` is excluded
+        // for `processing-unit` above.
+        &set(&[
+            "rocket-fuel-from-jelly",
+            "ammonia-rocket-fuel",
+            "solid-fuel-from-light-oil",
+            "solid-fuel-from-petroleum-gas",
+            "solid-fuel-from-heavy-oil",
+            "solid-fuel-from-ammonia",
+        ]),
+    );
+
+    // Same outcome CLASS: both a hard refusal, neither a solve, neither
+    // any other SolverError variant (in particular, no tier bump — that
+    // would show up as `Ok` with a machine other than AM1, not as a
+    // distinct error variant, since no such mechanism exists to produce
+    // one).
+    assert_eq!(
+        outcome_class(&processing_unit_result),
+        outcome_class(&rocket_fuel_result),
+        "rocket-fuel@AM1 must produce the same outcome CLASS as processing-unit@AM1 — both \
+         route through the same machine_can_run_recipe gate; got processing-unit={:?}, \
+         rocket-fuel={:?}",
+        processing_unit_result,
+        rocket_fuel_result,
+    );
+
+    // The specific reason legitimately differs by recipe shape (see doc
+    // comment) — pinned separately so a regression in either direction is
+    // caught precisely rather than papered over by the coarser class check
+    // above.
+    assert!(
+        matches!(
+            processing_unit_result,
+            Err(SolverError::IncompatibleMachine {
+                reason: recipe_db::MachineIncompatibility::TooManyIngredients { limit: 2, .. },
+                ..
+            })
+        ),
+        "processing-unit@AM1 outcome changed — update this test's doc comment: {processing_unit_result:?}"
+    );
+    assert!(
+        matches!(
+            rocket_fuel_result,
+            Err(SolverError::IncompatibleMachine {
+                reason: recipe_db::MachineIncompatibility::FluidNotSupported { .. },
+                ..
+            })
+        ),
+        "rocket-fuel@AM1 outcome changed — update this test's doc comment: {rocket_fuel_result:?}"
+    );
 }
 
 /// KILL CRITERION 4 — perf. Run explicitly in release:
