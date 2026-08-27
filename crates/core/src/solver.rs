@@ -97,23 +97,35 @@ pub enum SolverError {
 /// excluded and `result` is returned untouched: no re-solve is attempted.
 ///
 /// `resolve` is then called exactly ONCE with the expanded exclusion set.
-/// The re-solve is only WORTH taking if it actually gets rid of the
-/// burner(s): a second plan that still contains any `!needs_electricity`
-/// machine is strictly worse than the first (more machines, still
-/// unfuelled — #461 part (b)'s `burner-fuel` validator check makes that
-/// loud either way, so there is nothing to gain by swapping one unfuelled
-/// plan for a bigger one). So the re-solve's result is accepted ONLY when
-/// it both succeeds AND comes back fully burner-free; otherwise the
-/// ORIGINAL result is returned untouched. A trace event fires whenever a
-/// re-solve is ATTEMPTED (naming the excluded recipes), with `accepted`
-/// carrying which of the two results actually got used — see
-/// [`crate::trace::TraceEvent::BurnerRecipeExcluded`].
+/// The re-solve is only WORTH taking if it actually REDUCES how many
+/// burners are in play — not only when it eliminates every last one.
+/// `burners_before`/`burners_after` count `!needs_electricity` machine
+/// ENTRIES in `SolverResult::machines` (a count of distinct burner-recipe
+/// rows, not `Σ count` — machine `count` is a fractional craft-rate
+/// figure, not a number of recipes; this mechanism reasons about recipes).
+/// A multi-target solve can mix a STEERABLE burner (e.g.
+/// `rocket-fuel-from-jelly`, which has an electric alternative producer)
+/// with an UNSTEERABLE one in the SAME result (e.g. `pentapod-egg`,
+/// biochamber-only) — a re-solve that removes the steerable one while the
+/// unsteerable one stays in place is still strictly fewer burners than the
+/// original and must be kept, even though it isn't fully burner-free. So
+/// the re-solve's result is accepted when it succeeds AND
+/// `burners_after < burners_before`; a re-solve that errors, or that
+/// succeeds but doesn't reduce the count (see
+/// `phase0e1_biolubricant_biochamber`'s fixture, whose re-solve wanders
+/// into an 11-machine-type plan carrying MORE burners — three OTHER
+/// biochamber recipes — than the one it was trying to avoid), is
+/// discarded and the ORIGINAL result is returned untouched. A trace event
+/// fires whenever a re-solve is ATTEMPTED, carrying both counts and
+/// `accepted` — see [`crate::trace::TraceEvent::BurnerRecipeExcluded`].
 fn avoid_burner_recipes(
     result: SolverResult,
     target_item: &str,
     excluded_recipes: &FxHashSet<String>,
     resolve: impl FnOnce(&FxHashSet<String>) -> Result<SolverResult, SolverError>,
 ) -> SolverResult {
+    let burner_count = |r: &SolverResult| r.machines.iter().filter(|m| !needs_electricity(&m.entity)).count();
+    let burners_before = burner_count(&result);
     let mut expanded: Option<FxHashSet<String>> = None;
     for m in &result.machines {
         if needs_electricity(&m.entity) {
@@ -143,18 +155,23 @@ fn avoid_burner_recipes(
     let mut newly_excluded: Vec<String> =
         expanded.difference(excluded_recipes).cloned().collect();
     newly_excluded.sort();
-    // Accept the re-solve only when it succeeded AND is itself burner-free
-    // — a re-solve that still contains a burner is strictly worse (more
-    // machines, still unfuelled) than the original, so it's discarded.
-    let accepted_result = resolve(&expanded)
-        .ok()
-        .filter(|r| r.machines.iter().all(|m| needs_electricity(&m.entity)));
+    // Accept the re-solve only when it succeeded AND strictly reduced the
+    // burner count — a re-solve that ties or worsens it is discarded.
+    let resolved = resolve(&expanded).ok();
+    let burners_after = resolved.as_ref().map(burner_count);
+    let accepted = matches!(burners_after, Some(after) if after < burners_before);
     trace::emit(TraceEvent::BurnerRecipeExcluded {
         target_item: target_item.to_string(),
         excluded_recipes: newly_excluded,
-        accepted: accepted_result.is_some(),
+        accepted,
+        burners_before,
+        burners_after,
     });
-    accepted_result.unwrap_or(result)
+    if accepted {
+        resolved.expect("accepted implies resolved.is_some()")
+    } else {
+        result
+    }
 }
 
 /// Compute machines needed to produce `target_item` at `target_rate` items/sec.

@@ -349,25 +349,30 @@ fn category_machines(category: &str) -> &'static [&'static str] {
 }
 
 /// #461 part (a) follow-up: does `category` have AT LEAST ONE electric
-/// machine among its valid options? Used to scope
-/// `netflow::BURNER_MACHINE_COST_FACTOR` to burner-ONLY categories
-/// (`organic`, today) rather than every category that happens to place a
-/// burner column — a category like `smelting` lists `electric-furnace`
-/// alongside `stone-furnace`/`steel-furnace`, and the electric sibling
-/// already wins on machine time within that category (faster crafting
-/// speed), so penalizing the furnace columns there buys nothing but
-/// perturbs the LP's floating-point path for every fixture that smelts
-/// anything (see the calibration-probe note in `BURNER_MACHINE_COST_FACTOR`'s
-/// doc comment).
+/// machine among its valid options? Used by `solver::avoid_burner_recipes`
+/// to decide whether a burner recipe found in a solve's result has a
+/// genuine electric alternative producer for the same item worth
+/// re-solving toward — a category like `smelting` lists `electric-furnace`
+/// alongside `stone-furnace`/`steel-furnace`, so a recipe under it is not
+/// "burner-only" even when the specific machine chosen happens to be a
+/// furnace.
 ///
-/// A `[]` result from [`category_machines`] means the category falls
-/// through to the caller's assembler tier (`GENERAL_CATEGORIES`, or an
-/// unsupported category that never survives to a real column either way —
-/// see [`machine_handles_category`]) — always electric, so this returns
-/// `true`.
+/// A `[]` result from [`category_machines`] is ambiguous on its own — it
+/// covers BOTH the general-purpose fall-through categories
+/// ([`GENERAL_CATEGORIES`], always electric — the caller's assembler tier)
+/// AND unsupported categories (`rocket-building`,
+/// `captive-spawner-process`, …) that [`machine_handles_category`] refuses
+/// for every machine and that never survive to a real LP column. Only the
+/// first case means "electric machine available" — an unsupported
+/// category must return `false`, or an `organic` recipe whose product is
+/// ALSO (uselessly) claimed by an unsupported-category recipe would read
+/// as having an electric alternative and trigger a spurious re-solve.
 pub fn category_has_electric_machine(category: &str) -> bool {
     let valid = category_machines(category);
-    valid.is_empty() || valid.iter().any(|m| crate::common::needs_electricity(m))
+    if valid.is_empty() {
+        return GENERAL_CATEGORIES.contains(&category);
+    }
+    valid.iter().any(|m| crate::common::needs_electricity(m))
 }
 
 /// Categories that genuinely run on general-purpose assemblers. An explicit
@@ -674,6 +679,49 @@ mod tests {
             matches!(err, MachineIncompatibility::FluidNotSupported { .. }),
             "AM1 has no fluid boxes and must refuse rocket-fuel's light-oil ingredient, \
              got {err:?}"
+        );
+    }
+
+    /// #461 part (a) round 7 pin, both arms of `category_has_electric_machine`'s
+    /// `[]` branch: `GENERAL_CATEGORIES` membership (electric — the caller's
+    /// assembler tier) vs an unsupported category (no machine handles it at
+    /// all, so it never survives to a real LP column and must NOT read as
+    /// "electric available"). Both `category_machines` non-empty arms are
+    /// pinned too, for completeness: `smelting` (has an electric sibling)
+    /// and `organic` (biochamber-only, no electric sibling).
+    #[test]
+    fn category_has_electric_machine_both_arms() {
+        // Non-empty `category_machines` result, electric sibling present.
+        assert!(
+            category_has_electric_machine("smelting"),
+            "smelting lists electric-furnace alongside the burner furnaces"
+        );
+        // Non-empty `category_machines` result, burner-only.
+        assert!(
+            !category_has_electric_machine("organic"),
+            "organic maps only to biochamber, a burner"
+        );
+        // Empty `category_machines` result, GENERAL_CATEGORIES member —
+        // always falls through to the (electric) assembler tier.
+        assert!(
+            category_has_electric_machine("crafting"),
+            "crafting is a GENERAL_CATEGORIES fall-through to the assembler tier"
+        );
+        assert!(
+            category_has_electric_machine("organic-or-assembling"),
+            "organic-or-assembling is a GENERAL_CATEGORIES fall-through since #461 part (a)"
+        );
+        // Empty `category_machines` result, NOT a GENERAL_CATEGORIES member
+        // — unsupported everywhere (`machine_handles_category` refuses
+        // every machine for it), so it must not read as "electric
+        // available" even though the raw slice is also `[]` here.
+        assert!(
+            !category_has_electric_machine("rocket-building"),
+            "rocket-building is unsupported (silo semantics unmodeled), not general-purpose"
+        );
+        assert!(
+            !category_has_electric_machine("captive-spawner-process"),
+            "captive-spawner-process is unsupported everywhere, not general-purpose"
         );
     }
 

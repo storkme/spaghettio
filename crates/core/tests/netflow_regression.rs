@@ -775,22 +775,24 @@ fn issue_461_no_burner_no_resolve_for_electronic_circuit_from_ore() {
     );
 }
 
-/// #461 part (a) round 6 — the rejection path. `avoid_burner_recipes`
-/// attempts a re-solve whenever a burner has SOME electric alternative
-/// producer, but only ACCEPTS it if the re-solve comes back burner-free.
-/// `lubricant` off only `{jelly}` is the case that motivated the rule:
-/// `biolubricant` (`organic`, biochamber) is genuinely cost-optimal here,
-/// and the `lubricant` recipe (`chemistry` → chemical-plant) is a real
-/// electric alternative for the same item, so a re-solve IS attempted —
-/// but it doesn't land on that simple chemistry chain; it wanders into an
-/// 11-machine-type plan (coal-liquefaction, coal-synthesis, sulfuric-acid,
-/// …) that itself contains THREE other biochamber recipes (burnt-spoilage,
-/// biosulfur, bioflux) — strictly worse, not burner-free — so it must be
-/// discarded. This is `crates/core/tests/e2e.rs`'s
-/// `phase0e1_biolubricant_biochamber` fixture's exact shape, pinned here
-/// at the solver level: the event fires with `accepted: false`, and the
-/// ORIGINAL result — biolubricant on a biochamber — is what solver.rs
-/// actually returns.
+/// #461 part (a) round 6, tightened in round 7 — the rejection path.
+/// `avoid_burner_recipes` attempts a re-solve whenever a burner has SOME
+/// electric alternative producer, but only ACCEPTS it when
+/// `burners_after < burners_before` (round 7: a strict reduction, not
+/// merely `== 0`). `lubricant` off only `{jelly}` is the case that
+/// motivated the rule: `biolubricant` (`organic`, biochamber) is
+/// genuinely cost-optimal here, and the `lubricant` recipe (`chemistry` →
+/// chemical-plant) is a real electric alternative for the same item, so a
+/// re-solve IS attempted — but it doesn't land on that simple chemistry
+/// chain; it wanders into an 11-machine-type plan (coal-liquefaction,
+/// coal-synthesis, sulfuric-acid, …) that itself contains THREE other
+/// biochamber recipes (burnt-spoilage, biosulfur, bioflux) — MORE burners
+/// than the original's one, not fewer — so it must be discarded. This is
+/// `crates/core/tests/e2e.rs`'s `phase0e1_biolubricant_biochamber`
+/// fixture's exact shape, pinned here at the solver level: asserts the
+/// exact `burners_before`/`burners_after` counts (1 → 3), `accepted:
+/// false`, and that the ORIGINAL result — biolubricant on a biochamber —
+/// is what solver.rs actually returns.
 #[test]
 fn issue_461_burner_resolve_rejected_when_still_burner() {
     let _guard = trace::start_trace();
@@ -805,14 +807,104 @@ fn issue_461_burner_resolve_rejected_when_still_burner() {
                  have been rejected as still-burner, not replaced this");
     assert_eq!(m.entity, "biochamber", "biolubricant always runs on a biochamber");
     let events = trace::drain_events();
+    let event = events
+        .iter()
+        .find(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. }))
+        .unwrap_or_else(|| panic!("expected a BurnerRecipeExcluded trace event, got: {events:?}"));
+    match event {
+        TraceEvent::BurnerRecipeExcluded { accepted, burners_before, burners_after, .. } => {
+            assert!(!accepted, "expected the re-solve to be REJECTED, got accepted=true");
+            assert_eq!(*burners_before, 1, "original result has 1 burner (biolubricant)");
+            assert_eq!(
+                *burners_after,
+                Some(3),
+                "the re-solve's plan has 3 burners (burnt-spoilage, biosulfur, bioflux) — \
+                 MORE than the original, hence rejected"
+            );
+        }
+        other => panic!("expected BurnerRecipeExcluded, got {other:?}"),
+    }
+}
+
+/// #461 part (a) round 7 — the mixed steerable/unsteerable multi-target
+/// case that motivated moving the acceptance rule from "burner-free" to
+/// "strictly fewer burners". `solve_multi_with_palette_exclusions_quality_
+/// and_modules` is the multi-target family's own entry point (RFC-062,
+/// the wasm `solve_multi` boundary's choke point) — a THIRD real call
+/// site into `avoid_burner_recipes`, alongside `solve`/`solve_with_
+/// palette`/`solve_with_exclusions`'s family and the wasm-facing scalar
+/// quality/module family.
+///
+/// Targets `[rocket-fuel, pentapod-egg]` together off the six-ore set at
+/// AM1 (no exclusions): the FIRST solve mixes a STEERABLE burner
+/// (`rocket-fuel-from-jelly` — `rocket-fuel` has electric alternatives)
+/// with an UNSTEERABLE one (`pentapod-egg` — biochamber-only) in the SAME
+/// result, plus whatever nutrient-supply burners pentapod-egg's own
+/// demand pulls in. `avoid_burner_recipes` excludes only the recipes that
+/// clear the `category_has_electric_machine` bar (`rocket-fuel-from-jelly`
+/// among them; `pentapod-egg` itself never does) and re-solves — the
+/// re-solve is neither identical nor burner-free (pentapod-egg is still
+/// there), but it has STRICTLY FEWER burners than the original (verified:
+/// 4 → 2), so round 6's stricter "== 0" rule would have wrongly rejected
+/// this improvement; round 7's "< before" rule correctly accepts it.
+#[test]
+fn issue_461_multi_target_accepts_partial_burner_reduction() {
+    let _guard = trace::start_trace();
+    let inputs = set(&["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]);
+    let targets = vec![("rocket-fuel".to_string(), 1.0), ("pentapod-egg".to_string(), 0.2)];
+    let sr = solver::solve_multi_with_palette_exclusions_quality_and_modules(
+        &targets,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-1",
+        &FxHashSet::default(),
+        common::QualityTier::Normal,
+        spaghettio_core::module_policy::ModulePolicy::default(),
+    )
+    .unwrap_or_else(|e| panic!("[rocket-fuel, pentapod-egg] solves: {e}"));
+
+    let rocket_fuel_machine = sr
+        .machines
+        .iter()
+        .find(|m| m.recipe.contains("rocket-fuel"))
+        .expect("some rocket-fuel-producing recipe must appear in the accepted result");
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { accepted: false, .. })),
-        "expected a REJECTED BurnerRecipeExcluded trace event — the re-solve here still \
-         contains burners (three other biochamber recipes) and must be discarded, \
-         got: {events:?}"
+        common::needs_electricity(&rocket_fuel_machine.entity),
+        "rocket-fuel must be on an electric machine after the accepted re-solve, got {} for {}",
+        rocket_fuel_machine.entity,
+        rocket_fuel_machine.recipe,
     );
+
+    let pentapod_machine = sr
+        .machines
+        .iter()
+        .find(|m| m.recipe == "pentapod-egg")
+        .expect("pentapod-egg recipe must appear in the result");
+    assert_eq!(
+        pentapod_machine.entity, "biochamber",
+        "pentapod-egg is biochamber-only in the game and has no electric alternative — the \
+         re-solve must not (and cannot) move it"
+    );
+
+    let events = trace::drain_events();
+    let event = events
+        .iter()
+        .find(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. }))
+        .unwrap_or_else(|| panic!("expected a BurnerRecipeExcluded trace event, got: {events:?}"));
+    match event {
+        TraceEvent::BurnerRecipeExcluded { accepted, burners_before, burners_after, .. } => {
+            assert!(
+                *accepted,
+                "expected the re-solve to be ACCEPTED (fewer burners, even though not zero)"
+            );
+            let after = burners_after.unwrap_or_else(|| panic!("accepted implies Some(_)"));
+            assert!(
+                after < *burners_before,
+                "expected burners_after ({after}) < burners_before ({burners_before})"
+            );
+        }
+        other => panic!("expected BurnerRecipeExcluded, got {other:?}"),
+    }
 }
 
 /// KILL CRITERION 4 — perf. Run explicitly in release:
