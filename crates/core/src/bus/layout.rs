@@ -1872,12 +1872,36 @@ fn layout_pass(
                 // re-create #732 for a feed on any other edge).
                 //   * every tap-off below the source → South
                 //   * every tap-off above the source → North
-                //   * mixed / none → the entity's own direction (no claim)
+                //   * mixed / none → the head's occupied neighbour along
+                //     the lane axis (the lane continues INTO the layout:
+                //     below occupied → South, above → North — the same
+                //     fact `tests/boundary_direction.rs` checks)
+                //   * neither → the entity's own direction, which for a
+                //     bare pipe is the export default and therefore the
+                //     #732 shape; unreachable today and debug-asserted
+                //     (#736 round 2 — "no claim" was silently a North
+                //     claim).
                 // Pipe-to-ground heads carry their placed direction, which
                 // the same derivation must agree with (debug-asserted).
                 let flow = lane_flow_direction(l);
                 let direction = if l.is_fluid && e.name == "pipe" {
-                    flow.unwrap_or(e.direction)
+                    let neighbour = || {
+                        if entity_at(l.x, l.source_y + 1).is_some() {
+                            Some(EntityDirection::South)
+                        } else if entity_at(l.x, l.source_y - 1).is_some() {
+                            Some(EntityDirection::North)
+                        } else {
+                            None
+                        }
+                    };
+                    let derived = flow.or_else(neighbour);
+                    debug_assert!(
+                        derived.is_some(),
+                        "bare-pipe fluid head at ({}, {}) has no derivable flow — the record would carry the export default",
+                        l.x,
+                        l.source_y
+                    );
+                    derived.unwrap_or(e.direction)
                 } else {
                     debug_assert!(
                         !(l.is_fluid && e.name == "pipe-to-ground")
