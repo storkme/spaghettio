@@ -3503,17 +3503,17 @@ pub fn fluid_only_row(
             }
         }
 
-        // Machine direction=NORTH. Mirror only matters for oil-refinery (it
-        // swaps input/output faces — `validate/fluids.rs::fluid_ports` lists
-        // OIL_MIRROR vs OIL). Chemical-plant ports are symmetric across the
-        // mirror axis, but we keep `mirror=false` to match the unmirrored
-        // chemical-plant geometry used elsewhere in the codebase.
-        let machine_mirror = machine_entity == "oil-refinery";
+        // The input pipe row is north of the machine, so use the shared
+        // orientation that puts this machine's fluid inputs on its north face.
+        // This keeps casting foundries (and other large fluid-input machines)
+        // aligned with the validator's single source of port geometry.
+        let (machine_mirror, machine_dir) =
+            crate::fluid_ports::north_input_orientation(machine_entity);
         entities.push(PlacedEntity {
             name: machine_entity.to_string(),
             x: mx,
             y: y_offset + 1,
-            direction: EntityDirection::North,
+            direction: machine_dir,
             recipe: Some(recipe.to_string()),
             mirror: machine_mirror,
             segment_id: machine_seg.clone(),
