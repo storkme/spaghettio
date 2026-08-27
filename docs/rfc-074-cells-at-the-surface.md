@@ -250,3 +250,29 @@ entry, as #733 did. Unit 4: the probe's table in the decision log.
   library reuse it would have needed (still parked under K67-3; #619
   / #629 hold the state). Reopens only with a chain whose uniform-K
   ratio exceeds 15% — the probe is the instrument, and it stays.
+- *2026-08-27 — Unit 3: both receipts PASS; RFC-072 residual (f) closes
+  as RECEIPTED, not refused.* (1) **ec@240 from plates** (hash
+  `5c83b419…`, the browser's own request): 2×12 grid of the 4-machine
+  10/s cell, 4,460 entities — sim PASS, produced **240.00/240.00
+  (+0.0%)**, delivered +4.0%, all 240 machines working, converged, kit
+  clean. The badge now reads sim-verified for the layout a user gets
+  first. (2) **The mega/fluid grid** — advanced-circuit from ore +
+  crude at 56/s, the smallest fluid-touching request past K_MAX: K=14
+  → a 2×7 grid, each strip carrying its own refinery+chem mega block
+  and its own fluid feed heads (translated with the strip; heads face
+  into the layout, so #732's class never arose — the mega block's
+  heads are pipe-to-ground). Composed with **0 validator errors, 0
+  warnings**, 26,454 entities; sim PASS, produced **57.40/56.00
+  (+2.5%)**, converged, kit clean, 0 fluid errors, 1,246 machines
+  working, 14 ingredient-short. K74-2 read honestly: the report is
+  aggregate (no per-strip census in `report.json`, unlike the
+  K72-3-era probe), so "strips within 2 points" is not directly
+  measured; the 14 short machines are exactly one per copy across
+  both strips, which is the symmetric signature (an asymmetric
+  starvation reads as a per-strip multiple), and produced is above
+  the family bar with margin. Recorded as such — (f) closes, and a
+  per-strip census in the harness report is noted as the instrument
+  that would have made this a measurement rather than a signature.
+  Both rows are in `cell-sim-registry.json` with gate configs and
+  probe entries; `grid_composes_ac56_from_ore_with_fluid_heads_on_every_strip`
+  pins the composition contract.
