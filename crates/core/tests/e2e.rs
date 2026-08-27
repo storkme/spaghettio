@@ -688,6 +688,33 @@ fn assert_no_errors(result: &E2EResult) {
     );
 }
 
+/// Like [`assert_no_errors`] but tolerates Error-severity issues whose
+/// category is in `skip_categories` — everything else fails exactly as
+/// `assert_no_errors` does today.
+///
+/// Use sparingly, and only when the Error is the CORRECT verdict for a known
+/// engine limitation rather than a bug the fixture should hide — e.g.
+/// `burner-fuel` (#461): the engine has no fuel-delivery concept, so a
+/// biochamber fixture that pins self-loop geometry is expected to be loud
+/// about the machine it cannot run.
+fn assert_no_errors_except(result: &E2EResult, skip_categories: &[&str]) {
+    let errors: Vec<_> = result
+        .issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error && !skip_categories.contains(&i.category.as_str()))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "Expected 0 validation errors outside {skip_categories:?}, got {}:\n{}",
+        errors.len(),
+        errors
+            .iter()
+            .map(|i| format!("  [{}] {} — {}", i.category, i.message, i.x.map(|x| format!("({},{})", x, i.y.unwrap_or(0))).unwrap_or_default()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
 /// Assert the layout has no validation warnings either.
 ///
 /// Warnings are "soft" issues (belt-dead-end, input-rate-delivery, lane-throughput, etc.)
@@ -765,10 +792,23 @@ fn assert_no_warnings_except(result: &E2EResult, skip_categories: &[&str]) {
 /// checks going quiet without their problem being fixed — and only
 /// then bless, recording the adjudication where the change lives.
 fn assert_warnings_golden(result: &E2EResult, test_name: &str) {
-    // (The `_allow_errors` split for #644's adjudicated-error fixtures
-    // was folded back 2026-08-15 when the phantom-UG-source walker fix
-    // took its only caller, tier5, back to zero errors.)
-    assert_no_errors(result);
+    assert_warnings_golden_except(result, test_name, &[]);
+}
+
+/// Like [`assert_warnings_golden`] but tolerates Error-severity issues whose
+/// category is in `allowed_error_categories` — see [`assert_no_errors_except`].
+///
+/// (The `_allow_errors` split for #644's adjudicated-error fixtures was
+/// folded back 2026-08-15 when the phantom-UG-source walker fix took its
+/// only caller, tier5, back to zero errors; reintroduced 2026-08-27 for
+/// #461's `burner-fuel` — the biochamber self-loop fixtures are expected to
+/// carry that Error, not hide it.)
+fn assert_warnings_golden_except(
+    result: &E2EResult,
+    test_name: &str,
+    allowed_error_categories: &[&str],
+) {
+    assert_no_errors_except(result, allowed_error_categories);
     let mut actual: std::collections::BTreeMap<&str, usize> = Default::default();
     for w in result.issues.iter().filter(|i| i.severity == Severity::Warning) {
         *actual.entry(w.category.as_str()).or_default() += 1;
@@ -2191,7 +2231,10 @@ fn phase0e1_biolubricant_biochamber() {
     )
     .unwrap_or_else(|e| panic!("phase0e1_biolubricant: {e}"));
 
-    // 0 errors (was belt-dead-end + fluid-connectivity pre-fix), 0 warnings.
+    // 0 errors outside burner-fuel (was belt-dead-end + fluid-connectivity
+    // pre-fix), 0 warnings. biochamber has no fuel delivery; the layout is
+    // expected to be LOUD, and this fixture pins the fluid-port geometry,
+    // not production (#461).
     // Confirm the biolubricant recipe (not the chemistry lubricant) was chosen.
     assert!(
         result.solver_result.machines.iter().any(|m| m.entity == "biochamber"),
@@ -2199,7 +2242,7 @@ fn phase0e1_biolubricant_biochamber() {
         result.solver_result.machines.iter().map(|m| &m.entity).collect::<Vec<_>>()
     );
     assert_fluid_machine(&result, "biochamber", false, spaghettio_core::models::EntityDirection::North);
-    assert_warnings_golden(&result, "phase0e1_biolubricant_biochamber");
+    assert_warnings_golden_except(&result, "phase0e1_biolubricant_biochamber", &["burner-fuel"]);
     assert_round_trip(&result);
 }
 
@@ -3719,14 +3762,16 @@ fn tier_pentapod_egg_self_loop() {
     )
     .unwrap_or_else(|e| panic!("tier_pentapod_egg_self_loop: {e}"));
 
-    assert_no_errors(&result);
+    // biochamber has no fuel delivery; the layout is expected to be LOUD,
+    // and this fixture pins the self-loop geometry, not production (#461).
+    assert_no_errors_except(&result, &["burner-fuel"]);
     // RFC rfc-inserter-sizing.md Phase 3: pentapod-egg is the HasFluid
     // self-loop shape — near_item's inserter is a hard-0-budget LHI (both
     // free columns are structurally packed), a genuine geometric wall
     // (`docs/rfc-inserter-sizing.md`'s accepted residue: nutrients demand
     // ~3/s per machine vs the reach-2 ceiling). Permanent, honest residue
     // per the user-accepted DoD, not a bug — stays at 2/2 through Phase 3.
-    assert_warnings_golden(&result, "tier_pentapod_egg_self_loop");
+    assert_warnings_golden_except(&result, "tier_pentapod_egg_self_loop", &["burner-fuel"]);
     assert_produces(&result, "pentapod-egg", 0.2);
 
     let biochamber_count =
@@ -3734,6 +3779,16 @@ fn tier_pentapod_egg_self_loop() {
     assert_eq!(
         biochamber_count, 2,
         "expected 2 biochambers (hand-derived count for 0.2/s), got {biochamber_count}"
+    );
+
+    // Discrimination pin (#461): the allow-list above must never silently
+    // become a no-op. `burner-fuel` fires exactly once per unfuelled
+    // biochamber — if this drifts, either the check or the allow-list broke.
+    let burner_fuel_count =
+        result.issues.iter().filter(|i| i.category == "burner-fuel").count();
+    assert_eq!(
+        burner_fuel_count, biochamber_count,
+        "expected one burner-fuel error per biochamber, got {burner_fuel_count} for {biochamber_count} biochambers"
     );
 
     assert_round_trip(&result);
@@ -3830,11 +3885,13 @@ fn tier_bacteria_self_loop_regression() {
     )
     .unwrap_or_else(|e| panic!("tier_bacteria_self_loop_regression: {e}"));
 
-    assert_no_errors(&result);
+    // biochamber has no fuel delivery; the layout is expected to be LOUD,
+    // and this fixture pins the self-loop geometry, not production (#461).
+    assert_no_errors_except(&result, &["burner-fuel"]);
     // RFC rfc-inserter-sizing.md Phase 3: self_loop_row's near_item ladder
     // (near_item = bioflux here) resolves the one remaining inserter-bound
     // side from Phase 1 — fully clean.
-    assert_warnings_golden(&result, "tier_bacteria_self_loop_regression");
+    assert_warnings_golden_except(&result, "tier_bacteria_self_loop_regression", &["burner-fuel"]);
     assert_produces(&result, "iron-bacteria", 1.0);
 
     let biochamber_count =
