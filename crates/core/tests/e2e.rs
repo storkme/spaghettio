@@ -2203,6 +2203,46 @@ fn phase0e1_biolubricant_biochamber() {
     assert_round_trip(&result);
 }
 
+#[test]
+fn issue_463_casting_fluid_inputs_use_foundry_north_face() {
+    use spaghettio_core::bus::di_cell::DirectInsertion;
+
+    for (item, fluid, expected_fluid_issues) in [
+        ("copper-cable", "molten-copper", 0),
+        ("iron-plate", "molten-iron", 0),
+    ] {
+        let inputs: FxHashSet<String> = [fluid].iter().map(|s| s.to_string()).collect();
+        let solver_result = solver::solve(item, 1.0, &inputs, "assembling-machine-3")
+            .unwrap_or_else(|e| panic!("solve {item} from {fluid}: {e}"));
+        let layout = layout::build_bus_layout(
+            &solver_result,
+            layout::LayoutOptions {
+                direct_insertion: DirectInsertion::Off,
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("layout {item} from {fluid}: {e}"));
+        let issues = validate::validate(&layout, Some(&solver_result))
+            .unwrap_or_else(|e| e.issues);
+        let fluid_issues = issues
+            .iter()
+            .filter(|issue| issue.category == "fluid-connectivity")
+            .count();
+        assert_eq!(
+            fluid_issues, expected_fluid_issues,
+            "{item} from {fluid}: fluid-connectivity issues: {issues:?}"
+        );
+
+        let foundry = layout
+            .entities
+            .iter()
+            .find(|entity| entity.name == "foundry")
+            .unwrap_or_else(|| panic!("{item} from {fluid}: no foundry"));
+        assert_eq!(foundry.direction, spaghettio_core::models::EntityDirection::North);
+        assert!(foundry.mirror, "{item} from {fluid}: foundry must be mirrored");
+    }
+}
+
 // RFC `docs/rfc-power-supply.md` Phase 3a-i — substation as a first-class
 // entity. Non-layout-moving plumbing: the engine doesn't place substations yet
 // (3a-ii does), so this hand-places one and checks it powers, wires, exports,
