@@ -809,6 +809,50 @@ fn export_chain_fixtures_for_sim() {
     }
 }
 
+/// RFC-073 Phase 0 — the inserter sizing census over the SIM REGISTRY's
+/// fixtures: one CSV row per (fixture, declared level), the input sides
+/// re-priced at that level (the registry runs one geometry, sized at its
+/// `geo_cap`, in several declared worlds — the hand that starves is the
+/// hand at the world's rate). Join onto `cell-sim-registry.json` by
+/// (target, rate, level) for the verdict each row measured.
+///
+/// Survey, not a gate: `cargo test --manifest-path crates/core/Cargo.toml
+/// --test cell_composition -- inserter_sizing_census_registry --ignored
+/// --nocapture`.
+#[test]
+#[ignore = "survey — RFC-073 Phase 0 sizing census over the sim registry"]
+fn inserter_sizing_census_registry() {
+    use spaghettio_core::bus::sizing_census::{capture, side_loads_unjoined, summarize, Summary};
+    println!("fixture,target,rate,geo_cap,level,{}", Summary::CSV_HEADER);
+    let only = std::env::var("SPAGHETTIO_CENSUS_ONLY").ok();
+    for f in SIM_FIXTURES
+        .iter()
+        .filter(|f| !f.levels.is_empty() && only.as_deref().is_none_or(|o| o == f.label))
+    {
+        // Composed layouts: cells are generated once in their own frame and
+        // cloned, so the loads are taken unjoined (one copy per spec).
+        let (_l, events) = capture(|| f.compose_layout());
+        let (loads, ambiguous) = side_loads_unjoined(&events);
+        if std::env::var("SPAGHETTIO_CENSUS_RAW").is_ok() {
+            for l in &loads {
+                println!("raw {}: {l:?}", f.label);
+            }
+        }
+        for &lvl in f.levels {
+            let at_level: Vec<_> = loads.iter().map(|s| s.repriced(lvl)).collect();
+            println!(
+                "{},{},{},{},{},{}",
+                f.label,
+                f.target,
+                f.rate,
+                f.geo_cap,
+                lvl,
+                summarize(&at_level, ambiguous)
+            );
+        }
+    }
+}
+
 /// Phase-B differential scoreboard (kill-3 evidence): composed vs bus
 /// on every chain-eligible ladder fixture. Prints errors / warnings /
 /// area / refusals per path.

@@ -13,10 +13,16 @@
 //! frozen Phase 0v2 evidence base) exactly for `max_tier ==
 //! InserterTier::Stack`; generalizes it for lower caps so
 //! `max_inserter_tier` capping is meaningful. Rates come from
-//! `common::inserter_throughput` — the SAME table
-//! `validate::inserters::check_inserter_throughput` reads — so the fix
-//! and the check can never disagree on what an inserter moves (see the
-//! `constants_identity` test below).
+//! `common::inserter_throughput` / `machine_feed_rate` / `belt_drop_rate`
+//! — the SAME tables the validator reads (the per-side throughput checks
+//! that once consumed them were deleted 2026-08-21, #675; the
+//! `constants_identity` test below still pins the identity) — so sizing
+//! and checking can never disagree on what an inserter moves. Every plan
+//! carries what it was credited (`SidePlan::capacity`), and the templates
+//! record every sized side as `TraceEvent::InserterSideSized` — RFC-073's
+//! sizing census, which found that fullness on this credit does NOT
+//! predict a sim deficit (the RFC's decision log), so there is
+//! deliberately no margin here.
 
 use crate::common::{belt_drop_rate, machine_feed_rate, QualityTier};
 #[cfg(test)]
@@ -79,6 +85,16 @@ pub struct SidePlan {
     pub entity: &'static str,
     pub count: usize,
     pub shortfall: Option<f64>,
+    /// What the ladder CREDITS this plan with moving: `count` × the
+    /// per-entity rate of the table the plan was sized against
+    /// (`machine_feed_rate` for machine-drop sides, `belt_drop_rate` for
+    /// belt-drop sides). Carried on the plan so a consumer can read the
+    /// side's utilization (`required / capacity`) without re-deriving
+    /// the table — the ladder is the single source of truth for what a
+    /// hand moves (RFC-073 Phase 0: the sizing census reads it through
+    /// `TraceEvent::InserterSideSized`; `cells::chain`'s hand term reads
+    /// it directly).
+    pub capacity: f64,
 }
 
 /// Single-tier count ladder: place 1..=`total_slots` copies of `entity`
@@ -89,11 +105,16 @@ pub struct SidePlan {
 fn count_ladder(entity: &'static str, rate: f64, required: f64, total_slots: usize) -> SidePlan {
     for n in 1..=total_slots {
         if required <= n as f64 * rate + EPS {
-            return SidePlan { entity, count: n, shortfall: None };
+            return SidePlan { entity, count: n, shortfall: None, capacity: n as f64 * rate };
         }
     }
     let placed = total_slots as f64 * rate;
-    SidePlan { entity, count: total_slots, shortfall: Some((required - placed).max(0.0)) }
+    SidePlan {
+        entity,
+        count: total_slots,
+        shortfall: Some((required - placed).max(0.0)),
+        capacity: placed,
+    }
 }
 
 /// Size one machine side against an arbitrary per-entity `rate` table —
@@ -120,7 +141,7 @@ fn size_side_rated(
             // ("in-place tier swap" — zero extra columns spent).
             for &entity in tiers {
                 if required <= rate(entity) + EPS {
-                    return SidePlan { entity, count: 1, shortfall: None };
+                    return SidePlan { entity, count: 1, shortfall: None, capacity: rate(entity) };
                 }
             }
 
@@ -133,7 +154,7 @@ fn size_side_rated(
                     let r = rate(entity);
                     for n in 2..=total_slots {
                         if required <= n as f64 * r + EPS {
-                            return SidePlan { entity, count: n, shortfall: None };
+                            return SidePlan { entity, count: n, shortfall: None, capacity: n as f64 * r };
                         }
                     }
                 }
@@ -147,6 +168,7 @@ fn size_side_rated(
                 entity,
                 count: total_slots,
                 shortfall: Some((required - placed).max(0.0)),
+                capacity: placed,
             }
         }
     }
@@ -686,26 +708,26 @@ mod tests {
     #[test]
     fn rung0_regular_at_boundary() {
         let plan = size_side(0.84, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: REGULAR, count: 1, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (REGULAR, 1, None));
     }
 
     #[test]
     fn rung0_regular_below_boundary() {
         let plan = size_side(0.5, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: REGULAR, count: 1, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (REGULAR, 1, None));
     }
 
     #[test]
     fn rung1_fast_just_above_regular() {
         // Just over the regular ceiling — must NOT jump to stack.
         let plan = size_side(0.8401, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: FAST, count: 1, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (FAST, 1, None));
     }
 
     #[test]
     fn rung1_fast_at_boundary() {
         let plan = size_side(2.31, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: FAST, count: 1, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (FAST, 1, None));
     }
 
     #[test]
@@ -713,13 +735,13 @@ mod tests {
         // Just over the fast ceiling — must NOT skip straight past
         // without trying fast first (cheapest-sufficient).
         let plan = size_side(2.311, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: STACK, count: 1, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (STACK, 1, None));
     }
 
     #[test]
     fn rung1_stack_at_boundary() {
         let plan = size_side(12.0, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: STACK, count: 1, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (STACK, 1, None));
     }
 
     // ── cheapest-sufficient (KC6): never stack where fast suffices ─────
@@ -750,7 +772,7 @@ mod tests {
         // 13/s exceeds one stack inserter (12/s) but two cover it (24/s),
         // and a free column is available.
         let plan = size_side(13.0, Reach::Near, 1, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: STACK, count: 2, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (STACK, 2, None));
     }
 
     #[test]
@@ -763,7 +785,7 @@ mod tests {
         // (12/s) and needs 6 fast (13.86/s) within a 6-slot budget; 2
         // stack (24/s) would also fit but must not be reached first.
         let plan = size_side(13.0, Reach::Near, 5, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: FAST, count: 6, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (FAST, 6, None));
     }
 
     // ── max_inserter_tier capping ────────────────────────────────────────
@@ -774,7 +796,7 @@ mod tests {
         // beyond fast, zero extra columns) was 2.31/s exactly — Fast-capped
         // v2 must reproduce that number.
         let plan = size_side(2.31, Reach::Near, 0, InserterTier::Fast, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: FAST, count: 1, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (FAST, 1, None));
 
         let plan = size_side(2.32, Reach::Near, 0, InserterTier::Fast, QualityTier::Normal, 0);
         assert_eq!(plan.entity, FAST);
@@ -795,7 +817,7 @@ mod tests {
         // 1.5/s exceeds one regular (0.84) but two regular (1.68) covers
         // it, and Regular-capped still gets to use its free column.
         let plan = size_side(1.5, Reach::Near, 1, InserterTier::Regular, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: REGULAR, count: 2, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (REGULAR, 2, None));
     }
 
     // ── reach-2 count-laddering ──────────────────────────────────────────
@@ -803,19 +825,19 @@ mod tests {
     #[test]
     fn far_single_long_handed_suffices() {
         let plan = size_side(1.0, Reach::Far, 0, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: LONG_HANDED, count: 1, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (LONG_HANDED, 1, None));
     }
 
     #[test]
     fn far_boundary_exact() {
         let plan = size_side(1.2, Reach::Far, 0, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: LONG_HANDED, count: 1, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (LONG_HANDED, 1, None));
     }
 
     #[test]
     fn far_count_ladder_within_budget() {
         let plan = size_side(1.3, Reach::Far, 1, InserterTier::Stack, QualityTier::Normal, 0);
-        assert_eq!(plan, SidePlan { entity: LONG_HANDED, count: 2, shortfall: None });
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (LONG_HANDED, 2, None));
     }
 
     #[test]
@@ -845,6 +867,39 @@ mod tests {
         assert_eq!(plan.shortfall, Some(100.0 - 2.4));
     }
 
+    // ── capacity: the plan's own credit ─────────────────────────────────
+
+    #[test]
+    fn capacity_is_count_times_the_table_rate_on_every_rung() {
+        let q = QualityTier::Normal;
+        // Rung 0/1 (one hand), rung 2+ (count ladder), far count ladder,
+        // and both best-effort branches — capacity is what the plan moves
+        // at the table it was sized against, shortfall or not.
+        for (required, reach, budget) in [
+            (0.5, Reach::Near, 0),
+            (13.0, Reach::Near, 5),
+            (1.3, Reach::Far, 1),
+            (50.0, Reach::Near, 0),
+            (100.0, Reach::Far, 1),
+        ] {
+            let plan = size_side(required, reach, budget, InserterTier::Stack, q, 0);
+            let expected = plan.count as f64 * machine_feed_rate(plan.entity, q, 0);
+            assert!(
+                (plan.capacity - expected).abs() < 1e-9,
+                "required={required} {reach:?}: capacity {} != {} × {}",
+                plan.capacity,
+                plan.count,
+                plan.entity
+            );
+            if let Some(s) = plan.shortfall {
+                assert!((s - (required - plan.capacity)).abs() < 1e-9, "shortfall is required − capacity");
+            }
+        }
+        // Belt-drop plans credit the belt-drop table, not the machine-feed one.
+        let plan = size_belt_drop_side(20.0, Reach::Near, 0, InserterTier::Stack, q, 2, 0, "express-transport-belt");
+        assert!((plan.capacity - plan.count as f64 * belt_drop_rate(plan.entity, q, 2, 0, "express-transport-belt")).abs() < 1e-9);
+    }
+
     #[test]
     fn shortfall_none_when_sufficient() {
         let plan = size_side(0.5, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal, 0);
@@ -860,7 +915,7 @@ mod tests {
         // `rung2_prefers_fast_count_over_stack_count`).
         for _ in 0..5 {
             let plan = size_side(13.0, Reach::Near, 5, InserterTier::Stack, QualityTier::Normal, 0);
-            assert_eq!(plan, SidePlan { entity: FAST, count: 6, shortfall: None });
+            assert_eq!((plan.entity, plan.count, plan.shortfall), (FAST, 6, None));
         }
     }
 

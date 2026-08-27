@@ -314,6 +314,28 @@ pub enum TraceEvent {
         limit: String,
     },
 
+    /// One machine side was sized by `bus::inserter_ladder` (RFC-073
+    /// Phase 0, the sizing census). Emitted for EVERY sized side, covered
+    /// or not — `InserterSideCapped` above is the shortfall subset. The
+    /// census reads `required / capacity` per side to find the hands the
+    /// ladder fills to the brim; `capacity` is the plan's own credit at
+    /// the level the layout was sized at (`SidePlan::capacity`), and
+    /// `(entity, count)` lets a consumer re-price the side at a different
+    /// declared level. Same machine-origin anchor as the capped event.
+    InserterSideSized {
+        recipe: String,
+        side_is_output: bool,
+        /// The item this side moves — a machine's near and far inputs are
+        /// distinct sides at the same origin.
+        item: String,
+        required: f64,
+        entity: String,
+        count: usize,
+        capacity: f64,
+        machine_x: i32,
+        machine_y: i32,
+    },
+
     // Phase 2: Lane Planning
     LanesPlanned {
         lanes: Vec<LaneInfo>,

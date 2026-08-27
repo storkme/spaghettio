@@ -262,10 +262,18 @@ the snapshot debugger sees them.
   ec@240 = 2×12, sim PASS 240.00/240.00 at plan, all 1,200 machines
   working. K72-3 cleared on the exemplar, K72-4 by construction,
   K72-5 trivial. **The canonical Phase-2 residual list** (none
-  gating): (a) RFC-049 Phase 3 — margin in the inserter ladder
-  itself (the hand margin is scoped to grid territory; sub-K_MAX
-  strips whose per-copy draw lands a hand at ≥90% of its credit —
-  ec60 at K=5, the d1 FAIL rows' class — wait on it); (b) the
+  gating): (a) ~~RFC-049 Phase 3 — margin in the inserter ladder
+  itself~~ **re-pointed 2026-08-27 by RFC-073**, which instrumented the
+  ladder and censused both receipted corpora before writing the margin
+  and found the premise false (K73-1: at-plan rows ship hands at
+  0.93–0.974 of credit, the ec15 cell produces at plan with its last
+  hand at 1.042, and a short row has no hand above 0.65) — the grid's
+  K=18/K=20 failures and PU-from-ore's twenty 2.40/2.40 iron sides are
+  *serial single long-handed hands on one belt at the credit*, a
+  pickup-side (belt density / lane fill) effect the credit does not
+  describe; the open item is that sim experiment, and the quantizer's
+  scoped `HAND_MARGIN` stays as the receipted exception until it
+  lands; (b) the
   delivered-vs-produced gap widening with layout width (a
   transit/window effect — `--fixed-window` before reading a
   delivered-side bar on grids); (c) the delivered metric's drain-kit

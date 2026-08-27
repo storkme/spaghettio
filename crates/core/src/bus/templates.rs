@@ -404,19 +404,22 @@ fn stamp_side_inserters(
     }
 }
 
-/// Emit `InserterSideCapped` when `plan` couldn't cover its required
-/// rate even at the richest tier `max_inserter_tier` allows and every
-/// free column used. No-op (and no trace event) when the side is fully
-/// covered.
+/// Record one sized machine side: always `InserterSideSized` (RFC-073's
+/// sizing census — every side, covered or not, with the ladder's own
+/// credited `capacity`), plus `InserterSideCapped` when `plan` couldn't
+/// cover its required rate even at the richest tier `max_inserter_tier`
+/// allows and every free column used.
 ///
 /// `(machine_x, machine_y)` is the MACHINE ORIGIN (the tile the
 /// validator's warnings anchor at), and `lost_contest` is true only at
 /// the near/far shared-column contest sites for the LOSING side — the
 /// binding-constraint `limit` itself is derived centrally in
 /// `inserter_ladder::capped_limit` from the plan.
-fn emit_shortfall_trace(
+#[allow(clippy::too_many_arguments)]
+fn emit_side_trace(
     recipe: &str,
     side_is_output: bool,
+    item: &str,
     required: f64,
     plan: &SidePlan,
     machine_x: i32,
@@ -425,6 +428,17 @@ fn emit_shortfall_trace(
     quality: QualityTier,
     level: u8,
 ) {
+    crate::trace::emit(crate::trace::TraceEvent::InserterSideSized {
+        recipe: recipe.to_string(),
+        side_is_output,
+        item: item.to_string(),
+        required,
+        entity: plan.entity.to_string(),
+        count: plan.count,
+        capacity: plan.capacity,
+        machine_x,
+        machine_y,
+    });
     if let Some(shortfall) = plan.shortfall {
         crate::trace::emit(crate::trace::TraceEvent::InserterSideCapped {
             recipe: recipe.to_string(),
@@ -629,7 +643,7 @@ pub fn single_input_row(
             INPUT_BASELINE_DX,
             &input_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, input_rate, &input_plan, mx, y_offset + 2, false, quality, level);
+        emit_side_trace(recipe, false, input_item, input_rate, &input_plan, mx, y_offset + 2, false, quality, level);
 
         // Machine
         entities.push(PlacedEntity {
@@ -699,7 +713,7 @@ pub fn single_input_row(
             out_baseline_dx,
             &out_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 2, false, quality, level);
+        emit_side_trace(recipe, true, output_item, output_rate, &output_plan, mx, y_offset + 2, false, quality, level);
 
         // Output belt (machine_size tiles wide) — skip cols owned by
         // the bridge to avoid duplicate-tile stamps.
@@ -751,7 +765,7 @@ pub fn single_input_row(
                 segment_id: secondary_ins_seg.clone(),
                 ..Default::default()
             });
-            emit_shortfall_trace(recipe, true, sec_rate, &sec_plan, mx, y_offset + 2, false, quality, level);
+            emit_side_trace(recipe, true, sec_item, sec_rate, &sec_plan, mx, y_offset + 2, false, quality, level);
             let sec_belt_y = out_belt_y + 1;
             for dx in 0..out_stop2 {
                 entities.push(PlacedEntity {
@@ -985,8 +999,8 @@ pub fn dual_input_row(
             FAR_BASELINE_DX,
             &far_extra_dx,
         );
-        emit_shortfall_trace(
-            recipe, false, far_rate, &far_plan,
+        emit_side_trace(
+            recipe, false, input1, far_rate, &far_plan,
             mx, y_offset + 3,
             !shared_dx.is_empty() && !far_wins,
             quality, level,
@@ -1005,7 +1019,7 @@ pub fn dual_input_row(
             NEAR_BASELINE_DX,
             &near_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, y_offset + 3, far_wins, quality, level);
+        emit_side_trace(recipe, false, input2, near_rate, &near_plan, mx, y_offset + 3, far_wins, quality, level);
 
         // Machine — placed at its north-input orientation so a fluid-output
         // foundry's outputs sit on the south face (mirror=true); unchanged
@@ -1067,7 +1081,7 @@ pub fn dual_input_row(
             out_baseline_dx,
             &out_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 3, false, quality, level);
+        emit_side_trace(recipe, true, output_item, output_rate, &output_plan, mx, y_offset + 3, false, quality, level);
 
         // Output belt — skip cols owned by the bridge.
         for dx in 0..out_stop {
@@ -1446,7 +1460,7 @@ pub fn dual_input_row_horizontal(
             NEAR_BASELINE_DX,
             &near_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, far_wins, quality, level);
+        emit_side_trace(recipe, false, input0, near_rate, &near_plan, mx, machine_y, far_wins, quality, level);
 
         // Far input (input1) — ladder-sized (reach-2 count-ladder).
         let far_plan = size_side(far_rate, Reach::Far, far_extra_dx.len(), max_inserter_tier, quality, level);
@@ -1461,7 +1475,7 @@ pub fn dual_input_row_horizontal(
             FAR_BASELINE_DX,
             &far_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, far_rate, &far_plan, mx, machine_y, !shared_dx.is_empty() && !far_wins,
+        emit_side_trace(recipe, false, input1, far_rate, &far_plan, mx, machine_y, !shared_dx.is_empty() && !far_wins,
             quality, level,
         );
         entities.push(PlacedEntity {
@@ -1498,7 +1512,7 @@ pub fn dual_input_row_horizontal(
             out_baseline_dx,
             &out_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false, quality, level);
+        emit_side_trace(recipe, true, output_item, output_rate, &output_plan, mx, machine_y, false, quality, level);
     }
 
     // Output belt — single continuous east- (or west-) flowing belt
@@ -1762,8 +1776,8 @@ pub fn triple_input_row(
             FAR_BASELINE_DX,
             &far_extra_dx,
         );
-        emit_shortfall_trace(
-            recipe, false, far_rate, &far_plan,
+        emit_side_trace(
+            recipe, false, input1, far_rate, &far_plan,
             mx, y_offset + 3,
             !near_far_shared.is_empty() && !near_far_far_wins,
             quality, level,
@@ -1782,8 +1796,8 @@ pub fn triple_input_row(
             NEAR_BASELINE_DX,
             &near_extra_dx,
         );
-        emit_shortfall_trace(
-            recipe, false, near_rate, &near_plan,
+        emit_side_trace(
+            recipe, false, input2, near_rate, &near_plan,
             mx, y_offset + 3, near_far_far_wins,
             quality, level,
         );
@@ -1844,7 +1858,7 @@ pub fn triple_input_row(
             in3_baseline_dx,
             &input3_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, input3_rate, &input3_plan, mx, y_offset + 3, tile_exists && !input3_wins, quality, level);
+        emit_side_trace(recipe, false, input3, input3_rate, &input3_plan, mx, y_offset + 3, tile_exists && !input3_wins, quality, level);
 
         // Output — ladder-sized.
         let output_plan = size_belt_drop_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality, stacking, level, output_belt);
@@ -1859,7 +1873,7 @@ pub fn triple_input_row(
             1,
             &output_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 3, input3_wins, quality, level);
+        emit_side_trace(recipe, true, output_item, output_rate, &output_plan, mx, y_offset + 3, input3_wins, quality, level);
 
         // Output belt — skip cols owned by the bridge.
         let out_belt_y = y_offset + 3 + msz + 1;
@@ -2223,7 +2237,7 @@ pub fn quad_input_row(
             1,
             &output_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, input4_wins, quality, level);
+        emit_side_trace(recipe, true, output_item, output_rate, &output_plan, mx, machine_y, input4_wins, quality, level);
 
         // South input4 — ladder-sized (reach-2 count-ladder). Baseline at
         // mx+2 (picks belt 4 at y+9, drops machine middle mx+2,y+5).
@@ -2239,7 +2253,7 @@ pub fn quad_input_row(
             2,
             &input4_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, input4_rate, &input4_plan, mx, machine_y, !input4_wins, quality, level);
+        emit_side_trace(recipe, false, input4, input4_rate, &input4_plan, mx, machine_y, !input4_wins, quality, level);
 
         // Output belt
         let out_dir = output_dir(output_east);
@@ -2477,7 +2491,7 @@ pub fn fluid_input_row(
                 inserter_dx,
                 &solid_extra_dx,
             );
-            emit_shortfall_trace(recipe, false, solid_rate, &solid_plan, mx, machine_y, false, quality, level);
+            emit_side_trace(recipe, false, solid_item, solid_rate, &solid_plan, mx, machine_y, false, quality, level);
 
             // Machine — placed at its north-input orientation so the UG-out
             // above lands on a real fluid input port (RFC Phase 0e-i). Default
@@ -2525,7 +2539,7 @@ pub fn fluid_input_row(
                 out_baseline_dx,
                 &out_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false, quality, level);
+            emit_side_trace(recipe, true, output_item, output_rate, &output_plan, mx, machine_y, false, quality, level);
 
             // Output belt — skip cols owned by the bridge.
             for dx in 0..out_stop {
@@ -2770,7 +2784,7 @@ pub fn fluid_dual_input_row(
             segment_id: inserter_in1_seg.clone(),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, far_rate, &far_plan, mx, machine_y, false, quality, level);
+        emit_side_trace(recipe, false, input1, far_rate, &far_plan, mx, machine_y, false, quality, level);
 
         let near_plan = size_side(near_rate, Reach::Near, 0, max_inserter_tier, quality, level);
         entities.push(PlacedEntity {
@@ -2782,7 +2796,7 @@ pub fn fluid_dual_input_row(
             segment_id: inserter_in2_seg.clone(),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, false, quality, level);
+        emit_side_trace(recipe, false, input2, near_rate, &near_plan, mx, machine_y, false, quality, level);
 
         // Machine — placed at the orientation that puts its fluid input ports
         // on the north face the PTG tunnel delivers to (RFC Phase 0e-i): the
@@ -2845,7 +2859,7 @@ pub fn fluid_dual_input_row(
                 out_baseline_dx,
                 &out_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false, quality, level);
+            emit_side_trace(recipe, true, output_item, output_rate, &output_plan, mx, machine_y, false, quality, level);
             let out_dir = output_dir(output_east);
             for dx in 0..out_stop {
                 let x = mx + dx;
@@ -3820,7 +3834,7 @@ pub fn fluid_multi_input_row(
                 out_baseline_dx,
                 &out_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + machine_row_idx, false, quality, level);
+            emit_side_trace(recipe, true, out_item, output_rate, &output_plan, mx, y_offset + machine_row_idx, false, quality, level);
             // Output belt row — skip cols owned by the bridge.
             let out_dir = output_dir(output_east);
             for dx in 0..msz {
@@ -4282,7 +4296,7 @@ pub fn self_loop_row(
                 rate: Some(near_total),
                 ..Default::default()
             });
-            emit_shortfall_trace(recipe, false, near_net_rate, &near_plan, mx, y(dy_machine), false,
+            emit_side_trace(recipe, false, near_item, near_net_rate, &near_plan, mx, y(dy_machine), false,
             quality, level,
         );
             // Regulars: minor's OWN INPUT demand (`spec.self_loop`,
@@ -4343,7 +4357,7 @@ pub fn self_loop_row(
                     rate: Some(near_total),
                     ..Default::default()
                 });
-                emit_shortfall_trace(recipe, false, near_net_rate, &near_plan, mx, y(dy_machine), false,
+                emit_side_trace(recipe, false, near_item, near_net_rate, &near_plan, mx, y(dy_machine), false,
             quality, level,
         );
             } else {
@@ -4366,7 +4380,7 @@ pub fn self_loop_row(
                     2,
                     &near_extra_dx,
                 );
-                emit_shortfall_trace(recipe, false, near_net_rate, &near_plan, mx, y(dy_machine), false,
+                emit_side_trace(recipe, false, near_item, near_net_rate, &near_plan, mx, y(dy_machine), false,
             quality, level,
         );
             }
@@ -4415,7 +4429,7 @@ pub fn self_loop_row(
                 1,
                 &major_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, major_produced_rate, &major_plan, mx, y(dy_machine), minor_wins,
+            emit_side_trace(recipe, true, major_item, major_produced_rate, &major_plan, mx, y(dy_machine), minor_wins,
             quality, level,
         );
 
@@ -4431,7 +4445,7 @@ pub fn self_loop_row(
                 0,
                 &minor_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, minor_produced_rate, &minor_plan, mx, y(dy_machine), !minor_wins,
+            emit_side_trace(recipe, true, near_item, minor_produced_rate, &minor_plan, mx, y(dy_machine), !minor_wins,
             quality, level,
         );
         } else {
@@ -4448,7 +4462,7 @@ pub fn self_loop_row(
                 1,
                 &major_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, major_produced_rate, &major_plan, mx, y(dy_machine), false,
+            emit_side_trace(recipe, true, major_item, major_produced_rate, &major_plan, mx, y(dy_machine), false,
             quality, level,
         );
         }
@@ -5097,7 +5111,7 @@ pub fn voider_row(
             rate: Some(near_total),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, near_rate_per_machine, &near_plan, mx, y(dy_machine), false,
+        emit_side_trace(recipe, false, item, near_rate_per_machine, &near_plan, mx, y(dy_machine), false,
             quality, level,
         );
 
@@ -5112,7 +5126,7 @@ pub fn voider_row(
             rate: Some(far_total),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, far_rate_per_machine, &far_plan, mx, y(dy_machine), false,
+        emit_side_trace(recipe, false, item, far_rate_per_machine, &far_plan, mx, y(dy_machine), false,
             quality, level,
         );
     }
@@ -5413,8 +5427,8 @@ pub fn scrap_recycling_row(
         });
         // Per-machine (moved inside the loop for the D2 machine join —
         // the shared plan means identical events, one per recycler).
-        emit_shortfall_trace(
-            recipe, false, input_rate_per_machine, &scrap_plan,
+        emit_side_trace(
+            recipe, false, input_item, input_rate_per_machine, &scrap_plan,
             mx, y(dy_machine), false,
             quality, level,
         );

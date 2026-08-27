@@ -45,6 +45,7 @@ pub(crate) mod ghost_occupancy;
 pub mod ghost_router;
 pub(crate) mod eviction;
 pub mod inserter_ladder;
+pub mod sizing_census;
 pub(crate) mod junction;
 pub mod junction_cost;
 pub(crate) mod junction_sat_strategy;

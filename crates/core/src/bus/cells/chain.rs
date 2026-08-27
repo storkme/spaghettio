@@ -265,8 +265,7 @@ pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
                     _ => (Reach::Near, 1),
                 };
                 let plan = size_side(rate, reach, budget, InserterTier::Stack, quality, level);
-                let capacity =
-                    plan.count as f64 * crate::common::machine_feed_rate(plan.entity, quality, level);
+                let capacity = plan.capacity;
                 // In grid territory a plan the ladder CANNOT cover (an
                 // honest shortfall) is the strongest signal a copy would
                 // starve, so it counts as a violation too (#733 round 1 —
