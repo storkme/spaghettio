@@ -1863,7 +1863,17 @@ fn layout_pass(
                 item: l.item.clone(),
                 x: l.x,
                 y: l.source_y,
-                direction: e.direction,
+                // Bus lanes run south from the north-edge source. A
+                // pipe-to-ground head already carries that flow direction,
+                // but a bare pipe has EntityDirection's default North because
+                // pipes themselves have no facing. Record the lane flow for
+                // that class so the external fluid feed is placed outside the
+                // layout rather than inside it.
+                direction: if l.is_fluid && e.name == "pipe" {
+                    EntityDirection::South
+                } else {
+                    e.direction
+                },
                 is_fluid: l.is_fluid,
                 entity: e.name.clone(),
             })
