@@ -1,6 +1,6 @@
 # RFC-072: The cell interface — boundary contracts and rate-scaling composition
 
-Status: Accepted — Phases 0–2 COMPLETE 2026-08-26 (#725–#733); Phase 3 not committed by acceptance
+Status: Accepted — Phases 0–2 COMPLETE 2026-08-26 (#725–#733); Phase 3 CLOSED AS SCOPED 2026-08-27 by RFC-074
 Evidence base: [`composition-frontier-probes.md`](composition-frontier-probes.md)
 Successor framing to: the 2026-07-24 strategy call ("bus stays the
 low-rate/intra-cell winner; high rates via composition")
@@ -279,15 +279,28 @@ the snapshot debugger sees them.
   delivered-side bar on grids); (c) the delivered metric's drain-kit
   sensitivity on small fixtures (read produced where receipts differ
   only by kit; the bank's seven pre-#731 re-measures are comparable
-  among themselves only); (d) #732 bare-pipe fluid heads (engine-side
-  direction fix + 3-row bank re-measure); (e) the harness's
+  among themselves only); (d) ~~#732 bare-pipe fluid heads~~ CLOSED
+  2026-08-27 (#736: a bare-pipe fluid head records the lane flow; the
+  three never-measured bank rows measured, all converged); (e) the harness's
   perpendicular-corner same-type rig gap (extend to all-pairs before
-  any composer emits a corner); (f) the mega/fluid grid path is
-  untested by construction — no fluid-touching chain reaches K > 12
-  in the corpus; (g) the derived-quantum form min(belt, max
+  any composer emits a corner); (f) ~~the mega/fluid grid path is
+  untested by construction~~ CLOSED 2026-08-27 by RFC-074 Unit 3 —
+  advanced-circuit from ore + crude at 56/s composes as a 2×7 grid
+  with 0 errors and sims PASS at +2.5% (registry row
+  `d2ed811902dea6af`; the report carries no per-strip census, the
+  one-short-per-copy count is the symmetry signature); (g) the derived-quantum form min(belt, max
   single-row stage rate); (h) the Phase-1 residuals (unchanged).
-- **Phase 3 — heterogeneous + library.** Not committed by acceptance;
-  opens only on a clean Phase 2.
+- **Phase 3 — heterogeneous + library. CLOSED AS SCOPED 2026-08-27 by
+  [RFC-074](rfc-074-cells-at-the-surface.md).** The web surface shipped
+  (a typed `CompositionReceipt` on `LayoutResult`; the registry note
+  had been riding `warnings`, which hid the browser's export button
+  for every composed layout); the mega/fluid grid path was RECEIPTED
+  (advanced-circuit from ore + crude at 56/s: 2×7 strips, 0 validator
+  errors, sim PASS +2.5% — residual (f) below closes) and the
+  browser's own from-plates ec@240 grid receipted (PASS at plan);
+  "chains of unlike cell groups" closed by measurement (uniform K
+  over-builds 0–6.7% chain-wide across every chain-eligible fixture)
+  and the library stays parked under RFC-067's K67-3.
 
 ## Decision log
 

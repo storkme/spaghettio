@@ -95,7 +95,9 @@ grid quantizer today) is a second opinion on the same number.
   records itself as one side of two hands (#735 review found it
   missing from the first cut). The nine direct `size_side` calls in
   `placer.rs` (DI bridge, fused/straddle cells) emit nothing — the
-  census's recorded gap, not fixed here. The event is built only under
+  census's recorded gap, not fixed here. Hands that are not
+  ladder-sized at all (the quad row's input1/input2 long-handed pair
+  is hardcoded, one per belt) are not census subjects by definition. The event is built only under
   the census's own scope (`trace::with_sizing_census`, entered by
   `capture`) — NOT whenever a collector or sink is present, because
   the web's streaming solve installs both on every interactive layout
@@ -294,6 +296,9 @@ loudly. The rest of the tables are not gated.
 The ec15 L1 FAIL and the ec15 L2 at-plan rows are the SAME geometry
 (hash `8f2473ec…`): what changes between them is the world's hand rate,
 and the L2 world produces at plan with one hand 4% over its credit.
+(The ec15 cell is six EC machines per copy — five interior with two far
+hands each, one trimmed last-in-row with one — which is why its rows
+read 17 input sides: 6 iron + 6 cable + 5 cable-row inputs.)
 
 ### Phase 0 census — calibration bank (native builds)
 

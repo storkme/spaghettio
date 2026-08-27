@@ -1,6 +1,8 @@
 # RFC-074: Cells at the surface — RFC-072 Phase 3, scoped
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Design → Active 2026-08-27.**
+Registry: [`rfcs.md`](rfcs.md). Status: **COMPLETE 2026-08-27 — Units
+1–4 landed in one PR; RFC-072 Phase 3 closed as scoped.** Residuals in
+the close-out entry of the decision log.
 This is RFC-072's uncommitted Phase 3 ("heterogeneous composition and
 the library; the web surface") scoped to what its own evidence supports:
 the surface is a measured defect and ships; the fluid/mega grid path gets
@@ -276,3 +278,24 @@ entry, as #733 did. Unit 4: the probe's table in the decision log.
   Both rows are in `cell-sim-registry.json` with gate configs and
   probe entries; `grid_composes_ac56_from_ore_with_fluid_heads_on_every_strip`
   pins the composition contract.
+- *2026-08-27 — CLOSE-OUT: complete as scoped.* Against the Summary:
+  (1) the receipt and the surface shipped — `CompositionReceipt` on
+  `LayoutResult`, the export button back, the badge, the strip
+  outlines; (2) the two receipts are in the registry — the browser's
+  ec@240 at plan, the mega/fluid grid at +2.5% — and RFC-072 residual
+  (f) is closed; (3) heterogeneous composition is closed by its
+  number (0–6.7% chain-wide), and the library with it, parked where
+  K67-3 left it (#619/#629) — reopen only with a chain whose uniform-K
+  ratio exceeds 15%. Every kill criterion held: K74-1 (registry gate,
+  pins, fingerprints unchanged), K74-2 (receipted, with the per-strip
+  caveat stated), K74-3 (closed), K74-4 (no runtime change), K74-5
+  (the badge is as loud about FAIL and unverified as PASS). **Residuals,
+  none gating:** (a) the harness report carries no per-strip census —
+  add one before the next grid receipt is read for symmetry; (b) every
+  cell candidate carries a one-warning selection penalty (its own
+  receipt on `warnings`) — a policy question for RFC-071's owner, not
+  silently removed here; (c) the surface has not been eyeballed by the
+  user yet (standing UI rule; URL in the PR); (d) RFC-072's Phase-1
+  residuals and the pickup-side follow-up from RFC-073 are unchanged.
+  RFC-072's Phase 3 line and residuals (d)/(f) are updated in the same
+  PR; `rfcs.md` and `status.md` carry the row.
