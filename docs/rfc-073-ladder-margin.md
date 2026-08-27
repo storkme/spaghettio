@@ -258,6 +258,14 @@ K73-2..K73-4 read off those receipts; the copy-count pins and
   re-deriving it. Flip condition: if that follow-up concludes without
   consuming the census, the event and the module go in its close-out
   (the `capacity` field stays; it is a simplification, not scaffolding).
+  **Discharged 2026-08-27 by [RFC-075](rfc-075-pickup-side-far-hand.md)**:
+  the follow-up consumed the census — `SideLoad::repriced` now
+  re-prices input far hands through the ladder's derated pickup
+  credit (`far_pickup_rate`), the ec15 pin above was re-read against
+  it (1.042 → 1.225 on the last-in-row hand, 52% → 61% on the interior
+  pairs, geometry unmoved), and the census's own finding — PU's twenty
+  2.40/2.40 sides — is the bank row the derating re-shaped (87.7% →
+  89.9%). The instrument stays.
 
 ### Phase 0 census — sim registry (composed cells, input sides re-priced at the declared level)
 

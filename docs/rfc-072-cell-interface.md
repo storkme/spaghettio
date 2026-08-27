@@ -271,9 +271,17 @@ the snapshot debugger sees them.
   K=18/K=20 failures and PU-from-ore's twenty 2.40/2.40 iron sides are
   *serial single long-handed hands on one belt at the credit*, a
   pickup-side (belt density / lane fill) effect the credit does not
-  describe; the open item is that sim experiment, and the quantizer's
-  scoped `HAND_MARGIN` stays as the receipted exception until it
-  lands; (b) the
+  describe — **CLOSED 2026-08-27 by [RFC-075](rfc-075-pickup-side-far-hand.md)**:
+  the long-handed pickup credit was calibrated on a flooded express
+  belt and a hand with consumers downstream of it picks from a moving
+  stream (the ec@12 cell's five hands craft 2.11 → 2.48/s in belt
+  order; flooded, all five read 2.50); the ladder now derates the
+  reach-2 pickup hand by `FAR_PICKUP_FACTOR = 0.85`, the ec@12 cell
+  goes −7.1% → +0.3%, and this grid's K=18/K=20 failures are retired
+  — ec@240 re-quantizes to K=20 (2×10 of that cell) and sims at plan
+  from ore and +4.2% from plates. The quantizer's own far-side
+  `HAND_MARGIN` term is retired with it (the ladder carries the
+  margin; the near-side and belt terms stay); (b) the
   delivered-vs-produced gap widening with layout width (a
   transit/window effect — `--fixed-window` before reading a
   delivered-side bar on grids); (c) the delivered metric's drain-kit
