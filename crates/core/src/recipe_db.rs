@@ -335,7 +335,7 @@ fn category_machines(category: &str) -> &'static [&'static str] {
         "electromagnetics" => &["electromagnetic-plant"],
         "cryogenics" | "cryogenics-or-assembling" => &["cryogenic-plant"],
         "metallurgy" | "metallurgy-or-assembling" | "pressing" => &["foundry"],
-        "organic" | "organic-or-assembling" => &["biochamber"],
+        "organic" => &["biochamber"],
         "centrifuging" => &["centrifuge"],
         // Fulgora scrap economy (docs/rfc-solver-net-flow.md spike): both
         // categories are excluded from normal solving by
@@ -364,6 +364,16 @@ const GENERAL_CATEGORIES: &[&str] = &[
     "electronics-or-assembling",
     "electronics-with-fluid",
     "organic-or-hand-crafting",
+    // #461 part (a): the biochamber half of this category is a burner
+    // machine (fuel category `nutrients`) and the engine delivers no fuel
+    // to anything, so a biochamber placed here validates clean and
+    // produces 0/s (issue #461's rocket-fuel example: 0 errors, 0
+    // warnings, 0.00/s measured). The assembler half is what the engine
+    // can actually power — fall through to the caller's tier default, the
+    // same way a plain `crafting` recipe does. `organic` alone (no
+    // `-or-assembling`) is unaffected: those 13 recipes are biochamber-only
+    // in the game and stay mapped to `&["biochamber"]` above.
+    "organic-or-assembling",
     "parameters",
 ];
 
@@ -563,13 +573,22 @@ mod tests {
         let recipe = Recipe { category: "pressing".into(), ..recipe.clone() };
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "foundry");
 
-        // organic → biochamber
+        // organic → biochamber (unaffected by #461 part (a); these 13
+        // recipes are biochamber-only in the game, no assembler fallback).
         let recipe = Recipe { category: "organic".into(), ..recipe.clone() };
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "biochamber");
 
-        // organic-or-assembling → biochamber
+        // organic-or-assembling → assembler tier (#461 part (a)): the
+        // biochamber is a burner machine and the engine never delivers
+        // fuel to it, so a biochamber placed on this category validates
+        // clean and produces 0/s. Fall through to the caller's tier
+        // default, same as a plain `crafting` recipe, since every one of
+        // these recipes can also be crafted in an assembler in the game.
         let recipe = Recipe { category: "organic-or-assembling".into(), ..recipe.clone() };
-        assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "biochamber");
+        assert_eq!(
+            machine_for_recipe(&recipe, "assembling-machine-3"),
+            "assembling-machine-3"
+        );
 
         // chemistry-or-cryogenics still maps to chemical-plant
         let recipe = Recipe { category: "chemistry-or-cryogenics".into(), ..recipe.clone() };

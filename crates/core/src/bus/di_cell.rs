@@ -1930,12 +1930,23 @@ mod row_stamp_tests {
     /// SAME fluid and takes no belt-fed solid at all
     /// (`solid-fuel-from-light-oil → rocket-fuel`).
     ///
-    /// Pinned as a unit test rather than end-to-end because the shape is
-    /// currently UNREACHABLE: the only corpus pair with it resolves to a
-    /// `biochamber`, which `cell_machines_are_powerable` refuses (burner,
-    /// fuel category `nutrients`, and nothing in the engine delivers
-    /// burner fuel). `chemical-plant` on both sides here stands in for the
-    /// geometry, which is what this test is about.
+    /// Pinned as a unit test rather than end-to-end because at the time
+    /// this was written the shape was UNREACHABLE: the only corpus pair
+    /// with it resolved `rocket-fuel` to a `biochamber`, which
+    /// `cell_machines_are_powerable` refuses (burner, fuel category
+    /// `nutrients`, and nothing in the engine delivers burner fuel).
+    /// `chemical-plant` on both sides here stands in for the geometry,
+    /// which is what this test is about.
+    ///
+    /// #461 part (a) changed `organic-or-assembling` (rocket-fuel's
+    /// category) to fall through to the caller's assembler tier, so
+    /// `rocket-fuel` no longer resolves to a biochamber and
+    /// `cell_machines_are_powerable` no longer refuses it on that ground.
+    /// Whether the real pipeline now actually forms this cell (both roles
+    /// electric, other cell-eligibility heuristics permitting) was not
+    /// re-audited here — this synthetic spec remains the only coverage for
+    /// the geometry either way, so it is left as-is rather than widened
+    /// into an end-to-end fixture.
     fn shared_fluid_spec() -> RowCellSpec<'static> {
         RowCellSpec {
             producer_entity: "chemical-plant",

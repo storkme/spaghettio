@@ -2447,19 +2447,22 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
 /// a burner.
 ///
 /// Found by SIMULATING, not by reasoning: `solid-fuel-from-light-oil →
-/// rocket-fuel` builds a cell that validates 0 errors 0 warnings and then
-/// produces **literally nothing** — the solver picks `biochamber` for
+/// rocket-fuel` built a cell that validated 0 errors 0 warnings and then
+/// produced **literally nothing** — the solver picked `biochamber` for
 /// `rocket-fuel` (category `organic-or-assembling`), a burner whose fuel
-/// category is `nutrients`, and the sim reports `no_fuel: 8` with every
+/// category is `nutrients`, and the sim reported `no_fuel: 8` with every
 /// upstream chemical plant backed up behind it.
 ///
-/// The gap is engine-wide, not a cell property: nothing anywhere delivers
-/// burner fuel, and `validate::power` deliberately exempts biochambers
-/// from coverage without any check taking over the obligation. Refusing
-/// here is the narrow half of the fix — a cell that cannot run is worse
-/// than no cell, because it validates clean and lies. Delivering fuel (or
-/// steering machine selection away from burners) is the engine-wide half
-/// and is NOT attempted here.
+/// #461 part (a) fixed the `rocket-fuel` half of this at the source:
+/// `organic-or-assembling` now falls through to the caller's assembler
+/// tier (`recipe_db::category_machines`), so this specific repro no longer
+/// reaches a biochamber. The guard here stays as defense in depth — the
+/// pure `organic` category (bacteria cultivation, bioflux, pentapod-egg,
+/// …) still resolves to `biochamber` by design, and nothing engine-wide
+/// delivers burner fuel to it; `validate::power` deliberately exempts
+/// biochambers from coverage without any check taking over the
+/// obligation. Refusing here is the narrow half of that fix — a cell that
+/// cannot run is worse than no cell, because it validates clean and lies.
 fn cell_machines_are_powerable(producer: &MachineSpec, consumer: &MachineSpec) -> bool {
     crate::common::needs_electricity(&producer.entity)
         && crate::common::needs_electricity(&consumer.entity)
