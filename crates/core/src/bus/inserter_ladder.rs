@@ -197,8 +197,32 @@ pub fn size_side(
     quality: QualityTier,
     level: u8,
 ) -> SidePlan {
+    let far_factor = far_pickup_factor();
     size_side_rated(required, reach, position_budget, max_tier, |name| {
-        machine_feed_rate(name, quality, level)
+        let rate = machine_feed_rate(name, quality, level);
+        // RFC-075 Phase 1 experiment gate: the long-handed PICKUP credit
+        // was calibrated on a flooded express belt; a reach-2 hand with
+        // consumers downstream of it on the same belt picks from a moving
+        // stream and delivers less (ec@12 cell: 2.11/s at the head vs
+        // 2.48/s at the dead-end tail on a 2.40 credit). Derate it on
+        // input sides only. Env-gated while E3 measures the constant;
+        // Phase 2 replaces the gate with the measured factor or deletes
+        // this — see docs/rfc-075-pickup-side-far-hand.md.
+        if reach == Reach::Far && name == LONG_HANDED { rate * far_factor } else { rate }
+    })
+}
+
+/// RFC-075 Phase 1 gate: `SPAGHETTIO_FAR_PICKUP_FACTOR` (0 < f ≤ 1),
+/// default 1.0 (bit-identical to the pre-RFC ladder). Read once.
+fn far_pickup_factor() -> f64 {
+    use std::sync::OnceLock;
+    static FACTOR: OnceLock<f64> = OnceLock::new();
+    *FACTOR.get_or_init(|| {
+        std::env::var("SPAGHETTIO_FAR_PICKUP_FACTOR")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|f| *f > 0.0 && *f <= 1.0)
+            .unwrap_or(1.0)
     })
 }
 
