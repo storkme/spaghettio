@@ -5,8 +5,12 @@
 //! path) was deleted 2026-08-14 (#632 A1) once the parity suite ran green
 //! one final time — see the RFC's decision log for the deletion receipt.
 
+use crate::common::needs_electricity;
 use crate::models::SolverResult;
-use crate::recipe_db::{MachineIncompatibility, MachinePalette};
+use crate::recipe_db::{
+    category_has_electric_machine, db, is_excluded_recipe, MachineIncompatibility, MachinePalette,
+};
+use crate::trace::{self, TraceEvent};
 use rustc_hash::FxHashSet;
 
 /// Marker prefix carried in `IncompatibleMachine` error strings across the
@@ -54,6 +58,90 @@ pub enum SolverError {
     /// guarantees feasibility — so this indicates a bug worth reporting.
     #[error("net-flow solve failed for {target}: {detail}")]
     LpFailed { target: String, detail: String },
+}
+
+/// #461 part (a)'s production-path fix. The engine cannot fuel a burner
+/// (fuel category `nutrients` and no engine mechanism delivers it), so a
+/// recipe that lands on one is a last resort — but pushing that preference
+/// INTO the net-flow LP's cost model (an earlier version of this fix,
+/// this PR's history) moved 11 calibration fixtures' manifest hashes by
+/// float noise: any coefficient change on any column, even one that never
+/// wins, can shift the simplex's floating-point path for the WHOLE shared
+/// LP instance, and pure-`organic` recipes (`bioplastic` → plastic-bar,
+/// `biosulfur` → sulfur, …) sit in the demand closure of far more fixtures
+/// than #461 is about. Doing it here instead — strictly AFTER the LP has
+/// already run, as a policy decision over its OUTPUT — keeps the LP for
+/// every solve that never chose a burner bit-identical to before this fix
+/// existed: this function is a no-op unless `result` actually contains a
+/// burner machine.
+///
+/// Called by every real solver entry point (`solve`/`solve_with_palette`/
+/// `solve_with_exclusions` via [`solve_free_with_palette_and_exclusions`];
+/// the wasm-facing quality/module family via
+/// [`solve_with_palette_exclusions_quality_and_modules`]; the multi-target
+/// family via
+/// [`solve_multi_with_palette_exclusions_quality_and_modules`]) right
+/// after its own netflow call succeeds, via `resolve` — a closure that
+/// re-invokes that SAME netflow call with an expanded exclusion set, so
+/// the actual decision logic lives here exactly once rather than being
+/// copied at each entry point.
+///
+/// Rule: for every machine in `result` where [`needs_electricity`] is
+/// false, look up its recipe and ask whether ANY of its products has at
+/// least one OTHER (non-excluded) recipe whose category
+/// [`category_has_electric_machine`] says can run electric. If so, that
+/// burner recipe is a genuine last resort — not the only way to make this
+/// item — so it's added to the exclusion set. If NO burner recipe in the
+/// result clears that bar (e.g. `pentapod-egg`, biochamber-only with no
+/// assembler-tier alternative anywhere in the recipe graph), nothing is
+/// excluded and `result` is returned untouched: no re-solve is attempted.
+///
+/// Otherwise, `resolve` is called exactly ONCE with the expanded exclusion
+/// set. A trace event names the excluded recipes either way — re-solve
+/// attempted is the caller-visible fact, not whether it changed anything.
+/// If the re-solve errors, the ORIGINAL result is returned: a burner
+/// layout that #461 part (b)'s `burner-fuel` validator check can make loud
+/// beats refusing outright.
+fn avoid_burner_recipes(
+    result: SolverResult,
+    target_item: &str,
+    excluded_recipes: &FxHashSet<String>,
+    resolve: impl FnOnce(&FxHashSet<String>) -> Result<SolverResult, SolverError>,
+) -> SolverResult {
+    let mut expanded: Option<FxHashSet<String>> = None;
+    for m in &result.machines {
+        if needs_electricity(&m.entity) {
+            continue;
+        }
+        let Some(recipe) = db().recipes.get(&m.recipe) else {
+            continue;
+        };
+        let has_electric_alternative = recipe.products.iter().any(|product| {
+            db().recipes.iter().any(|(other_name, other)| {
+                other_name != &m.recipe
+                    && !excluded_recipes.contains(other_name)
+                    && !is_excluded_recipe(other)
+                    && other.products.iter().any(|p| p.name == product.name)
+                    && category_has_electric_machine(&other.category)
+            })
+        });
+        if has_electric_alternative {
+            expanded
+                .get_or_insert_with(|| excluded_recipes.clone())
+                .insert(m.recipe.clone());
+        }
+    }
+    let Some(expanded) = expanded else {
+        return result;
+    };
+    let mut newly_excluded: Vec<String> =
+        expanded.difference(excluded_recipes).cloned().collect();
+    newly_excluded.sort();
+    trace::emit(TraceEvent::BurnerRecipeExcluded {
+        target_item: target_item.to_string(),
+        excluded_recipes: newly_excluded,
+    });
+    resolve(&expanded).unwrap_or(result)
 }
 
 /// Compute machines needed to produce `target_item` at `target_rate` items/sec.
@@ -168,7 +256,7 @@ pub fn solve_free_with_palette_and_exclusions(
     default_machine: &str,
     excluded_recipes: &FxHashSet<String>,
 ) -> Result<SolverResult, SolverError> {
-    crate::netflow::solve_netflow(
+    let result = crate::netflow::solve_netflow(
         target_item,
         target_rate,
         available_inputs,
@@ -177,7 +265,19 @@ pub fn solve_free_with_palette_and_exclusions(
         excluded_recipes,
         crate::netflow::RecipeScope::Free,
         &crate::netflow::CostTable::default(),
-    )
+    )?;
+    Ok(avoid_burner_recipes(result, target_item, excluded_recipes, |excl| {
+        crate::netflow::solve_netflow(
+            target_item,
+            target_rate,
+            available_inputs,
+            palette,
+            default_machine,
+            excl,
+            crate::netflow::RecipeScope::Free,
+            &crate::netflow::CostTable::default(),
+        )
+    }))
 }
 
 /// Like [`solve_with_palette_and_exclusions`] with a build-quality tier
@@ -224,7 +324,9 @@ pub fn solve_with_palette_exclusions_quality_and_modules(
     quality: crate::common::QualityTier,
     module_policy: crate::module_policy::ModulePolicy,
 ) -> Result<SolverResult, SolverError> {
-    crate::netflow::solve_netflow_with_options(
+    let options =
+        crate::netflow::NetflowOptions { quality, module_policy, ..Default::default() };
+    let result = crate::netflow::solve_netflow_with_options(
         target_item,
         target_rate,
         available_inputs,
@@ -233,12 +335,21 @@ pub fn solve_with_palette_exclusions_quality_and_modules(
         excluded_recipes,
         crate::netflow::RecipeScope::Free,
         &crate::netflow::CostTable::default(),
-        &crate::netflow::NetflowOptions {
-            quality,
-            module_policy,
-            ..Default::default()
-        },
-    )
+        &options,
+    )?;
+    Ok(avoid_burner_recipes(result, target_item, excluded_recipes, |excl| {
+        crate::netflow::solve_netflow_with_options(
+            target_item,
+            target_rate,
+            available_inputs,
+            palette,
+            default_machine,
+            excl,
+            crate::netflow::RecipeScope::Free,
+            &crate::netflow::CostTable::default(),
+            &options,
+        )
+    }))
 }
 
 /// RFC-062 Phase 3: the multi-target counterpart of
@@ -280,7 +391,9 @@ pub fn solve_multi_with_palette_exclusions_quality_and_modules(
     quality: crate::common::QualityTier,
     module_policy: crate::module_policy::ModulePolicy,
 ) -> Result<SolverResult, SolverError> {
-    crate::netflow::solve_netflow_multi_with_options(
+    let options =
+        crate::netflow::NetflowOptions { quality, module_policy, ..Default::default() };
+    let result = crate::netflow::solve_netflow_multi_with_options(
         targets,
         available_inputs,
         palette,
@@ -288,12 +401,25 @@ pub fn solve_multi_with_palette_exclusions_quality_and_modules(
         excluded_recipes,
         crate::netflow::RecipeScope::Free,
         &crate::netflow::CostTable::default(),
-        &crate::netflow::NetflowOptions {
-            quality,
-            module_policy,
-            ..Default::default()
-        },
-    )
+        &options,
+    )?;
+    // `target_item` is a trace-only label (not part of the returned
+    // `SolverResult`, so this has no bearing on the N=1 bit-identity
+    // invariant above) — join every requested item, same convention as
+    // netflow.rs's own `target_label`.
+    let label = targets.iter().map(|(item, _)| item.as_str()).collect::<Vec<_>>().join("+");
+    Ok(avoid_burner_recipes(result, &label, excluded_recipes, |excl| {
+        crate::netflow::solve_netflow_multi_with_options(
+            targets,
+            available_inputs,
+            palette,
+            default_machine,
+            excl,
+            crate::netflow::RecipeScope::Free,
+            &crate::netflow::CostTable::default(),
+            &options,
+        )
+    }))
 }
 
 #[cfg(test)]

@@ -751,6 +751,24 @@ pub enum TraceEvent {
         machines: Vec<MachineTrace>,
     },
 
+    /// #461 part (a) production-path fix (`solver.rs`): the initial solve
+    /// placed a burner machine (the engine delivers no fuel to any burner)
+    /// for one or more recipes whose product item has at least one OTHER
+    /// producer that CAN run on an electric machine, so those recipes were
+    /// added to the exclusion set and the target was re-solved once.
+    /// Emitted whether or not the re-solve improved anything — a re-solve
+    /// that still contains a burner (no fully-electric plan exists), or one
+    /// that fails outright and falls back to the original result, still
+    /// emits this. The caller-visible fact is "a re-solve was attempted",
+    /// not its outcome. Absence of this event for a solve means no burner
+    /// machine had an electric alternative to steer toward (e.g.
+    /// `pentapod-egg`, biochamber-only) — the original result stands
+    /// untouched, no re-solve attempted.
+    BurnerRecipeExcluded {
+        target_item: String,
+        excluded_recipes: Vec<String>,
+    },
+
     /// The layout pipeline ran once, hit `JunctionGrowthCapped` events,
     /// and is being re-run with extra vertical gap inserted after each
     /// row whose successor junction couldn't fit. Emitted at the start

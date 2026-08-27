@@ -31,6 +31,7 @@ use spaghettio_core::models::SolverResult;
 use spaghettio_core::netflow::{solve_netflow, solve_netflow_with_options, CostTable, NetflowOptions, RecipeScope};
 use spaghettio_core::recipe_db::{self, MachinePalette};
 use spaghettio_core::solver::{self, SolverError};
+use spaghettio_core::trace::{self, TraceEvent};
 
 fn set(items: &[&str]) -> FxHashSet<String> {
     items.iter().map(|s| s.to_string()).collect()
@@ -654,21 +655,42 @@ fn issue_461_am1_fluid_recipe_outcome_matches_processing_unit() {
     );
 }
 
-/// #461 part (a) round 3 — the production-path gap rounds 1-2's exclusion-
-/// guarded tests couldn't see. `solver::solve` is the entry the wasm `solve`
-/// binding and the CLI both call, with NO exclusions — real callers never
-/// exclude anything. Found empirically (see `BURNER_MACHINE_COST_FACTOR`'s
-/// doc comment in `netflow.rs`): the SIX-ORE set (`iron-ore`, `copper-ore`,
-/// `coal`, `stone`, `crude-oil`, `water` — what the web passes by default)
-/// targeting `rocket-fuel` at AM1 used to select `rocket-fuel-from-jelly`
-/// on a biochamber, because AM1 can't run the direct `rocket-fuel` recipe
-/// (fluid check) and the jellynut/yumako-rooted chain's raw-input cost
-/// undercut the electric `ammonia-rocket-fuel` alternative — #461's
-/// symptom (0 errors, 0 warnings, 0/s measured) surviving part (a)'s
-/// `machine_for_recipe` fix entirely, for this input set. The burner-cost
-/// penalty fixes this at the LP objective, not by excluding anything.
+/// #461 part (a) round 5 — the production-path gap rounds 1-2's exclusion-
+/// guarded tests couldn't see, fixed as a POST-SOLVE re-solve
+/// (`solver::avoid_burner_recipes`), not the LP cost penalty round 3 tried
+/// first (`BURNER_MACHINE_COST_FACTOR`, reverted): any coefficient change
+/// on any LP column — even a losing one — can shift the simplex's
+/// floating-point path for the WHOLE shared LP instance, and pure-`organic`
+/// recipes (`bioplastic` → plastic-bar, `biosulfur` → sulfur, …) sit in far
+/// more fixtures' demand closures than #461 is about, so the penalty moved
+/// 11 calibration fixtures' manifest hashes by float noise even after
+/// narrowing it to burner-only categories. Doing it strictly AFTER the LP
+/// has run — as a policy decision over the output, re-solving only when a
+/// burner actually appears — keeps every other fixture's LP untouched.
+///
+/// Correction to round 3's doc comment: `solver::solve` is NOT the wasm
+/// `solve` binding's entry point — wasm's `solve`/`solve_with_palette`
+/// actually call `solver::solve_with_palette_exclusions_quality_and_modules`.
+/// Both families (and the multi-target one) share the same
+/// `avoid_burner_recipes` post-solve step, so pinning it here via
+/// `solver::solve` still exercises the real mechanism.
+///
+/// Found empirically: the SIX-ORE set (`iron-ore`, `copper-ore`, `coal`,
+/// `stone`, `crude-oil`, `water` — what the web passes by default)
+/// targeting `rocket-fuel` at AM1, with NO exclusions (real callers never
+/// exclude anything), selects `rocket-fuel-from-jelly` on a biochamber in
+/// its FIRST solve — AM1 can't run the direct `rocket-fuel` recipe (fluid
+/// check), and the jellynut/yumako-rooted chain's raw-input cost undercuts
+/// the electric `ammonia-rocket-fuel` alternative. `avoid_burner_recipes`
+/// then excludes `rocket-fuel-from-jelly` (its product, `rocket-fuel`, has
+/// other producers whose category has an electric machine) and re-solves
+/// once, landing on the electric chain. Asserts both the outcome (no
+/// burner in the final result) AND that the re-solve trace event actually
+/// fired — confirming the mechanism engaged, not that the LP happened to
+/// avoid a burner on its own.
 #[test]
 fn issue_461_production_path_prefers_electric_rocket_fuel() {
+    let _guard = trace::start_trace();
     let inputs = set(&["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]);
     let sr = solver::solve("rocket-fuel", 1.0, &inputs, "assembling-machine-1")
         .unwrap_or_else(|e| panic!("rocket-fuel solves: {e}"));
@@ -677,23 +699,35 @@ fn issue_461_production_path_prefers_electric_rocket_fuel() {
             common::needs_electricity(&m.entity),
             "#461: the production path (solver::solve, no exclusions) placed a burner \
              machine ({} for recipe {}) for rocket-fuel@AM1 off the six-ore set — the \
-             burner-cost penalty should have steered free-mode selection to the electric \
-             ammonia-rocket-fuel alternative instead",
+             post-solve re-solve should have steered to the electric ammonia-rocket-fuel \
+             alternative instead",
             m.entity,
             m.recipe,
         );
     }
+    let events = trace::drain_events();
+    assert!(
+        events.iter().any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. })),
+        "expected a BurnerRecipeExcluded trace event confirming the re-solve fired, \
+         got: {events:?}"
+    );
 }
 
-/// #461 part (a) round 3, companion to the pin above: the burner-cost
-/// penalty STEERS, it does not REFUSE. `pentapod-egg` is biochamber-only in
-/// the game (pure `organic` category, no assembler-tier alternative
-/// anywhere in the recipe graph) — when a burner is an item's ONLY
-/// producer, inflating its objective cost must not stop the LP from using
-/// it; the solve must still succeed, on a biochamber, same as before this
-/// change.
+/// #461 part (a) round 5, companion to the pin above and renamed to match
+/// the mechanism (was `issue_461_burner_penalty_does_not_refuse_sole_
+/// producer`, from the reverted LP-penalty design): `avoid_burner_recipes`
+/// STEERS when an electric alternative exists, it does not REFUSE — and,
+/// unlike a cost penalty, it does not even ATTEMPT a re-solve when none
+/// does. `pentapod-egg` is biochamber-only in the game (pure `organic`
+/// category, no assembler-tier alternative anywhere in the recipe graph),
+/// so no OTHER producer of `pentapod-egg` clears the
+/// `category_has_electric_machine` bar — nothing gets excluded, and the
+/// FIRST solve's result is returned untouched. Asserted via the trace
+/// event's ABSENCE, not just the outcome: a second solve that happened to
+/// land on the same machine would pass the outcome check but not this one.
 #[test]
-fn issue_461_burner_penalty_does_not_refuse_sole_producer() {
+fn issue_461_sole_burner_producer_skips_resolve() {
+    let _guard = trace::start_trace();
     let inputs = set(&["nutrients", "water"]);
     let sr = solver::solve("pentapod-egg", 0.2, &inputs, "assembling-machine-3")
         .unwrap_or_else(|e| panic!("pentapod-egg solves: {e}"));
@@ -704,10 +738,37 @@ fn issue_461_burner_penalty_does_not_refuse_sole_producer() {
         .expect("pentapod-egg recipe must appear in its own solve");
     assert_eq!(
         m.entity, "biochamber",
-        "pentapod-egg is biochamber-only in the game; the burner-cost penalty must not \
-         change WHICH machine gets used when there is no electric alternative, only \
-         whether a cheaper electric alternative gets picked over it — got {}",
+        "pentapod-egg is biochamber-only in the game; got {}",
         m.entity
+    );
+    let events = trace::drain_events();
+    assert!(
+        !events.iter().any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. })),
+        "no re-solve should have been attempted — pentapod-egg has no electric alternative \
+         producer — but got: {events:?}"
+    );
+}
+
+/// #461 part (a) round 5: the common, unaffected case — a solve that never
+/// chose a burner in the first place must perform NO re-solve at all.
+/// `avoid_burner_recipes` is a no-op unless `result.machines` actually
+/// contains a burner; electronic-circuit from ore (iron-ore, copper-ore,
+/// coal) never touches `organic` or any other burner-only category, so
+/// this pins the fast path: zero `BurnerRecipeExcluded` events, meaning
+/// the netflow LP ran exactly once — the property every all-electric
+/// calibration fixture depends on for its LP to stay bit-identical.
+#[test]
+fn issue_461_no_burner_no_resolve_for_electronic_circuit_from_ore() {
+    let _guard = trace::start_trace();
+    let inputs = set(&["iron-ore", "copper-ore", "coal"]);
+    let sr = solver::solve("electronic-circuit", 10.0, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("electronic-circuit solves: {e}"));
+    assert!(!sr.machines.is_empty(), "sanity: solve should place machines");
+    let events = trace::drain_events();
+    assert!(
+        !events.iter().any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. })),
+        "electronic-circuit from ore never touches a burner machine — no re-solve should \
+         have been attempted, but got: {events:?}"
     );
 }
 

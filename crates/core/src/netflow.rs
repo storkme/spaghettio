@@ -25,8 +25,8 @@
 
 use crate::models::{ItemFlow, MachineSpec, SelfLoopFlow, SolverResult};
 use crate::recipe_db::{
-    category_has_electric_machine, db, effective_crafting_speed, is_excluded_recipe,
-    machine_can_run_recipe, machine_for_recipe_with_palette, MachinePalette, Recipe,
+    db, effective_crafting_speed, is_excluded_recipe, machine_can_run_recipe,
+    machine_for_recipe_with_palette, MachinePalette, Recipe,
 };
 use crate::solver::SolverError;
 use microlp::{ComparisonOp, OptimizationDirection, Problem, Variable};
@@ -70,56 +70,6 @@ impl Default for CostTable {
 /// solution back out (real rates are ≥ 1e-3 in practice; simplex residues
 /// are ≤ 1e-12).
 const ACTIVE_TOL: f64 = 1e-9;
-
-/// #461 part (a) follow-up: multiplier applied to a column's machine-time
-/// cost (`costs.eps_machine * machine_time`, see the `x_vars` build below)
-/// when [`crate::common::needs_electricity`] is false for the column's
-/// resolved machine AND [`crate::recipe_db::category_has_electric_machine`]
-/// is false for the column's recipe category — i.e. a burner in a
-/// burner-ONLY category (today: `biochamber` under `organic`). The engine
-/// delivers no fuel to anything, so in that situation the burner recipe is
-/// only ever a last resort: free-mode cost selection must prefer any
-/// ELECTRIC RECIPE PRODUCING THE SAME ITEM whenever one is reachable, even
-/// if that recipe's raw inputs would otherwise cost more (`w_default`-scale,
-/// up to ~1.0 per unit — see [`CostTable`]'s doc comment for the weight
-/// ordering this factor has to out-rank). When the burner is the item's
-/// ONLY producer, the solve still succeeds — this is a cost penalty, not a
-/// feasibility gate; nothing here touches [`machine_can_run_recipe`] or the
-/// exclusion mechanism — and the resulting layout is exactly what #461
-/// part (b)'s `burner-fuel` validator check is for: made loud, not
-/// prevented.
-///
-/// **Deliberately NOT applied to an in-category burner sibling** (e.g.
-/// `stone-furnace`/`steel-furnace` next to `electric-furnace` under
-/// `smelting`, via `category_has_electric_machine`): within one category,
-/// the electric option already has the lower machine time and wins on cost
-/// on its own — the burner sibling was already losing every time before
-/// this constant existed. Penalizing an already-losing column can't change
-/// which column wins, so an earlier version of this fix that penalized
-/// EVERY burner (furnace included) bought nothing there, while still
-/// perturbing the shared LP's floating-point simplex path enough that 11
-/// unrelated, all-electric calibration fixtures (plastic-bar,
-/// sulfuric-acid, advanced-circuit variants, processing-unit — none
-/// touching `organic`) drifted to a different (but equally optimal, same
-/// exported blueprint) solution vertex and failed the calibration bank's
-/// bit-for-bit manifest-hash check. Scoping to burner-ONLY categories
-/// removes every furnace-touching column from this branch entirely, so
-/// those fixtures' LPs are now bit-identical to before this constant
-/// existed.
-///
-/// Found empirically (issue_461_production_path_prefers_electric_rocket_fuel):
-/// `solve("rocket-fuel", 1.0, <six-ore set>, "assembling-machine-1")` — no
-/// exclusions, the exact call the wasm/CLI production path makes — picked
-/// `rocket-fuel-from-jelly` on a biochamber (`organic`, burner-only) over
-/// the direct `rocket-fuel` recipe, because AM1 can't run the direct recipe
-/// (fluid check) and the jellynut/yumako-rooted chain's raw-input cost
-/// happened to undercut the electric `ammonia-rocket-fuel` alternative.
-/// `1e9` is chosen to clear that gap with headroom: eps_machine-scale terms
-/// are ~1e-6, so the penalized term lands around 1e3 per machine —
-/// comfortably above any realistic w_default-scale raw-input total (tens to
-/// low thousands in practice) without approaching values that would
-/// destabilize the LP.
-const BURNER_MACHINE_COST_FACTOR: f64 = 1e9;
 
 /// Additive, opt-in options for the Fulgora scrap-economy spike (see
 /// docs/rfc-solver-net-flow.md decision log). Both default to `false`, so
@@ -904,24 +854,7 @@ fn solve_attempt(
         .iter()
         .map(|col| {
             let machine_time = col.recipe.energy / col.crafting_speed;
-            let mut machine_cost = costs.eps_machine * machine_time;
-            // #461 part (a): steer free-mode selection away from burners
-            // (the engine delivers no fuel) — see BURNER_MACHINE_COST_FACTOR's
-            // doc comment. A cost penalty, not a feasibility gate: a burner
-            // that is the only producer is still selected, just at a
-            // (harmlessly) inflated objective value. Scoped to burner-ONLY
-            // categories (`category_has_electric_machine` false) — an
-            // in-category electric sibling (e.g. `electric-furnace` next to
-            // `stone-furnace`/`steel-furnace` under `smelting`) already wins
-            // on machine time, so penalizing the losing furnace columns too
-            // would buy nothing and only perturb the LP's floating-point
-            // path for every fixture that smelts anything.
-            if !crate::common::needs_electricity(&col.machine)
-                && !category_has_electric_machine(&col.recipe.category)
-            {
-                machine_cost *= BURNER_MACHINE_COST_FACTOR;
-            }
-            problem.add_var(machine_cost, (0.0, f64::INFINITY))
+            problem.add_var(costs.eps_machine * machine_time, (0.0, f64::INFINITY))
         })
         .collect();
 
