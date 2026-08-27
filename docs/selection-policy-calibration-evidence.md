@@ -1,6 +1,6 @@
 # Selection-policy calibration evidence
 
-Source bank: `/tmp/calibration-matrix-2026-08-26-q40`. Validator probe: `/tmp/calibration-matrix-2026-08-26-q40/calibration-issue-breakdown.json`. Corpus-definition fingerprint (`corpus_sha256` — the ordered fixture declarations, deliberately independent of any generated layout): `88c59075b90b4b22fdc0a4711b1b43c7aa47ab676488b4d93e19754fb5004617` — must match the same field in the committed `crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine's corpus; per-row geometry binds via each row's `blueprint_sha256`/`manifest_sha256`, which the CI probe checks.
+Source bank: `/tmp/calibration-matrix-2026-08-27-732`. Validator probe: `/tmp/calibration-matrix-2026-08-27-732/calibration-issue-breakdown.json`. Corpus-definition fingerprint (`corpus_sha256` — the ordered fixture declarations, deliberately independent of any generated layout): `88c59075b90b4b22fdc0a4711b1b43c7aa47ab676488b4d93e19754fb5004617` — must match the same field in the committed `crates/core/data/calibration-bank/matrix.json` for these rows to describe the shipped engine's corpus; per-row geometry binds via each row's `blueprint_sha256`/`manifest_sha256`, which the CI probe checks.
 
 Status preserves campaign state: `awaiting-measurement` has no `report.json`; `non-converged` and `kit-error` retain their measured values but are excluded from the clean-row findings; `excluded` covers every probe-side determinism refusal — the probe's `exclusion_reason` names which: `blueprint-sha256-mismatch`, `manifest-sha256-mismatch`, `validator-totals-mismatch`, or `build-failed`.
 
@@ -14,10 +14,10 @@ Status preserves campaign state: `awaiting-measurement` has no `report.json`; `n
 | tier2_electronic_circuit | measured | true |  | 100.645 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier2_electronic_circuit_from_ore | measured | true |  | 92.121 | 93.333 |  | 0 | 0 | 0 | 0 | 0 | 0 | 3 | 1 |
 | tier2_electronic_circuit_20s_from_ore | measured | true |  | 102.500 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
-| tier3_plastic_bar | non-converged | false |  | 0.000 | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| tier3_plastic_bar | measured | true |  | 98.667 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier3_plastic_bar_from_crude | measured | true |  | 98.667 | 100.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| tier3_sulfuric_acid | non-converged | false |  |  | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| tier3_heavy_oil_cracking | non-converged | false |  |  | 0.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| tier3_sulfuric_acid | measured | true |  |  | 375.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| tier3_heavy_oil_cracking | measured | true |  |  | 300.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier3_advanced_oil_processing_multi_machine | measured | true |  |  | 150.000 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation | non-converged | false |  |  | 158.333 |  | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | tier4_advanced_circuit_from_plates | measured | true |  | 101.672 | 100.334 |  | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
@@ -70,4 +70,4 @@ These are candidates, not adjudicated false positives: this table establishes co
 
 ## Coverage
 
-kit-error: 1, measured: 23, non-converged: 11.
+kit-error: 1, measured: 26, non-converged: 8.
