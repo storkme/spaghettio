@@ -490,9 +490,10 @@ fn issue_461_no_burner_machines_in_solver_result() {
                 m.recipe,
             );
         }
+        sr
     };
 
-    assert_no_burners(
+    let rocket_fuel_result = assert_no_burners(
         "rocket-fuel",
         &set(&["light-oil"]),
         &set(&["rocket-fuel-from-jelly", "ammonia-rocket-fuel"]),
@@ -506,6 +507,27 @@ fn issue_461_no_burner_machines_in_solver_result() {
             "nutrients-from-fish",
             "nutrients-from-biter-egg",
         ]),
+    );
+
+    // "Electric" alone isn't the whole claim — the placed machine must also
+    // be one the recipe DB actually says can run this recipe (fluid boxes,
+    // ingredient slots, category all agree), not just happen to need grid
+    // power. Pins "electric" and "can craft it" together, next to
+    // `recipe_db::tests::rocket_fuel_runs_on_am2_am3_not_am1`, which pins
+    // the same fact from the other side (the lookup table, not a live
+    // solve).
+    let rocket_fuel_machine = rocket_fuel_result
+        .machines
+        .iter()
+        .find(|m| m.recipe == "rocket-fuel")
+        .expect("rocket-fuel recipe must appear in its own solve");
+    let rocket_fuel_recipe =
+        recipe_db::find_recipe_for_item("rocket-fuel").expect("rocket-fuel recipe exists");
+    assert!(
+        recipe_db::machine_can_run_recipe(&rocket_fuel_machine.entity, rocket_fuel_recipe).is_ok(),
+        "#461: solver placed {} for rocket-fuel, but recipe_db::machine_can_run_recipe says \
+         that machine can't actually run this recipe",
+        rocket_fuel_machine.entity,
     );
 }
 

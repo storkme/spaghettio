@@ -621,6 +621,40 @@ mod tests {
             .expect("biochamber still handles the pure organic category");
     }
 
+    /// #461 part (a) happy-path pin: this is what the whole fallback rests
+    /// on. In the game, rocket fuel (solid-fuel + light-oil) is craftable
+    /// in assembling-machine-2/3 (both model fluid inputs) and in the
+    /// biochamber — only assembling-machine-1 lacks fluid boxes. The
+    /// bundled data must agree, or routing `organic-or-assembling` to the
+    /// assembler tier would be routing it to a machine that can't actually
+    /// take the fluid ingredient.
+    ///
+    /// Uses the REAL `rocket-fuel` recipe from the loaded DB (not a
+    /// synthetic one) — `find_recipe_for_item` prefers the name-matched
+    /// entry, so this is the `organic-or-assembling` recipe itself, not
+    /// one of its siblings (`rocket-fuel-from-jelly`, `ammonia-rocket-fuel`).
+    #[test]
+    fn rocket_fuel_runs_on_am2_am3_not_am1() {
+        let recipe = find_recipe_for_item("rocket-fuel").expect("rocket-fuel recipe exists");
+        assert_eq!(
+            recipe.category, "organic-or-assembling",
+            "sanity check: this must be the organic-or-assembling rocket-fuel recipe, \
+             not a sibling like rocket-fuel-from-jelly"
+        );
+
+        machine_can_run_recipe("assembling-machine-2", recipe)
+            .expect("AM2 has fluid boxes and must handle rocket-fuel's light-oil ingredient");
+        machine_can_run_recipe("assembling-machine-3", recipe)
+            .expect("AM3 has fluid boxes and must handle rocket-fuel's light-oil ingredient");
+
+        let err = machine_can_run_recipe("assembling-machine-1", recipe).unwrap_err();
+        assert!(
+            matches!(err, MachineIncompatibility::FluidNotSupported { .. }),
+            "AM1 has no fluid boxes and must refuse rocket-fuel's light-oil ingredient, \
+             got {err:?}"
+        );
+    }
+
     fn palette_with(entries: &[(&str, &str)]) -> MachinePalette {
         let mut p = MachinePalette::default();
         for (k, v) in entries {
