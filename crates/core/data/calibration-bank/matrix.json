@@ -494,11 +494,11 @@
       ],
       "label": "tier_pentapod_egg_self_loop",
       "machine": "assembling-machine-3",
-      "manifest_sha256": "dbe0ed93dd260569f836e0b4a6ac9d56aacb3e31dcfa0984a1b236dcd2d23e4e",
+      "manifest_sha256": "7e886440380d7f688ba708b475df6e49d6c6afed253c1a5e29610b7e47e80156",
       "rate": 0.2,
       "target": "pentapod-egg",
       "validator": {
-        "errors": 0,
+        "errors": 2,
         "warnings": 0
       },
       "variant": "plain"
@@ -543,11 +543,11 @@
       ],
       "label": "tier_bacteria_self_loop_regression",
       "machine": "assembling-machine-3",
-      "manifest_sha256": "dbf552e0f451e0f02dbd02383c605e586a4bf61f06c7927572518ab07ea6cf99",
+      "manifest_sha256": "73d27952108685b5fad631a8c4cd5b86f5e98138b77387a22d8d448dfaea8434",
       "rate": 1.0,
       "target": "iron-bacteria",
       "validator": {
-        "errors": 0,
+        "errors": 1,
         "warnings": 0
       },
       "variant": "excluded"
