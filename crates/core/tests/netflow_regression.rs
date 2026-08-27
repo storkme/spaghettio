@@ -654,6 +654,63 @@ fn issue_461_am1_fluid_recipe_outcome_matches_processing_unit() {
     );
 }
 
+/// #461 part (a) round 3 — the production-path gap rounds 1-2's exclusion-
+/// guarded tests couldn't see. `solver::solve` is the entry the wasm `solve`
+/// binding and the CLI both call, with NO exclusions — real callers never
+/// exclude anything. Found empirically (see `BURNER_MACHINE_COST_FACTOR`'s
+/// doc comment in `netflow.rs`): the SIX-ORE set (`iron-ore`, `copper-ore`,
+/// `coal`, `stone`, `crude-oil`, `water` — what the web passes by default)
+/// targeting `rocket-fuel` at AM1 used to select `rocket-fuel-from-jelly`
+/// on a biochamber, because AM1 can't run the direct `rocket-fuel` recipe
+/// (fluid check) and the jellynut/yumako-rooted chain's raw-input cost
+/// undercut the electric `ammonia-rocket-fuel` alternative — #461's
+/// symptom (0 errors, 0 warnings, 0/s measured) surviving part (a)'s
+/// `machine_for_recipe` fix entirely, for this input set. The burner-cost
+/// penalty fixes this at the LP objective, not by excluding anything.
+#[test]
+fn issue_461_production_path_prefers_electric_rocket_fuel() {
+    let inputs = set(&["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]);
+    let sr = solver::solve("rocket-fuel", 1.0, &inputs, "assembling-machine-1")
+        .unwrap_or_else(|e| panic!("rocket-fuel solves: {e}"));
+    for m in &sr.machines {
+        assert!(
+            common::needs_electricity(&m.entity),
+            "#461: the production path (solver::solve, no exclusions) placed a burner \
+             machine ({} for recipe {}) for rocket-fuel@AM1 off the six-ore set — the \
+             burner-cost penalty should have steered free-mode selection to the electric \
+             ammonia-rocket-fuel alternative instead",
+            m.entity,
+            m.recipe,
+        );
+    }
+}
+
+/// #461 part (a) round 3, companion to the pin above: the burner-cost
+/// penalty STEERS, it does not REFUSE. `pentapod-egg` is biochamber-only in
+/// the game (pure `organic` category, no assembler-tier alternative
+/// anywhere in the recipe graph) — when a burner is an item's ONLY
+/// producer, inflating its objective cost must not stop the LP from using
+/// it; the solve must still succeed, on a biochamber, same as before this
+/// change.
+#[test]
+fn issue_461_burner_penalty_does_not_refuse_sole_producer() {
+    let inputs = set(&["nutrients", "water"]);
+    let sr = solver::solve("pentapod-egg", 0.2, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("pentapod-egg solves: {e}"));
+    let m = sr
+        .machines
+        .iter()
+        .find(|m| m.recipe == "pentapod-egg")
+        .expect("pentapod-egg recipe must appear in its own solve");
+    assert_eq!(
+        m.entity, "biochamber",
+        "pentapod-egg is biochamber-only in the game; the burner-cost penalty must not \
+         change WHICH machine gets used when there is no electric alternative, only \
+         whether a cheaper electric alternative gets picked over it — got {}",
+        m.entity
+    );
+}
+
 /// KILL CRITERION 4 — perf. Run explicitly in release:
 /// `cargo test --release --manifest-path crates/core/Cargo.toml \
 ///    --test netflow_regression -- kc4 --ignored --nocapture`
