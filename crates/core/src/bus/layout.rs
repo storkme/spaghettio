@@ -2665,6 +2665,21 @@ pub(crate) fn place_poles(
 /// Adds bridge poles only — never moves or removes existing ones — and
 /// recomputes the wire graph. Returns how many bridges it added.
 pub fn repair_pole_network(layout: &mut LayoutResult) -> usize {
+    repair_pole_network_with_keepout(layout, &FxHashSet::default())
+}
+
+/// [`repair_pole_network`] with extra tiles the bridges must not use.
+///
+/// A grid's inter-strip clearance is empty geometry the sim harness fills
+/// with its feed/drain rigs; a bridge pole dropped in a rig's lane is a
+/// silent feed failure in-game and a pre-flight refusal in the harness
+/// (RFC-075: the K=20 ec@240 grid's bridge landed ten tiles from a
+/// copper-ore head). The grid composer passes those lanes here so the
+/// repair treats them as occupied — existing poles are never moved.
+pub fn repair_pole_network_with_keepout(
+    layout: &mut LayoutResult,
+    keepout: &FxHashSet<(i32, i32)>,
+) -> usize {
     let is_pole_ent = |e: &PlacedEntity| {
         e.name.ends_with("electric-pole") || e.name == "substation"
     };
@@ -2697,6 +2712,7 @@ pub fn repair_pole_network(layout: &mut LayoutResult) -> usize {
     for tile in &placed {
         occupied.insert(*tile);
     }
+    occupied.extend(keepout.iter().copied());
 
     let before = poles.len();
     repair_pole_connectivity(&mut poles, &placed, &occupied, quality);

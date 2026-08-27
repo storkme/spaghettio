@@ -1996,6 +1996,137 @@ fn compose_strip_with_capacity(
     Ok(composed)
 }
 
+/// The inter-strip clearance tiles a grid's bridge poles must not use —
+/// the sim harness's rig footprints around every INTERIOR boundary head,
+/// taken as the union over every slot the harness's stagger ladder can
+/// assign (the composer cannot know which slot a head gets):
+///
+/// - a feed head on a strip's top edge (flow south): the outward column
+///   above it for the whole clearance; for each ladder depth
+///   `4 + 6·slot` (4, 10, 16, 22, 28) the 18-tile jog row WEST of the
+///   head at `top − depth` — the harness's `rot90` puts the item jog on
+///   that side, which is the side the K=20 ec@240 collision was on —
+///   the chest bank (±2 rows) at jog 10–12 and the 2×2 substation/EEI at
+///   jog 15/18 (`sim-harness/scenario.rs::feed_footprint`). Fluid heads
+///   are the column only.
+/// - a drain head on a strip's bottom edge (flow south): the extension
+///   column below it, the ±2 lateral band and the 2×2 kit at lateral
+///   +4/+7 — over the whole clearance, since the extension is staggered
+///   per cluster (`drain_footprint`).
+///
+/// Deliberately the harness's SHAPES rather than a lane: on a narrow copy
+/// (the from-plates ec cell is 68 wide with three heads) a ±22 lane per
+/// head tiles the entire clearance and no bridge can exist, while the
+/// real rigs leave most of it free. The harness's pre-flight guard
+/// (`assert_rigs_clear_of_layout`) remains the oracle; this is what lets
+/// the composer avoid tripping it.
+pub fn interior_rig_lanes(
+    strip_rects: &[crate::models::StripRect],
+    layout: &LayoutResult,
+) -> FxHashSet<(i32, i32)> {
+    const FEED_DEPTHS: [i32; 5] = [4, 10, 16, 22, 28];
+    let mut ko = FxHashSet::default();
+    let last = strip_rects.len().saturating_sub(1);
+    for (s, r) in strip_rects.iter().enumerate() {
+        let top = r.y;
+        let bottom = r.y + r.height - 1;
+        if s > 0 {
+            for rec in layout.boundary_inputs.iter().filter(|b| b.y == top) {
+                let hx = rec.x;
+                for d in 1..=STRIP_CLEARANCE {
+                    ko.insert((hx, top - d));
+                }
+                if rec.is_fluid {
+                    continue;
+                }
+                for &depth in &FEED_DEPTHS {
+                    let jy = top - depth;
+                    for k in 1..=18 {
+                        ko.insert((hx - k, jy));
+                    }
+                    for k in 10..=12 {
+                        for dy in -2..=2 {
+                            ko.insert((hx - k, jy + dy));
+                        }
+                    }
+                    for k in [15, 18] {
+                        for dx in -1..=0 {
+                            for dy in -1..=0 {
+                                ko.insert((hx - k + dx, jy + dy));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if s < last {
+            for rec in layout.boundary_outputs.iter().filter(|b| b.y == bottom) {
+                let hx = rec.x;
+                for d in 1..=STRIP_CLEARANCE {
+                    let y = bottom + d;
+                    for dx in -2..=2 {
+                        ko.insert((hx + dx, y));
+                    }
+                    for off in [4, 7] {
+                        for dx in -1..=0 {
+                            for dy in -1..=0 {
+                                ko.insert((hx + off + dx, y + dy));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ko
+}
+
+/// Stamp one explicit medium-pole bridge column per inter-strip gap at
+/// the x with the most rig-free clearance rows (ties → nearest the grid's
+/// centre), poles chained down the free rows at pitch ≤ 8 against wire
+/// reach 9. Returns the poles added. The column meets each strip's own
+/// pole line only if one of its poles is within reach of the column's
+/// ends — `repair_pole_network_with_keepout` closes any remaining gap
+/// with short hops that stay out of the rig footprints.
+fn stamp_bridge_columns(
+    layout: &mut LayoutResult,
+    strip_rects: &[crate::models::StripRect],
+    keepout: &FxHashSet<(i32, i32)>,
+) -> usize {
+    let mut added = 0usize;
+    for pair in strip_rects.windows(2) {
+        let (above, below) = (&pair[0], &pair[1]);
+        let (top_row, bottom_row) = (above.y + above.height, below.y - 1);
+        if bottom_row < top_row {
+            continue;
+        }
+        let width = above.width.max(below.width);
+        let centre = width / 2;
+        let free_rows = |x: i32| (top_row..=bottom_row).filter(|&y| !keepout.contains(&(x, y))).count();
+        let x_b = (0..width)
+            .max_by_key(|&x| (free_rows(x), -(x - centre).abs()))
+            .unwrap_or(centre);
+        // Chain down the free rows: from the first free row, each next pole
+        // is the lowest free row within reach of the previous one.
+        let mut y = (top_row..=bottom_row).find(|&y| !keepout.contains(&(x_b, y)));
+        while let Some(py) = y {
+            layout.entities.push(PlacedEntity {
+                name: "medium-electric-pole".into(),
+                x: x_b,
+                y: py,
+                direction: EntityDirection::North,
+                segment_id: Some("grid:pole-bridge".into()),
+                ..Default::default()
+            });
+            added += 1;
+            y = ((py + 1)..=(py + 8).min(bottom_row))
+                .rev()
+                .find(|&ny| !keepout.contains(&(x_b, ny)));
+        }
+    }
+    added
+}
+
 /// RFC-072 Phase 2 unit 2 — the K_MAX successor: K > K_MAX quantized
 /// copies compose as a GRID of vertically stacked, fully independent
 /// strips. Every strip carries its own per-copy feeds and drains (the
@@ -2083,7 +2214,35 @@ fn compose_grid_with_capacity(
     // clearance and recomputes the stored wire graph for the combined
     // entity list (per-strip graphs were dropped in the merge — their
     // indices are strip-local).
-    let pole_bridges = crate::bus::layout::repair_pole_network(&mut composed);
+    //
+    // The clearance is not free space to the sim harness: every interior
+    // boundary head (a strip's top-edge feeds, a strip's bottom-edge
+    // drains) grows a rig into it, and a bridge pole inside a rig's lane
+    // is a silent feed failure in-game — the harness refuses such a
+    // fixture at pre-flight (RFC-075: the K=20 ec@240 grid's bridge at
+    // x=467 sat ten tiles from a copper-ore head at x=477). Try the plain
+    // repair first so every grid whose bridges never touched a lane keeps
+    // its receipted geometry byte-identical; only when a bridge lands in a
+    // lane, stamp an explicit bridge column at the x farthest from every
+    // interior head in each gap and repair again with the lanes kept out.
+    let lanes = interior_rig_lanes(&strip_rects, &composed);
+    let is_pole = |e: &PlacedEntity| e.name.ends_with("electric-pole");
+    let poles_before: FxHashSet<(i32, i32)> =
+        composed.entities.iter().filter(|e| is_pole(e)).map(|e| (e.x, e.y)).collect();
+    let mut trial = composed.clone();
+    let plain_bridges = crate::bus::layout::repair_pole_network(&mut trial);
+    let collides = trial
+        .entities
+        .iter()
+        .any(|e| is_pole(e) && !poles_before.contains(&(e.x, e.y)) && lanes.contains(&(e.x, e.y)));
+    let pole_bridges = if collides {
+        let columns = stamp_bridge_columns(&mut composed, &strip_rects, &lanes);
+        crate::trace::emit(crate::trace::TraceEvent::CellGridBridgeRerouted { columns });
+        columns + crate::bus::layout::repair_pole_network_with_keepout(&mut composed, &lanes)
+    } else {
+        composed = trial;
+        plain_bridges
+    };
     crate::trace::emit(crate::trace::TraceEvent::CellGridComposed {
         copies_per_strip: copies_per_strip.clone(),
         clearance: STRIP_CLEARANCE,

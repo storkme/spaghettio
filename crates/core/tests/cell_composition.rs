@@ -500,10 +500,11 @@ const SIM_FIXTURES: &[SimFixture] = &[
         geo_cap: 2,
         levels: &[2],
     },
-    // RFC-072 Phase 2 unit 2: the K_MAX successor's exemplar — K=24
-    // (18 by rate, 20 with the belt margin, 24 with the input-hand
-    // margin) composes as a 2×12 GRID of stacked strips (the K72-3
-    // fixture; the K=18 and K=20 receipts are in the decision log).
+    // RFC-072 Phase 2 unit 2: the K_MAX successor's exemplar — 18 by
+    // rate, 20 with the belt margin; RFC-072's input-hand margin took it
+    // to 24 (2×12), and RFC-075's derated far pickup credit brings it
+    // back to K=20 (2×10 of the 5-machine 12/s cell, two iron hands each)
+    // — the K72-3 fixture; the earlier receipts are in both decision logs.
     SimFixture {
         label: "chain-ec240",
         target: "electronic-circuit",
@@ -514,9 +515,10 @@ const SIM_FIXTURES: &[SimFixture] = &[
         levels: &[2],
     },
     // RFC-074 Unit 3: the grid a browser user actually gets — ec@240
-    // from PLATES (the ordinary external inputs) — is a 2×12 grid of
+    // from PLATES (the ordinary external inputs) — was a 2×12 grid of
     // the 4-machine 10/s cell with no furnace stage (4,460 entities,
-    // hash 5c83b419… on 2026-08-27) and had no receipt at all.
+    // hash 5c83b419… on 2026-08-27) and had no receipt at all; 2×10 of
+    // the 5-machine 12/s cell since RFC-075.
     SimFixture {
         label: "chain-ec240p",
         target: "electronic-circuit",
@@ -2084,9 +2086,10 @@ fn cell_registry_hashes_current() {
             "chain",
             2,
         ),
-        // RFC-072 P2 unit 2: the grid exemplar (K=24 → 2×12 strips; the
-        // K=18/K=20 numbers in the decision log are the earlier receipts,
-        // not the registered geometry).
+        // RFC-072 P2 unit 2: the grid exemplar — K=24 → 2×12 strips as
+        // registered there; K=20 → 2×10 since RFC-075 derated the far
+        // pickup credit (the K=18/K=20 numbers in RFC-072's log are the
+        // earlier one-hand receipts, not this geometry).
         (
             "electronic-circuit",
             240.0,
@@ -2286,12 +2289,66 @@ fn cell_quantization_copy_counts() {
     );
 }
 
+/// RFC-075: a grid's bridge poles stay out of the harness rig lanes.
+/// The K=20 from-ore ec@240 grid is the fixture that found this — its
+/// plain repair dropped a bridge pole ten tiles from strip 2's copper-ore
+/// feed head, inside the feed rig's jog, and the harness refused the
+/// fixture at pre-flight. Pins: no pole (bridge or column) inside
+/// `interior_rig_lanes`, the reroute event fired for this grid, and the
+/// network is still ONE component (the validator's power check).
+#[test]
+fn grid_bridge_poles_stay_out_of_interior_rig_lanes() {
+    use spaghettio_core::bus::cells::chain::{compose_chain, interior_rig_lanes};
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        240.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    let _guard = spaghettio_core::trace::start_trace();
+    let l = compose_chain(&sr).expect("from-ore grid composes");
+    let events = spaghettio_core::trace::drain_events();
+    assert!(
+        events.iter().any(|e| format!("{e:?}").contains("CellGridBridgeRerouted")),
+        "this grid is the one whose plain bridge collides — the reroute must fire"
+    );
+    let receipt = l.composition.as_ref().expect("grid receipt");
+    let lanes = interior_rig_lanes(&receipt.strips, &l);
+    assert!(!lanes.is_empty(), "two strips with interior heads define lanes");
+    let offenders: Vec<(i32, i32)> = l
+        .entities
+        .iter()
+        .filter(|e| e.name.ends_with("electric-pole") && lanes.contains(&(e.x, e.y)))
+        .map(|e| (e.x, e.y))
+        .collect();
+    assert!(offenders.is_empty(), "poles inside rig lanes: {offenders:?}");
+    let issues = match spaghettio_core::validate::validate(&l, Some(&sr)) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+    let power: Vec<&str> = issues
+        .iter()
+        .filter(|i| i.category.starts_with("power") || i.category.contains("pole"))
+        .map(|i| i.message.as_str())
+        .collect();
+    assert!(power.is_empty(), "the rerouted bridge must leave one connected power network: {power:?}");
+}
+
 /// The FROM-ORE grid — the configuration the registry row, the
 /// SIM_FIXTURES entry and the sim receipt actually describe (#733
 /// round 6: the plates test below pins the composer on a different
 /// input set; ec-from-ore has no fluid block — electric furnaces — but
 /// six external feeds per copy give it the deeper feed clusters). Pins
-/// the same contract: K=24 → 2×12, zero validator errors, and no
+/// the same contract: K=20 → 2×10 (RFC-075; was 2×12), zero validator errors, and no
 /// warning outside the honest zero-margin class.
 #[test]
 fn grid_composes_ec240_from_ore_zero_errors() {
@@ -2311,17 +2368,21 @@ fn grid_composes_ec240_from_ore_zero_errors() {
         QualityTier::Normal,
     )
     .unwrap();
-    assert_eq!(required_copies(&sr), 24, "ec240 from ore quantizes to 24 copies");
+    // 20 since RFC-075: the derated far pickup credit gives a 12/s copy's
+    // 2.40/s iron hand a second hand, so the input-hand margin no longer
+    // bumps K past 20 (was 24 — four-machine 10/s cells; now five-machine
+    // 12/s cells, the E3 cell that sims at +0.3%).
+    assert_eq!(required_copies(&sr), 20, "ec240 from ore quantizes to 20 copies");
     let _guard = spaghettio_core::trace::start_trace();
     let l = compose_chain(&sr).expect("from-ore grid composes");
     let events = spaghettio_core::trace::drain_events();
     assert!(
         events
             .iter()
-            .any(|e| format!("{e:?}").contains("copies_per_strip: [12, 12]")),
-        "balanced 2x12 split"
+            .any(|e| format!("{e:?}").contains("copies_per_strip: [10, 10]")),
+        "balanced 2x10 split"
     );
-    assert_eq!(l.boundary_outputs.len(), 24, "one exit per copy");
+    assert_eq!(l.boundary_outputs.len(), 20, "one exit per copy");
     let issues = match spaghettio_core::validate::validate(&l, Some(&sr)) {
         Ok(i) => i,
         Err(e) => e.issues,
@@ -2344,7 +2405,7 @@ fn grid_composes_ec240_from_ore_zero_errors() {
 
 /// RFC-072 Phase 2 unit 2: past K_MAX the chain composes as a GRID of
 /// stacked independent strips. This pins the whole contract on the
-/// ec@240 exemplar (K=24 → 2×12): balanced split, strip translation
+/// ec@240 exemplar (K=20 → 2×10 since RFC-075; K=24 → 2×12 when written): balanced split, strip translation
 /// (entities AND boundary records — the harness attaches rigs at those
 /// exact tiles), one bridged power network, the CellGridComposed trace
 /// event, and validator ZERO ERRORS — the K72-3(a) plan bar, where the
@@ -2369,13 +2430,14 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
     .unwrap();
     // 18 by the rate quantum alone (cable 720/s ÷ 40); 20 once the
     // row-input BELT margin applies (at 18 a copy's 6 EC machines can
-    // draw exactly 45/s on express); 24 once the input-HAND margin
-    // applies — K=19..23 all land a copy's iron draw on a single
-    // long-handed hand above 85% of its 2.4/s credit (the K=18 sim
-    // measured 92.6% → one machine short per copy, K=20 measured 100%
-    // → two short per copy; RFC-072 log, 2026-08-26). At 24 a copy is
-    // the 4-machine 10/s cell: iron 2.5/s → two hands at 52%.
-    assert_eq!(required_copies(&sr), 24, "ec240 quantizes to 24 copies");
+    // draw exactly 45/s on express). Until RFC-075 the input-HAND margin
+    // then pushed it to 24 — K=19..23 landed a copy's iron draw on a
+    // single long-handed hand above 85% of its flooded 2.4/s credit (the
+    // K=18 sim measured 92.6% → one machine short per copy, K=20 100% →
+    // two short; RFC-072 log, 2026-08-26). With the far PICKUP credit
+    // derated (RFC-075) a 12/s copy's 2.40/s iron hand is two hands at
+    // 59%, so K stays at 20: the 5-machine 12/s cell (E3, sim +0.3%).
+    assert_eq!(required_copies(&sr), 20, "ec240 quantizes to 20 copies");
     let _guard = spaghettio_core::trace::start_trace();
     let l = compose_chain(&sr).expect("grid composes");
     let events = spaghettio_core::trace::drain_events();
@@ -2386,19 +2448,19 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
         .collect();
     assert_eq!(grid_events.len(), 1, "exactly one grid event");
     assert!(
-        grid_events[0].contains("copies_per_strip: [12, 12]"),
-        "balanced 2x12 split, got: {}",
+        grid_events[0].contains("copies_per_strip: [10, 10]"),
+        "balanced 2x10 split, got: {}",
         grid_events[0]
     );
     // The typed receipt (RFC-074 Unit 1) states the same shape: two
-    // strips, 12 copies each, the second starting one clearance below
-    // the first's bottom. Verification is the candidate's business, so
-    // the bare composer leaves it empty.
+    // strips, 10 copies each (RFC-075), the second starting one clearance
+    // below the first's bottom. Verification is the candidate's business,
+    // so the bare composer leaves it empty.
     let receipt = l.composition.as_ref().expect("grid carries a composition receipt");
     assert_eq!(receipt.kind, "cell-grid");
-    assert_eq!(receipt.copies_per_strip, vec![12, 12]);
+    assert_eq!(receipt.copies_per_strip, vec![10, 10]);
     assert_eq!(receipt.strips.len(), 2);
-    assert_eq!((receipt.strips[0].x, receipt.strips[0].y, receipt.strips[0].copies), (0, 0, 12));
+    assert_eq!((receipt.strips[0].x, receipt.strips[0].y, receipt.strips[0].copies), (0, 0, 10));
     // 32 = chain.rs's private `STRIP_CLEARANCE`, the same literal the
     // inter-strip band assertion below pins (a change to the constant
     // must move both, deliberately).
@@ -2451,7 +2513,7 @@ fn grid_composes_ec240_as_two_strips_zero_errors() {
     );
     assert_eq!(
         l.boundary_outputs.len(),
-        24,
+        20,
         "one exit per copy across both strips"
     );
     // The K72-3(a) bar: zero validator errors (native at this rate has
