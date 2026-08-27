@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-kRqwZOPb.js","assets/webworkerAll-BNmiVow2.js","assets/Filter-BcgnCw-G.js","assets/WebGPURenderer-DsLMDq5k.js","assets/BufferResource-BwycreC7.js","assets/RenderTargetSystem-t8o2UZWA.js","assets/WebGLRenderer-CLsdZGxb.js","assets/CanvasRenderer-DB_9Yww3.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-CL050eRn.js","assets/webworkerAll-D8YsYqvE.js","assets/Filter-B4eB4Y1x.js","assets/WebGPURenderer-Dn6H6EMB.js","assets/BufferResource-DMWibMoz.js","assets/RenderTargetSystem-CAMmnA6L.js","assets/WebGLRenderer-CuPrduQN.js","assets/CanvasRenderer-BqHjsD0y.js"])))=>i.map(i=>d[i]);
 let Vh, Ta, pr, Gt, Dm, yn, Of, Mi, ms, Fs, fe, se, Xt, ci, Nh, St, at, ut, Ut, Ar, S, be, Ky, Hg, Mr, $g, Ln, Pr, br, Bt, fd, Do, Ht, cs, yi, Lt, Wp, Wm, js, Dd, md, ki, im, Qf, Td, jm, gg, xg, Eg, Cg, Tg, Nl, lr, Ca, dd, ze, Ea, mg, yg, Sg, wg, Ep, Ag, Le, Oh, Ge, Sr, _l, Xe, Ax, nf, vl, Xr, Cl, sf, Fh, Ir, ts, Or, A1, fr, Sa, Ot, Mt, na, ps, En, ea, Yi, Vt, qe, Yd, Vd, mi, Ye, T1, gx, ne, sx, oe, qt, It;
 let __tla = (async () => {
   (function() {
@@ -148,7 +148,7 @@ let __tla = (async () => {
     },
     test: () => true,
     load: async () => {
-      await Un(() => import("./browserAll-kRqwZOPb.js"), __vite__mapDeps([0,1,2]));
+      await Un(() => import("./browserAll-CL050eRn.js"), __vite__mapDeps([0,1,2]));
     }
   };
   fp = {
@@ -159,7 +159,7 @@ let __tla = (async () => {
     },
     test: () => typeof self < "u" && self.WorkerGlobalScope !== void 0,
     load: async () => {
-      await Un(() => import("./webworkerAll-BNmiVow2.js"), __vite__mapDeps([1,2]));
+      await Un(() => import("./webworkerAll-D8YsYqvE.js"), __vite__mapDeps([1,2]));
     }
   };
   class xe {
@@ -5189,7 +5189,7 @@ ${n}`;
       const o = t[r];
       if (o === "webgpu" && await nm()) {
         const { WebGPURenderer: a } = await Un(async () => {
-          const { WebGPURenderer: l } = await import("./WebGPURenderer-DsLMDq5k.js");
+          const { WebGPURenderer: l } = await import("./WebGPURenderer-Dn6H6EMB.js");
           return {
             WebGPURenderer: l
           };
@@ -5201,7 +5201,7 @@ ${n}`;
         break;
       } else if (o === "webgl" && em(n.failIfMajorPerformanceCaveat ?? fd.defaultOptions.failIfMajorPerformanceCaveat)) {
         const { WebGLRenderer: a } = await Un(async () => {
-          const { WebGLRenderer: l } = await import("./WebGLRenderer-CLsdZGxb.js");
+          const { WebGLRenderer: l } = await import("./WebGLRenderer-CuPrduQN.js");
           return {
             WebGLRenderer: l
           };
@@ -5213,7 +5213,7 @@ ${n}`;
         break;
       } else if (o === "canvas") {
         const { CanvasRenderer: a } = await Un(async () => {
-          const { CanvasRenderer: l } = await import("./CanvasRenderer-DB_9Yww3.js");
+          const { CanvasRenderer: l } = await import("./CanvasRenderer-BqHjsD0y.js");
           return {
             CanvasRenderer: l
           };
@@ -5523,7 +5523,7 @@ ${n}`;
       }
       const [l, { BitmapFont: c }] = await Promise.all([
         e.load(o),
-        Un(() => import("./BitmapFont-8-bSVMZe.js"), [])
+        Un(() => import("./BitmapFont-BEkN2tdA.js"), [])
       ]), h = o.map((u) => l[u.src]);
       return new c({
         data: s,
@@ -18005,8 +18005,46 @@ fn mainFragment(
         kt.style.display = "none", kt.textContent = "", kt.title = "", kt.className = "sb-composition";
         return;
       }
-      const O = ((_a3 = k.strips) == null ? void 0 : _a3.length) ?? 0, it = k.copies_per_strip ?? [], dt = O > 1 ? `${O} strips \xD7 ${it.join("/")} copies` : `${it[0] ?? "?"} copies`, ft = k.verification ?? "", yt = /sim-FAILED|FAILED it/.test(ft), nt = k.verified ? "sim-verified" : yt ? "sim FAILED" : "not sim-verified";
-      kt.className = `sb-composition ${k.verified ? "is-verified" : yt ? "is-failed" : "is-unverified"}`, kt.textContent = `${k.kind} \xB7 ${dt} \xB7 ${nt}`, kt.title = ft, kt.style.display = "block";
+      const O = ((_a3 = k.strips) == null ? void 0 : _a3.length) ?? 0, it = k.copies_per_strip ?? [], dt = O > 1 ? `${O} strips \xD7 ${it.join("/")} copies` : `${it[0] ?? "?"} copies`, ft = k.verification ?? "", [yt, nt] = (() => {
+        switch (k.standing) {
+          case "verified":
+            return [
+              "sim-verified at plan",
+              "is-verified"
+            ];
+          case "warned":
+            return [
+              "sim-verified AS WARNED \u2014 not at plan",
+              "is-warned"
+            ];
+          case "failed":
+            return [
+              "sim FAILED",
+              "is-failed"
+            ];
+          case "failed-elsewhere":
+            return [
+              "not sim-verified here (a hash-sharing build FAILED in another declared world)",
+              "is-unverified"
+            ];
+          case "verified-elsewhere":
+            return [
+              "not sim-verified here (verified only in another declared world)",
+              "is-unverified"
+            ];
+          case "unverified":
+            return [
+              "not sim-verified",
+              "is-unverified"
+            ];
+          default:
+            return [
+              "no verification recorded",
+              "is-unverified"
+            ];
+        }
+      })();
+      kt.className = `sb-composition ${nt}`, kt.textContent = `${k.kind} \xB7 ${dt} \xB7 ${yt}`, kt.title = ft, kt.style.display = "block";
     }
     const Et = document.createElement("div");
     Et.className = "sb-actions", Et.style.display = "none";
@@ -18393,7 +18431,7 @@ fn mainFragment(
   }
   async function qu() {
     if (Ve) return;
-    if (Ve = new Worker(new URL("/spaghettio/pr-737/assets/engine.worker-CKPOTIWW.js", import.meta.url), {
+    if (Ve = new Worker(new URL("/spaghettio/pr-737/assets/engine.worker-BbatCTRt.js", import.meta.url), {
       type: "module",
       name: "spaghettio-engine"
     }), Ve.onmessage = (e) => {
@@ -19623,7 +19661,7 @@ fn mainFragment(
     const w = new Gt();
     v.addChild(w), v.fit(true, b * 1.15, x * 1.2), v.moveCenter(b / 2, x / 2);
     const { renderLayoutAnimated: C } = await Un(async () => {
-      const { renderLayoutAnimated: T } = await import("./animated--dQwtuDu.js");
+      const { renderLayoutAnimated: T } = await import("./animated-BZ4wPLdD.js");
       return {
         renderLayoutAnimated: T
       };
@@ -20700,7 +20738,9 @@ fn mainFragment(
           fill: ah
         }
       });
-      o.alpha = Kw, o.x = i.x * S, o.y = i.y * S - S / 2 - o.height - 2, e.addChild(o);
+      o.alpha = Kw;
+      const a = i.y * S - S / 2 - o.height - 2;
+      o.x = i.x * S + 2, o.y = a >= 0 ? a : i.y * S + 2, e.addChild(o);
     }), t.addChild(e), e;
   }
   const Zw = /* @__PURE__ */ new Set([
@@ -23797,7 +23837,7 @@ ${$}` : et, Ct();
     const t = document.getElementById("app"), e = window.location.hash, s = new URLSearchParams(window.location.search);
     if (e.startsWith("#/balancers")) {
       const { renderBalancerShowcase: r } = await Un(async () => {
-        const { renderBalancerShowcase: o } = await import("./balancers-COUgAfOQ.js");
+        const { renderBalancerShowcase: o } = await import("./balancers-zO4upU_3.js");
         return {
           renderBalancerShowcase: o
         };
