@@ -35,7 +35,7 @@
 //! sides are counted but not banded — their rate is a measured min-form
 //! with the lane cap already in it, and no receipt implicates them.
 
-use crate::common::{machine_feed_rate, QualityTier};
+use crate::common::QualityTier;
 use crate::models::LayoutResult;
 use crate::trace::{self, TraceEvent};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -90,7 +90,17 @@ impl SideLoad {
         if self.side_is_output || self.count == 0 {
             return self.clone();
         }
-        let per_hand = machine_feed_rate(&self.entity, QualityTier::Normal, level);
+        // A long-handed hand on an INPUT side is the reach-2 pickup, whose
+        // credit the ladder derates (RFC-075 `FAR_PICKUP_FACTOR`); re-price
+        // through the same function the ladder sizes with, so a census
+        // fullness is read against the number that was actually credited.
+        let reach = if self.entity == crate::bus::inserter_ladder::LONG_HANDED {
+            crate::bus::inserter_ladder::Reach::Far
+        } else {
+            crate::bus::inserter_ladder::Reach::Near
+        };
+        let per_hand =
+            crate::bus::inserter_ladder::far_pickup_rate(&self.entity, reach, QualityTier::Normal, level);
         SideLoad { capacity: self.count as f64 * per_hand, ..self.clone() }
     }
 
@@ -409,10 +419,18 @@ mod tests {
         let events = vec![sized("rail", false, "stone", 3.0, "long-handed-inserter", 2, 4.8, 0, 0)];
         let (loads, amb) = side_loads(&events, &layout);
         assert_eq!(summarize(&loads, amb).bands, [1, 0, 0, 0, 0]);
-        // At level 0 the long-handed hand credits 1.2/s (2 × 1.2 = 2.4 < 3.0):
-        // the same geometry is a shortfall in an L0 world.
+        // At level 0 the long-handed PICKUP hand credits 1.2 × 0.85 = 1.02/s
+        // (RFC-075; 2 × 1.02 = 2.04 < 3.0): the same geometry is a shortfall
+        // in an L0 world, re-priced through the ladder's own credit.
         let l0: Vec<SideLoad> = loads.iter().map(|l| l.repriced(0)).collect();
-        assert!((l0[0].capacity - 2.0 * machine_feed_rate("long-handed-inserter", QualityTier::Normal, 0)).abs() < 1e-9);
+        let per_hand = crate::bus::inserter_ladder::far_pickup_rate(
+            "long-handed-inserter",
+            crate::bus::inserter_ladder::Reach::Far,
+            QualityTier::Normal,
+            0,
+        );
+        assert!((per_hand - 1.02).abs() < 1e-9);
+        assert!((l0[0].capacity - 2.0 * per_hand).abs() < 1e-9);
         assert_eq!(summarize(&l0, amb).bands, [0, 0, 0, 0, 1]);
         // Output sides never re-price.
         let out = SideLoad { side_is_output: true, ..loads[0].clone() };

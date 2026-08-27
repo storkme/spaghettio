@@ -317,11 +317,14 @@ near-side hands do not qualify.
   ac@2, ec@15 ×4, ec@30, ec@75, ec@150, gear@20, chem5); **three grid
   rows move** — ec@240 from ore (4f95009b → eac22938), ec@240 from
   plates (5c83b419 → 7ffba350), ac@56 (d2ed8119 → b955d9aa). The grid
-  moves are the quantizer re-planning: with the derated credit K=18's
-  2.22/s iron hands get two hands (54%) instead of one at 92.6%, so
-  `required_copies_at` stops bumping at K=18 rather than K=24 — a
-  different, smaller grid, which K75-3 requires re-simmed before the
-  factor ships. Cost against the cap: 1 bank row (already deficient)
+  moves are the quantizer re-planning: with the derated credit a 12/s
+  copy's 2.40/s iron hand becomes two hands (59%) instead of one at
+  100%, so `required_copies_at` stops bumping at **K=20** (2×10 —
+  verified by export: 17,118 entities, 100 EC + 160 cable machines,
+  2380×66) rather than K=24 — twenty copies of E3's exact cell, which
+  K75-3 requires re-simmed as a grid before the factor ships. (An
+  earlier draft of this entry said K=18 from head arithmetic; the
+  belt-margin term still rejects K=18/19 at six machines per copy.) Cost against the cap: 1 bank row (already deficient)
   + 3 registry rows (all at plan today) ≤ K75-2's 6 / 3. Proceeds.
 - *2026-08-27 — E1 receipt: the mechanism is the belt state.*
   `cell-ec12-plates` (the same 12/s cell composed from plates — 5 EC
@@ -340,3 +343,39 @@ near-side hands do not qualify.
   from 88% of credit to 104%. The 2.40 credit is a flooded-belt
   number. (E1's "1L" is the composition receipt riding `warnings`,
   RFC-074 K74-1 — not a validator finding.)
+- *2026-08-27 — E3 receipt: K75-1 CLEARS.* `cell-ec12-ore-f85` (E0's
+  furnace-fed cell re-composed under the 0.85 gate: two long-handed
+  iron hands per EC machine, 856 entities, 0 errors), same harness
+  settings, converged, drift +0.7%, kit clean: **PASS — produced
+  12.04/12.00 (+0.3%), delivered −1.3%; iron-plate 12.05/12.00,
+  copper-cable 36.50/36.00, copper-plate 18.20/18.00**. The EC row
+  reads 2.52 / 2.48 / 2.52 / 2.48 / 2.04 — four machines above their
+  2.40 plan on two hands, and the tail machine at 2.04 because the
+  row is now bound by its supply at exactly plan (the furnaces make
+  12.05/s and the upstream hands take theirs first); the two
+  ingredient-short frames moved to the cable row's last two machines
+  (copper at 18.20 vs 18.00 planned — zero-headroom, RFC-069's class,
+  not this RFC's). −7.1% → +0.3% for five inserters. The hand was the
+  constraint; the derating is the fix. Phase 2 proceeds: the constant
+  ships as `FAR_PICKUP_FACTOR = 0.85` (E0's head hand measured 0.88
+  of credit; 0.85 is the floor RFC-072 P2 already used and the sims
+  do not distinguish finer), routed through `contest_favors_far` as
+  well, with the composer's own far-side `HAND_MARGIN` term retired
+  (the ladder now carries it; the near-side and belt terms stay).
+- *2026-08-27 — Phase 2 shipped form, re-priced.* With the constant in
+  `far_pickup_rate` (single source for `size_side` AND
+  `contest_favors_far`), the census re-pricer reading it, and the
+  composer's far-side margin retired, the registry pin survey moves
+  **only ec@240's two rows** (from ore 4f95009b → eac22938, from plates
+  5c83b419 → 7ffba350 — the same K=20 hashes the gate produced);
+  **ac@56 is byte-identical again** (d2ed8119): under the gate the
+  composer had applied its 0.85 on top of the ladder's, and that
+  double margin was what re-quantized it. Every sub-K_MAX strip is
+  unchanged. The RFC-073 pin
+  (`census_sees_the_ec15_cells_far_hand_at_the_credit`) re-pinned
+  with the pickup credit (1.042 → 1.225 on the last-in-row hand, 52% →
+  61% on the interior pairs; the geometry itself did not move) passes.
+  Belt-drop far sides keep the flooded ladder — the three
+  belt-drop-vs-`size_side` identity tests now compare far sides to it
+  explicitly. Re-bless set: ec@240 ×2 (registry, re-sim the K=20 grids)
+  + PU-from-ore (bank).

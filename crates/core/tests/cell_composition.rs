@@ -842,17 +842,24 @@ fn export_chain_fixtures_for_sim() {
 /// survey; this is the gate that the plumbing behind them still works).
 /// The ec15 cell sized at L0: the EC row's far iron side asks 2.5/s;
 /// interior machines get two long-handed hands, the trimmed last-in-row
-/// machine one. Re-priced at L2 (2.4/s per hand) that last hand sits at
-/// 1.042 of its credit and the cell still produces 15.0/15 in the sim —
-/// the counter-example to "fullness predicts deficit".
+/// machine one. Re-priced at L2 that last hand sits over its credit and
+/// the cell still produces 15.0/15 in the sim — the counter-example to
+/// "fullness predicts deficit" as a scalar; RFC-075 then found WHY: it is
+/// the tail hand on a dead-end belt (the flooded regime the credit was
+/// calibrated in), and the credit is derated for every other far hand.
 ///
 /// This IS a pinned-geometry gate, deliberately (#735 round 2): the ec15
 /// cell's geometry is frozen by `cell_registry_hashes_current` (hash
 /// `8f2473ec…`, three sim rows), so its side plans cannot legitimately
 /// move without a registry re-bless — and a re-bless is exactly when
 /// these numbers should be re-read, not silently regenerated. The
-/// per-hand rates (1.2 at L0, 2.4 at L2) are `machine_feed_rate`'s
-/// measured table; a recalibration fails here on purpose.
+/// per-hand PICKUP credits (1.2 × 0.85 = 1.02 at L0, 2.4 × 0.85 = 2.04
+/// at L2) are `machine_feed_rate`'s measured table under RFC-075's
+/// `FAR_PICKUP_FACTOR`; a recalibration of either fails here on purpose.
+/// (Re-pinned 2026-08-27 with the factor: the geometry did not move —
+/// 2.5/s already needed two hands at the flooded credit — only the
+/// utilization the census reports against it did: 1.042 → 1.225 on the
+/// last-in-row hand, 52% → 61% on the interior pairs.)
 #[test]
 fn census_sees_the_ec15_cells_far_hand_at_the_credit() {
     use spaghettio_core::bus::sizing_census::{capture, side_loads_unjoined, summarize};
@@ -866,20 +873,27 @@ fn census_sees_the_ec15_cells_far_hand_at_the_credit() {
         .collect();
     assert!(!iron.is_empty(), "the EC row's far iron side is recorded");
     assert!(iron.iter().all(|s| s.entity == "long-handed-inserter" && (s.required - 2.5).abs() < 1e-9));
-    // At the sizing level (L0, 1.2/s per hand) every iron side is a shortfall.
+    // At the sizing level (L0, 1.02/s per pickup hand) every iron side is a shortfall.
     assert!(iron.iter().all(|s| s.utilization() > 1.0));
-    // Re-priced at L2 the double-handed interior sides sit at 52%, the
-    // single-handed last-in-row machine at 1.042 — and lands in the
-    // `0.95–1.00`-or-above accounting, not the sub-0.85 band.
+    // Re-priced at L2 (2.04/s per pickup hand) the double-handed interior
+    // sides sit at 61%, the single-handed last-in-row machine at 1.225 —
+    // and lands in the shortfall accounting, not the sub-0.85 band.
+    let per_hand_l2 = 2.4 * spaghettio_core::bus::inserter_ladder::FAR_PICKUP_FACTOR;
     let at_l2: Vec<_> = loads.iter().map(|s| s.repriced(2)).collect();
     let s = summarize(&at_l2, ambiguous);
     let m = s.max_in.expect("an input side");
     assert_eq!((m.recipe.as_str(), m.item.as_str(), m.count), ("electronic-circuit", "iron-plate", 1));
-    assert!((m.utilization() - 2.5 / 2.4).abs() < 1e-6, "last-in-row hand at 1.042, got {}", m.utilization());
-    assert!(s.bands[4] >= 1, "the 1.042 side is a shortfall against the L2 credit");
     assert!(
-        at_l2.iter().any(|x| x.count == 2 && x.item == "iron-plate" && (x.utilization() - 2.5 / 4.8).abs() < 1e-6),
-        "interior machines: two hands at 52%"
+        (m.utilization() - 2.5 / per_hand_l2).abs() < 1e-6,
+        "last-in-row hand at 1.225, got {}",
+        m.utilization()
+    );
+    assert!(s.bands[4] >= 1, "the 1.225 side is a shortfall against the L2 pickup credit");
+    assert!(
+        at_l2.iter().any(|x| {
+            x.count == 2 && x.item == "iron-plate" && (x.utilization() - 2.5 / (2.0 * per_hand_l2)).abs() < 1e-6
+        }),
+        "interior machines: two hands at 61%"
     );
 }
 

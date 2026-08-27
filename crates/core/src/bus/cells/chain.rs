@@ -271,7 +271,16 @@ pub fn required_copies_at(sr: &SolverResult, level: u8) -> i32 {
                 // starve, so it counts as a violation too (#733 round 1 —
                 // the first cut excluded it, a holdover from when this
                 // term also saw the receipted low-level strips).
-                plan.shortfall.is_some() || rate > HAND_MARGIN * capacity + 1e-9
+                //
+                // The FAR side's margin now lives in the ladder itself
+                // (RFC-075: `size_side` credits a reach-2 pickup hand at
+                // `FAR_PICKUP_FACTOR` of its flooded-belt rate, so
+                // `capacity` already carries it) — applying HAND_MARGIN on
+                // top would double-derate the hand this term was written
+                // for. Near sides keep the margin here: their credits are
+                // undented, and the grid's copies still carry no receipt.
+                let margin = if reach == Reach::Far { 1.0 } else { HAND_MARGIN };
+                plan.shortfall.is_some() || rate > margin * capacity + 1e-9
             })
         })
     };

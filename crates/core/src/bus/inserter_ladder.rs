@@ -197,33 +197,41 @@ pub fn size_side(
     quality: QualityTier,
     level: u8,
 ) -> SidePlan {
-    let far_factor = far_pickup_factor();
     size_side_rated(required, reach, position_budget, max_tier, |name| {
-        let rate = machine_feed_rate(name, quality, level);
-        // RFC-075 Phase 1 experiment gate: the long-handed PICKUP credit
-        // was calibrated on a flooded express belt; a reach-2 hand with
-        // consumers downstream of it on the same belt picks from a moving
-        // stream and delivers less (ec@12 cell: 2.11/s at the head vs
-        // 2.48/s at the dead-end tail on a 2.40 credit). Derate it on
-        // input sides only. Env-gated while E3 measures the constant;
-        // Phase 2 replaces the gate with the measured factor or deletes
-        // this — see docs/rfc-075-pickup-side-far-hand.md.
-        if reach == Reach::Far && name == LONG_HANDED { rate * far_factor } else { rate }
+        far_pickup_rate(name, reach, quality, level)
     })
 }
 
-/// RFC-075 Phase 1 gate: `SPAGHETTIO_FAR_PICKUP_FACTOR` (0 < f ≤ 1),
-/// default 1.0 (bit-identical to the pre-RFC ladder). Read once.
-fn far_pickup_factor() -> f64 {
-    use std::sync::OnceLock;
-    static FACTOR: OnceLock<f64> = OnceLock::new();
-    *FACTOR.get_or_init(|| {
-        std::env::var("SPAGHETTIO_FAR_PICKUP_FACTOR")
-            .ok()
-            .and_then(|s| s.parse::<f64>().ok())
-            .filter(|f| *f > 0.0 && *f <= 1.0)
-            .unwrap_or(1.0)
-    })
+/// RFC-075: the long-handed PICKUP credit is a flooded-belt number.
+///
+/// `machine_feed_rate(LONG_HANDED, …)` was calibrated on a flooded express
+/// feed — a stationary, fully compressed belt — which is the state of a
+/// row's far belt only at its dead-end tail. Every reach-2 hand with
+/// consumers downstream of it on the same belt picks from a MOVING stream
+/// and delivers less. Measured (RFC-075 E0/E1/E3, Factorio 2.0.77): the
+/// ec@12 cell's five single long-handed iron hands at the 2.40 credit
+/// craft 2.11 → 2.11 → 2.19 → 2.26 → 2.48/s in belt order on a 27%-dense
+/// express stream (the row −7.1%); the same hands on a harness-flooded
+/// belt all read 2.50 (+4.2%); with the credit derated by this factor
+/// the row gets two hands per machine and produces +0.3%. 0.85 is the
+/// floor of the head-of-row realization (0.88 measured) and the constant
+/// RFC-072 P2's grid quantizer already used for the same hands. Applies
+/// to INPUT (belt-pickup) far sides only — belt-drop far sides are sized
+/// by `belt_drop_rate`, which is not a pickup.
+pub const FAR_PICKUP_FACTOR: f64 = 0.85;
+
+/// The per-hand machine-feed credit the input ladder sizes against:
+/// `machine_feed_rate`, derated by [`FAR_PICKUP_FACTOR`] for the reach-2
+/// long-handed pickup. Single source of truth for `size_side` and
+/// `contest_favors_far`, so the contest and the ladder can never disagree
+/// on what a far hand moves.
+pub fn far_pickup_rate(name: &str, reach: Reach, quality: QualityTier, level: u8) -> f64 {
+    let rate = machine_feed_rate(name, quality, level);
+    if reach == Reach::Far && name == LONG_HANDED {
+        rate * FAR_PICKUP_FACTOR
+    } else {
+        rate
+    }
 }
 
 /// Size a machine side that drops onto a **belt** (RFC-046 stacking +
@@ -410,8 +418,12 @@ pub fn contest_favors_far(
     // Ceilings at the research level's measured machine-feed rates
     // (RFC-049 Phase 3) — at L0 identical to the historical flat
     // constants, so contest outcomes are unchanged at zero research.
-    let near_ceiling = machine_feed_rate(STACK, quality, level);
-    let far_ceiling = machine_feed_rate(LONG_HANDED, quality, level);
+    // The far ceiling is the PICKUP credit (RFC-075: derated for the
+    // moving-belt regime), the same number `size_side` ladders against,
+    // so a far side the ladder would give two hands wins the shared
+    // column by its own shortfall rather than on the tie rule.
+    let near_ceiling = far_pickup_rate(STACK, Reach::Near, quality, level);
+    let far_ceiling = far_pickup_rate(LONG_HANDED, Reach::Far, quality, level);
     let near_shortfall = (near_required - near_ceiling).max(0.0);
     let far_shortfall = (far_required - far_ceiling).max(0.0);
     let near_rel = if near_required > 0.0 { near_shortfall / near_required } else { 0.0 };
@@ -435,28 +447,42 @@ mod tests {
     // `belt_drop_rate_yellow_cap_binds_at_s1_l0`.
     const RED: &str = "fast-transport-belt";
 
+    /// The far side's FLOODED ladder — `size_side` before RFC-075 derated
+    /// the reach-2 pickup. Belt-DROP far sides (`size_belt_drop_side`,
+    /// `size_side_output`) are not pickups and still size against this at
+    /// L0 on an uncapped belt, so the identity tests below compare far
+    /// sides to it rather than to `size_side`.
+    fn flooded_far(required: f64, budget: usize, cap: InserterTier) -> SidePlan {
+        size_side_rated(required, Reach::Far, budget, cap, |name| {
+            machine_feed_rate(name, QualityTier::Normal, 0)
+        })
+    }
+
     /// S ≤ 1 AND level 0 is definitionally `size_side` on a belt whose
     /// lane cap doesn't bind (red, kill-1 anchor from RFC-046/049) — sweep
     /// rates, budgets, caps. This is no longer a UNIVERSAL identity
     /// (#385): on a yellow target the S=1/L=0 stack-inserter credit is
     /// deliberately lower than `size_side`'s flat rate — see
-    /// `belt_drop_yellow_cap_binds_below_size_side` below.
+    /// `belt_drop_yellow_cap_binds_below_size_side` below. Far sides
+    /// compare to the flooded ladder (RFC-075: `size_side` derates the
+    /// far PICKUP; a belt-drop far hand is not a pickup).
     #[test]
     fn belt_drop_identity_at_s1_l0() {
         let q = QualityTier::Normal;
         for &s in &[0u8, 1u8] {
             for &required in &[0.3, 0.9, 2.5, 8.0, 13.0, 30.0] {
-                for &reach in &[Reach::Near, Reach::Far] {
-                    for budget in 0..=2usize {
-                        for &cap in
-                            &[InserterTier::Regular, InserterTier::Fast, InserterTier::Stack]
-                        {
-                            assert_eq!(
-                                size_belt_drop_side(required, reach, budget, cap, q, s, 0, RED),
-                                size_side(required, reach, budget, cap, q, 0),
-                                "required={required} reach={reach:?} budget={budget} cap={cap:?} s={s}"
-                            );
-                        }
+                for budget in 0..=2usize {
+                    for &cap in &[InserterTier::Regular, InserterTier::Fast, InserterTier::Stack] {
+                        assert_eq!(
+                            size_belt_drop_side(required, Reach::Near, budget, cap, q, s, 0, RED),
+                            size_side(required, Reach::Near, budget, cap, q, 0),
+                            "required={required} near budget={budget} cap={cap:?} s={s}"
+                        );
+                        assert_eq!(
+                            size_belt_drop_side(required, Reach::Far, budget, cap, q, s, 0, RED),
+                            flooded_far(required, budget, cap),
+                            "required={required} far budget={budget} cap={cap:?} s={s}"
+                        );
                     }
                 }
             }
@@ -515,13 +541,14 @@ mod tests {
     }
 
     /// Far sides can never stack (BS5): passthrough to the long-handed
-    /// count ladder at any S.
+    /// count ladder at any S — the flooded (belt-drop) one, not the
+    /// derated pickup ladder (RFC-075).
     #[test]
     fn belt_drop_far_passthrough() {
         let q = QualityTier::Normal;
         assert_eq!(
             size_belt_drop_side(1.0, Reach::Far, 1, InserterTier::Stack, q, 4, 0, RED),
-            size_side(1.0, Reach::Far, 1, InserterTier::Stack, q, 0),
+            flooded_far(1.0, 1, InserterTier::Stack),
         );
     }
 
@@ -571,15 +598,20 @@ mod tests {
     fn size_side_output_identity_at_l0() {
         let q = QualityTier::Normal;
         for &required in &[0.3, 0.9, 2.5, 8.0, 13.0, 30.0] {
-            for &reach in &[Reach::Near, Reach::Far] {
-                for budget in 0..=2usize {
-                    for &cap in &[InserterTier::Regular, InserterTier::Fast, InserterTier::Stack] {
-                        assert_eq!(
-                            size_side_output(required, reach, budget, cap, q, 0, RED),
-                            size_side(required, reach, budget, cap, q, 0),
-                            "required={required} reach={reach:?} budget={budget} cap={cap:?}"
-                        );
-                    }
+            for budget in 0..=2usize {
+                for &cap in &[InserterTier::Regular, InserterTier::Fast, InserterTier::Stack] {
+                    assert_eq!(
+                        size_side_output(required, Reach::Near, budget, cap, q, 0, RED),
+                        size_side(required, Reach::Near, budget, cap, q, 0),
+                        "required={required} near budget={budget} cap={cap:?}"
+                    );
+                    // Output far hands drop onto a belt: the flooded ladder,
+                    // not the derated pickup one (RFC-075).
+                    assert_eq!(
+                        size_side_output(required, Reach::Far, budget, cap, q, 0, RED),
+                        flooded_far(required, budget, cap),
+                        "required={required} far budget={budget} cap={cap:?}"
+                    );
                 }
             }
         }
@@ -854,8 +886,62 @@ mod tests {
 
     #[test]
     fn far_boundary_exact() {
-        let plan = size_side(1.2, Reach::Far, 0, InserterTier::Stack, QualityTier::Normal, 0);
+        // The boundary is the PICKUP credit (RFC-075): 1.2 × 0.85 = 1.02 at L0.
+        let at = 1.2 * FAR_PICKUP_FACTOR;
+        let plan = size_side(at, Reach::Far, 0, InserterTier::Stack, QualityTier::Normal, 0);
         assert_eq!((plan.entity, plan.count, plan.shortfall), (LONG_HANDED, 1, None));
+        assert!((plan.capacity - at).abs() < 1e-9);
+    }
+
+    // ── RFC-075: the far pickup credit is the flooded rate derated ───────
+
+    /// `far_pickup_rate` is `machine_feed_rate` × 0.85 for the long-handed
+    /// hand at `Reach::Far` and the untouched table for everything else
+    /// (near hands of every tier, and the long-handed name at `Reach::Near`,
+    /// which no ladder asks for but must not be special-cased by name).
+    #[test]
+    fn far_pickup_credit_is_the_flooded_rate_derated() {
+        let q = QualityTier::Normal;
+        for level in [0u8, 2, 7] {
+            let flooded = machine_feed_rate(LONG_HANDED, q, level);
+            assert!((far_pickup_rate(LONG_HANDED, Reach::Far, q, level) - flooded * FAR_PICKUP_FACTOR).abs() < 1e-9);
+            assert!((far_pickup_rate(LONG_HANDED, Reach::Near, q, level) - flooded).abs() < 1e-9);
+            for near in [REGULAR, FAST, STACK] {
+                assert!((far_pickup_rate(near, Reach::Near, q, level) - machine_feed_rate(near, q, level)).abs() < 1e-9);
+                assert!((far_pickup_rate(near, Reach::Far, q, level) - machine_feed_rate(near, q, level)).abs() < 1e-9);
+            }
+        }
+        assert!((far_pickup_rate(LONG_HANDED, Reach::Far, q, 2) - 2.04).abs() < 1e-9, "2.4 × 0.85 at L2");
+    }
+
+    /// The ec@12 cell's row (RFC-075 E0/E3): 2.40/s of iron per machine at
+    /// L2 was ONE hand at 100% of the flooded credit (−7.1% in the sim) and
+    /// is TWO hands at 59% of the pickup credit (+0.3%). The discrimination
+    /// pin: at the flooded credit this plan would be `(1, None)`.
+    #[test]
+    fn far_hand_at_the_flooded_credit_gets_a_second_hand() {
+        let q = QualityTier::Normal;
+        let plan = size_side(2.4, Reach::Far, 1, InserterTier::Stack, q, 2);
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (LONG_HANDED, 2, None));
+        assert!((plan.capacity - 2.0 * 2.04).abs() < 1e-9);
+        // With no spare column the honest answer is one hand and a shortfall,
+        // not a silently full hand.
+        let capped = size_side(2.4, Reach::Far, 0, InserterTier::Stack, q, 2);
+        assert_eq!(capped.count, 1);
+        assert!((capped.shortfall.unwrap() - (2.4 - 2.04)).abs() < 1e-9);
+        // Near sides are not derated: a 2.4/s near demand at L2 is still one fast hand.
+        let near = size_side(2.4, Reach::Near, 1, InserterTier::Stack, q, 2);
+        assert_eq!((near.entity, near.count, near.shortfall), (FAST, 1, None));
+    }
+
+    /// Belt-DROP far sides are not pickups: `size_belt_drop_side` still
+    /// credits `belt_drop_rate`, untouched by the pickup factor.
+    #[test]
+    fn belt_drop_far_side_is_not_derated() {
+        let q = QualityTier::Normal;
+        let plan = size_belt_drop_side(1.2, Reach::Far, 0, InserterTier::Stack, q, 1, 0, RED);
+        assert_eq!((plan.entity, plan.count, plan.shortfall), (LONG_HANDED, 1, None));
+        assert!((plan.capacity - belt_drop_rate(LONG_HANDED, q, 1, 0, RED)).abs() < 1e-9);
     }
 
     #[test]
@@ -888,7 +974,8 @@ mod tests {
         let plan = size_side(100.0, Reach::Far, 1, InserterTier::Stack, QualityTier::Normal, 0);
         assert_eq!(plan.entity, LONG_HANDED);
         assert_eq!(plan.count, 2);
-        assert_eq!(plan.shortfall, Some(100.0 - 2.4));
+        // Two pickup hands at L0: 2 × 1.02 (RFC-075).
+        assert!((plan.shortfall.unwrap() - (100.0 - 2.0 * 1.2 * FAR_PICKUP_FACTOR)).abs() < 1e-9);
     }
 
     // ── capacity: the plan's own credit ─────────────────────────────────
@@ -907,7 +994,7 @@ mod tests {
             (100.0, Reach::Far, 1),
         ] {
             let plan = size_side(required, reach, budget, InserterTier::Stack, q, 0);
-            let expected = plan.count as f64 * machine_feed_rate(plan.entity, q, 0);
+            let expected = plan.count as f64 * far_pickup_rate(plan.entity, reach, q, 0);
             assert!(
                 (plan.capacity - expected).abs() < 1e-9,
                 "required={required} {reach:?}: capacity {} != {} × {}",
@@ -1014,13 +1101,14 @@ mod tests {
         assert!(l7.shortfall.is_none());
     }
 
-    /// Far (long-handed) ceiling rises with research: 4.0/s far demand
-    /// is a shortfall at L0 (1.2/s) but covered at L7 (4.8/s).
+    /// Far (long-handed) ceiling rises with research: 2.5/s far demand
+    /// is a shortfall at L0 (pickup credit 1.02/s) but covered at L7
+    /// (1.2 × 2.67 × 0.85 = 2.72/s).
     #[test]
     fn far_ceiling_rises_with_research() {
         let q = QualityTier::Normal;
-        assert!(size_side(4.0, Reach::Far, 0, InserterTier::Stack, q, 0).shortfall.is_some());
-        assert!(size_side(4.0, Reach::Far, 0, InserterTier::Stack, q, 7).shortfall.is_none());
+        assert!(size_side(2.5, Reach::Far, 0, InserterTier::Stack, q, 0).shortfall.is_some());
+        assert!(size_side(2.5, Reach::Far, 0, InserterTier::Stack, q, 7).shortfall.is_none());
     }
 
     /// Contest ceilings scale with the level. The decisive case: near
