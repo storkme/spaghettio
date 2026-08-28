@@ -775,24 +775,31 @@ fn issue_461_no_burner_no_resolve_for_electronic_circuit_from_ore() {
     );
 }
 
-/// #461 part (a) round 6, tightened in round 7 — the rejection path.
-/// `avoid_burner_recipes` attempts a re-solve whenever a burner has SOME
-/// electric alternative producer, but only ACCEPTS it when
-/// `burners_after < burners_before` (round 7: a strict reduction, not
-/// merely `== 0`). `lubricant` off only `{jelly}` is the case that
-/// motivated the rule: `biolubricant` (`organic`, biochamber) is
-/// genuinely cost-optimal here, and the `lubricant` recipe (`chemistry` →
-/// chemical-plant) is a real electric alternative for the same item, so a
-/// re-solve IS attempted — but it doesn't land on that simple chemistry
-/// chain; it wanders into an 11-machine-type plan (coal-liquefaction,
-/// coal-synthesis, sulfuric-acid, …) that itself contains THREE other
-/// biochamber recipes (burnt-spoilage, biosulfur, bioflux) — MORE burners
-/// than the original's one, not fewer — so it must be discarded. This is
-/// `crates/core/tests/e2e.rs`'s `phase0e1_biolubricant_biochamber`
-/// fixture's exact shape, pinned here at the solver level: asserts the
-/// exact `burners_before`/`burners_after` counts (1 → 3), `accepted:
-/// false`, and that the ORIGINAL result — biolubricant on a biochamber —
-/// is what solver.rs actually returns.
+/// #461 part (a) round 6, tightened in round 7, re-verified against round
+/// 8's bounded fixpoint — the rejection path, and its ACTUAL attempt
+/// sequence rather than an assumed one. `avoid_burner_recipes` attempts a
+/// re-solve whenever a burner has a TIER-FEASIBLE electric alternative
+/// producer, accepting only when `burners_after < burners_before`.
+/// `lubricant` off only `{jelly}` is the case that motivated the rule:
+/// `biolubricant` (`organic`, biochamber) is genuinely cost-optimal here,
+/// and the `lubricant` recipe (`chemistry` → chemical-plant, AM3-feasible)
+/// is a real alternative for the same item, so attempt 1 excludes
+/// `biolubricant` and re-solves — but that re-solve doesn't land on the
+/// simple chemistry chain; it wanders into an 11-machine-type plan
+/// (coal-liquefaction, coal-synthesis, sulfuric-acid, …) carrying THREE
+/// other biochamber recipes (burnt-spoilage, biosulfur, bioflux) — MORE
+/// burners than the one attempt 1 started from (1 → 3), not fewer.
+///
+/// Per the fixpoint's own rule, a rejected attempt stops the WHOLE loop —
+/// it does not examine that rejected re-solve's own burners for a follow-
+/// up attempt (only an ACCEPTED attempt's result becomes the new "current
+/// best" the next iteration examines). So this is a SINGLE-attempt
+/// sequence: attempt 1 only, rejected, fixpoint stops there. Verified
+/// empirically (not assumed) before writing this assertion — the
+/// receipts, not a hoped-for outcome, are what's pinned here.
+/// Consequently `crates/core/tests/e2e.rs`'s
+/// `phase0e1_biolubricant_biochamber` fixture is UNCHANGED by round 8: it
+/// still lands on biolubricant/biochamber and was not edited.
 #[test]
 fn issue_461_burner_resolve_rejected_when_still_burner() {
     let _guard = trace::start_trace();
@@ -807,12 +814,17 @@ fn issue_461_burner_resolve_rejected_when_still_burner() {
                  have been rejected as still-burner, not replaced this");
     assert_eq!(m.entity, "biochamber", "biolubricant always runs on a biochamber");
     let events = trace::drain_events();
-    let event = events
-        .iter()
-        .find(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. }))
-        .unwrap_or_else(|| panic!("expected a BurnerRecipeExcluded trace event, got: {events:?}"));
-    match event {
-        TraceEvent::BurnerRecipeExcluded { accepted, burners_before, burners_after, .. } => {
+    assert_eq!(
+        events.len(),
+        1,
+        "expected exactly ONE attempt (rejected attempts stop the fixpoint immediately \
+         rather than probing further) — got: {events:?}"
+    );
+    match &events[0] {
+        TraceEvent::BurnerRecipeExcluded {
+            accepted, attempt, burners_before, burners_after, machines_before, machines_after, ..
+        } => {
+            assert_eq!(*attempt, 1, "the sole attempt is attempt 1");
             assert!(!accepted, "expected the re-solve to be REJECTED, got accepted=true");
             assert_eq!(*burners_before, 1, "original result has 1 burner (biolubricant)");
             assert_eq!(
@@ -821,9 +833,113 @@ fn issue_461_burner_resolve_rejected_when_still_burner() {
                 "the re-solve's plan has 3 burners (burnt-spoilage, biosulfur, bioflux) — \
                  MORE than the original, hence rejected"
             );
+            assert_eq!(*machines_before, 1, "original plan is exactly the biolubricant row");
+            assert_eq!(
+                *machines_after,
+                Some(12),
+                "the rejected re-solve's plan has 12 total machine entries — a much bigger \
+                 plan traded for a worse burner count, exactly why there's no cost arbiter \
+                 here: it would have been the wrong signal either way"
+            );
         }
         other => panic!("expected BurnerRecipeExcluded, got {other:?}"),
     }
+}
+
+/// #461 part (a) round 8 — the tier-feasibility check. An "electric
+/// alternative" only counts if the caller's `default_machine` tier (for a
+/// `GENERAL_CATEGORIES` recipe) or the category's own canonical machine
+/// (for a specialised category) can actually run it —
+/// `machine_can_run_recipe(machine_for_recipe(other, default_machine),
+/// other).is_ok()`. Calls `solver::avoid_burner_recipes` DIRECTLY (it's
+/// `pub` since round 8, for exactly this kind of isolated check, and for
+/// `sim_export.rs`) with a hand-built `SolverResult` pinning
+/// `rocket-fuel-from-jelly` on a biochamber as the sole machine, so the
+/// test exercises ONLY the tier-feasibility decision, not the LP's own
+/// cost-driven recipe selection (at AM3 the LP would never have chosen
+/// this burner in the first place — see
+/// `issue_461_no_burner_no_resolve_for_electronic_circuit_from_ore`'s
+/// doc comment for the general "never chose one" case). `ammonia-
+/// rocket-fuel` (`chemistry-or-cryogenics` → chemical-plant) is excluded
+/// so the ONLY remaining candidate is the direct `rocket-fuel` recipe
+/// itself (2 ingredients incl. a fluid, `organic-or-assembling` →
+/// `GENERAL_CATEGORIES` → resolves to `default_machine`) — the recipe
+/// whose OWN tier-feasibility genuinely differs between AM1 and AM3.
+///
+/// At AM1: `machine_for_recipe` resolves the direct recipe to AM1, and
+/// AM1 has no fluid boxes (`FluidNotSupported`) — not tier-feasible, so
+/// NO re-solve is attempted (the `resolve` closure panics if called,
+/// proving it never is; zero trace events). At AM3: the same recipe
+/// resolves to AM3, which has fluid boxes — tier-feasible, so a re-solve
+/// IS attempted (`resolve` is called; exactly one trace event fires).
+#[test]
+fn issue_461_tier_feasible_alternative_gates_resolve_attempt() {
+    use spaghettio_core::models::{MachineSpec, SolverResult};
+
+    let synthetic_burner_result = || SolverResult {
+        machines: vec![MachineSpec {
+            entity: "biochamber".to_string(),
+            recipe: "rocket-fuel-from-jelly".to_string(),
+            count: 1.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let excluded = set(&["ammonia-rocket-fuel"]);
+
+    let _guard = trace::start_trace();
+    let am1_result = solver::avoid_burner_recipes(
+        synthetic_burner_result(),
+        "rocket-fuel",
+        &excluded,
+        "assembling-machine-1",
+        |_excl| panic!("resolve must not be called at AM1 — the only remaining alternative \
+                         (the direct rocket-fuel recipe) is FluidNotSupported on AM1"),
+    );
+    assert_eq!(
+        am1_result.machines[0].entity, "biochamber",
+        "no tier-feasible alternative at AM1 — the synthetic result must pass through unchanged"
+    );
+    let events = trace::drain_events();
+    assert!(
+        events.is_empty(),
+        "expected NO BurnerRecipeExcluded event at AM1 (no re-solve attempted), got: {events:?}"
+    );
+
+    let _guard = trace::start_trace();
+    let resolve_called = std::cell::Cell::new(false);
+    let am3_result = solver::avoid_burner_recipes(
+        synthetic_burner_result(),
+        "rocket-fuel",
+        &excluded,
+        "assembling-machine-3",
+        |_excl| {
+            resolve_called.set(true);
+            // The specific re-solve outcome isn't under test here — only
+            // that `avoid_burner_recipes` decided to ATTEMPT one. Erroring
+            // keeps this test independent of the real solve's numbers.
+            Err(SolverError::LpFailed {
+                target: "rocket-fuel".to_string(),
+                detail: "test stub — intentionally not a real solve".to_string(),
+            })
+        },
+    );
+    assert!(
+        resolve_called.get(),
+        "expected resolve to be CALLED at AM3 — the direct rocket-fuel recipe is \
+         tier-feasible there (AM3 has fluid boxes)"
+    );
+    assert_eq!(
+        am3_result.machines[0].entity, "biochamber",
+        "the stub resolve errored, so the original result must be what's returned"
+    );
+    let events = trace::drain_events();
+    assert_eq!(
+        events.len(),
+        1,
+        "expected exactly one BurnerRecipeExcluded event (attempt 1, errored -> rejected), \
+         got: {events:?}"
+    );
 }
 
 /// #461 part (a) round 7 — the mixed steerable/unsteerable multi-target

@@ -398,7 +398,7 @@ const GENERAL_CATEGORIES: &[&str] = &[
     // warnings, 0.00/s measured). The assembler half is what the engine
     // can actually power — fall through to the caller's tier default, the
     // same way a plain `crafting` recipe does. `organic` alone (no
-    // `-or-assembling`) is unaffected: those 13 recipes are biochamber-only
+    // `-or-assembling`) is unaffected: those recipes are biochamber-only
     // in the game and stay mapped to `&["biochamber"]` above.
     "organic-or-assembling",
     "parameters",
@@ -600,7 +600,7 @@ mod tests {
         let recipe = Recipe { category: "pressing".into(), ..recipe.clone() };
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "foundry");
 
-        // organic → biochamber (unaffected by #461 part (a); these 13
+        // organic → biochamber (unaffected by #461 part (a); these
         // recipes are biochamber-only in the game, no assembler fallback).
         let recipe = Recipe { category: "organic".into(), ..recipe.clone() };
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "biochamber");

@@ -751,44 +751,63 @@ pub enum TraceEvent {
         machines: Vec<MachineTrace>,
     },
 
-    /// #461 part (a) production-path fix (`solver.rs`): the initial solve
-    /// placed a burner machine (the engine delivers no fuel to any burner)
-    /// for one or more recipes whose product item has at least one OTHER
-    /// producer that CAN run on an electric machine, so those recipes were
-    /// added to the exclusion set and the target was re-solved once. This
-    /// event is always emitted when a re-solve is ATTEMPTED.
+    /// #461 part (a) production-path fix (`solver::avoid_burner_recipes`):
+    /// a solve placed a burner machine (the engine delivers no fuel to any
+    /// burner) for one or more recipes whose product item has at least one
+    /// OTHER producer that a tier-feasible electric machine CAN run, so
+    /// those recipes were added to the exclusion set and the target was
+    /// re-solved. This is a BOUNDED FIXPOINT, not a single re-solve: one
+    /// event is emitted per attempt (`attempt`, 1-indexed, capped at 4),
+    /// because a single re-solve can wander into a DIFFERENT set of
+    /// burners before a burner-free (or fewer-burner) chain is reached one
+    /// exclusion further out — `lubricant` from `{jelly}` is the found
+    /// case: attempt 1 (excluding `biolubricant`) lands on a plan with
+    /// THREE other biochamber recipes, rejected; attempt 2 (additionally
+    /// excluding those three) finds the plain `chemistry` chain and is
+    /// accepted. The exclusion set only grows attempt-over-attempt
+    /// (monotone), so this always terminates within the cap even though
+    /// each attempt's LP is independent.
     ///
-    /// `burners_before` is the number of `!needs_electricity` machine
+    /// `burners_before`/`burners_after` count `!needs_electricity` machine
     /// ENTRIES (not `Σ count` — a count of distinct burner-recipe rows in
-    /// `SolverResult::machines`, matching how this whole mechanism reasons
-    /// about "how many burner recipes are in play") in the ORIGINAL
-    /// result. `burners_after` is the same count for the re-solve's
-    /// result, or `None` if the re-solve errored — distinguishing the
-    /// three possible outcomes `accepted` alone collapses: errored
-    /// (`burners_after: None`), re-solved but not fewer burners
-    /// (`Some(n) if n >= burners_before`), or genuinely fewer
-    /// (`Some(n) if n < burners_before`). `accepted` is `true` only in the
-    /// last case — the re-solve is accepted whenever it *reduces* the
-    /// burner count, not only when it eliminates every burner: a
-    /// multi-target solve can mix a STEERABLE burner (e.g.
+    /// `SolverResult::machines`, matching how this mechanism reasons about
+    /// "how many burner recipes are in play") in the CURRENT BEST result
+    /// going into this attempt vs. this attempt's re-solve result;
+    /// `burners_after` is `None` if the re-solve errored — distinguishing
+    /// the three outcomes `accepted` alone collapses: errored, re-solved
+    /// but not fewer, or genuinely fewer. `machines_before`/
+    /// `machines_after` are the same idea over the TOTAL machine-entry
+    /// count (burner and electric together), so a reader can see what a
+    /// steering step traded — e.g. rocket-fuel's accepted re-solve grows
+    /// the plan (more raw-input refining) to lose the burner. There is
+    /// deliberately no cost arbiter here: a burner-free (or fewer-burner)
+    /// plan is preferred over a cheaper one that still contains a dead
+    /// machine, by design — the whole point is that an unfuelled burner
+    /// validates clean and produces nothing, so "cheaper but broken" is
+    /// not a competitive alternative to "costlier but works".
+    ///
+    /// `accepted` is `true` only when this attempt's re-solve succeeded
+    /// AND strictly reduced the burner count from the CURRENT BEST going
+    /// into it — accepting a partial reduction, not only a burner-free
+    /// result: a multi-target solve can mix a STEERABLE burner (e.g.
     /// `rocket-fuel-from-jelly`, which has an electric alternative) with
     /// an UNSTEERABLE one in the same result (e.g. `pentapod-egg`,
-    /// biochamber-only) — a re-solve that removes the steerable one while
-    /// leaving the unsteerable one in place still has fewer burners than
-    /// the original and must be kept, even though it isn't burner-free.
-    /// When `accepted` is `false`, the ORIGINAL result is what actually
-    /// got used (see `phase0e1_biolubricant_biochamber`, whose re-solve
-    /// wanders into an 11-machine-type plan carrying MORE burners — three
-    /// OTHER biochamber recipes — than the one it was trying to avoid).
-    /// Absence of this event for a solve means no burner machine had an
-    /// electric alternative to steer toward at all — no re-solve was even
-    /// attempted.
+    /// biochamber-only) — a re-solve that removes only the steerable one
+    /// still has fewer burners than the current best and must be kept.
+    /// Whenever an attempt's `accepted` is `false`, the fixpoint stops
+    /// there and the last-accepted (or, on attempt 1, the original) result
+    /// is what actually got used. Absence of ANY event for a solve means
+    /// no burner machine had a tier-feasible electric alternative to steer
+    /// toward at all — no re-solve was even attempted.
     BurnerRecipeExcluded {
         target_item: String,
         excluded_recipes: Vec<String>,
         accepted: bool,
+        attempt: usize,
         burners_before: usize,
         burners_after: Option<usize>,
+        machines_before: usize,
+        machines_after: Option<usize>,
     },
 
     /// The layout pipeline ran once, hit `JunctionGrowthCapped` events,
