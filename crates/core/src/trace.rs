@@ -757,16 +757,26 @@ pub enum TraceEvent {
     /// OTHER producer that a tier-feasible electric machine CAN run, so
     /// those recipes were added to the exclusion set and the target was
     /// re-solved. This is a BOUNDED FIXPOINT, not a single re-solve: one
-    /// event is emitted per attempt (`attempt`, 1-indexed, capped at 4),
-    /// because a single re-solve can wander into a DIFFERENT set of
-    /// burners before a burner-free (or fewer-burner) chain is reached one
-    /// exclusion further out — `lubricant` from `{jelly}` is the found
-    /// case: attempt 1 (excluding `biolubricant`) lands on a plan with
-    /// THREE other biochamber recipes, rejected; attempt 2 (additionally
-    /// excluding those three) finds the plain `chemistry` chain and is
-    /// accepted. The exclusion set only grows attempt-over-attempt
-    /// (monotone), so this always terminates within the cap even though
-    /// each attempt's LP is independent.
+    /// event is emitted per attempt (`attempt`, 1-indexed, capped at 4) —
+    /// but attempts continue ONLY from an ACCEPTED result (strictly fewer
+    /// burners than the current best); the FIRST non-improving attempt
+    /// (errored, tied, or worse) ends the loop immediately, and that
+    /// rejected attempt's OWN burners are never examined for a follow-up
+    /// exclusion. The exclusion set only grows across ACCEPTED attempts
+    /// (monotone), so this always terminates within the cap.
+    ///
+    /// Residual, stated plainly: `lubricant` from `{jelly}` stays on
+    /// `biolubricant`/biochamber — a single-attempt sequence. Attempt 1
+    /// excludes `biolubricant` (its product, `lubricant`, has a
+    /// tier-feasible electric alternative) and re-solves; with only
+    /// `jelly` supplied, the cheapest remaining path pulls a
+    /// coal-liquefaction chain from free root supply, landing on a plan
+    /// with THREE OTHER biochamber recipes (burnt-spoilage, biosulfur,
+    /// bioflux) — 1 → 3 burners, strictly worse, rejected, loop stops.
+    /// The residual biochamber is exactly what #461 part (b)'s
+    /// `burner-fuel` validator check exists to make LOUD, not silently
+    /// hide — see `solver::avoid_burner_recipes`'s doc comment for why the
+    /// fixpoint deliberately does not probe past that rejection.
     ///
     /// `burners_before`/`burners_after` count `!needs_electricity` machine
     /// ENTRIES (not `Σ count` — a count of distinct burner-recipe rows in

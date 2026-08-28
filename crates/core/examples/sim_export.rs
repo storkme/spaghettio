@@ -392,10 +392,15 @@ fn main() {
         // field it cannot pass, and must not change anything else.
         ..Default::default()
     };
+    // No `--palette` flag on this tool today — `MachinePalette::default()`
+    // is what both the initial solve and the burner-avoidance re-solve
+    // below must agree on (one binding, not two independently-constructed
+    // defaults) so a future palette flag can't add one without the other.
+    let palette = MachinePalette::default();
     let solved = spaghettio_core::netflow::solve_netflow_multi_with_options(
         &targets,
         &input_set,
-        &MachinePalette::default(),
+        &palette,
         &tier,
         &FxHashSet::default(),
         spaghettio_core::netflow::RecipeScope::Free,
@@ -416,17 +421,22 @@ fn main() {
     // produced for the identical target+inputs+tier, defeating the parity
     // this example exists to guarantee (see the doc comment atop this
     // file). `avoid_burner_recipes` is `pub` specifically so this can call
-    // it directly with a closure that re-invokes the SAME netflow call.
+    // it directly with a closure that re-invokes the SAME netflow call —
+    // and the SAME `palette` this export used, so the gate's
+    // tier-feasibility check agrees with what this re-solve would actually
+    // place (round 9's palette-aware fix: the gate must resolve candidate
+    // machines the same way the real re-solve does).
     let solved = spaghettio_core::solver::avoid_burner_recipes(
         solved,
         &targets_desc(),
         &FxHashSet::default(),
+        &palette,
         &tier,
         |excl| {
             spaghettio_core::netflow::solve_netflow_multi_with_options(
                 &targets,
                 &input_set,
-                &MachinePalette::default(),
+                &palette,
                 &tier,
                 excl,
                 spaghettio_core::netflow::RecipeScope::Free,

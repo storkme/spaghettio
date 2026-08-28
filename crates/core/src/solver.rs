@@ -9,7 +9,7 @@ use crate::common::needs_electricity;
 use crate::models::SolverResult;
 use crate::recipe_db::{
     category_has_electric_machine, db, is_excluded_recipe, machine_can_run_recipe,
-    machine_for_recipe, MachineIncompatibility, MachinePalette,
+    machine_for_recipe_with_palette, MachineIncompatibility, MachinePalette,
 };
 use crate::trace::{self, TraceEvent};
 use rustc_hash::FxHashSet;
@@ -93,34 +93,59 @@ pub enum SolverError {
 /// whether a given target ships on a burner.
 ///
 /// **Bounded fixpoint, not a single re-solve** (capped at
-/// [`MAX_BURNER_AVOIDANCE_ATTEMPTS`]): a single re-solve can wander into a
-/// DIFFERENT set of burners rather than landing on a burner-free (or
-/// fewer-burner) chain that exists one exclusion further out — found on
-/// `lubricant` from `{jelly}`: excluding `biolubricant` alone lands on a
-/// plan with three OTHER biochamber recipes (rejected, more burners than
-/// before), but excluding those three ALSO finds the plain `chemistry`
-/// chain (accepted). Each attempt starts from the current best result,
-/// collects ITS steerable burners, and re-solves with the cumulative
-/// exclusion set; the loop stops as soon as an attempt finds nothing to
-/// exclude, or an attempt's re-solve doesn't strictly reduce the burner
-/// count. The exclusion set only grows attempt-over-attempt (monotone),
-/// so every attempt is a fresh, independent netflow solve and the loop
-/// still terminates within the cap.
+/// [`MAX_BURNER_AVOIDANCE_ATTEMPTS`]): attempts continue ONLY from an
+/// ACCEPTED result. Each attempt starts from the current best, collects
+/// ITS steerable burners, and re-solves with the cumulative exclusion
+/// set; if that re-solve strictly reduces the burner count, it becomes
+/// the new current best and the next attempt starts from there. The
+/// FIRST non-improving attempt (the re-solve errors, ties, or worsens the
+/// burner count) ends the loop immediately — a rejected attempt's OWN
+/// burners are never examined for a follow-up exclusion, so the fixpoint
+/// never probes past a rejection.
+///
+/// Residual, stated plainly: `lubricant` from `{jelly}` stays on
+/// `biolubricant`/biochamber. Attempt 1 excludes `biolubricant` (its
+/// product, `lubricant`, has a tier-feasible electric alternative — the
+/// `lubricant` recipe itself) and re-solves; with only `jelly` supplied,
+/// the cheapest remaining path to `lubricant` pulls a coal-liquefaction
+/// chain from free root supply, landing on a plan with THREE OTHER
+/// biochamber recipes (burnt-spoilage, biosulfur, bioflux) — 1 → 3
+/// burners, strictly WORSE, rejected — and the loop stops there. Why not
+/// probe past that rejection: a rejected attempt already means "worse,
+/// not better", and continuing to exclude further from a worse state
+/// would chase an unbounded, more expensive search (more netflow solves)
+/// with no guarantee of ever landing on something strictly fewer-burner
+/// than where the loop started — each further exclusion can just as
+/// easily pull in yet more free-root-supply chains rather than converge.
+/// "Stop at the first non-improving attempt" is the deliberate bound, not
+/// "keep trying until the cap": the cheaper plan with one unfuelled
+/// machine is the honest answer here, preferred over a bigger plan with
+/// three. That residual biochamber is exactly what #461 part (b)'s
+/// `burner-fuel` validator check exists to make LOUD, not silently hide.
 ///
 /// Per attempt: for every machine in the current best result where
 /// [`needs_electricity`] is false, look up its recipe and ask whether ANY
 /// of its products has at least one OTHER (non-excluded) recipe that a
 /// TIER-FEASIBLE electric machine can actually run — not just "some
 /// electric machine exists for this category" but
-/// `machine_can_run_recipe(machine_for_recipe(other, default_machine),
-/// other).is_ok()`: for a `GENERAL_CATEGORIES` recipe that resolves to
-/// `default_machine` (the caller's chosen tier), the SAME tier that
-/// rejected the original recipe might also reject the "alternative" —
-/// e.g. AM1 can't run the direct `rocket-fuel` recipe (fluid check)
-/// either, so at AM1 that's not a real alternative and no re-solve is
-/// attempted; at AM3 it is. Specialised-category alternatives (e.g.
-/// `ammonia-rocket-fuel` → chemical-plant) ignore `default_machine`
-/// entirely, same as [`machine_for_recipe`] always has.
+/// `machine_can_run_recipe(machine_for_recipe_with_palette(other, palette,
+/// default_machine), other).is_ok()`. `palette` matters here, not just
+/// `default_machine`: the actual re-solve (`resolve`) honours the
+/// caller's [`MachinePalette`], so the gate must resolve candidate
+/// machines the SAME way or it can approve (or refuse) an "alternative"
+/// the re-solve would never actually place there — e.g. a palette pinning
+/// `crafting` to `assembling-machine-1` makes a `GENERAL_CATEGORIES`
+/// alternative resolve to AM1 even when `default_machine` is AM3, so the
+/// same fluid/slot-count rejection that blocks AM1 applies regardless of
+/// the caller's chosen default tier. For a `GENERAL_CATEGORIES` recipe
+/// with no matching palette entry, this resolves to `default_machine`
+/// (the caller's chosen tier) — the SAME tier that rejected the original
+/// recipe might also reject the "alternative": e.g. AM1 can't run the
+/// direct `rocket-fuel` recipe (fluid check) either, so at AM1 that's not
+/// a real alternative and no re-solve is attempted; at AM3 it is.
+/// Specialised-category alternatives (e.g. `ammonia-rocket-fuel` →
+/// chemical-plant) ignore both `palette` and `default_machine` entirely,
+/// same as [`machine_for_recipe_with_palette`] always has.
 /// [`category_has_electric_machine`] is kept as a cheap structural
 /// pre-filter (rules out `organic` and unsupported categories without an
 /// `db()` scan) before paying for the tier check.
@@ -162,6 +187,7 @@ pub fn avoid_burner_recipes(
     result: SolverResult,
     target_item: &str,
     excluded_recipes: &FxHashSet<String>,
+    palette: &MachinePalette,
     default_machine: &str,
     resolve: impl Fn(&FxHashSet<String>) -> Result<SolverResult, SolverError>,
 ) -> SolverResult {
@@ -188,7 +214,8 @@ pub fn avoid_burner_recipes(
                         && other.products.iter().any(|p| p.name == product.name)
                         && category_has_electric_machine(&other.category)
                         && {
-                            let candidate_machine = machine_for_recipe(other, default_machine);
+                            let candidate_machine =
+                                machine_for_recipe_with_palette(other, palette, default_machine);
                             needs_electricity(&candidate_machine)
                                 && machine_can_run_recipe(&candidate_machine, other).is_ok()
                         }
@@ -364,7 +391,7 @@ pub fn solve_free_with_palette_and_exclusions(
         crate::netflow::RecipeScope::Free,
         &crate::netflow::CostTable::default(),
     )?;
-    Ok(avoid_burner_recipes(result, target_item, excluded_recipes, default_machine, |excl| {
+    Ok(avoid_burner_recipes(result, target_item, excluded_recipes, palette, default_machine, |excl| {
         crate::netflow::solve_netflow(
             target_item,
             target_rate,
@@ -435,7 +462,7 @@ pub fn solve_with_palette_exclusions_quality_and_modules(
         &crate::netflow::CostTable::default(),
         &options,
     )?;
-    Ok(avoid_burner_recipes(result, target_item, excluded_recipes, default_machine, |excl| {
+    Ok(avoid_burner_recipes(result, target_item, excluded_recipes, palette, default_machine, |excl| {
         crate::netflow::solve_netflow_with_options(
             target_item,
             target_rate,
@@ -506,7 +533,7 @@ pub fn solve_multi_with_palette_exclusions_quality_and_modules(
     // invariant above) — join every requested item, same convention as
     // netflow.rs's own `target_label`.
     let label = targets.iter().map(|(item, _)| item.as_str()).collect::<Vec<_>>().join("+");
-    Ok(avoid_burner_recipes(result, &label, excluded_recipes, default_machine, |excl| {
+    Ok(avoid_burner_recipes(result, &label, excluded_recipes, palette, default_machine, |excl| {
         crate::netflow::solve_netflow_multi_with_options(
             targets,
             available_inputs,

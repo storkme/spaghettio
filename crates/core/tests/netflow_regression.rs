@@ -866,12 +866,16 @@ fn issue_461_burner_resolve_rejected_when_still_burner() {
 /// `GENERAL_CATEGORIES` → resolves to `default_machine`) — the recipe
 /// whose OWN tier-feasibility genuinely differs between AM1 and AM3.
 ///
-/// At AM1: `machine_for_recipe` resolves the direct recipe to AM1, and
-/// AM1 has no fluid boxes (`FluidNotSupported`) — not tier-feasible, so
-/// NO re-solve is attempted (the `resolve` closure panics if called,
-/// proving it never is; zero trace events). At AM3: the same recipe
-/// resolves to AM3, which has fluid boxes — tier-feasible, so a re-solve
-/// IS attempted (`resolve` is called; exactly one trace event fires).
+/// At AM1: `machine_for_recipe_with_palette` resolves the direct recipe
+/// to AM1 (the default, empty-palette case), and AM1 has no fluid boxes
+/// (`FluidNotSupported`) — not tier-feasible, so NO re-solve is attempted
+/// (the `resolve` closure panics if called, proving it never is; zero
+/// trace events). At AM3: the same recipe resolves to AM3, which has
+/// fluid boxes — tier-feasible, so a re-solve IS attempted (`resolve` is
+/// called; exactly one trace event fires). Both calls pass
+/// `&MachinePalette::default()` — the companion pin
+/// `issue_461_palette_entry_changes_tier_feasibility_verdict` covers the
+/// case where a non-default palette entry is what flips the verdict.
 #[test]
 fn issue_461_tier_feasible_alternative_gates_resolve_attempt() {
     use spaghettio_core::models::{MachineSpec, SolverResult};
@@ -886,12 +890,14 @@ fn issue_461_tier_feasible_alternative_gates_resolve_attempt() {
         ..Default::default()
     };
     let excluded = set(&["ammonia-rocket-fuel"]);
+    let palette = MachinePalette::default();
 
     let _guard = trace::start_trace();
     let am1_result = solver::avoid_burner_recipes(
         synthetic_burner_result(),
         "rocket-fuel",
         &excluded,
+        &palette,
         "assembling-machine-1",
         |_excl| panic!("resolve must not be called at AM1 — the only remaining alternative \
                          (the direct rocket-fuel recipe) is FluidNotSupported on AM1"),
@@ -912,6 +918,7 @@ fn issue_461_tier_feasible_alternative_gates_resolve_attempt() {
         synthetic_burner_result(),
         "rocket-fuel",
         &excluded,
+        &palette,
         "assembling-machine-3",
         |_excl| {
             resolve_called.set(true);
@@ -939,6 +946,90 @@ fn issue_461_tier_feasible_alternative_gates_resolve_attempt() {
         1,
         "expected exactly one BurnerRecipeExcluded event (attempt 1, errored -> rejected), \
          got: {events:?}"
+    );
+}
+
+/// #461 part (a) round 9 — palette-aware feasibility. The gate must
+/// resolve a candidate machine the SAME way the real re-solve would: via
+/// `machine_for_recipe_with_palette`, honouring the caller's
+/// [`MachinePalette`], not just `default_machine`. Same synthetic
+/// `rocket-fuel-from-jelly`/biochamber setup as the pin above, `ammonia-
+/// rocket-fuel` excluded so the direct `rocket-fuel` recipe (`organic-or-
+/// assembling` → `GENERAL_CATEGORIES`) is the only remaining candidate —
+/// but this time `default_machine` is AM3 (tier-feasible on its own,
+/// per the pin above) while the PALETTE pins `crafting` to AM1. Since
+/// `rocket-fuel`'s category is `organic-or-assembling`, not `crafting`,
+/// a palette entry keyed on the wrong category must NOT change anything
+/// (sanity half); a palette entry keyed on `organic-or-assembling`
+/// itself — the category `GENERAL_CATEGORIES` actually dispatches this
+/// recipe through — pinning it to AM1 must flip the verdict to
+/// infeasible, even though `default_machine` alone says AM3.
+#[test]
+fn issue_461_palette_entry_changes_tier_feasibility_verdict() {
+    use spaghettio_core::models::{MachineSpec, SolverResult};
+
+    let synthetic_burner_result = || SolverResult {
+        machines: vec![MachineSpec {
+            entity: "biochamber".to_string(),
+            recipe: "rocket-fuel-from-jelly".to_string(),
+            count: 1.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let excluded = set(&["ammonia-rocket-fuel"]);
+
+    // Sanity half: a palette entry for an unrelated category (`crafting`)
+    // must not affect `organic-or-assembling`'s resolution — AM3 default
+    // still applies, so a re-solve IS attempted.
+    let mut unrelated_palette = MachinePalette::default();
+    unrelated_palette.by_category.insert("crafting".to_string(), "assembling-machine-1".to_string());
+    let _guard = trace::start_trace();
+    let resolve_called = std::cell::Cell::new(false);
+    solver::avoid_burner_recipes(
+        synthetic_burner_result(),
+        "rocket-fuel",
+        &excluded,
+        &unrelated_palette,
+        "assembling-machine-3",
+        |_excl| {
+            resolve_called.set(true);
+            Err(SolverError::LpFailed {
+                target: "rocket-fuel".to_string(),
+                detail: "test stub".to_string(),
+            })
+        },
+    );
+    assert!(
+        resolve_called.get(),
+        "a palette entry for `crafting` must not affect the `organic-or-assembling` \
+         recipe's resolution — expected resolve to be called (AM3 default applies)"
+    );
+
+    // The actual verdict-changing half: pinning `organic-or-assembling`
+    // itself to AM1 in the palette must make the gate see the SAME
+    // FluidNotSupported infeasibility a plain AM1 default would, even
+    // though `default_machine` here is AM3.
+    let mut targeted_palette = MachinePalette::default();
+    targeted_palette
+        .by_category
+        .insert("organic-or-assembling".to_string(), "assembling-machine-1".to_string());
+    let _guard = trace::start_trace();
+    solver::avoid_burner_recipes(
+        synthetic_burner_result(),
+        "rocket-fuel",
+        &excluded,
+        &targeted_palette,
+        "assembling-machine-3",
+        |_excl| panic!("resolve must not be called — the palette pins organic-or-assembling \
+                         to AM1, which is FluidNotSupported for the direct rocket-fuel recipe, \
+                         even though default_machine here is AM3"),
+    );
+    let events = trace::drain_events();
+    assert!(
+        events.is_empty(),
+        "expected NO BurnerRecipeExcluded event — the palette entry must override \
+         default_machine's AM3 and make the alternative tier-infeasible, got: {events:?}"
     );
 }
 
