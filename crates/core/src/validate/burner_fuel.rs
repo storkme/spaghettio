@@ -4,7 +4,7 @@
 //! machines therefore paste with no fuel and cannot run, even when every
 //! ingredient belt is connected.
 
-use crate::common::needs_electricity;
+use crate::common::is_burner_machine;
 use crate::models::{LayoutResult, PlacedEntity};
 use crate::validate::{Severity, ValidationIssue};
 
@@ -31,12 +31,20 @@ fn is_fuelled_machine(machine: &PlacedEntity) -> bool {
 /// Grid power and burner fuel are separate obligations. `needs_electricity`
 /// deliberately exempts burners from power coverage; this check owns the
 /// complementary delivery obligation until the engine can model fuel inserters.
+///
+/// Classified by [`is_burner_machine`]'s EXPLICIT name list, not
+/// `!needs_electricity(name)`: `needs_electricity` is itself an allow-list of
+/// known-electric machines falling through to `_ => false`, so its negation
+/// means "not a machine this codebase recognizes as electric" — true of
+/// `electric-mining-drill`/`big-mining-drill` (real electric machines with no
+/// arm in that function) and of any future prototype neither function has
+/// seen yet. An unrecognized machine is never assumed to be a burner.
 pub fn check_burner_fuel(layout: &LayoutResult) -> Vec<ValidationIssue> {
     layout
         .entities
         .iter()
         .filter(|machine| is_fuelled_machine(machine))
-        .filter(|machine| !needs_electricity(&machine.name))
+        .filter(|machine| is_burner_machine(&machine.name))
         .filter(|machine| !has_fuel_delivery(layout, machine))
         .map(|machine| {
             let recipe = machine.recipe.as_deref().unwrap_or("mining");
@@ -92,6 +100,29 @@ mod tests {
     fn does_not_fire_on_electric_machine() {
         let layout = LayoutResult {
             entities: vec![machine("assembling-machine-3", "iron-gear-wheel", 1, 2)],
+            ..Default::default()
+        };
+
+        assert!(check_burner_fuel(&layout).is_empty());
+    }
+
+    #[test]
+    fn does_not_fire_on_electric_mining_drill() {
+        // Regression: `electric-mining-drill` has no recipe, so it passed
+        // `is_fuelled_machine`'s mining-drill branch, and `needs_electricity`
+        // has no arm for it either — `!needs_electricity(name)` would have
+        // wrongly condemned it as a burner. `is_burner_machine` is an
+        // explicit list, so an unrecognized (but real, electric) machine is
+        // never assumed to be a burner.
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "electric-mining-drill".to_string(),
+                recipe: None,
+                x: 1,
+                y: 2,
+                direction: EntityDirection::North,
+                ..Default::default()
+            }],
             ..Default::default()
         };
 

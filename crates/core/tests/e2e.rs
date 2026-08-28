@@ -2243,6 +2243,19 @@ fn phase0e1_biolubricant_biochamber() {
     );
     assert_fluid_machine(&result, "biochamber", false, spaghettio_core::models::EntityDirection::North);
     assert_warnings_golden_except(&result, "phase0e1_biolubricant_biochamber", &["burner-fuel"]);
+
+    // Discrimination pin (#461): the allow-list above must never silently
+    // become a no-op. `burner-fuel` fires exactly once per unfuelled
+    // biochamber — if this drifts, either the check or the allow-list broke.
+    let biochamber_count =
+        result.layout.entities.iter().filter(|e| e.name == "biochamber").count();
+    let burner_fuel_count =
+        result.issues.iter().filter(|i| i.category == "burner-fuel").count();
+    assert_eq!(
+        burner_fuel_count, biochamber_count,
+        "expected one burner-fuel error per biochamber, got {burner_fuel_count} for {biochamber_count} biochambers"
+    );
+
     assert_round_trip(&result);
 }
 
@@ -3899,6 +3912,16 @@ fn tier_bacteria_self_loop_regression() {
     assert_eq!(
         biochamber_count, 1,
         "expected 1 biochamber (hand-derived count for 1.0/s), got {biochamber_count}"
+    );
+
+    // Discrimination pin (#461): the allow-list above must never silently
+    // become a no-op. `burner-fuel` fires exactly once per unfuelled
+    // biochamber — if this drifts, either the check or the allow-list broke.
+    let burner_fuel_count =
+        result.issues.iter().filter(|i| i.category == "burner-fuel").count();
+    assert_eq!(
+        burner_fuel_count, biochamber_count,
+        "expected one burner-fuel error per biochamber, got {burner_fuel_count} for {biochamber_count} biochambers"
     );
 
     assert_round_trip(&result);
