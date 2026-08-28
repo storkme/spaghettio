@@ -17,11 +17,11 @@ fn has_fuel_delivery(_layout: &LayoutResult, _machine: &PlacedEntity) -> bool {
     false
 }
 
-/// Whether this entity is a machine whose operation needs a recipe or mining
-/// fuel. Crafting machines are identified by their stamped recipe rather than
-/// a prototype-name list, so any future burner crafting machine is covered.
-/// Mining drills have no recipe in Factorio; include them should the engine
-/// begin placing one.
+/// Whether this entity is a burner machine this check can classify: one with
+/// a stamped recipe, or a mining drill (mining drills have no recipe in
+/// Factorio; include them should the engine begin placing one). Recipe-less
+/// burner entities (`boiler`, `burner-inserter`) are out of this check's
+/// scope — the engine places none of them.
 fn is_fuelled_machine(machine: &PlacedEntity) -> bool {
     machine.recipe.is_some() || machine.name.ends_with("mining-drill")
 }
