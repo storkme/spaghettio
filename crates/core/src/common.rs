@@ -381,6 +381,31 @@ pub fn needs_electricity(entity: &str) -> bool {
     }
 }
 
+/// Whether `entity` is a burner-fueled crafting/mining machine: `biochamber`
+/// (RFC `docs/rfc-power-supply.md` Phase 0a ground truth, see
+/// [`needs_electricity`]'s doc comment) plus the vanilla burner furnace and
+/// mining-drill tiers already named in [`module_slots_known`]
+/// (`stone-furnace`, `steel-furnace`, `burner-mining-drill`). None of the
+/// three furnace/drill names are placed by the generator today — the solver
+/// defaults to `electric-furnace`, the web UI's furnace picker never offers
+/// stone/steel, and ore is always an external input rather than a placed
+/// drill — but a parsed community blueprint or a future placer change hits
+/// them, and they belong on this list regardless of whether the generator
+/// currently reaches them.
+///
+/// Deliberately an EXPLICIT allow-list, not `!needs_electricity(entity)`.
+/// `needs_electricity` is itself an allow-list of known-electric machines
+/// falling through to `_ => false`, so its negation means "not a machine
+/// this function recognizes as electric" — true of `electric-mining-drill`
+/// and `big-mining-drill` (real electric machines `needs_electricity` simply
+/// has no arm for, since it only classifies crafting machines + inserters)
+/// and true of any future prototype neither function has seen yet. Classifying
+/// burner-ness is explicit by design: an unknown machine is never assumed to
+/// be a burner just because it's unrecognized as electric.
+pub fn is_burner_machine(entity: &str) -> bool {
+    matches!(entity, "biochamber" | "stone-furnace" | "steel-furnace" | "burner-mining-drill")
+}
+
 /// Candidate pole rows for a machine row whose machines start at `top_y`
 /// with footprint height `mh`: the row just above the machine (`top_y-1`,
 /// the input-inserter band) and just below (`top_y+mh`, the output-inserter
@@ -1232,6 +1257,26 @@ mod tests {
         // Non-machine entities draw no grid power.
         assert!(!needs_electricity("medium-electric-pole"));
         assert!(!needs_electricity("transport-belt"));
+    }
+
+    #[test]
+    fn is_burner_machine_is_an_explicit_list_not_needs_electricity_negation() {
+        for name in ["biochamber", "stone-furnace", "steel-furnace", "burner-mining-drill"] {
+            assert!(is_burner_machine(name), "{name} should be a burner machine");
+        }
+        // `electric-mining-drill`/`big-mining-drill` are real electric
+        // machines `needs_electricity` has no arm for — !needs_electricity
+        // would wrongly call them burners. Regular electric machines must
+        // also read false, so the two functions never silently agree by
+        // negation.
+        for name in [
+            "electric-mining-drill",
+            "big-mining-drill",
+            "assembling-machine-1",
+            "electric-furnace",
+        ] {
+            assert!(!is_burner_machine(name), "{name} should not be a burner machine");
+        }
     }
 
     /// Drift regression (RFC `docs/rfc-power-supply.md` Phase 0b): every

@@ -4,6 +4,7 @@
 
 pub mod belt_detour;
 pub mod belt_flow;
+pub mod burner_fuel;
 pub mod inserters;
 pub(crate) mod fluids;
 pub mod modules;
@@ -26,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::models::{LayoutResult, MachineSpec, RegionKind, SolverResult};
+use burner_fuel::check_burner_fuel;
 use power::{check_pole_network_connectivity, check_power_coverage};
 use rustc_hash::FxHashSet;
 
@@ -1078,6 +1080,7 @@ pub fn validate(
     let checks: Vec<Box<dyn Fn() -> Vec<ValidationIssue> + Send + Sync>> = vec![
         Box::new(|| check_power_coverage(layout)),
         Box::new(|| check_pole_network_connectivity(layout)),
+        Box::new(|| check_burner_fuel(layout)),
         Box::new(|| inserters::check_inserter_chains(layout, solver)),
         Box::new(|| inserters::check_inserter_direction(layout)),
         Box::new(|| inserters::check_row_output_lane_budget(layout, solver)),
