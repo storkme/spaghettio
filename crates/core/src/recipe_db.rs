@@ -335,7 +335,7 @@ fn category_machines(category: &str) -> &'static [&'static str] {
         "electromagnetics" => &["electromagnetic-plant"],
         "cryogenics" | "cryogenics-or-assembling" => &["cryogenic-plant"],
         "metallurgy" | "metallurgy-or-assembling" | "pressing" => &["foundry"],
-        "organic" | "organic-or-assembling" => &["biochamber"],
+        "organic" => &["biochamber"],
         "centrifuging" => &["centrifuge"],
         // Fulgora scrap economy (docs/rfc-solver-net-flow.md spike): both
         // categories are excluded from normal solving by
@@ -346,6 +346,33 @@ fn category_machines(category: &str) -> &'static [&'static str] {
         "recycling" | "recycling-or-hand-crafting" => &["recycler"],
         _ => &[],
     }
+}
+
+/// #461 part (a) follow-up: does `category` have AT LEAST ONE electric
+/// machine among its valid options? Used by `solver::avoid_burner_recipes`
+/// to decide whether a burner recipe found in a solve's result has a
+/// genuine electric alternative producer for the same item worth
+/// re-solving toward — a category like `smelting` lists `electric-furnace`
+/// alongside `stone-furnace`/`steel-furnace`, so a recipe under it is not
+/// "burner-only" even when the specific machine chosen happens to be a
+/// furnace.
+///
+/// A `[]` result from [`category_machines`] is ambiguous on its own — it
+/// covers BOTH the general-purpose fall-through categories
+/// ([`GENERAL_CATEGORIES`], always electric — the caller's assembler tier)
+/// AND unsupported categories (`rocket-building`,
+/// `captive-spawner-process`, …) that [`machine_handles_category`] refuses
+/// for every machine and that never survive to a real LP column. Only the
+/// first case means "electric machine available" — an unsupported
+/// category must return `false`, or an `organic` recipe whose product is
+/// ALSO (uselessly) claimed by an unsupported-category recipe would read
+/// as having an electric alternative and trigger a spurious re-solve.
+pub fn category_has_electric_machine(category: &str) -> bool {
+    let valid = category_machines(category);
+    if valid.is_empty() {
+        return GENERAL_CATEGORIES.contains(&category);
+    }
+    valid.iter().any(|m| crate::common::needs_electricity(m))
 }
 
 /// Categories that genuinely run on general-purpose assemblers. An explicit
@@ -364,6 +391,16 @@ const GENERAL_CATEGORIES: &[&str] = &[
     "electronics-or-assembling",
     "electronics-with-fluid",
     "organic-or-hand-crafting",
+    // #461 part (a): the biochamber half of this category is a burner
+    // machine (fuel category `nutrients`) and the engine delivers no fuel
+    // to anything, so a biochamber placed here validates clean and
+    // produces 0/s (issue #461's rocket-fuel example: 0 errors, 0
+    // warnings, 0.00/s measured). The assembler half is what the engine
+    // can actually power — fall through to the caller's tier default, the
+    // same way a plain `crafting` recipe does. `organic` alone (no
+    // `-or-assembling`) is unaffected: those recipes are biochamber-only
+    // in the game and stay mapped to `&["biochamber"]` above.
+    "organic-or-assembling",
     "parameters",
 ];
 
@@ -563,17 +600,129 @@ mod tests {
         let recipe = Recipe { category: "pressing".into(), ..recipe.clone() };
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "foundry");
 
-        // organic → biochamber
+        // organic → biochamber (unaffected by #461 part (a); these
+        // recipes are biochamber-only in the game, no assembler fallback).
         let recipe = Recipe { category: "organic".into(), ..recipe.clone() };
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "biochamber");
 
-        // organic-or-assembling → biochamber
+        // organic-or-assembling → assembler tier (#461 part (a)): the
+        // biochamber is a burner machine and the engine never delivers
+        // fuel to it, so a biochamber placed on this category validates
+        // clean and produces 0/s. Fall through to the caller's tier
+        // default, same as a plain `crafting` recipe, since every one of
+        // these recipes can also be crafted in an assembler in the game.
         let recipe = Recipe { category: "organic-or-assembling".into(), ..recipe.clone() };
-        assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "biochamber");
+        assert_eq!(
+            machine_for_recipe(&recipe, "assembling-machine-3"),
+            "assembling-machine-3"
+        );
 
         // chemistry-or-cryogenics still maps to chemical-plant
         let recipe = Recipe { category: "chemistry-or-cryogenics".into(), ..recipe.clone() };
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "chemical-plant");
+    }
+
+    /// #461 part (a) negative pin: a palette (or hand-edited URL, same path
+    /// `category_mismatch_rejected` guards) that asks for `biochamber` on an
+    /// `organic-or-assembling` recipe must be refused, not silently
+    /// accepted. This is deliberate — the engine cannot fuel a biochamber
+    /// (burner, fuel category `nutrients`, nothing delivers it), so a
+    /// config that names one here should get a clear `CategoryNotSupported`
+    /// refusal at solve time, not a layout that validates clean and
+    /// produces 0/s. `biochamber` remains valid for the pure `organic`
+    /// category (unaffected below), which is the only category it is still
+    /// listed under in `category_machines`.
+    #[test]
+    fn organic_or_assembling_palette_rejects_biochamber() {
+        let recipe = make_recipe("organic-or-assembling");
+        let err = machine_can_run_recipe("biochamber", &recipe).unwrap_err();
+        assert!(
+            matches!(err, MachineIncompatibility::CategoryNotSupported { .. }),
+            "expected CategoryNotSupported, got {err:?}"
+        );
+
+        // Contrast: biochamber is still accepted for the pure `organic`
+        // category (no `-or-assembling` half to fall through from).
+        let organic_recipe = make_recipe("organic");
+        machine_can_run_recipe("biochamber", &organic_recipe)
+            .expect("biochamber still handles the pure organic category");
+    }
+
+    /// #461 part (a) happy-path pin: this is what the whole fallback rests
+    /// on. In the game, rocket fuel (solid-fuel + light-oil) is craftable
+    /// in assembling-machine-2/3 (both model fluid inputs) and in the
+    /// biochamber — only assembling-machine-1 lacks fluid boxes. The
+    /// bundled data must agree, or routing `organic-or-assembling` to the
+    /// assembler tier would be routing it to a machine that can't actually
+    /// take the fluid ingredient.
+    ///
+    /// Uses the REAL `rocket-fuel` recipe from the loaded DB (not a
+    /// synthetic one) — `find_recipe_for_item` prefers the name-matched
+    /// entry, so this is the `organic-or-assembling` recipe itself, not
+    /// one of its siblings (`rocket-fuel-from-jelly`, `ammonia-rocket-fuel`).
+    #[test]
+    fn rocket_fuel_runs_on_am2_am3_not_am1() {
+        let recipe = find_recipe_for_item("rocket-fuel").expect("rocket-fuel recipe exists");
+        assert_eq!(
+            recipe.category, "organic-or-assembling",
+            "sanity check: this must be the organic-or-assembling rocket-fuel recipe, \
+             not a sibling like rocket-fuel-from-jelly"
+        );
+
+        machine_can_run_recipe("assembling-machine-2", recipe)
+            .expect("AM2 has fluid boxes and must handle rocket-fuel's light-oil ingredient");
+        machine_can_run_recipe("assembling-machine-3", recipe)
+            .expect("AM3 has fluid boxes and must handle rocket-fuel's light-oil ingredient");
+
+        let err = machine_can_run_recipe("assembling-machine-1", recipe).unwrap_err();
+        assert!(
+            matches!(err, MachineIncompatibility::FluidNotSupported { .. }),
+            "AM1 has no fluid boxes and must refuse rocket-fuel's light-oil ingredient, \
+             got {err:?}"
+        );
+    }
+
+    /// #461 part (a) round 7 pin, both arms of `category_has_electric_machine`'s
+    /// `[]` branch: `GENERAL_CATEGORIES` membership (electric — the caller's
+    /// assembler tier) vs an unsupported category (no machine handles it at
+    /// all, so it never survives to a real LP column and must NOT read as
+    /// "electric available"). Both `category_machines` non-empty arms are
+    /// pinned too, for completeness: `smelting` (has an electric sibling)
+    /// and `organic` (biochamber-only, no electric sibling).
+    #[test]
+    fn category_has_electric_machine_both_arms() {
+        // Non-empty `category_machines` result, electric sibling present.
+        assert!(
+            category_has_electric_machine("smelting"),
+            "smelting lists electric-furnace alongside the burner furnaces"
+        );
+        // Non-empty `category_machines` result, burner-only.
+        assert!(
+            !category_has_electric_machine("organic"),
+            "organic maps only to biochamber, a burner"
+        );
+        // Empty `category_machines` result, GENERAL_CATEGORIES member —
+        // always falls through to the (electric) assembler tier.
+        assert!(
+            category_has_electric_machine("crafting"),
+            "crafting is a GENERAL_CATEGORIES fall-through to the assembler tier"
+        );
+        assert!(
+            category_has_electric_machine("organic-or-assembling"),
+            "organic-or-assembling is a GENERAL_CATEGORIES fall-through since #461 part (a)"
+        );
+        // Empty `category_machines` result, NOT a GENERAL_CATEGORIES member
+        // — unsupported everywhere (`machine_handles_category` refuses
+        // every machine for it), so it must not read as "electric
+        // available" even though the raw slice is also `[]` here.
+        assert!(
+            !category_has_electric_machine("rocket-building"),
+            "rocket-building is unsupported (silo semantics unmodeled), not general-purpose"
+        );
+        assert!(
+            !category_has_electric_machine("captive-spawner-process"),
+            "captive-spawner-process is unsupported everywhere, not general-purpose"
+        );
     }
 
     fn palette_with(entries: &[(&str, &str)]) -> MachinePalette {

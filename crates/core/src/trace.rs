@@ -751,6 +751,75 @@ pub enum TraceEvent {
         machines: Vec<MachineTrace>,
     },
 
+    /// #461 part (a) production-path fix (`solver::avoid_burner_recipes`):
+    /// a solve placed a burner machine (the engine delivers no fuel to any
+    /// burner) for one or more recipes whose product item has at least one
+    /// OTHER producer that a tier-feasible electric machine CAN run, so
+    /// those recipes were added to the exclusion set and the target was
+    /// re-solved. This is a BOUNDED FIXPOINT, not a single re-solve: one
+    /// event is emitted per attempt (`attempt`, 1-indexed, capped at 4) —
+    /// but attempts continue ONLY from an ACCEPTED result (strictly fewer
+    /// burners than the current best); the FIRST non-improving attempt
+    /// (errored, tied, or worse) ends the loop immediately, and that
+    /// rejected attempt's OWN burners are never examined for a follow-up
+    /// exclusion. The exclusion set only grows across ACCEPTED attempts
+    /// (monotone), so this always terminates within the cap.
+    ///
+    /// Residual, stated plainly: `lubricant` from `{jelly}` stays on
+    /// `biolubricant`/biochamber — a single-attempt sequence. Attempt 1
+    /// excludes `biolubricant` (its product, `lubricant`, has a
+    /// tier-feasible electric alternative) and re-solves; with only
+    /// `jelly` supplied, the cheapest remaining path pulls a
+    /// coal-liquefaction chain from free root supply, landing on a plan
+    /// with THREE OTHER biochamber recipes (burnt-spoilage, biosulfur,
+    /// bioflux) — 1 → 3 burners, strictly worse, rejected, loop stops.
+    /// The residual biochamber is exactly what #461 part (b)'s
+    /// `burner-fuel` validator check exists to make LOUD, not silently
+    /// hide — see `solver::avoid_burner_recipes`'s doc comment for why the
+    /// fixpoint deliberately does not probe past that rejection.
+    ///
+    /// `burners_before`/`burners_after` count `!needs_electricity` machine
+    /// ENTRIES (not `Σ count` — a count of distinct burner-recipe rows in
+    /// `SolverResult::machines`, matching how this mechanism reasons about
+    /// "how many burner recipes are in play") in the CURRENT BEST result
+    /// going into this attempt vs. this attempt's re-solve result;
+    /// `burners_after` is `None` if the re-solve errored — distinguishing
+    /// the three outcomes `accepted` alone collapses: errored, re-solved
+    /// but not fewer, or genuinely fewer. `machines_before`/
+    /// `machines_after` are the same idea over the TOTAL machine-entry
+    /// count (burner and electric together), so a reader can see what a
+    /// steering step traded — e.g. rocket-fuel's accepted re-solve grows
+    /// the plan (more raw-input refining) to lose the burner. There is
+    /// deliberately no cost arbiter here: a burner-free (or fewer-burner)
+    /// plan is preferred over a cheaper one that still contains a dead
+    /// machine, by design — the whole point is that an unfuelled burner
+    /// validates clean and produces nothing, so "cheaper but broken" is
+    /// not a competitive alternative to "costlier but works".
+    ///
+    /// `accepted` is `true` only when this attempt's re-solve succeeded
+    /// AND strictly reduced the burner count from the CURRENT BEST going
+    /// into it — accepting a partial reduction, not only a burner-free
+    /// result: a multi-target solve can mix a STEERABLE burner (e.g.
+    /// `rocket-fuel-from-jelly`, which has an electric alternative) with
+    /// an UNSTEERABLE one in the same result (e.g. `pentapod-egg`,
+    /// biochamber-only) — a re-solve that removes only the steerable one
+    /// still has fewer burners than the current best and must be kept.
+    /// Whenever an attempt's `accepted` is `false`, the fixpoint stops
+    /// there and the last-accepted (or, on attempt 1, the original) result
+    /// is what actually got used. Absence of ANY event for a solve means
+    /// no burner machine had a tier-feasible electric alternative to steer
+    /// toward at all — no re-solve was even attempted.
+    BurnerRecipeExcluded {
+        target_item: String,
+        excluded_recipes: Vec<String>,
+        accepted: bool,
+        attempt: usize,
+        burners_before: usize,
+        burners_after: Option<usize>,
+        machines_before: usize,
+        machines_after: Option<usize>,
+    },
+
     /// The layout pipeline ran once, hit `JunctionGrowthCapped` events,
     /// and is being re-run with extra vertical gap inserted after each
     /// row whose successor junction couldn't fit. Emitted at the start

@@ -18,7 +18,11 @@
 //! `netflow::solve_netflow_multi_with_options` rather than the
 //! `solve_multi_with_palette_exclusions_quality_and_modules` wrapper — the
 //! wrapper cannot pass the declared research-productivity axis. Every other
-//! option is left at the value that wrapper set.
+//! option is left at the value that wrapper set, INCLUDING #461 part (a)'s
+//! post-solve burner-avoidance fixpoint (`solver::avoid_burner_recipes`,
+//! `pub` specifically so this file can call it directly) — bypassing the
+//! wrapper must not mean bypassing that too, or this fixture and the
+//! wasm/CLI path could disagree about whether a target ships on a burner.
 //!                       boundary uses). Replaces the <item> <rate>
 //!                       positionals; every flag below still applies. N=1
 //!                       is bit-identical to the plain positional form by
@@ -378,29 +382,69 @@ fn main() {
     // `solve_with_palette_exclusions_and_quality` call by construction
     // (kill criterion 5), so there is one solve code path here, not a
     // single/multi fork.
+    let netflow_options = spaghettio_core::netflow::NetflowOptions {
+        quality,
+        module_policy: spaghettio_core::module_policy::ModulePolicy::default(),
+        research_productivity: research_productivity.clone(),
+        // Everything else exactly as
+        // `solve_multi_with_palette_exclusions_quality_and_modules` set
+        // it — this call replaces that wrapper only to reach the one
+        // field it cannot pass, and must not change anything else.
+        ..Default::default()
+    };
+    // No `--palette` flag on this tool today — `MachinePalette::default()`
+    // is what both the initial solve and the burner-avoidance re-solve
+    // below must agree on (one binding, not two independently-constructed
+    // defaults) so a future palette flag can't add one without the other.
+    let palette = MachinePalette::default();
     let solved = spaghettio_core::netflow::solve_netflow_multi_with_options(
         &targets,
         &input_set,
-        &MachinePalette::default(),
+        &palette,
         &tier,
         &FxHashSet::default(),
         spaghettio_core::netflow::RecipeScope::Free,
         &spaghettio_core::netflow::CostTable::default(),
-        &spaghettio_core::netflow::NetflowOptions {
-            quality,
-            module_policy: spaghettio_core::module_policy::ModulePolicy::default(),
-            research_productivity: research_productivity.clone(),
-            // Everything else exactly as
-            // `solve_multi_with_palette_exclusions_quality_and_modules` set
-            // it — this call replaces that wrapper only to reach the one
-            // field it cannot pass, and must not change anything else.
-            ..Default::default()
-        },
+        &netflow_options,
     )
     .unwrap_or_else(|e| {
         eprintln!("solve failed for {} on {tier}: {e}", targets_desc());
         std::process::exit(1);
     });
+    // #461 part (a): this example calls `solve_netflow_multi_with_options`
+    // directly (above) rather than any `solver.rs` entry point, because it
+    // needs to pass the declared research-productivity axis none of those
+    // wrappers can carry — so it bypasses `avoid_burner_recipes` unless
+    // called explicitly here too. Without this, a target that ships on an
+    // unfuelled burner in a sim fixture (this tool's whole output) could
+    // silently disagree with what the wasm/CLI production path would have
+    // produced for the identical target+inputs+tier, defeating the parity
+    // this example exists to guarantee (see the doc comment atop this
+    // file). `avoid_burner_recipes` is `pub` specifically so this can call
+    // it directly with a closure that re-invokes the SAME netflow call —
+    // and the SAME `palette` this export used, so the gate's
+    // tier-feasibility check agrees with what this re-solve would actually
+    // place (round 9's palette-aware fix: the gate must resolve candidate
+    // machines the same way the real re-solve does).
+    let solved = spaghettio_core::solver::avoid_burner_recipes(
+        solved,
+        &targets_desc(),
+        &FxHashSet::default(),
+        &palette,
+        &tier,
+        |excl| {
+            spaghettio_core::netflow::solve_netflow_multi_with_options(
+                &targets,
+                &input_set,
+                &palette,
+                &tier,
+                excl,
+                spaghettio_core::netflow::RecipeScope::Free,
+                &spaghettio_core::netflow::CostTable::default(),
+                &netflow_options,
+            )
+        },
+    );
 
     let mut opts = LayoutOptions {
         direct_insertion: di,

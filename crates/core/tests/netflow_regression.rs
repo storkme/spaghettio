@@ -26,10 +26,12 @@
 //! in the same PR (#635) that caught the over-deletion.
 
 use rustc_hash::FxHashSet;
+use spaghettio_core::common;
 use spaghettio_core::models::SolverResult;
 use spaghettio_core::netflow::{solve_netflow, solve_netflow_with_options, CostTable, NetflowOptions, RecipeScope};
 use spaghettio_core::recipe_db::{self, MachinePalette};
-use spaghettio_core::solver::SolverError;
+use spaghettio_core::solver::{self, SolverError};
+use spaghettio_core::trace::{self, TraceEvent};
 
 fn set(items: &[&str]) -> FxHashSet<String> {
     items.iter().map(|s| s.to_string()).collect()
@@ -428,6 +430,687 @@ fn golden_epsilon_sensitivity() {
                 "ε ({eo_mul},{em_mul}): count changed for {br}: {bc} vs {ac}"
             );
         }
+    }
+}
+
+/// #461 part (a) follow-up — solver-level pin. The `recipe_db.rs` unit
+/// test fixed alongside this only pins `machine_for_recipe`'s lookup
+/// table; this pins the actual entry point `run_e2e` (and the web app)
+/// call — `solver::solve_with_exclusions` — so a future palette or
+/// category change that reintroduces a burner anywhere on the machine-
+/// selection path trips a test against the real pipeline, not just the
+/// table lookup.
+///
+/// Before #461 part (a), `organic-or-assembling` recipes resolved to
+/// `biochamber` — a burner (fuel category `nutrients`) — and nothing in
+/// the engine delivers burner fuel, so the layout validated clean and
+/// produced 0/s (issue #461's rocket-fuel example: 0 errors, 0 warnings,
+/// 0.00/s measured, census `no_fuel: 8`).
+///
+/// Two of the six `organic-or-assembling` recipes, each solved off a
+/// single raw input so the LP has no other recipe to reach for:
+/// - `rocket-fuel` — `light-oil` supplies both itself (direct, fluid
+///   ingredient) and `solid-fuel` (via `solid-fuel-from-light-oil`,
+///   category `chemistry` → chemical-plant, electric).
+/// - `nutrients-from-spoilage` — targeted via its product `nutrients`
+///   (the item name differs from the recipe name here, unlike
+///   rocket-fuel).
+///
+/// **Both items have OTHER producer recipes outside the six, and free-mode
+/// cost selection is not shy about reaching for them** — discovered
+/// empirically writing this test, not something to leave implicit:
+/// `rocket-fuel` is ALSO produced by `rocket-fuel-from-jelly` (pure
+/// `organic` — biochamber; out of #461 part (a)'s scope, a separate task's
+/// concern) and `ammonia-rocket-fuel` (`chemistry-or-cryogenics` —
+/// chemical-plant); `nutrients` is ALSO produced by
+/// `nutrients-from-yumako-mash` and `nutrients-from-bioflux` (both pure
+/// `organic` — biochamber) besides the other two `-or-assembling` siblings
+/// (`nutrients-from-fish`, `nutrients-from-biter-egg`). Root resources with
+/// no recipe of their own (`jellynut`, `yumako`, `ammoniacal-solution`, …)
+/// are automatically free supply in the LP regardless of what
+/// `available_inputs` lists (`s_eligible` in netflow.rs — anything with no
+/// in-closure producer is eligible), so a first attempt at this test that
+/// supplied only `light-oil` and left `rocket-fuel-from-jelly` uncontested
+/// actually solved via the biochamber path (cheaper here: fewer, faster
+/// machines dominated the raw-input weight disadvantage) — the OPPOSITE
+/// of what this test exists to catch. All non-`-or-assembling` producers
+/// (and the `-or-assembling` siblings not under test) are excluded below
+/// so the solve is forced through the recipe #461 part (a) actually fixed.
+#[test]
+fn issue_461_no_burner_machines_in_solver_result() {
+    let assert_no_burners = |item: &str, inputs: &FxHashSet<String>, excluded: &FxHashSet<String>| {
+        let sr = solver::solve_with_exclusions(item, 1.0, inputs, "assembling-machine-3", excluded)
+            .unwrap_or_else(|e| panic!("{item} solves: {e}"));
+        for m in &sr.machines {
+            assert!(
+                common::needs_electricity(&m.entity),
+                "#461: solving {item} placed a burner machine ({} for recipe {}) — nothing \
+                 in the engine delivers burner fuel, so this layout would validate clean \
+                 and produce 0/s",
+                m.entity,
+                m.recipe,
+            );
+        }
+        sr
+    };
+
+    let rocket_fuel_result = assert_no_burners(
+        "rocket-fuel",
+        &set(&["light-oil"]),
+        &set(&["rocket-fuel-from-jelly", "ammonia-rocket-fuel"]),
+    );
+    assert_no_burners(
+        "nutrients",
+        &set(&["spoilage"]),
+        &set(&[
+            "nutrients-from-yumako-mash",
+            "nutrients-from-bioflux",
+            "nutrients-from-fish",
+            "nutrients-from-biter-egg",
+        ]),
+    );
+
+    // "Electric" alone isn't the whole claim — the placed machine must also
+    // be one the recipe DB actually says can run this recipe (fluid boxes,
+    // ingredient slots, category all agree), not just happen to need grid
+    // power. Pins "electric" and "can craft it" together, next to
+    // `recipe_db::tests::rocket_fuel_runs_on_am2_am3_not_am1`, which pins
+    // the same fact from the other side (the lookup table, not a live
+    // solve).
+    let rocket_fuel_machine = rocket_fuel_result
+        .machines
+        .iter()
+        .find(|m| m.recipe == "rocket-fuel")
+        .expect("rocket-fuel recipe must appear in its own solve");
+    let rocket_fuel_recipe =
+        recipe_db::find_recipe_for_item("rocket-fuel").expect("rocket-fuel recipe exists");
+    assert!(
+        recipe_db::machine_can_run_recipe(&rocket_fuel_machine.entity, rocket_fuel_recipe).is_ok(),
+        "#461: solver placed {} for rocket-fuel, but recipe_db::machine_can_run_recipe says \
+         that machine can't actually run this recipe",
+        rocket_fuel_machine.entity,
+    );
+}
+
+/// #461 follow-up — the AM1 question, pinned rather than asserted.
+/// `organic-or-assembling` now sits in `GENERAL_CATEGORIES` (`recipe_db.rs`)
+/// alongside every other assembler-tier category, and every recipe in that
+/// set is checked by the SAME function, `machine_can_run_recipe`, in the
+/// SAME order: ingredient-slot count, then fluid support, then category.
+/// There is no tier-bump/auto-uptier mechanism anywhere in netflow.rs or
+/// solver.rs (checked): a machine-incompatible column is either a hard
+/// error (when it is the target's only producer) or silently dropped (when
+/// an alternative exists) — never routed to a bigger machine.
+///
+/// **Outcome class, pinned against `processing-unit`** (category
+/// `electronics-with-fluid`, also a `GENERAL_CATEGORIES` member, needs
+/// sulfuric-acid): both `processing-unit`@AM1 and `rocket-fuel`@AM1 are a
+/// HARD `SolverError::IncompatibleMachine` — never `Ok`, never a
+/// substituted machine. Under `RecipeScope::Free` (what
+/// `solve_with_exclusions` always uses), an incompatible column that is
+/// the target's ONLY producer surfaces as this hard error instead of being
+/// silently dropped (netflow.rs's `dropped_incompat` bookkeeping) — true
+/// for both recipes here, since every other ingredient is supplied
+/// directly.
+///
+/// **The specific `reason` genuinely differs, and that is expected, not a
+/// bug**: `processing-unit` needs 3 ingredients (electronic-circuit,
+/// advanced-circuit, sulfuric-acid) against AM1's 2-slot limit, so the
+/// SLOT-COUNT check (which runs first) fires — `TooManyIngredients`, the
+/// fluid check never even runs. `rocket-fuel` needs exactly 2
+/// (solid-fuel, light-oil), clears the slot check, and hits the FLUID
+/// check instead — `FluidNotSupported`. Both are the same ordered gate in
+/// the same shared function; which sub-check fires depends on each
+/// recipe's own shape, not on any divergence in machine-selection logic.
+/// (`advanced-circuit`'s own 3-ingredient recipe is excluded even though
+/// it is supplied directly: free mode still considers it as a candidate
+/// column, and `dropped_incompat` surfaces whichever incompatible column
+/// was enumerated FIRST — not necessarily the target's own producer — so
+/// leaving it in would report `advanced-circuit`'s own refusal instead of
+/// `processing-unit`'s.)
+#[test]
+fn issue_461_am1_fluid_recipe_outcome_matches_processing_unit() {
+    fn outcome_class(result: &Result<SolverResult, SolverError>) -> &'static str {
+        match result {
+            Ok(_) => "solved",
+            Err(SolverError::IncompatibleMachine { .. }) => "IncompatibleMachine",
+            Err(SolverError::MissingCraftingSpeed { .. }) => "MissingCraftingSpeed",
+            Err(SolverError::UnsupportedSelfLoop { .. }) => "UnsupportedSelfLoop",
+            Err(SolverError::UnsupportedCycle { .. }) => "UnsupportedCycle",
+            Err(SolverError::LpFailed { .. }) => "LpFailed",
+        }
+    }
+
+    let processing_unit_result = solver::solve_with_exclusions(
+        "processing-unit",
+        1.0,
+        &set(&["electronic-circuit", "advanced-circuit", "sulfuric-acid"]),
+        "assembling-machine-1",
+        &set(&["advanced-circuit"]),
+    );
+    let rocket_fuel_result = solver::solve_with_exclusions(
+        "rocket-fuel",
+        1.0,
+        &set(&["solid-fuel", "light-oil"]),
+        "assembling-machine-1",
+        // Same reasoning as `issue_461_no_burner_machines_in_solver_result`'s
+        // doc comment: `rocket-fuel-from-jelly` / `ammonia-rocket-fuel` are
+        // OTHER producers of `rocket-fuel`, and `solid-fuel-from-*` are
+        // other producers of the directly-supplied `solid-fuel` — left in,
+        // free mode can route around the AM1-incompatible `rocket-fuel`
+        // column entirely (solving via the biochamber path) instead of
+        // hitting the refusal this test exists to pin, or `dropped_incompat`
+        // can surface one of these siblings' refusal instead of
+        // `rocket-fuel`'s own. Excluding them forces `rocket-fuel` to be
+        // the only candidate, exactly like `advanced-circuit` is excluded
+        // for `processing-unit` above.
+        &set(&[
+            "rocket-fuel-from-jelly",
+            "ammonia-rocket-fuel",
+            "solid-fuel-from-light-oil",
+            "solid-fuel-from-petroleum-gas",
+            "solid-fuel-from-heavy-oil",
+            "solid-fuel-from-ammonia",
+        ]),
+    );
+
+    // Same outcome CLASS: both a hard refusal, neither a solve, neither
+    // any other SolverError variant (in particular, no tier bump — that
+    // would show up as `Ok` with a machine other than AM1, not as a
+    // distinct error variant, since no such mechanism exists to produce
+    // one).
+    assert_eq!(
+        outcome_class(&processing_unit_result),
+        outcome_class(&rocket_fuel_result),
+        "rocket-fuel@AM1 must produce the same outcome CLASS as processing-unit@AM1 — both \
+         route through the same machine_can_run_recipe gate; got processing-unit={:?}, \
+         rocket-fuel={:?}",
+        processing_unit_result,
+        rocket_fuel_result,
+    );
+
+    // The specific reason legitimately differs by recipe shape (see doc
+    // comment) — pinned separately so a regression in either direction is
+    // caught precisely rather than papered over by the coarser class check
+    // above.
+    assert!(
+        matches!(
+            processing_unit_result,
+            Err(SolverError::IncompatibleMachine {
+                reason: recipe_db::MachineIncompatibility::TooManyIngredients { limit: 2, .. },
+                ..
+            })
+        ),
+        "processing-unit@AM1 outcome changed — update this test's doc comment: {processing_unit_result:?}"
+    );
+    assert!(
+        matches!(
+            rocket_fuel_result,
+            Err(SolverError::IncompatibleMachine {
+                reason: recipe_db::MachineIncompatibility::FluidNotSupported { .. },
+                ..
+            })
+        ),
+        "rocket-fuel@AM1 outcome changed — update this test's doc comment: {rocket_fuel_result:?}"
+    );
+}
+
+/// #461 part (a) round 5 — the production-path gap rounds 1-2's exclusion-
+/// guarded tests couldn't see, fixed as a POST-SOLVE re-solve
+/// (`solver::avoid_burner_recipes`), not the LP cost penalty round 3 tried
+/// first (`BURNER_MACHINE_COST_FACTOR`, reverted): any coefficient change
+/// on any LP column — even a losing one — can shift the simplex's
+/// floating-point path for the WHOLE shared LP instance, and pure-`organic`
+/// recipes (`bioplastic` → plastic-bar, `biosulfur` → sulfur, …) sit in far
+/// more fixtures' demand closures than #461 is about, so the penalty moved
+/// 11 calibration fixtures' manifest hashes by float noise even after
+/// narrowing it to burner-only categories. Doing it strictly AFTER the LP
+/// has run — as a policy decision over the output, re-solving only when a
+/// burner actually appears — keeps every other fixture's LP untouched.
+///
+/// Correction to round 3's doc comment: `solver::solve` is NOT the wasm
+/// `solve` binding's entry point — wasm's `solve`/`solve_with_palette`
+/// actually call `solver::solve_with_palette_exclusions_quality_and_modules`.
+/// Both families (and the multi-target one) share the same
+/// `avoid_burner_recipes` post-solve step, so pinning it here via
+/// `solver::solve` still exercises the real mechanism.
+///
+/// Found empirically: the SIX-ORE set (`iron-ore`, `copper-ore`, `coal`,
+/// `stone`, `crude-oil`, `water` — what the web passes by default)
+/// targeting `rocket-fuel` at AM1, with NO exclusions (real callers never
+/// exclude anything), selects `rocket-fuel-from-jelly` on a biochamber in
+/// its FIRST solve — AM1 can't run the direct `rocket-fuel` recipe (fluid
+/// check), and the jellynut/yumako-rooted chain's raw-input cost undercuts
+/// the electric `ammonia-rocket-fuel` alternative. `avoid_burner_recipes`
+/// then excludes `rocket-fuel-from-jelly` (its product, `rocket-fuel`, has
+/// other producers whose category has an electric machine) and re-solves
+/// once, landing on the electric chain — burner-free, so round 6's
+/// acceptance rule takes it. Asserts the outcome (no burner in the final
+/// result) AND that the re-solve trace event fired with `accepted: true` —
+/// confirming the mechanism both engaged AND kept its result, not that the
+/// LP happened to avoid a burner on its own.
+#[test]
+fn issue_461_production_path_prefers_electric_rocket_fuel() {
+    let _guard = trace::start_trace();
+    let inputs = set(&["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]);
+    let sr = solver::solve("rocket-fuel", 1.0, &inputs, "assembling-machine-1")
+        .unwrap_or_else(|e| panic!("rocket-fuel solves: {e}"));
+    for m in &sr.machines {
+        assert!(
+            common::needs_electricity(&m.entity),
+            "#461: the production path (solver::solve, no exclusions) placed a burner \
+             machine ({} for recipe {}) for rocket-fuel@AM1 off the six-ore set — the \
+             post-solve re-solve should have steered to the electric ammonia-rocket-fuel \
+             alternative instead",
+            m.entity,
+            m.recipe,
+        );
+    }
+    let events = trace::drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { accepted: true, .. })),
+        "expected an ACCEPTED BurnerRecipeExcluded trace event — the re-solve here is \
+         burner-free and round 6's acceptance rule must keep it — got: {events:?}"
+    );
+}
+
+/// #461 part (a) round 5, companion to the pin above and renamed to match
+/// the mechanism (was `issue_461_burner_penalty_does_not_refuse_sole_
+/// producer`, from the reverted LP-penalty design): `avoid_burner_recipes`
+/// STEERS when an electric alternative exists, it does not REFUSE — and,
+/// unlike a cost penalty, it does not even ATTEMPT a re-solve when none
+/// does. `pentapod-egg` is biochamber-only in the game (pure `organic`
+/// category, no assembler-tier alternative anywhere in the recipe graph),
+/// so no OTHER producer of `pentapod-egg` clears the
+/// `category_has_electric_machine` bar — nothing gets excluded, and the
+/// FIRST solve's result is returned untouched. Asserted via the trace
+/// event's ABSENCE, not just the outcome: a second solve that happened to
+/// land on the same machine would pass the outcome check but not this one.
+#[test]
+fn issue_461_sole_burner_producer_skips_resolve() {
+    let _guard = trace::start_trace();
+    let inputs = set(&["nutrients", "water"]);
+    let sr = solver::solve("pentapod-egg", 0.2, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("pentapod-egg solves: {e}"));
+    let m = sr
+        .machines
+        .iter()
+        .find(|m| m.recipe == "pentapod-egg")
+        .expect("pentapod-egg recipe must appear in its own solve");
+    assert_eq!(
+        m.entity, "biochamber",
+        "pentapod-egg is biochamber-only in the game; got {}",
+        m.entity
+    );
+    let events = trace::drain_events();
+    assert!(
+        !events.iter().any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. })),
+        "no re-solve should have been attempted — pentapod-egg has no electric alternative \
+         producer — but got: {events:?}"
+    );
+}
+
+/// #461 part (a) round 5: the common, unaffected case — a solve that never
+/// chose a burner in the first place must perform NO re-solve at all.
+/// `avoid_burner_recipes` is a no-op unless `result.machines` actually
+/// contains a burner; electronic-circuit from ore (iron-ore, copper-ore,
+/// coal) never touches `organic` or any other burner-only category, so
+/// this pins the fast path: zero `BurnerRecipeExcluded` events, meaning
+/// the netflow LP ran exactly once — the property every all-electric
+/// calibration fixture depends on for its LP to stay bit-identical.
+#[test]
+fn issue_461_no_burner_no_resolve_for_electronic_circuit_from_ore() {
+    let _guard = trace::start_trace();
+    let inputs = set(&["iron-ore", "copper-ore", "coal"]);
+    let sr = solver::solve("electronic-circuit", 10.0, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("electronic-circuit solves: {e}"));
+    assert!(!sr.machines.is_empty(), "sanity: solve should place machines");
+    let events = trace::drain_events();
+    assert!(
+        !events.iter().any(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. })),
+        "electronic-circuit from ore never touches a burner machine — no re-solve should \
+         have been attempted, but got: {events:?}"
+    );
+}
+
+/// #461 part (a) round 6, tightened in round 7, re-verified against round
+/// 8's bounded fixpoint — the rejection path, and its ACTUAL attempt
+/// sequence rather than an assumed one. `avoid_burner_recipes` attempts a
+/// re-solve whenever a burner has a TIER-FEASIBLE electric alternative
+/// producer, accepting only when `burners_after < burners_before`.
+/// `lubricant` off only `{jelly}` is the case that motivated the rule:
+/// `biolubricant` (`organic`, biochamber) is genuinely cost-optimal here,
+/// and the `lubricant` recipe (`chemistry` → chemical-plant, AM3-feasible)
+/// is a real alternative for the same item, so attempt 1 excludes
+/// `biolubricant` and re-solves — but that re-solve doesn't land on the
+/// simple chemistry chain; it wanders into an 11-machine-type plan
+/// (coal-liquefaction, coal-synthesis, sulfuric-acid, …) carrying THREE
+/// other biochamber recipes (burnt-spoilage, biosulfur, bioflux) — MORE
+/// burners than the one attempt 1 started from (1 → 3), not fewer.
+///
+/// Per the fixpoint's own rule, a rejected attempt stops the WHOLE loop —
+/// it does not examine that rejected re-solve's own burners for a follow-
+/// up attempt (only an ACCEPTED attempt's result becomes the new "current
+/// best" the next iteration examines). So this is a SINGLE-attempt
+/// sequence: attempt 1 only, rejected, fixpoint stops there. Verified
+/// empirically (not assumed) before writing this assertion — the
+/// receipts, not a hoped-for outcome, are what's pinned here.
+/// Consequently `crates/core/tests/e2e.rs`'s
+/// `phase0e1_biolubricant_biochamber` fixture is UNCHANGED by round 8: it
+/// still lands on biolubricant/biochamber and was not edited.
+#[test]
+fn issue_461_burner_resolve_rejected_when_still_burner() {
+    let _guard = trace::start_trace();
+    let inputs = set(&["jelly"]);
+    let sr = solver::solve("lubricant", 5.0, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("lubricant solves: {e}"));
+    let m = sr
+        .machines
+        .iter()
+        .find(|m| m.recipe == "biolubricant")
+        .expect("expected the ORIGINAL biolubricant/biochamber result — the re-solve should \
+                 have been rejected as still-burner, not replaced this");
+    assert_eq!(m.entity, "biochamber", "biolubricant always runs on a biochamber");
+    let events = trace::drain_events();
+    assert_eq!(
+        events.len(),
+        1,
+        "expected exactly ONE attempt (rejected attempts stop the fixpoint immediately \
+         rather than probing further) — got: {events:?}"
+    );
+    match &events[0] {
+        TraceEvent::BurnerRecipeExcluded {
+            accepted, attempt, burners_before, burners_after, machines_before, machines_after, ..
+        } => {
+            assert_eq!(*attempt, 1, "the sole attempt is attempt 1");
+            assert!(!accepted, "expected the re-solve to be REJECTED, got accepted=true");
+            assert_eq!(*burners_before, 1, "original result has 1 burner (biolubricant)");
+            assert_eq!(
+                *burners_after,
+                Some(3),
+                "the re-solve's plan has 3 burners (burnt-spoilage, biosulfur, bioflux) — \
+                 MORE than the original, hence rejected"
+            );
+            assert_eq!(*machines_before, 1, "original plan is exactly the biolubricant row");
+            assert_eq!(
+                *machines_after,
+                Some(12),
+                "the rejected re-solve's plan has 12 total machine entries — a much bigger \
+                 plan traded for a worse burner count, exactly why there's no cost arbiter \
+                 here: it would have been the wrong signal either way"
+            );
+        }
+        other => panic!("expected BurnerRecipeExcluded, got {other:?}"),
+    }
+}
+
+/// #461 part (a) round 8 — the tier-feasibility check. An "electric
+/// alternative" only counts if the caller's `default_machine` tier (for a
+/// `GENERAL_CATEGORIES` recipe) or the category's own canonical machine
+/// (for a specialised category) can actually run it —
+/// `machine_can_run_recipe(machine_for_recipe(other, default_machine),
+/// other).is_ok()`. Calls `solver::avoid_burner_recipes` DIRECTLY (it's
+/// `pub` since round 8, for exactly this kind of isolated check, and for
+/// `sim_export.rs`) with a hand-built `SolverResult` pinning
+/// `rocket-fuel-from-jelly` on a biochamber as the sole machine, so the
+/// test exercises ONLY the tier-feasibility decision, not the LP's own
+/// cost-driven recipe selection (at AM3 the LP would never have chosen
+/// this burner in the first place — see
+/// `issue_461_no_burner_no_resolve_for_electronic_circuit_from_ore`'s
+/// doc comment for the general "never chose one" case). `ammonia-
+/// rocket-fuel` (`chemistry-or-cryogenics` → chemical-plant) is excluded
+/// so the ONLY remaining candidate is the direct `rocket-fuel` recipe
+/// itself (2 ingredients incl. a fluid, `organic-or-assembling` →
+/// `GENERAL_CATEGORIES` → resolves to `default_machine`) — the recipe
+/// whose OWN tier-feasibility genuinely differs between AM1 and AM3.
+///
+/// At AM1: `machine_for_recipe_with_palette` resolves the direct recipe
+/// to AM1 (the default, empty-palette case), and AM1 has no fluid boxes
+/// (`FluidNotSupported`) — not tier-feasible, so NO re-solve is attempted
+/// (the `resolve` closure panics if called, proving it never is; zero
+/// trace events). At AM3: the same recipe resolves to AM3, which has
+/// fluid boxes — tier-feasible, so a re-solve IS attempted (`resolve` is
+/// called; exactly one trace event fires). Both calls pass
+/// `&MachinePalette::default()` — the companion pin
+/// `issue_461_palette_entry_changes_tier_feasibility_verdict` covers the
+/// case where a non-default palette entry is what flips the verdict.
+#[test]
+fn issue_461_tier_feasible_alternative_gates_resolve_attempt() {
+    use spaghettio_core::models::{MachineSpec, SolverResult};
+
+    let synthetic_burner_result = || SolverResult {
+        machines: vec![MachineSpec {
+            entity: "biochamber".to_string(),
+            recipe: "rocket-fuel-from-jelly".to_string(),
+            count: 1.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let excluded = set(&["ammonia-rocket-fuel"]);
+    let palette = MachinePalette::default();
+
+    let _guard = trace::start_trace();
+    let am1_result = solver::avoid_burner_recipes(
+        synthetic_burner_result(),
+        "rocket-fuel",
+        &excluded,
+        &palette,
+        "assembling-machine-1",
+        |_excl| panic!("resolve must not be called at AM1 — the only remaining alternative \
+                         (the direct rocket-fuel recipe) is FluidNotSupported on AM1"),
+    );
+    assert_eq!(
+        am1_result.machines[0].entity, "biochamber",
+        "no tier-feasible alternative at AM1 — the synthetic result must pass through unchanged"
+    );
+    let events = trace::drain_events();
+    assert!(
+        events.is_empty(),
+        "expected NO BurnerRecipeExcluded event at AM1 (no re-solve attempted), got: {events:?}"
+    );
+
+    let _guard = trace::start_trace();
+    let resolve_called = std::cell::Cell::new(false);
+    let am3_result = solver::avoid_burner_recipes(
+        synthetic_burner_result(),
+        "rocket-fuel",
+        &excluded,
+        &palette,
+        "assembling-machine-3",
+        |_excl| {
+            resolve_called.set(true);
+            // The specific re-solve outcome isn't under test here — only
+            // that `avoid_burner_recipes` decided to ATTEMPT one. Erroring
+            // keeps this test independent of the real solve's numbers.
+            Err(SolverError::LpFailed {
+                target: "rocket-fuel".to_string(),
+                detail: "test stub — intentionally not a real solve".to_string(),
+            })
+        },
+    );
+    assert!(
+        resolve_called.get(),
+        "expected resolve to be CALLED at AM3 — the direct rocket-fuel recipe is \
+         tier-feasible there (AM3 has fluid boxes)"
+    );
+    assert_eq!(
+        am3_result.machines[0].entity, "biochamber",
+        "the stub resolve errored, so the original result must be what's returned"
+    );
+    let events = trace::drain_events();
+    assert_eq!(
+        events.len(),
+        1,
+        "expected exactly one BurnerRecipeExcluded event (attempt 1, errored -> rejected), \
+         got: {events:?}"
+    );
+}
+
+/// #461 part (a) round 9 — palette-aware feasibility. The gate must
+/// resolve a candidate machine the SAME way the real re-solve would: via
+/// `machine_for_recipe_with_palette`, honouring the caller's
+/// [`MachinePalette`], not just `default_machine`. Same synthetic
+/// `rocket-fuel-from-jelly`/biochamber setup as the pin above, `ammonia-
+/// rocket-fuel` excluded so the direct `rocket-fuel` recipe (`organic-or-
+/// assembling` → `GENERAL_CATEGORIES`) is the only remaining candidate —
+/// but this time `default_machine` is AM3 (tier-feasible on its own,
+/// per the pin above) while the PALETTE pins `crafting` to AM1. Since
+/// `rocket-fuel`'s category is `organic-or-assembling`, not `crafting`,
+/// a palette entry keyed on the wrong category must NOT change anything
+/// (sanity half); a palette entry keyed on `organic-or-assembling`
+/// itself — the category `GENERAL_CATEGORIES` actually dispatches this
+/// recipe through — pinning it to AM1 must flip the verdict to
+/// infeasible, even though `default_machine` alone says AM3.
+#[test]
+fn issue_461_palette_entry_changes_tier_feasibility_verdict() {
+    use spaghettio_core::models::{MachineSpec, SolverResult};
+
+    let synthetic_burner_result = || SolverResult {
+        machines: vec![MachineSpec {
+            entity: "biochamber".to_string(),
+            recipe: "rocket-fuel-from-jelly".to_string(),
+            count: 1.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let excluded = set(&["ammonia-rocket-fuel"]);
+
+    // Sanity half: a palette entry for an unrelated category (`crafting`)
+    // must not affect `organic-or-assembling`'s resolution — AM3 default
+    // still applies, so a re-solve IS attempted.
+    let mut unrelated_palette = MachinePalette::default();
+    unrelated_palette.by_category.insert("crafting".to_string(), "assembling-machine-1".to_string());
+    let _guard = trace::start_trace();
+    let resolve_called = std::cell::Cell::new(false);
+    solver::avoid_burner_recipes(
+        synthetic_burner_result(),
+        "rocket-fuel",
+        &excluded,
+        &unrelated_palette,
+        "assembling-machine-3",
+        |_excl| {
+            resolve_called.set(true);
+            Err(SolverError::LpFailed {
+                target: "rocket-fuel".to_string(),
+                detail: "test stub".to_string(),
+            })
+        },
+    );
+    assert!(
+        resolve_called.get(),
+        "a palette entry for `crafting` must not affect the `organic-or-assembling` \
+         recipe's resolution — expected resolve to be called (AM3 default applies)"
+    );
+
+    // The actual verdict-changing half: pinning `organic-or-assembling`
+    // itself to AM1 in the palette must make the gate see the SAME
+    // FluidNotSupported infeasibility a plain AM1 default would, even
+    // though `default_machine` here is AM3.
+    let mut targeted_palette = MachinePalette::default();
+    targeted_palette
+        .by_category
+        .insert("organic-or-assembling".to_string(), "assembling-machine-1".to_string());
+    let _guard = trace::start_trace();
+    solver::avoid_burner_recipes(
+        synthetic_burner_result(),
+        "rocket-fuel",
+        &excluded,
+        &targeted_palette,
+        "assembling-machine-3",
+        |_excl| panic!("resolve must not be called — the palette pins organic-or-assembling \
+                         to AM1, which is FluidNotSupported for the direct rocket-fuel recipe, \
+                         even though default_machine here is AM3"),
+    );
+    let events = trace::drain_events();
+    assert!(
+        events.is_empty(),
+        "expected NO BurnerRecipeExcluded event — the palette entry must override \
+         default_machine's AM3 and make the alternative tier-infeasible, got: {events:?}"
+    );
+}
+
+/// #461 part (a) round 7 — the mixed steerable/unsteerable multi-target
+/// case that motivated moving the acceptance rule from "burner-free" to
+/// "strictly fewer burners". `solve_multi_with_palette_exclusions_quality_
+/// and_modules` is the multi-target family's own entry point (RFC-062,
+/// the wasm `solve_multi` boundary's choke point) — a THIRD real call
+/// site into `avoid_burner_recipes`, alongside `solve`/`solve_with_
+/// palette`/`solve_with_exclusions`'s family and the wasm-facing scalar
+/// quality/module family.
+///
+/// Targets `[rocket-fuel, pentapod-egg]` together off the six-ore set at
+/// AM1 (no exclusions): the FIRST solve mixes a STEERABLE burner
+/// (`rocket-fuel-from-jelly` — `rocket-fuel` has electric alternatives)
+/// with an UNSTEERABLE one (`pentapod-egg` — biochamber-only) in the SAME
+/// result, plus whatever nutrient-supply burners pentapod-egg's own
+/// demand pulls in. `avoid_burner_recipes` excludes only the recipes that
+/// clear the `category_has_electric_machine` bar (`rocket-fuel-from-jelly`
+/// among them; `pentapod-egg` itself never does) and re-solves — the
+/// re-solve is neither identical nor burner-free (pentapod-egg is still
+/// there), but it has STRICTLY FEWER burners than the original (verified:
+/// 4 → 2), so round 6's stricter "== 0" rule would have wrongly rejected
+/// this improvement; round 7's "< before" rule correctly accepts it.
+#[test]
+fn issue_461_multi_target_accepts_partial_burner_reduction() {
+    let _guard = trace::start_trace();
+    let inputs = set(&["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]);
+    let targets = vec![("rocket-fuel".to_string(), 1.0), ("pentapod-egg".to_string(), 0.2)];
+    let sr = solver::solve_multi_with_palette_exclusions_quality_and_modules(
+        &targets,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-1",
+        &FxHashSet::default(),
+        common::QualityTier::Normal,
+        spaghettio_core::module_policy::ModulePolicy::default(),
+    )
+    .unwrap_or_else(|e| panic!("[rocket-fuel, pentapod-egg] solves: {e}"));
+
+    let rocket_fuel_machine = sr
+        .machines
+        .iter()
+        .find(|m| m.recipe.contains("rocket-fuel"))
+        .expect("some rocket-fuel-producing recipe must appear in the accepted result");
+    assert!(
+        common::needs_electricity(&rocket_fuel_machine.entity),
+        "rocket-fuel must be on an electric machine after the accepted re-solve, got {} for {}",
+        rocket_fuel_machine.entity,
+        rocket_fuel_machine.recipe,
+    );
+
+    let pentapod_machine = sr
+        .machines
+        .iter()
+        .find(|m| m.recipe == "pentapod-egg")
+        .expect("pentapod-egg recipe must appear in the result");
+    assert_eq!(
+        pentapod_machine.entity, "biochamber",
+        "pentapod-egg is biochamber-only in the game and has no electric alternative — the \
+         re-solve must not (and cannot) move it"
+    );
+
+    let events = trace::drain_events();
+    let event = events
+        .iter()
+        .find(|e| matches!(e, TraceEvent::BurnerRecipeExcluded { .. }))
+        .unwrap_or_else(|| panic!("expected a BurnerRecipeExcluded trace event, got: {events:?}"));
+    match event {
+        TraceEvent::BurnerRecipeExcluded { accepted, burners_before, burners_after, .. } => {
+            assert!(
+                *accepted,
+                "expected the re-solve to be ACCEPTED (fewer burners, even though not zero)"
+            );
+            let after = burners_after.unwrap_or_else(|| panic!("accepted implies Some(_)"));
+            assert!(
+                after < *burners_before,
+                "expected burners_after ({after}) < burners_before ({burners_before})"
+            );
+        }
+        other => panic!("expected BurnerRecipeExcluded, got {other:?}"),
     }
 }
 

@@ -5,8 +5,13 @@
 //! path) was deleted 2026-08-14 (#632 A1) once the parity suite ran green
 //! one final time — see the RFC's decision log for the deletion receipt.
 
+use crate::common::needs_electricity;
 use crate::models::SolverResult;
-use crate::recipe_db::{MachineIncompatibility, MachinePalette};
+use crate::recipe_db::{
+    category_has_electric_machine, db, is_excluded_recipe, machine_can_run_recipe,
+    machine_for_recipe_with_palette, MachineIncompatibility, MachinePalette,
+};
+use crate::trace::{self, TraceEvent};
 use rustc_hash::FxHashSet;
 
 /// Marker prefix carried in `IncompatibleMachine` error strings across the
@@ -55,6 +60,214 @@ pub enum SolverError {
     #[error("net-flow solve failed for {target}: {detail}")]
     LpFailed { target: String, detail: String },
 }
+
+/// #461 part (a)'s production-path fix. The engine cannot fuel a burner
+/// (fuel category `nutrients` and no engine mechanism delivers it), so a
+/// recipe that lands on one is a last resort — but pushing that preference
+/// INTO the net-flow LP's cost model (an earlier version of this fix,
+/// this PR's history) moved 11 calibration fixtures' manifest hashes by
+/// float noise: any coefficient change on any column, even one that never
+/// wins, can shift the simplex's floating-point path for the WHOLE shared
+/// LP instance, and pure-`organic` recipes (`bioplastic` → plastic-bar,
+/// `biosulfur` → sulfur, …) sit in the demand closure of far more fixtures
+/// than #461 is about. Doing it here instead — strictly AFTER the LP has
+/// already run, as a policy decision over its OUTPUT — keeps the LP for
+/// every solve that never chose a burner bit-identical to before this fix
+/// existed: this function is a no-op unless `result` actually contains a
+/// burner machine.
+///
+/// `pub` (not just crate-internal): every real production entry point
+/// calls it — `solve`/`solve_with_palette`/`solve_with_exclusions` via
+/// [`solve_free_with_palette_and_exclusions`]; the wasm-facing
+/// quality/module family via
+/// [`solve_with_palette_exclusions_quality_and_modules`]; the multi-target
+/// family via [`solve_multi_with_palette_exclusions_quality_and_modules`]
+/// — right after each one's own netflow call succeeds, via `resolve`, a
+/// closure that re-invokes that SAME netflow call with an expanded
+/// exclusion set, so the decision logic lives here exactly once. It is
+/// ALSO exposed for `crates/core/examples/sim_export.rs`, which calls
+/// `netflow::solve_netflow_multi_with_options` directly (to pass the
+/// declared research-productivity axis the wrapper can't carry) and so
+/// bypasses every one of those three entry points — without this being
+/// `pub`, the sim-export path and the wasm path could disagree about
+/// whether a given target ships on a burner.
+///
+/// **Bounded fixpoint, not a single re-solve** (capped at
+/// [`MAX_BURNER_AVOIDANCE_ATTEMPTS`]): attempts continue ONLY from an
+/// ACCEPTED result. Each attempt starts from the current best, collects
+/// ITS steerable burners, and re-solves with the cumulative exclusion
+/// set; if that re-solve strictly reduces the burner count, it becomes
+/// the new current best and the next attempt starts from there. The
+/// FIRST non-improving attempt (the re-solve errors, ties, or worsens the
+/// burner count) ends the loop immediately — a rejected attempt's OWN
+/// burners are never examined for a follow-up exclusion, so the fixpoint
+/// never probes past a rejection.
+///
+/// Residual, stated plainly: `lubricant` from `{jelly}` stays on
+/// `biolubricant`/biochamber. Attempt 1 excludes `biolubricant` (its
+/// product, `lubricant`, has a tier-feasible electric alternative — the
+/// `lubricant` recipe itself) and re-solves; with only `jelly` supplied,
+/// the cheapest remaining path to `lubricant` pulls a coal-liquefaction
+/// chain from free root supply, landing on a plan with THREE OTHER
+/// biochamber recipes (burnt-spoilage, biosulfur, bioflux) — 1 → 3
+/// burners, strictly WORSE, rejected — and the loop stops there. Why not
+/// probe past that rejection: a rejected attempt already means "worse,
+/// not better", and continuing to exclude further from a worse state
+/// would chase an unbounded, more expensive search (more netflow solves)
+/// with no guarantee of ever landing on something strictly fewer-burner
+/// than where the loop started — each further exclusion can just as
+/// easily pull in yet more free-root-supply chains rather than converge.
+/// "Stop at the first non-improving attempt" is the deliberate bound, not
+/// "keep trying until the cap": the cheaper plan with one unfuelled
+/// machine is the honest answer here, preferred over a bigger plan with
+/// three. That residual biochamber is exactly what #461 part (b)'s
+/// `burner-fuel` validator check exists to make LOUD, not silently hide.
+///
+/// Per attempt: for every machine in the current best result where
+/// [`needs_electricity`] is false, look up its recipe and ask whether ANY
+/// of its products has at least one OTHER (non-excluded) recipe that a
+/// TIER-FEASIBLE electric machine can actually run — not just "some
+/// electric machine exists for this category" but
+/// `machine_can_run_recipe(machine_for_recipe_with_palette(other, palette,
+/// default_machine), other).is_ok()`. `palette` matters here, not just
+/// `default_machine`: the actual re-solve (`resolve`) honours the
+/// caller's [`MachinePalette`], so the gate must resolve candidate
+/// machines the SAME way or it can approve (or refuse) an "alternative"
+/// the re-solve would never actually place there — e.g. a palette pinning
+/// `crafting` to `assembling-machine-1` makes a `GENERAL_CATEGORIES`
+/// alternative resolve to AM1 even when `default_machine` is AM3, so the
+/// same fluid/slot-count rejection that blocks AM1 applies regardless of
+/// the caller's chosen default tier. For a `GENERAL_CATEGORIES` recipe
+/// with no matching palette entry, this resolves to `default_machine`
+/// (the caller's chosen tier) — the SAME tier that rejected the original
+/// recipe might also reject the "alternative": e.g. AM1 can't run the
+/// direct `rocket-fuel` recipe (fluid check) either, so at AM1 that's not
+/// a real alternative and no re-solve is attempted; at AM3 it is.
+/// Specialised-category alternatives (e.g. `ammonia-rocket-fuel` →
+/// chemical-plant) ignore both `palette` and `default_machine` entirely,
+/// same as [`machine_for_recipe_with_palette`] always has.
+/// [`category_has_electric_machine`] is kept as a cheap structural
+/// pre-filter (rules out `organic` and unsupported categories without an
+/// `db()` scan) before paying for the tier check.
+///
+/// If a burner clears that bar, it's added to this attempt's exclusion
+/// set; if NO burner in the current best clears it (e.g. `pentapod-egg`,
+/// biochamber-only with no alternative anywhere in the recipe graph), the
+/// loop stops with nothing excluded THIS attempt — which, on attempt 1,
+/// means no event fires at all and the original result is returned
+/// untouched.
+///
+/// Otherwise `resolve` is called once for this attempt. The re-solve is
+/// only WORTH taking if it actually REDUCES how many burners are in play
+/// relative to the current best — not only when it eliminates every last
+/// one. `burners_before`/`burners_after` count `!needs_electricity`
+/// machine ENTRIES in `SolverResult::machines` (a count of distinct
+/// burner-recipe rows, not `Σ count` — machine `count` is a fractional
+/// craft-rate figure, not a number of recipes; this mechanism reasons
+/// about recipes). `machines_before`/`machines_after` are the total entry
+/// count (burner + electric), so a reader can see what a steering step
+/// traded, e.g. a bigger raw-input-refining plan to lose a burner — there
+/// is deliberately no cost arbiter weighing that trade: a burner-free (or
+/// fewer-burner) plan always wins over a cheaper one that still contains
+/// a dead machine, because "cheaper but produces nothing" was never a
+/// real competitor. A multi-target solve can mix a STEERABLE burner (e.g.
+/// `rocket-fuel-from-jelly`, which has a tier-feasible electric
+/// alternative) with an UNSTEERABLE one in the SAME result (e.g.
+/// `pentapod-egg`) — a re-solve that removes only the steerable one is
+/// still strictly fewer burners than the current best and must be kept,
+/// even though it isn't fully burner-free.
+///
+/// A trace event fires for every attempt (`attempt`, 1-indexed), carrying
+/// all four counts and `accepted` — see
+/// [`crate::trace::TraceEvent::BurnerRecipeExcluded`]. The loop accepts
+/// an attempt's result and continues from it when `accepted`; otherwise
+/// it stops and the last-accepted (or original, on attempt 1) result is
+/// what the whole function returns.
+pub fn avoid_burner_recipes(
+    result: SolverResult,
+    target_item: &str,
+    excluded_recipes: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    resolve: impl Fn(&FxHashSet<String>) -> Result<SolverResult, SolverError>,
+) -> SolverResult {
+    let burner_count = |r: &SolverResult| r.machines.iter().filter(|m| !needs_electricity(&m.entity)).count();
+
+    let mut best = result;
+    let mut current_excluded = excluded_recipes.clone();
+
+    for attempt in 1..=MAX_BURNER_AVOIDANCE_ATTEMPTS {
+        let burners_before = burner_count(&best);
+        let mut expanded: Option<FxHashSet<String>> = None;
+        for m in &best.machines {
+            if needs_electricity(&m.entity) {
+                continue;
+            }
+            let Some(recipe) = db().recipes.get(&m.recipe) else {
+                continue;
+            };
+            let has_electric_alternative = recipe.products.iter().any(|product| {
+                db().recipes.iter().any(|(other_name, other)| {
+                    other_name != &m.recipe
+                        && !current_excluded.contains(other_name)
+                        && !is_excluded_recipe(other)
+                        && other.products.iter().any(|p| p.name == product.name)
+                        && category_has_electric_machine(&other.category)
+                        && {
+                            let candidate_machine =
+                                machine_for_recipe_with_palette(other, palette, default_machine);
+                            needs_electricity(&candidate_machine)
+                                && machine_can_run_recipe(&candidate_machine, other).is_ok()
+                        }
+                })
+            });
+            if has_electric_alternative {
+                expanded
+                    .get_or_insert_with(|| current_excluded.clone())
+                    .insert(m.recipe.clone());
+            }
+        }
+        let Some(expanded) = expanded else {
+            break;
+        };
+        let mut newly_excluded: Vec<String> =
+            expanded.difference(&current_excluded).cloned().collect();
+        newly_excluded.sort();
+
+        // Accept this attempt only when it succeeded AND strictly reduced
+        // the burner count relative to the current best — an attempt that
+        // ties or worsens it stops the whole fixpoint.
+        let resolved = resolve(&expanded).ok();
+        let burners_after = resolved.as_ref().map(burner_count);
+        let machines_after = resolved.as_ref().map(|r| r.machines.len());
+        let accepted = matches!(burners_after, Some(after) if after < burners_before);
+        trace::emit(TraceEvent::BurnerRecipeExcluded {
+            target_item: target_item.to_string(),
+            excluded_recipes: newly_excluded,
+            accepted,
+            attempt,
+            burners_before,
+            burners_after,
+            machines_before: best.machines.len(),
+            machines_after,
+        });
+        if !accepted {
+            break;
+        }
+        best = resolved.expect("accepted implies resolved.is_some()");
+        current_excluded = expanded;
+    }
+    best
+}
+
+/// Hard cap on [`avoid_burner_recipes`]'s fixpoint attempts. The exclusion
+/// set only grows attempt-over-attempt so the loop is monotone and would
+/// terminate on its own once no further burner clears the tier-feasible
+/// bar, but a cap keeps a solve's worst-case cost bounded (each attempt is
+/// a full independent netflow solve) regardless of how deep a recipe
+/// graph's alternation between burner and electric producers could
+/// theoretically go.
+const MAX_BURNER_AVOIDANCE_ATTEMPTS: usize = 4;
 
 /// Compute machines needed to produce `target_item` at `target_rate` items/sec.
 ///
@@ -168,7 +381,7 @@ pub fn solve_free_with_palette_and_exclusions(
     default_machine: &str,
     excluded_recipes: &FxHashSet<String>,
 ) -> Result<SolverResult, SolverError> {
-    crate::netflow::solve_netflow(
+    let result = crate::netflow::solve_netflow(
         target_item,
         target_rate,
         available_inputs,
@@ -177,7 +390,19 @@ pub fn solve_free_with_palette_and_exclusions(
         excluded_recipes,
         crate::netflow::RecipeScope::Free,
         &crate::netflow::CostTable::default(),
-    )
+    )?;
+    Ok(avoid_burner_recipes(result, target_item, excluded_recipes, palette, default_machine, |excl| {
+        crate::netflow::solve_netflow(
+            target_item,
+            target_rate,
+            available_inputs,
+            palette,
+            default_machine,
+            excl,
+            crate::netflow::RecipeScope::Free,
+            &crate::netflow::CostTable::default(),
+        )
+    }))
 }
 
 /// Like [`solve_with_palette_and_exclusions`] with a build-quality tier
@@ -224,7 +449,9 @@ pub fn solve_with_palette_exclusions_quality_and_modules(
     quality: crate::common::QualityTier,
     module_policy: crate::module_policy::ModulePolicy,
 ) -> Result<SolverResult, SolverError> {
-    crate::netflow::solve_netflow_with_options(
+    let options =
+        crate::netflow::NetflowOptions { quality, module_policy, ..Default::default() };
+    let result = crate::netflow::solve_netflow_with_options(
         target_item,
         target_rate,
         available_inputs,
@@ -233,12 +460,21 @@ pub fn solve_with_palette_exclusions_quality_and_modules(
         excluded_recipes,
         crate::netflow::RecipeScope::Free,
         &crate::netflow::CostTable::default(),
-        &crate::netflow::NetflowOptions {
-            quality,
-            module_policy,
-            ..Default::default()
-        },
-    )
+        &options,
+    )?;
+    Ok(avoid_burner_recipes(result, target_item, excluded_recipes, palette, default_machine, |excl| {
+        crate::netflow::solve_netflow_with_options(
+            target_item,
+            target_rate,
+            available_inputs,
+            palette,
+            default_machine,
+            excl,
+            crate::netflow::RecipeScope::Free,
+            &crate::netflow::CostTable::default(),
+            &options,
+        )
+    }))
 }
 
 /// RFC-062 Phase 3: the multi-target counterpart of
@@ -280,7 +516,9 @@ pub fn solve_multi_with_palette_exclusions_quality_and_modules(
     quality: crate::common::QualityTier,
     module_policy: crate::module_policy::ModulePolicy,
 ) -> Result<SolverResult, SolverError> {
-    crate::netflow::solve_netflow_multi_with_options(
+    let options =
+        crate::netflow::NetflowOptions { quality, module_policy, ..Default::default() };
+    let result = crate::netflow::solve_netflow_multi_with_options(
         targets,
         available_inputs,
         palette,
@@ -288,12 +526,25 @@ pub fn solve_multi_with_palette_exclusions_quality_and_modules(
         excluded_recipes,
         crate::netflow::RecipeScope::Free,
         &crate::netflow::CostTable::default(),
-        &crate::netflow::NetflowOptions {
-            quality,
-            module_policy,
-            ..Default::default()
-        },
-    )
+        &options,
+    )?;
+    // `target_item` is a trace-only label (not part of the returned
+    // `SolverResult`, so this has no bearing on the N=1 bit-identity
+    // invariant above) — join every requested item, same convention as
+    // netflow.rs's own `target_label`.
+    let label = targets.iter().map(|(item, _)| item.as_str()).collect::<Vec<_>>().join("+");
+    Ok(avoid_burner_recipes(result, &label, excluded_recipes, palette, default_machine, |excl| {
+        crate::netflow::solve_netflow_multi_with_options(
+            targets,
+            available_inputs,
+            palette,
+            default_machine,
+            excl,
+            crate::netflow::RecipeScope::Free,
+            &crate::netflow::CostTable::default(),
+            &options,
+        )
+    }))
 }
 
 #[cfg(test)]
